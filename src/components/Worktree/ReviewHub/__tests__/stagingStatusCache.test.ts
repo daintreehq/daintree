@@ -9,6 +9,7 @@ import {
   resetStagingStatusCacheForTests,
 } from "../stagingStatusCache";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 import {
   resetStoreAccessorsForTesting,
   setViewedMarkSourcesAccessor,
@@ -37,22 +38,24 @@ describe("stagingStatusCache", () => {
       worktrees: null,
       stagingStatus: getCachedStagingStatus(worktreePath),
     }));
-    const withStaged = (insertions: number): StagingStatus =>
+    const listing = (...paths: string[]): StagingStatus =>
       // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the sections the rule reads
       ({
-        staged: [{ path: "a.ts", status: "modified", insertions, deletions: 0 }],
+        staged: paths.map((path) => ({ path, status: "modified", insertions: 1, deletions: 0 })),
         unstaged: [],
       }) as unknown as StagingStatus;
-    const viewed = () => selectViewedSet(useDiffViewedStore.getState(), "/wt").has("staged:a.ts");
+    const viewed = () =>
+      selectViewedSet(useDiffViewedStore.getState(), "/wt").has(workingTreeViewedKey("a.ts"));
 
     const older = beginStagingStatusRead();
-    rememberStagingStatus("/wt", withStaged(1), beginStagingStatusRead());
-    useDiffViewedStore.getState().setViewed("/wt", "staged:a.ts", true);
+    rememberStagingStatus("/wt", listing("a.ts"), beginStagingStatusRead());
+    useDiffViewedStore.getState().setViewed("/wt", workingTreeViewedKey("a.ts"), true);
 
-    rememberStagingStatus("/wt", withStaged(5), older);
+    // The file left both sections, but an older read says so.
+    rememberStagingStatus("/wt", listing(), older);
     expect(viewed()).toBe(true);
 
-    rememberStagingStatus("/wt", withStaged(5), beginStagingStatusRead());
+    rememberStagingStatus("/wt", listing(), beginStagingStatusRead());
     expect(viewed()).toBe(false);
   });
 

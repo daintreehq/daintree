@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { sanitizeNotificationSettingsPatch } from "../notificationSettingsPatch.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  notificationSettingsWritten,
+  onNotificationSettingsWritten,
+  sanitizeNotificationSettingsPatch,
+} from "../notificationSettingsPatch.js";
 
 const ALLOWED = new Set(["chime.wav", "ping.wav"]);
 
@@ -58,6 +62,19 @@ describe("sanitizeNotificationSettingsPatch", () => {
     expect(inRange).toBe(60_000);
   });
 
+  it("clamps the sound volume to 0-1 and drops a value that isn't a finite number", () => {
+    const volume = (raw: unknown) =>
+      sanitizeNotificationSettingsPatch({ soundVolume: raw }, ALLOWED).soundVolume;
+
+    expect(volume(0.35)).toBe(0.35);
+    expect(volume(0)).toBe(0);
+    expect(volume(4)).toBe(1);
+    expect(volume(-0.5)).toBe(0);
+    expect(volume(Number.NaN)).toBeUndefined();
+    expect(volume(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(volume("0.5")).toBeUndefined();
+  });
+
   it("clamps quiet-hours minutes to a single day and floors fractions", () => {
     const result = sanitizeNotificationSettingsPatch(
       { quietHoursStartMin: -5, quietHoursEndMin: 99_999 },
@@ -91,5 +108,30 @@ describe("sanitizeNotificationSettingsPatch", () => {
 
     const dropped = Object.keys(requested).filter((key) => !(key in result));
     expect(dropped).toEqual(["completedSoundFile"]);
+  });
+});
+
+describe("notification settings writes (#17240)", () => {
+  it("tells each listener of a write until it unsubscribes, past one that throws", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const heard = vi.fn();
+    const off = onNotificationSettingsWritten(heard);
+    const offThrowing = onNotificationSettingsWritten(() => {
+      throw new Error("listener broke");
+    });
+    const after = vi.fn();
+    const offAfter = onNotificationSettingsWritten(after);
+
+    notificationSettingsWritten();
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledTimes(1);
+
+    off();
+    offThrowing();
+    offAfter();
+    notificationSettingsWritten();
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledTimes(1);
+    error.mockRestore();
   });
 });

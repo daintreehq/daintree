@@ -1,3 +1,4 @@
+import { Pin } from "lucide-react";
 import {
   cn,
   type CursorStep,
@@ -30,8 +31,12 @@ const TERMINAL = { anchor: "claude-body", dx: -74, dy: -22 };
 const PROMPT = "Add a search box to the header";
 const SEND = { cue: "send" } as const;
 
+// A filled pin marks the agents pinned to the toolbar, as the launcher's rows do;
+// the rest show theirs only under the pointer.
+const PINNED = <Pin className="size-2.5 fill-current" aria-hidden="true" />;
+
 export const CURSOR: readonly CursorStep[] = [
-  // The pointer rests on the pinned agents as they're named.
+  // The pointer rests on the pinned agents' buttons as pinning is named.
   { cue: "pick", at: { anchor: "agent-codex" } },
   { cue: "launcher", at: { anchor: "launcher" } },
   { cue: "launcher", offset: 0.5, at: { anchor: "launcher" }, click: true },
@@ -150,9 +155,9 @@ export function AgentsScene() {
           </MockSearchField>
         }
         items={[
-          { icon: <MockAgentGlyph agent="claude" />, label: "Claude" },
-          { icon: <MockAgentGlyph agent="codex" />, label: "Codex" },
-          { icon: <MockAgentGlyph agent="antigravity" />, label: "Antigravity" },
+          { icon: <MockAgentGlyph agent="claude" />, label: "Claude", hint: PINNED },
+          { icon: <MockAgentGlyph agent="codex" />, label: "Codex", hint: PINNED },
+          { icon: <MockAgentGlyph agent="antigravity" />, label: "Antigravity", hint: PINNED },
           { icon: <MockAgentGlyph agent="cursor" />, label: "Cursor" },
           { icon: <MockAgentGlyph agent="opencode" />, label: "OpenCode" },
         ]}

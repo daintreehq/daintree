@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MCP_REMOTE_CONFIRM_MARGIN_MS } from "../../../../shared/config/mcpConfirmWindow.js";
 
 const { webContentsById } = vi.hoisted(() => ({
   webContentsById: new Map<number, { isDestroyed: () => boolean }>(),
@@ -16,6 +17,7 @@ import {
 import { setMcpDriveTargetResolver, type McpDriveTarget } from "../driveTarget.js";
 import { SessionBindingError } from "../rendererBridge.js";
 import { helpNotifyKey } from "../terminalNotify.js";
+import { setPluginAssistantReachSource } from "../../plugin/pluginAssistantReach.js";
 import type { AssistantControlBinding, McpSessionOrigin } from "../shared.js";
 import type { McpBearerIdentity } from "../../../../shared/types/ipc/mcpServer.js";
 import type { WindowRegistry } from "../../../window/WindowRegistry.js";
@@ -286,6 +288,28 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.relay?.global).toBe(expected);
   });
 
+  // #18153: the session reads `local` beside `global` to reach plugin actions,
+  // so the projection must carry it, and only for the in-process relay.
+  it.each([
+    ["this machine's own relay", { local: true as const }, true],
+    ["another machine's relay", {}, undefined],
+  ])("hands %s session its locality", (_label, caller, expected) => {
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: {
+        linkSessionId: "link-1",
+        senderId: "shell-1",
+        helpSessionId: "help-1",
+        shellName: "Shell",
+        global: true,
+        ...caller,
+      },
+    });
+
+    expect(sessionDeps.relay?.local).toBe(expected);
+  });
+
   // #15698: the Shell's view can only match a dispatch to its own call if the call is named.
   it("names the Shell's own call on each of a relay session's dispatches, and only its own", async () => {
     const bound = (relay?: Record<string, unknown>) => {
@@ -337,6 +361,138 @@ describe("createSessionServerDeps", () => {
       "call-1"
     );
     expect(relays()).toEqual([undefined]);
+  });
+
+  // #17917: a local call's matcher reaches its dispatch bound to that one call,
+  // and another machine's relay never carries one.
+  it("binds a local relay's next-fallback matcher to the call each dispatch runs", async () => {
+    const ran = vi.fn();
+    const offers = vi.fn(() => ran);
+    const bound = (relay: Record<string, unknown>) => {
+      const deps = fakeSource();
+      const dispatchActionForWorkspace = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+        dispatchActionForWorkspace;
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+        workspaceBinding: { workspaceId: WS_A },
+        relay: relay as never,
+      });
+      type Bound = (p: string, a: string, x: unknown) => (() => void) | null;
+      const matchers = () =>
+        dispatchActionForWorkspace.mock.calls.map(
+          (call) =>
+            ((call as unknown[])[5] as { relay?: { nextFallback?: Bound } } | undefined)?.relay
+              ?.nextFallback
+        );
+      return { sessionDeps, matchers };
+    };
+    const caller = {
+      linkSessionId: "local",
+      senderId: "local",
+      helpSessionId: "help-1",
+      shellName: "Mac",
+      nextFallback: offers,
+    };
+    const move = { terminalId: "t-1", presetId: "work" };
+
+    const local = bound({ ...caller, local: true });
+    await local.sessionDeps.dispatchAction(
+      "terminal.restartOnPreset",
+      move,
+      false,
+      undefined,
+      "call-1"
+    );
+    await local.sessionDeps.dispatchAction("terminal.restartOnPreset", move, false);
+    const [named, unnamed] = local.matchers();
+    expect(named?.("proj-1", "terminal.restartOnPreset", move)).toBe(ran);
+    expect(offers).toHaveBeenCalledWith({
+      callId: "call-1",
+      helpSessionId: "help-1",
+      projectId: "proj-1",
+      actionId: "terminal.restartOnPreset",
+      args: move,
+    });
+    expect(unnamed).toBeUndefined();
+
+    const remote = bound(caller);
+    await remote.sessionDeps.dispatchAction(
+      "terminal.restartOnPreset",
+      move,
+      false,
+      undefined,
+      "call-2"
+    );
+    expect(remote.matchers()).toEqual([undefined]);
+  });
+
+  // #18153: only this machine's own global Assistant's call tells the view who
+  // asked, and a plugin's opted-in query never reads as one another machine's
+  // driving view could answer.
+  it("marks the local global Assistant's dispatches, and never counts a plugin action a read", async () => {
+    const REACH = "acme.stages.inspect";
+    const uninstall = setPluginAssistantReachSource({
+      has: (id) => id === REACH,
+      ids: () => [REACH],
+    });
+    try {
+      const bound = (relay: Record<string, unknown>) => {
+        const deps = fakeSource();
+        const queries = [
+          { id: REACH, kind: "query", danger: "confirm" },
+          { id: "terminal.list", kind: "query", danger: "safe" },
+        ];
+        (deps as { getCachedManifest?: unknown }).getCachedManifest = vi.fn(() => queries);
+        const dispatchActionForWorkspace = vi.fn(async () => ({
+          result: { ok: true, result: null },
+        }));
+        (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+          dispatchActionForWorkspace;
+        const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+          sessionId: "s",
+          role: ROLE,
+          workspaceBinding: { workspaceId: WS_A },
+          relay: relay as never,
+        });
+        const options = () =>
+          dispatchActionForWorkspace.mock.calls.map(
+            (call) =>
+              (call as unknown[])[5] as
+                { callerOrigin?: string; relay?: { readOnly?: boolean } } | undefined
+          );
+        return { sessionDeps, options };
+      };
+      const caller = {
+        linkSessionId: "local",
+        senderId: "local",
+        helpSessionId: "help-1",
+        shellName: "Mac",
+      };
+
+      const globalLocal = bound({ ...caller, local: true, global: true });
+      await globalLocal.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-1");
+      await globalLocal.sessionDeps.dispatchAction("terminal.list", {}, false, undefined, "call-2");
+      const [plugin, read] = globalLocal.options();
+      expect(plugin?.callerOrigin).toBe("global-assistant");
+      expect(plugin?.relay?.readOnly).toBe(false);
+      expect(read?.callerOrigin).toBe("global-assistant");
+      expect(read?.relay?.readOnly).toBe(true);
+
+      for (const relay of [
+        { ...caller, global: true },
+        { ...caller, local: true },
+      ]) {
+        const other = bound(relay);
+        await other.sessionDeps.dispatchAction(REACH, {}, false, undefined, "call-3");
+        expect(other.options()[0]).not.toHaveProperty("callerOrigin");
+      }
+    } finally {
+      uninstall();
+    }
   });
 
   // #14551: only a relay caller its Shell's runtime named global is handed the
@@ -417,6 +573,75 @@ describe("createSessionServerDeps", () => {
     }
   );
 
+  // #16750: the close's read follows the binding, and no binding is no agent to close.
+  it("reads a close target through the steer bound at each call", async () => {
+    const { state, host } = mutableHost();
+    const sessionDeps = createSessionServerDeps(fakeSource(), host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: { ...RELAY, global: true },
+    });
+    const steer = sessionDeps.globalSteer!;
+
+    await expect(steer.closeTarget("p", "t")).resolves.toBeNull();
+
+    const found = { generation: 1, closeClass: "handback" as const };
+    const closeTarget = vi.fn(async () => found);
+    state.binding = {
+      control: {} as AssistantControlBinding["control"],
+      sessionProject: () => null,
+      steer: { closeTarget } as never,
+    };
+    await expect(steer.closeTarget("p", "t")).resolves.toBe(found);
+    expect(closeTarget).toHaveBeenCalledWith("p", "t");
+  });
+
+  // #16750: the close's question goes to the Shell inside the call's own wait.
+  it("asks the Shell about a global close inside its call's deadline, and not after it", async () => {
+    const requestApproval = vi.fn(async () => ({ decision: "approved" as const, deadline: 1 }));
+    let deadline: number | undefined = 100_000;
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: {
+        ...RELAY,
+        global: true,
+        requestApproval,
+        callDeadline: () => deadline,
+      },
+    });
+    const ask = {
+      actionId: "terminal.close",
+      args: { terminalId: "t" },
+      subject: "Fix it",
+      lines: ["Panel: Fix it (t)"],
+      closeClass: "handback" as const,
+    };
+
+    await sessionDeps.relay!.askClose!("call-1", ask);
+    expect(requestApproval).toHaveBeenCalledWith({
+      ...ask,
+      callId: "call-1",
+      holdUntil: 100_000 - MCP_REMOTE_CONFIRM_MARGIN_MS,
+    });
+
+    // The call has already been answered: nobody is asked about it.
+    deadline = undefined;
+    await expect(sessionDeps.relay!.askClose!("call-1", ask)).resolves.toEqual({
+      decision: "timeout",
+    });
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a project assistant's relay session no way to ask about a close", () => {
+    const sessionDeps = createSessionServerDeps(fakeSource(), mutableHost().host, {
+      sessionId: "s",
+      role: ROLE,
+      relay: { ...RELAY, requestApproval: vi.fn() },
+    });
+    expect(sessionDeps.relay?.askClose).toBeUndefined();
+  });
+
   it.each([
     ["a project assistant's relay session", { relay: RELAY }],
     [
@@ -471,6 +696,136 @@ describe("createSessionServerDeps", () => {
       state.bearer,
       "external"
     );
+  });
+
+  // #17036: main's own actions.list walk asks a local view for one large page,
+  // and only on the routes that reach one.
+  describe("main's own actions.list walk", () => {
+    const WALK = { actionsListWalk: true } as const;
+
+    it("rides an unpinned dispatch beside its authorization", async () => {
+      const deps = fakeSource();
+      const { state, host } = mutableHost();
+      const sessionDeps = createSessionServerDeps(deps, host, { sessionId: "x", role: ROLE });
+      state.bearer = { token4LastChars: "wxyz", userAgent: "client/1.0" };
+
+      await sessionDeps.dispatchAction(
+        "actions.list",
+        { limit: 100 },
+        true,
+        "skip-preference",
+        undefined,
+        WALK
+      );
+      await sessionDeps.dispatchAction("actions.list", { limit: 100 }, false);
+
+      expect(deps.dispatchAction).toHaveBeenNthCalledWith(
+        1,
+        "actions.list",
+        { limit: 100 },
+        true,
+        state.bearer,
+        "external",
+        "skip-preference",
+        WALK
+      );
+      expect(deps.dispatchAction).toHaveBeenNthCalledWith(
+        2,
+        "actions.list",
+        { limit: 100 },
+        false,
+        state.bearer,
+        "external"
+      );
+    });
+
+    it("rides a pinned dispatch's options", async () => {
+      const deps = fakeSource();
+      const dispatchActionForWebContents = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWebContents?: unknown }).dispatchActionForWebContents =
+        dispatchActionForWebContents;
+      deps.sessionStore.sessionOriginMap.set("s", "help");
+      deps.sessionStore.sessionWebContentsMap.set("s", 7);
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+      });
+
+      await sessionDeps.dispatchAction("actions.list", {}, false, undefined, undefined, WALK);
+
+      expect((dispatchActionForWebContents.mock.calls[0] as unknown[])[6]).toEqual(WALK);
+    });
+
+    it("carries the dialog's hand-over offer to this machine's own help session's view only (#16752)", async () => {
+      const offer = { label: "Delete a worktree it created", detail: "Only a clean one" };
+      const dispatchActionForWebContents = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      const deps = fakeSource();
+      (deps as { dispatchActionForWebContents?: unknown }).dispatchActionForWebContents =
+        dispatchActionForWebContents;
+      deps.sessionStore.sessionOriginMap.set("s", "help");
+      deps.sessionStore.sessionWebContentsMap.set("s", 7);
+      deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
+      const help = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+      });
+
+      await help.dispatchAction("worktree.delete", {}, false, undefined, undefined, {
+        delegationOffer: offer,
+      });
+
+      expect((dispatchActionForWebContents.mock.calls[0] as unknown[])[6]).toMatchObject({
+        delegationOffer: offer,
+      });
+
+      // A pinned session that isn't one of this machine's help sessions never carries it.
+      deps.sessionStore.sessionOriginMap.set("p", "external");
+      deps.sessionStore.sessionWebContentsMap.set("p", 8);
+      const other = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "p",
+        role: ROLE,
+      });
+      await other.dispatchAction("worktree.delete", {}, false, undefined, undefined, {
+        delegationOffer: offer,
+      });
+
+      const sent = (dispatchActionForWebContents.mock.calls[1] as unknown[])[6] as
+        Record<string, unknown> | undefined;
+      expect(sent?.delegationOffer).toBeUndefined();
+    });
+
+    it("rides a workspace-bound dispatch's options without dropping a pane's own", async () => {
+      const deps = fakeSource();
+      const dispatchActionForWorkspace = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+        dispatchActionForWorkspace;
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        role: ROLE,
+        workspaceBinding: { workspaceId: WS_A },
+        paneBinding: {
+          workspaceId: WS_A,
+          launchWebContentsId: 7,
+          actionContext: { focusedTerminalId: "term-focused" },
+        },
+      });
+
+      await sessionDeps.dispatchAction("actions.list", {}, false, undefined, undefined, WALK);
+      await sessionDeps.dispatchAction("actions.list", {}, false);
+
+      const [walked, plain] = dispatchActionForWorkspace.mock.calls.map(
+        (call) => (call as unknown[])[5] as Record<string, unknown>
+      );
+      expect(walked).toEqual({ ...plain, actionsListWalk: true });
+      expect(plain).not.toHaveProperty("actionsListWalk");
+      expect(plain).toHaveProperty("preferredWebContentsId", 7);
+    });
   });
 
   it("keeps the pin and help-session id it captured after teardown clears the store", async () => {

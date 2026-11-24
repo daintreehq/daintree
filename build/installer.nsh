@@ -7,6 +7,248 @@
 ; Double-clicking a `.dntr` file then launches Daintree with the file path as a
 ; bare argv entry, which app's `second-instance` handler validates and sideloads
 ; (see electron/lifecycle/appLifecycle.ts).
+;
+; It also puts the `daintree` command on PATH (#17931): $INSTDIR\bin holds only
+; daintree.cmd, which scripts/afterPack.cjs renders from build/win/daintree.cmd.in.
+
+!define DAINTREE_MACHINE_ENV_KEY "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
+; The longest Path value this edits, in UTF-16 units: one short of NSIS's
+; string buffer. ReadRegStr terminates the buffer's last unit, so a read that
+; long may be short by one, and the installer never writes a value its own
+; uninstaller would then refuse to read.
+!define /math DAINTREE_PATH_MAX ${NSIS_MAX_STRLEN} - 2
+
+; Adds (ADD 1) or removes (ADD 0) $INSTDIR\bin in the Path of the scope this copy
+; was installed for: HKCU for a per-user install, the machine environment for an
+; all-users one. Entries compare whole, ordinally and case-insensitively, the
+; way file names do, ignoring surrounding quotes and trailing backslashes; every
+; other entry, empty ones included, is written back exactly as read.
+!macro daintreeEditPath ADD
+  System::Store "s"
+  StrCpy $9 "$INSTDIR\bin"
+  StrCpy $6 "" ; the entries that aren't $9
+  StrCpy $7 0 ; how many are
+  StrCpy $R1 0 ; inside quotes at the end of the scan
+  StrCpy $0 0x80000001 ; HKEY_CURRENT_USER
+  StrCpy $1 "Environment"
+  ${If} $installMode == "all"
+    StrCpy $0 0x80000002 ; HKEY_LOCAL_MACHINE
+    StrCpy $1 "${DAINTREE_MACHINE_ENV_KEY}"
+  ${EndIf}
+
+  !if ${ADD} == 1
+    ${IfNot} ${FileExists} "$9\daintree.cmd"
+      Goto daintreePathSkip
+    ${EndIf}
+    ; The machine PATH reaches every account, so it only gets a folder that
+    ; standard users can't write to. A custom all-users folder elsewhere
+    ; (C:\Tools, D:\Apps) usually inherits their Modify right.
+    ${If} $installMode == "all"
+      ; Canonical first, so C:\Program Files\..\Users\Public can't pass.
+      ClearErrors
+      GetFullPathName $R6 $INSTDIR
+      ${If} ${Errors}
+        Goto daintreePathSkip
+      ${EndIf}
+      StrCpy $R8 "$PROGRAMFILES64\"
+      StrLen $R9 $R8
+      StrCpy $R7 $R6 $R9
+      System::Call 'kernel32::CompareStringOrdinal(w R7, i -1, w R8, i -1, i 1) i .R9'
+      ${If} $R9 <> 2 ; CSTR_EQUAL
+        StrCpy $R8 "$PROGRAMFILES\"
+        StrLen $R9 $R8
+        StrCpy $R7 $R6 $R9
+        System::Call 'kernel32::CompareStringOrdinal(w R7, i -1, w R8, i -1, i 1) i .R9'
+        ${If} $R9 <> 2
+          Goto daintreePathSkip
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+    ; An entry can't carry a bare semicolon, and Windows (and Daintree's own
+    ; PATH refresh) can expand a percent sign in it.
+    StrLen $R9 $9
+    StrCpy $R8 0
+    ${DoWhile} $R8 < $R9
+      StrCpy $R4 $9 1 $R8
+      ${If} $R4 == ";"
+      ${OrIf} $R4 == "%"
+        Goto daintreePathSkip
+      ${EndIf}
+      IntOp $R8 $R8 + 1
+    ${Loop}
+  !else
+    ; A copy installed here again since this uninstall removed the files (the
+    ; uninstaller's last page can still be open) owns the entry now. A shim
+    ; left alone, one the uninstall couldn't delete, owns nothing.
+    ${If} ${FileExists} "$9\daintree.cmd"
+    ${AndIf} ${FileExists} "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
+      Goto daintreePathDone
+    ${EndIf}
+  !endif
+
+  ; Status and type first, without the data (RRF_RT_ANY | RRF_NOEXPAND):
+  ; ReadRegStr returns "" both for a missing value and for one too long for
+  ; its buffer, and a PATH rebuilt from that "" would wipe the user's.
+  System::Call 'advapi32::RegGetValueW(p r0, w r1, w "Path", i 0x1000FFFF, *i .r2, p 0, *i .r3) i .r4'
+  ${If} $4 = 2 ; ERROR_FILE_NOT_FOUND: no Path value yet
+    !if ${ADD} == 1
+      StrCpy $2 2 ; REG_EXPAND_SZ, as Windows creates it
+      StrCpy $5 ""
+      StrCpy $R3 0
+      Goto daintreePathScanned
+    !else
+      Goto daintreePathDone
+    !endif
+  ${ElseIf} $4 <> 0
+    Goto daintreePathSkip
+  ${EndIf}
+  ${If} $2 <> 1 ; REG_SZ
+  ${AndIf} $2 <> 2 ; REG_EXPAND_SZ
+    Goto daintreePathSkip
+  ${EndIf}
+
+  ; A value longer than NSIS_MAX_STRLEN fails here with the error flag set
+  ; rather than coming back truncated.
+  ClearErrors
+  ${If} $installMode == "all"
+    ReadRegStr $5 HKLM "${DAINTREE_MACHINE_ENV_KEY}" "Path"
+  ${Else}
+    ReadRegStr $5 HKCU "Environment" "Path"
+  ${EndIf}
+  ${If} ${Errors}
+    Goto daintreePathSkip
+  ${EndIf}
+  ; A value stored without a terminator at exactly the buffer's size comes
+  ; back one unit short (see DAINTREE_PATH_MAX).
+  StrLen $R3 $5
+  ${If} $R3 > ${DAINTREE_PATH_MAX}
+    Goto daintreePathSkip
+  ${EndIf}
+  ; Another installer could have rewritten Path between the two reads; the
+  ; write below reuses the first read's type, so it must still be the type.
+  System::Call 'advapi32::RegGetValueW(p r0, w r1, w "Path", i 0x1000FFFF, *i .R8, p 0, *i .R9) i .r4'
+  ${If} $4 <> 0
+  ${OrIf} $R8 <> $2
+    Goto daintreePathSkip
+  ${EndIf}
+
+  ; Split on semicolons outside double quotes. The end is found by length:
+  ; StrCmp is linguistic, and reads a zero-weight character (U+200C, say) as
+  ; equal to "", which would cut PATH short at it.
+  StrCpy $8 0 ; scan index
+  StrCpy $R0 0 ; start of the current entry
+  StrCpy $R2 0 ; entries kept
+  IntCmp $R3 0 daintreePathScanned
+daintreePathScan:
+  IntCmp $8 $R3 daintreePathEntry
+  StrCpy $R4 $5 1 $8
+  StrCmp $R4 "$\"" 0 +3
+    IntOp $R1 $R1 ^ 1
+    Goto daintreePathNext
+  StrCmp $R4 ";" 0 daintreePathNext
+  IntCmp $R1 0 daintreePathEntry daintreePathNext daintreePathNext
+daintreePathEntry:
+  IntOp $R5 $8 - $R0
+  StrCpy $R6 $5 $R5 $R0
+  StrCpy $R7 $R6
+  StrCpy $R8 $R7 1
+  StrCmp $R8 "$\"" 0 daintreePathTrim
+  StrCpy $R8 $R7 1 -1
+  StrCmp $R8 "$\"" 0 daintreePathTrim
+  StrCpy $R7 $R7 "" 1
+  StrCpy $R7 $R7 -1
+daintreePathTrim:
+  StrCpy $R8 $R7 1 -1
+  StrCmp $R8 "\" 0 daintreePathCompare
+  StrCpy $R7 $R7 -1
+  Goto daintreePathTrim
+daintreePathCompare:
+  ; Not StrCmp: lstrcmpi is linguistic, and can call two names equal that
+  ; are different files.
+  System::Call 'kernel32::CompareStringOrdinal(w R7, i -1, w r9, i -1, i 1) i .R8'
+  IntCmp $R8 2 0 daintreePathKeep daintreePathKeep ; CSTR_EQUAL
+  IntOp $7 $7 + 1
+  Goto daintreePathKept
+daintreePathKeep:
+  ${If} $R2 = 0
+    StrCpy $6 $R6
+  ${Else}
+    StrCpy $6 "$6;$R6"
+  ${EndIf}
+  IntOp $R2 $R2 + 1
+daintreePathKept:
+  IntCmp $8 $R3 daintreePathScanned
+  IntOp $R0 $8 + 1
+daintreePathNext:
+  IntOp $8 $8 + 1
+  Goto daintreePathScan
+daintreePathScanned:
+
+  !if ${ADD} == 1
+    ${If} $7 > 0
+      Goto daintreePathDone
+    ${EndIf}
+    ; After an unclosed quote the new entry would be inside it: no command
+    ; search would see it, and the uninstaller couldn't find it to remove.
+    ${If} $R1 <> 0
+      Goto daintreePathSkip
+    ${EndIf}
+    ; Within the same limit the read is held to, so the concatenation can't
+    ; truncate and the uninstaller can read back what this writes.
+    StrLen $R9 $9
+    IntOp $R8 $R3 + $R9
+    IntOp $R8 $R8 + 1
+    ${If} $R8 > ${DAINTREE_PATH_MAX}
+      Goto daintreePathSkip
+    ${EndIf}
+    ; Always a new separator, even after a trailing one: the empty entry
+    ; that trailing ";" stood for is then still there after an uninstall.
+    ${If} $R3 = 0
+      StrCpy $6 $9
+    ${Else}
+      StrCpy $6 "$5;$9"
+    ${EndIf}
+  !else
+    ${If} $7 = 0
+      Goto daintreePathDone
+    ${EndIf}
+  !endif
+
+  ; Written back with the type it was read with, so a REG_SZ PATH keeps its
+  ; literal % signs and a REG_EXPAND_SZ one keeps expanding.
+  StrLen $R8 $6
+  IntOp $R8 $R8 + 1
+  IntOp $R8 $R8 * 2
+  System::Call 'advapi32::RegSetKeyValueW(p r0, w r1, w "Path", i r2, w r6, i R8) i .r4'
+  ${If} $4 <> 0
+    Goto daintreePathSkip
+  ${EndIf}
+  ; Explorer rereads the environment on this, so terminals it starts afterwards
+  ; see the change. SMTO_ABORTIFHUNG: a hung window can't stall the installer.
+  System::Call 'user32::SendMessageTimeoutW(p 0xffff, i 0x1A, p 0, w "Environment", i 0x2, i 5000, *p .r4)'
+  Goto daintreePathDone
+daintreePathSkip:
+  DetailPrint "PATH was left unchanged: it could not be updated safely for $9"
+daintreePathDone:
+  System::Store "l"
+!macroend
+
+; Inserted by electron-builder after its own includes, where $installMode
+; exists. The removal waits for a successful uninstall, an update's included:
+; the uninstall section can still restore the old files and abort, and an update
+; that moved the install directory must not leave the old bin on PATH. The new
+; install's customInstall adds its own entry back.
+!macro customHeader
+  !ifdef BUILD_UNINSTALLER
+    Function un.onUninstSuccess
+      !insertmacro daintreeEditPath 0
+    FunctionEnd
+  !else
+    Function daintreeAddCliToPath
+      !insertmacro daintreeEditPath 1
+    FunctionEnd
+  !endif
+!macroend
 
 !macro customInstall
   ; ProgID describing the plugin-archive document type.
@@ -50,6 +292,8 @@
   ; would name the sibling `C:\src.` on every non-root folder.) %1 needs no
   ; guard: a selected item is never a drive root — drives are `Drive\shell`.
   WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Daintree\command" "" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --cli-path="%V\."'
+
+  Call daintreeAddCliToPath
 
   ; Tell the shell the association table changed so Explorer picks it up now.
   ; Covers the `.dntr` mapping and both folder verbs in one call.

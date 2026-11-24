@@ -433,7 +433,14 @@ describe("createMockHost", () => {
     await expect(host.notify({ title: "t", body: "b", os: true })).rejects.toThrow(
       /PERMISSION_REQUIRED/
     );
+    await expect(
+      host.notify({ title: "t", body: "b", audience: "everyone" as "assistant" })
+    ).rejects.toThrow(/audience/);
     expect(host.notifications).toEqual([]);
+    // One marked for an assistant is a shape the real host takes (#18154).
+    const marked = createMockHost({ pluginId: "acme.demo" });
+    await marked.notify({ title: "t", body: "b", audience: "assistant" });
+    expect(marked.notifications[0]?.options).toMatchObject({ audience: "assistant" });
 
     const withArgs = (args: unknown) =>
       host.notify({
@@ -1289,6 +1296,28 @@ describe("createMockHost", () => {
     });
   });
 
+  describe("registerCloudProvider (#17351)", () => {
+    it("records the binding so a test can call it, replacing by id with an inert prior disposer", async () => {
+      const host = createMockHost();
+      const impl = () => ({ validate: vi.fn(async () => ({ identity: null })) }) as never;
+      const first = impl();
+      const second = impl();
+      const disposeFirst = await host.registerCloudProvider({ id: "ec2" }, first);
+      const disposeSecond = await host.registerCloudProvider({ id: "ec2" }, second);
+      expect(host.registeredCloudProviders).toHaveLength(1);
+      disposeFirst();
+      expect(host.registeredCloudProviders[0]?.impl).toBe(second);
+      disposeSecond();
+      expect(host.registeredCloudProviders).toHaveLength(0);
+    });
+
+    it("refuses what the real host refuses structurally", () => {
+      const host = createMockHost();
+      expect(() => host.registerCloudProvider({ id: "" }, {} as never)).toThrow(/descriptor.id/);
+      expect(() => host.registerCloudProvider({ id: "ec2" }, null as never)).toThrow(/impl/);
+    });
+  });
+
   describe("registerWorktreeDeleteNotesProvider (#13805)", () => {
     it("records the binding so a test can ask it, replacing by id with an inert prior disposer", async () => {
       const host = createMockHost();
@@ -2066,9 +2095,24 @@ describe("createMockHost production-parity validation (#10617)", () => {
         /PERMISSION_REQUIRED/
       );
       const host = createMockHost({ agents: panes });
-      await expect(host.agents.list()).resolves.toEqual(panes);
+      await expect(host.agents.list()).resolves.toEqual(
+        panes.map((pane) => ({ ...pane, launchedByThisPlugin: false }))
+      );
       host.simulateAgentsChange([]);
       await expect(host.agents.list()).resolves.toEqual([]);
+    });
+
+    it("agents.list marks the panes this plugin launched, as production (#16845)", async () => {
+      const host = createMockHost({
+        agents: panes,
+        dispatch: async () => ({ ok: true, result: { launched: true, terminalId: "t-2" } }),
+      });
+      host.simulateAgentLaunched("t-1");
+      const launched = async () =>
+        (await host.agents.list()).filter((p) => p.launchedByThisPlugin).map((p) => p.terminalId);
+      await expect(launched()).resolves.toEqual(["t-1"]);
+      await host.dispatch("agent.launch", { agentId: "codex" });
+      await expect(launched()).resolves.toEqual(["t-1", "t-2"]);
     });
 
     it("agents.listAll and onDidChangeAllAgents mirror production's gates and shape", async () => {
@@ -2129,6 +2173,41 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(twice).toHaveBeenCalledTimes(1);
     });
 
+    it("reports a seeded band and Canopy note, quoting Canopy only with terminal:read", async () => {
+      const canopy = { readAt: 5, ask: "question" as const, quote: "Which branch?" };
+      const placed = { ...panes[0]!, band: "needs-you" as const, canopy };
+      const run = {
+        workspaceId: "12345678-1234-4abc-8def-123456789abc",
+        workspaceKind: "scratch" as const,
+        terminalId: "t-1",
+        band: "needs-you" as const,
+        canopy: { ...canopy, seen: false } as typeof canopy,
+      };
+      const seed = { agents: [run], degraded: false, lastSuccessfulAt: 1 };
+
+      const reader = createMockHost({
+        capabilities: ["agent:read", "terminal:read"],
+        agents: [placed],
+        allAgents: seed,
+      });
+      expect((await reader.agents.list())[0]).toMatchObject({ band: "needs-you", canopy });
+      const listed = (await reader.agents.listAll()).agents[0]!;
+      expect(listed.canopy).toEqual(canopy);
+      expect(Object.isFrozen(listed.canopy)).toBe(true);
+
+      const blind = createMockHost({ agents: [placed] });
+      const pane = (await blind.agents.list())[0]!;
+      expect(pane.band).toBe("needs-you");
+      expect(pane.canopy).toEqual({ readAt: 5, ask: "question" });
+      const pushed: unknown[] = [];
+      await blind.onDidChangeAllAgents((s) => pushed.push(s), { debounceMs: 0 });
+      blind.simulateAllAgentsChange(seed);
+      const blindRun = (await blind.agents.listAll()).agents[0]!;
+      expect(blindRun.band).toBe("needs-you");
+      expect(blindRun.canopy).toEqual({ readAt: 5, ask: "question" });
+      expect(pushed).toHaveLength(1);
+    });
+
     it("onDidChangeFocusedPanel gates, replays and dedupes like production", async () => {
       expect(() => createMockHost().onDidChangeFocusedPanel(() => {})).toThrow(
         /PERMISSION_REQUIRED:.*panel:focus-read/
@@ -2157,7 +2236,25 @@ describe("createMockHost production-parity validation (#10617)", () => {
       expect(received).toHaveLength(2);
     });
 
-    it("onDidChangeFocusedPanel hides the Portal from a project plugin and survives a throw", async () => {
+    it("onDidChangeFocusedPanel never delivers the retired portal kind to an installed plugin", async () => {
+      const host = createMockHost({
+        capabilities: ["panel:focus-read"],
+        focusedPanel: { kind: "portal", agent: false, worktreeId: "w" },
+      });
+      const received: unknown[] = [];
+      await host.onDidChangeFocusedPanel((f) => received.push(f));
+      await Promise.resolve();
+      host.simulateFocusedPanelChange({ kind: "file", agent: false, worktreeId: "w" });
+      host.simulateFocusedPanelChange({ kind: "portal", agent: false, worktreeId: "w" });
+
+      expect(received).toEqual([
+        { kind: null, agent: false, worktreeId: null },
+        { kind: "file", agent: false, worktreeId: "w" },
+        { kind: null, agent: false, worktreeId: null },
+      ]);
+    });
+
+    it("onDidChangeFocusedPanel reads the retired portal kind as no panel and survives a throw", async () => {
       const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       const host = createMockHost({
         pluginId: `project__${"a".repeat(64)}__acme.board`,
@@ -2171,10 +2268,12 @@ describe("createMockHost production-parity validation (#10617)", () => {
       });
       await Promise.resolve();
       host.simulateFocusedPanelChange({ kind: "file", agent: false, worktreeId: "w" });
+      host.simulateFocusedPanelChange({ kind: "portal", agent: false, worktreeId: "w" });
 
       expect(received).toEqual([
         { kind: null, agent: false, worktreeId: null },
         { kind: "file", agent: false, worktreeId: "w" },
+        { kind: null, agent: false, worktreeId: null },
       ]);
       expect(errors).toHaveBeenCalled();
 
@@ -2923,6 +3022,43 @@ describe("createMockHost terminals.readScreen", () => {
     });
     host.simulateTerminalScreen("t-1", null);
     await expect(host.terminals.readScreen("t-1")).resolves.toEqual({ status: "not-found" });
+  });
+
+  it("hands back a fixture's input box unchanged, whatever lines are kept", async () => {
+    const inputLine = { state: "suggestion", text: "run the gate table" } as const;
+    const host = createMockHost({
+      capabilities: ["terminal:read"],
+      terminalScreens: {
+        "t-1": {
+          status: "ok",
+          text: "⏺ Done.\n❯ run the gate table\n? for shortcuts",
+          lineCount: 3,
+          truncated: false,
+          inputLine,
+        },
+      },
+    });
+    await expect(host.terminals.readScreen("t-1", { lines: 1 })).resolves.toEqual({
+      status: "ok",
+      text: "? for shortcuts",
+      lineCount: 1,
+      truncated: true,
+      inputLine,
+    });
+    host.simulateTerminalScreen("t-2", {
+      status: "ok",
+      text: "",
+      lineCount: 0,
+      truncated: false,
+      inputLine: { state: "empty", text: "" },
+    });
+    await expect(host.terminals.readScreen("t-2")).resolves.toMatchObject({
+      inputLine: { state: "empty", text: "" },
+    });
+    expect(host.readScreenCalls.map((c) => c.result)).toMatchObject([
+      { inputLine },
+      { inputLine: { state: "empty" } },
+    ]);
   });
 });
 

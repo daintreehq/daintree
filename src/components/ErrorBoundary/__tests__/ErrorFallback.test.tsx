@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ErrorFallback } from "../ErrorFallback";
-import { actionService } from "@/services/ActionService";
+import { logsClient } from "@/clients/logsClient";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
-vi.mock("@/services/ActionService", () => ({
-  actionService: {
-    dispatch: vi.fn().mockResolvedValue({ ok: true }),
+vi.mock("@/clients/logsClient", () => ({
+  logsClient: {
+    openFile: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -178,13 +178,67 @@ describe("ErrorFallback", () => {
       expect(screen.getByText("View logs")).toBeTruthy();
     });
 
-    it("dispatches logs.openFile when View logs is clicked", () => {
+    it("opens the log file over IPC without needing registered actions", () => {
       vi.stubEnv("DEV", false);
       render(<ErrorFallback {...baseProps} variant="section" />);
       fireEvent.click(screen.getByText("View logs"));
-      expect(actionService.dispatch).toHaveBeenCalledWith("logs.openFile", undefined, {
-        source: "user",
+      expect(logsClient.openFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows a local alert when the log open call rejects, and keeps the other actions", async () => {
+      vi.stubEnv("DEV", false);
+      vi.mocked(logsClient.openFile).mockRejectedValueOnce(new Error("no logs"));
+      render(<ErrorFallback {...baseProps} variant="section" onReport={vi.fn()} />);
+      fireEvent.click(screen.getByText("View logs"));
+      const alert = await screen.findByRole("alert");
+      expect(alert.textContent).toContain("Couldn't open the log file");
+      expect(screen.getByTestId("error-fallback-restart")).toBeTruthy();
+      expect(screen.getByTestId("error-fallback-report")).toBeTruthy();
+      expect(screen.getByTestId("error-fallback-logs")).toBeTruthy();
+    });
+
+    it("shows the alert when the log opener throws synchronously", async () => {
+      vi.stubEnv("DEV", false);
+      vi.mocked(logsClient.openFile).mockImplementationOnce(() => {
+        throw new Error("bridge unavailable");
       });
+      render(<ErrorFallback {...baseProps} variant="fullscreen" />);
+      fireEvent.click(screen.getByText("View logs"));
+      expect(await screen.findByRole("alert")).toBeTruthy();
+    });
+
+    it("clears the alert when View logs is retried and succeeds", async () => {
+      vi.stubEnv("DEV", false);
+      vi.mocked(logsClient.openFile).mockRejectedValueOnce(new Error("no logs"));
+      render(<ErrorFallback {...baseProps} variant="section" />);
+      fireEvent.click(screen.getByText("View logs"));
+      await screen.findByRole("alert");
+      fireEvent.click(screen.getByText("View logs"));
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    });
+
+    it("ignores a stale failure that settles after a later successful retry", async () => {
+      vi.stubEnv("DEV", false);
+      let rejectFirst!: (e: Error) => void;
+      vi.mocked(logsClient.openFile)
+        .mockImplementationOnce(() => new Promise<void>((_, reject) => (rejectFirst = reject)))
+        .mockResolvedValueOnce(undefined);
+      render(<ErrorFallback {...baseProps} variant="section" />);
+      fireEvent.click(screen.getByText("View logs"));
+      fireEvent.click(screen.getByText("View logs"));
+      await waitFor(() => expect(logsClient.openFile).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        rejectFirst(new Error("late"));
+      });
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("shows no alert when the log opens", async () => {
+      vi.stubEnv("DEV", false);
+      render(<ErrorFallback {...baseProps} variant="section" />);
+      fireEvent.click(screen.getByText("View logs"));
+      await waitFor(() => expect(logsClient.openFile).toHaveBeenCalled());
+      expect(screen.queryByRole("alert")).toBeNull();
     });
 
     it("keeps Report issue focused but inert while a report is in flight", () => {
@@ -385,6 +439,25 @@ describe("ErrorFallback description and details", () => {
       unmount();
     }
   });
+
+  it.each(["component", "section", "fullscreen"] as const)(
+    "keeps Copy details at a constant name and width while it confirms (%s)",
+    async (variant) => {
+      installClipboardMock();
+      render(<ErrorFallback error={error} resetError={vi.fn()} variant={variant} />);
+      const button = screen.getByTestId("error-fallback-copy-details");
+      expect(button.getAttribute("aria-label")).toBe("Copy details");
+
+      fireEvent.click(button);
+
+      await waitFor(() => expect(button.textContent).toContain("Copied"));
+      expect(button.getAttribute("aria-label")).toBe("Copy details");
+      const sizers = Array.from(button.querySelectorAll("[data-label]")).map((el) =>
+        el.getAttribute("data-label")
+      );
+      expect(sizers).toEqual(expect.arrayContaining(["Copy details", "Copied"]));
+    }
+  );
 
   it("says the terminals keep running wherever the copy is not the raw dev message", () => {
     vi.stubEnv("DEV", false);

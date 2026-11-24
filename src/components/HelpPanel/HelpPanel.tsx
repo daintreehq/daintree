@@ -27,6 +27,7 @@ import { VoiceMicNoticeBanner } from "@/components/Terminal/VoiceMicNoticeBanner
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
+import { submitPaneComposerText } from "@/components/Terminal/submitComposerText";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import {
   subscribeWhenReady as subscribeTerminalServiceWhenReady,
@@ -50,6 +51,7 @@ import {
   useHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
 import { ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
+import { GLOBAL_ASSISTANT_SESSION_AGENT_IDS } from "@shared/config/globalAssistantSessions";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import {
   closeSessionDescription,
@@ -135,6 +137,35 @@ const ASSISTANT_INSTALLER_URL = "https://daintree.org/download";
 const ASSISTANT_AGENT_EXIT_SETTLE_MS = 750;
 
 /** "Claude or Codex": the agents that can run the assistant, for the line saying what to install. */
+/**
+ * The Assistant composer's `submitText`: whether its terminal can take input is
+ * read as the text goes, so a lock or restart landing while `@` tokens expand
+ * refuses the send, and the composer keeps the draft and says it wasn't sent.
+ */
+function submitAssistantComposerText(
+  terminalId: string,
+  text: string,
+  imagePaths: readonly string[] | undefined,
+  submissionToken?: string
+): Promise<boolean> {
+  return submitPaneComposerText(
+    terminalId,
+    text,
+    imagePaths,
+    {
+      canTakeInput: () => {
+        const panel = usePanelStore.getState().panelsById[terminalId];
+        const pty = panel && isPtyPanel(panel) ? panel : undefined;
+        return pty?.isInputLocked !== true && pty?.isRestarting !== true;
+      },
+      onSending: () =>
+        withTerminalService((service) => service.notifyUserInput(terminalId), terminalId),
+      onAccepted: () => reportCanopySent(terminalId),
+    },
+    submissionToken
+  );
+}
+
 function assistantAgentNames(): string {
   const names = getAssistantSupportedAgentIds().map((id) => getAgentConfig(id)?.name ?? id);
   if (names.length === 0) return "a supported agent";
@@ -224,6 +255,7 @@ export function HelpPanel({
   // The global assistant replaces the lane body while its tab is selected
   // (#14454); every lane keeps running behind it, as a background lane does.
   const globalSelected = useHelpPanelStore((s) => s.globalSelected);
+  const globalSlot = useHelpPanelStore((s) => s.globalSlot);
   const controller = useHelpSessionController(activeSlot);
 
   const session = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
@@ -910,7 +942,15 @@ export function HelpPanel({
     }
   }, []);
   const projectActivity = useMemo(() => summarizeLaneActivity(sessionTabs), [sessionTabs]);
-  const globalAgentState = useGlobalAssistantActivity(isOpen && isVisible && !globalSelected);
+  const globalNewSessionAgentIds = useMemo(
+    () =>
+      supportedInstalledAgentIds.filter((id) => GLOBAL_ASSISTANT_SESSION_AGENT_IDS.includes(id)),
+    [supportedInstalledAgentIds]
+  );
+  const globalAgentState = useGlobalAssistantActivity(
+    isOpen && isVisible && !globalSelected,
+    globalSlot
+  );
   const projectIdentity = useProjectAssistantIdentity(activeWorkspaceId);
   const globalIdentity = useGlobalAssistantIdentity();
   const globalAssistantName = displayIdentityName(globalIdentity, "Global assistant");
@@ -1238,6 +1278,8 @@ export function HelpPanel({
       // element per ARIA 1.2 and trips axe's `aria-hidden-focus` rule).
       inert={!isVisible || undefined}
       data-macro-focus={isHighlighted ? "true" : undefined}
+      // Focus anywhere in the aside hands prompt history to its composer.
+      data-prompt-history-host=""
       onFocus={() => {
         setHasDomFocus(true);
         // Promote the assistant to the active macro region whenever DOM focus
@@ -1328,6 +1370,10 @@ export function HelpPanel({
           canOpenSessionWithAgent={canStartSessionWithAgent}
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
           idBase={tabIdBase}
+          workspaceId={activeWorkspaceId}
+          // A launch reserves the id, then commits a spawning placeholder, before
+          // the PTY exists; plugins get it once there is one to act on.
+          activeTerminalId={terminalSpawnStatus === "ready" ? terminalId : null}
         />
       )}
 
@@ -1401,6 +1447,7 @@ export function HelpPanel({
               controlsHost={globalControlsHost}
               focusHandledThrough={scopeSwitchFocusRequest}
               onOpenDocs={handleOpenAssistantDocs}
+              newSessionAgentIds={globalNewSessionAgentIds}
             />
           </Suspense>
         ) : showTerminal ? (
@@ -1460,24 +1507,13 @@ export function HelpPanel({
                     // The aside's own focus state, the one its edge shows: the
                     // grid's selection never names the Assistant's terminal.
                     selected={isHighlighted}
-                    onSend={({ text, imagePaths }) => {
-                      if (terminalPty?.isInputLocked === true) return;
-                      withTerminalService(
-                        (service) => service.notifyUserInput(terminalId),
-                        terminalId
-                      );
-                      reportCanopySent(terminalId);
-                      // submit can now reject for dead PTYs (#8706); swallow
-                      // to log so the unhandled rejection doesn't leak — the
-                      // help panel is a one-shot send with no recovery UI.
-                      const submission =
-                        imagePaths !== undefined && imagePaths.length > 0
-                          ? terminalClient.submitWithImages(terminalId, text, imagePaths)
-                          : terminalClient.submit(terminalId, text);
-                      submission.catch((err) => {
-                        logWarn("[HelpPanel] submit failed", { terminalId, error: err });
-                      });
-                    }}
+                    ownsHistoryByFocus={isVisible}
+                    onSend={({ text, imagePaths }) =>
+                      void submitAssistantComposerText(terminalId, text, imagePaths)
+                    }
+                    submitText={(text, imagePaths, submissionToken) =>
+                      submitAssistantComposerText(terminalId, text, imagePaths, submissionToken)
+                    }
                     onSendKey={(key) => {
                       if (terminalPty?.isInputLocked === true) return;
                       if (key === "escape") {

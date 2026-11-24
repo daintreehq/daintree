@@ -29,6 +29,13 @@ const { useFileTreeDecorationsMock } = vi.hoisted(() => ({
 vi.mock("@/hooks/useFileTreeDecorations", () => ({
   useFileTreeDecorations: useFileTreeDecorationsMock,
 }));
+const { hasDecorationProviderMock } = vi.hoisted(() => ({
+  hasDecorationProviderMock: vi.fn<(scope: string) => boolean>(),
+}));
+vi.mock("@/store/pluginRuntimeStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/pluginRuntimeStore")>()),
+  useHasFileDecorationProvider: hasDecorationProviderMock,
+}));
 
 let rangeOverride: { startIndex: number; endIndex: number } | null = null;
 vi.mock("@/lib/platform", async (importOriginal) => ({
@@ -117,6 +124,8 @@ beforeEach(() => {
   scrollIntoViewMock.mockClear();
   useFileTreeDecorationsMock.mockReset();
   useFileTreeDecorationsMock.mockReturnValue({});
+  hasDecorationProviderMock.mockReset();
+  hasDecorationProviderMock.mockImplementation((scope) => scope.startsWith("worktree-files:"));
 });
 
 function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {}) {
@@ -934,6 +943,22 @@ describe("FileTreeView git status markers", () => {
     expect(describedStatus(container, "README.md")).toBeNull();
   });
 
+  it("carries no native title on the git and decoration markers", () => {
+    useFileTreeDecorationsMock.mockReturnValue({
+      "README.md": { badge: "3", tooltip: "3 lint errors" },
+    });
+    const { container } = renderTree({
+      rows: NESTED_ROWS,
+      gitStatusIndex: buildFileBrowserGitStatusIndex([
+        { relativePath: "src/app.ts", status: "modified" },
+      ]),
+    });
+
+    expect(describedStatus(container, "app.ts")).toBe("Modified");
+    expect(container.textContent).toContain("3");
+    expect(container.querySelector("[title]")).toBeNull();
+  });
+
   it("phrases a folder as containing changes, not as being changed itself", () => {
     const { container } = renderTree({
       rows: NESTED_ROWS,
@@ -1287,6 +1312,39 @@ describe("FileTreeView plugin decorations", () => {
 
     renderTree({ basePath: "" });
     expect(useFileTreeDecorationsMock.mock.calls.at(-1)?.[2]).toBe(false);
+  });
+
+  it("asks for nothing while no plugin declares a provider for the tree's scope", () => {
+    hasDecorationProviderMock.mockReturnValue(false);
+    rangeOverride = { startIndex: 50, endIndex: 55 };
+    renderTree({ rows: files });
+    expect(hasDecorationProviderMock).toHaveBeenLastCalledWith("worktree-files:/repo");
+    const last = useFileTreeDecorationsMock.mock.calls.at(-1);
+    expect(last?.[1]).toEqual([]);
+    expect(last?.[2]).toBe(false);
+  });
+
+  it("starts asking once a provider for the scope appears", () => {
+    hasDecorationProviderMock.mockReturnValue(false);
+    rangeOverride = { startIndex: 50, endIndex: 55 };
+    const tree = renderTree({ rows: files });
+    expect(useFileTreeDecorationsMock.mock.calls.at(-1)?.[2]).toBe(false);
+
+    hasDecorationProviderMock.mockReturnValue(true);
+    tree.rerender(
+      <FileTreeView
+        rows={files}
+        cursorPath={null}
+        onSelect={tree.onSelect}
+        onToggleExpanded={vi.fn()}
+        rowContextMenu={() => <div />}
+        basePath={BASE_PATH}
+        label="Files"
+      />
+    );
+    const last = useFileTreeDecorationsMock.mock.calls.at(-1);
+    expect(last?.[2]).toBe(true);
+    expect(last?.[1]).toContain("f50.ts");
   });
 
   it("requests only the mounted window plus padding, not the whole listing", () => {

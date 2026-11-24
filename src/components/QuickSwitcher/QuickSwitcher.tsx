@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { KbdChord } from "@/components/ui/Kbd";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
-import { PaletteFooterHints, PaletteNoMatchHint } from "@/components/ui/AppPaletteDialog";
+import {
+  PaletteFooterHints,
+  PaletteNoMatchHint,
+  type PaletteCloseReason,
+} from "@/components/ui/AppPaletteDialog";
 import { PaletteScopeChip } from "@/components/ui/PaletteScopeChip";
 import { QuickSwitcherItem } from "./QuickSwitcherItem";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
@@ -21,6 +25,8 @@ function getQuickSwitcherActionLabel(item: QuickSwitcherItemData): string {
       return "to switch worktree";
     case "plugin":
       return "to open";
+    case "file":
+      return "to open file";
   }
   const _exhaustive: never = item.type;
   return _exhaustive;
@@ -35,6 +41,7 @@ type QuickSwitcherProps = Pick<
   | "selectedIndex"
   | "matchesById"
   | "isLoading"
+  | "isFiltering"
   | "close"
   | "setQuery"
   | "setSelectedIndex"
@@ -46,8 +53,13 @@ type QuickSwitcherProps = Pick<
   | "keywordProvider"
   | "scopedStatus"
   | "enterScope"
+  | "fileScope"
+  | "isFileKeyword"
+  | "enterFileScope"
   | "exitScope"
 >;
+
+const FILE_EDITOR_HINT = { keys: "Cmd+Enter", label: "to open in editor" };
 
 export function QuickSwitcher({
   isOpen,
@@ -57,6 +69,7 @@ export function QuickSwitcher({
   selectedIndex,
   matchesById,
   isLoading,
+  isFiltering,
   close,
   setQuery,
   setSelectedIndex,
@@ -68,29 +81,45 @@ export function QuickSwitcher({
   keywordProvider,
   scopedStatus,
   enterScope,
+  fileScope,
+  isFileKeyword,
+  enterFileScope,
   exitScope,
 }: QuickSwitcherProps) {
   const handleSelect = useCallback(
-    (item: QuickSwitcherItemData) => {
-      selectItem(item);
+    (item: QuickSwitcherItemData, modified?: boolean) => {
+      selectItem(item, modified);
     },
     [selectItem]
   );
+
+  const isScoped = scopedProvider !== null || fileScope !== null;
+  // The chip names the worktree once, so no file row has to.
+  const fileScopeTitle = fileScope?.worktreeName
+    ? `Files in ${fileScope.worktreeName}`
+    : fileScope
+      ? "Files"
+      : null;
+  const scopeTitle = scopedProvider?.title ?? fileScopeTitle;
 
   const footerHintId = useId();
 
   // While the query spells a provider's keyword, the footer says Tab scopes to
   // it — the one place the keyword grammar is taught.
   const keywordHint = useMemo(
-    () => (keywordProvider ? { keys: "Tab", label: `to search ${keywordProvider.title}` } : null),
-    [keywordProvider]
+    () =>
+      isFileKeyword
+        ? { keys: "Tab", label: "to search files" }
+        : keywordProvider
+          ? { keys: "Tab", label: `to search ${keywordProvider.title}` }
+          : null,
+    [isFileKeyword, keywordProvider]
   );
   // Inside a scope the way back is Backspace on an empty field, said where the
   // Tab that got the user in was taught.
   const scopeExitHint = useMemo(
-    () =>
-      scopedProvider && query === "" ? { keys: "Backspace", label: "to search everything" } : null,
-    [scopedProvider, query]
+    () => (isScoped && query === "" ? { keys: "Backspace", label: "to search everything" } : null),
+    [isScoped, query]
   );
   const secondaryHint = keywordHint ?? scopeExitHint;
   const getFooter = useCallback(
@@ -101,7 +130,10 @@ export function QuickSwitcher({
           {item ? (
             <PaletteFooterHints
               primaryHint={{ keys: "Enter", label: getQuickSwitcherActionLabel(item) }}
-              hints={secondaryHint ? [secondaryHint] : []}
+              hints={[
+                ...(item.type === "file" ? [FILE_EDITOR_HINT] : []),
+                ...(secondaryHint ? [secondaryHint] : []),
+              ]}
             />
           ) : (
             <PaletteFooterHints primaryHint={secondaryHint!} />
@@ -115,16 +147,22 @@ export function QuickSwitcher({
   // Built-in rows carry their type in their glyph and stay in one MRU or ranked
   // run; a band would split that order. Plugin rows come from somewhere else,
   // so each provider's block is named once above it instead of on every row.
-  // Scoped, the chip in the field already names the one provider.
+  // Scoped, the chip in the field already names the one provider. The file
+  // scope's empty field lists changed files, and says so: nothing was typed
+  // that they match.
   const getSectionLabel = useCallback(
     (item: QuickSwitcherItemData) =>
-      !scopedProvider && item.type === "plugin" ? (item.pluginHit?.providerTitle ?? "") : "",
+      item.file?.changed
+        ? "Changed files"
+        : !scopedProvider && item.type === "plugin"
+          ? (item.pluginHit?.providerTitle ?? "")
+          : "",
     [scopedProvider]
   );
 
-  // Keyword + Tab scopes the switcher to that provider; Backspace on an empty
-  // field, or Escape once the query is clear, steps back out. Plain Tab and
-  // Shift+Tab keep moving the selection as before.
+  // Keyword + Tab scopes the switcher to files or to that provider; Backspace
+  // on an empty field steps back out. Plain Tab and Shift+Tab move focus as
+  // usual.
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
       if (
@@ -133,53 +171,69 @@ export function QuickSwitcher({
         !e.metaKey &&
         !e.ctrlKey &&
         !e.altKey &&
-        keywordProvider
+        (isFileKeyword || keywordProvider)
       ) {
         e.preventDefault();
         e.stopPropagation();
-        enterScope(keywordProvider.key);
-        useAnnouncerStore.getState().announce(`Searching ${keywordProvider.title}`, "polite");
-        return;
-      }
-      if (!scopedProvider) return;
-      if (e.key === "Backspace") {
-        const input = e.currentTarget;
-        if (input.selectionStart === 0 && input.selectionEnd === 0) {
-          e.preventDefault();
-          exitScope();
-          useAnnouncerStore.getState().announce("Searching everything", "polite");
+        if (isFileKeyword) {
+          enterFileScope();
+          useAnnouncerStore.getState().announce("Searching files", "polite");
+        } else if (keywordProvider) {
+          enterScope(keywordProvider.key);
+          useAnnouncerStore.getState().announce(`Searching ${keywordProvider.title}`, "polite");
         }
         return;
       }
-      if (e.key === "Escape" && query === "") {
+      if (!isScoped || e.key !== "Backspace") return;
+      // Only an empty field: with text before the caret's end Backspace edits it.
+      if (e.currentTarget.value === "") {
         e.preventDefault();
-        e.stopPropagation();
         exitScope();
         useAnnouncerStore.getState().announce("Searching everything", "polite");
       }
     },
-    [keywordProvider, scopedProvider, enterScope, exitScope, query]
+    [isFileKeyword, keywordProvider, isScoped, enterFileScope, enterScope, exitScope]
+  );
+
+  // Escape once the query is clear steps out of a scope before it closes, from
+  // the field or from anywhere else in the palette; a scrim click closes.
+  const handleClose = useCallback(
+    (reason?: PaletteCloseReason) => {
+      if (reason === "escape" && isScoped) {
+        exitScope();
+        useAnnouncerStore.getState().announce("Searching everything", "polite");
+        return;
+      }
+      close();
+    },
+    [isScoped, exitScope, close]
   );
 
   // Hold the last chip label across the exit animation so it doesn't blank out.
   const [chipLabel, setChipLabel] = useState("");
   useEffect(() => {
-    if (scopedProvider) setChipLabel(scopedProvider.title);
-  }, [scopedProvider]);
+    if (scopeTitle) setChipLabel(scopeTitle);
+  }, [scopeTitle]);
   const { isVisible: chipVisible, shouldRender: chipShouldRender } = useAnimatedPresence({
-    isOpen: scopedProvider !== null,
+    isOpen: isScoped,
     animationDuration: UI_PALETTE_EXIT_DURATION,
   });
   const chipNode = chipShouldRender ? (
     <PaletteScopeChip label={chipLabel} isVisible={chipVisible} live={false} />
   ) : null;
 
-  const scopedFailure =
-    scopedProvider && scopedStatus === "timeout"
+  const scopedFailure = fileScope?.failed
+    ? "Couldn't search files right now"
+    : scopedProvider && scopedStatus === "timeout"
       ? `${scopedProvider.title} didn't answer in time`
       : scopedProvider && scopedStatus === "error"
         ? `${scopedProvider.title} couldn't search right now`
         : null;
+  // With no worktree shown there is nothing to search, typed or not.
+  const noWorktree =
+    fileScope !== null && fileScope.worktreeName === null
+      ? "Select a worktree to search its files"
+      : null;
   // The empty field's way out of the scope is Backspace; with a query in the
   // field Backspace edits it, so that state's next step is Escape.
   const backToEverything = (
@@ -210,7 +264,7 @@ export function QuickSwitcher({
       onSelectPrevious={selectPrevious}
       onSelectNext={selectNext}
       onConfirm={confirmSelection}
-      onClose={close}
+      onClose={handleClose}
       onHoverIndex={setSelectedIndex}
       onKeyDown={handleKeyDown}
       inputPrefix={chipNode}
@@ -235,26 +289,37 @@ export function QuickSwitcher({
       shortcut={quickSwitcherShortcut}
       ariaLabel="Quick switcher"
       isLoading={isLoading}
+      isFiltering={isFiltering}
       searchPlaceholder={
-        scopedProvider ? `Search ${scopedProvider.title}…` : "Find panels, agents, or worktrees…"
+        fileScope
+          ? "Search files by name or path…"
+          : scopedProvider
+            ? `Search ${scopedProvider.title}…`
+            : "Find panels, agents, or worktrees…"
       }
       searchAriaLabel={
-        scopedProvider ? `Search ${scopedProvider.title}` : "Find panels, agents, or worktrees"
+        fileScope
+          ? fileScope.worktreeName
+            ? `Search files in ${fileScope.worktreeName}`
+            : "Search files"
+          : scopedProvider
+            ? `Search ${scopedProvider.title}`
+            : "Find panels, agents, or worktrees"
       }
       listId="quick-switcher-list"
       itemIdPrefix="qs-option"
       emptyMessage={
-        scopedProvider
-          ? (scopedFailure ?? `Type to search ${scopedProvider.title}`)
-          : "No panels open"
+        fileScope
+          ? (noWorktree ?? scopedFailure ?? "No files in this worktree yet")
+          : scopedProvider
+            ? (scopedFailure ?? `Type to search ${scopedProvider.title}`)
+            : "No panels open"
       }
-      noMatchMessage={scopedProvider ? (scopedFailure ?? undefined) : undefined}
-      noMatchContent={
-        scopedProvider ? scopedNoMatch : <PaletteNoMatchHint what="everything open" />
-      }
+      noMatchMessage={isScoped ? (noWorktree ?? scopedFailure ?? undefined) : undefined}
+      noMatchContent={isScoped ? scopedNoMatch : <PaletteNoMatchHint what="everything open" />}
       totalResults={totalResults}
       emptyContent={
-        scopedProvider ? (
+        isScoped ? (
           backToEverything
         ) : (
           <p className="mt-2 text-xs text-text-secondary">

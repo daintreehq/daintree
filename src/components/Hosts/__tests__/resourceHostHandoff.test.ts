@@ -8,6 +8,7 @@ const client = vi.hoisted(() => ({
   add: vi.fn(),
   connectAndSettle: vi.fn(),
   forget: vi.fn(),
+  update: vi.fn(),
 }));
 const requestHostSwitch = vi.hoisted(() => vi.fn());
 const requestHostUpdate = vi.hoisted(() => vi.fn());
@@ -33,6 +34,7 @@ import {
   freeHostName,
   openResourceBoxOnHost,
 } from "../resourceHostHandoff";
+import { _resetPendingPlacementsForTesting } from "../pendingPlacement";
 
 function descriptor(id: string, target: string, ownerWorktreeId?: string): HostDescriptor {
   return {
@@ -85,7 +87,9 @@ describe("resource box handoff", () => {
       descriptor(payload.name, box.sshTarget, payload.ownerWorktreeId)
     );
     client.connectAndSettle.mockResolvedValue(connected);
+    client.update.mockResolvedValue({});
     requestHostSwitch.mockReturnValue(1);
+    _resetPendingPlacementsForTesting();
   });
 
   it("adds the box as a host owned by the worktree and places the branch there", async () => {
@@ -139,28 +143,78 @@ describe("resource box handoff", () => {
     expect(outcome).toEqual({ status: "placing", hostId: "box" });
   });
 
-  it("opens Host setup, without connecting, when Daintree isn't listening there", async () => {
+  it("opens Host setup, without connecting, with the worktree waiting to be placed after it", async () => {
     client.probe.mockResolvedValue(probeResult({ hostModeListening: false }));
 
-    const outcome = await openResourceBoxOnHost(box);
+    const outcome = await openResourceBoxOnHost({ ...box, label: "feature/x" });
 
     expect(client.add).toHaveBeenCalled();
     expect(client.connectAndSettle).not.toHaveBeenCalled();
-    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x");
+    expect(client.update).toHaveBeenCalledWith({
+      hostId: "dt-feature-x",
+      pendingPlacement: {
+        projectId: "proj-1",
+        worktreeId: box.worktreeId,
+        worktreePath: box.worktreePath,
+        label: "feature/x",
+        requestedAt: expect.any(Number),
+      },
+    });
+    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
     expect(openHostsSettingsTab).toHaveBeenCalled();
     expect(requestHostSwitch).not.toHaveBeenCalled();
     expect(outcome).toEqual({ status: "setup", hostId: "dt-feature-x" });
+  });
+
+  it("opens setup only once the placement is held, so finishing setup always finds it", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: false }));
+    let held!: () => void;
+    client.update.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          held = () => resolve({});
+        })
+    );
+
+    const outcome = openResourceBoxOnHost(box);
+    await vi.waitFor(() => expect(client.update).toHaveBeenCalled());
+    expect(requestHostUpdate).not.toHaveBeenCalled();
+
+    held();
+    await expect(outcome).resolves.toEqual({ status: "setup", hostId: "dt-feature-x" });
+    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
   });
 
   it("opens Host setup when a listener answers but the link doesn't come up", async () => {
     client.probe.mockResolvedValue(probeResult({ hostModeListening: true }));
     client.connectAndSettle.mockResolvedValue({ status: "disconnected" });
 
-    const outcome = await openResourceBoxOnHost(box);
+    const outcome = await openResourceBoxOnHost({ ...box, askFirst: true });
 
-    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x");
+    expect(client.update).toHaveBeenCalledWith({
+      hostId: "dt-feature-x",
+      pendingPlacement: expect.objectContaining({ label: "feature-x", askFirst: true }),
+    });
+    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
     expect(requestHostSwitch).not.toHaveBeenCalled();
     expect(outcome.status).toBe("setup");
+  });
+
+  it("stops waiting on the user's own host when the worktree went away while it was held", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: false }));
+    client.list.mockResolvedValue([entry(descriptor("my-box", "dt-feature-x"))]);
+    let current = true;
+    client.update.mockImplementation(async () => {
+      current = false;
+      return {};
+    });
+
+    await expect(openResourceBoxOnHost({ ...box, isCurrent: () => current })).rejects.toMatchObject(
+      { code: "CANCELLED" }
+    );
+    expect(client.update).toHaveBeenLastCalledWith({ hostId: "my-box", pendingPlacement: null });
+    expect(client.forget).not.toHaveBeenCalled();
+    expect(requestHostUpdate).not.toHaveBeenCalled();
   });
 
   it("adds nothing when ssh can't reach the box, and says so in ssh's words", async () => {
@@ -235,6 +289,78 @@ describe("resource box handoff", () => {
     );
     expect(requestHostSwitch).not.toHaveBeenCalled();
     expect(client.forget).not.toHaveBeenCalled();
+  });
+
+  it("holds a connected box for the switch dialog, asking first, when it can't open now", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: true }));
+    let placeNowAsked = 0;
+
+    const outcome = await openResourceBoxOnHost({
+      ...box,
+      label: "feature/x",
+      placeNow: () => {
+        placeNowAsked += 1;
+        return false;
+      },
+    });
+
+    expect(placeNowAsked).toBe(1);
+    expect(client.connectAndSettle).toHaveBeenCalled();
+    expect(client.connectAndSettle.mock.invocationCallOrder[0]).toBeLessThan(
+      client.update.mock.invocationCallOrder[0]!
+    );
+    expect(client.update).toHaveBeenCalledWith({
+      hostId: "dt-feature-x",
+      pendingPlacement: expect.objectContaining({
+        worktreeId: box.worktreeId,
+        worktreePath: box.worktreePath,
+        label: "feature/x",
+        askFirst: true,
+      }),
+    });
+    expect(requestHostSwitch).not.toHaveBeenCalled();
+    expect(requestHostUpdate).not.toHaveBeenCalled();
+    expect(openHostsSettingsTab).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ status: "waiting", hostId: "dt-feature-x" });
+  });
+
+  it("opens Host setup with the switch after it set to ask first when it can't open now", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: false }));
+
+    const outcome = await openResourceBoxOnHost({ ...box, placeNow: () => false });
+
+    expect(client.update).toHaveBeenCalledWith({
+      hostId: "dt-feature-x",
+      pendingPlacement: expect.objectContaining({ askFirst: true }),
+    });
+    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
+    expect(outcome).toEqual({ status: "setup", hostId: "dt-feature-x" });
+  });
+
+  it("asks first after setup when the view goes out of sight while the placement is written", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: false }));
+    let visible = true;
+    client.update.mockImplementation(async () => {
+      visible = false;
+      return {};
+    });
+
+    await openResourceBoxOnHost({ ...box, placeNow: () => visible });
+
+    expect(client.update).toHaveBeenCalledTimes(2);
+    expect(client.update.mock.calls[0]![0].pendingPlacement.askFirst).toBeUndefined();
+    expect(client.update.mock.calls[1]![0].pendingPlacement.askFirst).toBe(true);
+    expect(requestHostUpdate).toHaveBeenCalledWith("dt-feature-x", "setup");
+  });
+
+  it("switches straight away when it can open now", async () => {
+    client.probe.mockResolvedValue(probeResult({ hostModeListening: true }));
+
+    const outcome = await openResourceBoxOnHost({ ...box, placeNow: () => true });
+
+    expect(client.update).not.toHaveBeenCalled();
+    expect(requestHostSwitch).toHaveBeenCalledWith(expect.objectContaining({ askFirst: false }));
+    expect(outcome).toEqual({ status: "placing", hostId: "dt-feature-x" });
   });
 
   it("keeps a numbered name inside the host list's 64 characters", () => {

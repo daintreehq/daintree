@@ -1,12 +1,27 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import type { LogEntry } from "@shared/types";
 import { LogsContent } from "../LogsContent";
+import { UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
 import { useLogsStore } from "@/store";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("../../Logs/LogFilters", () => ({
-  LogFilters: () => <div data-testid="log-filters" />,
+  LogFilters: ({
+    searchInputRef,
+    availableSources,
+  }: {
+    searchInputRef?: React.Ref<HTMLInputElement>;
+    availableSources?: string[];
+  }) => (
+    <input
+      data-testid="log-filters"
+      data-sources={JSON.stringify(availableSources ?? [])}
+      aria-label="Search logs"
+      ref={searchInputRef}
+    />
+  ),
 }));
 
 type FollowOutput = (isAtBottom: boolean) => "smooth" | "auto" | false;
@@ -17,26 +32,44 @@ const virtuoso = vi.hoisted(() => ({
     followOutput: false | FollowOutput;
   } | null,
   scrollToIndex: vi.fn(),
+  renderItems: false,
 }));
 
 vi.mock("react-virtuoso", async () => {
   const React = await import("react");
   return {
     Virtuoso: React.forwardRef(function VirtuosoMock(
-      props: { data: unknown[] } & NonNullable<typeof virtuoso.props>,
+      props: {
+        data: unknown[];
+        itemContent: (index: number, item: unknown) => React.ReactNode;
+        computeItemKey: (index: number, item: unknown) => React.Key;
+      } & NonNullable<typeof virtuoso.props>,
       ref: React.Ref<{ scrollToIndex: typeof virtuoso.scrollToIndex }>
     ) {
       React.useLayoutEffect(() => {
         virtuoso.props = props;
       });
       React.useImperativeHandle(ref, () => ({ scrollToIndex: virtuoso.scrollToIndex }));
-      return <div data-testid="virtuoso" data-count={props.data.length} />;
+      return (
+        <div data-testid="virtuoso" data-count={props.data.length}>
+          {virtuoso.renderItems
+            ? props.data.map((item, index) => (
+                <React.Fragment key={props.computeItemKey(index, item)}>
+                  {props.itemContent(index, item)}
+                </React.Fragment>
+              ))
+            : null}
+        </div>
+      );
     }),
   };
 });
 
 const mockGetAll = vi.fn<() => Promise<LogEntry[]>>().mockResolvedValue([]);
 const mockGetSources = vi.fn<() => Promise<string[]>>().mockResolvedValue([]);
+const batchHandlers = vi.hoisted(() => ({
+  current: null as ((entries: LogEntry[]) => void) | null,
+}));
 
 vi.mock("@/clients", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -45,7 +78,10 @@ vi.mock("@/clients", async (importOriginal) => {
     logsClient: {
       getAll: () => mockGetAll(),
       getSources: () => mockGetSources(),
-      onBatch: () => () => {},
+      onBatch: (handler: (entries: LogEntry[]) => void) => {
+        batchHandlers.current = handler;
+        return () => {};
+      },
     },
     appClient: {
       getVersion: vi.fn().mockResolvedValue("1.0.0"),
@@ -94,6 +130,20 @@ describe("LogsContent — filtered-empty recovery", () => {
     });
 
     expect(useLogsStore.getState().filters).toEqual({});
+  });
+
+  it("hands the keyboard to the search box when Clear filters removes itself", async () => {
+    mockGetAll.mockResolvedValue([makeLog("a", { level: "error" })]);
+    useLogsStore.setState({ filters: { levels: ["debug"] } });
+
+    const { findByText, getByTestId } = render(<LogsContent />);
+    const button = (await findByText("Clear filters")).closest("button")!;
+    button.focus();
+    await act(async () => {
+      fireEvent.click(button);
+    });
+
+    expect(document.activeElement).toBe(getByTestId("log-filters"));
   });
 
   it("does not show the filtered-empty action when there are no logs at all", async () => {
@@ -167,6 +217,47 @@ describe("LogsContent — failed reads", () => {
     render(<LogsContent />);
 
     await waitFor(() => expect(useLogsStore.getState().logs.map((l) => l.id)).toEqual(["fresh"]));
+  });
+});
+
+describe("LogsContent — source list", () => {
+  beforeEach(() => {
+    mockGetAll.mockReset().mockResolvedValue([]);
+    mockGetSources.mockReset().mockResolvedValue([]);
+    batchHandlers.current = null;
+    useLogsStore.setState({ logs: [], filters: {}, autoScroll: true, expandedIds: new Set() });
+  });
+
+  it("lists a source once when a live batch carries it several times", async () => {
+    mockGetSources.mockResolvedValue(["main"]);
+    const onSourcesChange = vi.fn();
+    const { getByTestId } = render(<LogsContent onSourcesChange={onSourcesChange} />);
+    await waitFor(() => expect(onSourcesChange).toHaveBeenCalledWith(["main"]));
+
+    act(() => {
+      batchHandlers.current?.([
+        makeLog("a", { source: "git" }),
+        makeLog("b", { source: "git" }),
+        makeLog("c", { source: "main" }),
+      ]);
+    });
+
+    expect(onSourcesChange).toHaveBeenLastCalledWith(["git", "main"]);
+    expect(getByTestId("log-filters").dataset.sources).toBe('["git","main"]');
+  });
+
+  it("derives sources from the loaded entries when the sources read fails", async () => {
+    mockGetAll.mockResolvedValue([
+      makeLog("a", { source: "pty" }),
+      makeLog("b", { source: "git" }),
+      makeLog("c", { source: "pty" }),
+    ]);
+    mockGetSources.mockRejectedValue(new Error("sources unavailable"));
+    const onSourcesChange = vi.fn();
+    const { getByTestId } = render(<LogsContent onSourcesChange={onSourcesChange} />);
+
+    await waitFor(() => expect(onSourcesChange).toHaveBeenLastCalledWith(["git", "pty"]));
+    expect(getByTestId("log-filters").dataset.sources).toBe('["git","pty"]');
   });
 });
 
@@ -327,5 +418,110 @@ describe("LogsContent — auto-scroll follows the toggle and the scroll position
     reportBottom(true);
 
     expect(useLogsStore.getState().autoScroll).toBe(false);
+  });
+});
+
+describe("LogsContent — first-read skeleton onset", () => {
+  beforeEach(() => {
+    mockGetAll.mockReset().mockResolvedValue([]);
+    mockGetSources.mockReset().mockResolvedValue([]);
+    useLogsStore.setState({ logs: [], filters: {}, autoScroll: true, expandedIds: new Set() });
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("paints no loading rows when the read settles inside the onset gate", async () => {
+    const { queryByRole } = render(<LogsContent />);
+    expect(queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS - 1);
+    });
+    expect(queryByRole("status")).toBeNull();
+  });
+
+  it("paints the loading rows once a slow read crosses the onset gate", async () => {
+    mockGetAll.mockReturnValue(new Promise(() => {}));
+    const { queryByRole, getByRole } = render(<LogsContent />);
+    expect(queryByRole("status")).toBeNull();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
+    expect(getByRole("status").getAttribute("aria-label")).toBe("Loading logs");
+  });
+
+  it("keeps captured rows visible and paints no skeleton while a refresh is in flight", async () => {
+    mockGetAll.mockReturnValue(new Promise(() => {}));
+    useLogsStore.setState({ logs: [makeLog("a")] });
+    const { queryByRole, queryByTestId } = render(<LogsContent />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS * 3);
+    });
+    expect(queryByTestId("virtuoso")?.getAttribute("data-count")).toBe("1");
+    expect(queryByRole("status")).toBeNull();
+  });
+});
+
+describe("LogsContent — collapsed groups", () => {
+  beforeEach(() => {
+    mockGetAll.mockReset().mockResolvedValue([]);
+    mockGetSources.mockReset().mockResolvedValue([]);
+    useLogsStore.setState({ logs: [], filters: {}, autoScroll: true, expandedIds: new Set() });
+    virtuoso.renderItems = true;
+  });
+
+  afterEach(() => {
+    virtuoso.renderItems = false;
+  });
+
+  it("keeps every request's context reachable from one collapsed row", async () => {
+    const request = (id: string, timestamp: number, requestId: string) =>
+      makeLog(id, { timestamp, source: "s1", message: "same", context: { requestId } });
+    mockGetAll.mockResolvedValue([request("r1", 1000, "a"), request("r2", 1001, "b")]);
+
+    const { findByTestId, getByRole, queryByRole } = render(
+      <TooltipProvider>
+        <LogsContent />
+      </TooltipProvider>
+    );
+    await waitFor(async () =>
+      expect((await findByTestId("virtuoso")).getAttribute("data-count")).toBe("1")
+    );
+
+    const copyPayload = async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      fireEvent.click(getByRole("button", { name: "Copy log entry" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+      return String(writeText.mock.calls[0]?.[0]);
+    };
+
+    const copied = await copyPayload();
+    expect(copied).toContain('"requestId": "a"');
+    expect(copied).toContain('"requestId": "b"');
+
+    const disclosure = getByRole("button", { expanded: false });
+    expect(disclosure.getAttribute("aria-label")).toContain("repeated 2 times");
+    const panelId = disclosure.getAttribute("aria-controls") ?? "";
+    expect(document.getElementById(panelId)).toBeNull();
+    await act(async () => {
+      fireEvent.click(disclosure);
+    });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(document.getElementById(panelId)?.textContent).toMatch(
+      /"requestId": "a".*"requestId": "b"/s
+    );
+
+    // A repeat arriving while the group is open joins it without closing it.
+    await act(async () => {
+      useLogsStore.getState().addLogs([request("r3", 1002, "c")]);
+    });
+    expect(queryByRole("button", { expanded: true })).toBe(disclosure);
+    expect(disclosure.getAttribute("aria-label")).toContain("repeated 3 times");
+    const allThree = /"requestId": "a".*"requestId": "b".*"requestId": "c"/s;
+    expect(document.getElementById(panelId)?.textContent).toMatch(allThree);
+    expect(await copyPayload()).toMatch(allThree);
   });
 });

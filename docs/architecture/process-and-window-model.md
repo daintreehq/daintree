@@ -16,9 +16,10 @@ Multi-process topology, IPC transports, multi-window isolation.
 | **Workspace host** | `electron/workspace-host.ts` + `electron/workspace-host/` | `daintree-workspace-host:<basename>-<sha1[0:8]>` (**one per open project**) | one per project | git polling + file watchers are CPU/FD heavy and can wedge on a bad repo; per-project isolation contains the blast radius and lets `inotify`/`EMFILE` exhaustion be scoped |
 | **Watchdog host** | `electron/watchdog-host.ts` + `electron/watchdog-host-core.ts` | `daintree-watchdog` (single) | one per app | Detects a _frozen main process_ — must live outside main so a main-thread deadlock can't also freeze the detector. SIGKILLs main when it stops sending pings |
 | **Plugin worker** | `electron/plugin-dev-worker.ts` (+ `-bootstrap`), managed by `electron/services/plugin/PluginDevWorkerHost.ts` | `daintree-plugin-<dev\|prod>:<pluginId>-<sha1[0:8]>` (**one per activated plugin**) | one per loaded plugin | Third-party code must not share an isolate with the host. Per-plugin isolation gives each its own crash budget, its own `execArgv` permission flags, and a dispose path that reclaims it when idle. `mode: "dev"` additionally watches the bundle for hot reload |
+| **On-device speech** | `electron/services/voice/localSpeechWorker.ts`, managed by `electron/services/voice/localSpeechProcess.ts` | `daintree-voice-local` (single) | one while on-device dictation is in use; exits after 60s idle | Runs the ~754 MB speech model and its Silero VAD on ONNX Runtime, which can abort in native code (#12577), and keeps ~70ms of inference per 560ms of audio off the main loop. See [voice-input.md](../voice-input.md#on-device-transcription) |
 | **Voice VAD** | `electron/services/voice/openaiVadWorker.ts`, managed by `electron/services/voice/openaiVadProcess.ts` | `daintree-voice-vad` (**one per voice session**) | one per active OpenAI dictation session | ONNX Runtime can abort in native code (#12577); out of process an abort ends the VAD, not main. Also keeps ~32ms inference off the main loop. See [voice-input.md](../voice-input.md) |
 
-The four long-lived classes — the three hosts and the plugin worker — are forked from a `*-bootstrap.js` (`pty-host-bootstrap.ts`, `workspace-host-bootstrap.ts`, `watchdog-host-bootstrap.ts`, `plugin-dev-worker-bootstrap.ts`) with `stdio: "pipe"` (not `"inherit"` — fd 2 may point at a dead pty on AppImage GUI launches, #5588). The three hosts fork with `cwd: os.homedir()` and tag themselves with `DAINTREE_UTILITY_PROCESS_KIND` in `env`; a plugin worker instead forks at its plugin's own directory. The VAD child is the exception on every count: no bootstrap, forked directly at its compiled entry, `stdio: "ignore"` and no kind tag, because it is short-lived, prints nothing, and speaks only its own message protocol.
+The four long-lived classes — the three hosts and the plugin worker — are forked from a `*-bootstrap.js` (`pty-host-bootstrap.ts`, `workspace-host-bootstrap.ts`, `watchdog-host-bootstrap.ts`, `plugin-dev-worker-bootstrap.ts`) with `stdio: "pipe"` (not `"inherit"` — fd 2 may point at a dead pty on AppImage GUI launches, #5588). The three hosts fork with `cwd: os.homedir()` and tag themselves with `DAINTREE_UTILITY_PROCESS_KIND` in `env`; a plugin worker instead forks at its plugin's own directory. The VAD child is the exception on every count: no bootstrap, forked directly at its compiled entry, `stdio: "ignore"` and no kind tag, because it is short-lived, prints nothing, and speaks only its own message protocol. The on-device speech child is forked the same way, for the same reasons.
 
 One more process class exists but is not part of the steady-state topology: the **paint-fabric surface views** behind `DAINTREE_PAINT_FABRIC_VIEWS` (sibling `WebContentsView`s, not utility processes — see [terminal-paint-fabric.md](./terminal-paint-fabric.md)).
 
@@ -33,7 +34,7 @@ One more process class exists but is not part of the steady-state topology: the 
    ipc send/on (push)    │                    WorktreePortBroker         │
                          │                    MainProcessWatchdogClient  │
                          │  Per-window (WindowContext.services):         │
-                         │    PortalManager, EventBuffer, ProjectViewMgr │
+                         │    EventBuffer, ProjectViewMgr                │
                          └───┬───────────┬──────────────┬───────────┬────┘
                              │ fork      │ fork          │ fork      │ ping/sleep/wake
                              │ +ports    │ +ports        │           │ (send/on)
@@ -116,7 +117,7 @@ These look similar and are the easiest thing to get wrong. They serve different 
 | Scope | Held in | Examples |
 | --- | --- | --- |
 | **Global** (shared across all windows) | `electron/window/serviceRefs.ts` (leaf module, zero runtime imports), set by `globalServicesInit.ts` | `PtyClient`, `WorkspaceClient`, `WorktreePortBroker`, `MainProcessWatchdogClient`, `ResourceProfileService`, agent/CCR services |
-| **Per-window** | `WindowContext.services` (`WindowServices`), set by `perWindowInit.ts` | `PortalManager`, `EventBuffer`, `ProjectSwitchService`, `ProjectViewManager`, `activeRendererPort`, `activePtyHostPort` |
+| **Per-window** | `WindowContext.services` (`WindowServices`), set by `perWindowInit.ts` | `EventBuffer`, `ProjectSwitchService`, `ProjectViewManager`, `activeRendererPort`, `activePtyHostPort` |
 
 `globalServicesInit.ts` runs once (guarded by `globalServicesInitialized`); most of it registers **deferred tasks** that drain after the renderer reports first-interactive (`registerDeferredTask`), so service starts don't contend with React hydration. `perWindowInit.ts` runs per window and wires the per-window event fanout (e.g. `ptyClient.on("host-crash-details")` → `terminal:backend-recovering` push to every window's app webContents).
 
@@ -152,7 +153,7 @@ The PTY host and workspace host share an almost-identical fork/exit/restart loop
 
 | Process | Owned services / state | Talks to | Channels / transport |
 | --- | --- | --- | --- |
-| **Main** | `PtyClient`, `WorkspaceClient`, `WorktreePortBroker`, `MainProcessWatchdogClient`, all IPC handlers, `WindowRegistry`, per-window `PortalManager`/`EventBuffer`/`ProjectViewManager` | every other process + all renderers | `invoke/handle`, `send/on`, `MessageChannelMain`, `utilityProcess.postMessage` |
+| **Main** | `PtyClient`, `WorkspaceClient`, `WorktreePortBroker`, `MainProcessWatchdogClient`, all IPC handlers, `WindowRegistry`, per-window `EventBuffer`/`ProjectViewManager` | every other process + all renderers | `invoke/handle`, `send/on`, `MessageChannelMain`, `utilityProcess.postMessage` |
 | **PTY host** (`daintree-pty-host`) | node-pty processes, scrollback, backpressure (`pty-host/`), FD monitor, resource governor | Main (`PtyClient`), renderers (direct via MessagePort) | broker over UtilityProcess channel; `terminal-port` MessagePort per window |
 | **Workspace host** (per project) | `WorkspaceService`, `WorktreeMonitor`, file watchers, `PRIntegrationService`, forge polling | Main (`WorkspaceClient` / `WorkspaceHostProcess`), renderer views | broker over UtilityProcess channel; `worktree-port` MessagePort per view; forge RPC round-trips back to main |
 | **Watchdog host** (`daintree-watchdog`) | deadlock-kill timer + kill flag | Main only | `ping`/`sleep`/`wake`/`dispose` (one-way `postMessage`) |

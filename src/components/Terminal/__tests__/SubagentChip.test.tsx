@@ -400,6 +400,26 @@ describe("SubagentChip", () => {
     expect(document.activeElement).toBe(refresh);
   });
 
+  it("keeps a busy refresh glyph at full ink when motion is off and the spin can't show", async () => {
+    document.body.dataset.performanceMode = "true";
+    try {
+      listSubagents.mockResolvedValueOnce(ok([subagent()]));
+      render(<SubagentChip terminalId="t1" />);
+      const refresh = await screen.findByRole("button", { name: "Refresh subagents" });
+      const glyph = () => refresh.querySelector("svg")!.getAttribute("class");
+      const atRest = glyph();
+
+      listSubagents.mockReturnValueOnce(new Promise(() => {}));
+      fireEvent.click(refresh);
+      await waitFor(() => expect(refresh.getAttribute("aria-disabled")).toBe("true"));
+
+      // Busy never dims: a stepped-down glyph falls under the icon contrast floor.
+      expect(glyph()).toBe(atRest);
+    } finally {
+      delete document.body.dataset.performanceMode;
+    }
+  });
+
   it("keeps showing the children it found when a refresh fails, and says so", async () => {
     listSubagents.mockResolvedValueOnce(ok([subagent()]));
     render(<SubagentChip terminalId="t1" />);

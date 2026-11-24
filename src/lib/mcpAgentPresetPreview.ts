@@ -12,6 +12,8 @@
  */
 
 import { pluralize } from "@/lib/pluralize";
+import { EXPLICIT_MODE_LABELS } from "@/lib/permissionLabels";
+import { resolveDangerousMode } from "@shared/types/agentSettings";
 import type { AgentPresetMutation } from "@/services/actions/definitions/agentPresetMutation";
 import { isSecretEnvEntry, maskSecretValue } from "@/utils/secretDetection";
 import type { AgentPreset } from "@shared/config/agentRegistry";
@@ -23,9 +25,6 @@ import { isValidEnvKey } from "@shared/utils/envVars";
  * renders as its own warning.
  */
 const INDENT = "  ";
-
-/** A dialog subject is one heading line. */
-const MAX_SUBJECT_CHARS = 80;
 
 /**
  * Caller text as a quoted literal: whitespace, quotes and control characters
@@ -71,14 +70,12 @@ const PRESET_FIELDS: readonly PresetField[] = [
     unset: "the agent's own",
   },
   {
-    label: "Skip permissions",
+    label: "Permission prompts",
+    // Read the way a launch reads it, so a legacy `dangerousEnabled: false`
+    // shows as the agent's setting it defers to, not as an explicit choice.
     read: (p) => {
-      if (p.dangerousMode === "on") return "On";
-      if (p.dangerousMode === "off") return "Off";
-      if (p.dangerousMode === undefined && typeof p.dangerousEnabled === "boolean") {
-        return p.dangerousEnabled ? "On" : "Off";
-      }
-      return undefined;
+      const mode = resolveDangerousMode(p);
+      return mode === "inherit" ? undefined : EXPLICIT_MODE_LABELS[mode];
     },
     unset: "the agent's setting",
   },
@@ -114,6 +111,11 @@ const PRESET_FIELDS: readonly PresetField[] = [
   {
     label: "Keep the conversation on usage limits",
     read: (p) => (p.keepConversationOnRateLimit === true ? "On" : undefined),
+    unset: "Off",
+  },
+  {
+    label: "Continue when usage limit resets",
+    read: (p) => (p.continueAtLimitReset === true ? "On" : undefined),
     unset: "Off",
   },
   {
@@ -224,17 +226,4 @@ export function formatAgentPresetPreviewLines(mutation: AgentPresetMutation): st
     );
   }
   return lines;
-}
-
-/** The preset a write names, for the dialog title: one line, bounded. */
-export function agentPresetPreviewSubject(mutation: AgentPresetMutation): string | undefined {
-  const name = mutation.operation === "update" ? mutation.before.name : mutation.preset.name;
-  if (typeof name !== "string") return undefined;
-  // eslint-disable-next-line no-control-regex
-  const flat = name.replace(/[\x00-\x1f\x7f\u2028\u2029]+/g, " ").trim();
-  if (flat.length === 0) return undefined;
-  const points = Array.from(flat);
-  return points.length > MAX_SUBJECT_CHARS
-    ? `${points.slice(0, MAX_SUBJECT_CHARS - 1).join("")}…`
-    : flat;
 }

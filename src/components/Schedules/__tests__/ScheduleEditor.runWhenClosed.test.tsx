@@ -20,7 +20,12 @@ vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
   useFirstAgentOptions: () => [{ id: "claude", name: "Claude", iconId: "claude" }],
 }));
 vi.mock("../useScheduleLaunchOptions", () => ({
-  useScheduleLaunchOptions: () => ({ presets: [], preset: undefined, stopsAtPrompts: false }),
+  useScheduleLaunchOptions: (_agentId: string, presetId: string | null) => ({
+    presets: [],
+    preset: undefined,
+    presetStatus: presetId === null ? "none" : "missing",
+    stopsAtPrompts: false,
+  }),
 }));
 const platformMock = vi.hoisted(() => ({
   isMac: vi.fn(() => true),
@@ -90,6 +95,7 @@ function renderEditor(
       schedule={schedule}
       defaultAgentId="claude"
       worktrees={[{ id: null, label: "Main checkout" }]}
+      worktreeIds={new Set()}
       now={NOW}
       osJobContext={osJobContext}
       projectSwitches={switches}
@@ -436,6 +442,7 @@ describe("ScheduleEditor: main's refusal under the project's switches (#16168)",
         schedule={existing({ runWhenClosed: true })}
         defaultAgentId="claude"
         worktrees={[{ id: null, label: "Main checkout" }]}
+        worktreeIds={new Set()}
         now={NOW}
         osJobContext={LONDON}
         projectSwitches={null}

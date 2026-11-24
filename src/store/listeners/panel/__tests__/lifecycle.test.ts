@@ -858,6 +858,21 @@ describe("onRestored — dock popover preservation (#8368)", () => {
     }
   });
 
+  it("leaves focus where an undone close put it, once per restore it settled", async () => {
+    const { settleRestoreFocus } = await import("@/services/terminal/settledRestores");
+    setupPanel({ location: "grid" });
+    usePanelStore.setState({ focusedId: "other" });
+    settleRestoreFocus("term-1");
+    const handler = getRestoredHandler();
+
+    handler({ id: "term-1" });
+    expect(usePanelStore.getState().focusedId).toBe("other");
+
+    // A later restore of the same pane is news again.
+    handler({ id: "term-1" });
+    expect(usePanelStore.getState().focusedId).toBe("term-1");
+  });
+
   it("does not clear an unrelated open dock popover when a background terminal restores", () => {
     setupPanel();
     usePanelStore.setState({ activeDockTerminalId: "dock-1", focusedId: "dock-1" });
@@ -1246,6 +1261,7 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
     metricType: string;
     terminalId?: string;
     perTerminalHeld?: Array<{ terminalId: string; heldDurationMs: number }>;
+    clearedTerminalIds?: string[];
   }) => void {
     reliabilityMetricHandlers.length = 0;
     setupLifecycleListeners();
@@ -1342,6 +1358,126 @@ describe("onReliabilityMetric — pause-duration-gauge routing", () => {
     expect(usePanelStore.getState().panelsById["ghost-terminal"]).toBeUndefined();
   });
 
+  describe("snapshots from several PTY shards (#17575)", () => {
+    function setupTwoPanels() {
+      const base = {
+        kind: "terminal" as const,
+        cwd: "/tmp",
+        cols: 80,
+        rows: 24,
+        location: "grid" as const,
+      };
+      usePanelStore.setState({
+        panelsById: {
+          "term-a": { ...base, id: "term-a", title: "A" },
+          "term-b": { ...base, id: "term-b", title: "B" },
+        },
+        panelIds: ["term-a", "term-b"],
+      });
+    }
+
+    function gauge(held: Record<string, number>, clearedTerminalIds?: string[]) {
+      return {
+        metricType: "pause-duration-gauge",
+        terminalId: "resource-governor",
+        perTerminalHeld: Object.entries(held).map(([terminalId, heldDurationMs]) => ({
+          terminalId,
+          heldDurationMs,
+        })),
+        ...(clearedTerminalIds ? { clearedTerminalIds } : {}),
+      };
+    }
+
+    it("keeps each terminal's duration while another shard's snapshots interleave", () => {
+      setupTwoPanels();
+      const handler = getReliabilityHandler();
+
+      handler(gauge({ "term-a": 2000 }));
+      flushPanelStatusBuffer();
+      handler(gauge({ "term-b": 1000 }));
+      flushPanelStatusBuffer();
+      expect(getPtyHeldDuration("term-a")).toBe(2000);
+      expect(getPtyHeldDuration("term-b")).toBe(1000);
+
+      handler(gauge({ "term-a": 4000 }));
+      flushPanelStatusBuffer();
+      handler(gauge({ "term-b": 3000 }));
+      flushPanelStatusBuffer();
+      expect(getPtyHeldDuration("term-a")).toBe(4000);
+      expect(getPtyHeldDuration("term-b")).toBe(3000);
+
+      // term-a resumes: its own shard names it once, B's batch carries on.
+      handler(gauge({}, ["term-a"]));
+      flushPanelStatusBuffer();
+      expect(getPtyHeldDuration("term-a")).toBeUndefined();
+      expect(getPtyHeldDuration("term-b")).toBe(3000);
+      handler(gauge({ "term-b": 5000 }));
+      flushPanelStatusBuffer();
+      expect(getPtyHeldDuration("term-a")).toBeUndefined();
+      expect(getPtyHeldDuration("term-b")).toBe(5000);
+
+      handler(gauge({}, ["term-b"]));
+      flushPanelStatusBuffer();
+      expect(getPtyHeldDuration("term-b")).toBeUndefined();
+    });
+
+    it("clears only the terminal a batch names, never one it leaves out", () => {
+      setupTwoPanels();
+      usePanelStore.setState((s) => ({
+        panelsById: {
+          ...s.panelsById,
+          "term-c": {
+            id: "term-c",
+            kind: "terminal",
+            title: "C",
+            cwd: "/tmp",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+            heldDurationMs: 7000,
+          },
+        },
+        panelIds: [...s.panelIds, "term-c"],
+      }));
+      const handler = getReliabilityHandler();
+
+      handler(gauge({ "term-a": 2000, "term-b": 1000 }));
+      flushPanelStatusBuffer();
+      handler(gauge({ "term-b": 3000 }, ["term-a"]));
+      flushPanelStatusBuffer();
+
+      expect(getPtyHeldDuration("term-a")).toBeUndefined();
+      expect(getPtyHeldDuration("term-b")).toBe(3000);
+      // Another shard's terminal, absent from both batches.
+      expect(getPtyHeldDuration("term-c")).toBe(7000);
+    });
+
+    it("lets a clear win over a sample still waiting for the same flush", () => {
+      setupTwoPanels();
+      const handler = getReliabilityHandler();
+
+      handler(gauge({ "term-a": 2000 }));
+      handler(gauge({ "term-b": 1000 }, ["term-a"]));
+      flushPanelStatusBuffer();
+
+      expect(getPtyHeldDuration("term-a")).toBeUndefined();
+      expect(getPtyHeldDuration("term-b")).toBe(1000);
+    });
+
+    it("ignores a clear for a terminal this view has no panel for", () => {
+      setupTwoPanels();
+      const handler = getReliabilityHandler();
+
+      handler(gauge({ "term-a": 2000 }));
+      flushPanelStatusBuffer();
+      handler(gauge({}, ["elsewhere"]));
+      flushPanelStatusBuffer();
+
+      expect(getPtyHeldDuration("term-a")).toBe(2000);
+      expect(usePanelStore.getState().panelsById["elsewhere"]).toBeUndefined();
+    });
+  });
+
   it("pause-end clears a buffered (but unflushed) heldDurationMs patch", () => {
     // Locks in the cross-frame race fix: a `pause-duration-gauge`
     // patch enqueues a value into the RAF buffer; a `pause-end` arrives
@@ -1400,6 +1536,14 @@ describe("onExit — stale flow state cleared (#9899)", () => {
     expect(panel?.heldDurationMs).toBeUndefined();
     expect(panel?.runtimeStatus).toBe("exited");
     expect(panel?.exitCode).toBe(1);
+  });
+
+  it("drops the update footer the exited run showed (#17905)", () => {
+    setupPanel({ updateInstalled: { observedAt: 1_000, namesRestart: true } });
+
+    getExitHandler()("term-1", 1);
+
+    expect(getPanel("term-1")?.updateInstalled).toBeUndefined();
   });
 
   it("a buffered flow-status patch does not resurrect the pill after exit", () => {

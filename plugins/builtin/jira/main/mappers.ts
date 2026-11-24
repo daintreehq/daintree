@@ -4,7 +4,7 @@ import type {
   IssueComment,
   NormalizedIssueState,
 } from "../../../../shared/types/forge.js";
-import { siteHostOf } from "../shared/connection.js";
+import { siteIdOf } from "../shared/connection.js";
 import { adfToText } from "./adf.js";
 
 /** Jira's search returns only ids unless the fields are named. */
@@ -22,9 +22,13 @@ export const ISSUE_FIELDS = [
 
 const MAX_BRANCH_SLUG_LENGTH = 50;
 
+/** Cloud users carry an `accountId`; Server and Data Center users a `name` and `key` instead. */
 export interface JiraUserNode {
   accountId?: string | null;
+  name?: string | null;
+  key?: string | null;
   displayName?: string | null;
+  emailAddress?: string | null;
   avatarUrls?: Record<string, string> | null;
 }
 
@@ -92,22 +96,36 @@ export function suggestBranchName(key: string, summary: string): string {
   return `${key}-${lastBreak > 0 ? cut.slice(0, lastBreak) : cut}`;
 }
 
+/**
+ * What Jira assigns a user by: the `accountId` on Cloud, the username (`name`)
+ * on Server and Data Center. A site only ever sends the one it uses.
+ */
+export function userIdOf(node: JiraUserNode | null | undefined): string | null {
+  return node?.accountId || node?.name || null;
+}
+
+/**
+ * `login` is what the host compares to tell the viewer from another assignee.
+ * A Server or Data Center username is unique and readable, so it's the login
+ * there; a Cloud account id is neither, so Cloud keeps the display name.
+ */
 export function mapUser(node: JiraUserNode): ForgeUser {
   const avatarUrl = node.avatarUrls?.["48x48"];
   return {
-    login: node.displayName || node.accountId || "Unknown",
+    login: node.name || node.displayName || node.accountId || "Unknown",
     ...(avatarUrl ? { avatarUrl } : {}),
-    rawData: { accountId: node.accountId ?? null },
+    rawData: { accountId: node.accountId ?? null, ...(node.name ? { name: node.name } : {}) },
   };
 }
 
 /**
- * The id a link stores. Jira's own is only unique within a site, and a link
- * prefers it to the key, so a bare `10042` would open an unrelated issue after
- * the connection moves to another site.
+ * The id a link stores: the site's base without its scheme, then Jira's own id
+ * (`acme.atlassian.net/10042`, `jira.example.com:8443/jira/10042`). Jira's id is
+ * only unique within a site, and a link prefers it to the key, so a bare `10042`
+ * would open an unrelated issue after the connection moves to another site.
  */
 export function stableIssueId(siteUrl: string, jiraId: string): string {
-  return `${siteHostOf(siteUrl)}/${jiraId}`;
+  return `${siteIdOf(siteUrl)}/${jiraId}`;
 }
 
 export function mapIssue(node: JiraIssueNode, siteUrl: string): Issue {

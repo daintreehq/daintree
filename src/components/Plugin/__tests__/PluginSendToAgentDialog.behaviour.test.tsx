@@ -35,7 +35,6 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
   }),
 }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/store/paletteStore", () => {
   const usePaletteStore = (selector?: (s: { activePaletteId: null }) => unknown) =>
     selector ? selector({ activePaletteId: null }) : { activePaletteId: null };
@@ -64,6 +63,8 @@ vi.mock("@/components/ui/paletteFocusRestore", () => ({
   suppressPaletteFocusRestore,
   consumePaletteFocusRestoreSuppression: () => false,
   consumeDeferredPaletteFocusRestore: () => null,
+  notePaletteOpening: () => {},
+  paletteOpeningCount: () => 0,
 }));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: asStore({ showAgentTaskTitles: true }),
@@ -98,6 +99,7 @@ vi.mock("@/services/agentHandoff/agentDraft", () => ({
     hybridInputEnabled: true,
     voiceSubmittingIds: new Set(),
     armedIds: new Set(),
+    crossHostTargetCount: 0,
   }),
 }));
 vi.mock("@/services/agentHandoff/launchForHandoff", async (importOriginal) => ({
@@ -292,6 +294,35 @@ describe("PluginSendToAgentDialog", () => {
     press("Escape");
     expect(resolve).not.toHaveBeenCalled();
     expect(option("feat-1")).toBeTruthy();
+  });
+
+  it("clears a search on the pick step before Escape gives up", () => {
+    const resolve = open();
+    act(() => {
+      fireEvent.change(combobox(), { target: { value: "feat" } });
+    });
+    press("Escape");
+    expect(combobox().value).toBe("");
+    expect(resolve).not.toHaveBeenCalled();
+    press("Escape");
+    expect(resolve).toHaveBeenCalledWith({ status: "cancelled" });
+  });
+
+  it("steps back from the branch step on Escape from the results region too, branch name and all", () => {
+    const resolve = open();
+    act(() => {
+      fireEvent.click(option("new-worktree"));
+    });
+    expect(combobox().value).not.toBe("");
+    const region = combobox()
+      .closest('[role="dialog"]')!
+      .querySelector<HTMLElement>('[role="group"][tabindex="0"]')!;
+    act(() => {
+      fireEvent.keyDown(region, { key: "Escape" });
+    });
+    expect(resolve).not.toHaveBeenCalled();
+    expect(option("feat-1")).toBeTruthy();
+    expect(combobox().value).toBe("");
   });
 
   it("names both operations on the branch step, and says add to draft in the heading", () => {

@@ -614,7 +614,13 @@ label:focus-within .brand-mark,
   pointer-events: none;
 }
 
+/* Every palette mounts the bar, loading or not, and an infinite sweep keeps the
+ * compositor producing frames even under the bar's `opacity: 0`. So the sweep
+ * exists only while the palette is loading: it starts each load from off the
+ * left edge, and the idle track fades out alone. `:where()` holds the gate at
+ * the sweep's own specificity, so the reduce-motion rule below still wins. */
 .palette-loading-bar__sweep {
+  display: none;
   position: absolute;
   top: 0;
   left: 0;
@@ -626,6 +632,10 @@ label:focus-within .brand-mark,
     color-mix(in oklab, var(--color-accent-primary) 85%, transparent),
     transparent
   );
+}
+
+:where(.palette-loading-bar[data-loading="true"]) > .palette-loading-bar__sweep {
+  display: block;
   animation: palette-loading-sweep 1.5s ease-in-out infinite;
   will-change: transform;
 }
@@ -655,7 +665,7 @@ label:focus-within .brand-mark,
   }
 }
 
-/* The document tab family (`ui/document-tab`): grid, dock, portal and assistant
+/* The document tab family (`ui/document-tab`): grid, dock and assistant
    tabs. Under either reduce-motion trigger their colour fades and the close
    control's reveal snap, like the palette row's; the sliding underline is
    Framer's and follows `MotionConfig`. */
@@ -678,6 +688,7 @@ label:focus-within .brand-mark,
 
   .palette-loading-bar__sweep {
     animation: none;
+    will-change: auto;
     width: 100%;
     background: color-mix(in oklab, var(--color-accent-primary) 50%, transparent);
   }

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   adoptProcessForKill,
@@ -22,6 +22,43 @@ function exitOf(child: ChildProcess): Promise<NodeJS.Signals | null> {
     return Promise.resolve(child.signalCode);
   }
   return new Promise((resolve) => child.once("exit", (_code, signal) => resolve(signal)));
+}
+
+// A zombie counts as gone: PID 1 in a container may never reap an orphan.
+function isGone(pid: number): boolean {
+  try {
+    const stat = execFileSync("/bin/ps", ["-o", "stat=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 5_000,
+    });
+    return stat.trim().startsWith("Z");
+  } catch (err) {
+    // ps exits 1 with nothing printed when no process holds the PID.
+    const { status, stdout } = err as { status?: number; stdout?: string };
+    if (status === 1 && !stdout?.trim()) return true;
+    throw err;
+  }
+}
+
+/** A detached shell that exits at once, leaving `sleep` orphaned in its group. */
+async function orphanedGroup(): Promise<{ group: number; orphan: number }> {
+  const leader = spawn("sh", ["-c", "sleep 30 >/dev/null 2>&1 & echo $!"], {
+    detached: true,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  children.push(leader);
+  let out = "";
+  leader.stdout!.on("data", (chunk: Buffer) => (out += String(chunk)));
+  await new Promise((resolve) => leader.once("close", resolve));
+  const orphan = Number.parseInt(out, 10);
+  expect(Number.isInteger(orphan) && orphan > 1).toBe(true);
+  return { group: leader.pid!, orphan };
+}
+
+function killOrphan(orphan: number): void {
+  adoptProcessForKill(orphan);
+  refusalOf(() => process.kill(orphan, "SIGKILL"));
+  takeProcessKillViolations();
 }
 
 function refusalOf(fn: () => void): NodeJS.ErrnoException | null {
@@ -112,6 +149,77 @@ describe("unit-test process.kill guard (#14418)", () => {
     expect(await exitOf(child)).toBe("SIGKILL");
     expect(takeProcessKillViolations()).toEqual([]);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "signals a detached child's group after its leader exited and orphaned a member",
+    async () => {
+      const { group, orphan } = await orphanedGroup();
+
+      try {
+        expect(process.kill(-group, "SIGKILL")).toBe(true);
+        expect(takeProcessKillViolations()).toEqual([]);
+        await vi.waitFor(() => expect(isGone(orphan)).toBe(true), { timeout: 5_000 });
+      } finally {
+        killOrphan(orphan);
+      }
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "ends an orphaned group's permission with the test, and never extends it to a member's own PID",
+    async () => {
+      const { group, orphan } = await orphanedGroup();
+
+      try {
+        expect(process.kill(-group, "SIGCONT")).toBe(true);
+        expect(refusalOf(() => process.kill(orphan, "SIGCONT"))?.code).toBe("EPERM");
+        expect(takeProcessKillViolations()).toEqual([expect.objectContaining({ pid: orphan })]);
+
+        expect(refusalOf(() => process.kill(-group, "SIGCONT"))?.code).toBe("EPERM");
+        expect(takeProcessKillViolations()).toEqual([expect.objectContaining({ pid: -group })]);
+      } finally {
+        killOrphan(orphan);
+      }
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "refuses a group whose exited leader this worker did not spawn",
+    async () => {
+      // The intermediate node spawns the group leader, so the worker never saw it.
+      const script = `
+        const { spawn } = require("node:child_process");
+        const leader = spawn("sh", ["-c", "sleep 30 >/dev/null 2>&1 & echo $!"], {
+          detached: true,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+        let out = "";
+        leader.stdout.on("data", (chunk) => (out += chunk));
+        leader.on("close", () => process.stdout.write(leader.pid + " " + out.trim()));
+      `;
+      const parent = spawn(process.execPath, ["-e", script], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      children.push(parent);
+      let out = "";
+      parent.stdout!.on("data", (chunk: Buffer) => (out += String(chunk)));
+      await new Promise((resolve) => parent.once("close", resolve));
+      const [group, orphan] = out.trim().split(" ").map(Number);
+      expect([group, orphan].every((pid) => Number.isInteger(pid) && pid > 1)).toBe(true);
+      // An orphaned group of its own is recorded alongside, so the refusal is
+      // about which group, not about the worker having none.
+      const own = await orphanedGroup();
+
+      try {
+        expect(refusalOf(() => process.kill(-group, "SIGCONT"))?.code).toBe("EPERM");
+        expect(process.kill(-own.group, "SIGCONT")).toBe(true);
+        expect(takeProcessKillViolations()).toEqual([expect.objectContaining({ pid: -group })]);
+      } finally {
+        killOrphan(orphan);
+        killOrphan(own.orphan);
+      }
+    }
+  );
 
   it("never lets an adoption widen to the group or broadcast forms", () => {
     adoptProcessForKill(0);

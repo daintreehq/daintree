@@ -108,14 +108,26 @@ describe("file panel state setters", () => {
     expect(saveMock).toHaveBeenCalled();
   });
 
-  it("setFileViewMode is a no-op when the mode is unchanged (default source)", () => {
-    seedFilePanel({ fileViewMode: undefined });
+  it("setFileViewMode is a no-op when the mode is unchanged", () => {
+    seedFilePanel({ fileViewMode: "source" });
     const before = usePanelStore.getState().panelsById["file-1"];
 
     usePanelStore.getState().setFileViewMode("file-1", "source");
 
     expect(usePanelStore.getState().panelsById["file-1"]).toBe(before);
     expect(saveMock).not.toHaveBeenCalled();
+  });
+
+  // An unset mode may open a built-in viewer (#17336), so a Source the user
+  // picks over it has to be written down to stay Source.
+  it("setFileViewMode writes Source over an unset mode", () => {
+    seedFilePanel({ fileViewMode: undefined });
+
+    usePanelStore.getState().setFileViewMode("file-1", "source");
+
+    const stored = usePanelStore.getState().panelsById["file-1"] as FilePanelData | undefined;
+    expect(stored?.fileViewMode).toBe("source");
+    expect(saveMock).toHaveBeenCalled();
   });
 
   it("setFilePanelPath swaps the file and triggers persistence", () => {
@@ -127,6 +139,56 @@ describe("file panel state setters", () => {
     expect(stored?.filePath).toBe("/repo/README.md");
     expect(saveMock).toHaveBeenCalled();
   });
+
+  it("setFilePanelPath keeps the panel's mode when no mode is given", () => {
+    seedFilePanel({ filePath: "/repo/a.ts", fileViewMode: "diff" });
+
+    usePanelStore.getState().setFilePanelPath("file-1", "/repo/b.ts");
+
+    expect(usePanelStore.getState().panelsById["file-1"]).toMatchObject({
+      filePath: "/repo/b.ts",
+      fileViewMode: "diff",
+    });
+  });
+
+  it("setFilePanelPath with a null mode leaves the new file's mode unset", () => {
+    seedFilePanel({ filePath: "/repo/a.ts", fileViewMode: "source" });
+
+    usePanelStore.getState().setFilePanelPath("file-1", "/repo/users.csv", null);
+
+    const stored = usePanelStore.getState().panelsById["file-1"] as FilePanelData | undefined;
+    expect(stored?.filePath).toBe("/repo/users.csv");
+    expect(stored && "fileViewMode" in stored).toBe(false);
+    const saved = (saveMock.mock.calls.at(-1)?.[0] as FilePanelData[] | undefined)?.find(
+      (panel) => panel.id === "file-1"
+    );
+    expect(saved?.filePath).toBe("/repo/users.csv");
+    expect(saved && "fileViewMode" in saved).toBe(false);
+  });
+
+  it.each([
+    ["source", "/repo/README.md", "rendered"],
+    ["diff", "/repo/b.ts", "source"],
+  ] as const)(
+    "setFilePanelPath writes a given mode in the same update as the path (%s → %s)",
+    (fromMode, filePath, mode) => {
+      seedFilePanel({ filePath: "/repo/a.ts", fileViewMode: fromMode });
+      const updates: unknown[] = [];
+      const unsubscribe = usePanelStore.subscribe((state) =>
+        updates.push(state.panelsById["file-1"])
+      );
+
+      usePanelStore.getState().setFilePanelPath("file-1", filePath, mode);
+      unsubscribe();
+
+      expect(updates).toHaveLength(1);
+      expect(updates[0]).toMatchObject({ filePath, fileViewMode: mode });
+      expect(saveMock).toHaveBeenCalledTimes(1);
+      expect(saveMock).toHaveBeenCalledWith([
+        expect.objectContaining({ id: "file-1", filePath, fileViewMode: mode }),
+      ]);
+    }
+  );
 
   it("setFilePanelPath drops a containment root pinned for the previous file", () => {
     seedFilePanel({ filePath: "/tmp/plugin/notes.md", fileContainmentRoot: "/tmp/plugin" });

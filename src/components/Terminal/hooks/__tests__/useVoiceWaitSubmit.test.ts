@@ -18,6 +18,16 @@ vi.mock("@/services/VoiceRecordingService", () => ({
   },
 }));
 
+// The hook reaches the service, and registers its spoken send, through the runtime.
+vi.mock("@/services/voiceRecordingRuntime", async (importOriginal) => {
+  const { voiceRecordingService } = await import("@/services/VoiceRecordingService");
+  return {
+    ...(await importOriginal<typeof import("@/services/voiceRecordingRuntime")>()),
+    getLoadedVoiceRecordingService: () => voiceRecordingService,
+    onSpokenSend: voiceRecordingService.onSpokenSend,
+  };
+});
+
 const voiceState = vi.hoisted(() => ({
   activeTarget: { panelId: "test-panel" },
   status: "recording",

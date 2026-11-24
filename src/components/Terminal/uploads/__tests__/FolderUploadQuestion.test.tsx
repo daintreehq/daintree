@@ -21,7 +21,6 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/hooks/useOverlayState", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/hooks/useOverlayState")>()),
   useOverlayState: () => {},

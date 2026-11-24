@@ -303,6 +303,12 @@ let frozen = false;
  * launch if it doesn't.
  */
 let suppressed = false;
+/**
+ * Held from Keep Agents Running until those windows come back: every window
+ * closes one by one, and the set the user left is what a reopen, or the next
+ * launch if they quit first, has to restore.
+ */
+let heldForReopen = false;
 
 export function initOpenWindowsTracker(opts: {
   registry: WindowRegistry;
@@ -539,7 +545,7 @@ function attachOrphanedLiveWorkspaces(
 
 function canSave(): boolean {
   if (!state) return false;
-  if (frozen || suppressed || state.readOnly) return false;
+  if (frozen || suppressed || heldForReopen || state.readOnly) return false;
   // A shutdown owns the process: the window set is being torn down, not changed.
   return getActiveShutdown() === null;
 }
@@ -663,6 +669,21 @@ export function resumeOpenWindowsSaves(persistNow: boolean): void {
 }
 
 /**
+ * Write the window set on screen now and keep it, for Keep Agents Running.
+ * Unlike suppression and the shutdown freeze, it ends only when the windows it
+ * kept have been restored.
+ */
+export function holdOpenWindowsSaves(): void {
+  saveOpenWindowsNow();
+  heldForReopen = true;
+}
+
+/** The held set came back: saves track the windows again. */
+export function releaseOpenWindowsHold(): void {
+  heldForReopen = false;
+}
+
+/**
  * Capture the final window set, then latch saves off for good.
  *
  * Called at the top of `runShutdownChain()`, before its first await. Bypasses
@@ -675,7 +696,7 @@ export function resumeOpenWindowsSaves(persistNow: boolean): void {
 export function freezeAndSnapshotOpenWindows(): void {
   cancelPendingSave();
 
-  if (state && !frozen && !suppressed && !state.readOnly) {
+  if (state && !frozen && !suppressed && !heldForReopen && !state.readOnly) {
     persist();
   }
 
@@ -688,6 +709,7 @@ export function resetOpenWindowsTrackerForTests(): void {
   state = null;
   frozen = false;
   suppressed = false;
+  heldForReopen = false;
   canopyWindowOpen = false;
   pendingBackgroundRestores.clear();
   pendingRemoteRestores.clear();

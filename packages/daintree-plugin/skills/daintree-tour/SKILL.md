@@ -37,7 +37,7 @@ Ask these together, in one message, with your recommendation for each:
 
 1. **Plugin tour or panel tour?** A plugin tour is offered from Help and the command palette. A panel tour opens from one panel's menu and must name one of this plugin's own `contributes.panels` ids — list them and ask which.
 2. **What should it show, and roughly how many chapters?** Suggest a split: one idea per chapter, usually 2–5 chapters of 15–30 seconds each. Daintree's own tour runs 20–35 seconds a chapter.
-3. **Which voice?** Recommend `Simon`, the voice Daintree's own tour uses. Offer alternatives the author can audition in the Inworld TTS playground (for example `Ashley` or `Dennis`), or any Inworld voice id they already use. Do not describe voices you have not heard.
+3. **Which voice?** Recommend `Simon`, the CLI's default: articulate and steady, made for technical tutorials. Offer alternatives the author can audition in the Inworld TTS playground (for example `Ashley` or `Dennis`), or any Inworld voice id they already use. Do not describe voices you have not heard.
 4. **Audio source.** `INWORLD_API_KEY` already set in the environment; a key file the author points you at (a path — never its contents); or their own recordings (these are still timed with Inworld speech-to-text, so a key is needed either way, plus `ffmpeg`).
 
 Check the environment variable with `test -n "$INWORLD_API_KEY" && echo set || echo unset` — never `echo $INWORLD_API_KEY`.

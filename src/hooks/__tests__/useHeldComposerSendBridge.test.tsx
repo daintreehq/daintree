@@ -125,4 +125,35 @@ describe("useHeldComposerSendBridge", () => {
     act(() => panels.set({ panelsById: {} }));
     expect(notify).toHaveBeenCalledTimes(1);
   });
+
+  it("does nothing on panel writes while nothing is dropped", async () => {
+    renderHook(() => useHeldComposerSendBridge());
+    await waitFor(() => expect(client.list).toHaveBeenCalled());
+    const store = useHeldComposerSendStore.getState();
+    const forget = vi.spyOn(store, "forgetDroppedExcept");
+    try {
+      for (let i = 0; i < 3; i++) {
+        act(() => panels.set({ panelsById: { t1: { title: `tick ${i}`, location: "grid" } } }));
+      }
+      act(() => panels.set({ panelsById: {} }));
+      expect(forget).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    } finally {
+      forget.mockRestore();
+    }
+  });
+
+  it("forgets what it reported once nothing is dropped", async () => {
+    panels.set({ panelsById: { t1: { title: "Gemini", location: "trash" } } });
+    renderHook(() => useHeldComposerSendBridge());
+    await waitFor(() => expect(client.list).toHaveBeenCalled());
+    act(() => client.push?.(dropped("t1", "a")));
+    expect(notify).toHaveBeenCalledTimes(1);
+
+    // The note is dismissed, then a panel write with nothing dropped.
+    act(() => useHeldComposerSendStore.getState().clearDropped("t1"));
+    act(() => panels.set({ panelsById: { t1: { title: "Gemini", location: "trash" } } }));
+    act(() => client.push?.(dropped("t1", "a")));
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
 });

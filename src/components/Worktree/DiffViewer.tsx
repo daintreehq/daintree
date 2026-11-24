@@ -4,6 +4,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useEffectEvent,
   useId,
   useLayoutEffect,
   useMemo,
@@ -92,6 +93,7 @@ import {
   hashLineRange,
   lineForChange,
   placeDiffNote,
+  placeDiffNoteAnchor,
   sortDiffNotes,
   type DiffNote,
   type DiffNoteAnchor,
@@ -99,7 +101,6 @@ import {
   type DiffNoteSide,
 } from "./diffNotes";
 import {
-  clearComposerDraft,
   DiffNoteCard,
   DiffNoteComposer,
   nameAnchor,
@@ -107,6 +108,14 @@ import {
   type DiffNoteCardPlacement,
   type DiffNoteCloseVia,
 } from "./DiffNoteWidgets";
+import {
+  DiffNoteDraftContext,
+  diffNoteFileKey,
+  fileDraftBodyKey,
+  lineDraftBodyKey,
+  useDiffNoteDraftSession,
+  useDiffNoteDraftState,
+} from "./diffNoteDrafts";
 import {
   findLineNumber,
   selectionLines,
@@ -170,8 +179,30 @@ export interface DiffViewerProps {
   /** Case-insensitive plain-text query; matches render as .diff-search-match spans */
   searchQuery?: string;
   onRetry?: () => void;
+  /**
+   * Set when the diff was read with whitespace changes ignored. An empty one
+   * then offers the way back instead of reading as an unchanged file.
+   */
+  onShowWhitespaceChanges?: () => void;
   /** Fired whenever rendered hunk rows change (collapse toggles, context expansion, progressive reveal, each staged batch of a large file), so consumers can re-scan the live DOM */
   onToggleCollapse?: () => void;
+  /**
+   * How many hunks the patch holds as git wrote them, across its files, with
+   * the patch it counted. Context expansion and the full-file view merge
+   * hunks into one drawn body, and the progressive cap and the staged mount
+   * draw only some, so a count of drawn bodies would shift under the reader;
+   * this one is the stops a host's hunk stepper walks. The first changed row
+   * of each carries `diff-hunk-anchor`, in the same order, inside a file root
+   * whose `data-hunk-offset` says where that file's hunks start.
+   */
+  onHunkCount?: (count: number, forDiff: string) => void;
+  /**
+   * Bring authored hunk `index` (counted as `onHunkCount` counts) to the top:
+   * its file opens if collapsed, the progressive cap lifts to include it, and
+   * its first changed row scrolls into view once the staged mount has drawn
+   * it. A new `seq` repeats the request for the same hunk.
+   */
+  revealHunk?: { index: number; seq: number } | null;
   /** Fired after each commit of a file's token pass (highlighting, search marks) — the signal that .diff-search-match spans are scannable. A large file's pass lands in batches; the last call has every row highlighted. */
   onTokensRendered?: () => void;
   /**
@@ -202,6 +233,18 @@ export interface DiffViewerProps {
    * without looking back at wherever the comparison was chosen.
    */
   sideLabels?: DiffViewerSideLabels;
+  /**
+   * Where a single renamed or copied file came from, named in its header. The
+   * host passes the exact path its file list holds; a pure move has no hunks,
+   * so without it the header would be a bare destination over an empty body.
+   */
+  origin?: DiffFileOrigin;
+}
+
+/** The source of a renamed or copied file. */
+export interface DiffFileOrigin {
+  kind: "renamed" | "copied";
+  path: string;
 }
 
 export interface DiffViewerSideLabels {
@@ -507,7 +550,10 @@ function sourceMatchesHunks(newLines: string[], hunks: HunkData[]): boolean {
  * `expandFromRawCode` expects) from the new-side file content. Unchanged
  * regions are byte-identical between revisions, differing only by the running
  * insert/delete offset — and expansion only ever reads unchanged regions, so
- * positions inside hunks can stay empty.
+ * positions inside hunks can stay empty. A diff read with whitespace ignored
+ * keeps that offset (git prints its context from the new side and counts a
+ * reindented line as unchanged), but its gaps are equal only up to whitespace,
+ * so both columns show the new side's.
  */
 function buildSyntheticOldSource(newLines: string[], hunks: HunkData[]): string[] | null {
   if (!hunks.length) return null;
@@ -538,6 +584,46 @@ function buildSyntheticOldSource(newLines: string[], hunks: HunkData[]): string[
   return oldLines;
 }
 
+// try/catch stays out of the components: React Compiler abandons a component
+// whose try block holds a conditional or optional expression.
+function parseDiffFiles(diff: string): ReturnType<typeof parseDiff> {
+  try {
+    const parsed = parseDiff(diff);
+    // parseDiff is forgiving — nonsense input yields a synthetic file with
+    // empty paths and no hunks. Treat that shape as a parse failure.
+    const allEmpty = parsed.every(
+      (file) => !file.oldPath && !file.newPath && file.hunks.length === 0
+    );
+    return allEmpty ? [] : parsed;
+  } catch {
+    return [];
+  }
+}
+
+function expandFullFile(hunks: HunkData[], oldSource: string[]): HunkData[] | null {
+  try {
+    // One range per gap, each ending where the next hunk starts. A range that
+    // reaches into a hunk is stretched over its leading context, which is read
+    // from the source (blank inside hunks here), and one that covers a whole
+    // hunk keeps the plain lines and drops that hunk's changes.
+    let expanded = hunks;
+    let start = 1;
+    for (const hunk of hunks) {
+      if (hunk.oldStart > start) {
+        expanded = expandFromRawCode(expanded, oldSource, start, hunk.oldStart);
+      }
+      start = Math.max(start, hunk.oldStart + hunk.oldLines);
+    }
+    // `end` is exclusive, so the last line needs length + 1.
+    if (start <= oldSource.length) {
+      expanded = expandFromRawCode(expanded, oldSource, start, oldSource.length + 1);
+    }
+    return expanded;
+  } catch {
+    return null;
+  }
+}
+
 export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function DiffViewer(
   {
     diff,
@@ -549,7 +635,10 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     wrapLines = false,
     searchQuery,
     onRetry,
+    onShowWhitespaceChanges,
     onToggleCollapse,
+    onHunkCount,
+    revealHunk,
     onTokensRendered,
     annotations,
     language,
@@ -558,6 +647,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     headerLeading,
     headerActions,
     sideLabels,
+    origin,
   },
   ref
 ) {
@@ -603,19 +693,23 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   // Keep keystrokes responsive: highlighting re-tokenizes the whole file, so
   // the query lands as a deferred value and the table catches up after paint.
   const deferredSearchQuery = useDeferredValue(searchQuery ?? "");
-  const files = useMemo(() => {
-    try {
-      const parsed = parseDiff(diff);
-      // parseDiff is forgiving — nonsense input yields a synthetic file with
-      // empty paths and no hunks. Treat that shape as a parse failure.
-      const allEmpty = parsed.every(
-        (file) => !file.oldPath && !file.newPath && file.hunks.length === 0
-      );
-      return allEmpty ? [] : parsed;
-    } catch {
-      return [];
+  const files = useMemo(() => parseDiffFiles(diff), [diff]);
+
+  // Where each file's hunks start in the patch-wide count the host steps by.
+  const hunkOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let total = 0;
+    for (const file of files) {
+      offsets.push(total);
+      total += file.hunks?.length ?? 0;
     }
-  }, [diff]);
+    return { offsets, total };
+  }, [files]);
+  useEffect(() => {
+    onHunkCount?.(hunkOffsets.total, diff);
+  }, [onHunkCount, hunkOffsets, diff]);
+  const revealIndex = revealHunk?.index ?? null;
+  const revealSeq = revealHunk?.seq ?? 0;
 
   // Raw per-file slices of the diff text, used by the per-file copy buttons.
   // Falls back to null (buttons hidden) when the segment count doesn't line up
@@ -683,7 +777,16 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           variant="zero-data"
           scale="canvas"
           icon={<FileDiffIcon />}
-          title="No changes detected"
+          title={
+            onShowWhitespaceChanges ? "No changes with whitespace ignored" : "No changes detected"
+          }
+          action={
+            onShowWhitespaceChanges && (
+              <Button variant="outline" size="sm" onClick={onShowWhitespaceChanges}>
+                Show whitespace changes
+              </Button>
+            )
+          }
           instant
         />
       </div>
@@ -769,6 +872,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           oldSource={files.length === 1 ? oldSource : null}
           fullFile={effectiveFullFile}
           onToggleCollapse={onToggleCollapse}
+          hunkOffset={hunkOffsets.offsets[index] ?? 0}
+          revealHunkIndex={localRevealIndex(revealIndex, hunkOffsets.offsets[index] ?? 0, file)}
+          revealSeq={revealSeq}
           onTokensRendered={onTokensRendered}
           stageFlush={stageFlush}
           annotations={annotations}
@@ -778,6 +884,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           headerLeading={headerLeading}
           headerActions={headerActions}
           sideLabels={sideLabels}
+          origin={files.length === 1 ? origin : undefined}
         />
       ))}
     </div>
@@ -879,11 +986,15 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand, actions }: HunkHead
   );
 }
 
-/** A file header's path: the directory stepped down, the file name at full strength. */
-export function DiffFilePath({ path }: { path: string }) {
+/**
+ * A file header's path: the directory stepped down, the file name at full
+ * strength, and where a renamed or copied file came from.
+ */
+export function DiffFilePath({ path, origin }: { path: string; origin?: DiffFileOrigin }) {
   const slash = path.lastIndexOf("/");
+  const originText = origin ? `${origin.kind} from ${origin.path}` : null;
   return (
-    <TruncatedTooltip content={path}>
+    <TruncatedTooltip content={originText ? `${path} ${originText}` : path}>
       <span className="min-w-0 flex-1 truncate text-text-primary">
         {slash === -1 ? (
           path
@@ -892,6 +1003,12 @@ export function DiffFilePath({ path }: { path: string }) {
             <span className="text-text-secondary">{path.slice(0, slash + 1)}</span>
             <span className="text-text-primary">{path.slice(slash + 1)}</span>
           </>
+        )}
+        {origin && (
+          <span className="text-text-secondary" data-testid="diff-file-origin">
+            {" "}
+            <span className="font-sans">{origin.kind} from</span> {origin.path}
+          </span>
         )}
       </span>
     </TruncatedTooltip>
@@ -964,6 +1081,16 @@ interface FileDiffProps {
   fullFile: boolean;
   /** Fired whenever this file's rendered hunk rows change (collapse, expansion, reveal) */
   onToggleCollapse?: () => void;
+  /**
+   * Where this file's hunks start in the patch-wide count, drawn on its root as
+   * `data-hunk-offset`: a collapsed file before it draws no anchors, so a
+   * host reading anchors in DOM order needs it to number the ones it sees.
+   */
+  hunkOffset: number;
+  /** This file's authored hunk to bring to the top, or null when the request is another file's. */
+  revealHunkIndex: number | null;
+  /** Bumped with each reveal request, so asking for the same hunk again scrolls again. */
+  revealSeq: number;
   /** Fired after this file's token pass commits */
   onTokensRendered?: () => void;
   /** Bumped to finish any staged mount at once (Select All needs every row in the DOM) */
@@ -975,11 +1102,35 @@ interface FileDiffProps {
   headerLeading?: ReactNode;
   headerActions?: ReactNode;
   sideLabels?: DiffViewerSideLabels;
+  origin?: DiffFileOrigin;
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
+const NOTHING_TO_COLLAPSE = { collapse: false, reason: null } as const;
 const EMPTY_HUNKS: HunkData[] = [];
 const EMPTY_KEYS: string[] = [];
+const FILE_NOTE_ANCHOR: DiffNoteAnchor = { kind: "file" };
+
+/** A patch-wide hunk index as one file's own, or null when it falls in another file. */
+function localRevealIndex(
+  index: number | null,
+  offset: number,
+  file: FileDiffProps["file"]
+): number | null {
+  if (index === null) return null;
+  const local = index - offset;
+  return local >= 0 && local < (file.hunks?.length ?? 0) ? local : null;
+}
+
+/**
+ * The row a hunk stepper lands on: the hunk's first changed line, keyed the
+ * way react-diff-view keys rows. Unlike a drawn body, which expansion merges
+ * with its neighbours, that line stays put whatever the view draws around it.
+ */
+function hunkAnchorKey(hunk: HunkData): string | null {
+  const change = hunk.changes.find((c) => c.type !== "normal") ?? hunk.changes[0];
+  return change ? getChangeKey(change) : null;
+}
 
 interface PendingHeaderFocus {
   file: FileDiffProps["file"];
@@ -994,8 +1145,6 @@ interface ExpandedHunks {
   hunks: HunkData[];
 }
 
-type DiffNoteDraft = { kind: "file" } | DiffNoteLines;
-
 function FileDiff({
   file,
   rawText,
@@ -1006,6 +1155,9 @@ function FileDiff({
   oldSource,
   fullFile,
   onToggleCollapse,
+  hunkOffset,
+  revealHunkIndex,
+  revealSeq,
   onTokensRendered,
   stageFlush,
   annotations,
@@ -1015,6 +1167,7 @@ function FileDiff({
   headerLeading,
   headerActions,
   sideLabels,
+  origin,
 }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
@@ -1029,7 +1182,12 @@ function FileDiff({
   // and must not shift when the user expands context.
   const isLargeDiff = fileBytes > DIFF_SOFT_COLLAPSE_BYTES;
 
-  const collapseDecision = useMemo(() => shouldCollapseByDefault(file), [file]);
+  // A pure rename or mode change has no hunks, so nothing to fold away or scroll.
+  const hasHunks = (file.hunks?.length ?? 0) > 0;
+  const collapseDecision = useMemo(
+    () => (hasHunks ? shouldCollapseByDefault(file) : NOTHING_TO_COLLAPSE),
+    [file, hasHunks]
+  );
   const [isCollapsed, setIsCollapsed] = useState(collapseDecision.collapse);
 
   useEffect(() => {
@@ -1053,12 +1211,7 @@ function FileDiff({
   // expanded instead of discarding it.
   const renderedHunks = useMemo(() => {
     if (!fullFile || !oldSource) return hunks;
-    try {
-      // `end` is exclusive, so the last line needs length + 1.
-      return expandFromRawCode(file.hunks ?? [], oldSource, 1, oldSource.length + 1);
-    } catch {
-      return hunks;
-    }
+    return expandFullFile(file.hunks ?? [], oldSource) ?? hunks;
   }, [fullFile, oldSource, file, hunks]);
 
   // Progressive reveal for very large expanded files: committing tens of
@@ -1080,6 +1233,15 @@ function FileDiff({
   );
   const hiddenHunkCount = renderedHunks.length - visibleHunks.length;
 
+  const anchorKeys = useMemo<(string | null)[]>(
+    () => (file.hunks ?? EMPTY_HUNKS).map(hunkAnchorKey),
+    [file]
+  );
+  const anchorKeySet = useMemo(
+    () => new Set(anchorKeys.filter((key: string | null): key is string => key !== null)),
+    [anchorKeys]
+  );
+
   // Measured from what is actually being rendered, not from the parsed diff:
   // expansion merges hunks and grows them without end, so a small diff in a
   // large file would otherwise keep the cheap-to-highlight verdict it earned
@@ -1099,8 +1261,10 @@ function FileDiff({
   const generateLineClassName = useCallback(
     ({ changes, defaultGenerate }: { changes: ChangeData[]; defaultGenerate: () => string }) => {
       const base = defaultGenerate();
-      if (!movedKeys?.size) return base;
-      let extra = "";
+      let extra = changes.some((change) => change && anchorKeySet.has(getChangeKey(change)))
+        ? " diff-hunk-anchor"
+        : "";
+      if (!movedKeys?.size) return extra ? base + extra : base;
       for (const change of changes) {
         if (!change || change.type === "normal") continue;
         if (!movedKeys.has(getChangeKey(change))) continue;
@@ -1108,7 +1272,7 @@ function FileDiff({
       }
       return extra ? base + extra : base;
     },
-    [movedKeys]
+    [movedKeys, anchorKeySet]
   );
 
   const notesWorktree = annotations?.worktreePath ?? "";
@@ -1123,24 +1287,36 @@ function FileDiff({
     () => makeGutterRenderer(movedKeys, notesEnabled ? noteKeysHintId : null),
     [movedKeys, notesEnabled, noteKeysHintId]
   );
-  const [noteDraft, setNoteDraft] = useState<DiffNoteDraft | null>(null);
+  // Open drafts live in the pane's session, keyed by file, so a refresh, a
+  // revision change that remounts this view, a layout without the table, or a
+  // visit to another file leaves them where the reviewer left them. The line
+  // draft and the file draft are separate entries: opening one never takes
+  // over the other's text.
+  const draftSession = useDiffNoteDraftSession();
+  const draftFileKey = notesEnabled ? diffNoteFileKey(notesWorktree, relPath) : null;
+  const lineDraft = useDiffNoteDraftState(draftSession, (state) =>
+    draftFileKey === null ? null : (state.lines[draftFileKey] ?? null)
+  );
+  const fileDraftOpen = useDiffNoteDraftState(
+    draftSession,
+    (state) => draftFileKey !== null && state.files[draftFileKey] === true
+  );
   const [lineSelection, setLineSelection] = useState<DiffNoteLineSelection | null>(null);
-  // Whatever held focus when the composer opened — a line number, the diff region
-  // after a click beside one, or the Add file note button — so closing it hands
-  // focus back.
-  const draftOpenerRef = useRef<HTMLElement | null>(null);
+  // Whatever held focus when each composer opened — a line number, the diff
+  // region after a click beside one, or the Add file note button — so closing
+  // it hands focus back.
+  const lineDraftOpenerRef = useRef<HTMLElement | null>(null);
+  const fileDraftOpenerRef = useRef<HTMLElement | null>(null);
   const fileRootRef = useRef<HTMLDivElement | null>(null);
-  const rememberDraftOpener = useCallback(() => {
+  const rememberOpener = useCallback((ref: { current: HTMLElement | null }) => {
     const active = document.activeElement;
-    draftOpenerRef.current = active instanceof HTMLElement ? active : null;
+    ref.current = active instanceof HTMLElement ? active : null;
   }, []);
-  const draftOwnerId = useId();
   useEffect(() => {
-    setNoteDraft(null);
     setLineSelection(null);
-    clearComposerDraft(draftOwnerId);
-  }, [file, draftOwnerId]);
-  useEffect(() => () => clearComposerDraft(draftOwnerId), [draftOwnerId]);
+  }, [file]);
+  // This view's gestures hand focus only to editors this view renders.
+  const [focusOwner] = useState(() => ({}));
 
   // Anchors are checked against every rendered row, expanded context included,
   // so a note written on revealed context still matches once it is revealed.
@@ -1157,39 +1333,43 @@ function FileDiff({
     return keys;
   }, [notesEnabled, isCollapsed, visibleHunks]);
 
-  const draftPlacement = useMemo<{
-    anchor: DiffNoteAnchor;
-    keys: string[];
-  } | null>(() => {
-    if (!noteDraft) return null;
-    if (noteDraft.kind === "file") return { anchor: { kind: "file" }, keys: [] };
-    if (!renderedLineIndex) return null;
-    const { side, startLine, endLine } = noteDraft;
-    const contentHash = hashLineRange(renderedLineIndex, side, startLine, endLine);
-    if (contentHash === null) return null;
-    return {
-      anchor: { kind: "lines", side, startLine, endLine, contentHash },
-      keys: changeKeysForLines(renderedLineIndex, side, startLine, endLine),
-    };
-  }, [noteDraft, renderedLineIndex]);
+  // Placed the way a saved note is: under its rows only while they're on
+  // screen and still read as they did when the draft was opened.
+  const lineDraftPlacement = useMemo(() => {
+    if (!lineDraft || !renderedLineIndex) return null;
+    const placement = placeDiffNoteAnchor(lineDraft, renderedLineIndex);
+    return placement.status === "anchored" && !visibleChangeKeys?.has(placement.widgetKey)
+      ? ({ status: "unplaced" } as const)
+      : placement;
+  }, [lineDraft, renderedLineIndex, visibleChangeKeys]);
 
-  const closeNoteDraft = useCallback(
-    (via: DiffNoteCloseVia) => {
-      // A layout switch under an open draft remounts whatever opened it.
-      const opener = draftOpenerRef.current;
-      const root = fileRootRef.current;
-      returnFocusTo(
-        opener && !opener.isConnected && root
-          ? (findLineNumber(root, opener) ?? root.querySelector<HTMLElement>('[role="region"]'))
-          : opener,
-        via
-      );
-      draftOpenerRef.current = null;
-      setNoteDraft(null);
-      clearComposerDraft(draftOwnerId);
-    },
-    [draftOwnerId]
-  );
+  // The session has already closed the draft; this only hands focus back.
+  const handLineDraftFocusBack = useCallback((via: DiffNoteCloseVia) => {
+    // A layout switch under an open draft remounts whatever opened it, and a
+    // draft restored after a refresh has no opener at all.
+    const opener = lineDraftOpenerRef.current;
+    const root = fileRootRef.current;
+    returnFocusTo(
+      (!opener || !opener.isConnected) && root
+        ? ((opener && findLineNumber(root, opener)) ??
+            root.querySelector<HTMLElement>('[role="region"]') ??
+            // A collapsed file has no diff region to land in.
+            root.querySelector<HTMLElement>("[data-note-file-add]"))
+        : opener,
+      via
+    );
+    lineDraftOpenerRef.current = null;
+  }, []);
+  const handFileDraftFocusBack = useCallback((via: DiffNoteCloseVia) => {
+    const opener = fileDraftOpenerRef.current;
+    returnFocusTo(
+      opener?.isConnected
+        ? opener
+        : (fileRootRef.current?.querySelector<HTMLElement>("[data-note-file-add]") ?? null),
+      via
+    );
+    fileDraftOpenerRef.current = null;
+  }, []);
 
   // Notes that can't sit under their lines — file notes, stale ones, and any
   // whose rows are collapsed or not yet revealed — are listed above the table
@@ -1222,9 +1402,12 @@ function FileDiff({
   }, [fileNotes, renderedLineIndex, visibleChangeKeys]);
 
   const draftWidgetKey =
-    draftPlacement && draftPlacement.anchor.kind === "lines"
-      ? draftPlacement.keys[draftPlacement.keys.length - 1]
-      : undefined;
+    lineDraftPlacement?.status === "anchored" ? lineDraftPlacement.widgetKey : undefined;
+  const detachedLineDraft =
+    lineDraft &&
+    (lineDraftPlacement?.status === "stale" || lineDraftPlacement?.status === "unplaced")
+      ? { anchor: lineDraft, placement: lineDraftPlacement.status }
+      : null;
 
   const widgets = useMemo(() => {
     if (rowNotes.size === 0 && !draftWidgetKey) return undefined;
@@ -1237,13 +1420,13 @@ function FileDiff({
           {rowNotes.get(key)?.map((note) => (
             <DiffNoteCard key={note.id} note={note} />
           ))}
-          {key === draftWidgetKey && draftPlacement && (
+          {key === draftWidgetKey && lineDraft && (
             <DiffNoteComposer
-              ownerId={draftOwnerId}
               worktreePath={notesWorktree}
               filePath={relPath}
-              anchor={draftPlacement.anchor}
-              onDone={closeNoteDraft}
+              anchor={lineDraft}
+              focusOwner={focusOwner}
+              onDone={handLineDraftFocusBack}
             />
           )}
         </div>
@@ -1253,42 +1436,52 @@ function FileDiff({
   }, [
     rowNotes,
     draftWidgetKey,
-    draftPlacement,
-    draftOwnerId,
+    lineDraft,
     notesWorktree,
     relPath,
-    closeNoteDraft,
+    focusOwner,
+    handLineDraftFocusBack,
   ]);
 
   // Click a line number to note that line; shift-click extends the open draft
   // across a contiguous run of rows on the same side.
-  const startLineDraft = useCallback(
-    ({ side: noteSide, line }: { side: DiffNoteSide; line: number }, extend: boolean) => {
-      rememberDraftOpener();
-      setLineSelection(null);
-      setNoteDraft((current) => {
-        if (extend && current?.kind === "lines" && current.side === noteSide) {
-          const startLine = Math.min(current.startLine, line);
-          const endLine = Math.max(current.endLine, line);
-          if (
-            renderedLineIndex &&
-            hashLineRange(renderedLineIndex, noteSide, startLine, endLine) !== null
-          ) {
-            return { kind: "lines", side: noteSide, startLine, endLine };
-          }
-        }
-        return { kind: "lines", side: noteSide, startLine: line, endLine: line };
-      });
-    },
-    [renderedLineIndex, rememberDraftOpener]
-  );
+  // Opening or moving the draft hashes the rows it now covers, as they read on
+  // screen: the one gesture that re-anchors it to the text in front of it.
   const openLineDraft = useCallback(
     (lines: DiffNoteLines) => {
-      rememberDraftOpener();
-      setNoteDraft(lines);
+      if (draftFileKey === null || !renderedLineIndex) return;
+      const { side, startLine, endLine } = lines;
+      const contentHash = hashLineRange(renderedLineIndex, side, startLine, endLine);
+      if (contentHash === null) return;
+      rememberOpener(lineDraftOpenerRef);
+      draftSession.requestFocus(lineDraftBodyKey(draftFileKey), focusOwner);
+      draftSession.openLine(draftFileKey, { kind: "lines", side, startLine, endLine, contentHash });
     },
-    [rememberDraftOpener]
+    [draftFileKey, renderedLineIndex, draftSession, rememberOpener, focusOwner]
   );
+  const startLineDraft = useCallback(
+    ({ side: noteSide, line }: { side: DiffNoteSide; line: number }, extend: boolean) => {
+      setLineSelection(null);
+      const current =
+        draftFileKey === null ? undefined : draftSession.getState().lines[draftFileKey];
+      if (extend && current?.side === noteSide && renderedLineIndex) {
+        const startLine = Math.min(current.startLine, line);
+        const endLine = Math.max(current.endLine, line);
+        if (hashLineRange(renderedLineIndex, noteSide, startLine, endLine) !== null) {
+          openLineDraft({ kind: "lines", side: noteSide, startLine, endLine });
+          return;
+        }
+      }
+      openLineDraft({ kind: "lines", side: noteSide, startLine: line, endLine: line });
+    },
+    [draftFileKey, draftSession, renderedLineIndex, openLineDraft]
+  );
+  const openFileDraft = useCallback(() => {
+    if (draftFileKey === null) return;
+    rememberOpener(fileDraftOpenerRef);
+    draftSession.requestFocus(fileDraftBodyKey(draftFileKey), focusOwner);
+    draftSession.openFile(draftFileKey);
+  }, [draftFileKey, draftSession, rememberOpener, focusOwner]);
   const gutterEvents = useMemo<EventMap | undefined>(() => {
     if (!notesEnabled) return undefined;
     return {
@@ -1318,7 +1511,8 @@ function FileDiff({
     return changeKeysForLines(renderedLineIndex, side, startLine, endLine);
   }, [lineSelection, renderedLineIndex]);
   const selectedChanges =
-    selectionKeys ?? (draftPlacement?.keys.length ? draftPlacement.keys : EMPTY_KEYS);
+    selectionKeys ??
+    (lineDraftPlacement?.status === "anchored" ? lineDraftPlacement.selectedKeys : EMPTY_KEYS);
 
   const searchRanges = useMemo(
     () => (searchQuery && !isCollapsed ? computeSearchRanges(visibleHunks, searchQuery) : null),
@@ -1498,7 +1692,8 @@ function FileDiff({
     return () => {
       region.removeEventListener("wheel", onWheel);
     };
-  }, [isCenteredSplit]);
+    // The region mounts and unmounts with these, not just with the layout.
+  }, [isCenteredSplit, isCollapsed, hasHunks]);
 
   // Keep the centered indent in sync when the scroll system mounts/unmounts or
   // content changes under a non-zero offset (wrap toggle round-trip, collapse,
@@ -1723,6 +1918,83 @@ function FileDiff({
     [file, oldSource, visibleHunks]
   );
 
+  // A host's hunk step: open the file, lift the cap past the hunk, and land on
+  // its first changed row once the staged mount has drawn it. Held by key,
+  // file and request, so a refresh, another file, or the host withdrawing the
+  // request (the reader took the scroll back) drops it rather than scrolling
+  // from under them. A request this view mounts with is one an earlier view
+  // already carried out: a refresh that returns the same bytes, or a trip
+  // through the rendered layout, remounts it, and must not jump again.
+  const pendingRevealRef = useRef<{
+    key: string;
+    file: FileDiffProps["file"];
+    seq: number;
+  } | null>(null);
+  const handledRevealSeqRef = useRef(revealSeq);
+  const [revealTick, setRevealTick] = useState(0);
+  const startReveal = useEffectEvent((index: number, seq: number) => {
+    const key = anchorKeys[index];
+    if (!key) return;
+    pendingRevealRef.current = { key, file, seq };
+    if (isCollapsed) {
+      // As a click on the header would: consumers re-scan the rows that appear.
+      onToggleCollapse?.();
+      setIsCollapsed(false);
+    }
+    setRevealTick((tick) => tick + 1);
+  });
+  useEffect(() => {
+    if (revealHunkIndex === null || revealSeq === handledRevealSeqRef.current) return;
+    handledRevealSeqRef.current = revealSeq;
+    startReveal(revealHunkIndex, revealSeq);
+  }, [revealHunkIndex, revealSeq]);
+  useLayoutEffect(() => {
+    const pending = pendingRevealRef.current;
+    if (pending === null) return;
+    if (pending.file !== file || revealHunkIndex === null || pending.seq !== revealSeq) {
+      pendingRevealRef.current = null;
+      return;
+    }
+    // Recomputed on every commit while the landing waits, so a scope change
+    // that splits the drawn bodies apart again still lifts the cap far enough.
+    const drawnIndex = renderedHunks.findIndex((hunk) =>
+      hunk.changes.some((change) => getChangeKey(change) === pending.key)
+    );
+    if (drawnIndex === -1) {
+      pendingRevealRef.current = null;
+      return;
+    }
+    if (drawnIndex >= visibleHunkCount) {
+      setVisibleHunkCount(drawnIndex + 1);
+      extendStage();
+      return;
+    }
+    const region = regionRef.current ?? nativeScrollerRef.current;
+    if (isCollapsed || !region) return;
+    const row = region.querySelector(`[data-change-key="${pending.key}"]`)?.closest("tr");
+    if (!row) {
+      // Every visible row is drawn and the line isn't among them: nothing to land on.
+      if (allRowsMounted) pendingRevealRef.current = null;
+      return;
+    }
+    // Scrolled as soon as it is drawn, and again as later batches arrive: a row
+    // near the end of a partial stage can't reach the top until the rows below
+    // it exist, so the landing settles once staging has finished.
+    row.scrollIntoView({ block: "start", behavior: "instant" });
+    if (allRowsMounted) pendingRevealRef.current = null;
+  }, [
+    file,
+    isCollapsed,
+    renderedHunks,
+    visibleHunkCount,
+    mountedHunks,
+    allRowsMounted,
+    revealHunkIndex,
+    revealSeq,
+    revealTick,
+    extendStage,
+  ]);
+
   const handleShowMoreHunks = () => {
     setVisibleHunkCount((count) => count + SHOW_MORE_HUNKS_STEP);
     // Revealed hunks join the stage behind the rows already mounted.
@@ -1871,12 +2143,13 @@ function FileDiff({
     </div>
   );
 
-  return (
+  const view = (
     <div
       ref={fileRootRef}
       className="mb-2"
       style={fileStyle}
       data-diff-file=""
+      data-hunk-offset={hunkOffset}
       data-notes-enabled={notesEnabled || undefined}
       onKeyDown={gutterKeys.onKeyDown}
       onFocus={gutterKeys.onFocus}
@@ -1888,7 +2161,7 @@ function FileDiff({
             {headerLeading != null && headerLeading !== false && (
               <div className="-ml-1.5 flex shrink-0 items-center">{headerLeading}</div>
             )}
-            <DiffFilePath path={relPath} />
+            <DiffFilePath path={relPath} origin={origin} />
             {langLoadFailed && (
               <span
                 className="text-xs text-text-secondary"
@@ -1911,10 +2184,7 @@ function FileDiff({
                     <Button
                       variant="ghost"
                       size="icon-xs"
-                      onClick={() => {
-                        rememberDraftOpener();
-                        setNoteDraft({ kind: "file" });
-                      }}
+                      onClick={openFileDraft}
                       aria-label="Add file note"
                       data-note-file-add=""
                       // The copy beside it is a CopyButton; one glyph size per row.
@@ -1970,7 +2240,7 @@ function FileDiff({
             <p ref={noteKeysHintRef} id={noteKeysHintId} className="diff-note-keys">
               Arrow keys move <FactSeparator /> Shift+arrows select lines <FactSeparator /> Enter
               adds a note
-              {noteDraft?.kind === "lines" && (
+              {lineDraft && (
                 <>
                   {" "}
                   <FactSeparator /> Shift+Enter extends the open note
@@ -1980,24 +2250,35 @@ function FileDiff({
           )}
         </div>
       )}
-      {notesEnabled && (detachedNotes.length > 0 || draftPlacement?.anchor.kind === "file") && (
+      {notesEnabled && (detachedNotes.length > 0 || detachedLineDraft || fileDraftOpen) && (
         <div className="diff-note-thread" data-testid="diff-file-notes">
           {detachedNotes.map(({ note, placement }) => (
             <DiffNoteCard key={note.id} note={note} placement={placement} />
           ))}
-          {draftPlacement?.anchor.kind === "file" && (
+          {detachedLineDraft && (
             <DiffNoteComposer
-              ownerId={draftOwnerId}
               worktreePath={notesWorktree}
               filePath={relPath}
-              anchor={draftPlacement.anchor}
-              onDone={closeNoteDraft}
+              anchor={detachedLineDraft.anchor}
+              placement={detachedLineDraft.placement}
+              focusOwner={focusOwner}
+              onDone={handLineDraftFocusBack}
+            />
+          )}
+          {fileDraftOpen && (
+            <DiffNoteComposer
+              worktreePath={notesWorktree}
+              filePath={relPath}
+              anchor={FILE_NOTE_ANCHOR}
+              focusOwner={focusOwner}
+              onDone={handFileDraftFocusBack}
             />
           )}
         </div>
       )}
       {collapseDecision.collapse && (
         <button
+          type="button"
           onClick={handleToggleCollapse}
           aria-expanded={!isCollapsed}
           {...(!isCollapsed ? { "aria-controls": diffRegionId } : {})}
@@ -2010,15 +2291,13 @@ function FileDiff({
           />
           <span className="text-left">
             {collapseDecision.reason === "generated"
-              ? "Generated file collapsed"
+              ? "Generated file"
               : `Large diff (${formatBytes(fileBytes)})`}
-          </span>
-          <span className="ml-auto text-text-secondary font-mono text-xs">
-            {isCollapsed ? "Show diff" : "Hide diff"}
           </span>
         </button>
       )}
       {!isCollapsed &&
+        hasHunks &&
         (isCenteredSplit ? (
           <div
             id={diffRegionId}
@@ -2059,4 +2338,8 @@ function FileDiff({
         ))}
     </div>
   );
+
+  // Re-provided so the cards and composers in this file share its session even
+  // where no pane hands one down.
+  return <DiffNoteDraftContext value={draftSession}>{view}</DiffNoteDraftContext>;
 }

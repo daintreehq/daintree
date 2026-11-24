@@ -21,7 +21,7 @@ import {
 } from "@/store/worktreeSnapshotSync";
 
 const mocks = vi.hoisted(() => ({
-  list: vi.fn(() => [] as ActionManifestEntry[]),
+  listForTransfer: vi.fn(() => [] as ActionManifestEntry[]),
   get: vi.fn((_id: string): ActionManifestEntry | null => null),
   dispatch: vi.fn(),
   getContext: vi.fn((): Record<string, unknown> => ({})),
@@ -42,7 +42,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
-    list: mocks.list,
+    listForTransfer: mocks.listForTransfer,
     getDispatchMeta: mocks.get,
     dispatch: mocks.dispatch,
     getContext: mocks.getContext,
@@ -162,6 +162,15 @@ const MAIN_PUSH_REVIEW = {
   destination: { remote: "origin", branch: "main" },
 };
 
+// The recipe formatter loads on demand, so its preview lands a few ticks after
+// the dispatch rather than within two microtasks.
+const recipePreviewsSettled = () =>
+  vi.waitFor(() => {
+    const { current, queue } = useMcpConfirmStore.getState();
+    expect(current).not.toBeNull();
+    expect([current, ...queue].every((item) => item?.previewPending !== true)).toBe(true);
+  });
+
 describe("useMcpBridge", () => {
   let manifestHandler: ((requestId: string) => void) | undefined;
   let dispatchHandler:
@@ -180,7 +189,10 @@ describe("useMcpBridge", () => {
         authorization?: "tier" | "user" | "session-grant" | "native-grant" | "skip-preference";
         requester?:
           { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
+        delegationOffer?: { label: string; detail: string; switchesMode?: true };
         dispatchDeadlineAt?: number;
+        actionsListWalk?: boolean;
+        callerOrigin?: "global-assistant";
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -257,7 +269,7 @@ describe("useMcpBridge", () => {
   });
 
   it("returns the current action manifest and falls back to an empty manifest on failure", () => {
-    mocks.list.mockReturnValueOnce([safeManifestEntry()]);
+    mocks.listForTransfer.mockReturnValueOnce([safeManifestEntry()]);
 
     renderHook(() => useMcpBridge());
 
@@ -266,12 +278,36 @@ describe("useMcpBridge", () => {
       expect.objectContaining({ id: "actions.list" }),
     ]);
 
-    mocks.list.mockImplementationOnce(() => {
+    mocks.listForTransfer.mockImplementationOnce(() => {
       throw new Error("manifest exploded");
     });
 
     manifestHandler?.("req-2");
     expect(sendGetManifestResponse).toHaveBeenCalledWith("req-2", []);
+  });
+
+  it("passes main's own actions.list walk to the dispatch, and nothing for any other request (#17036)", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-walk",
+      actionId: "actions.list",
+      args: { limit: 100 },
+      actionsListWalk: true,
+    });
+    await dispatchHandler?.({
+      requestId: "req-plain",
+      actionId: "actions.list",
+      args: { limit: 100 },
+    });
+
+    expect(mocks.dispatch.mock.calls.map(([, , options]) => options.actionsListWalk)).toEqual([
+      true,
+      undefined,
+    ]);
   });
 
   it("dispatches safe actions immediately without surfacing a confirmation modal", async () => {
@@ -578,6 +614,64 @@ describe("useMcpBridge", () => {
     });
   });
 
+  // #18153: the global Assistant's relayed call is external, so its confirm-class
+  // dispatch waits on this view's dialog like any other, and only an answered
+  // dialog reaches the action as the person's approval.
+  it.each(["approved", "rejected"] as const)(
+    "asks before running the global Assistant's confirm-class call, %s",
+    async (decision) => {
+      mocks.get.mockReturnValue(
+        confirmManifestEntry({
+          id: "acme.stages.resume" as ActionManifestEntry["id"],
+          title: "Resume stage",
+        })
+      );
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: `req-global-${decision}`,
+        actionId: "acme.stages.resume",
+        args: { stageId: "s1" },
+        confirmed: false,
+        sessionOrigin: "external",
+        callerOrigin: "global-assistant",
+      });
+
+      await Promise.resolve();
+      expect(useMcpConfirmStore.getState().current).not.toBeNull();
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+
+      useMcpConfirmStore.getState().resolveCurrent(decision);
+      await dispatched;
+
+      if (decision === "rejected") {
+        expect(mocks.dispatch).not.toHaveBeenCalled();
+        // The caller hears the refusal now rather than waiting out its deadline.
+        expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requestId: "req-global-rejected",
+            confirmationDecision: "rejected",
+          })
+        );
+        return;
+      }
+      expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "acme.stages.resume",
+        { stageId: "s1" },
+        {
+          source: "agent",
+          confirmed: true,
+          hostCallerOrigin: "global-assistant",
+          hostPersonApproved: true,
+          dispatchDeadlineAt: expect.any(Number),
+        }
+      );
+    }
+  );
+
   it("threads the action's dangerRationale into the confirm store so the dialog can show it (#11342)", async () => {
     mocks.get.mockReturnValue(
       confirmManifestEntry({
@@ -773,6 +867,38 @@ describe("useMcpBridge", () => {
     });
     // Main runs this call itself on the answer, so nothing here claims a run (#14989).
     expect(holdDispatch).not.toHaveBeenCalledWith(expect.objectContaining({ phase: "approved" }));
+  });
+
+  // #16752: main's own assistant's question about another machine's call, with
+  // the hand-over main settled; the view reports the tick, main writes it.
+  it("puts main's hand-over offer in the dialog and reports the tick beside the approval", async () => {
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "host.settings", title: "Change settings" }));
+    const offer = { label: "Change a host's settings", detail: "Only as previewed" };
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-hand-over",
+      actionId: "host.settings",
+      args: {},
+      sessionOrigin: "external",
+      approvalOnly: true,
+      hostPreview: { lines: ["Canopy: unset → on"] },
+      delegationOffer: offer,
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.delegationOffer).toEqual(offer);
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", undefined, "delegate");
+    await dispatched;
+
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-hand-over",
+      result: { ok: true, result: null },
+      confirmationDecision: "approved",
+      approvalScope: "delegate",
+    });
   });
 
   // #14992: the dialog names the pane that asked, as this view names it when
@@ -1154,6 +1280,29 @@ describe("useMcpBridge", () => {
         );
       }
     );
+
+    // #18153: main says when this machine's global Assistant asked through
+    // host.call; the session itself is external, like any relay.
+    it("names the global Assistant to the action when main says it asked", async () => {
+      mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.launch", danger: "safe" }));
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { terminalId: "t-global" } });
+
+      renderHook(() => useMcpBridge());
+
+      await dispatchHandler?.({
+        requestId: "req-global",
+        actionId: "agent.launch",
+        args: { agentId: "claude" },
+        sessionOrigin: "external",
+        callerOrigin: "global-assistant",
+      });
+
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "agent.launch",
+        expect.anything(),
+        expect.objectContaining({ source: "agent", hostCallerOrigin: "global-assistant" })
+      );
+    });
 
     it("falls back to 'mcp' when the dispatch carries no origin at all", async () => {
       mocks.get.mockReturnValue(safeManifestEntry({ id: "agent.launch", danger: "safe" }));
@@ -3020,8 +3169,7 @@ describe("useMcpBridge", () => {
       args: { recipeId: "shadowed" },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await recipePreviewsSettled();
     const preview = (useMcpConfirmStore.getState().current?.preview ?? []).join("\n");
     expect(preview).toContain("new");
     expect(preview).not.toContain("old");
@@ -3082,8 +3230,7 @@ describe("useMcpBridge", () => {
         actionId: "recipe.run",
         args: { recipeId: "recipe-1" },
       });
-      await Promise.resolve();
-      await Promise.resolve();
+      await recipePreviewsSettled();
 
       // What the approver reads and what the approval authorizes are the same
       // number, by construction — both come from the one resolved recipe.
@@ -3123,8 +3270,7 @@ describe("useMcpBridge", () => {
           actionId,
           args: { recipeId: "recipe-1" },
         });
-        await Promise.resolve();
-        await Promise.resolve();
+        await recipePreviewsSettled();
         useMcpConfirmStore.getState().resolveCurrent("approved");
         await dispatched;
 
@@ -3165,8 +3311,7 @@ describe("useMcpBridge", () => {
         actionId: "recipe.run",
         args: { recipeId: "recipe-2" },
       });
-      await Promise.resolve();
-      await Promise.resolve();
+      await recipePreviewsSettled();
 
       // The queue promotes one at a time; approve both in turn.
       useMcpConfirmStore.getState().resolveCurrent("approved");

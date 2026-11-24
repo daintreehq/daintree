@@ -28,12 +28,18 @@ import {
   GIT_PAGE_LIMIT_MAX,
   GIT_SUBJECT_MAX_BYTES,
 } from "@shared/config/gitReadLimits";
-import type { ConflictedFileEntry, GitPushReview, StagingFileEntry } from "@shared/types/git";
+import type {
+  ConflictedFileEntry,
+  GitPullRebaseReview,
+  GitPushReview,
+  RepoOperationPin,
+  StagingFileEntry,
+} from "@shared/types/git";
 import { projectPulseForAction } from "@shared/utils/pulseProjection";
 import { z } from "zod";
 import { mintRemoteOperationId } from "@/clients/operationsClient";
 import { runHostOperation } from "@/hooks/useHostConnection";
-import { fileMutationArgsSchema } from "./gitActionArgs";
+import { fileMutationArgsSchema, hunkStagingArgsSchema } from "./gitActionArgs";
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(Math.trunc(value) || min, min), max);
@@ -473,6 +479,26 @@ export const gitActionRuns = {
     const { filePath, ...location } = args as WorktreeLocationArgs & { filePath: string };
     await window.electron.git.unstageFile(requireWorktreePath(location, ctx), filePath);
   },
+  "git.stageHunk": async (args: unknown, ctx: ActionContext) => {
+    const { filePath, hunks, ...location } = hunkStagingArgsSchema.parse(args);
+    const result = await window.electron.git.stageHunks({
+      cwd: requireWorktreePath(location, ctx),
+      filePath,
+      hunks,
+    });
+    if (result.status === "applied") await refreshWorktree(location, ctx);
+    return result;
+  },
+  "git.unstageHunk": async (args: unknown, ctx: ActionContext) => {
+    const { filePath, hunks, ...location } = hunkStagingArgsSchema.parse(args);
+    const result = await window.electron.git.unstageHunks({
+      cwd: requireWorktreePath(location, ctx),
+      filePath,
+      hunks,
+    });
+    if (result.status === "applied") await refreshWorktree(location, ctx);
+    return result;
+  },
   "git.discardFileChanges": async (args: unknown, ctx: ActionContext) => {
     const { filePath, ...location } = fileMutationArgsSchema.parse(args);
     const worktreePath = requireWorktreePath(location, ctx);
@@ -600,6 +626,9 @@ export const gitActionRuns = {
   "git.pullRebase": async (args: unknown, ctx: ActionContext) => {
     const location = args as WorktreeLocationArgs | undefined;
     let resolvedCwd: string | null = null;
+    // Only a pull that reached git can have moved the worktree. A missing
+    // worktree or a declined confirm changed nothing, so neither refreshes.
+    let attempted = false;
     try {
       const cwd = requireWorktreePath(location, ctx);
       resolvedCwd = cwd;
@@ -610,12 +639,37 @@ export const gitActionRuns = {
       // the same reason as `git.push`: ActionService already cleared it against
       // the MCP bridge's own confirm, and this deferred store can only be
       // resolved by a renderer dialog a headless client cannot reach (#11538).
+      //
+      // The pull carries the branch and commit the confirm SHOWED (#17188), so
+      // an agent switching branches or committing while it sat open makes the
+      // pull refuse rather than rebase something nobody previewed.
+      let review: GitPullRebaseReview | undefined;
       if (ctx.dispatchSource !== "agent") {
-        const confirmed = await useGitPullRebaseConfirmStore.getState().requestConfirmation(cwd);
-        if (!confirmed) return;
+        const result = await useGitPullRebaseConfirmStore.getState().requestConfirmation(cwd);
+        if (!result.confirmed) return;
+        review = result.review;
       }
-      await window.electron.git.pullRebase(cwd);
+      attempted = true;
+      await window.electron.git.pullRebase(cwd, review);
     } catch (error) {
+      if (attempted && resolvedCwd) {
+        // Same shape as a base integration (#17188): a pull that stops on a
+        // conflict throws having genuinely moved the worktree, so the card is
+        // refreshed on this path too, and a real halt takes a person straight
+        // to Review Hub's conflict panel instead of a toast pointing at it.
+        // Swallowed only when the panel actually opened. An agent keeps the
+        // halt as its result: it has no panel to read, and a pull reported as
+        // done while the worktree sits mid-rebase would be a false success.
+        await refreshWorktree(location, ctx);
+        const isConflict = isClientGitError(error) && error.gitReason === "conflict-unresolved";
+        if (
+          isConflict &&
+          ctx.dispatchSource !== "agent" &&
+          (await routeHaltToReviewHub(resolvedCwd, location, ctx))
+        ) {
+          return;
+        }
+      }
       reportRemoteGitFailure(
         error,
         { operation: "Pull and rebase", location, cwd: resolvedCwd },
@@ -623,6 +677,9 @@ export const gitActionRuns = {
       );
       throw error;
     }
+    // Without this the card's behind count and status stay stale until the
+    // next background poll.
+    await refreshWorktree(location, ctx);
   },
   "git.fetch": async (args: unknown, ctx: ActionContext) => {
     // Everything is inside the try, including `requireWorktreePath`. The
@@ -714,6 +771,10 @@ export const gitActionRuns = {
       operation?: RepoOperationState;
     };
     const resolvedCwd = requireWorktreePath(location, ctx);
+    // The operation the user approved, so Main can refuse one that replaced it
+    // while the confirm sat open (#17559). An agent dispatch confirms nothing,
+    // has nothing to bind to, and aborts what it finds.
+    let chosen: RepoOperationPin | undefined;
     if (ctx.dispatchSource !== "agent") {
       const result = await useGitWorktreeOperationConfirmStore.getState().requestConfirmation({
         kind: "abort-operation",
@@ -722,10 +783,11 @@ export const gitActionRuns = {
         // only the label to show while that read is in flight.
         operation: operation ?? "REBASING",
       });
-      if (!result.confirmed) return;
+      if (!result.confirmed || !result.operation) return;
+      chosen = result.operation;
     }
     try {
-      await window.electron.git.abortRepositoryOperation(resolvedCwd);
+      await window.electron.git.abortRepositoryOperation(resolvedCwd, chosen);
     } catch (error) {
       await refreshWorktree(location, ctx);
       reportGitFailure(error, location, ctx);

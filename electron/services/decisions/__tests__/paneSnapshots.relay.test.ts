@@ -294,11 +294,22 @@ afterEach(() => {
 
 describe("terminal snapshots through the 0.4.0 bridge (#16230)", () => {
   // Phone images are declared beside snapshots now that Daintree stores them (#16233).
-  it("declares pane snapshots to the relay, beside follow-ups and phone images", async () => {
+  it("declares pane snapshots to the relay, beside follow-ups, phone images, involvement hints, person declines and the owner desktop's answers, follow-ups and declines", async () => {
     const h = await harness();
 
+    // The attempt is live once its bridge starts; the socket's signed ticket request lands after that.
+    await vi.waitFor(() => expect(h.relay.tickets).not.toHaveLength(0));
     const features = (h.relay.tickets[0] as { features?: string[] }).features;
-    expect(features).toEqual(["pane-snapshots-v1", "phone-images-v1", "thread-messages-v1"]);
+    expect(features).toEqual([
+      "involvement-v1",
+      "owner-desktop-answers-v1",
+      "owner-desktop-declines-v1",
+      "owner-desktop-messages-v1",
+      "pane-snapshots-v1",
+      "person-declines-v1",
+      "phone-images-v1",
+      "thread-messages-v1",
+    ]);
     h.connection.stop();
   });
 

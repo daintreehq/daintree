@@ -149,7 +149,7 @@ const fixtures = {
 
 const RINGS = Object.keys(fixtures) as AuditRingName[];
 
-// The caps the owners' production adapters pass to writeAll.
+// Each ring's limit when its owner has none configured.
 const CAPS: Record<AuditRingName, number> = {
   mcpAuditLog: MCP_AUDIT_DEFAULT_MAX_RECORDS,
   mcpTurnOutcomeLog: MCP_AUDIT_DEFAULT_MAX_RECORDS,
@@ -158,6 +158,9 @@ const CAPS: Record<AuditRingName, number> = {
   runHistoryRecords: RUN_HISTORY_DEFAULT_MAX_RECORDS,
   pluginMcpAuditLog: PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
 };
+
+// Rings whose owners read a user-set limit from `auditMaxRecords`.
+const CONFIGURABLE_RINGS = RINGS.filter((ring) => ring !== "runHistoryRecords");
 
 // Where each ring sits in a v0.18 config.json.
 const CONFIG_HOME: Record<AuditRingName, [string, string]> = {
@@ -434,6 +437,54 @@ describe("importLegacyAuditRings — merge", () => {
       expect(result).toHaveLength(cap);
       expect(result.slice(0, 3)).toEqual(["l3", "l4", "e0"]);
       expect(result.at(-1)).toBe(`e${cap - 3}`);
+    }
+  );
+
+  it.each(CONFIGURABLE_RINGS)(
+    "keeps %s past the default when its configured limit is higher",
+    (ring) => {
+      const make = fixtures[ring];
+      harness.db!.transaction(() => {
+        for (let i = 0; i < CAPS[ring]; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+      })();
+      // The legacy records are only in the sidecar; config.json holds the setting.
+      const [parentKey] = CONFIG_HOME[ring];
+      const config = makeConfig({ [parentKey]: { auditMaxRecords: CAPS[ring] + 100 } });
+      fs.writeFileSync(
+        harness.sidecarPath,
+        JSON.stringify({ [ring]: [make("l1", 1), make("l2", 2)] })
+      );
+
+      importLegacyAuditRings(deps(config));
+
+      const result = ids(ring);
+      expect(result).toHaveLength(CAPS[ring] + 2);
+      expect(result.slice(0, 3)).toEqual(["l1", "l2", "e0"]);
+    }
+  );
+
+  it.each(CONFIGURABLE_RINGS)(
+    "trims %s to a configured limit below the default, giving up the oldest legacy records first",
+    (ring) => {
+      const make = fixtures[ring];
+      const limit = 100;
+      harness.db!.transaction(() => {
+        for (let i = 0; i < limit - 2; i++) insertRow(ring, make(`e${i}`, 10_000 + i));
+      })();
+      const [parentKey, field] = CONFIG_HOME[ring];
+      const config = makeConfig({
+        [parentKey]: {
+          auditMaxRecords: limit,
+          [field]: [make("l1", 1), make("l2", 2), make("l3", 3), make("l4", 4)],
+        },
+      });
+
+      importLegacyAuditRings(deps(config));
+
+      const result = ids(ring);
+      expect(result).toHaveLength(limit);
+      expect(result.slice(0, 3)).toEqual(["l3", "l4", "e0"]);
+      expect(result.at(-1)).toBe(`e${limit - 3}`);
     }
   );
 

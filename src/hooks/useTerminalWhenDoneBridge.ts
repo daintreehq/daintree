@@ -4,6 +4,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
 import { hasHeldComposerSend } from "@/store/heldComposerSendStore";
+import { hasDraftText } from "@/lib/draftKey";
 
 /**
  * Whether someone is using a pane in this view (#16171), so its When done
@@ -25,12 +26,7 @@ export function isTerminalPaneInUseHere(terminalId: string): boolean {
   }
   // A send held for the pane's next prompt (#16379) is a draft closing would lose.
   if (hasHeldComposerSend(terminalId)) return true;
-  // Drafts are keyed by the composer's project scope, so match the id alone.
-  for (const [key, draft] of useTerminalInputStore.getState().draftInputs) {
-    if (draft.trim() === "") continue;
-    if (key === terminalId || key.endsWith(`:${terminalId}`)) return true;
-  }
-  return false;
+  return hasDraftText(useTerminalInputStore.getState().draftInputs, terminalId);
 }
 
 /**

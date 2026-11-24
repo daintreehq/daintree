@@ -869,3 +869,23 @@ describe("buildGitHubSearchQuery", () => {
     expect(buildGitHubSearchQuery("  hello  ", "closed", "issue")).toBe("is:closed hello");
   });
 });
+
+describe("rateLimit selections", () => {
+  it("selects the window's limit wherever a query reads the budget", async () => {
+    const queries: Record<string, unknown> = await import("../GitHubQueries.js");
+    const documents: Array<[string, string]> = [];
+    for (const [name, value] of Object.entries(queries)) {
+      if (typeof value === "string" && /rateLimit\s*\{/.test(value)) documents.push([name, value]);
+    }
+
+    expect(documents.length).toBeGreaterThan(0);
+    for (const [name, document] of documents) {
+      const selection = /rateLimit\s*\{([^}]*)\}/.exec(document)?.[1] ?? "";
+      // Without it a server with rate limiting off reads as an exhausted budget.
+      expect({ name, selectsLimit: /\blimit\b/.test(selection) }).toEqual({
+        name,
+        selectsLimit: true,
+      });
+    }
+  });
+});

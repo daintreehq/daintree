@@ -1089,3 +1089,162 @@ describe("ensureAssistantContentDir", () => {
     expect(await fs.readFile(path.join(target, "README.md"), "utf-8")).toBe("customized");
   });
 });
+
+describe("a relaunch with nothing changed (#17076)", () => {
+  const plugin: AssistantPluginContent = {
+    key: "daintree-ledger",
+    skills: new Map([["daintree-ledger-reconcile", new Map([["SKILL.md", "Reconcile."]])]]),
+    references: new Map([["schema.md", "Tables."]]),
+  };
+  const mirrored = [
+    ".claude/commands/review.md",
+    ".claude/skills/deploy/SKILL.md",
+    ".claude/skills/deploy/scripts/run.sh",
+    ".claude/skills/project-skill/SKILL.md",
+    ".claude/skills/daintree-ledger-reconcile/SKILL.md",
+    "reference/plugins/daintree-ledger/schema.md",
+  ];
+  const LONG_AGO = 1_000_000;
+
+  function syncAll() {
+    return syncAssistantContent({
+      sessionPath,
+      projectPath,
+      agentId: "claude",
+      globalContentDir: globalDir,
+      pluginContent: [plugin],
+    });
+  }
+
+  /** Back-dates every mirrored file and the manifest, so any rewrite shows. */
+  async function backdate(): Promise<void> {
+    for (const rel of [...mirrored, ".daintree-user-content.json"]) {
+      const abs = path.join(sessionPath, ...rel.split("/"));
+      await fs.utimes(abs, LONG_AGO / 1000, LONG_AGO / 1000);
+    }
+  }
+
+  async function mtimeOf(rel: string): Promise<number> {
+    return (await fs.stat(path.join(sessionPath, ...rel.split("/")))).mtimeMs;
+  }
+
+  beforeEach(async () => {
+    await writeSource(globalDir, ".claude/commands/review.md", "do a review");
+    await writeSource(globalDir, ".claude/skills/deploy/SKILL.md", "deploy skill");
+    await writeSource(globalDir, ".claude/skills/deploy/scripts/run.sh", "echo deploy");
+    await writeSource(
+      getProjectAssistantContentDir(projectPath),
+      ".claude/skills/project-skill/SKILL.md",
+      "---\nname: project-skill\nallowed-tools: Bash(*)\n---\nBody.\n"
+    );
+  });
+
+  it("rewrites no mirrored file and not the manifest", async () => {
+    expect(await syncAll()).toMatchObject({ copied: mirrored.length, unchanged: 0 });
+    await backdate();
+
+    const again = await syncAll();
+
+    expect(again).toMatchObject({
+      copied: 0,
+      unchanged: mirrored.length,
+      removed: 0,
+      failedCopies: [],
+      staleFailures: [],
+      pluginContent: ["daintree-ledger"],
+    });
+    for (const rel of [...mirrored, ".daintree-user-content.json"]) {
+      expect(await mtimeOf(rel), rel).toBe(LONG_AGO);
+    }
+  });
+
+  it("rewrites only what changed: a source edit, a tampered copy, a retired file", async () => {
+    await syncAll();
+    await backdate();
+    await writeSource(globalDir, ".claude/commands/review.md", "do a REVIEW");
+    await fs.writeFile(
+      path.join(sessionPath, ".claude", "skills", "deploy", "SKILL.md"),
+      "tampered!!!!",
+      "utf-8"
+    );
+    await fs.rm(path.join(globalDir, ".claude", "skills", "deploy", "scripts"), {
+      recursive: true,
+    });
+
+    const again = await syncAll();
+
+    expect(again).toMatchObject({ copied: 2, unchanged: 3, removed: 1, staleFailures: [] });
+    expect(await readSession(".claude/commands/review.md")).toBe("do a REVIEW");
+    expect(await readSession(".claude/skills/deploy/SKILL.md")).toBe("deploy skill");
+    expect(await readSession(".claude/skills/deploy/scripts/run.sh")).toBeNull();
+    expect(await mtimeOf(".claude/skills/project-skill/SKILL.md")).toBe(LONG_AGO);
+    expect(await mtimeOf(".daintree-user-content.json")).not.toBe(LONG_AGO);
+  });
+
+  it("rewrites generated and sanitized text when it changes, even at the same length", async () => {
+    await syncAll();
+    await backdate();
+    await writeSource(
+      getProjectAssistantContentDir(projectPath),
+      ".claude/skills/project-skill/SKILL.md",
+      "---\nname: project-skill\nallowed-tools: Bash(*)\n---\nBodx.\n"
+    );
+
+    const again = await syncAssistantContent({
+      sessionPath,
+      projectPath,
+      agentId: "claude",
+      globalContentDir: globalDir,
+      pluginContent: [{ ...plugin, references: new Map([["schema.md", "Fields."]]) }],
+    });
+
+    expect(again).toMatchObject({ copied: 2, unchanged: 4 });
+    expect(await readSession("reference/plugins/daintree-ledger/schema.md")).toBe("Fields.");
+    expect(await readSession(".claude/skills/project-skill/SKILL.md")).toContain("Bodx.");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "replaces a symlink planted where a mirrored file belongs, even one reading the same text",
+    async () => {
+      // The link's own size is its target's path length, so with that path as
+      // the expected text only the regular-file check tells the link apart.
+      const outside = path.join(tmpDir, "outside.md");
+      const linked = { ...plugin, references: new Map([["schema.md", outside]]) };
+      const syncLinked = () =>
+        syncAssistantContent({
+          sessionPath,
+          projectPath,
+          agentId: "claude",
+          globalContentDir: globalDir,
+          pluginContent: [linked],
+        });
+      await syncLinked();
+      const dest = path.join(sessionPath, "reference", "plugins", "daintree-ledger", "schema.md");
+      await fs.writeFile(outside, outside, "utf-8");
+      await fs.rm(dest);
+      await fs.symlink(outside, dest);
+      expect((await fs.lstat(dest)).size).toBe(Buffer.byteLength(outside));
+
+      const again = await syncLinked();
+
+      expect(again).toMatchObject({ copied: 1, staleFailures: [] });
+      expect((await fs.lstat(dest)).isSymbolicLink()).toBe(false);
+      expect(await fs.readFile(dest, "utf-8")).toBe(outside);
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "re-copies a file whose source only changed permission bits",
+    async () => {
+      await syncAll();
+      const source = path.join(globalDir, ".claude", "skills", "deploy", "scripts", "run.sh");
+      await fs.chmod(source, 0o755);
+
+      const again = await syncAll();
+
+      expect(again).toMatchObject({ copied: 1 });
+      const dest = path.join(sessionPath, ".claude", "skills", "deploy", "scripts", "run.sh");
+      expect((await fs.stat(dest)).mode & 0o777).toBe(0o755);
+    }
+  );
+});

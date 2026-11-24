@@ -23,6 +23,14 @@ import {
 
 export const SHELL_IDENTITY_FALLBACK_COMMIT_MS = 1200;
 export const SHELL_IDENTITY_FALLBACK_POLL_MS = 200;
+// Ceiling on a settled watcher's backoff. Output, a screen digest and a census
+// refresh each pull the next poll back to the base cadence, so this only
+// bounds how late a change that nothing announced is noticed.
+export const SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS = 2_000;
+// The foreground probe serves null past its 1.5 s hard age, which the poll
+// reads as an unsupported platform. Until it has latched, an agent command
+// must read it inside that age or a settled cadence would never latch it.
+export const SHELL_IDENTITY_FALLBACK_UNLATCHED_POLL_MAX_MS = 1_000;
 // How often a prompt-less output chunk may read the foreground-pgid probe.
 // Longer than the probe's 1.5 s hard-max age on purpose, so each window costs
 // one spawn: the rationed read past that age starts a refresh, and the
@@ -78,6 +86,17 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
 // cannot carry a prompt. Cursor-addressed TUIs repaint with no line break to
 // window on, and this spares stripping the whole repaint.
 const PROMPT_CHARACTER_PATTERN = /[#$%>➜➤➟➔]/;
+
+// The same shapes by their ends: every one closes on `#$%>` (cmd's `>` may
+// trail `^C` echoes) or, decorated, opens on an arrow. None of those is a
+// lowercase letter or non-ASCII apart from the arrows, so they always land in
+// the edges getTrailingNonBlankLines reads off a long line.
+const PROMPT_LINE_END_PATTERN = /[#$%>](?:\^C)*\s*$/;
+const PROMPT_LINE_START_PATTERN = /^\s*[➜➤➟➔]/;
+
+function promptEdgesMayMatch(head: string, tail: string): boolean {
+  return PROMPT_LINE_END_PATTERN.test(tail) || PROMPT_LINE_START_PATTERN.test(head);
+}
 
 const ACTIVE_AGENT_PROMPT_PATTERN =
   /(?:welcome to claude code|claude code v\d|openai codex|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
@@ -196,6 +215,8 @@ export interface IdentityWatcherDelegate {
   getPtyDescendantCount(): number | undefined;
   /** Whether the agent's own process is under the PTY root; `undefined` when the census can't say. */
   hasAgentProcess(agentId: string): boolean | undefined;
+  /** Called after each census refresh; returns the unsubscribe. Absent when there is no census. */
+  onProcessTreeRefresh?(listener: () => void): () => void;
   readForegroundProcessGroupSnapshot(): {
     shellPgid: number;
     foregroundPgid: number;
@@ -226,6 +247,21 @@ export function normalizeShellCommandText(commandText?: string): string | undefi
  */
 export class IdentityWatcher {
   private timer = new MutableDisposable<IDisposable>();
+  // The poll is a one-shot chain so a settled watcher can back off. Bumped on
+  // stop() so a tick that stopped (and maybe re-armed) mid-poll can't chain.
+  private pollEpoch = 0;
+  private pollDueAt = 0;
+  private pollDelayMs = SHELL_IDENTITY_FALLBACK_POLL_MS;
+  private activitySinceLastPoll = false;
+  private treeChangedThisPoll = false;
+  private processTreeSubscription: (() => void) | null = null;
+  // What the previous poll saw of the census; null before the first poll.
+  private polledDescendantCount: number | undefined | null = null;
+  private polledAgentProcessPresent: boolean | undefined | null = null;
+  private polledDetectedAgentId: string | undefined | null = null;
+  // The last foreground read was the probe's warm-up placeholder, whose real
+  // reading lands within a tick.
+  private foregroundReadingPending = false;
   private submittedAt: number | null = null;
   private commandText: string | undefined;
   private identity: CommandIdentity | null = null;
@@ -543,7 +579,14 @@ export class IdentityWatcher {
     this.seededCommand = undefined;
   }
 
+  // The rendered screen the poll reads moved. In worker mode it trails the
+  // output that produced it, so output alone can wake the poll too early.
+  noteScreenChange(): void {
+    this.noteActivity();
+  }
+
   observeOutput(data: string): void {
+    this.noteActivity();
     let chunkHasPrompt: boolean | undefined;
     if (
       !this.stopped &&
@@ -636,6 +679,17 @@ export class IdentityWatcher {
 
   stop(): void {
     this.timer.clear();
+    this.pollEpoch++;
+    this.pollDueAt = 0;
+    this.pollDelayMs = SHELL_IDENTITY_FALLBACK_POLL_MS;
+    this.activitySinceLastPoll = false;
+    this.treeChangedThisPoll = false;
+    this.processTreeSubscription?.();
+    this.processTreeSubscription = null;
+    this.polledDescendantCount = null;
+    this.polledAgentProcessPresent = null;
+    this.polledDetectedAgentId = null;
+    this.foregroundReadingPending = false;
     if (this.recheckTimer !== null) {
       clearTimeout(this.recheckTimer);
       this.recheckTimer = null;
@@ -669,19 +723,89 @@ export class IdentityWatcher {
   }
 
   private start(): void {
-    if (this.timer.value || this.stopped) {
+    if (this.stopped) {
       return;
     }
-    const id = setInterval(() => {
-      // An uncaught throw in a setInterval callback would tear down the
-      // interval (and on Electron 37+ utility processes, crash the host).
-      try {
-        this.poll();
-      } catch (err) {
-        console.error(`[IdentityWatcher] poll failed for ${this.delegate.terminalId}:`, err);
-      }
-    }, SHELL_IDENTITY_FALLBACK_POLL_MS);
-    this.timer.value = toDisposable(() => clearInterval(id));
+    this.pollDelayMs = SHELL_IDENTITY_FALLBACK_POLL_MS;
+    if (this.timer.value) {
+      this.noteActivity();
+      return;
+    }
+    this.activitySinceLastPoll = true;
+    this.processTreeSubscription =
+      this.delegate.onProcessTreeRefresh?.(() => this.wakePoll()) ?? null;
+    this.schedulePoll(SHELL_IDENTITY_FALLBACK_POLL_MS);
+  }
+
+  private schedulePoll(delayMs: number): void {
+    const id = setTimeout(() => this.runPoll(), delayMs);
+    this.pollDueAt = Date.now() + delayMs;
+    this.timer.value = toDisposable(() => clearTimeout(id));
+  }
+
+  private runPoll(): void {
+    const epoch = this.pollEpoch;
+    const activity = this.activitySinceLastPoll;
+    this.activitySinceLastPoll = false;
+    this.treeChangedThisPoll = false;
+    // An uncaught throw in a timer callback would end the chain (and on
+    // Electron 37+ utility processes, crash the host).
+    try {
+      this.poll();
+    } catch (err) {
+      console.error(`[IdentityWatcher] poll failed for ${this.delegate.terminalId}:`, err);
+    }
+    if (epoch !== this.pollEpoch || this.stopped || this.submittedAt === null) return;
+    this.schedulePoll(this.nextPollDelay(activity || this.treeChangedThisPoll));
+  }
+
+  // Something the poll reads may have moved: bring the next poll forward and
+  // reset the backoff.
+  private noteActivity(): void {
+    if (this.stopped || !this.timer.value) return;
+    this.activitySinceLastPoll = true;
+    this.wakePoll();
+  }
+
+  // A census refresh only brings the poll forward; the backoff resets only if
+  // that poll sees the tree it reads actually change.
+  private wakePoll(): void {
+    if (this.stopped || !this.timer.value) return;
+    if (this.pollDueAt - Date.now() <= SHELL_IDENTITY_FALLBACK_POLL_MS) return;
+    this.schedulePoll(SHELL_IDENTITY_FALLBACK_POLL_MS);
+  }
+
+  private nextPollDelay(changed: boolean): number {
+    if (changed || this.pollMustStayFast()) {
+      this.pollDelayMs = SHELL_IDENTITY_FALLBACK_POLL_MS;
+      return this.pollDelayMs;
+    }
+    this.pollDelayMs = Math.min(this.pollDelayMs * 2, SHELL_IDENTITY_FALLBACK_IDLE_POLL_MAX_MS);
+    let delay = this.pollDelayMs;
+    if (this.identity?.agentType && !(this.committed && this.sawForegroundSnapshot)) {
+      delay = Math.min(delay, SHELL_IDENTITY_FALLBACK_UNLATCHED_POLL_MAX_MS);
+    }
+    if (this.foregroundRefutedAt !== 0) {
+      // A refuted candidate is re-asked when the refutation lapses, with or
+      // without new evidence.
+      const untilLapse = this.foregroundRefutedAt + FOREGROUND_PROBE_REFUTATION_MS - Date.now();
+      delay = Math.min(delay, Math.max(SHELL_IDENTITY_FALLBACK_POLL_MS, untilLapse));
+    }
+    return delay;
+  }
+
+  // Whether time alone can move the next poll's verdict, so it can't wait for
+  // an announced change.
+  private pollMustStayFast(): boolean {
+    if (this.submittedAt === null) return false;
+    // The commit window and the no-identity stop both fall due on the clock.
+    if (Date.now() - this.submittedAt < SHELL_IDENTITY_FALLBACK_COMMIT_MS) return true;
+    if (this.identity && !this.committed) return true;
+    // A started streak confirms on the next poll with no new evidence.
+    if (this.promptStreak > 0) return true;
+    // A prompt candidate still waiting on a reading taken after it appeared.
+    if (this.foregroundCandidateSince !== 0 && this.foregroundRefutedAt === 0) return true;
+    return this.foregroundReadingPending;
   }
 
   private hasRecentCommandFailureOutput(): boolean {
@@ -704,7 +828,8 @@ export class IdentityWatcher {
     return getTrailingNonBlankLines(
       text,
       SHELL_IDENTITY_FALLBACK_SCAN_LINES,
-      PROMPT_CHARACTER_PATTERN
+      PROMPT_CHARACTER_PATTERN,
+      promptEdgesMayMatch
     ).some((line) => isUnambiguousShellPromptLine(line, true));
   }
 
@@ -860,8 +985,21 @@ export class IdentityWatcher {
     if (agentProcessPresent) {
       this.sawAgentProcess = true;
     }
+    const detectedAgentId = this.delegate.detectedAgentId;
+    if (
+      ptyDescendantCount !== this.polledDescendantCount ||
+      agentProcessPresent !== this.polledAgentProcessPresent ||
+      detectedAgentId !== this.polledDetectedAgentId
+    ) {
+      this.polledDescendantCount = ptyDescendantCount;
+      this.polledAgentProcessPresent = agentProcessPresent;
+      this.polledDetectedAgentId = detectedAgentId;
+      this.treeChangedThisPoll = true;
+    }
+    this.foregroundReadingPending =
+      foregroundShellIdle !== null && foregroundShellIdle.supported && foregroundShellIdle.empty;
 
-    const agentCommitted = agentIdentity || Boolean(this.delegate.detectedAgentId);
+    const agentCommitted = agentIdentity || Boolean(detectedAgentId);
     const unambiguousShellPromptVisible = this.hasUnambiguousShellPromptVisible(agentCommitted);
     // A plain process command may leave the prior shell prompt in scrollback.
     // On Windows, a missed descendant reading would otherwise let that stale

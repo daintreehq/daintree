@@ -36,6 +36,7 @@ import {
 } from "@/store/driveLeaseWaitStore";
 import { getDriveLeaseSnapshot } from "@/services/terminal/inputGate";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
+import { conversationStoreFor } from "@shared/utils/conversationStore";
 import { buildAgentLaunchContext } from "./agentLaunchContext";
 
 const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
@@ -458,7 +459,7 @@ export function enqueuePtyStartup(
           // no live panel claims it).
           if (!agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true).accepted) {
             if (!get().panelsById[id]) {
-              terminalClient.kill(id).catch((killError) => {
+              terminalClient.kill(id, { closesPane: true }).catch((killError) => {
                 logWarn("[TerminalStore] Compensating kill after stale spawn resolution failed", {
                   id,
                   error: killError,
@@ -491,7 +492,7 @@ export function enqueuePtyStartup(
           });
           if (mountedPanel) persistLaunchPrompt();
           if (orphaned) {
-            terminalClient.kill(id).catch((killError) => {
+            terminalClient.kill(id, { closesPane: true }).catch((killError) => {
               logWarn("[TerminalStore] Compensating kill after orphan spawn failed", {
                 id,
                 error: killError,
@@ -577,7 +578,7 @@ export function enqueuePtyStartup(
                   agentLifecycleLedger.recordSpawnResolved(id, launchGeneration, true);
                   for (;;) {
                     try {
-                      await terminalClient.kill(id);
+                      await terminalClient.kill(id, { closesPane: true });
                       break;
                     } catch (killError) {
                       if (!isUnknownOutcomeError(killError)) {
@@ -690,6 +691,12 @@ export function enqueuePtyStartup(
             // the terminal record at spawn so a kill path that never runs a
             // capture (force quit, crash, SIGKILL) can't lose the conversation.
             agentSessionId: options.agentSessionId,
+            // Where that conversation is stored, when the pane launches on
+            // another account's folder (#17087).
+            conversationStore: conversationStoreFor(
+              options.conversationStore,
+              options.agentSessionId
+            ),
             // Live, for the same reason as `title` above: a move landing while
             // the spawn was queued reaches a pty-host with no record yet and is
             // dropped, so the spawn itself has to carry the current filing.
@@ -697,6 +704,7 @@ export function enqueuePtyStartup(
             agentPresetId: options.agentPresetId,
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+            fallbackChainIndex: options.fallbackChainIndex,
             handbackCode: options.handbackCode,
             ...(options.whenDone !== undefined && { whenDone: options.whenDone }),
             // A launch prompt or a carried record is the run's first prompt, so

@@ -48,6 +48,7 @@ export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   "agent.listAvailable": read(),
   "slashCommands.list": read(),
   "agent.listPresets": read(),
+  "agent.listAccounts": read(),
   "agent.listModels": read(),
   "worktree.create": write(),
   "worktree.createWithRecipe": write(),

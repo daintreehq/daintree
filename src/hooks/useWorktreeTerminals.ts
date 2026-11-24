@@ -23,6 +23,7 @@ export interface WorktreeTerminalCounts {
 
 export interface UseWorktreeTerminalsResult {
   terminals: PtyPanelData[];
+  terminalIds: string[];
   counts: WorktreeTerminalCounts;
   dominantAgentState: AgentState | null;
 }
@@ -151,43 +152,78 @@ function useDebouncedValue<T>(value: T, delay: number): T {
   return debouncedValue;
 }
 
-export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsResult {
-  // Reads only from this worktree's pre-computed bucket (`panelIdsByWorktreeId`)
-  // so the selector body cost is bounded by the worktree's own panel count, not
-  // by total `panelIds`. The bucket reference is reference-stable when other
-  // worktrees mutate (issue #7451) — useShallow then skips re-renders unless a
-  // panel object inside this worktree actually changed.
-  const terminals = usePanelStore(
-    useShallow((state) => {
-      const ids = state.panelIdsByWorktreeId[worktreeId];
-      if (!ids || ids.length === 0) return [];
-      const out: PtyPanelData[] = [];
-      for (const id of ids) {
-        const raw = state.panelsById[id];
-        if (!raw) continue;
-        if (raw.location === "trash") continue;
-        if (!isPtyPanel(raw)) continue;
-        if (raw.excludeFromPersistence === true) continue;
-        out.push(raw);
-      }
-      return out;
-    })
+type PanelStoreState = ReturnType<typeof usePanelStore.getState>;
+
+/**
+ * A worktree's terminals, in bucket order: PTY panels that are neither trashed
+ * nor excluded from persistence. Reads only this worktree's bucket
+ * (`panelIdsByWorktreeId`), so the cost is bounded by its own panel count, not
+ * by total `panelIds` (#7451).
+ */
+export function selectWorktreeTerminals(
+  state: PanelStoreState,
+  worktreeId: string
+): PtyPanelData[] {
+  const ids = state.panelIdsByWorktreeId[worktreeId];
+  if (!ids || ids.length === 0) return [];
+  const out: PtyPanelData[] = [];
+  for (const id of ids) {
+    const raw = state.panelsById[id];
+    if (!raw) continue;
+    if (raw.location === "trash") continue;
+    if (!isPtyPanel(raw)) continue;
+    if (raw.excludeFromPersistence === true) continue;
+    out.push(raw);
+  }
+  return out;
+}
+
+/** The live PTY panels behind `ids`, in that order; missing or non-PTY ids drop out. */
+export function selectPtyPanels(state: PanelStoreState, ids: readonly string[]): PtyPanelData[] {
+  const out: PtyPanelData[] = [];
+  for (const id of ids) {
+    const raw = state.panelsById[id];
+    if (raw && isPtyPanel(raw)) out.push(raw);
+  }
+  return out;
+}
+
+export interface WorktreeTerminalSummary {
+  /** Same array for as long as the membership and its order hold. */
+  terminalIds: string[];
+  counts: WorktreeTerminalCounts;
+  dominantAgentState: AgentState | null;
+}
+
+/**
+ * Everything a worktree card shows about its terminals without holding the
+ * panels themselves. A panel object is replaced on every activity, flow-status
+ * and held-duration write, so a caller holding `terminals` re-renders on each
+ * of them; this hook selects only ids and value keys, and re-renders only when
+ * the membership, the counts or the dominant state actually change (#17051).
+ */
+export function useWorktreeTerminalSummary(worktreeId: string): WorktreeTerminalSummary {
+  const terminalIds = usePanelStore(
+    useShallow((state) => selectWorktreeTerminals(state, worktreeId).map((t) => t.id))
+  );
+  const bands = useRunFleetBands(terminalIds);
+  const bandById = useMemo(
+    () => new Map(terminalIds.map((id, i) => [id, bands[i]])),
+    [terminalIds, bands]
   );
 
-  const terminalIds = useMemo(() => terminals.map((t) => t.id), [terminals]);
-  const bands = useRunFleetBands(terminalIds);
-
-  const result = useMemo(() => {
-    const bandById = new Map(terminalIds.map((id, i) => [id, bands[i]]));
-    const { byState, unread, blocked, agentStates } = aggregateAgentStates(terminals, (id) =>
-      bandById.get(id)
-    );
-    return {
-      terminals,
-      countsKey: countsKey({ total: terminals.length, byState, unread, blocked }),
-      dominantAgentState: getDominantAgentState(agentStates),
-    };
-  }, [terminals, terminalIds, bands]);
+  const result = usePanelStore(
+    useShallow((state) => {
+      const terminals = selectWorktreeTerminals(state, worktreeId);
+      const { byState, unread, blocked, agentStates } = aggregateAgentStates(terminals, (id) =>
+        bandById.get(id)
+      );
+      return {
+        countsKey: countsKey({ total: terminals.length, byState, unread, blocked }),
+        dominantAgentState: getDominantAgentState(agentStates),
+      };
+    })
+  );
 
   // Debounce counts to prevent UI jitter during rapid state changes (e.g., app
   // restart). It runs on a value key, not the counts object: any patch to a
@@ -198,9 +234,18 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
   const debouncedCountsKey = useDebouncedValue(result.countsKey, 250);
   const counts = useMemo(() => countsFromKey(debouncedCountsKey), [debouncedCountsKey]);
 
-  return {
-    terminals: result.terminals,
-    counts,
-    dominantAgentState: result.dominantAgentState,
-  };
+  return { terminalIds, counts, dominantAgentState: result.dominantAgentState };
+}
+
+/**
+ * The summary plus the panels themselves, for callers that render panel fields.
+ * `terminals` is a fresh array whenever any panel in the worktree is patched,
+ * so a caller that re-renders often should take the summary instead.
+ */
+export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsResult {
+  const summary = useWorktreeTerminalSummary(worktreeId);
+  const terminals = usePanelStore(
+    useShallow((state) => selectWorktreeTerminals(state, worktreeId))
+  );
+  return { ...summary, terminals };
 }

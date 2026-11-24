@@ -9,10 +9,12 @@ import { getStagedUpdate, onStagedUpdateChanged } from "../../services/stagedUpd
 import type { HostModeEvent, HostModeStatus } from "../../../shared/types/ipc/hostMode.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import { HostAdvertiser } from "./advertise.js";
-import { clearAdvertRecord, reapOrphanedAdvert, saveAdvertRecord } from "./advertRecord.js";
+import { clearAdvertRecord, saveAdvertRecord } from "./advertRecord.js";
 import { runCommand, spawnOwnedProcess } from "./hostCommands.js";
 import { hostLocation, startHostListener } from "./hostListener.js";
-import { HostModeService, type HostModeSettings } from "./HostModeService.js";
+import { hostStartsOnConnect } from "./hostLocation.js";
+import { HostModeService } from "./HostModeService.js";
+import { readHostModeSettings } from "./hostModeSettings.js";
 import { readHostModeStatusFile, writeHostModeStatusFile } from "./hostModeStatusFile.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import {
@@ -25,16 +27,6 @@ import {
 } from "./startAtLogin.js";
 
 const BUNDLE_ID = "org.daintree.app";
-
-function readSettings(): HostModeSettings {
-  const stored = store.get("hostMode");
-  return {
-    enabled: stored?.enabled === true,
-    startAtLogin: stored?.startAtLogin === true,
-    // On unless turned off: discovery is how a new Shell finds this machine.
-    advertise: stored?.advertise !== false,
-  };
-}
 
 function launchTarget(): HostLaunchTarget {
   const appImage = runningAppImage();
@@ -57,7 +49,8 @@ function startAtLoginController(): StartAtLoginController | null {
       target: launchTarget(),
     });
   }
-  if (process.platform === "linux") {
+  // No init system to run a unit under: a Shell's connection starts the host instead.
+  if (process.platform === "linux" && !hostStartsOnConnect()) {
     return createSystemdUserController({
       homeDir,
       packaged: app.isPackaged,
@@ -96,15 +89,14 @@ export function createHostModeService(
     // Reported through the listener's own error when it tries to start.
   }
   const statusDir = socketDir;
-  // Whatever the settings now say: an advert the last launch left behind keeps announcing this machine.
-  if (statusDir) reapOrphanedAdvert(statusDir);
   return new HostModeService({
     platform: process.platform,
-    readSettings,
+    readSettings: readHostModeSettings,
     writeSettings: (next) => store.set("hostMode", next),
     socketPath,
     startListener: (signal) => startHostListener({ signal, location }),
     startAtLogin: startAtLoginController(),
+    startsOnConnect: hostStartsOnConnect(),
     createAdvertiser: (onChange) =>
       new HostAdvertiser({
         platform: process.platform,

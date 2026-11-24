@@ -9,11 +9,14 @@ import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry, formatSnoozeWake } from "../NotificationCenterEntry";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUIStore } from "@/store/uiStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { _resetCopyFlashForTests, getCopyFlash } from "@/lib/copyFlash";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 
 // An unavailable row action explains itself through a real tooltip, which the
 // app mounts under App.tsx's provider.
@@ -39,6 +42,8 @@ const getVersionInfoMock = vi.hoisted(() =>
 vi.mock("@/clients/appClient", () => ({
   appClient: { getVersionInfo: getVersionInfoMock },
 }));
+
+const originalAnnounce = useAnnouncerStore.getState().announce;
 
 const notifyMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/notify", async (importOriginal) => {
@@ -732,6 +737,8 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
   });
 
   afterEach(() => {
+    useAnnouncerStore.setState({ announce: originalAnnounce });
+    notifyMock.mockReset();
     delete (window as unknown as { electron?: unknown }).electron;
     if (originalElectron.electron !== undefined) {
       (window as unknown as { electron: unknown }).electron = originalElectron.electron;
@@ -816,6 +823,67 @@ describe("NotificationCenterEntry diagnostics affordances", () => {
       fireEvent.click(item);
     });
     expect(writeText).toHaveBeenCalledWith("corr-copy-1");
+  });
+
+  it("confirms the correlation ID copy with one announcement and one flash", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    const announce = vi.fn();
+    useAnnouncerStore.setState({ announce });
+    _resetCopyFlashForTests();
+
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-copy-2" })} />
+    );
+    await openMenu();
+    expect(getCopyFlash()).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Copy correlation ID"));
+    });
+
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce).toHaveBeenCalledWith("Correlation ID copied", "polite");
+    expect(getCopyFlash()).not.toBeNull();
+  });
+
+  it("reports a refused correlation ID copy as an error toast whose Retry copies again", async () => {
+    const writeText = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("denied"))
+      .mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    notifyMock.mockClear();
+    notifyMock.mockReturnValue("toast-1");
+    _resetCopyFlashForTests();
+
+    render(
+      <NotificationCenterEntry entry={makeEntry({ type: "error", correlationId: "corr-copy-3" })} />
+    );
+    await openMenu();
+    await act(async () => {
+      fireEvent.click(screen.getByText("Copy correlation ID"));
+    });
+
+    expect(getCopyFlash()).toBeNull();
+    expect(notifyMock).toHaveBeenCalledTimes(1);
+    const toast = notifyMock.mock.calls[0]![0] as {
+      type: string;
+      title: string;
+      action: { label: string; onClick: () => void };
+    };
+    expect(toast).toMatchObject({
+      type: "error",
+      title: "Couldn't copy correlation ID",
+      action: { label: "Retry" },
+    });
+
+    await act(async () => {
+      toast.action.onClick();
+    });
+    expect(writeText).toHaveBeenCalledTimes(2);
+    expect(writeText).toHaveBeenLastCalledWith("corr-copy-3");
+    expect(getCopyFlash()).not.toBeNull();
+    notifyMock.mockReset();
   });
 
   it("opens the prefilled GitHub URL when Report on GitHub is selected", async () => {
@@ -941,6 +1009,64 @@ describe("NotificationCenterEntry snooze keybinding", () => {
   });
 });
 
+describe("NotificationCenterEntry silence item gating (#17195)", () => {
+  async function openMenu() {
+    const trigger = screen.getByLabelText(/^Options for /);
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+  }
+
+  it.each(["completed", "waiting", "workingPulse", "uiFeedback"] as const)(
+    "offers Silence for the %s kind",
+    async (eventKind) => {
+      render(
+        <NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1", eventKind } })} />
+      );
+      await openMenu();
+      expect(screen.getByText(/^Silence /)).toBeTruthy();
+    }
+  );
+
+  it.each(["agent", "git", "host", "recovery", "settings", "connectivity"] as const)(
+    "leaves Silence out for the routing-only %s kind but keeps Mute",
+    async (eventKind) => {
+      render(
+        <NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1", eventKind } })} />
+      );
+      await openMenu();
+      expect(screen.queryByText(/^Silence /)).toBeNull();
+      expect(screen.getByText("Mute project notifications")).toBeTruthy();
+    }
+  );
+});
+
+describe("NotificationCenterEntry projectless silence gating (#17195)", () => {
+  it.each(["agent", "git", "host", "recovery", "settings", "connectivity"] as const)(
+    "renders no options trigger for a projectless routing-only %s row with nothing else to offer",
+    (eventKind) => {
+      render(<NotificationCenterEntry entry={makeEntry({ context: { eventKind } })} />);
+      expect(screen.queryByLabelText(/^Options for /)).toBeNull();
+    }
+  );
+
+  it.each(["completed", "waiting", "workingPulse", "uiFeedback"] as const)(
+    "keeps the options trigger when the projectless %s kind is the only action",
+    async (eventKind) => {
+      render(<NotificationCenterEntry entry={makeEntry({ context: { eventKind } })} />);
+      const trigger = screen.getByLabelText(/^Options for /);
+      await act(async () => {
+        fireEvent.pointerDown(trigger, { button: 0 });
+        fireEvent.pointerUp(trigger, { button: 0 });
+        fireEvent.click(trigger);
+      });
+      expect(screen.getByText(/^Silence /)).toBeTruthy();
+    }
+  );
+});
+
 describe("NotificationCenterEntry silence refresh", () => {
   it("re-reads the project's silences once a row-menu silence or mute lands", async () => {
     const load = vi
@@ -991,6 +1117,120 @@ describe("NotificationCenterEntry — unavailable row action", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("No worktree selected").length).toBeGreaterThan(0);
+    });
+  });
+});
+
+describe("NotificationCenterEntry — row action closes the inbox (#16937)", () => {
+  beforeEach(() => {
+    getMock.mockReturnValue({ enabled: true });
+    useUIStore.setState({ notificationCenterOpen: true });
+  });
+
+  it("closes the inbox once the action has run, so it doesn't cover what it opened", async () => {
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({
+          actions: [
+            {
+              label: "Open settings",
+              actionId: "app.settings.openTab",
+              actionArgs: { tab: "notifications" },
+            },
+          ],
+        })}
+      />
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open settings" }));
+    });
+    expect(dispatchMock).toHaveBeenCalledWith("app.settings.openTab", { tab: "notifications" });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+  });
+
+  it("keeps the inbox open when the action fails", async () => {
+    dispatchMock.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "nope" },
+    });
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ actions: [{ label: "Retry", actionId: "test.retry" }] })}
+      />
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(dispatchMock).toHaveBeenCalledWith("test.retry", undefined);
+    expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+  });
+
+  describe("Go to terminal", () => {
+    const goToTerminal = {
+      label: "Go to terminal",
+      actionId: "panel.focus",
+      actionArgs: { panelId: "pane-42" },
+    } as const;
+
+    beforeEach(() => {
+      useProjectStore.setState({ currentProject: { id: "p1" } } as never);
+    });
+
+    it("goes to its panel and closes the inbox", async () => {
+      seedPanel("pane-42", "grid");
+      render(<NotificationCenterEntry entry={makeEntry({ actions: [goToTerminal] })} />);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Go to terminal" }));
+      });
+      expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "pane-42" });
+      expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+    });
+
+    it.each([
+      ["in the trash", () => seedPanel("pane-42", "trash", "wt-1"), "Panel in trash"],
+      ["gone", () => usePanelStore.setState({ panelsById: {} } as never), "Source unavailable"],
+    ])(
+      "says its panel is %s instead of running, though the row's worktree is live",
+      async (_, arrange, reason) => {
+        arrange();
+        // The row itself still goes to its worktree; the button never does.
+        const liveWorktree = {
+          getState: () => ({ worktrees: new Map([["wt-1", {}]]) }),
+          subscribe: () => () => {},
+        } as never;
+        render(
+          <WorktreeStoreContext value={liveWorktree}>
+            <NotificationCenterEntry
+              entry={makeEntry({
+                context: { worktreeId: "wt-1", panelId: "pane-42" },
+                actions: [goToTerminal],
+              })}
+            />
+          </WorktreeStoreContext>
+        );
+        const button = screen.getByRole("button", { name: "Go to terminal" });
+        expect(button.getAttribute("aria-disabled")).toBe("true");
+        await act(async () => {
+          fireEvent.click(button);
+          button.focus();
+        });
+        await waitFor(() => {
+          expect(screen.getAllByText(reason).length).toBeGreaterThan(0);
+        });
+        expect(dispatchMock).not.toHaveBeenCalled();
+        expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+      }
+    );
+
+    it("comes back once its panel is restored", () => {
+      seedPanel("pane-42", "trash");
+      render(<NotificationCenterEntry entry={makeEntry({ actions: [goToTerminal] })} />);
+      const button = () => screen.getByRole("button", { name: "Go to terminal" });
+      expect(button().getAttribute("aria-disabled")).toBe("true");
+      act(() => {
+        seedPanel("pane-42", "grid");
+      });
+      expect(button().getAttribute("aria-disabled")).toBeNull();
     });
   });
 });
@@ -1387,5 +1627,15 @@ describe("NotificationCenterEntry — go to source", () => {
     const { container } = render(<NotificationCenterEntry entry={makeEntry()} />);
     expect(getRow(container).className).not.toMatch(/cursor-pointer/);
     expect(getRow(container).getAttribute("data-navigable")).toBeNull();
+  });
+});
+
+describe("NotificationCenterEntry empty message", () => {
+  it("renders no body line for a titled entry whose message is empty", () => {
+    const { container } = render(
+      <NotificationCenterEntry entry={makeEntry({ title: "Couldn't save", message: "" })} isNew />
+    );
+    expect(screen.getByText("Couldn't save")).toBeTruthy();
+    expect(container.querySelectorAll("p.text-text-secondary")).toHaveLength(0);
   });
 });

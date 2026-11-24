@@ -1,4 +1,6 @@
 import { type AgentPreset, getEffectiveAgentConfig } from "../config/agentRegistry.js";
+import type { DangerousMode } from "../types/dangerousMode.js";
+import type { PermissionLevel } from "../types/agentSettings.js";
 import {
   getMergedPreset,
   getMergedPresetIdentities,
@@ -67,9 +69,9 @@ export interface PluginPresetLaunchSummary {
   /** Present when the preset replaces the agent's own extra flags. */
   customFlags?: string;
   /** The preset's own bypass override, before the agent's setting is layered under it. */
-  dangerousMode: "inherit" | "on" | "off";
-  /** Whether a launch on this preset skips permission prompts, with today's agent settings. */
-  skipsPermissions: boolean;
+  dangerousMode: DangerousMode;
+  /** What a launch on this preset does about permission prompts, with today's agent settings. */
+  permissionLevel: PermissionLevel;
   /** The account the preset pins, when it pins one. A worktree's own account still wins. */
   accountName?: string;
   envNames: string[];
@@ -79,6 +81,12 @@ export interface PluginPresetLaunchSummary {
    */
   fallbacks: PluginPresetFallbackSummary[];
   fallbackOnRateLimit: boolean;
+  /**
+   * Panes launched on it continue by themselves once their usage limit resets
+   * (#17912), typing into the agent days later: the person's own preset says
+   * so, for an agent that can be continued.
+   */
+  continuesAtLimitReset?: boolean;
 }
 
 /** What one fallback in the chain turns on, display-safe like the summary. */
@@ -86,8 +94,8 @@ export interface PluginPresetFallbackSummary {
   presetName: string;
   args: string[];
   customFlags?: string;
-  dangerousMode: "inherit" | "on" | "off";
-  skipsPermissions: boolean;
+  dangerousMode: DangerousMode;
+  permissionLevel: PermissionLevel;
   envNames: string[];
 }
 
@@ -108,7 +116,7 @@ export function presetLaunchContent(preset: AgentPreset): string {
       : Object.keys(preset.env)
           .sort()
           .map((key) => [key, preset.env![key]]);
-  return JSON.stringify([
+  const fields: unknown[] = [
     1,
     preset.id,
     preset.name,
@@ -127,7 +135,11 @@ export function presetLaunchContent(preset: AgentPreset): string {
     preset.fallbackOnRateLimit ?? null,
     preset.keepConversationOnRateLimit ?? null,
     preset.accountId ?? null,
-  ]);
+  ];
+  // Fields added after version 1 go on the end only when on (#17912), so a
+  // grant for a preset that never turned one on still matches.
+  if (preset.continueAtLimitReset === true) fields.push(true);
+  return JSON.stringify(fields);
 }
 
 /**

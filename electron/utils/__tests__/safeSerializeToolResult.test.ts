@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   safeSerializeToolResult,
   safeSerializeToolResultCompact,
+  trySafeSerializeToolResult,
 } from "../safeSerializeToolResult.js";
 
 describe("safeSerializeToolResult", () => {
@@ -111,5 +112,29 @@ describe("safeSerializeToolResultCompact", () => {
 
   it("shares the string-coercion fallbacks", () => {
     expect(safeSerializeToolResultCompact(undefined)).toBe("undefined");
+  });
+});
+
+describe("trySafeSerializeToolResult", () => {
+  it("writes the same bytes as the indented form whenever that form is JSON", () => {
+    const cyclic: Record<string, unknown> = { id: 1n, at: new Error("x") };
+    cyclic.self = cyclic;
+    for (const value of [{ a: [1, "two"] }, "text", 0, cyclic]) {
+      expect(trySafeSerializeToolResult(value)).toBe(safeSerializeToolResult(value));
+    }
+  });
+
+  it("reports the values the indented form could only coerce to a string", () => {
+    const throwing = {
+      toJSON() {
+        throw new Error("boom");
+      },
+      toString() {
+        return "42";
+      },
+    };
+    expect(safeSerializeToolResult(throwing)).toBe("42");
+    expect(trySafeSerializeToolResult(throwing)).toBeUndefined();
+    expect(trySafeSerializeToolResult(undefined)).toBeUndefined();
   });
 });

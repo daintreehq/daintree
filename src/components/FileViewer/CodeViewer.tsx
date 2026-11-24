@@ -19,6 +19,8 @@ import { editorSearchHighlightTheme, editorSearchPanelTheme } from "./editorSear
 import { createEditorSearchPanel } from "./editorSearchPanel";
 import { matchCodeMirrorLanguage } from "./codeMirrorLanguages";
 import { cn } from "@/lib/utils";
+import { CODE_VIEWER_OWNER_ATTR } from "@/lib/codeViewerKeys";
+import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 
 export interface CodeViewerHandle {
   openSearch: () => void;
@@ -31,6 +33,8 @@ export interface CodeViewerProps {
   initialLine?: number;
   wrapLines?: boolean;
   className?: string;
+  /** Extensions a host adds for its file type, such as Markdown's clickable links. */
+  extraExtensions?: Extension;
 }
 
 const setHighlightedLine = StateEffect.define<number | null>();
@@ -66,12 +70,31 @@ const highlightLineTheme = EditorView.baseTheme({
   },
 });
 
+// `editable={false}` strips contenteditable, and without a tabindex nothing
+// else makes `.cm-content` focusable: closing find handed focus to a node that
+// refused it and stranded it on `body`, and the keymap below never saw a key
+// unless the find field was open. The tabindex keeps the surface focusable
+// without a caret. The focus ring is the scroll wrapper's below, so the two
+// outlines CodeMirror's content would otherwise wear are dropped: its dotted
+// editor outline, and the global focus-visible ring, which forced-colors makes
+// important and which would trace the whole file's height.
+const focusableSurface = [
+  EditorView.contentAttributes.of({ tabindex: "0" }),
+  EditorView.theme({
+    "&.cm-focused": { outline: "none" },
+    ".cm-content:focus-visible": { outline: "none !important" },
+  }),
+];
+
 const BASE_EXTENSIONS: Extension[] = [
   highlightedLineField,
   highlightLineTheme,
   EditorState.readOnly.of(true),
+  focusableSurface,
   search({ top: true, createPanel: createEditorSearchPanel }),
-  keymap.of([{ key: "Mod-l", run: gotoLine }]),
+  // The find bar runs only keys scoped to it, so go to line needs the scope to
+  // answer while the find field has focus.
+  keymap.of([{ key: "Mod-l", run: gotoLine, scope: "editor search-panel" }]),
   editorSearchPanelTheme,
   editorSearchHighlightTheme,
 ];
@@ -143,7 +166,7 @@ const SCOPE_NODE_TYPES_BY_LANGUAGE: Record<string, Set<string>> = {
 };
 
 export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function CodeViewer(
-  { content, filePath, initialLine, wrapLines = false, className },
+  { content, filePath, initialLine, wrapLines = false, className, extraExtensions },
   ref
 ) {
   const [langExtension, setLangExtension] = useState<Extension | null>(null);
@@ -219,8 +242,9 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
     const list = langExtension ? [...BASE_EXTENSIONS, langExtension] : [...BASE_EXTENSIONS];
     list.push(panels({ topContainer: panelHost }));
     if (wrapLines) list.push(EditorView.lineWrapping);
+    if (extraExtensions) list.push(extraExtensions);
     return list;
-  }, [langExtension, wrapLines, panelHost]);
+  }, [langExtension, wrapLines, panelHost, extraExtensions]);
 
   const handleScroll = useCallback(() => {
     if (rafRef.current !== null) return;
@@ -318,28 +342,39 @@ export const CodeViewer = forwardRef<CodeViewerHandle, CodeViewerProps>(function
   );
 
   return (
-    <div className={cn("flex min-h-0 flex-col", className)}>
+    <div {...{ [CODE_VIEWER_OWNER_ATTR]: "" }} className={cn("flex min-h-0 flex-col", className)}>
       <div ref={mountPanelHost} className="sticky top-0 z-10 shrink-0" />
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        data-code-viewer-scroll=""
         // `isolate` keeps CodeMirror's own stacking (its gutters sit at z-index
         // 200) from painting over the sticky find bar as the document scrolls.
-        className="isolate min-h-0 flex-1 overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible"
+        // The ring sits on this wrapper, which stays put while the document
+        // scrolls inside it, and not on the content node, which is as tall as
+        // the file.
+        className={cn(
+          "isolate min-h-0 flex-1 overflow-auto text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
+          "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:-outline-offset-2 has-[.cm-content:focus-visible]:outline-accent-primary"
+        )}
       >
-        <div
-          className={cn(
-            "sticky top-0 z-10 pointer-events-none flex items-center px-2 truncate border-b whitespace-pre",
-            stickyScope !== null
-              ? "border-[var(--theme-border-default)] bg-[var(--theme-surface-sidebar)] text-[var(--theme-text-secondary)]"
-              : "border-transparent bg-transparent text-transparent"
+        {/* Zero-height anchor: the scope line overlays the first visible line
+            instead of reserving a band above line 1, so the document never
+            shifts when a scope appears or goes. */}
+        <div className="sticky top-0 z-10 h-0 pointer-events-none">
+          {stickyScope !== null && (
+            <div
+              data-code-viewer-sticky-scope=""
+              className="absolute inset-x-0 top-0 flex items-center px-2 truncate border-b whitespace-pre border-border-default bg-surface-sidebar text-text-secondary"
+              style={{
+                height: `${cmLineHeight}px`,
+                lineHeight: `${cmLineHeight}px`,
+                fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
+              }}
+            >
+              {stickyScope}
+            </div>
           )}
-          style={{
-            height: `${cmLineHeight}px`,
-            lineHeight: `${cmLineHeight}px`,
-          }}
-        >
-          {stickyScope ?? " "}
         </div>
         <CodeMirror
           value={content}

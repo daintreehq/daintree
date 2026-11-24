@@ -78,6 +78,7 @@ describe("readWorktreeGitObservation", () => {
       unstaged: 0,
       untracked: 0,
       conflicted: 0,
+      changedEntries: 0,
       hiddenFromStatus: 0,
       unpushedCommits: 0,
     });
@@ -123,6 +124,35 @@ describe("readWorktreeGitObservation", () => {
       // The untracked directory is one entry, however many files it holds.
       untracked: 1,
       conflicted: 0,
+      changedEntries: 4,
+    });
+  });
+
+  it("counts a path git lists twice once", async () => {
+    const dir = linkedWorktree("uncached");
+    git(dir, "rm", "-q", "--cached", "a.txt");
+
+    expect(await readWorktreeGitObservation(dir)).toMatchObject({
+      staged: 1,
+      untracked: 1,
+      changedEntries: 1,
+    });
+  });
+
+  it("counts a file staged and then edited again as one changed entry", async () => {
+    const dir = linkedWorktree("restaged");
+    fs.writeFileSync(path.join(dir, "a.txt"), "staged\n");
+    git(dir, "add", "a.txt");
+    fs.writeFileSync(path.join(dir, "a.txt"), "edited again\n");
+    fs.mkdirSync(path.join(dir, "scratch"));
+    fs.writeFileSync(path.join(dir, "scratch", "one.txt"), "1\n");
+    fs.writeFileSync(path.join(dir, "scratch", "two.txt"), "2\n");
+
+    expect(await readWorktreeGitObservation(dir)).toMatchObject({
+      staged: 1,
+      unstaged: 1,
+      untracked: 1,
+      changedEntries: 2,
     });
   });
 

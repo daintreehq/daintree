@@ -1,17 +1,76 @@
-import { parseAnswers, type QuestionRow } from "@daintreehq/decisions-client";
-import { answerNeedsAttention, heldFollowUps, type HandledAnswers } from "./attentionList.js";
+import {
+  isPendingMessage,
+  parseAnswers,
+  parseMessages,
+  type QuestionRow,
+} from "@daintreehq/decisions-client";
+import {
+  answerNeedsAttention,
+  heldFollowUps,
+  heldTimeoutNotice,
+  reasonOf,
+  type HandledAnswers,
+} from "./attentionList.js";
+import { replyModeOfRow } from "./questionRound.js";
+import { replyRequestMessage, standingOf } from "./questionList.js";
+import { deliverySubject } from "../../../shared/utils/decisionsDeliveryReasons.js";
 import type {
   DecisionDeliveryStatus,
   PaneDecisionAttention,
+  PaneDecisionQuestion,
   PaneDecisionState,
 } from "../../../shared/types/decisions.js";
+import type { RunDecisionAttention } from "../runAnswerAttentionSource.js";
 
 export type PaneDecisionStatePublisher = (projectId: string, state: PaneDecisionState) => void;
 
-/** Every pane with answers needing a person, and how many; an empty map when none has any. */
-export type AnswerAttentionPublisher = (counts: ReadonlyMap<string, number>) => void;
+/**
+ * Every pane with answers needing a person or questions open for one, and how
+ * many of each; an empty map when none has any.
+ */
+export type AnswerAttentionPublisher = (counts: ReadonlyMap<string, RunDecisionAttention>) => void;
 
 type PaneContent = Omit<PaneDecisionState, "revision">;
+
+/**
+ * The questions with a withdrawal or the person's decline queued on this
+ * machine for the relay (#18052), by question id: read from the outbox, so
+ * every view sees one at once, whichever view started it.
+ */
+export type PendingClosings = ReadonlyMap<string, NonNullable<PaneDecisionQuestion["closing"]>>;
+
+/** A withdrawal or decline queued in the outbox, as the store reads it (#18052). */
+export interface QueuedClosing {
+  questionId: string;
+  closing: NonNullable<PaneDecisionQuestion["closing"]>;
+  /** The round a decline was signed for; null for a withdrawal, signed against whatever round it finds. */
+  revision: number | null;
+}
+
+/**
+ * What each question has queued for it, from `queued` against the rows. A
+ * decline closes only the round it was signed for, so one for a round since
+ * replaced marks nothing; a question this machine holds no row for (a Remote
+ * Host's, declined here) keeps its decline. A withdrawal outranks a decline.
+ */
+export function closingsFor(
+  rows: readonly QuestionRow[],
+  queued: readonly QueuedClosing[]
+): PendingClosings {
+  if (queued.length === 0) return new Map();
+  const revisions = new Map(rows.map((row) => [row.question_id, row.question_revision]));
+  const closings = new Map<string, NonNullable<PaneDecisionQuestion["closing"]>>();
+  for (const { questionId, closing, revision } of queued) {
+    if (closing === "withdrawing") {
+      closings.set(questionId, closing);
+      continue;
+    }
+    const current = revisions.get(questionId);
+    const sameRound = current === undefined || revision === null || revision === current;
+    if (sameRound && !closings.has(questionId)) closings.set(questionId, closing);
+  }
+  return closings;
+}
 
 export interface ProjectedPane {
   projectId: string;
@@ -19,17 +78,6 @@ export interface ProjectedPane {
 }
 
 type AttentionStatus = PaneDecisionAttention["deliveryStatus"];
-
-/**
- * The library's codes are short identifiers (`pane_gone`, `inject_ambiguous`).
- * Anything else is passed on as `unspecified` rather than trimmed into shape,
- * so free text can never reach a view through this field.
- */
-const REASON_CODE = /^[a-z0-9_.-]{1,48}$/;
-
-export function reasonOf(code: string | null): string {
-  return typeof code === "string" && REASON_CODE.test(code) ? code : "unspecified";
-}
 
 function isAttention(status: DecisionDeliveryStatus): status is AttentionStatus {
   return status === "needs-attention" || status === "delivery-uncertain";
@@ -51,15 +99,29 @@ function byAlias(a: QuestionRow, b: QuestionRow): number {
  *   without keeping it. A follow-up held for a person (#16231) counts too,
  *   with its own status and code once the answer is past needing one.
  * - **Waiting:** otherwise, an answer entry still marked for delivery and not
- *   yet delivered, the same test the delivery engine uses.
+ *   yet delivered, the same test the delivery engine uses. A person's decline
+ *   (#17234) isn't one: they chose not to answer, so the pane drops the
+ *   question even while its notice waits to be typed.
+ * - **Reply requested:** answered, and its agent asked for a reply the person
+ *   hasn't given (#18052).
+ * - **Follow-up waiting:** a follow-up of the person's received and not yet
+ *   typed (#18052), on a question with nothing of an answer left to type and
+ *   nothing needing a person, open or answered.
  *
- * Imported history is never delivered and shows nowhere. Rows are taken in
- * question order, and a pane belongs to the project of its newest question,
- * settled or not, so settling that question never moves the pane back.
+ * A request for a reply, and which questions wait on the person, are read as
+ * the list of every question reads them (`standingOf`), so the chip and the
+ * inbox never disagree. Imported history is never delivered and shows nowhere, and what a
+ * person marked handled, or a question over without an answer whose notice
+ * stopped (#18021), adds no warning. Rows are taken in question order, and a
+ * pane belongs to the project of its newest question, settled or not, so
+ * settling that question never moves the pane back. `closings` marks the open
+ * questions a withdrawal or decline is under way for.
  */
 export function projectPaneDecisionStates(
   rows: readonly QuestionRow[],
-  handled: HandledAnswers = new Map()
+  handled: HandledAnswers = new Map(),
+  closings: PendingClosings = new Map(),
+  memo?: PaneContributionMemo
 ): Map<string, ProjectedPane> {
   const sorted = [...rows].filter((row) => !row.history_only).sort(byAlias);
   const projectOf = new Map<string, string>();
@@ -74,55 +136,146 @@ export function projectPaneDecisionStates(
     const paneId = row.origin.pane_id;
     const projectId = projectOf.get(paneId);
     if (!paneId || !projectId) continue;
-
-    const deliveryStatus: DecisionDeliveryStatus = row.delivery_status;
-    const open = row.local_status === "queued" || row.local_status === "open";
-    const held = heldFollowUps(row);
-    // A handled answer's status is past needing a person; its follow-ups may not be.
-    const answerHeld = isAttention(deliveryStatus) && answerNeedsAttention(row, handled);
-    const attention = answerHeld || held.length > 0;
-    const pending =
-      attention || isAttention(deliveryStatus)
-        ? []
-        : parseAnswers(row.answers_json).filter((entry) => entry.deliver && !entry.delivered);
-    if (!open && !attention && pending.length === 0) continue;
+    const contribution = contributionOf(row, handled, closings.get(row.question_id), memo);
+    if (contribution === null) continue;
 
     let pane = panes.get(paneId);
     if (!pane) {
       pane = { projectId, content: emptyContent(paneId) };
       panes.set(paneId, pane);
     }
-
-    const { question_id: questionId, alias } = row;
-    if (row.local_status === "queued" || row.local_status === "open") {
-      pane.content.openQuestions.push({
-        questionId,
-        alias,
-        status: row.local_status,
-        askedAt: row.origin_created_at,
-        expiresAt: row.expires_at ?? null,
-      });
-    }
-    if (attention) {
-      const uncertain =
-        (answerHeld && deliveryStatus === "delivery-uncertain") ||
-        held.some((message) => message.delivery?.status === "delivery-uncertain");
-      pane.content.needsAttention.push({
-        questionId,
-        alias,
-        deliveryStatus: uncertain ? "delivery-uncertain" : "needs-attention",
-        reason: reasonOf(answerHeld ? row.error_code : (held[0]!.delivery?.error_code ?? null)),
-      });
-    } else if (pending.length > 0 && !isAttention(deliveryStatus)) {
-      pane.content.waitingAnswers.push({
-        questionId,
-        alias,
-        kind: pending.some((entry) => entry.kind !== "expired") ? "answer" : "expired",
-        deliveryStatus,
-      });
-    }
+    if (contribution.open) pane.content.openQuestions.push(contribution.open);
+    if (contribution.reply) (pane.content.replyRequests ??= []).push(contribution.reply);
+    if (contribution.followUp) (pane.content.waitingFollowUps ??= []).push(contribution.followUp);
+    if (contribution.attention) pane.content.needsAttention.push(contribution.attention);
+    if (contribution.waiting) pane.content.waitingAnswers.push(contribution.waiting);
   }
   return panes;
+}
+
+/** What one row adds to its pane, whichever project the pane is in. */
+interface PaneContribution {
+  open: PaneContent["openQuestions"][number] | null;
+  reply: NonNullable<PaneContent["replyRequests"]>[number] | null;
+  followUp: NonNullable<PaneContent["waitingFollowUps"]>[number] | null;
+  attention: PaneContent["needsAttention"][number] | null;
+  waiting: PaneContent["waitingAnswers"][number] | null;
+}
+
+type Closing = NonNullable<PaneDecisionQuestion["closing"]>;
+
+/**
+ * Each row's contribution already worked out, by the row object it was
+ * worked out from, so a feed that keeps its unchanged rows' objects reads
+ * only the threads that changed (#18033). Entries go with their rows.
+ */
+export type PaneContributionMemo = WeakMap<
+  QuestionRow,
+  {
+    handled: number | undefined;
+    closing: Closing | undefined;
+    contribution: PaneContribution | null;
+  }
+>;
+
+function contributionOf(
+  row: QuestionRow,
+  handled: HandledAnswers,
+  closing: Closing | undefined,
+  memo: PaneContributionMemo | undefined
+): PaneContribution | null {
+  if (memo === undefined) return rowContribution(row, handled, closing);
+  // A row object is replaced whenever its row changes; only what it is read with can differ.
+  const revision = handled.get(row.question_id);
+  const held = memo.get(row);
+  if (held !== undefined && held.handled === revision && held.closing === closing) {
+    return held.contribution;
+  }
+  const contribution = rowContribution(row, handled, closing);
+  memo.set(row, { handled: revision, closing, contribution });
+  return contribution;
+}
+
+function rowContribution(
+  row: QuestionRow,
+  handled: HandledAnswers,
+  closing: Closing | undefined
+): PaneContribution | null {
+  const deliveryStatus: DecisionDeliveryStatus = row.delivery_status;
+  const open = row.local_status === "queued" || row.local_status === "open";
+  const held = heldFollowUps(row);
+  // A handled answer's status is past needing a person; its follow-ups may not be.
+  const answerHeld = isAttention(deliveryStatus) && answerNeedsAttention(row, handled);
+  const attention = answerHeld || held.length > 0;
+  const standing = standingOf(row, handled);
+  // What waits on the person comes first, as the list shows it.
+  const reply =
+    standing.kind === "waiting" && standing.reason === "reply" ? replyRequestMessage(row) : null;
+  const pending =
+    attention || reply !== null || isAttention(deliveryStatus)
+      ? []
+      : parseAnswers(row.answers_json).filter(
+          (entry) => entry.deliver && !entry.delivered && entry.kind !== "declined"
+        );
+  // Typed in whatever the question's standing, an open one's too; an answer still to type stands for it.
+  const followUp =
+    !attention &&
+    reply === null &&
+    pending.length === 0 &&
+    parseMessages(row.messages_json).some(isPendingMessage);
+  if (!open && !attention && reply === null && pending.length === 0 && !followUp) return null;
+
+  const { question_id: questionId, alias } = row;
+  const contribution: PaneContribution = {
+    open: null,
+    reply: null,
+    followUp: null,
+    attention: null,
+    waiting: null,
+  };
+  if (row.local_status === "queued" || row.local_status === "open") {
+    contribution.open = {
+      questionId,
+      alias,
+      status: row.local_status,
+      askedAt: row.origin_created_at,
+      expiresAt: row.expires_at ?? null,
+      replyMode: replyModeOfRow(row, parseAnswers(row.answers_json)),
+      ...(closing !== undefined ? { closing } : {}),
+    };
+  }
+  if (reply !== null) contribution.reply = { questionId, alias, requestedAt: reply.created_at };
+  if (followUp) contribution.followUp = { questionId, alias };
+  if (attention) {
+    const uncertain =
+      (answerHeld && deliveryStatus === "delivery-uncertain") ||
+      held.some((message) => message.delivery?.status === "delivery-uncertain");
+    contribution.attention = {
+      questionId,
+      alias,
+      deliveryStatus: uncertain ? "delivery-uncertain" : "needs-attention",
+      reason: reasonOf(answerHeld ? row.error_code : (held[0]!.delivery?.error_code ?? null)),
+      // A timeout notice stands in the answer's place, as the list and the notification name it.
+      subject: deliverySubject(
+        answerHeld,
+        held.length,
+        answerHeld && heldTimeoutNotice(row) !== null
+      ),
+    };
+  } else if (pending.length > 0 && !isAttention(deliveryStatus)) {
+    contribution.waiting = {
+      questionId,
+      alias,
+      // A notice that the question never reached the relay (0.9.0) is no answer, nor an expiry.
+      kind: pending.some((entry) => entry.kind === "answer")
+        ? "answer"
+        : pending.some((entry) => entry.kind === "unpublished")
+          ? "never-published"
+          : "expired",
+      deliveryStatus,
+    };
+  }
+  return contribution;
 }
 
 function emptyContent(terminalId: string): PaneContent {
@@ -148,7 +301,10 @@ interface HeldPane {
  */
 export class PaneDecisionStates {
   private readonly panes = new Map<string, HeldPane>();
+  /** Open questions the person hasn't cleared, by terminal, as the last `replace` was told. */
+  private questions: ReadonlyMap<string, number> = new Map();
   private revision = 0;
+  private readonly memo: PaneContributionMemo = new WeakMap();
 
   constructor(
     private readonly publish: PaneDecisionStatePublisher,
@@ -162,10 +318,19 @@ export class PaneDecisionStates {
 
   /**
    * Replaces every pane's state with what these rows show, `handled` the
-   * answers a person marked handled, pushing only the panes that changed.
+   * answers a person marked handled and `closings` the withdrawals and
+   * declines queued, pushing only the panes that changed. `questions` counts
+   * each terminal's questions open in Needs you that the person hasn't
+   * cleared, for the fleet alone: pane chrome doesn't show it.
    */
-  replace(rows: readonly QuestionRow[], handled: HandledAnswers = new Map()): void {
-    const next = projectPaneDecisionStates(rows, handled);
+  replace(
+    rows: readonly QuestionRow[],
+    handled: HandledAnswers = new Map(),
+    questions: ReadonlyMap<string, number> = new Map(),
+    closings: PendingClosings = new Map()
+  ): void {
+    this.questions = questions;
+    const next = projectPaneDecisionStates(rows, handled, closings, this.memo);
     for (const [terminalId, held] of [...this.panes]) {
       if (next.get(terminalId)?.projectId === held.projectId) continue;
       this.panes.delete(terminalId);
@@ -179,21 +344,37 @@ export class PaneDecisionStates {
     this.sendAttention();
   }
 
+  /** Replaces the open question counts alone, as a deadline passing changes them. */
+  setQuestions(questions: ReadonlyMap<string, number>): void {
+    this.questions = questions;
+    this.sendAttention();
+  }
+
   /** Lets every pane go; with `notify`, each one's views first get an empty state. */
   clear(notify: boolean): void {
     const held = [...this.panes];
     this.panes.clear();
+    this.questions = new Map();
     // Whatever happens to the views, no run keeps a count once the panes go.
     this.sendAttention();
     if (!notify) return;
     for (const [terminalId, { projectId }] of held) this.send(projectId, emptyContent(terminalId));
   }
 
-  /** Each held pane's count of answers needing a person, for the fleet; best effort like `send`. */
+  /**
+   * Each terminal's answers needing a person and open questions, for the
+   * fleet; best effort like `send`. A question can wait on a terminal no pane
+   * is held for (a reply its agent asked for), and a clear changes no pane.
+   */
   private sendAttention(): void {
-    const counts = new Map<string, number>();
+    const counts = new Map<string, RunDecisionAttention>();
     for (const [terminalId, { state }] of this.panes) {
-      if (state.needsAttention.length > 0) counts.set(terminalId, state.needsAttention.length);
+      const answers = state.needsAttention.length;
+      if (answers > 0) counts.set(terminalId, { answers, questions: 0 });
+    }
+    for (const [terminalId, questions] of this.questions) {
+      if (questions <= 0) continue;
+      counts.set(terminalId, { answers: counts.get(terminalId)?.answers ?? 0, questions });
     }
     try {
       this.publishAttention(counts);

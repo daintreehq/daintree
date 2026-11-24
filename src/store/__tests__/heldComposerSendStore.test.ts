@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { HeldComposerSend } from "@shared/types/ipc/composerHold";
-import { hasHeldComposerSend, useHeldComposerSendStore } from "../heldComposerSendStore";
+import {
+  hasHeldComposerSend,
+  heldComposerSendDelivered,
+  useHeldComposerSendStore,
+} from "../heldComposerSendStore";
 
 function send(token: string, text = "ship it", terminalId = "t1"): HeldComposerSend {
   return {
@@ -17,7 +21,13 @@ function send(token: string, text = "ship it", terminalId = "t1"): HeldComposerS
 const store = () => useHeldComposerSendStore.getState();
 
 beforeEach(() => {
-  useHeldComposerSendStore.setState({ held: {}, dropped: {}, refused: {}, endedTokens: [] });
+  useHeldComposerSendStore.setState({
+    held: {},
+    dropped: {},
+    refused: {},
+    endedTokens: [],
+    deliveredTokens: [],
+  });
 });
 
 describe("heldComposerSendStore", () => {
@@ -88,6 +98,31 @@ describe("heldComposerSendStore", () => {
     });
     store().noteHeld(send("a"));
     expect(hasHeldComposerSend("t1")).toBe(false);
+  });
+
+  it("says which ended sends were delivered, and nothing of one still held", () => {
+    store().applyChange({ terminalId: "t1", held: send("a") });
+    expect(heldComposerSendDelivered(store(), "a")).toBeUndefined();
+
+    store().applyChange({
+      terminalId: "t1",
+      held: null,
+      ended: { token: "a", outcome: { kind: "delivered" } },
+    });
+    store().applyChange({
+      terminalId: "t2",
+      held: null,
+      ended: { token: "b", outcome: { kind: "withdrawn" } },
+    });
+    store().applyChange({
+      terminalId: "t3",
+      held: null,
+      ended: { token: "c", outcome: { kind: "dropped", reason: "unconfirmed" }, text: "x" },
+    });
+
+    expect(heldComposerSendDelivered(store(), "a")).toBe(true);
+    expect(heldComposerSendDelivered(store(), "b")).toBe(false);
+    expect(heldComposerSendDelivered(store(), "c")).toBe(false);
   });
 
   it("clears the last drop note and refusal once a new send is held", () => {

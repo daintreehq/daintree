@@ -320,7 +320,7 @@ export async function handleValidateActionIds(actionIds: string[]): Promise<void
 // Trust model for plugin:actions-* channels: defineIpcNamespace deliberately
 // omits an isTrustedRendererUrl check because contextBridge only exposes
 // window.electron to trusted renderer frames (the app origin). Untrusted
-// iframes, <webview>, and portal WebContents have no access to this API,
+// iframes and <webview> guests have no access to this API,
 // so no per-request URL check is needed. PLUGIN_INVOKE has a check only
 // because it uses raw ipcMain.handle for its variadic signature, which
 // gives it direct access to event.senderFrame — the typed path here does

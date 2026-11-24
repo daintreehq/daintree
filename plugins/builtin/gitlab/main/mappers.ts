@@ -1,4 +1,5 @@
 import type {
+  CheckRun,
   CIStatusState,
   ForgeLabel,
   ForgeUser,
@@ -15,6 +16,7 @@ import type {
 } from "../../../../shared/types/forge.js";
 import type {
   GitLabIssue,
+  GitLabJob,
   GitLabMergeRequest,
   GitLabNote,
   GitLabRelease,
@@ -163,6 +165,77 @@ export function pipelineStatusToCIState(status: unknown): CIStatusState | undefi
   }
 }
 
+/** Failure reasons GitLab gives a job that ran out of time rather than failed its script. */
+const TIMEOUT_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  "job_execution_timeout",
+  "stuck_or_timeout_failure",
+]);
+
+function jobOutcome(job: GitLabJob): Pick<CheckRun, "status" | "conclusion"> {
+  const status = typeof job.status === "string" ? job.status.toLowerCase() : "";
+  switch (status) {
+    case "created":
+    case "waiting_for_resource":
+    case "waiting_for_callback":
+    case "preparing":
+    case "pending":
+    case "scheduled":
+      return { status: "queued" };
+    case "running":
+    case "canceling":
+      return { status: "in_progress" };
+    case "success":
+      return { status: "completed", conclusion: "success" };
+    case "failed":
+      return {
+        status: "completed",
+        conclusion:
+          typeof job.failure_reason === "string" && TIMEOUT_FAILURE_REASONS.has(job.failure_reason)
+            ? "timed_out"
+            : "failure",
+      };
+    case "canceled":
+      return { status: "completed", conclusion: "cancelled" };
+    case "skipped":
+      return { status: "completed", conclusion: "skipped" };
+    case "manual":
+      // Waiting for someone to play it. A manual job the pipeline is blocked on
+      // is something to do; an optional one (a deploy button) is not.
+      return {
+        status: "completed",
+        conclusion: job.allow_failure === true ? "neutral" : "action_required",
+      };
+    default:
+      // A status this mapping doesn't know: no verdict, rather than a guessed one.
+      return { status: "completed" };
+  }
+}
+
+/**
+ * One job, trigger job or external commit status from a pipeline → {@link CheckRun}.
+ * `null` for an entry with no name, which the caller treats as an unreadable
+ * check rather than one to leave out.
+ */
+export function gitlabJobToCheckRun(job: GitLabJob): CheckRun | null {
+  if (!job || typeof job !== "object") return null;
+  if (typeof job.name !== "string" || !job.name.trim()) return null;
+  // A trigger job's own page has no log; the pipeline it started is where its
+  // result lives. An external status links wherever its CI put the result.
+  const detailsUrl = [job.downstream_pipeline?.web_url, job.web_url, job.target_url].find(
+    (url): url is string => typeof url === "string" && url.length > 0
+  );
+  return {
+    name: job.name,
+    ...jobOutcome(job),
+    // An allowed failure never fails the pipeline, so it can't hold up a merge.
+    // GitLab says nothing either way about whether any other job does.
+    ...(job.allow_failure === true ? { required: false } : {}),
+    ...(detailsUrl ? { detailsUrl } : {}),
+    ...(typeof job.stage === "string" && job.stage.trim() ? { workflow: job.stage } : {}),
+    rawData: job,
+  };
+}
+
 /**
  * Mergeability from the modern `detailed_merge_status` when present, falling
  * back to `has_conflicts`. `null` when GitLab hasn't computed it (matching
@@ -170,22 +243,31 @@ export function pipelineStatusToCIState(status: unknown): CIStatusState | undefi
  */
 function mergeableFromMR(mr: GitLabMergeRequest): boolean | null {
   if (typeof mr.detailed_merge_status === "string") {
-    if (mr.detailed_merge_status === "mergeable") return true;
-    // The four states GitLab documents as "still being computed". Reporting
-    // any of them as not-mergeable would show a merge button disabled for a
-    // reason that hasn't been established yet.
-    if (
-      mr.detailed_merge_status === "checking" ||
-      mr.detailed_merge_status === "unchecked" ||
-      mr.detailed_merge_status === "preparing" ||
-      mr.detailed_merge_status === "approvals_syncing"
-    ) {
-      return null;
-    }
-    return false;
+    return mergeableFromDetailedStatus(mr.detailed_merge_status);
   }
   if (mr.has_conflicts === true) return false;
   return null;
+}
+
+/**
+ * REST `detailed_merge_status` is lower-case and GraphQL `detailedMergeStatus`
+ * upper-case; both name the same states.
+ */
+function mergeableFromDetailedStatus(detailedMergeStatus: string): boolean | null {
+  const status = detailedMergeStatus.toLowerCase();
+  if (status === "mergeable") return true;
+  // The four states GitLab documents as "still being computed". Reporting
+  // any of them as not-mergeable would show a merge button disabled for a
+  // reason that hasn't been established yet.
+  if (
+    status === "checking" ||
+    status === "unchecked" ||
+    status === "preparing" ||
+    status === "approvals_syncing"
+  ) {
+    return null;
+  }
+  return false;
 }
 
 /**
@@ -371,7 +453,8 @@ export function mapListOrderBy(sort: string | undefined): string {
 
 /**
  * GraphQL merge-request node (camelCase, string `iid`) → contract PR. Used by
- * the batched branch→MR lookup; the REST mapper handles everything else.
+ * the batched branch→MR and number→MR lookups; the REST mapper handles
+ * everything else.
  */
 export function graphqlMergeRequestToForgePR(
   node: Record<string, unknown>,
@@ -410,7 +493,11 @@ export function graphqlMergeRequestToForgePR(
     ...(authorUser ? { author: authorUser } : {}),
     baseRef: typeof node.targetBranch === "string" ? node.targetBranch : "",
     headRef: typeof node.sourceBranch === "string" ? node.sourceBranch : "",
-    mergeable: null,
+    mergeable:
+      typeof node.detailedMergeStatus === "string"
+        ? mergeableFromDetailedStatus(node.detailedMergeStatus)
+        : null,
+    ...(typeof node.userNotesCount === "number" ? { commentCount: node.userNotesCount } : {}),
     ...(ciStatus && ciStatus !== "unknown" ? { ciStatus } : {}),
     ...(mergeState ? { mergeState } : {}),
     createdAt: isoToMs(node.createdAt ?? node.updatedAt),

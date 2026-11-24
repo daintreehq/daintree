@@ -6,7 +6,19 @@ import net from "node:net";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The developer's own ~/.ssh/config would decide whether a route is remembered;
+// tests that care about the config name their files.
+vi.mock("../sshConfig.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sshConfig.js")>();
+  return {
+    ...actual,
+    defaultSshConfigRoots: () => [],
+    sshConfigStamp: vi.fn(actual.sshConfigStamp),
+  };
+});
 import { HostServer } from "../../host/HostServer.js";
+import { sshConfigStamp } from "../sshConfig.js";
 import { hostSocketLocation, remoteHostSocketLocation } from "../../host/hostSocketPath.js";
 import { LinkClient, type LinkClientState } from "../LinkClient.js";
 import { bridgeChild, type BridgeChild } from "../../__tests__/harness/bridgeChild.js";
@@ -25,7 +37,11 @@ import {
   buildForwardArgs,
   buildMuxForwardArgs,
   buildProbeArgs,
+  buildSignInArgs,
   buildStreamLocalCheckArgs,
+  defaultSshSpawner,
+  discoveryReadFrom,
+  hiddenHopRefusal,
   controlPathFor,
   controlPathOption,
   exitStaleSshMasters,
@@ -38,6 +54,7 @@ import {
   type SshStreamSpawner,
 } from "../sshTransport.js";
 import { remoteShellArgs, scpArgs } from "../remoteShell.js";
+import type { CommandRunner } from "../commandRunner.js";
 import { HostModeOffError, SshAccessError, TransportError } from "../transport.js";
 import {
   TEST_HANDSHAKE,
@@ -75,7 +92,78 @@ const COMMON = [
   'ControlPath="/cp/cm-%C"',
 ];
 
+describe("hiddenHopRefusal", () => {
+  const run =
+    (code: number, stderr: string): CommandRunner =>
+    async () => ({
+      code,
+      stdout: "",
+      stderr,
+      spawnError: null,
+      timedOut: false,
+    });
+
+  it("keeps a changed jump-host key's own lines, not the closing lines ssh adds after them", async () => {
+    const refusal = await hiddenHopRefusal(
+      run(
+        255,
+        [
+          "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+          "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @",
+          "Offending ECDSA key in /Users/g/.ssh/known_hosts:3",
+          "Host key for bastion has changed and you have requested strict checking.",
+          "Host key verification failed.",
+          "kex_exchange_identification: Connection closed by remote host",
+          "Connection closed by UNKNOWN port 65535",
+        ].join("\n")
+      ),
+      "ssh",
+      "studio"
+    );
+    expect(refusal?.split("\n").slice(-3)).toEqual([
+      "Offending ECDSA key in /Users/g/.ssh/known_hosts:3",
+      "Host key for bastion has changed and you have requested strict checking.",
+      "Host key verification failed.",
+    ]);
+  });
+
+  it("is nothing when ssh itself didn't fail: a command there printed the words", async () => {
+    expect(
+      await hiddenHopRefusal(run(1, "Permission denied (restricted command)\n"), "ssh", "studio")
+    ).toBeNull();
+  });
+});
+
 describe("ssh argument construction", () => {
+  it("turns batch mode off only for a sign-in, which is otherwise the probe on the same master", () => {
+    const batch = [
+      buildProbeArgs("studio", "/cp/cm-%C"),
+      buildCatArgs("studio", "/cp/cm-%C", "/home/g/host.json"),
+      buildAttachArgs("studio", "/cp/cm-%C", "daintree --attach-stdio"),
+      buildStreamLocalCheckArgs("studio", "/cp/cm-%C", "/run/user/1/daintree/host.sock"),
+      buildForwardArgs("studio", "/tmp/l.sock", "/run/user/1/daintree/host.sock"),
+      remoteShellArgs("studio", "/cp/cm-%C", "true"),
+      scpArgs("studio", "/cp/cm-%C", "/tmp/a", "/tmp/b", "ssh"),
+    ];
+    for (const args of batch) {
+      expect(args.filter((arg) => arg.startsWith("BatchMode="))).toEqual(["BatchMode=yes"]);
+    }
+    const signIn = buildSignInArgs("studio", "/cp/cm-%C");
+    expect(signIn.filter((arg) => arg.startsWith("BatchMode="))).toEqual(["BatchMode=no"]);
+    // No banner deadline: behind a jump host it waits on the person's answer there.
+    expect(signIn.filter((arg) => arg.startsWith("ConnectTimeout="))).toEqual(["ConnectTimeout=0"]);
+    const probe = buildProbeArgs("studio", "/cp/cm-%C");
+    expect(
+      signIn.map((arg) =>
+        arg === "BatchMode=no"
+          ? "BatchMode=yes"
+          : arg === "ConnectTimeout=0"
+            ? "ConnectTimeout=10"
+            : arg
+      )
+    ).toEqual(probe);
+  });
+
   it("quotes the control path so ssh keeps a path with spaces as one value", () => {
     expect(controlPathOption("/Users/g/Library/Application Support/Daintree/rh/cm-%C")).toBe(
       'ControlPath="/Users/g/Library/Application Support/Daintree/rh/cm-%C"'
@@ -140,6 +228,27 @@ describe("ssh argument construction", () => {
     expect(read.at(-1)).toMatch(
       /^sh -c '[^']*' sh '\/Users\/g\/Library\/Application Support\/Daintree\/host\.json'$/
     );
+    expect(
+      buildCatArgs("greg@studio", "/cp/cm-%C", [
+        "/run/user/1000/daintree/host.json",
+        "/home/g/.cache/daintree/run/host.json",
+      ]).at(-1)
+    ).toMatch(
+      /^sh -c '[^']*' sh '\/run\/user\/1000\/daintree\/host\.json' '\/home\/g\/\.cache\/daintree\/run\/host\.json'$/
+    );
+    expect(discoveryReadFrom(`banner\n@@dt:discovery-from 2\n@@dt:discovery\n{}`)).toBe(1);
+    expect(discoveryReadFrom(`\n@@dt:discovery-from 1\r\n@@dt:discovery\n`)).toBe(0);
+    // An older reply, or a shell's noise that only looks like it, reads as the first.
+    expect(discoveryReadFrom(`\n@@dt:discovery\n{}`)).toBe(0);
+    expect(discoveryReadFrom(`x@@dt:discovery-from 2\n`)).toBe(0);
+    // Only the marker right before the file counts.
+    expect(
+      discoveryReadFrom(`@@dt:discovery-from 1\nbanner\n@@dt:discovery-from 2\n@@dt:discovery\n{}`)
+    ).toBe(1);
+    expect(
+      discoveryReadFrom(`@@dt:discovery-from 2\nbanner\n@@dt:discovery-from 1\n@@dt:discovery\n{}`)
+    ).toBe(0);
+    expect(discoveryReadFrom(`@@dt:discovery-from 2\nbanner\n@@dt:discovery\n{}`)).toBe(0);
     expect(
       buildMuxForwardArgs("studio", "/cp/cm-%C", "/l/l.sock", "/run/user/1/daintree/host.sock")
     ).toEqual([
@@ -362,6 +471,8 @@ afterEach(async () => {
   await server?.close();
   client = null;
   server = null;
+  // Back to the real walk, so a fake one queued by a failed test can't reach the next.
+  vi.mocked(sshConfigStamp).mockReset();
   await removeTempDir(root);
 });
 
@@ -389,6 +500,149 @@ describe("SshTransport with an injected ssh", () => {
     expect(ensureRunning).not.toHaveBeenCalled();
     expect(calls).toHaveLength(1);
   });
+
+  it("hears a jump host's refusal that ssh hid, and parks on it like any refused login", async () => {
+    const calls: string[][] = [];
+    const proxyClosed =
+      "kex_exchange_identification: Connection closed by remote host\nConnection closed by UNKNOWN port 65535\n";
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      // Without a master the jump host's own stderr reaches this side.
+      if (args.includes("ControlPath=none")) {
+        child.finish(
+          255,
+          "",
+          `greg@bastion: Permission denied (publickey,keyboard-interactive).\n${proxyClosed}`
+        );
+      } else {
+        child.finish(255, "", proxyClosed);
+      }
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SshAccessError);
+    expect((error as SshAccessError).detail).toContain("greg@bastion: Permission denied");
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toContain("BatchMode=yes");
+    expect(calls[1]).not.toContain("ControlMaster=auto");
+  });
+
+  it("asks the hops at most once a while when a proxy just keeps closing", async () => {
+    const calls: string[][] = [];
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      child.finish(255, "", "Connection closed by UNKNOWN port 65535\n");
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    const diagnoses = () => calls.filter((args) => args.includes("ControlPath=none")).length;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      await transport.open(new AbortController().signal).catch(() => {});
+      await transport.open(new AbortController().signal).catch(() => {});
+      expect(diagnoses()).toBe(1);
+      expect(calls).toHaveLength(3);
+      // A person's fresh dial asks again, and so does any dial once the interval has passed.
+      await transport.open(new AbortController().signal, { fresh: true }).catch(() => {});
+      expect(diagnoses()).toBe(2);
+      vi.setSystemTime(Date.now() + 5 * 60_000 - 1);
+      await transport.open(new AbortController().signal).catch(() => {});
+      expect(diagnoses()).toBe(2);
+      vi.setSystemTime(Date.now() + 2);
+      await transport.open(new AbortController().signal).catch(() => {});
+      expect(diagnoses()).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks again every time while a jump host keeps refusing, so the link stays parked on it", async () => {
+    const calls: string[][] = [];
+    const spawner: SshSpawner = (args) => {
+      calls.push(args);
+      const child = new FakeChild();
+      child.finish(
+        255,
+        "",
+        args.includes("ControlPath=none")
+          ? "greg@bastion: Permission denied (publickey).\nConnection closed by UNKNOWN port 65535\n"
+          : "Connection closed by UNKNOWN port 65535\n"
+      );
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    for (let i = 0; i < 2; i++) {
+      const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(SshAccessError);
+    }
+    expect(calls.filter((args) => args.includes("ControlPath=none"))).toHaveLength(2);
+  });
+
+  it("keeps a refusal that ends a long stretch of stderr, past what follows it", async () => {
+    const spawner: SshSpawner = () => {
+      const child = new FakeChild();
+      setImmediate(() => {
+        child.stderr.write(
+          `${"banner line\n".repeat(800)}greg@studio: Permission denied (publickey).\n`
+        );
+        setImmediate(() => {
+          child.stderr.end("Connection closed by 10.0.0.2 port 22\n");
+          child.stdout.end();
+          child.emit("exit", 255, null);
+        });
+      });
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "greg@studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SshAccessError);
+  });
+
+  it("keeps retrying a host behind a jump host that didn't refuse the login", async () => {
+    const spawner: SshSpawner = () => {
+      const child = new FakeChild();
+      child.finish(255, "", "Connection closed by UNKNOWN port 65535\n");
+      return child;
+    };
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: spawner,
+    });
+    const error = await transport.open(new AbortController().signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TransportError);
+    expect(error).not.toBeInstanceOf(SshAccessError);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "runs every batch ssh with askpass forbidden, so a jump host can't ask either",
+    async () => {
+      const child = defaultSshSpawner("/usr/bin/env")([]);
+      let out = "";
+      child.stdout?.on("data", (chunk: Buffer) => (out += chunk.toString()));
+      await new Promise((resolve) => child.on("exit", resolve));
+      expect(out.split("\n")).toContain("SSH_ASKPASS_REQUIRE=never");
+    }
+  );
 
   it("leaves an ordinary unreachable host to the usual retries", async () => {
     const spawner: SshSpawner = () => {
@@ -419,7 +673,12 @@ describe("SshTransport with an injected ssh", () => {
       if (command === PROBE_COMMAND) {
         child.finish(0, "Linux\n4242\n/home/greg\n");
       } else if (isDiscoveryRead(command)) {
-        expect(command.endsWith(" sh '/run/user/4242/daintree/host.json'")).toBe(true);
+        // Both places a Linux host may listen: the read picks by PID 1, as the host does.
+        expect(
+          command.endsWith(
+            " sh '/run/user/4242/daintree/host.json' '/home/greg/.cache/daintree/run/host.json'"
+          )
+        ).toBe(true);
         child.finish(
           0,
           discoveryReply({
@@ -618,6 +877,67 @@ describe("SshTransport with an injected ssh", () => {
     });
     await expect(transport.open(new AbortController().signal)).rejects.toMatchObject({
       detail: "Error: remote port forwarding failed for listen path",
+    });
+  });
+
+  it("holds a Linux host's socket to the place its discovery file was read from", async () => {
+    const runtime = remoteHostSocketLocation({ platform: "linux", uid: 4242, home: "/home/greg" });
+    const cache = remoteHostSocketLocation({
+      platform: "linux",
+      uid: 4242,
+      home: "/home/greg",
+      startsOnConnect: true,
+    });
+    const open = (from: 1 | 2, socketPath: string) => {
+      const after: string[][] = [];
+      const spawner: SshSpawner = (args) => {
+        const child = new FakeChild();
+        const command = args.at(-1)!;
+        if (command === PROBE_COMMAND) child.finish(0, "Linux\n4242\n/home/greg\n");
+        else if (isDiscoveryRead(command)) {
+          child.finish(
+            0,
+            `\n@@dt:discovery-from ${from}${discoveryReply({
+              version: 1,
+              socketPath,
+              token: "a".repeat(64),
+              pid: 1,
+            })}`
+          );
+        } else {
+          after.push(args);
+          child.finish(1);
+        }
+        return child;
+      };
+      const transport = new SshTransport({
+        target: "studio",
+        clientDir: path.join(root, "c"),
+        spawn: spawner,
+        spawnStream: () => bridgeChild("/nonexistent/host.json"),
+      });
+      return {
+        opened: transport.open(new AbortController().signal).catch((e: unknown) => e),
+        after,
+      };
+    };
+
+    // Read from the home's cache (PID 1 isn't systemd there): its socket is the one beside it.
+    const fromCache = open(2, cache.socketPath);
+    const cacheError = await fromCache.opened;
+    expect(cacheError).not.toMatchObject({ message: "Host discovery file is not valid" });
+    expect(fromCache.after.flat().some((arg) => arg.includes(cache.socketPath))).toBe(true);
+
+    // A socket beside the other place is still a path the host chose, and refused.
+    const crossed = open(2, runtime.socketPath);
+    await expect(crossed.opened).resolves.toMatchObject({
+      message: "Host discovery file is not valid",
+      detail: expect.stringContaining("not beside it"),
+    });
+    expect(crossed.after).toEqual([]);
+    const crossedBack = open(1, cache.socketPath);
+    await expect(crossedBack.opened).resolves.toMatchObject({
+      message: "Host discovery file is not valid",
     });
   });
 
@@ -1313,6 +1633,72 @@ describe("reconnecting to a host the transport already knows", () => {
     expect(fourth.remembered).toBe(true);
     await fourth.dispose();
     host.closeProxies();
+  });
+
+  it("dials afresh once a file the ssh config includes re-points the alias", async () => {
+    const host = await knownHost();
+    const config = path.join(root, "ssh_config");
+    const included = path.join(root, "studio.conf");
+    writeFileSync(config, `Host studio\n  Include ${included}\n`);
+    writeFileSync(included, "HostName a.example\n");
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+      sshConfigFiles: [config],
+    });
+    const first = await transport.open(new AbortController().signal);
+    await first.dispose();
+    const second = await transport.open(new AbortController().signal);
+    expect(second.remembered).toBe(true);
+    await second.dispose();
+
+    writeFileSync(included, "HostName b.example.org\n");
+    const before = host.calls.length;
+    const stampsBefore = vi.mocked(sshConfigStamp).mock.calls.length;
+    const third = await transport.open(new AbortController().signal);
+    expect(third.remembered).toBeUndefined();
+    expect(host.calls.slice(before).filter(isProbe)).toHaveLength(1);
+    // The walk that showed the change is the one the dial goes on with.
+    expect(vi.mocked(sshConfigStamp).mock.calls.length - stampsBefore).toBe(1);
+    await third.dispose();
+    host.closeProxies();
+  });
+
+  it("keeps a remembered route when the dial is cancelled while the config is read", async () => {
+    const host = await knownHost();
+    const transport = new SshTransport({
+      target: "studio",
+      clientDir: path.join(root, "c"),
+      spawn: host.spawner,
+      sshConfigFiles: [],
+    });
+    const first = await transport.open(new AbortController().signal);
+    await first.dispose();
+    const abort = new AbortController();
+    vi.mocked(sshConfigStamp).mockImplementationOnce(async () => {
+      abort.abort();
+      return "incomplete:cancelled";
+    });
+    await expect(transport.open(abort.signal)).rejects.toThrow("Connection cancelled");
+    const again = await transport.open(new AbortController().signal);
+    expect(again.remembered).toBe(true);
+    await again.dispose();
+    host.closeProxies();
+  });
+
+  it("starts nothing for a first dial cancelled while the config is read", async () => {
+    const clientDir = path.join(root, "c");
+    const spawn = vi.fn(() => new FakeChild());
+    const transport = new SshTransport({ target: "studio", clientDir, spawn, sshConfigFiles: [] });
+    const abort = new AbortController();
+    vi.mocked(sshConfigStamp).mockImplementationOnce(async () => {
+      abort.abort();
+      return "incomplete:cancelled";
+    });
+    await expect(transport.open(abort.signal)).rejects.toThrow("Connection cancelled");
+    expect(existsSync(clientDir)).toBe(false);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("starts no fresh dial for a remembered one that was cancelled", async () => {

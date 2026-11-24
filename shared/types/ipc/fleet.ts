@@ -84,6 +84,14 @@ export interface RunWaitRecord {
 export type RunCanopyRefinement =
   | {
       kind: "asked";
+      /**
+       * Which ask the reading saw: an approval of something the agent is about
+       * to do, or a question only the user can answer. Both place the run the
+       * same way; a reader may still sort them, since a policy can settle an
+       * approval and never a question. Absent on a row from a Remote Host
+       * whose build predates it.
+       */
+      ask?: "approval" | "question";
       /** The question, verbatim from the screen. */
       quote: string;
       /** When the screen behind the verdict was read (epoch ms). */
@@ -278,6 +286,14 @@ export interface FleetRunRow {
    * is above zero. An observation about the answers, never about the agent.
    */
   answerAttention?: number;
+  /**
+   * How many Daintree Decisions questions this pane asked are open in Needs
+   * you (waiting for the person, or queued to be sent), less any the person
+   * cleared from Needs you on this computer at the ask they cleared. Present
+   * only while Decisions is on and the count is above zero. What Decisions
+   * recorded, never a reading of the agent's screen.
+   */
+  questionAttention?: number;
   /**
    * Present iff Canopy is on with its model here, and read something this
    * turn that refines where the run lands. Whether it still applies to what

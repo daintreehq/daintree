@@ -1,5 +1,5 @@
 import { useTerminalInputStore, type SentPrompt } from "@/store/terminalInputStore";
-import { VOICE_RECENT_PROMPTS_MAX } from "@shared/config/voiceCorrection";
+import { VOICE_RECENT_PROMPTS_MAX } from "@shared/config/voiceCorrectionPolicy";
 
 // The window's start moves this many sends at a time, so most sends only add to
 // the end of what cleanup is shown and its cached prefix still holds the

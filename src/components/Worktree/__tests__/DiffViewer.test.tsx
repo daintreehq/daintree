@@ -156,6 +156,18 @@ index 000..111 100644
     expect(screen.getByText("No changes detected")).toBeTruthy();
   });
 
+  it("offers the way back when a whitespace-ignoring read comes back empty", () => {
+    const onShowWhitespaceChanges = vi.fn();
+    render(
+      wrap(<DiffViewer diff="NO_CHANGES" onShowWhitespaceChanges={onShowWhitespaceChanges} />)
+    );
+
+    expect(screen.queryByText("No changes detected")).toBeNull();
+    expect(screen.getByText("No changes with whitespace ignored")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Show whitespace changes" }));
+    expect(onShowWhitespaceChanges).toHaveBeenCalledTimes(1);
+  });
+
   it("renders BINARY_FILE sentinel", () => {
     render(wrap(<DiffViewer diff="BINARY_FILE" />));
     expect(screen.getByText("Binary file")).toBeTruthy();
@@ -211,8 +223,8 @@ describe("DiffViewer collapse behavior", () => {
   it("renders small normal file without collapse", () => {
     render(wrap(<DiffViewer diff={SMALL_DIFF} />));
 
-    expect(screen.queryByText("Show diff")).toBeNull();
-    expect(screen.queryByText("Generated file collapsed")).toBeNull();
+    expect(screen.queryByText("Generated file")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Generated file|Large diff/ })).toBeNull();
   });
 
   it("toggles collapse state — expand then collapse again", () => {
@@ -220,13 +232,19 @@ describe("DiffViewer collapse behavior", () => {
 
     expect(screen.queryByTestId("diff-element")).toBeNull();
 
-    fireEvent.click(screen.getByText("Show diff"));
-    expect(screen.getByTestId("diff-element")).toBeTruthy();
-    expect(screen.getByText("Hide diff")).toBeTruthy();
+    const toggle = screen.getByRole("button", { name: "Generated file" });
+    expect(toggle.getAttribute("type")).toBe("button");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
-    fireEvent.click(screen.getByText("Hide diff"));
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("diff-element")).toBeTruthy();
+    // The label never changes with state; `aria-expanded` carries it.
+    expect(toggle.textContent).toBe("Generated file");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(toggle);
     expect(screen.queryByTestId("diff-element")).toBeNull();
-    expect(screen.getByText("Show diff")).toBeTruthy();
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
   // #10013: consumers re-scan hunk rows on toggle, so the callback must fire on
@@ -237,10 +255,10 @@ describe("DiffViewer collapse behavior", () => {
 
     expect(onToggleCollapse).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByText("Show diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     expect(onToggleCollapse).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByText("Hide diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     expect(onToggleCollapse).toHaveBeenCalledTimes(2);
   });
 });
@@ -380,6 +398,14 @@ describe("DiffViewer moved-line styling", () => {
     clearCapturedDiffProps();
   });
 
+  function classesOf(generate: GenerateLineClassName, change: ChangeData): string[] {
+    return generate({ changes: [change], defaultGenerate: () => "diff-line" }).split(" ");
+  }
+
+  function movedClasses(generate: GenerateLineClassName, change: ChangeData): string[] {
+    return classesOf(generate, change).filter((name) => name.startsWith("diff-line-moved"));
+  }
+
   it("tags relocated rows with side-specific moved classes", () => {
     render(wrap(<DiffViewer diff={MOVED_DIFF} viewType="split" />));
 
@@ -389,13 +415,9 @@ describe("DiffViewer moved-line styling", () => {
     const ins = hunks[1]!.changes.find((c) => c.type === "insert")!;
     const ctx = hunks[0]!.changes.find((c) => c.type === "normal")!;
 
-    expect(generate({ changes: [del], defaultGenerate: () => "diff-line" })).toBe(
-      "diff-line diff-line-moved-old"
-    );
-    expect(generate({ changes: [ins], defaultGenerate: () => "diff-line" })).toBe(
-      "diff-line diff-line-moved-new"
-    );
-    expect(generate({ changes: [ctx], defaultGenerate: () => "diff-line" })).toBe("diff-line");
+    expect(movedClasses(generate, del)).toEqual(["diff-line-moved-old"]);
+    expect(movedClasses(generate, ins)).toEqual(["diff-line-moved-new"]);
+    expect(classesOf(generate, ctx)).toEqual(["diff-line"]);
   });
 
   it("leaves rows untouched when nothing moved", () => {
@@ -405,7 +427,30 @@ describe("DiffViewer moved-line styling", () => {
     const hunks = capturedDiffProps.hunks as HunkData[];
     const ins = hunks[0]!.changes.find((c) => c.type === "insert")!;
 
-    expect(generate({ changes: [ins], defaultGenerate: () => "diff-line" })).toBe("diff-line");
+    expect(movedClasses(generate, ins)).toEqual([]);
+    // Still the hunk's first change, so still where a step lands, in either
+    // column of a split row.
+    expect(classesOf(generate, ins)).toContain("diff-hunk-anchor");
+    expect(
+      generate({
+        changes: [undefined as unknown as ChangeData, ins],
+        defaultGenerate: () => "diff-line",
+      }).split(" ")
+    ).toContain("diff-hunk-anchor");
+  });
+
+  // The hunk stepper's landing rows (#17326): each hunk's first change only.
+  it("marks each hunk's first changed row as its anchor and no other row", () => {
+    render(wrap(<DiffViewer diff={MOVED_DIFF} viewType="split" />));
+
+    const generate = capturedDiffProps.generateLineClassName as GenerateLineClassName;
+    const hunks = capturedDiffProps.hunks as HunkData[];
+    for (const hunk of hunks) {
+      const first = hunk.changes.findIndex((c) => c.type !== "normal");
+      hunk.changes.forEach((change, index) => {
+        expect(classesOf(generate, change).includes("diff-hunk-anchor")).toBe(index === first);
+      });
+    }
   });
 });
 
@@ -512,6 +557,19 @@ describe("DiffViewer directional context expansion", () => {
     fireEvent.click(screen.getByRole("button", { name: /Expand up/ }));
 
     expect(screen.getByRole("button", { name: "Expand all 77" })).toBeTruthy();
+  });
+
+  it("offers expansion once a source lands after the diff is already showing", () => {
+    const { rerender } = render(
+      wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={null} viewType="split" />)
+    );
+    expect(renderedContent()).toContain("line2-changed");
+    expect(screen.queryByRole("button", { name: /^Expand (up|down|all)/ })).toBeNull();
+
+    rerender(wrap(<DiffViewer diff={FAR_HUNKS_DIFF} source={FAR_HUNKS_SOURCE} viewType="split" />));
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand all 97" }));
+    expect(renderedContent()).toContain("line50");
   });
 });
 
@@ -1303,16 +1361,16 @@ describe("DiffViewer native scroll proxy", () => {
     const { container } = render(wrap(<DiffViewer diff={LOCKFILE_DIFF} viewType="unified" />));
     expect(container.querySelector(".diff-file-scroll")).toBeNull();
 
-    fireEvent.click(screen.getByText("Show diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     const scroller = container.querySelector<HTMLElement>(".diff-file-scroll");
     stubLayout(scroller!, 200, 500);
     resize(scroller!);
     expect(scroller?.getAttribute("data-proxy-active")).toBe("true");
 
-    fireEvent.click(screen.getByText("Hide diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     expect(screen.queryByTestId("diff-hscrollbar")).toBeNull();
 
-    fireEvent.click(screen.getByText("Show diff"));
+    fireEvent.click(screen.getByRole("button", { name: "Generated file" }));
     const reopened = container.querySelector<HTMLElement>(".diff-file-scroll");
     stubLayout(reopened!, 200, 500);
     resize(reopened!);
@@ -1634,6 +1692,181 @@ describe("DiffViewer full file scope", () => {
     expect(renderedContent()).not.toContain("line1");
   });
 
+  it("expands a whitespace-ignoring patch against the file on disk", () => {
+    // `git diff --ignore-all-space` (git 2.56.1) after reindenting a block,
+    // changing one line in it and appending one at the end: the reindented
+    // lines are context printed from the new side, so the file on disk still
+    // matches every hunk.
+    const diff = [
+      "diff --git a/f.js b/f.js",
+      "index 943a52b..8d5a6c1 100644",
+      "--- a/f.js",
+      "+++ b/f.js",
+      "@@ -1,6 +1,6 @@",
+      " function a() {",
+      "     if (x) {",
+      "-  return 1;",
+      "+        return 2;",
+      "     }",
+      " }",
+      " l1",
+      "@@ -13,3 +13,4 @@ l7",
+      " l8",
+      " l9",
+      " l10",
+      "+new",
+      "",
+    ].join("\n");
+    const tail = Array.from({ length: 10 }, (_, i) => `l${i + 1}`);
+    const source = [
+      "function a() {",
+      "    if (x) {",
+      "        return 2;",
+      "    }",
+      "}",
+      ...tail,
+      "new",
+    ].join("\n");
+    const onVerdict =
+      vi.fn<
+        (reason: FullFileUnavailableReason | null, forSource: string | null | undefined) => void
+      >();
+
+    renderViewer({ diff, source, fullFile: true, onFullFileVerdict: onVerdict });
+
+    expect(onVerdict).toHaveBeenLastCalledWith(null, source);
+    expect(renderedContent()).toEqual([
+      "function a() {",
+      "    if (x) {",
+      "  return 1;",
+      "        return 2;",
+      "    }",
+      "}",
+      ...tail,
+      "new",
+    ]);
+  });
+
+  it("keeps every hunk's own lines when expanding a file with several", () => {
+    // One range over the whole file reached into the second hunk's leading
+    // context, which the synthetic old side leaves blank, and rendered it empty.
+    const lines = Array.from({ length: 20 }, (_, i) => `l${i + 1}`);
+    const diff = [
+      "diff --git a/f.ts b/f.ts",
+      "index 86bba90..1d28e03 100644",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      "@@ -1,6 +1,6 @@",
+      " l1",
+      " l2",
+      "-l3",
+      "+X3",
+      " l4",
+      " l5",
+      " l6",
+      "@@ -12,7 +12,7 @@ l11",
+      " l12",
+      " l13",
+      " l14",
+      "-l15",
+      "+X15",
+      " l16",
+      " l17",
+      " l18",
+      "",
+    ].join("\n");
+    const changed = lines.map((line) => (line === "l3" ? "X3" : line === "l15" ? "X15" : line));
+
+    renderViewer({ diff, source: changed.join("\n"), fullFile: true });
+
+    expect(renderedContent()).toEqual([
+      ...lines.slice(0, 2),
+      "l3",
+      "X3",
+      ...lines.slice(3, 14),
+      "l15",
+      "X15",
+      ...lines.slice(15),
+    ]);
+  });
+
+  it("fills each gap on the old side's lines once an earlier hunk has shifted them", () => {
+    // An insertion near the top moves every later new-side line down by one, so
+    // a gap bounded by new-side numbers would reach into the second hunk.
+    const lines = Array.from({ length: 20 }, (_, i) => `l${i + 1}`);
+    const diff = [
+      "diff --git a/f.ts b/f.ts",
+      "index 86bba90..e078a51 100644",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      "@@ -1,5 +1,6 @@",
+      " l1",
+      " l2",
+      "+A",
+      " l3",
+      " l4",
+      " l5",
+      "@@ -12,7 +13,7 @@ l11",
+      " l12",
+      " l13",
+      " l14",
+      "-l15",
+      "+X15",
+      " l16",
+      " l17",
+      " l18",
+      "",
+    ].join("\n");
+    const source = [
+      ...lines.slice(0, 2),
+      "A",
+      ...lines.slice(2).map((line) => (line === "l15" ? "X15" : line)),
+    ].join("\n");
+
+    renderViewer({ diff, source, fullFile: true });
+
+    expect(renderedContent()).toEqual([
+      ...lines.slice(0, 2),
+      "A",
+      ...lines.slice(2, 14),
+      "l15",
+      "X15",
+      ...lines.slice(15),
+    ]);
+    const hunks = capturedHunks();
+    expect(hunks.reduce((sum, hunk) => sum + hunk.oldLines, 0)).toBe(20);
+    expect(hunks.reduce((sum, hunk) => sum + hunk.newLines, 0)).toBe(21);
+  });
+
+  it("keeps a trailing insert when an earlier hunk precedes the one ending the file", () => {
+    // A range covering the whole last hunk kept the plain lines and dropped the
+    // hunk, taking the appended line with it.
+    const lines = Array.from({ length: 12 }, (_, i) => `l${i + 1}`);
+    const diff = [
+      "diff --git a/f.ts b/f.ts",
+      "index 1111111..2222222 100644",
+      "--- a/f.ts",
+      "+++ b/f.ts",
+      "@@ -1,4 +1,4 @@",
+      "-l1",
+      "+X1",
+      " l2",
+      " l3",
+      " l4",
+      "@@ -10,3 +10,4 @@ l9",
+      " l10",
+      " l11",
+      " l12",
+      "+new",
+      "",
+    ].join("\n");
+    const source = ["X1", ...lines.slice(1), "new"].join("\n");
+
+    renderViewer({ diff, source, fullFile: true });
+
+    expect(renderedContent()).toEqual(["l1", "X1", ...lines.slice(1), "new"]);
+  });
+
   it("refuses to expand against a source that isn't the diff's new side", () => {
     const { diff } = makeFixture(12, 5);
     // Same shape, different content — exactly what a file edited between the
@@ -1892,5 +2125,95 @@ describe("DiffViewer full file scope", () => {
     const content = renderedContent();
     expect(content).not.toContain("line1");
     expect(content.some((line) => line.startsWith("unrelated"))).toBe(false);
+  });
+});
+
+describe("DiffViewer file origin", () => {
+  const PURE_RENAME = `diff --git a/src/old.ts b/src/new.ts
+similarity index 100%
+rename from src/old.ts
+rename to src/new.ts
+`;
+
+  const EDITED_RENAME = `diff --git a/src/old.ts b/src/new.ts
+similarity index 99%
+rename from src/old.ts
+rename to src/new.ts
+index 0123456..abcdefg 100644
+--- a/src/old.ts
++++ b/src/new.ts
+@@ -100,0 +101 @@ line 100
++line 101
+`;
+
+  function originText(): string | null {
+    return screen.queryByTestId("diff-file-origin")?.textContent?.trim() ?? null;
+  }
+
+  it("names where a hunkless rename came from in its header", () => {
+    render(
+      wrap(<DiffViewer diff={PURE_RENAME} origin={{ kind: "renamed", path: "src/old.ts" }} />)
+    );
+
+    expect(originText()).toBe("renamed from src/old.ts");
+    expect(screen.queryAllByTestId("hunk")).toHaveLength(0);
+    expect(screen.queryByRole("region")).toBeNull();
+  });
+
+  it("names the host's exact source, not the patch's quoted spelling of it", () => {
+    const quoted = String.raw`diff --git "a/src/o\"ld.ts" b/src/new.ts
+similarity index 100%
+rename from "src/o\"ld.ts"
+rename to src/new.ts
+`;
+    render(wrap(<DiffViewer diff={quoted} origin={{ kind: "renamed", path: 'src/o"ld.ts' }} />));
+
+    expect(originText()).toBe('renamed from src/o"ld.ts');
+  });
+
+  it("offers no generated-file disclosure for a move with nothing to show", () => {
+    const lockfileMove = `diff --git a/package-lock.json b/web/package-lock.json
+similarity index 100%
+rename from package-lock.json
+rename to web/package-lock.json
+`;
+    render(
+      wrap(
+        <DiffViewer diff={lockfileMove} origin={{ kind: "renamed", path: "package-lock.json" }} />
+      )
+    );
+
+    expect(originText()).toBe("renamed from package-lock.json");
+    expect(screen.queryByText("Generated file")).toBeNull();
+  });
+
+  it("names the source of an edited copy, which the patch parses as a modify", () => {
+    render(
+      wrap(<DiffViewer diff={EDITED_RENAME} origin={{ kind: "copied", path: "src/old.ts" }} />)
+    );
+
+    expect(originText()).toBe("copied from src/old.ts");
+    expect(screen.getAllByTestId("hunk")).toHaveLength(1);
+  });
+
+  it("leaves the header alone when the host names no origin", () => {
+    render(wrap(<DiffViewer diff={PURE_RENAME} />));
+
+    expect(screen.getByText("new.ts")).toBeTruthy();
+    expect(originText()).toBeNull();
+  });
+
+  it("drops the origin when the patch holds more than one file", () => {
+    render(
+      wrap(
+        <DiffViewer
+          diff={`${PURE_RENAME}${SMALL_DIFF}\n`}
+          origin={{ kind: "renamed", path: "src/old.ts" }}
+        />
+      )
+    );
+
+    expect(screen.getByText("a.ts")).toBeTruthy();
+    expect(originText()).toBeNull();
   });
 });

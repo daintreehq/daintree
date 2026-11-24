@@ -27,6 +27,7 @@ import { formatCopyResultMessage } from "@/lib/formatCopyResult";
 import { announceCopyTreeCopy } from "@/lib/copyTreeFeedback";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
+import { comparableBranch } from "@/components/Worktree/crossWorktreeDiffUtils";
 import { findReviewHubMarkTarget } from "@/components/Worktree/ReviewHub/reviewHubMarkTargets";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
@@ -41,8 +42,10 @@ import {
   isFileBrowserPanel,
   isGridPanelLocation,
   type FileBrowserPanelData,
+  type PanelInstance,
 } from "@shared/types/panel";
 import { isForegroundDispatch } from "./dispatchSource";
+import { isOptimisticallyClosing } from "@/services/terminal/optimisticPanelCloseIds";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 import { paginate } from "@shared/utils/boundedOutput";
@@ -595,8 +598,11 @@ export const worktreeContextActionRuns: {
     // `dispatch` would report ok with nothing on screen. A person who just
     // asked to browse a named worktree means to go there, so follow them;
     // an agent or plugin naming another worktree does not move the user,
-    // and keeps today's silent-background behavior.
-    if (foreground && worktreeId !== undefined) {
+    // and keeps today's silent-background behavior. Run only once nothing is
+    // left to refuse, so a reveal cancelled at the unsaved-changes prompt
+    // leaves the user where they were.
+    const followToWorktree = async () => {
+      if (!foreground || worktreeId === undefined) return;
       const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
       const selection = useWorktreeSelectionStore.getState();
       // Guarded rather than unconditional: `selectWorktree` is a no-op for
@@ -606,7 +612,7 @@ export const worktreeContextActionRuns: {
       if (selection.activeWorktreeId !== worktreeId) {
         selection.selectWorktree(worktreeId, { source: "user" });
       }
-    }
+    };
 
     // Lazily imported for the same reason the dialog store is above.
     const { usePanelStore } = await import("@/store/panelStore");
@@ -618,65 +624,41 @@ export const worktreeContextActionRuns: {
     // walks this same list — so reusing an unlisted record would report a
     // panel that can never be focused, which is worse than the duplicate
     // that a batch-pending browser would otherwise cause.
-    const existing = store.panelIds
-      .map((id) => store.panelsById[id])
-      .find((panel): panel is FileBrowserPanelData => {
-        if (panel === undefined || !isFileBrowserPanel(panel)) return false;
-        // Matched against the surface that was ASKED for, not "anywhere":
-        // reusing the grid browser for a dock request would leave the dock
-        // empty after a gesture that named it, and moving the panel across
-        // instead would drag its whole tab group along. One browser per
-        // folder per surface is the smallest honest extension of the old
-        // grid-only rule (#11917).
-        //
-        // Either way a dialog browser is ephemeral modal content and
-        // reusing one would hand the grid an uncounted, unpersisted record;
-        // trashed, backgrounded and overlay panels surface nothing when
-        // activated. `isGridPanelLocation` is the one place that answer
-        // lives, so every one of those exclusions — and the legacy
-        // `undefined` location that still counts as grid — comes for free.
-        const onRequestedSurface =
-          location === "dock" ? panel.location === "dock" : isGridPanelLocation(panel.location);
-        if (!onRequestedSurface) return false;
-        // Identity is the folder the tree is rooted at, not the placement
-        // worktree: a workspace-rooted panel carries a worktreeId purely so
-        // it lands in a rendered index bucket (#11489), and matching on
-        // that id would hand a worktree request the workspace browser.
-        const panelIsWorkspaceRooted =
-          panel.browserWorkspaceRooted === true || panel.worktreeId === undefined;
-        return worktreeId === undefined
-          ? panelIsWorkspaceRooted
-          : !panelIsWorkspaceRooted && panel.worktreeId === worktreeId;
-      });
+    const isReuseTarget = (panel: PanelInstance | undefined): panel is FileBrowserPanelData => {
+      if (panel === undefined || !isFileBrowserPanel(panel)) return false;
+      // A grid close hides the panel at once and removes it later; one on its
+      // way out (including one whose close shared a reveal's Save answer) is
+      // not a browser to reveal into.
+      if (isOptimisticallyClosing(panel.id)) return false;
+      // Matched against the surface that was ASKED for, not "anywhere":
+      // reusing the grid browser for a dock request would leave the dock
+      // empty after a gesture that named it, and moving the panel across
+      // instead would drag its whole tab group along. One browser per
+      // folder per surface is the smallest honest extension of the old
+      // grid-only rule (#11917).
+      //
+      // Either way a dialog browser is ephemeral modal content and
+      // reusing one would hand the grid an uncounted, unpersisted record;
+      // trashed, backgrounded and overlay panels surface nothing when
+      // activated. `isGridPanelLocation` is the one place that answer
+      // lives, so every one of those exclusions — and the legacy
+      // `undefined` location that still counts as grid — comes for free.
+      const onRequestedSurface =
+        location === "dock" ? panel.location === "dock" : isGridPanelLocation(panel.location);
+      if (!onRequestedSurface) return false;
+      // Identity is the folder the tree is rooted at, not the placement
+      // worktree: a workspace-rooted panel carries a worktreeId purely so
+      // it lands in a rendered index bucket (#11489), and matching on
+      // that id would hand a worktree request the workspace browser.
+      const panelIsWorkspaceRooted =
+        panel.browserWorkspaceRooted === true || panel.worktreeId === undefined;
+      return worktreeId === undefined
+        ? panelIsWorkspaceRooted
+        : !panelIsWorkspaceRooted && panel.worktreeId === worktreeId;
+    };
+    const existing = store.panelIds.map((id) => store.panelsById[id]).find(isReuseTarget);
 
     if (existing) {
-      if (reveal) {
-        store.setFileBrowserView(existing.id, {
-          // Merged, not replaced: the user's own expansions are theirs to
-          // keep, and a reveal only adds the path to what is already open.
-          browserExpandedPaths: [
-            ...new Set([...(existing.browserExpandedPaths ?? []), ...reveal.browserExpandedPaths]),
-          ].sort(),
-          browserSelectedPath: reveal.browserSelectedPath,
-          // An explicit root is the caller's scope and was already checked
-          // against the reveal above. Otherwise, reveal paths are
-          // base-relative, so a tree scoped to a subfolder can only show
-          // one that lives under it. Cleared when the target is outside —
-          // otherwise the selection would name a row the tree does not
-          // contain — and left alone when it is already inside, since
-          // dropping a scope the user chose is not part of revealing
-          // something they can already see.
-          ...(rootPath !== undefined
-            ? { browserRootPath: rootPath }
-            : !isWithinBrowserRoot(reveal.browserSelectedPath, existing.browserRootPath) && {
-                browserRootPath: "",
-              }),
-        });
-      } else if (rootPath !== undefined) {
-        // Root alone, like the pane's own "set as root": the selection and
-        // expansions the user has are left as they are.
-        store.setFileBrowserView(existing.id, { browserRootPath: rootPath });
-      }
       // Reuse has to answer the same focus question the create path below
       // does. `activateTerminal` moves `focusedId` AND leaves fullscreen
       // (#11506), so running it unconditionally would let a suppressed
@@ -689,6 +671,70 @@ export const worktreeContextActionRuns: {
       // `file-browser` keeps the registry's default
       // `defaultFocusOnCreate: true`, the third term of that resolution.
       const takeFocus = foreground || !(isMcpSpawnFocusSuppressed() || isAssistantFocused());
+      if (reveal) {
+        const { navigateFileBrowserView, unsavedDraftLeftBy } =
+          await import("@/panels/file-browser/guardedFileBrowserView");
+        // Moving the selection off a file with unsaved edits releases the
+        // draft, so a reveal asks Save / Discard / Cancel exactly as a click
+        // in the tree does (#17197) — but only where this dispatch may take
+        // focus. A modal interrupts more than the focus change the ambient
+        // guards hold back, so a dispatch they suppress is refused instead
+        // of prompting over a typing user.
+        const draftName = unsavedDraftLeftBy(existing, reveal.browserSelectedPath);
+        if (draftName !== null && !takeFocus) {
+          throw new UnactionableTargetError(
+            `Didn't reveal ${reveal.browserSelectedPath}: the file browser has unsaved changes to '${draftName}'. Save or discard them there first.`
+          );
+        }
+        const outcome = await navigateFileBrowserView(
+          existing.id,
+          (panel) => ({
+            // Merged, not replaced: the user's own expansions are theirs to
+            // keep, and a reveal only adds the path to what is already open.
+            // Built from the record as it stands once any prompt is answered.
+            browserExpandedPaths: [
+              ...new Set([...(panel.browserExpandedPaths ?? []), ...reveal.browserExpandedPaths]),
+            ].sort(),
+            browserSelectedPath: reveal.browserSelectedPath,
+            // A collapsed viewer would hold the revealed file off screen.
+            browserViewerCollapsed: false,
+            // An explicit root is the caller's scope and was already checked
+            // against the reveal above. Otherwise, reveal paths are
+            // base-relative, so a tree scoped to a subfolder can only show
+            // one that lives under it. Cleared when the target is outside —
+            // otherwise the selection would name a row the tree does not
+            // contain — and left alone when it is already inside, since
+            // dropping a scope the user chose is not part of revealing
+            // something they can already see.
+            ...(rootPath !== undefined
+              ? { browserRootPath: rootPath }
+              : !isWithinBrowserRoot(reveal.browserSelectedPath, panel.browserRootPath) && {
+                  browserRootPath: "",
+                }),
+          }),
+          (panel) => usePanelStore.getState().panelIds.includes(panel.id) && isReuseTarget(panel)
+        );
+        if (outcome === "unavailable") {
+          throw new UnactionableTargetError(
+            `Didn't reveal ${reveal.browserSelectedPath}: the file browser closed or moved before it could be shown.`
+          );
+        }
+        if (outcome !== "applied") {
+          // The person who asked is the one who answered the prompt, or the
+          // one whose later navigation won: either way nothing needs saying.
+          if (foreground) return { panelId: existing.id };
+          throw new UnactionableTargetError(
+            outcome === "cancelled"
+              ? `Didn't reveal ${reveal.browserSelectedPath}: the unsaved-changes prompt for '${draftName ?? "the open file"}' in the file browser was cancelled.`
+              : `Didn't reveal ${reveal.browserSelectedPath}: a later navigation in the same file browser replaced it.`
+          );
+        }
+      } else if (rootPath !== undefined) {
+        // Root alone, like the pane's own "set as root": the selection and
+        // expansions the user has are left as they are.
+        store.setFileBrowserView(existing.id, { browserRootPath: rootPath });
+      }
+      await followToWorktree();
       if (takeFocus) {
         // Activation focuses the panel but leaves a tab group showing
         // whatever tab it had; the group's stored active tab wins over
@@ -701,6 +747,7 @@ export const worktreeContextActionRuns: {
       return { panelId: existing.id };
     }
 
+    await followToWorktree();
     // A person asking to browse expects to see it, so a foreground dispatch
     // takes focus outright — that policy is also the one that leaves
     // fullscreen, so the panel can't land buried behind a maximized cell.
@@ -754,17 +801,19 @@ export const worktreeContextActionRuns: {
     if (!right) {
       throw new Error(`Worktree not found: ${rightId}`);
     }
-    if (!left.branch) {
+    const leftBranch = comparableBranch(left);
+    const rightBranch = comparableBranch(right);
+    if (!leftBranch) {
       throw new Error(`Worktree '${leftId}' has no branch (detached HEAD); cannot compare.`);
     }
-    if (!right.branch) {
+    if (!rightBranch) {
       throw new Error(`Worktree '${rightId}' has no branch (detached HEAD); cannot compare.`);
     }
 
     const res = await window.electron.git.compareWorktrees(
       left.path,
-      left.branch,
-      right.branch,
+      leftBranch,
+      rightBranch,
       undefined,
       args.useMergeBase,
       args.ignoreWhitespace

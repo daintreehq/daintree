@@ -1,6 +1,6 @@
 import { useCallback, useRef } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirmStore";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import {
@@ -14,6 +14,8 @@ import { cn } from "@/lib/utils";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { useHostConnection } from "@/hooks/useHostConnection";
 import type { PluginPresetLaunchSummary } from "@shared/utils/agentPresetLaunchConsent";
+
+const CONFIRM_COOLDOWN_MS = 1_200;
 
 /**
  * Singleton dialog driven by the just-in-time capability consent queue (#10524).
@@ -49,6 +51,7 @@ export function PluginCapabilityConfirmDialog() {
         variant="component"
         componentName="PluginCapabilityConfirmDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={false}
@@ -61,12 +64,22 @@ export function PluginCapabilityConfirmDialog() {
     );
   }
 
+  // The queue advances by swapping `current` on the mounted dialog, whichever
+  // branch renders it, so each request starts at the top, with focus back on the
+  // safe answer rather than the button that answered the last one.
+  const perRequest = {
+    focusResetKey: current.requestId,
+    bodyResetKey: current.requestId,
+    cooldownKey: current.requestId,
+  };
+
   if (current.restore !== undefined) {
     return (
       <ErrorBoundary
         variant="component"
         componentName="PluginCapabilityConfirmDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={true}
@@ -79,6 +92,8 @@ export function PluginCapabilityConfirmDialog() {
           variant="destructive"
           // The body carries a permission list, so this is a `dialog`, not an `alertdialog`.
           hasPreview={true}
+          {...perRequest}
+          confirmCooldownMs={CONFIRM_COOLDOWN_MS}
           hint={
             <span className="min-w-0 leading-tight">Only what this version still declares</span>
           }
@@ -103,6 +118,7 @@ export function PluginCapabilityConfirmDialog() {
         variant="component"
         componentName="PluginCapabilityConfirmDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={true}
@@ -113,6 +129,7 @@ export function PluginCapabilityConfirmDialog() {
           cancelLabel="Deny"
           onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
           variant="default"
+          {...perRequest}
           hint={<span className="min-w-0 leading-tight">Only {site}, not other sites</span>}
         />
       </ErrorBoundary>
@@ -126,6 +143,7 @@ export function PluginCapabilityConfirmDialog() {
         variant="component"
         componentName="PluginCapabilityConfirmDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={true}
@@ -137,10 +155,8 @@ export function PluginCapabilityConfirmDialog() {
           onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
           variant="destructive"
           hasPreview={true}
-          // A queued prompt for another preset reuses the open dialog: start it
-          // from the top, with focus off the button that approved the last one.
-          focusResetKey={current.requestId}
-          bodyResetKey={current.requestId}
+          {...perRequest}
+          confirmCooldownMs={CONFIRM_COOLDOWN_MS}
           hint={<span className="min-w-0 leading-tight">Only this preset, as it is now</span>}
         >
           <PresetLaunchDetails preset={preset} />
@@ -158,6 +174,7 @@ export function PluginCapabilityConfirmDialog() {
       variant="component"
       componentName="PluginCapabilityConfirmDialog"
       resetKeys={[resetKey]}
+      onError={afterCatch(() => usePluginCapabilityConfirmStore.getState().drop(resetKey))}
     >
       <ConfirmDialog
         isOpen={true}
@@ -179,6 +196,8 @@ export function PluginCapabilityConfirmDialog() {
         // The body carries a capability list, so this is a `dialog` — APG
         // reserves `alertdialog` for a brief message read out whole.
         hasPreview={true}
+        {...perRequest}
+        confirmCooldownMs={CONFIRM_COOLDOWN_MS}
         // Beside the action, where a modal is actually read: title, then
         // primary button. The description still carries the full wording for
         // the accessible description; this is the visual scan path.
@@ -228,16 +247,23 @@ export function presetSourceLabel(source: PluginPresetLaunchSummary["source"]): 
   }
 }
 
-/** Whether a launch on a preset skips permission prompts, and why. Exported for tests. */
+/** What a launch on a preset does about permission prompts, and why. Exported for tests. */
 export function presetBypassLabel(
-  preset: Pick<PluginPresetLaunchSummary, "dangerousMode" | "skipsPermissions">,
+  preset: Pick<PluginPresetLaunchSummary, "dangerousMode" | "permissionLevel">,
   agentName: string
 ): string {
+  // The CLI default is named as such, not as "asked": Daintree adds no flag
+  // then, and the CLI's own settings decide whether it asks.
   if (preset.dangerousMode === "on") return "Skipped: the preset turns bypass on";
-  if (preset.dangerousMode === "off") return "Asked: the preset turns bypass off";
-  return preset.skipsPermissions
-    ? `Skipped: from ${agentName}'s settings`
-    : `Asked: from ${agentName}'s settings`;
+  if (preset.dangerousMode === "off") return "CLI default: the preset adds no permission flag";
+  if (preset.dangerousMode === "auto") {
+    return preset.permissionLevel === "auto"
+      ? `Auto: the preset turns on ${agentName}'s Auto mode`
+      : `CLI default: ${agentName} has no Auto mode for the preset to turn on`;
+  }
+  if (preset.permissionLevel === "skip") return `Skipped: from ${agentName}'s settings`;
+  if (preset.permissionLevel === "auto") return `Auto: from ${agentName}'s settings`;
+  return `CLI default: from ${agentName}'s settings`;
 }
 
 type DetailRow = { label: string; value: string; mono?: boolean };
@@ -246,7 +272,7 @@ type DetailRow = { label: string; value: string; mono?: boolean };
 function configurationRows(
   preset: Pick<
     PluginPresetLaunchSummary,
-    "dangerousMode" | "skipsPermissions" | "args" | "customFlags" | "envNames"
+    "dangerousMode" | "permissionLevel" | "args" | "customFlags" | "envNames"
   >,
   agentName: string
 ): DetailRow[] {
@@ -305,6 +331,9 @@ function PresetLaunchDetails({ preset }: { preset: PluginPresetLaunchSummary }) 
   ];
   if (preset.accountName !== undefined) {
     rows.push({ label: "Account it pins", value: preset.accountName });
+  }
+  if (preset.continuesAtLimitReset === true) {
+    rows.push({ label: "At a usage limit", value: "Continues by itself once the limit resets" });
   }
   return (
     <div className="space-y-3">

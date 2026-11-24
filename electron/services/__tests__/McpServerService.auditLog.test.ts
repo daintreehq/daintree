@@ -522,6 +522,52 @@ describe("McpServerService", () => {
       expect(turnSpy).toHaveBeenCalledWith(30);
     });
 
+    describe("setAuditMaxRecords applies the limit to the turn-outcome ring at once", () => {
+      const seedTurns = (count: number) => {
+        auditLogsState.mcpTurnOutcomeLog = Array.from({ length: count }, (_, i) => ({
+          id: `turn-${i}`,
+          timestamp: 1000 + i,
+          terminalId: "term-1",
+          sessionId: "help-1",
+          outcome: "answered",
+        }));
+        return auditLogsState.mcpTurnOutcomeLog.map((r) => r.id as string);
+      };
+      const persistedTurns = () => auditLogsState.mcpTurnOutcomeLog.map((r) => r.id);
+      const liveTurns = () =>
+        service._turnOutcomeService
+          .getRecords()
+          .map((r) => r.id)
+          .reverse();
+
+      it.each([
+        ["not yet read this session", false],
+        ["already read this session", true],
+      ])("trims a ring %s, and raising it again keeps nothing evicted", (_label, warm) => {
+        const ids = seedTurns(120);
+        if (warm) expect(liveTurns()).toEqual(ids);
+
+        service.setAuditMaxRecords(60);
+        expect(persistedTurns()).toEqual(ids.slice(-60));
+        expect(liveTurns()).toEqual(ids.slice(-60));
+
+        service.setAuditMaxRecords(1000);
+        expect(liveTurns()).toEqual(ids.slice(-60));
+        expect(persistedTurns()).toEqual(ids.slice(-60));
+      });
+
+      it("keeps a cold ring to the limit it was kept with when the first change raises it", () => {
+        // Left over from a build whose setter never trimmed this ring.
+        storeState.mcpServer.auditMaxRecords = 100;
+        const ids = seedTurns(120);
+
+        service.setAuditMaxRecords(1000);
+
+        expect(liveTurns()).toEqual(ids.slice(-100));
+        expect(persistedTurns()).toEqual(ids.slice(-100));
+      });
+    });
+
     it("getAuditDiagnostics reads the owned ring passively, before the server starts (#12508)", () => {
       const audit = service._auditService;
       const append = (toolId: string, tier: "core" | "external") =>

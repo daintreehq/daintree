@@ -1,7 +1,7 @@
-import { useWaitingTerminals } from "@/hooks/useTerminalSelectors";
 import { usePluginAttentionWaitingRows } from "@/hooks/usePluginPanelAttentionRows";
 import { compareWaitingAttention } from "@shared/utils/waitingReasonDisplay";
 import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
+import { ATTENTION_FILTER_BANDS } from "@/lib/fleetAttention";
 import { AGENT_BUCKET_LABEL } from "@/lib/agentStateVocabulary";
 import { AgentStatusContainer, type AgentStatusConfig } from "./AgentStatusContainer";
 
@@ -10,6 +10,7 @@ import { AgentStatusContainer, type AgentStatusConfig } from "./AgentStatusConta
 // for input" claimed more than the tray knows.
 const WAITING_CONFIG: AgentStatusConfig = {
   kind: "waiting",
+  bands: ATTENTION_FILTER_BANDS,
   label: AGENT_BUCKET_LABEL.attention,
   Icon: STATE_ICONS.waiting,
   iconClassName: STATE_COLORS.waiting,
@@ -28,14 +29,6 @@ interface WaitingContainerProps {
 }
 
 export function WaitingContainer({ compact = false }: WaitingContainerProps) {
-  const terminals = useWaitingTerminals();
   const pluginRows = usePluginAttentionWaitingRows();
-  return (
-    <AgentStatusContainer
-      terminals={terminals}
-      pluginRows={pluginRows}
-      config={WAITING_CONFIG}
-      compact={compact}
-    />
-  );
+  return <AgentStatusContainer pluginRows={pluginRows} config={WAITING_CONFIG} compact={compact} />;
 }

@@ -1,5 +1,7 @@
 import type {
   CIStatusState,
+  Deployment,
+  DeploymentState,
   ForgeLabel,
   ForgeNumberReference,
   ForgeUser,
@@ -650,4 +652,71 @@ export function mapPRGraphQLStates(state: ListOptions["state"]): string[] {
   if (state === "closed") return ["CLOSED", "MERGED"];
   if (state === "all") return ["OPEN", "CLOSED", "MERGED"];
   return ["OPEN"];
+}
+
+const GITHUB_DEPLOYMENT_STATES: ReadonlyMap<string, DeploymentState> = new Map([
+  ["QUEUED", "pending"],
+  ["PENDING", "pending"],
+  ["WAITING", "pending"],
+  ["IN_PROGRESS", "in_progress"],
+  ["ACTIVE", "success"],
+  ["SUCCESS", "success"],
+  ["FAILURE", "failure"],
+  ["ERROR", "failure"],
+  ["INACTIVE", "inactive"],
+  ["DESTROYED", "inactive"],
+  ["ABANDONED", "inactive"],
+]);
+
+/**
+ * Normalize one GraphQL `Deployment` node, or `null` when it lacks what a
+ * deployment can't be reported without: an id, an environment, a creation time.
+ *
+ * The deployment's own `state` wins over its latest status: GitHub moves a
+ * superseded or destroyed deployment to `INACTIVE`/`DESTROYED` without a newer
+ * status, so the status alone would still read as a live success. The URL is
+ * only ever the latest status's `environmentUrl`.
+ */
+export function mapGitHubDeployment(node: unknown): Deployment | null {
+  if (!isRecord(node)) return null;
+  const { id, environment, commitOid, ref } = node;
+  if (typeof id !== "string" || !id) return null;
+  if (typeof environment !== "string" || !environment.trim()) return null;
+  const createdAt = isoToMsOrNull(node.createdAt);
+  if (createdAt === null) return null;
+
+  const status = isRecord(node.latestStatus) ? node.latestStatus : null;
+  const rawState =
+    typeof node.state === "string"
+      ? node.state
+      : typeof status?.state === "string"
+        ? status.state
+        : "";
+  const state = GITHUB_DEPLOYMENT_STATES.get(rawState) ?? "unknown";
+  const updatedAt = Math.max(
+    createdAt,
+    isoToMsOrNull(node.updatedAt) ?? 0,
+    isoToMsOrNull(status?.createdAt) ?? 0,
+    isoToMsOrNull(status?.updatedAt) ?? 0
+  );
+  const url =
+    typeof status?.environmentUrl === "string" && status.environmentUrl.trim()
+      ? status.environmentUrl
+      : undefined;
+  const qualifiedRef =
+    isRecord(ref) && typeof ref.name === "string" && ref.name
+      ? `${typeof ref.prefix === "string" ? ref.prefix : ""}${ref.name}`
+      : undefined;
+
+  return {
+    id,
+    environment,
+    state,
+    ...(url ? { url } : {}),
+    createdAt,
+    updatedAt,
+    ...(typeof commitOid === "string" && commitOid ? { commitSha: commitOid } : {}),
+    ...(qualifiedRef ? { ref: qualifiedRef } : {}),
+    rawData: node,
+  };
 }

@@ -4,7 +4,7 @@ import { buildPluginViewDiagnostics } from "@/components/Plugin/buildPluginViewD
 import { Button } from "@/components/ui/button";
 import { StackLines } from "@/components/ErrorBoundary/StackLines";
 import { actionService } from "@/services/ActionService";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
 import { PathSegments } from "@/components/ui/PathSegments";
@@ -72,7 +72,6 @@ export function PluginViewDiagnosticsFallback({
   onRequestClose,
   requestCloseLabel = "Close panel",
 }: PluginViewDiagnosticsFallbackProps) {
-  const { copied, copy } = useCopyWithFeedback({ announcement: "Diagnostics copied" });
   // Only a refusal the document runtime itself issued is unrecoverable by a
   // remount; an unrelated render error in the same plugin keeps its retry.
   const needsDocumentReload = pluginDocumentRuntime.errorSource(error) !== undefined;
@@ -115,10 +114,6 @@ export function PluginViewDiagnosticsFallback({
     announcedRef.current = true;
     useAnnouncerStore.getState().announce(`${panelName} stopped working`, "polite");
   }, [panelName]);
-
-  const handleCopy = useCallback(() => {
-    void copy(report);
-  }, [copy, report]);
 
   const handleReloadWindow = useCallback(() => {
     void actionService.dispatch("plugin.reloadWindow", undefined, { source: "user" });
@@ -204,16 +199,14 @@ export function PluginViewDiagnosticsFallback({
                 {requestCloseLabel}
               </Button>
             )}
-            <Button
-              type="button"
+            <CopyButton
+              label="Copy diagnostics"
               variant="ghost"
               size="sm"
-              onClick={handleCopy}
-              aria-label="Copy diagnostics"
+              text={report}
+              announcement="Diagnostics copied"
               data-testid="plugin-view-diagnostics-copy"
-            >
-              {copied ? "Copied" : "Copy diagnostics"}
-            </Button>
+            />
             <Button
               type="button"
               variant="ghost"

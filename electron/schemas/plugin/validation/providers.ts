@@ -165,12 +165,26 @@ export function validateContextProviders(
 
 // `forgeProvider.settingsScopeRef` → a declared setting; `viewRefs[]` →
 // declared views. Both were validated for shape only before (#10620).
+// `fileDecorationProviders[].forgeProvider` → one of this plugin's own forge
+// providers: a gate naming none would keep the decorator asleep everywhere.
 export function validateForgeProviderRefs(
   manifest: ParsedPluginManifest,
   ctx: z.RefinementCtx,
   context: ManifestValidationContext
 ): void {
   const { settingIds, viewIds } = context;
+  const forgeProviderIds = new Set(manifest.contributes.forgeProviders.map((p) => p.id));
+  manifest.contributes.fileDecorationProviders.forEach((decorator, index) => {
+    if (decorator.forgeProvider === undefined || forgeProviderIds.has(decorator.forgeProvider)) {
+      return;
+    }
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["contributes", "fileDecorationProviders", index, "forgeProvider"],
+      message: `fileDecorationProvider forgeProvider "${decorator.forgeProvider}" matches no contributes.forgeProviders[].id.`,
+      params: { errorCode: "file_decoration_forge_provider_unknown" },
+    });
+  });
   manifest.contributes.forgeProviders.forEach((provider, index) => {
     if (provider.settingsScopeRef !== undefined && !settingIds.has(provider.settingsScopeRef)) {
       ctx.addIssue({
@@ -179,6 +193,22 @@ export function validateForgeProviderRefs(
         message: `forgeProvider settingsScopeRef "${provider.settingsScopeRef}" matches no contributes.settings[].id.`,
         params: { errorCode: "forge_settings_scope_ref_unknown" },
       });
+    }
+    if (provider.matchesSettingRef !== undefined) {
+      // The host reads this setting to route remotes before the plugin runs,
+      // and routing is the same for every project: only a plain user-scoped
+      // string can name a hostname there.
+      const setting = manifest.contributes.settings.find(
+        (s) => s.id === provider.matchesSettingRef
+      );
+      if (!setting || (setting.type ?? "string") !== "string" || setting.scope !== "user") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "forgeProviders", index, "matchesSettingRef"],
+          message: `forgeProvider matchesSettingRef "${provider.matchesSettingRef}" must name a user-scoped string setting in contributes.settings.`,
+          params: { errorCode: "forge_matches_setting_ref_invalid" },
+        });
+      }
     }
     provider.viewRefs?.forEach((ref, refIndex) => {
       if (!viewIds.has(ref)) {

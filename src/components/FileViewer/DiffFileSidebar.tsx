@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { shouldVirtualizeFileList } from "@/lib/fileListWindowing";
-import { basename, dirname, join } from "@shared/utils/path";
+import { basename, join } from "@shared/utils/path";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { PathTail } from "@/components/ui/PathTail";
@@ -22,9 +22,15 @@ import {
 } from "@/hooks/useFileRowMenuItems";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
+import { useAriaKeyshortcuts } from "@/hooks/useKeybinding";
 import { LIST_DETAIL_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { DIFF_STATUS_CONFIG, formatDiffDir, summarizeChangeSet } from "./diffChangeSet";
-import type { DiffChangeSetEntry } from "./diffChangeSet";
+import {
+  DIFF_STATUS_CONFIG,
+  formatDiffDir,
+  groupDiffChangeSet,
+  summarizeChangeSet,
+} from "./diffChangeSet";
+import type { DiffChangeSetEntry, IndexedDiffEntry } from "./diffChangeSet";
 import { pluralize } from "@/lib/pluralize";
 
 export interface DiffFileSidebarProps {
@@ -43,16 +49,13 @@ export interface DiffFileSidebarProps {
    * `Discard changes` and `Trash file`.
    */
   statusIsLocal?: boolean;
+  /**
+   * The filter box's text. Held by the pane, whose file stepper walks the same
+   * filtered order the shelf shows.
+   */
+  filter: string;
+  onFilterChange: (filter: string) => void;
   onSelect: (index: number) => void;
-}
-
-interface IndexedEntry extends DiffChangeSetEntry {
-  index: number;
-}
-
-interface DirGroup {
-  dir: string;
-  files: IndexedEntry[];
 }
 
 /** Per-row inputs, shared by the static and windowed paths so they cannot drift. */
@@ -64,6 +67,8 @@ interface ShelfRowContext {
   statusIsLocal: boolean;
   onSelect: (index: number) => void;
   toggleViewed: (worktreePath: string, viewedKey: string) => void;
+  /** The Viewed shortcut for `aria-keyshortcuts`; undefined while it is unbound. */
+  viewedShortcut: string | undefined;
   renderFileRowMenuItems: ReturnType<typeof useFileRowMenuItems>["renderItems"];
   tabStopKey: string | null;
   onRowFocus: UseRovingRowsResult["onRowFocus"];
@@ -79,7 +84,7 @@ interface ShelfRowContext {
  * that coordinate system, and windowing must not quietly swap it for the
  * display index.
  */
-function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext }) {
+function DiffShelfRow({ file, ctx }: { file: IndexedDiffEntry; ctx: ShelfRowContext }) {
   const config = DIFF_STATUS_CONFIG[file.status] ?? DIFF_STATUS_CONFIG.untracked;
   const viewed = ctx.viewedSet.has(file.viewedKey);
   const isCurrent = file.index === ctx.currentIndex;
@@ -119,22 +124,14 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
         ref={ctx.rowRef(rowKey)}
         // One tab stop for the whole shelf; the arrow keys move it.
         tabIndex={isTabStop ? 0 : -1}
-        aria-keyshortcuts="V"
+        // The viewed box is out of the tab order with every other control in the
+        // row, so its key is advertised here. The key itself is the diff
+        // viewer's Viewed action, which marks the row holding focus (found by
+        // its `data-file-index`) rather than the open file.
+        aria-keyshortcuts={ctx.viewedShortcut}
         // The viewed box is out of the tab order, so its state rides here.
         aria-description={viewed ? "Viewed" : undefined}
         onKeyDown={(event) => {
-          // The viewed box is out of the tab order with every other control in
-          // the row, so its key lives on the row's own button.
-          if (
-            event.key.toLowerCase() === "v" &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.altKey
-          ) {
-            event.preventDefault();
-            ctx.toggleViewed(ctx.worktreePath, file.viewedKey);
-            return;
-          }
           if (!ctx.hasRowMenu || !isFileRowMenuKey(event)) return;
           // Anchored to the whole row, not this button: the menu
           // targets the file, and the row is what lifts to show
@@ -149,14 +146,22 @@ function DiffShelfRow({ file, ctx }: { file: IndexedEntry; ctx: ShelfRowContext 
         data-testid="diff-sidebar-file"
       >
         <span className={cn("w-4 shrink-0 font-bold", config.color)}>{config.label}</span>
-        <span
-          className={cn(
-            "truncate font-medium",
-            viewed ? "text-text-secondary" : "text-text-primary"
-          )}
+        <TruncatedTooltip
+          content={file.path}
+          side="bottom"
+          align="start"
+          contentClassName="break-words"
+          focusable={false}
         >
-          {basename(file.path)}
-        </span>
+          <span
+            className={cn(
+              "truncate font-medium",
+              viewed ? "text-text-secondary" : "text-text-primary"
+            )}
+          >
+            {basename(file.path)}
+          </span>
+        </TruncatedTooltip>
         <DiffStat
           insertions={file.insertions}
           deletions={file.deletions}
@@ -257,9 +262,10 @@ export function DiffFileSidebar({
   worktreePath,
   worktreeId = null,
   statusIsLocal = true,
+  filter,
+  onFilterChange,
   onSelect,
 }: DiffFileSidebarProps) {
-  const [filter, setFilter] = useState("");
   // The one file-row menu, shared with the worktree card, the file browser and
   // the Review Hub (#11757). Built once for the list, rendered per row.
   const { renderItems: renderFileRowMenuItems } = useFileRowMenuItems({
@@ -275,6 +281,7 @@ export function DiffFileSidebar({
     useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
   );
   const toggleViewed = useDiffViewedStore((state) => state.toggleViewed);
+  const viewedShortcut = useAriaKeyshortcuts("diff.toggleViewed");
 
   const summary = useMemo(() => summarizeChangeSet(files), [files]);
   const viewedCount = useMemo(
@@ -282,25 +289,7 @@ export function DiffFileSidebar({
     [files, viewedSet]
   );
 
-  const groups = useMemo((): DirGroup[] => {
-    const query = filter.trim().toLowerCase();
-    const grouped = new Map<string, IndexedEntry[]>();
-    files.forEach((file, index) => {
-      if (query && !file.path.toLowerCase().includes(query)) return;
-      const dir = dirname(file.path);
-      const key = !dir || dir === "." ? "" : dir;
-      const bucket = grouped.get(key);
-      if (bucket) bucket.push({ ...file, index });
-      else grouped.set(key, [{ ...file, index }]);
-    });
-    return Array.from(grouped.entries())
-      .map(([dir, groupFiles]) => ({ dir, files: groupFiles }))
-      .sort((a, b) => {
-        if (a.dir === "") return -1;
-        if (b.dir === "") return 1;
-        return a.dir.localeCompare(b.dir);
-      });
-  }, [files, filter]);
+  const groups = useMemo(() => groupDiffChangeSet(files, filter), [files, filter]);
 
   const visibleCount = useMemo(
     () => groups.reduce((count, group) => count + group.files.length, 0),
@@ -312,7 +301,7 @@ export function DiffFileSidebar({
   // is the bridge back — reveal speaks slot order, everything else (the open
   // file, `onSelect`, `aria-current`) speaks the original changeset's order.
   const flat = useMemo(() => {
-    const entries: IndexedEntry[] = [];
+    const entries: IndexedDiffEntry[] = [];
     const counts: number[] = [];
     const dirs: string[] = [];
     // `itemContent` is the odd one out: it is called with the file-only index,
@@ -376,6 +365,7 @@ export function DiffFileSidebar({
       statusIsLocal,
       onSelect,
       toggleViewed,
+      viewedShortcut,
       renderFileRowMenuItems,
       tabStopKey,
       onRowFocus,
@@ -390,6 +380,7 @@ export function DiffFileSidebar({
       statusIsLocal,
       onSelect,
       toggleViewed,
+      viewedShortcut,
       renderFileRowMenuItems,
       tabStopKey,
       onRowFocus,
@@ -446,7 +437,7 @@ export function DiffFileSidebar({
           />
         </div>
         <div className="mt-1" data-testid="diff-sidebar-progress">
-          <span className="text-2xs text-text-secondary">
+          <span className="text-2xs text-text-secondary tabular-nums">
             {viewedCount} of {files.length} viewed
           </span>
           {/* The track only appears once review has started — an empty
@@ -467,8 +458,8 @@ export function DiffFileSidebar({
         <SearchField
           size="compact"
           value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-          onClear={() => setFilter("")}
+          onChange={(event) => onFilterChange(event.target.value)}
+          onClear={() => onFilterChange("")}
           clearLabel="Clear file filter"
           placeholder="Filter files"
           aria-label="Filter files"
@@ -493,7 +484,7 @@ export function DiffFileSidebar({
             scale="sidebar"
             title="No files match the filter"
             action={
-              <Button variant="subtle" size="sm" onClick={() => setFilter("")}>
+              <Button variant="subtle" size="sm" onClick={() => onFilterChange("")}>
                 Clear filter
               </Button>
             }

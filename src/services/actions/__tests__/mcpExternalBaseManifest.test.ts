@@ -112,6 +112,7 @@ const VIEW_DEPENDENT_FIELDS = [
   "disabledReason",
   "paletteHidden",
   "paletteRedirectTo",
+  "paletteDescription",
   "paletteDisabled",
   "paletteDisabledReason",
 ] as const;

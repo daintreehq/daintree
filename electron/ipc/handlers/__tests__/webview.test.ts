@@ -113,7 +113,10 @@ import { registerWebviewHandlers } from "../webview.js";
 import { __resetCdpLeasesForTests } from "../../../services/cdp/WebContentsCdpService.js";
 import { sendToRenderer, broadcastToRenderer } from "../../utils.js";
 import type { HandlerDependencies } from "../../types.js";
-import { MAX_CONSOLE_ROWS } from "../../../../shared/config/devPreviewConsole.js";
+import {
+  MAX_CONSOLE_ROWS,
+  MAX_LIVE_OBJECT_ROWS,
+} from "../../../../shared/config/devPreviewConsole.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const deps: HandlerDependencies = { mainWindow: mainWindowMock as any };
@@ -203,14 +206,34 @@ describe("registerWebviewHandlers", () => {
     });
   });
 
-  it("sends active state when frozen=false", async () => {
+  it("sends active state when frozen=false to a guest it froze", async () => {
     cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
+    await handler(null, 42, true);
+    debuggerMock.sendCommand.mockClear();
     await handler(null, 42, false);
 
     expect(debuggerMock.sendCommand).toHaveBeenCalledWith("Page.setWebLifecycleState", {
       state: "active",
     });
+  });
+
+  it("sends nothing when frozen=false reaches a guest never frozen (#17036)", async () => {
+    const freshDebugger = {
+      isAttached: vi.fn(() => false),
+      attach: vi.fn(),
+      sendCommand: vi.fn(() => Promise.resolve()),
+    };
+    webContentsMock.fromId.mockReturnValueOnce({
+      ...mockWebContents,
+      debugger: freshDebugger as unknown as typeof debuggerMock,
+    });
+    cleanup = registerWebviewHandlers(deps);
+    const handler = getHandler("webview:set-lifecycle-state");
+    await handler(null, 42, false);
+
+    expect(freshDebugger.attach).not.toHaveBeenCalled();
+    expect(freshDebugger.sendCommand).not.toHaveBeenCalled();
   });
 
   it("returns early if webContents not found", async () => {
@@ -1237,22 +1260,178 @@ describe("registerWebviewHandlers", () => {
         .map((call) => (call[1] as { objectId: string }).objectId);
     }
 
-    it("releases handles for rows evicted past the renderer's row cap", async () => {
-      cleanup = registerWebviewHandlers(deps);
-      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
-      const listener = getMessageListener();
-
-      for (let i = 0; i < MAX_CONSOLE_ROWS + 2; i++) {
+    function emitObjects(listener: ReturnType<typeof getMessageListener>, ids: string[]) {
+      for (const objectId of ids) {
         listener({}, "Runtime.consoleAPICalled", {
           type: "log",
-          args: [{ type: "object", objectId: `obj-${i}`, className: "Object" }],
-          timestamp: 1000 + i,
+          args: [{ type: "object", objectId, className: "Object" }],
+          timestamp: 1000,
         });
       }
+    }
 
-      // The two oldest rows fell off the cap; everything still on screen keeps
-      // its handle.
+    function lastRowId(): number {
+      const sent = embedderMock.send.mock.calls.filter(
+        ([channel]: string[]) => channel === "webview:console-message"
+      );
+      return (sent[sent.length - 1][1] as { id: number }).id;
+    }
+
+    it("releases a row's handles as it ages out of the live window (#17067)", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      const ids = Array.from({ length: MAX_LIVE_OBJECT_ROWS + 2 }, (_, i) => `obj-${i}`);
+
+      emitObjects(getMessageListener(), ids);
+
+      // Only the two rows pushed out of the window let go of their objects;
+      // the rows themselves stay on screen as previews.
       expect(releasedIds()).toEqual(["obj-0", "obj-1"]);
+    });
+
+    it("never pins more than the live window, however many rows the console keeps", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      const ids = Array.from({ length: MAX_CONSOLE_ROWS + 2 }, (_, i) => `obj-${i}`);
+
+      emitObjects(getMessageListener(), ids);
+
+      // Each handle is released exactly once, when its row ages out — falling
+      // off the row cap later releases nothing twice.
+      const released = releasedIds();
+      expect(new Set(released).size).toBe(released.length);
+      expect(released).toEqual(ids.slice(0, ids.length - MAX_LIVE_OBJECT_ROWS));
+    });
+
+    it("reports a row aged out of the live window as released (#17067)", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      const rowId = await emitObjectRow("pane-1", "aged-obj");
+      emitObjects(
+        getMessageListener(),
+        Array.from({ length: MAX_LIVE_OBJECT_ROWS }, (_, i) => `newer-${i}`)
+      );
+
+      debuggerMock.sendCommand.mockClear();
+      const result = await getHandler("webview:get-console-properties")(
+        null,
+        42,
+        "pane-1",
+        rowId,
+        "aged-obj"
+      );
+
+      expect(result).toEqual({ properties: [], released: true });
+      expect(debuggerMock.sendCommand).not.toHaveBeenCalledWith(
+        "Runtime.getProperties",
+        expect.anything()
+      );
+    });
+
+    it("keeps an expanded row's handles past the live window until it leaves the row cap", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      const rowId = await emitObjectRow("pane-1", "inspected-obj");
+      debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+        if (cmd === "Runtime.getProperties") {
+          return Promise.resolve({
+            result: [
+              {
+                name: "nested",
+                value: { type: "object", objectId: "nested-obj", className: "Object" },
+                enumerable: true,
+              },
+            ],
+          });
+        }
+        return Promise.resolve();
+      });
+      await getHandler("webview:get-console-properties")(
+        null,
+        42,
+        "pane-1",
+        rowId,
+        "inspected-obj"
+      );
+      const listener = getMessageListener();
+
+      emitObjects(
+        listener,
+        Array.from({ length: MAX_LIVE_OBJECT_ROWS + 5 }, (_, i) => `newer-${i}`)
+      );
+      expect(releasedIds()).not.toContain("inspected-obj");
+      debuggerMock.sendCommand.mockClear();
+      await getHandler("webview:get-console-properties")(null, 42, "pane-1", rowId, "nested-obj");
+      expect(debuggerMock.sendCommand).toHaveBeenCalledWith(
+        "Runtime.getProperties",
+        expect.objectContaining({ objectId: "nested-obj" })
+      );
+
+      // The rest of the cap fills behind it, which takes the row off screen.
+      emitObjects(
+        listener,
+        Array.from({ length: MAX_CONSOLE_ROWS }, (_, i) => `filler-${i}`)
+      );
+      expect(releasedIds()).toContain("inspected-obj");
+      expect(releasedIds()).toContain("nested-obj");
+    });
+
+    it("keeps a handle another pane on the guest still holds (#17067)", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      const start = getHandler("webview:start-console-capture");
+      await start(null, 42, "pane-1");
+      await start(null, 42, "pane-2");
+      const listener = getMessageListener();
+      emitObjects(listener, ["shared-obj"]);
+      const rows = embedderMock.send.mock.calls
+        .filter(([channel]: string[]) => channel === "webview:console-message")
+        .map((call) => call[1] as { id: number; paneId: string });
+      const pane2Row = rows.find((row) => row.paneId === "pane-2")!.id;
+      debuggerMock.sendCommand.mockImplementation((cmd: string) =>
+        Promise.resolve(cmd === "Runtime.getProperties" ? { result: [] } : undefined)
+      );
+      await getHandler("webview:get-console-properties")(
+        null,
+        42,
+        "pane-2",
+        pane2Row,
+        "shared-obj"
+      );
+
+      // Both panes age the row out; only pane-1 lets go of it.
+      emitObjects(
+        listener,
+        Array.from({ length: MAX_LIVE_OBJECT_ROWS }, (_, i) => `newer-${i}`)
+      );
+
+      expect(releasedIds()).not.toContain("shared-obj");
+      // A handle neither pane holds any more still goes.
+      emitObjects(listener, ["one-more"]);
+      expect(releasedIds()).toContain("newer-0");
+    });
+
+    it("records nothing for a pane whose capture is stopping (#17067)", async () => {
+      cleanup = registerWebviewHandlers(deps);
+      await emitObjectRow("pane-1", "first-obj");
+      const listener = getMessageListener();
+      let finishRelease: () => void = () => {};
+      debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+        if (cmd === "Runtime.releaseObject") {
+          return new Promise<void>((resolve) => {
+            finishRelease = resolve;
+          });
+        }
+        return Promise.resolve();
+      });
+      const rowsBefore = lastRowId();
+
+      const stopping = getHandler("webview:stop-console-capture")(null, 42, "pane-1");
+      await vi.waitFor(() => expect(releasedIds()).toContain("first-obj"));
+      emitObjects(listener, ["late-obj"]);
+      finishRelease();
+      await stopping;
+
+      // A row logged while the release was in flight would be recorded into a
+      // ledger nothing releases any more.
+      expect(lastRowId()).toBe(rowsBefore);
     });
 
     it("attributes nested handles from an expansion to the row that owns them", async () => {
@@ -1336,8 +1515,9 @@ describe("registerWebviewHandlers", () => {
 
       emit("old-obj", 1000);
       // Rows carrying no handles still occupy renderer rows, so they have to
-      // count toward the cap or eviction drifts out of step with the store.
-      for (let i = 0; i < MAX_CONSOLE_ROWS - 1; i++) {
+      // count toward the live window or release drifts out of step with the
+      // store.
+      for (let i = 0; i < MAX_LIVE_OBJECT_ROWS - 1; i++) {
         listener({}, "Runtime.consoleAPICalled", {
           type: "log",
           args: [{ type: "string", value: `filler-${i}` }],
@@ -1346,7 +1526,7 @@ describe("registerWebviewHandlers", () => {
       }
       emit("kept-obj", 9000);
 
-      // Exactly one row past the cap, so only the oldest is released.
+      // Exactly one row past the window, so only the oldest is released.
       expect(releasedIds()).toEqual(["old-obj"]);
     });
 
@@ -1416,7 +1596,9 @@ describe("registerWebviewHandlers", () => {
         "root-obj"
       );
 
-      expect(result).toEqual({ properties: [] });
+      // Flagged, so the renderer stops offering an expansion that can only
+      // come back empty.
+      expect(result).toEqual({ properties: [], released: true });
       expect(debuggerMock.sendCommand).not.toHaveBeenCalledWith(
         "Runtime.getProperties",
         expect.anything()

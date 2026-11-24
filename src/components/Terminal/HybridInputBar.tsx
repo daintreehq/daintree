@@ -50,6 +50,12 @@ import { PromptTemplateForm } from "@/components/Commands/PromptTemplateForm";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
+import {
+  claimPromptHistory,
+  followPromptHistoryHost,
+  returnPromptHistoryToGrid,
+  usePromptHistoryOwnerStore,
+} from "@/store/promptHistoryOwnerStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { usePromptTemplates } from "@/hooks/usePromptTemplates";
 import { actionService } from "@/services/ActionService";
@@ -62,13 +68,14 @@ import type {
   VoiceRecordingTarget,
   VoiceScratchRefusal,
 } from "@/store/voiceRecordingStore";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectIsLocalFleetComposing, useFleetArmingStore } from "@/store/fleetArmingStore";
 
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { DictationCancelConfirmOverlay, useDictationCancelConfirm } from "./DictationCancelConfirm";
 import { DICTATION_CANCEL_CONFIRM_PROMPT } from "@/lib/pressAgain";
 import { DictionaryLearnPrompt } from "./DictionaryLearnPrompt";
+import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { Archive, X } from "lucide-react";
 import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -80,6 +87,7 @@ import {
   COMPOSER_CONTROL_FOCUS_CLASS,
   COMPOSER_CONTROL_HOVER_BG_CLASS,
   COMPOSER_CONTROL_TEXT_CLASS,
+  COMPOSER_MARKER_HOVER_CLASS,
   COMPOSER_MARKER_TEXT_CLASS,
 } from "./composerControlStyles";
 import {
@@ -98,7 +106,7 @@ import {
   type VoiceSubmitWaitKeys,
 } from "./VoiceSubmitProgress";
 import { useKeyLabels } from "@/lib/keyboardLayout";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { getLoadedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import {
   registerInputController,
   selectHomeFocusTarget,
@@ -308,9 +316,24 @@ export interface HybridInputBarProps {
    * that host's id. Nothing of this machine's — a file, an image, a path from
    * completion, a diff or a screen expanded at send — is offered or sent,
    * since it would name something that isn't there; text is typed as text.
-   * Its draft and history are that host's, apart from this one's.
+   * Its draft is that host's, apart from this one's, and no prompt history
+   * is offered or kept for it.
    */
   otherHostId?: string;
+  /**
+   * The project whose prompt history this composer records into and offers
+   * first. A grid pane's, and the Assistant's, is the window's project; an
+   * isolated composer keeps none unless given one (Canopy's reply: the run's
+   * project), since its draft scope is no project's.
+   */
+  historyProjectId?: string;
+  /**
+   * A composer outside the grid that isn't `isolated` (the Project
+   * Assistant's), while it is on screen: prompt history serves it once focus
+   * lands in its host (`PROMPT_HISTORY_HOST_ATTR`), not by the grid's focused
+   * pane. An isolated composer always works this way.
+   */
+  ownsHistoryByFocus?: boolean;
   /**
    * Sends the composer's text and says whether the terminal took it, in place
    * of the fire-and-forget `onSend`: the draft is cleared and kept in history
@@ -378,6 +401,8 @@ interface LatestState {
   uploadSurface: string;
   modEnterSend?: () => ComposerSendRoute;
   altChords?: readonly string[];
+  /** The action of the note at the menu's foot, while one shows. */
+  autocompleteNoteAction?: () => void;
 }
 
 interface HybridInputE2EController {
@@ -453,6 +478,9 @@ const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
 /** A file left out of the templates folder would otherwise just be absent from the menu. */
 const TEMPLATE_PROBLEMS_NOTE = {
   text: "Some prompt templates weren't loaded. See why in Settings > CLI agents",
+  // Bound in the composer's keymap by the physical comma key: focus stays in
+  // the editor while the menu is open, so the note itself is never a tab stop.
+  shortcut: "Cmd+Shift+,",
   onClick: () => {
     void actionService.dispatch(
       "app.settings.openTab",
@@ -472,6 +500,25 @@ function standingVoiceNote(voiceId: string): VoiceScratchRefusal | VoiceFileRefe
 }
 
 /**
+ * Whether a send went through, a send that threw counting as refused. Kept out
+ * of the component: a try/catch holding a conditional bails React Compiler for
+ * all of `HybridInputBar`.
+ */
+async function sendAccepted(
+  submit: (outgoing: string, submissionToken?: string) => Promise<boolean>,
+  outgoing: string,
+  submissionToken: string | undefined
+): Promise<boolean> {
+  try {
+    return await (submissionToken === undefined
+      ? submit(outgoing)
+      : submit(outgoing, submissionToken));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether the editor holds the caret, judged by the DOM rather than by
  * `view.hasFocus` — CodeMirror reports false there whenever the window is
  * blurred, even though the editor is still `document.activeElement`.
@@ -485,9 +532,20 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  * Editor. Shared so the two drop targets cannot drift apart again (#12570).
  */
 const SEND_HELD_STATUS = "Not sent. The draft is still here.";
+/** The `❯`'s box: as wide as the glyph, as tall as the controls (#15309). */
+const COMPOSER_MARKER_CLASS = cn(
+  "ml-2 flex h-6 shrink-0 select-none items-center font-mono text-xs font-semibold leading-5",
+  COMPOSER_MARKER_TEXT_CLASS
+);
+/** Mod+R in the editor keymap (`inputEditorExtensions/base.ts`); not a rebindable action. */
+const PROMPT_HISTORY_SHORTCUT = "Cmd+R";
 /** The `❯` and trailing controls of an unavailable composer: inactive, one family. */
 const DISABLED_CONTROL_MIX = "45%";
 const DISABLED_CONTROL_INK = "color-mix(in oklab, var(--ib-fg) 45%, var(--ib-bg))";
+
+/** The band's side inset, which the shell and every strip above it share. */
+const COMPOSER_BAND_RAIL = "px-3.5";
+
 const SPOKEN_SEND_TOO_SHORT_CAPTION = "Too short to send by voice · Enter to send";
 const NO_DIFF_NOTES_CAPTION = "Not sent · No notes to send";
 const NO_DIFF_NOTES_STATUS = "Not sent: there are no diff notes to send. The draft is still here.";
@@ -560,6 +618,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       className,
       isolated = false,
       otherHostId,
+      historyProjectId: historyProjectIdProp,
+      ownsHistoryByFocus = false,
       submitText,
       selected,
       voiceTarget,
@@ -580,16 +640,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const resetHistoryIndex = useTerminalInputStore((s) => s.resetHistoryIndex);
     const currentProjectId = useProjectStore((s) => s.currentProject?.id);
     // An isolated composer types to a terminal that may live in another
-    // project, beside that terminal's own composer: its draft and history are
+    // project, beside that terminal's own composer: its draft and recall are
     // its own, so neither leaks into the pane's (or, through it, the fleet's).
+    // The prompts it sends still belong to a project's history.
     const projectId = isolated ? isolatedComposerScope(otherHostId) : currentProjectId;
+    const historyProjectId = thisMachineOff
+      ? undefined
+      : (historyProjectIdProp ?? (isolated ? undefined : currentProjectId));
     const draftKey = makeDraftKey(terminalId, projectId);
     // Where dictation into this composer is kept: the pane's own by terminal,
     // a reply's by its own id, which names the same draft with no project.
     const voiceId = voiceTarget?.panelId ?? terminalId;
     const voiceProjectId = voiceTarget ? voiceTarget.projectId : projectId;
+    const learnPromptShown = useDictionaryLearnPromptStore((s) => s.prompts.has(voiceId));
     const draftKeyRef = useRef(draftKey);
-    useEffect(() => {
+    // Before the editor factory's layout effect, which builds a tab's editor
+    // over the draft this names.
+    useLayoutEffect(() => {
       draftKeyRef.current = draftKey;
     }, [draftKey]);
     const isInHistoryMode = useTerminalInputStore((s) => {
@@ -608,6 +675,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // down (`shellVars`).
     const showSelectedChrome = !disabled && (selected ?? (isFocusedTerminal && !isAssistantActive));
     const canopyOpen = useCanopyStore((s) => s.isOpen);
+    // Outside the grid, prompt history serves whichever composer's host focus
+    // last landed in; in it, the focused pane's, while none outside has it.
+    const historyByFocus = isolated || ownsHistoryByFocus;
+    const historyToken = useId();
+    const holdsHistory = usePromptHistoryOwnerStore((s) =>
+      historyByFocus ? s.owner === historyToken : s.owner === null && isFocusedTerminal
+    );
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
@@ -620,6 +694,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const editorViewRef = useRef<EditorView | null>(null);
     const [isExpanded, setIsExpanded] = useState(false);
     const modalEditorHostRef = useRef<HTMLDivElement | null>(null);
+    const [modalFrameEl, setModalFrameEl] = useState<HTMLDivElement | null>(null);
     const compactEditorHostRef = useRef<HTMLDivElement | null>(null);
     // Absolute path the current selection resolves to, captured on right-click.
     // Gates the "View file" / reveal context-menu section.
@@ -642,6 +717,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const focusGenerationRef = useRef(0);
     const [activeCompletionContext, setActiveCompletionContext] =
       useState<ActiveCompletionContext | null>(null);
+    // The editor changes hosts with the Expanded Editor: a menu open across
+    // the move would be placed against the host it left.
+    const [completionHostExpanded, setCompletionHostExpanded] = useState(isExpanded);
+    if (completionHostExpanded !== isExpanded) {
+      setCompletionHostExpanded(isExpanded);
+      setActiveCompletionContext(null);
+    }
 
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
@@ -793,16 +875,23 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // then fires the pending dragleave at the detached node, which React never
     // sees, so the depth the body accumulated would pin the overlay on the
     // compact bar. Stable identity, or every re-render would detach and reset.
-    const releaseModalDropTarget = useCallback(
+    // The completion menu sits in the same frame, and is placed against it.
+    const attachModalFrame = useCallback(
       (node: HTMLDivElement | null) => {
+        setModalFrameEl(node);
         if (!node) resetDragState();
       },
       [resetDragState]
     );
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
     const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd, uploadSurface);
-    // Held back for this composer's draft, so gone with the composer.
-    useEffect(() => () => void takeHeldBackAttachments(uploadSurface), [uploadSurface]);
+    // A pane's composer keeps what was held back for it through a remount, and
+    // its panel's close lets it go. An isolated one's terminal may never close
+    // as a panel here, so what was held back for it goes with it.
+    useEffect(() => {
+      if (!isolated) return;
+      return () => void takeHeldBackAttachments(uploadSurface);
+    }, [isolated, uploadSurface]);
     const addHeldBackAttachments = (attachments: readonly PreparedAttachment[]): boolean => {
       const view = editorViewRef.current;
       if (!view || !insertPreparedAttachments(view, attachments, readCwd())) return false;
@@ -919,7 +1008,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       syncedDraftRef.current = value;
     }, [terminalId, value, projectId, draftKey, setDraftInput, followsDriver, isFleetFollower]);
 
-    const { isApplyingExternalValueRef } = useFleetMirror({
+    const { isApplyingExternalValueRef, mirrorDraft } = useFleetMirror({
       editorViewRef,
       terminalId,
       projectId,
@@ -1084,6 +1173,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const promptTemplates = usePromptTemplates(currentProjectId);
     const hasTemplateProblems = useUserPromptTemplateStore((s) => s.problems.length > 0);
     const isSlashMenuOpen = isCompleting && triggerChar === "/";
+    const autocompleteNote =
+      isSlashMenuOpen && hasTemplateProblems ? TEMPLATE_PROBLEMS_NOTE : undefined;
     // A plugin attached in dev mode announces itself without a provenance event,
     // and a file saved in the templates folder doesn't announce itself at all. An
     // expanded composer keeps its menu open across a trip to another app, which is
@@ -1182,6 +1273,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         modEnterSend,
         altChords,
         uploadSurface,
+        autocompleteNoteAction: autocompleteNote?.onClick,
       };
     });
 
@@ -1195,6 +1287,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isAutocompleteOpen,
       activeCompletionContext,
       setMenuPlacement,
+      isExpanded,
+      modalFrameEl,
     });
 
     useAutocompleteState({
@@ -1202,6 +1296,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       activeCompletionContext,
       autocompleteItems,
       rootRef,
+      menuRef,
+      modalEditorHostRef,
       selectedIndex,
       setSelectedIndex,
       lastQueryRef,
@@ -1323,6 +1419,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setActiveCompletionContext,
       terminalId,
       voice: voiceTarget,
+      historyProjectId,
       cwd,
       agentId,
       expandContext: !thisMachineOff,
@@ -1530,14 +1627,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         async (outgoing: string, submissionToken?: string): Promise<boolean> => {
           const attempt = ++submitAttemptRef.current;
           setSendNote(dictated ? null : { terminalId, refused: false });
-          let accepted: boolean;
-          try {
-            accepted = await (submissionToken === undefined
-              ? submit(outgoing)
-              : submit(outgoing, submissionToken));
-          } catch {
-            accepted = false;
-          }
+          const accepted = await sendAccepted(submit, outgoing, submissionToken);
           if (!accepted && submitAttemptRef.current === attempt) {
             const retires = standingVoiceNote(voiceId);
             // A voice wait begun since this send went has taken the status over.
@@ -1621,7 +1711,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // The send takes the draft as it stands. A dictation correction still on
       // its way must not rewrite it mid-send, or land on the next draft (#14611).
       // One for words a dictated send holds back still lands on them (#14804).
-      voiceRecordingService.discardPendingCorrections(voiceId, voiceSend?.sessions);
+      getLoadedVoiceRecordingService()?.discardPendingCorrections(voiceId, voiceSend?.sessions);
       const view = departed ? null : editorViewRef.current;
       const latest = latestRef.current;
       const doc =
@@ -1646,7 +1736,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const keepDraft = split
         ? () => {
             if (editorAheadOfStore()) return;
-            const kept = voiceRecordingService.keepHeldBackDictation(split);
+            const kept = getLoadedVoiceRecordingService()?.keepHeldBackDictation(split) ?? null;
             if (kept === null) return;
             applyEditorValue(kept, {
               selection: EditorSelection.create([EditorSelection.cursor(kept.length)]),
@@ -1664,7 +1754,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ? draftUnchangedSince(readStored, readStored)
         : guardSentDraft(latest?.projectId);
       const isDraftUnchanged = split
-        ? () => unchanged() || (!editorAheadOfStore() && voiceRecordingService.holdsBackFrom(split))
+        ? () =>
+            unchanged() ||
+            (!editorAheadOfStore() &&
+              getLoadedVoiceRecordingService()?.holdsBackFrom(split) === true)
         : unchanged;
 
       // A chip whose path the text no longer spells is left out, as the editor's own are.
@@ -1984,7 +2077,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         </span>
       ) : null;
 
-    const handleDictationEscape = () => voiceRecordingService.handleEscape(voiceId);
+    const handleDictationEscape = () =>
+      getLoadedVoiceRecordingService()?.handleEscape(voiceId) ?? false;
     const dictationCancelConfirm = useDictationCancelConfirm(voiceId);
 
     const collapseEditor = () => setIsExpanded(false);
@@ -2033,6 +2127,67 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (placeReturnCaret(view)) return;
       if (readComposerSelection(draftKeyRef.current, currentDraft()) === null) caretToEnd(view);
     };
+
+    // One palette per id, so one composer holds it (`promptHistoryOwnerStore`):
+    // while Canopy is open, never the grid pane's behind it. History spans this
+    // machine's projects, whose prompts name its files: none is offered for a
+    // terminal on another host. A composer mounts its palette only while it
+    // holds history, but its `❯` offers history either way, since the press
+    // that clicks it hands history to it.
+    const historyAvailable = historyByFocus ? !thisMachineOff : !canopyOpen;
+    const historyPaletteMounted = historyAvailable && holdsHistory;
+    const historyOffered = historyAvailable && !disabled;
+    const pendingHistoryOpenRef = useRef(false);
+
+    useEffect(() => {
+      const composer = rootRef.current;
+      if (!historyByFocus || composer === null) return;
+      return followPromptHistoryHost(historyToken, composer);
+    }, [historyByFocus, historyToken]);
+
+    const openHistoryPalette = (open: () => void) => {
+      const view = editorViewRef.current;
+      // The palette restores focus to whatever held it on opening: make that
+      // the editor, and end any frame-late refocus still owed to an earlier
+      // press so it cannot pull focus back out of the palette's search field.
+      if (view && !editorOwnsDomFocus(view)) view.focus();
+      focusGenerationRef.current++;
+      open();
+    };
+
+    const requestHistoryPalette = () => {
+      const open = historyPaletteOpenRef.current;
+      if (open) {
+        openHistoryPalette(open);
+        return;
+      }
+      // A click with no press before it (assistive technology) reaches a
+      // composer that doesn't hold history, whose palette is not mounted yet.
+      // Hand history to it, and open once that commit registers the palette; a
+      // request that commit did not answer is dropped rather than left to open
+      // on some later focus.
+      pendingHistoryOpenRef.current = true;
+      if (historyByFocus) {
+        claimPromptHistory(historyToken);
+      } else {
+        // The pane may already be the selected one, with an Assistant holding
+        // history since: selecting it again would change nothing.
+        returnPromptHistoryToGrid();
+        onActivate?.();
+      }
+      requestAnimationFrame(() => {
+        pendingHistoryOpenRef.current = false;
+      });
+    };
+
+    // Runs after the palette's own effect in the same commit, so the opener it
+    // registers is already in the ref.
+    useEffect(() => {
+      if (!historyPaletteMounted || !pendingHistoryOpenRef.current) return;
+      pendingHistoryOpenRef.current = false;
+      const open = historyPaletteOpenRef.current;
+      if (open) openHistoryPalette(open);
+    }, [historyPaletteMounted]);
 
     const focusEditor = () => {
       const view = editorViewRef.current;
@@ -2300,7 +2455,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           if (!view || !latest || latest.disabled) return false;
           // The snapshot is what goes out; a correction landing during the
           // submit would rewrite the draft under it (#14611).
-          voiceRecordingService.discardPendingCorrections(voiceId);
+          getLoadedVoiceRecordingService()?.discardPendingCorrections(voiceId);
           const snapshot = view.state.doc.toString();
           return sendText(snapshot, {
             compose: (draft) => composeDraftWithInstruction(draft, instruction),
@@ -2322,7 +2477,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const recordTypedTarget = () => {
       // A canopy view types to a terminal that may live in another project.
       if (isolated || agentId === undefined) return;
-      if (useFleetArmingStore.getState().armedIds.size >= 2) return;
+      if (selectIsLocalFleetComposing(useFleetArmingStore.getState())) return;
       const workspaceId = getViewWorkspaceId();
       if (workspaceId === null) return;
       useTerminalInputStore.getState().recordLastTypedAgentTarget(terminalId, workspaceId);
@@ -2348,6 +2503,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;
         setValue(next);
+        mirrorDraft(next);
         return true;
       },
       consumeExternalValueFlag: () => {
@@ -2369,7 +2525,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isComposingRef,
       handledEnterRef,
       editableCompartmentRef,
-      historyPaletteOpenRef,
+      requestHistorySearch: requestHistoryPalette,
       applyAutocompleteSelection,
       handleHistoryNavigation,
       sendFromEditor: (route) => sendFromEditor(undefined, undefined, route),
@@ -2446,7 +2602,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       draftKeyRef,
       editorHostRef,
       editorViewRef,
-      value,
       disabled,
       placeholder,
       effectiveTheme,
@@ -2626,16 +2781,96 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 }
               : undefined;
 
+    // One menu, wherever the editor is: in the bar's shell, or in the Expanded
+    // Editor's dialog, which covers the bar.
+    const autocompleteMenu = (
+      <AutocompleteMenu
+        ref={menuRef}
+        isOpen={isAutocompleteOpen}
+        items={autocompleteItems}
+        selectedIndex={selectedIndex}
+        isLoading={isLoading}
+        staleKeys={staleItemKeys}
+        onSelect={handleAutocompleteSelect}
+        onHoverIndex={setSelectedIndex}
+        side={menuPlacement.side}
+        style={{
+          left: `${menuPlacement.left}px`,
+          top: menuPlacement.top,
+          bottom: menuPlacement.bottom,
+          maxWidth: menuPlacement.maxWidth,
+          maxHeight: menuPlacement.maxHeight,
+          marginBottom: menuPlacement.side ? undefined : MENU_SHELL_GAP_PX,
+        }}
+        listboxId={listboxId}
+        title={
+          triggerChar === "/"
+            ? "Commands"
+            : triggerChar === "$"
+              ? "Capabilities"
+              : triggerChar === "#"
+                ? "Issues and pull requests"
+                : atClaim === "terminal"
+                  ? "Terminal output"
+                  : atClaim === "selection"
+                    ? "Terminal selection"
+                    : atClaim === "notes"
+                      ? "Diff notes"
+                      : atClaim === "diff"
+                        ? "Diffs"
+                        : "Files"
+        }
+        ariaLabel={
+          triggerChar === "/"
+            ? "Command autocomplete"
+            : triggerChar === "$"
+              ? "Capability autocomplete"
+              : triggerChar === "#"
+                ? "Issue and pull request autocomplete"
+                : atClaim === "terminal"
+                  ? "Terminal autocomplete"
+                  : atClaim === "selection"
+                    ? "Selection autocomplete"
+                    : atClaim === "notes"
+                      ? "Diff note autocomplete"
+                      : atClaim === "diff"
+                        ? "Diff autocomplete"
+                        : "File autocomplete"
+        }
+        emptyMessage={
+          triggerChar === "/"
+            ? "No commands match"
+            : triggerChar === "$"
+              ? "No capabilities match"
+              : isFileMode
+                ? "No files match"
+                : "No matches"
+        }
+        note={autocompleteNote}
+      />
+    );
+
     const barContent = (
       <div
-        className="relative group cursor-text px-3.5 pb-2.5 pt-2.5"
+        className={cn(
+          "relative group cursor-text pb-2.5",
+          COMPOSER_BAND_RAIL,
+          // The learn offer's row above already holds the band's top edge.
+          learnPromptShown ? "pt-1.5" : "pt-2.5"
+        )}
         // Anchors the type-anywhere rescue (#11134): marks this subtree as a
         // real typing surface, and lets the rescue verify focus actually landed
         // here rather than trusting a handle's boolean return.
         data-hybrid-input-root={terminalId}
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
-        {isRemote && <PendingUploadChips surface={uploadSurface} className="mb-1.5" />}
+        {isRemote && (
+          <PendingUploadChips
+            surface={uploadSurface}
+            className="mb-1.5"
+            onReturnFocus={focusEditor}
+          />
+        )}
         <HeldBackAttachmentsBanner
           surface={uploadSurface}
           disabled={disabled}
@@ -2764,83 +2999,50 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 {unresolvedFileReferencesCaption(fileReferenceNote.references)}
               </div>
             )}
-            <AutocompleteMenu
-              ref={menuRef}
-              isOpen={isAutocompleteOpen}
-              items={autocompleteItems}
-              selectedIndex={selectedIndex}
-              isLoading={isLoading}
-              staleKeys={staleItemKeys}
-              onSelect={handleAutocompleteSelect}
-              onHoverIndex={setSelectedIndex}
-              style={{
-                left: `${menuPlacement.left}px`,
-                maxWidth: menuPlacement.maxWidth,
-                maxHeight: menuPlacement.maxHeight,
-                marginBottom: MENU_SHELL_GAP_PX,
-              }}
-              listboxId={listboxId}
-              title={
-                triggerChar === "/"
-                  ? "Commands"
-                  : triggerChar === "$"
-                    ? "Capabilities"
-                    : triggerChar === "#"
-                      ? "Issues and pull requests"
-                      : atClaim === "terminal"
-                        ? "Terminal output"
-                        : atClaim === "selection"
-                          ? "Terminal selection"
-                          : atClaim === "notes"
-                            ? "Diff notes"
-                            : atClaim === "diff"
-                              ? "Diffs"
-                              : "Files"
-              }
-              ariaLabel={
-                triggerChar === "/"
-                  ? "Command autocomplete"
-                  : triggerChar === "$"
-                    ? "Capability autocomplete"
-                    : triggerChar === "#"
-                      ? "Issue and pull request autocomplete"
-                      : atClaim === "terminal"
-                        ? "Terminal autocomplete"
-                        : atClaim === "selection"
-                          ? "Selection autocomplete"
-                          : atClaim === "notes"
-                            ? "Diff note autocomplete"
-                            : atClaim === "diff"
-                              ? "Diff autocomplete"
-                              : "File autocomplete"
-              }
-              emptyMessage={
-                triggerChar === "/"
-                  ? "No commands match"
-                  : triggerChar === "$"
-                    ? "No capabilities match"
-                    : isFileMode
-                      ? "No files match"
-                      : "No matches"
-              }
-              note={isSlashMenuOpen && hasTemplateProblems ? TEMPLATE_PROBLEMS_NOTE : undefined}
-            />
+            {!isExpanded && autocompleteMenu}
             {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
-            {/* A prompt marker, not a control: it is what makes the box read as
-                somewhere to type. A press on it focuses the editor through the
-                root's handlers, like one anywhere else in the shell. `h-6` keeps
-                it centred on the draft's last 24px row; `ml-2` is the shell's
-                left inset, so the box is only as wide as the glyph. */}
-            <span
-              aria-hidden="true"
-              data-composer-marker=""
-              className={cn(
-                "ml-2 flex h-6 shrink-0 select-none items-center font-mono text-xs font-semibold leading-5",
-                COMPOSER_MARKER_TEXT_CLASS
-              )}
-            >
-              ❯
-            </span>
+            {/* The prompt marker is what makes the box read as somewhere to
+                type. `h-6` keeps it centred on the draft's last 24px row; `ml-2`
+                is the shell's left inset, so the box is only as wide as the
+                glyph. Where this composer offers prompt history, a click on it
+                opens the palette Mod+R opens; the press still focuses the editor
+                through the root's handlers first, so the palette records the
+                editor as where focus goes back. Out of the Tab order: Mod+R is
+                the keyboard path. */}
+            {historyOffered ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    data-composer-marker=""
+                    aria-label="Search prompt history"
+                    // Keeps the button from taking focus, so the editor stays
+                    // the palette's opener and the tooltip opens on hover only.
+                    onMouseDown={(e) => e.preventDefault()}
+                    // Radix opens a tooltip on focus too; a focus that arrives
+                    // some other way is not a hover.
+                    onFocus={(e) => e.preventDefault()}
+                    onClick={(e) => {
+                      // The root's click would focus the editor again under
+                      // the palette that is opening.
+                      e.stopPropagation();
+                      requestHistoryPalette();
+                    }}
+                    className={cn(COMPOSER_MARKER_CLASS, COMPOSER_MARKER_HOVER_CLASS)}
+                  >
+                    ❯
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {createTooltipContent("Search prompt history", PROMPT_HISTORY_SHORTCUT)}
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              <span aria-hidden="true" data-composer-marker="" className={COMPOSER_MARKER_CLASS}>
+                ❯
+              </span>
+            )}
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
                 {/* `min-w-0`: a flex item defaults to `min-width: auto`, so the
@@ -3106,11 +3308,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             focusEditor();
           }}
         >
-          <DictionaryLearnPrompt
-            terminalId={voiceId}
-            projectId={voiceProjectId}
-            onReturnFocus={focusEditor}
-          />
+          {/* Painted as the band, on its rail, so no app canvas shows between
+              the terminal and the composer (#17278). Outside the typing root:
+              the offer's buttons are not the draft's, and inside it a voice
+              wait would take Enter on Retry as a send. */}
+          {learnPromptShown && (
+            <div
+              className={cn(COMPOSER_BAND_RAIL, "pt-2.5")}
+              style={{ backgroundColor: inputBarColors.background }}
+            >
+              <DictionaryLearnPrompt
+                terminalId={voiceId}
+                projectId={voiceProjectId}
+                onReturnFocus={focusEditor}
+              />
+            </div>
+          )}
           {barContent}
         </div>
         {activeTemplate && (
@@ -3143,7 +3356,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               Outside the scrolling host, so the overlay covers the visible
               editor instead of scrolling away with a long draft. */}
           <div
-            ref={releaseModalDropTarget}
+            ref={attachModalFrame}
             className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
@@ -3183,6 +3396,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 {selectionFilePath && <SelectedFileMenuItems absolutePath={selectionFilePath} />}
               </ContextMenuContent>
             </ContextMenu>
+            {isExpanded && autocompleteMenu}
             {isDragOverModal && <FileDropOverlay />}
             {isExpanded && voiceSubmitAnnouncer}
             {/* The app's announcer outside this modal goes unheard in it. */}
@@ -3193,14 +3407,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             )}
           </div>
         </AppDialog>
-        {/* One palette per id: while Canopy is open its own composer's is the
-            one, not the grid pane's behind it. */}
-        {/* History spans this machine's projects, whose prompts name its files:
-            none is offered for a terminal on another host. */}
-        {((isFocusedTerminal && !canopyOpen) || (isolated && !thisMachineOff)) && (
+        {historyPaletteMounted && (
           <PromptHistoryPalette
             terminalId={terminalId}
-            projectId={projectId}
+            projectId={historyProjectId}
+            draftProjectId={projectId}
             onOpenRef={historyPaletteOpenRef}
           />
         )}

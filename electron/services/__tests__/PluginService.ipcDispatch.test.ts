@@ -27,6 +27,22 @@ const ipcMainMock = vi.hoisted(() => {
     _reset: () => listeners.clear(),
   };
 });
+// PluginService loads ajv through createRequire, which esbuild's graph and
+// vi.mock's module map never see, so the require itself is what is watched.
+const requiredIds = vi.hoisted(() => [] as string[]);
+vi.mock("node:module", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:module")>();
+  return {
+    ...actual,
+    createRequire: (from: string | URL) => {
+      const real = actual.createRequire(from);
+      return Object.assign((id: string) => {
+        requiredIds.push(id);
+        return real(id);
+      }, real);
+    },
+  };
+});
 const windowRefMock = vi.hoisted(() => ({
   getWindowRegistry: vi.fn(() => null),
   getProjectViewManager: vi.fn(() => null),
@@ -218,6 +234,7 @@ import { getPluginActionAuditService } from "../PluginActionAuditService.js";
 import { isAuditedHandlerFailure } from "../../utils/pluginAuditMarker.js";
 import { PluginInvokeOwnershipError } from "../plugin/PluginInvokeErrors.js";
 import { PluginInvokeTimeoutError } from "../plugin/pluginInvokeDeadline.js";
+import { PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES } from "../plugin/pluginAuditArgsHash.js";
 import { type PluginIpcContext, type PluginManifest } from "../../../shared/types/plugin.js";
 
 function makeCtx(pluginId: string, overrides: Partial<PluginIpcContext> = {}): PluginIpcContext {
@@ -402,6 +419,33 @@ describe("Plugin IPC handler registration", () => {
         expect(record.errorMessage).toBe("");
         expect(record.argsHash).toMatch(/^[0-9a-f]{64}$/);
         expect(typeof record.durationMs).toBe("number");
+      } finally {
+        appendSpy.mockRestore();
+      }
+    });
+
+    it("audits large accepted args unhashed on success and on a throw (#17069)", async () => {
+      const appendSpy = vi
+        .spyOn(getPluginActionAuditService(), "append")
+        .mockImplementation(() => {});
+      try {
+        const large = ["x".repeat(PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES + 1)];
+        service.registerHandler("acme.test-plugin", "ok", vi.fn().mockResolvedValue("ok"));
+        service.registerHandler(
+          "acme.test-plugin",
+          "boom",
+          vi.fn().mockRejectedValue(new Error("x"))
+        );
+
+        await service.dispatchHandler("acme.test-plugin", "ok", makeCtx("acme.test-plugin"), large);
+        await expect(
+          service.dispatchHandler("acme.test-plugin", "boom", makeCtx("acme.test-plugin"), large)
+        ).rejects.toThrow("x");
+
+        expect(appendSpy.mock.calls.map((c) => [c[0].result, c[0].argsHash])).toEqual([
+          ["success", ""],
+          ["error", ""],
+        ]);
       } finally {
         appendSpy.mockRestore();
       }
@@ -1120,5 +1164,68 @@ describe("per-plugin metrics", () => {
     service.unloadPlugin("acme.test-plugin");
     expect(service.metrics.getSnapshot("acme.test-plugin")).toBeNull();
     expect(service.metrics.getAll()).toEqual([]);
+  });
+});
+
+describe("ajv loading (#17024)", () => {
+  function registerSchemaAction(service: PluginService, id: string): ReturnType<typeof vi.fn> {
+    service.registerPluginAction("acme.test-plugin", {
+      id,
+      title: id,
+      description: "Schema action",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      inputSchema: {
+        type: "object",
+        properties: { email: { type: "string", format: "email" } },
+        required: ["email"],
+      },
+    });
+    const handler = vi.fn().mockResolvedValue("ok");
+    service.registerHandler("acme.test-plugin", id, handler);
+    return handler;
+  }
+
+  const ajvRequires = () => requiredIds.filter((id) => id === "ajv" || id === "ajv-formats");
+
+  it("requires ajv and its formats only for the first action input schema validated", async () => {
+    // A fresh evaluation, watched from before it starts: a require at module
+    // load would otherwise have run before this test, unseen.
+    vi.resetModules();
+    requiredIds.length = 0;
+    const { PluginService: FreshPluginService } = await import("../PluginService.js");
+    expect(ajvRequires()).toEqual([]);
+
+    await writePlugin("test-plugin", { name: "acme.test-plugin", version: "1.0.0" });
+    const service = new FreshPluginService(tmpDir);
+    await service.initialize();
+    const plain = vi.fn().mockResolvedValue("ok");
+    service.registerHandler("acme.test-plugin", "raw-channel", plain);
+    await service.dispatchHandler("acme.test-plugin", "raw-channel", makeCtx("acme.test-plugin"), [
+      {},
+    ]);
+    expect(ajvRequires()).toEqual([]);
+
+    registerSchemaAction(service, "acme.test-plugin.first");
+    await expect(
+      service.dispatchHandler(
+        "acme.test-plugin",
+        "acme.test-plugin.first",
+        makeCtx("acme.test-plugin"),
+        [{ email: "not-an-email" }]
+      )
+    ).rejects.toThrow("Invalid arguments for plugin action");
+    expect(ajvRequires()).toEqual(["ajv", "ajv-formats"]);
+
+    const second = registerSchemaAction(service, "acme.test-plugin.second");
+    await service.dispatchHandler(
+      "acme.test-plugin",
+      "acme.test-plugin.second",
+      makeCtx("acme.test-plugin"),
+      [{ email: "a@example.com" }]
+    );
+    expect(second).toHaveBeenCalledWith(expect.anything(), { email: "a@example.com" });
+    expect(ajvRequires()).toEqual(["ajv", "ajv-formats"]);
   });
 });

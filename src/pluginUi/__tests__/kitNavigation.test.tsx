@@ -16,6 +16,12 @@ import { registerDockPopoverLayer } from "@/lib/dockPopoverLayer";
 // jsdom lays nothing out, so a Virtuoso never scrolls there; the palette's
 // requests to its list are recorded instead, passing through unchanged.
 const listScrolls = vi.hoisted((): { method: string; index: number }[] => []);
+// What the palette last handed its list: the element it scrolls, and the last
+// reveal request, whose view-location callback is the part jsdom can't run.
+const listRecord = vi.hoisted((): { scrollParent: unknown; reveal: unknown } => ({
+  scrollParent: null,
+  reveal: null,
+}));
 
 vi.mock("react-virtuoso", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react-virtuoso")>();
@@ -26,6 +32,7 @@ vi.mock("react-virtuoso", async (importOriginal) => {
   };
   function RecordingVirtuoso(props: Record<string, unknown> & { ref?: Ref<VirtuosoHandle> }) {
     const { ref, ...rest } = props;
+    listRecord.scrollParent = rest.customScrollParent ?? null;
     const inner = useRef<VirtuosoHandle>(null);
     useImperativeHandle(ref, () => ({
       scrollToIndex: (location) => {
@@ -34,6 +41,7 @@ vi.mock("react-virtuoso", async (importOriginal) => {
       },
       scrollIntoView: (location) => {
         listScrolls.push({ method: "scrollIntoView", index: indexOf(location) });
+        listRecord.reveal = location;
         inner.current?.scrollIntoView(location);
       },
       scrollTo: (location) => inner.current?.scrollTo(location),
@@ -327,6 +335,73 @@ describe("CommandPalette", () => {
     expect(onSelect).toHaveBeenCalledWith(items[1]);
     // Closed: the palette plays its exit and drops its modal claim meanwhile.
     expect(screen.getByRole("dialog", { hidden: true }).getAttribute("aria-modal")).toBe("false");
+  });
+
+  it("scrolls the results region, so the list has one tab stop and it takes the list keys", async () => {
+    render(inViewport(createElement(Harness)));
+    await screen.findByText("Alpha issue");
+    const region = screen.getByRole("group", { name: "Go to" });
+    expect(listRecord.scrollParent).toBe(region);
+    expect(region.tabIndex).toBe(0);
+    expect(region.querySelectorAll('[tabindex]:not([tabindex="-1"])')).toHaveLength(0);
+    expect(region.contains(screen.getByRole("listbox"))).toBe(true);
+    const input = screen.getByRole("combobox");
+    const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
+    fireEvent.keyDown(region, { key: "ArrowDown" });
+    expect(active()?.textContent).toBe("Delta issue");
+  });
+
+  it("reveals a row clear of the region's edge fades, which Virtuoso's own reveal ignores", async () => {
+    render(inViewport(createElement(Harness)));
+    await screen.findByText("Alpha issue");
+    const region = screen.getByRole("group", { name: "Go to" });
+    region.style.scrollPaddingTop = "32px";
+    listRecord.reveal = null;
+    fireEvent.keyDown(region, { key: "ArrowDown" });
+    expect(listRecord.reveal).not.toBeNull();
+
+    const reveal = listRecord.reveal as {
+      calculateViewLocation: (params: {
+        itemTop: number;
+        itemBottom: number;
+        viewportTop: number;
+        viewportBottom: number;
+        locationParams: { index: number };
+      }) => unknown;
+    };
+    const at = (itemTop: number) =>
+      reveal.calculateViewLocation({
+        itemTop,
+        itemBottom: itemTop + 34,
+        viewportTop: 100,
+        viewportBottom: 400,
+        locationParams: { index: 3 },
+      });
+    // Under the bottom fade but inside the viewport: still scrolled clear.
+    expect(at(350)).toEqual({ index: 3, align: "end", offset: 32 });
+    expect(at(110)).toEqual({ index: 3, align: "start", offset: -32 });
+    expect(at(200)).toBeNull();
+  });
+
+  it("pages over disabled rows toward the cursor instead of wrapping to the far end", async () => {
+    const paged = Array.from({ length: 25 }, (_, index) => ({
+      id: `row-${index}`,
+      label: `Row ${String(index).padStart(2, "0")}`,
+      disabled: index < 15,
+    }));
+    render(inViewport(createElement(Harness, { items: paged })));
+    const input = await screen.findByRole("combobox");
+    // Read off the active descendant's id: jsdom has no scroll offset to
+    // render a list that opens partway down.
+    const activeId = () => input.getAttribute("aria-activedescendant")?.replace(/^.*option-/, "");
+    expect(activeId()).toBe("row-15");
+    for (let i = 0; i < 5; i++) fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(activeId()).toBe("row-20");
+
+    fireEvent.keyDown(input, { key: "PageUp" });
+    expect(activeId()).toBe("row-15");
+    fireEvent.keyDown(input, { key: "PageDown" });
+    expect(activeId()).toBe("row-24");
   });
 
   it("skips disabled rows with the arrow keys", async () => {

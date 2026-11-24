@@ -17,10 +17,11 @@ import { Osc94Parser } from "../Osc94Parser.js";
 import { ParseBarrier, SubmissionCaptureHost } from "../SubmissionOutputCapture.js";
 import { SynchronizedFrameDetector } from "../SynchronizedFrameDetector.js";
 import {
+  applySessionRestore,
   mirrorNeedsResize,
   mirrorReplayInFlight,
+  readSessionRestore,
   resizeMirror,
-  restoreSessionFromFile,
 } from "../terminalSessionPersistence.js";
 import {
   measureVisibleContentDelta,
@@ -80,7 +81,7 @@ export class AnalysisSession {
 
   private headlessTerminal: HeadlessTerminalType | null;
   private serializeAddon: SerializeAddonType | null;
-  private frameDetector: SynchronizedFrameDetector | null;
+  private frameDetector: SynchronizedFrameDetector | null = null;
   private responderDisposable: { dispose: () => void } | null = null;
   private restoreBannerStart: IMarker | null = null;
   private restoreBannerEnd: IMarker | null = null;
@@ -114,6 +115,7 @@ export class AnalysisSession {
   private disposed = false;
   private readonly submissionCaptures: SubmissionCaptureHost;
   private readonly parseBarrier = new ParseBarrier();
+  private pendingRestore: { bracketedPasteMode: boolean } | null;
 
   constructor(spec: AnalysisCreateSpec, emit: Emit) {
     this.terminalId = spec.terminalId;
@@ -139,23 +141,40 @@ export class AnalysisSession {
     this.serializeAddon = serializeAddon;
     this.viewportSnapshotCache.attach(terminal);
 
-    this.frameDetector = new SynchronizedFrameDetector(terminal, (snapshot) => {
-      this.monitor?.onSynchronizedFrame(snapshot);
-    });
     this.osc94Parser = new Osc94Parser({
       onWorking: (now) => this.monitor?.onOscProgressWorking(now),
       onIdle: (now) => this.monitor?.onOscProgressIdle(now),
     });
 
-    if (spec.restore) {
-      const result = restoreSessionFromFile(terminal, this.terminalId);
-      if (result.restored) {
-        this.restoreBannerStart = result.bannerStartMarker;
-        this.restoreBannerEnd = result.bannerEndMarker;
-        this.scheduleDigest();
+    // A restore seeds the paste mode after its replay instead, whose parser
+    // reset would otherwise clear it.
+    this.pendingRestore = spec.restore ? { bracketedPasteMode: !!spec.bracketedPasteMode } : null;
+    if (!spec.restore && spec.bracketedPasteMode) this.feedPrelude("\x1b[?2004h");
+  }
+
+  /**
+   * Replay the persisted session the spec asked for, reading it off disk
+   * without blocking this worker's other terminals. Undefined when no restore
+   * was asked for. The runtime holds this terminal's later messages until the
+   * promise settles, so live output never parses ahead of the restored screen.
+   */
+  restorePersistedSession(): Promise<void> | undefined {
+    const pending = this.pendingRestore;
+    if (!pending) return undefined;
+    this.pendingRestore = null;
+    return readSessionRestore(this.terminalId).then((payload) => {
+      const terminal = this.headlessTerminal;
+      if (this.disposed || !terminal) return;
+      if (payload) {
+        const result = applySessionRestore(terminal, this.terminalId, payload);
+        if (result.restored) {
+          this.restoreBannerStart = result.bannerStartMarker;
+          this.restoreBannerEnd = result.bannerEndMarker;
+          this.scheduleDigest();
+        }
       }
-    }
-    if (spec.bracketedPasteMode) this.feedPrelude("\x1b[?2004h");
+      if (pending.bracketedPasteMode) this.feedPrelude("\x1b[?2004h");
+    });
   }
 
   feedChunk(
@@ -340,10 +359,21 @@ export class AnalysisSession {
     if (spec.pollingIntervalMs !== undefined) {
       this.monitor.setPollingInterval(spec.pollingIntervalMs);
     }
-    this.monitor.startPolling();
+    // Only a monitor that reads frame snapshots gets the detector; for any
+    // other it would arm a timer and copy the bottom rows on every DEC 2026
+    // frame for nothing (#17041).
+    const monitor = this.monitor;
+    if (monitor.consumesSynchronizedFrames && this.headlessTerminal) {
+      this.frameDetector = new SynchronizedFrameDetector(this.headlessTerminal, (snapshot) =>
+        monitor.onSynchronizedFrame(snapshot)
+      );
+    }
+    monitor.startPolling();
   }
 
   stopMonitor(): void {
+    this.frameDetector?.dispose();
+    this.frameDetector = null;
     if (this.monitor) {
       this.monitor.dispose();
       this.monitor = null;
@@ -406,6 +436,15 @@ export class AnalysisSession {
       // Read in the same drain callback as the serialize, so the tail and the
       // screen describe the same parsed prefix of the stream.
       return snapshot && { ...snapshot, continuation: { pendingEscapeTail: this.parserTail.tail } };
+    });
+  }
+
+  /** The visible screen once everything fed has parsed; see `AnalysisBackend.serializeScreen`. */
+  serializeScreen(): Promise<SerializedTerminalSnapshot | null> {
+    return this.drainThen(() => {
+      const [data, partial] = this.serializeTail(0);
+      const screen = this.withGeometry(data);
+      return screen && partial ? { ...screen, partial: true } : screen;
     });
   }
 
@@ -473,14 +512,6 @@ export class AnalysisSession {
         // Ignore disposal errors
       }
       this.responderDisposable = null;
-    }
-    if (this.frameDetector) {
-      try {
-        this.frameDetector.dispose();
-      } catch {
-        // Ignore disposal errors
-      }
-      this.frameDetector = null;
     }
     this.viewportSnapshotCache.detach();
     if (this.headlessTerminal) {

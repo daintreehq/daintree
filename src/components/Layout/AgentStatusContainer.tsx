@@ -12,6 +12,8 @@ import { handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store";
 import type { PtyPanelData } from "@shared/types/panel";
+import { useFleetBandTerminals } from "@/hooks/useTerminalSelectors";
+import type { FleetBand } from "@/lib/fleetAttention";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import {
@@ -44,6 +46,11 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
+import {
+  openPopoverContent,
+  useDockFocusLandmark,
+  useDockPillHideHandoff,
+} from "./dockFocusHandoff";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CirclePause } from "@/components/icons";
@@ -93,12 +100,13 @@ export interface AgentStatusConfig {
    * Unread offers that and leaves Kill to the row's context menu.
    */
   rowAction: "kill" | "mark-read";
+  /** The fleet bands whose agents the pill holds. */
+  bands: ReadonlySet<FleetBand>;
   /** Row order; groups take the place of their first member. */
   compare: (a: PtyPanelData, b: PtyPanelData) => number;
 }
 
 interface AgentStatusContainerProps {
-  terminals: PtyPanelData[];
   /**
    * Plugin panels the user let into this pill (#13821). Their own section,
    * below every agent's, so a plugin can never rank above an agent asking.
@@ -132,7 +140,6 @@ interface AgentDisplayGroup {
 type AgentDisplayItem = AgentDisplaySingle | AgentDisplayGroup;
 
 export function AgentStatusContainer({
-  terminals,
   pluginRows: reportedPluginRows = NO_PLUGIN_ROWS,
   config,
   compact = false,
@@ -140,6 +147,10 @@ export function AgentStatusContainer({
   const [isOpen, setIsOpen] = useState(false);
   const [killConfirmId, setKillConfirmId] = useState<string | null>(null);
   const { kind, compare } = config;
+  // The pill's members are read here, not by its parent, because only this
+  // component knows whether rows are showing. Closed, it keeps its list across
+  // the per-frame writes of a streaming member (#17053).
+  const terminals = useFleetBandTerminals(config.bands, isOpen || killConfirmId !== null);
   const tabGroups = usePanelStore((state) => state.tabGroups);
   const { activateTerminal, pingTerminal, removePanel, setActiveTab } = usePanelStore(
     useShallow((state) => ({
@@ -350,6 +361,15 @@ export function AgentStatusContainer({
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
   const popoverId = `${kind}-container-popover`;
+  // The pill hides rather than unmounts, so focus inside it would otherwise be
+  // left on a `display: none` button — and a kill confirmation that closes with
+  // the last entry has nowhere of its own to restore to.
+  const hideHandoff = useDockPillHideHandoff(count);
+  const { resolve: resolveLandmark } = useDockFocusLandmark();
+  const restoreKillFocus = useCallback(
+    () => openPopoverContent(popoverId) ?? resolveLandmark(),
+    [popoverId, resolveLandmark]
+  );
 
   useEffect(() => {
     if (count === 0) {
@@ -359,7 +379,7 @@ export function AgentStatusContainer({
   }, [count]);
 
   return (
-    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
+    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"} {...hideHandoff}>
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -506,6 +526,7 @@ export function AgentStatusContainer({
           description={killTerminalDescription(killTarget?.title || undefined)}
           variant="destructive"
           confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
+          restoreFocusTo={restoreKillFocus}
           onConfirm={handleKillConfirm}
         />
       </Popover>

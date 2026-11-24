@@ -9,9 +9,14 @@
 // minifier with compress and mangle off: a parse and print, nothing else.
 // Tagged template quasis keep their characters, since a tag can read `raw`.
 // Regex literals are escaped too, so `RegExp.prototype.source` reads the
-// escapes; matching is unchanged.
+// escapes; matching is unchanged. Main's esbuild build goes through the same
+// re-print (#17023): esbuild escapes strings but writes regex literals as they
+// are (#16682).
 
-import { minifySync, parseSync, Visitor } from "rolldown/utils";
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { minifySync } from "rolldown/utils";
 
 /** Code units above U+00FF force a two-byte string in Blink and V8. */
 export function hasTwoByteCharacters(code) {
@@ -22,43 +27,16 @@ export function hasTwoByteCharacters(code) {
 }
 
 /**
- * Offsets of the code units above U+00FF that an escape could remove: every
- * one outside a tagged template's quasis, whose `raw` text a tag can read.
- * Main's esbuild build has no re-print pass, so its chunks are checked
- * against their source instead (#16682).
+ * Re-prints a minified ES module chunk with non-ASCII characters escaped.
+ * Comments go unless `legalComments` keeps the `/*!`, `@license` ones, which
+ * then keep their characters.
  */
-export function findEscapableTwoByteCharacters(fileName, code) {
-  if (!hasTwoByteCharacters(code)) return [];
-  const result = parseSync(fileName, code, { sourceType: "module" });
-  if (result.errors.length) {
-    throw new Error(`parsing ${fileName} failed: ${result.errors[0].message}`);
-  }
-  const quasis = [];
-  new Visitor({
-    TaggedTemplateExpression(node) {
-      for (const quasi of node.quasi.quasis) quasis.push(quasi);
-    },
-  }).visit(result.program);
-  quasis.sort((a, b) => a.start - b.start);
-
-  const offsets = [];
-  let next = 0;
-  for (let i = 0; i < code.length; i++) {
-    if (code.charCodeAt(i) <= 0xff) continue;
-    while (next < quasis.length && quasis[next].end <= i) next++;
-    if (next < quasis.length && quasis[next].start <= i) continue;
-    offsets.push(i);
-  }
-  return offsets;
-}
-
-/** Re-prints a minified ES module chunk with non-ASCII characters escaped. */
-export function escapeChunkToAscii(fileName, code) {
+export function escapeChunkToAscii(fileName, code, { legalComments = "none" } = {}) {
   const result = minifySync(fileName, code, {
     module: true,
     compress: false,
     mangle: false,
-    codegen: { removeWhitespace: true, asciiOnly: true },
+    codegen: { removeWhitespace: true, asciiOnly: true, legalComments },
   });
   if (result.errors?.length) {
     throw new Error(`ascii-only re-print of ${fileName} failed: ${result.errors[0].message}`);
@@ -90,6 +68,45 @@ export function asciiOnlyChunksPlugin() {
           output.code = escapeChunkToAscii(output.fileName, output.code);
         }
       },
+    },
+  };
+}
+
+/**
+ * esbuild plugin: the same re-print for a one-shot production build of Main,
+ * keeping the legal comments esbuild keeps. It takes over writing, so the
+ * escaped text is what lands on disk and what a `write: false` caller reads;
+ * a rebuild would never remove an output it drops, so watch builds go without.
+ * Chunk names keep esbuild's hash: Main and its hosts load chunks from disk,
+ * and Node's compile cache checks the source it caches.
+ */
+export function asciiOnlyOutputPlugin() {
+  return {
+    name: "ascii-only-output",
+    setup(build) {
+      const write = build.initialOptions.write !== false;
+      // esbuild resolves symlinks in output paths, including macOS's /var.
+      const workingDir = fs.realpathSync(build.initialOptions.absWorkingDir ?? process.cwd());
+      build.initialOptions.write = false;
+      build.onEnd((result) => {
+        if (result.errors.length > 0 || !result.outputFiles) return;
+        // Every chunk is re-printed before any is written, so a chunk the
+        // printer rejects fails the build with nothing on disk.
+        for (const file of result.outputFiles) {
+          if (!file.path.endsWith(".js") || !hasTwoByteCharacters(file.text)) continue;
+          const code = escapeChunkToAscii(file.path, file.text, { legalComments: "inline" });
+          file.contents = new TextEncoder().encode(code);
+          file.hash = createHash("sha256").update(file.contents).digest("base64url");
+          const key = path.relative(workingDir, file.path).split(path.sep).join("/");
+          const meta = result.metafile?.outputs[key];
+          if (meta) meta.bytes = file.contents.byteLength;
+        }
+        if (!write) return;
+        for (const file of result.outputFiles) {
+          fs.mkdirSync(path.dirname(file.path), { recursive: true });
+          fs.writeFileSync(file.path, file.contents);
+        }
+      });
     },
   };
 }

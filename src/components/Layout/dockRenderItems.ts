@@ -17,6 +17,16 @@ export interface DockRenderItem {
   panels: DockPanelData[];
 }
 
+/**
+ * One rail chip, by id: the group and its surviving member ids in chip order.
+ * No panel records, so a status flush on a docked agent leaves the descriptors
+ * equal and the rail unrendered (#17053); each chip reads its own panels.
+ */
+export interface DockRenderDescriptor {
+  group: TabGroup;
+  panelIds: string[];
+}
+
 /** The panel-store fields that decide which panels are docked. */
 export interface DockMembershipState {
   panelIds: string[];
@@ -229,4 +239,59 @@ export function planDockChipMove(
     next[slot] = railIds[index]!;
   });
   return next.some((id, index) => id !== panelIds[index]) ? next : null;
+}
+
+export interface DockRailState extends DockMembershipState {
+  tabGroups: ReadonlyMap<string, TabGroup>;
+}
+
+/** What the rail paints for the active worktree, as ids and groups only. */
+export function selectDockRenderDescriptors(
+  state: DockRailState,
+  activeWorktreeId: string | null | undefined,
+  excludedIds: readonly string[]
+): DockRenderDescriptor[] {
+  const panels = filterRailDockPanels(
+    collectDockPanels(state, activeWorktreeId),
+    activeWorktreeId,
+    excludedIds
+  );
+  return buildDockRenderItems(panels, state.tabGroups, activeWorktreeId).map(
+    ({ group, panels: members }) => ({ group, panelIds: members.map((panel) => panel.id) })
+  );
+}
+
+// `buildDockRenderItems` mints a fresh group object per call, so identity says
+// nothing; compare every field, `panelIds` element by element.
+function dockGroupsEqual(a: TabGroup, b: TabGroup): boolean {
+  if (a === b) return true;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) {
+    if (key === "panelIds") continue;
+    if (Reflect.get(a, key) !== Reflect.get(b, key)) return false;
+  }
+  if (a.panelIds.length !== b.panelIds.length) return false;
+  for (let i = 0; i < a.panelIds.length; i++) {
+    if (a.panelIds[i] !== b.panelIds[i]) return false;
+  }
+  return true;
+}
+
+export function dockRenderDescriptorsEqual(
+  a: readonly DockRenderDescriptor[],
+  b: readonly DockRenderDescriptor[]
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i]!;
+    const right = b[i]!;
+    if (!dockGroupsEqual(left.group, right.group)) return false;
+    if (left.panelIds.length !== right.panelIds.length) return false;
+    for (let j = 0; j < left.panelIds.length; j++) {
+      if (left.panelIds[j] !== right.panelIds[j]) return false;
+    }
+  }
+  return true;
 }

@@ -34,6 +34,7 @@ import {
 import { EmptyState } from "@/components/ui/EmptyState";
 import { pluralize } from "@/lib/pluralize";
 import { RemoteAgentMark } from "./RemoteAgentMark";
+import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import { shortTerminalId } from "./crossHostFleet";
 
 interface FleetCountChipProps {
@@ -233,6 +234,10 @@ export function FleetCountChip({
     };
   }, [armedCount]);
 
+  // The pane a row click asked for, handed the keyboard once the list has
+  // closed: re-selecting the primary pane changes nothing that would move it
+  // there, and the list's own close would hand it back to the chip.
+  const paneHandoffRef = useRef<string | null>(null);
   // Click a row → focus that pane (mouse path to "set primary"). Existing
   // terminal-nav chords (⌘⌥Arrow, Ctrl+Tab, ⌘1-9) cover the keyboard path
   // since focus already promotes any armed pane to primary. Closes the
@@ -245,10 +250,27 @@ export function FleetCountChip({
       // A grid pane is hidden while the project's Home shows.
       if (isGridPanelLocation(panel.location)) exitProjectHome();
       usePanelStore.getState().setFocused(id);
+      paneHandoffRef.current = id;
       onOpenChange(false);
     },
     [onOpenChange]
   );
+
+  // A row's Disarm button leaves with its row, so the keyboard moves on to the
+  // next row's, or the previous one's. The last one empties the fleet, and the
+  // ribbon hands focus on as it goes.
+  const disarmFromRow = (event: React.MouseEvent<HTMLButtonElement>, key: string) => {
+    const button = event.currentTarget;
+    const list = button.closest<HTMLElement>("[data-fleet-armed-list]");
+    if (list && button.contains(document.activeElement)) {
+      const buttons = [...list.querySelectorAll<HTMLElement>("[data-fleet-disarm]")];
+      const index = buttons.indexOf(button);
+      const next = buttons[index + 1] ?? buttons[index - 1];
+      // A click moves on without a ring; the keyboard keeps its own.
+      next?.focus({ preventScroll: true, ...(event.detail > 0 && { focusVisible: false }) });
+    }
+    disarmId(key);
+  };
 
   const scope = useFleetWorktreeScope();
   const hostGroups = groupByHost(crossHostTargets);
@@ -262,7 +284,13 @@ export function FleetCountChip({
   const label = `${armedCount} in fleet${worktreeScopeText}${hostScopeText}${exitedAriaText}`;
 
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) paneHandoffRef.current = null;
+        onOpenChange(next);
+      }}
+    >
       <PopoverTrigger asChild>
         <button
           ref={chipRef}
@@ -312,7 +340,16 @@ export function FleetCountChip({
         side="bottom"
         align="start"
         data-testid="fleet-armed-list"
+        data-fleet-armed-list=""
+        data-fleet-ribbon-layer=""
         aria-labelledby={headingId}
+        onCloseAutoFocus={(event) => {
+          const pane = paneHandoffRef.current;
+          paneHandoffRef.current = null;
+          // Taken over only once the pane has the keyboard; otherwise the
+          // chip gets it back as usual.
+          if (pane !== null && focusPanelInput(pane)) event.preventDefault();
+        }}
         className={cn(
           "flex flex-col overflow-hidden p-1",
           popoverMode === "list" ? "max-h-[320px] w-[320px]" : "max-h-[420px] w-[380px]"
@@ -436,8 +473,9 @@ export function FleetCountChip({
                         <Button
                           variant="ghost"
                           size="icon-xs"
-                          onClick={() => disarmId(id)}
+                          onClick={(event) => disarmFromRow(event, id)}
                           aria-label={`Disarm ${title}`}
+                          data-fleet-disarm=""
                           // Ringed inside: the list scrolls and clips anything outside it.
                           className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"
                         >
@@ -510,7 +548,8 @@ export function FleetCountChip({
                           <Button
                             variant="ghost"
                             size="icon-xs"
-                            onClick={() => disarmId(target.key)}
+                            onClick={(event) => disarmFromRow(event, target.key)}
+                            data-fleet-disarm=""
                             aria-label={`Disarm ${target.title}${detail ? ` (${detail})` : ""} on ${target.hostName}`}
                             // Ringed inside: the list scrolls and clips anything outside it.
                             className="mr-0.5 shrink-0 [&_svg]:size-3.5 focus-visible:-outline-offset-2"

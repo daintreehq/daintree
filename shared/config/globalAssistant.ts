@@ -16,8 +16,16 @@ import {
  */
 export const GLOBAL_ASSISTANT_ID = "daintree:global-assistant";
 
-/** The lane its resume pointer is stored under, in the project hibernation store. */
-export const GLOBAL_ASSISTANT_SLOT = 0;
+export {
+  GLOBAL_ASSISTANT_SESSION_AGENT_IDS,
+  GLOBAL_ASSISTANT_SESSION_LIMIT,
+  GLOBAL_ASSISTANT_SLOT,
+  GLOBAL_ASSISTANT_SLOTS,
+  VIEWLESS_ASSISTANT_AGENT_IDS,
+  globalAssistantSessionNumber,
+  isGlobalAssistantSlot,
+  type GlobalAssistantSlot,
+} from "./globalAssistantSessions.js";
 
 /** Folder under userData whose path stands in for the project path, so its session directory is stable. */
 export const GLOBAL_ASSISTANT_DIR_NAME = "global-assistant";
@@ -31,8 +39,9 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * project, so every project tool reaches it only through `host.call`, where
  * the target host admits it as it would another machine's assistant: the owned
  * tools alone act, on what it launched there or was handed, save that a prompt,
- * keys and an interrupt also reach an agent it didn't launch (#14551), and a
- * reveal shows the person that agent's panel (#16096). `host.ensureProject`
+ * keys and an interrupt also reach an agent it didn't launch (#14551), a
+ * reveal shows the person that agent's panel (#16096), and a close reaches one
+ * that has finished (#16750). `host.ensureProject`
  * acts on the caller's own project, which it has none of. `host.settings`
  * names hosts, never a project, and every change it makes the person approves.
  * `host.watch` names a host and only listens, so the coordinator that held
@@ -69,10 +78,17 @@ export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
  * run it names and never over a person's input, and its send runs a slash
  * command only as one of the agent's fixed forms (#16101); `terminal.revealOwned`
  * reaches the same workers through the same checks, which writes nothing and so
- * waits on no one (#16096); every other owned form keeps the ledger.
+ * waits on no one (#16096); `terminal.applyClaudeUpdateOwned` reaches them
+ * through the same checks too, and types only `/restart`, once, after the
+ * person approves (#17908); `terminal.closeOwned` and `terminal.closeMany`
+ * close an agent it didn't launch only with nothing typed in it: one whose
+ * stop handed the work back once the person's Daintree confirmations or the
+ * person say yes, and one stopped on an error only on the person's own yes
+ * (#16750); every other owned form keeps the ledger.
  * `worktree.resource.teardown` and `recipe.run` are here on purpose: both are
  * `danger: "confirm"`, so the person approves each run. So are the user-preset
- * writes (#16047), each previewed as the exact change.
+ * writes (#16047), each previewed as the exact change, and the account add
+ * (#17079), each account a row naming its folder.
  */
 export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "actions.getContext",
@@ -121,9 +137,13 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeMany",
   "terminal.waitForExit",
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdateOwned",
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.listAccounts",
+  "agent.addAccount",
   "terminal.revealOwned",
   "terminal.placeOwned",
   "terminal.waitUntilIdle",
@@ -195,6 +215,11 @@ export const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
   // Brings the user's backgrounded pane forward or relaunches their conversation,
   // and the pane it opens is never recorded as the assistant's.
   "agentSessionHistory.resume",
+  // A project's own links are its own assistant's to keep (#17091).
+  "project.links.list",
+  "project.links.add",
+  "project.links.update",
+  "project.links.remove",
 ]);
 
 /**
@@ -204,4 +229,34 @@ export const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
  */
 export function globalAssistantMayRelay(tool: string): boolean {
   return GLOBAL_ALLOWED_TOOLS.has(tool);
+}
+
+/**
+ * What a global assistant session that isn't coordinating may still run
+ * through `host.call` (#18143): reads that start, address, type to and wait
+ * on nothing, so it can see the work another session now leads without
+ * advancing any of it. Owned forms are left out even where they only read,
+ * since what they reach is the coordinator's. An allow-list, like
+ * {@link GLOBAL_ALLOWED_TOOLS}: a tool added later is refused here until placed.
+ */
+export const GLOBAL_STANDBY_TOOLS: ReadonlySet<string> = new Set([
+  "actions.list",
+  "actions.search",
+  "actions.getSchema",
+  "mcp.surface",
+  "workspace.list",
+  "worktree.list",
+  "worktree.getCurrent",
+  "assistant.list",
+  "terminal.list",
+  "terminal.getStatus",
+  "terminal.getOutput",
+  // A throwaway run's own reads, still held to the runs this session started.
+  "throwaway.status",
+  "throwaway.output",
+]);
+
+/** Whether a global assistant session that isn't coordinating may run `tool` through `host.call`. */
+export function globalStandbyMayRelay(tool: string): boolean {
+  return GLOBAL_STANDBY_TOOLS.has(tool);
 }

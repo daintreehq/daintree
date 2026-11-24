@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS } from "../../../../shared/config/pluginBudgets.js";
-import type { PluginIpcContext } from "../../../../shared/types/plugin.js";
+import {
+  CONTEXT_MENU_AVAILABILITY_CHANNEL,
+  CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS,
+  type PluginIpcContext,
+} from "../../../../shared/types/plugin.js";
 import {
   PLUGIN_INVOKE_TIMEOUT,
   PluginInvokeTimeoutError,
@@ -29,6 +33,17 @@ describe("resolveInvokeTimeoutMs", () => {
       expect(() => resolveInvokeTimeoutMs("p", "c", raw)).toThrow(/timeoutMs must be a number/);
     }
   );
+
+  it("holds the context-menu availability channel to its own timeout, even with 0", () => {
+    const channel = CONTEXT_MENU_AVAILABILITY_CHANNEL;
+    expect(resolveInvokeTimeoutMs("p", channel, undefined)).toBe(
+      CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS
+    );
+    expect(resolveInvokeTimeoutMs("p", channel, 0)).toBe(CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS);
+    expect(resolveInvokeTimeoutMs("p", channel, 60_000)).toBe(CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS);
+    expect(resolveInvokeTimeoutMs("p", channel, 500)).toBe(500);
+    expect(() => resolveInvokeTimeoutMs("p", channel, -1)).toThrow(/timeoutMs must be a number/);
+  });
 });
 
 describe("runWithInvokeDeadline", () => {

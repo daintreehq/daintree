@@ -17,8 +17,14 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
-import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import {
+  useFleetArmingStore,
+  isFleetArmEligible,
+  selectFleetMemberCount,
+} from "@/store/fleetArmingStore";
 import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
+import { useCodexLimitContinueStore } from "@/store/codexLimitContinueStore";
+import { canContinueAtLimitReset } from "@shared/types/codexLimitContinuation";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
@@ -110,6 +116,7 @@ import {
   TerminalSelectionMenuItems,
   TerminalSessionMenuItems,
 } from "./contextMenu/TerminalMenuItems";
+import { terminalScreenEnded } from "@/utils/terminalLiveScreen";
 
 // Loaded on first use: every pane and session row mounts this menu, and the
 // dialog pulls in Pilot's row and band modules that nothing else here needs.
@@ -399,7 +406,8 @@ function TerminalContextMenuBody({
   const whenDoneChoice = useTerminalWhenDoneStore((s) =>
     isMenuLive ? s.choices[terminalId] : undefined
   );
-  const fleetSize = useFleetArmingStore((s) => (isMenuLive ? s.armedIds.size : 0));
+  const armedToContinue = useCodexLimitContinueStore((s) => isMenuLive && terminalId in s.panes);
+  const fleetSize = useFleetArmingStore((s) => (isMenuLive ? selectFleetMemberCount(s) : 0));
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
   // What Resend last message needs to know, read only while the menu is live.
@@ -478,10 +486,11 @@ function TerminalContextMenuBody({
     (e: React.MouseEvent<HTMLElement>) => {
       handleTriggerContextMenu(e);
       const { panelsById } = usePanelStore.getState();
-      const { armedIds } = useFleetArmingStore.getState();
+      const arming = useFleetArmingStore.getState();
+      const { armedIds } = arming;
       const composerOptions = {
         hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
-        fleetSize: armedIds.size,
+        fleetSize: selectFleetMemberCount(arming),
       };
       // Only a pane whose composer can show the words is offered (#14955).
       const canDictate = (panel: (typeof panelsById)[string] | undefined) =>
@@ -924,6 +933,7 @@ function TerminalContextMenuBody({
               hoveredFileScope={hoveredFileScope}
               selectionFilePath={selectionFilePath}
               onSendToAgent={handleSendToAgent}
+              copyCleanKeybinding="terminal.copyClean"
               onOpenInFileBrowser={handleOpenInFileBrowser}
               onAction={handleAction}
             />
@@ -933,10 +943,21 @@ function TerminalContextMenuBody({
             isArmed={isArmed}
             fleetSize={fleetSize}
             fleetRun={fleetRun}
-            detectedAgentId={terminal.detectedAgentId}
+            isAgent={Boolean(terminal.launchAgentId || terminal.detectedAgentId)}
             isWatched={isWatched}
             whenDone={
               terminalPty && !isEphemeralPanel(terminal) ? (whenDoneChoice ?? "keep") : undefined
+            }
+            continueAtLimitReset={
+              terminalPty &&
+              !isEphemeralPanel(terminal) &&
+              // Kept for a pane already armed whose Codex has since left (a
+              // shell it ran in): the checked item is where it's seen and
+              // turned off (#17911).
+              (armedToContinue ||
+                canContinueAtLimitReset(terminal.detectedAgentId ?? terminal.launchAgentId))
+                ? armedToContinue
+                : undefined
             }
             onRequestPark={handleRequestPark}
             onAction={handleAction}
@@ -947,6 +968,7 @@ function TerminalContextMenuBody({
             terminalId={terminalId}
             terminalPty={terminalPty}
             hasPty={hasPty}
+            canResetModes={hasPty && !terminalScreenEnded(terminal)}
             isPaused={isPaused}
             isInputLocked={terminal.isInputLocked}
             isVoiceLockedHere={isVoiceLockedHere}

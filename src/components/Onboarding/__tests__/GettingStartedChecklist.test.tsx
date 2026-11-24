@@ -313,6 +313,87 @@ describe("GettingStartedChecklist", () => {
     });
   });
 
+  describe("focus handoff", () => {
+    function addOutsideButton(): HTMLButtonElement {
+      const button = document.createElement("button");
+      button.textContent = "Outside";
+      document.body.appendChild(button);
+      return button;
+    }
+
+    function headerToggle(): HTMLElement {
+      return screen.getByRole("button", { name: /getting started/i });
+    }
+
+    it("hands focus back to where it came from when the card goes away", () => {
+      // First in the document, so it is what a fallback would pick.
+      const fallback = addOutsideButton();
+      const outside = addOutsideButton();
+      const { unmount } = render(
+        <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />
+      );
+      outside.focus();
+      act(() => screen.getByRole("button", { name: "Dismiss checklist" }).focus());
+
+      unmount();
+
+      expect(document.activeElement).toBe(outside);
+      fallback.remove();
+      outside.remove();
+    });
+
+    it("leaves focus alone when the card goes away without holding it", () => {
+      const outside = addOutsideButton();
+      const { unmount } = render(
+        <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />
+      );
+      act(() => screen.getByRole("button", { name: "Dismiss checklist" }).focus());
+      const elsewhere = addOutsideButton();
+      elsewhere.focus();
+
+      unmount();
+
+      expect(document.activeElement).toBe(elsewhere);
+      outside.remove();
+      elsewhere.remove();
+    });
+
+    it("moves focus to the header when the focused step finishes", () => {
+      const { rerender } = render(
+        <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />
+      );
+      act(() => screen.getByRole("button", { name: /open your project/i }).focus());
+
+      rerender(<GettingStartedChecklist {...defaultProps} checklist={mixedState} />);
+
+      expect(document.activeElement).toBe(headerToggle());
+    });
+
+    it("leaves focus on its row when a different step finishes", () => {
+      const { rerender } = render(
+        <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />
+      );
+      act(() => screen.getByRole("button", { name: /start a parallel task/i }).focus());
+
+      rerender(<GettingStartedChecklist {...defaultProps} checklist={mixedState} />);
+
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: /start a parallel task/i })
+      );
+    });
+
+    it("moves focus out of the body when it collapses under a focused row", () => {
+      const { rerender } = render(
+        <GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />
+      );
+      act(() => screen.getByRole("button", { name: /start a parallel task/i }).focus());
+
+      rerender(<GettingStartedChecklist {...defaultProps} collapsed checklist={allIncomplete} />);
+
+      expect(document.activeElement).toBe(headerToggle());
+    });
+  });
+
   describe("check badge pop animation", () => {
     beforeEach(() => {
       useReducedMotionMock.mockReturnValue(false);

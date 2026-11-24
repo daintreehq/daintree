@@ -1,6 +1,10 @@
 import { create } from "zustand";
-import type { SerializedConsoleRow, CdpConsoleType } from "@shared/types/ipc/webviewConsole";
-import { MAX_CONSOLE_ROWS } from "@shared/config/devPreviewConsole";
+import type {
+  SerializedConsoleRow,
+  CdpConsoleType,
+  CdpRemoteArg,
+} from "@shared/types/ipc/webviewConsole";
+import { MAX_CONSOLE_ROWS, MAX_LIVE_OBJECT_ROWS } from "@shared/config/devPreviewConsole";
 
 export type ConsoleLevel = "log" | "info" | "warning" | "error";
 
@@ -37,6 +41,19 @@ interface ConsoleCaptureState {
   getMessages(paneId: string): ConsoleMessage[];
   getCounts(paneId: string): ConsoleCounts;
   removePane(paneId: string): void;
+  /**
+   * The user is expanding a value in this row. Main keeps an expanded row's
+   * handles past the live window, so the store has to keep its object ids too.
+   */
+  markInspected(paneId: string, rowId: number): void;
+  /** Main reported this row's handles gone: stop offering to expand its values. */
+  releaseRowHandles(paneId: string, rowId: number): void;
+  /**
+   * A capture stopped and main released its handles: none of the rows it
+   * delivered, up to `throughRowId`, can be expanded any more. Rows a later
+   * capture of the pane delivered are newer, and stay as they are.
+   */
+  releaseHandles(paneId: string, throughRowId: number): void;
 }
 
 // Types that should not be rendered as visible rows
@@ -52,6 +69,47 @@ function formatConsoleTime(ts: number): string {
   const s = String(d.getSeconds()).padStart(2, "0");
   const ms = String(d.getMilliseconds()).padStart(3, "0");
   return `${h}:${m}:${s}.${ms}`;
+}
+
+/**
+ * Rows the user has expanded, per pane. Mirrors main's pinning: these keep
+ * their object ids when they age out of the live window.
+ */
+const inspectedRows = new Map<string, Set<number>>();
+
+function hasHandles(msg: ConsoleMessage): boolean {
+  return msg.args.some(
+    (arg) => (arg.type === "object" || arg.type === "function") && arg.objectId !== ""
+  );
+}
+
+/**
+ * The row with its values' object ids blanked. The previews stay; a blank id
+ * is what tells the inspector there is nothing left to expand.
+ */
+function withoutHandles(msg: ConsoleMessage): ConsoleMessage {
+  if (!hasHandles(msg)) return msg;
+  return {
+    ...msg,
+    args: msg.args.map((arg): CdpRemoteArg =>
+      arg.type === "object" || arg.type === "function" ? { ...arg, objectId: "" } : arg
+    ),
+  };
+}
+
+function mapPaneMessages(
+  paneId: string,
+  update: (messages: ConsoleMessage[]) => ConsoleMessage[] | null
+): void {
+  useConsoleCaptureStore.setState((state) => {
+    const existing = state.messages.get(paneId);
+    if (!existing || existing.length === 0) return state;
+    const next = update(existing);
+    if (next === null) return state;
+    const messages = new Map(state.messages);
+    messages.set(paneId, next);
+    return { messages };
+  });
 }
 
 // RAF-flushed ingest buffer, mirroring panelStatusBuffer: one IPC console row
@@ -93,10 +151,20 @@ export function flushConsoleCaptureBuffer(): void {
     for (const [paneId, batch] of batches) {
       const existing = nextMessages.get(paneId) ?? [];
       let combined = existing.concat(batch);
+      // Main released the handles of every row that just left the live
+      // window, unless the user had expanded it. Earlier rows left it in an
+      // earlier flush. `combined` is a fresh array, so `existing` is untouched.
+      const inspected = inspectedRows.get(paneId);
+      const liveStart = combined.length - MAX_LIVE_OBJECT_ROWS;
+      for (let i = Math.max(0, existing.length - MAX_LIVE_OBJECT_ROWS); i < liveStart; i++) {
+        const msg = combined[i];
+        if (msg !== undefined && !inspected?.has(msg.id)) combined[i] = withoutHandles(msg);
+      }
       let evicted: ConsoleMessage[] = EMPTY_MESSAGES;
       if (combined.length > MAX_MESSAGES) {
         evicted = combined.slice(0, combined.length - MAX_MESSAGES);
         combined = combined.slice(combined.length - MAX_MESSAGES);
+        if (inspected) for (const msg of evicted) inspected.delete(msg.id);
       }
       nextMessages.set(paneId, combined);
 
@@ -177,6 +245,7 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
   clearMessages(paneId: string) {
     // Rows enqueued before the clear must not resurrect on the next flush.
     pendingRows.delete(paneId);
+    inspectedRows.delete(paneId);
     set((state) => {
       const nextMessages = new Map(state.messages);
       nextMessages.set(paneId, []);
@@ -201,6 +270,7 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
 
   removePane(paneId: string) {
     pendingRows.delete(paneId);
+    inspectedRows.delete(paneId);
     set((state) => {
       const nextMessages = new Map(state.messages);
       nextMessages.delete(paneId);
@@ -212,6 +282,44 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
       }
 
       return { messages: nextMessages, counters: nextCounters };
+    });
+  },
+
+  markInspected(paneId: string, rowId: number) {
+    let rows = inspectedRows.get(paneId);
+    if (!rows) {
+      rows = new Set();
+      inspectedRows.set(paneId, rows);
+    }
+    rows.add(rowId);
+  },
+
+  releaseRowHandles(paneId: string, rowId: number) {
+    inspectedRows.get(paneId)?.delete(rowId);
+    // The row may still be waiting in the ingest buffer.
+    flushConsoleCaptureBuffer();
+    mapPaneMessages(paneId, (messages) => {
+      const index = messages.findIndex((msg) => msg.id === rowId);
+      const row = messages[index];
+      if (row === undefined) return null;
+      const stripped = withoutHandles(row);
+      if (stripped === row) return null;
+      const next = messages.slice();
+      next[index] = stripped;
+      return next;
+    });
+  },
+
+  releaseHandles(paneId: string, throughRowId: number) {
+    const inspected = inspectedRows.get(paneId);
+    if (inspected) {
+      for (const rowId of inspected) if (rowId <= throughRowId) inspected.delete(rowId);
+    }
+    flushConsoleCaptureBuffer();
+    mapPaneMessages(paneId, (messages) => {
+      const released = (msg: ConsoleMessage) => msg.id <= throughRowId && hasHandles(msg);
+      if (!messages.some(released)) return null;
+      return messages.map((msg) => (released(msg) ? withoutHandles(msg) : msg));
     });
   },
 }));

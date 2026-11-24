@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSkeletonDisplayFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -11,9 +12,10 @@ import type {
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/Spinner";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { Callout } from "@/components/ui/Callout";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { pluralize } from "@/lib/pluralize";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
@@ -208,12 +210,51 @@ const ERROR_EVENT_TYPES: ReadonlySet<DevPreviewDiagnosticEvent["type"]> = new Se
   "proxy-ws-failed",
 ]);
 
+function RetryButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button variant="outline" size="xs" onClick={onClick}>
+      <RefreshCw aria-hidden="true" />
+      Retry
+    </Button>
+  );
+}
+
+const SKELETON_SUMMARY_LABEL_WIDTHS = ["w-14", "w-20", "w-16", "w-24"] as const;
+const SKELETON_TIMELINE_ROWS = 6;
+
+// Mirrors the loaded layout (summary grid, then timeline rows) so the swap to
+// real content doesn't shift anything. Bones are immediate: the onset gate and
+// display floor live on the caller.
+function DiagnosticsSkeleton() {
+  return (
+    <Skeleton label="Loading diagnostics">
+      <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1.5 border-b border-overlay px-3 py-2">
+        {SKELETON_SUMMARY_LABEL_WIDTHS.map((width, i) => (
+          <div key={i} className="contents">
+            <SkeletonBone immediate className={cn("h-3", width)} />
+            <SkeletonBone immediate className={cn("h-3", i % 2 === 0 ? "w-1/2" : "w-2/3")} />
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-col gap-1.5 px-3 py-2">
+        {Array.from({ length: SKELETON_TIMELINE_ROWS }, (_, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <SkeletonBone immediate className="h-3 w-14 shrink-0" />
+            <SkeletonBone immediate className="h-3 w-24 shrink-0" />
+            <SkeletonBone immediate className="h-3 min-w-0 flex-1" />
+          </div>
+        ))}
+      </div>
+    </Skeleton>
+  );
+}
+
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
     <>
       <dt className="text-text-secondary">{label}</dt>
       <TruncatedTooltip content={value}>
-        <dd className="min-w-0 truncate text-text-primary">{value}</dd>
+        <dd className="min-w-0 truncate tabular-nums text-text-primary">{value}</dd>
       </TruncatedTooltip>
     </>
   );
@@ -267,9 +308,11 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
   }, []);
 
   // Only the first load has nothing to show; a refresh keeps the last snapshot
-  // on screen rather than blanking it.
+  // on screen rather than blanking it. The gate keeps a fast load from flashing
+  // a skeleton; the floor keeps a skeleton that did appear from tearing down
+  // in the same frame.
   const isFirstLoad = isPending && result === null && !loadFailed;
-  const showLoading = useDeferredLoading(isFirstLoad, UI_DOHERTY_THRESHOLD);
+  const showSkeleton = useSkeletonDisplayFloor(useSkeletonGate(isFirstLoad));
 
   const session = result?.session ?? null;
   const proxy = result?.proxy ?? null;
@@ -299,34 +342,31 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {isFirstLoad ? (
-          showLoading && (
-            <div className="flex items-center gap-2 px-3 py-4 text-text-secondary">
-              <Spinner size="xs" />
-              Loading diagnostics…
-            </div>
-          )
+        {isFirstLoad || showSkeleton ? (
+          showSkeleton && <DiagnosticsSkeleton />
         ) : loadFailed && result === null ? (
-          <div className="flex flex-col items-start gap-2 p-3">
-            <p role="alert" className="text-text-secondary">
+          <div className="p-3">
+            <Callout
+              severity="error"
+              role="alert"
+              action={<RetryButton onClick={fetchDiagnostics} />}
+            >
               Couldn't load diagnostics for this preview.
-            </p>
-            <Button variant="outline" size="xs" onClick={fetchDiagnostics}>
-              Retry
-            </Button>
+            </Callout>
           </div>
         ) : (
           <>
             {/* A refresh that fails keeps the last snapshot: it is still the
                 best evidence there is while the server misbehaves. */}
             {loadFailed && (
-              <div className="flex items-center justify-between gap-2 border-b border-overlay px-3 py-1.5">
-                <p role="alert" className="text-text-secondary">
+              <div className="border-b border-overlay px-3 py-1.5">
+                <Callout
+                  severity="error"
+                  role="alert"
+                  action={<RetryButton onClick={fetchDiagnostics} />}
+                >
                   Couldn't refresh diagnostics. Showing the last snapshot.
-                </p>
-                <Button variant="outline" size="xs" onClick={fetchDiagnostics}>
-                  Retry
-                </Button>
+                </Callout>
               </div>
             )}
             {session && (
@@ -353,7 +393,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
                     value={
                       crashLoop.stopped
                         ? "stopped auto-restart"
-                        : `${crashLoop.count} fast crash${crashLoop.count === 1 ? "" : "es"}${crashLoop.backoffPending ? ", backoff pending" : ""}`
+                        : `${pluralize(crashLoop.count, "fast crash", "fast crashes")}${crashLoop.backoffPending ? ", backoff pending" : ""}`
                     }
                   />
                 )}
@@ -361,9 +401,11 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
             )}
 
             {events.length === 0 ? (
-              <p className="px-3 py-4 text-text-secondary">
-                No lifecycle events yet. Start the dev server to record its timeline.
-              </p>
+              <EmptyState
+                variant="zero-data"
+                scale="sidebar"
+                title="No lifecycle events yet. Start the dev server to record its timeline."
+              />
             ) : (
               <ol className="px-1 py-1">
                 {events.map((event) => {

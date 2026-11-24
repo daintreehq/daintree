@@ -43,6 +43,13 @@ export interface AnalysisBackend {
   feedChunk(data: string, flags: AnalysisChunkFlags): void;
   /** Pooled-shell prelude replay: headless write only, no monitor feed. */
   feedPrelude(data: string): void;
+  /**
+   * A mode reset Daintree writes as its own output (#17328): a headless write
+   * behind every chunk fed before it, with no monitor feed. False when a live
+   * mirror couldn't take it in that order; nothing was written, and the caller
+   * must not send the renderer bytes the mirror never saw.
+   */
+  feedModeReset(data: string): boolean;
   /** Headless resize + monitor resize suppression + temperature reset. */
   resize(cols: number, rows: number): void;
   /**
@@ -104,6 +111,13 @@ export interface AnalysisBackend {
    * before writing (#11552).
    */
   serialize(options?: SerializeReadOptions): Promise<SerializedTerminalSnapshot | null>;
+  /**
+   * The visible screen, read once every byte fed before the call has parsed
+   * (#17984), or null when that can't be shown: no live mirror, output the
+   * mirror was never handed, a mirror that lost output during the read, or a
+   * read that failed. Host-internal; it never answers a view.
+   */
+  serializeScreen(): Promise<SerializedTerminalSnapshot | null>;
   serializeForPersistence(): Promise<SerializedTerminalSnapshot | null>;
   /** Drain pending parses, then capture both preserved + persistence forms. */
   captureFinalSnapshot(): Promise<AnalysisFinalCapture>;
@@ -112,7 +126,8 @@ export interface AnalysisBackend {
    * Since when this mirror has read every byte of the terminal's output: its
    * creation, or the last time output was lost to it (a rebuilt worker slot, a
    * dropped feed). Agent state and the visible-change stamp only cover that
-   * span. Null once nothing reads the output any more.
+   * span. Every loss moves it, even two in one millisecond. Null once nothing
+   * reads the output any more.
    */
   observedSince(): number | null;
 

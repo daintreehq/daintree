@@ -293,6 +293,31 @@ describe("PluginDevWorkerHost", () => {
     host.dispose();
   });
 
+  it("lets an owner dispose it from inside the crash-loop verdict, dropping its app listener (#17211)", async () => {
+    const { PluginDevWorkerHost } = await loadModule();
+    const unrelated = vi.fn();
+    appMock.on("child-process-gone", unrelated);
+    const host = new PluginDevWorkerHost({ ...OPTS, mode: "prod" });
+    // What PluginService does for a prod worker: tear it down on the spot.
+    const crashLoop = vi.fn(() => host.dispose());
+    host.on("crash-loop", crashLoop);
+    void host.start();
+    mockChildren[0].emit("message", { type: "ready" });
+    expect(appMock.listenerCount("child-process-gone")).toBe(2);
+
+    for (let i = 0; i < 3; i++) {
+      const child = mockChildren[mockChildren.length - 1] as MockUtilityChild;
+      child.emit("exit", 1);
+      await flush();
+    }
+
+    expect(crashLoop).toHaveBeenCalledTimes(1);
+    expect(appMock.listeners("child-process-gone")).toEqual([unrelated]);
+    // Nothing respawns behind the verdict, and a second dispose is a no-op.
+    expect(forkMock).toHaveBeenCalledTimes(3);
+    expect(() => host.dispose()).not.toThrow();
+  });
+
   it("logs a worker's fatal V8 error without throwing and leaves the crash ladder to its exit (#16807)", async () => {
     const { PluginDevWorkerHost } = await loadModule();
     const host = new PluginDevWorkerHost(OPTS);

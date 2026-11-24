@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BrokerError } from "../rpc/RequestResponseBroker.js";
 import {
   _resetScheduledRunAdmissionForTest,
   reserveScheduledLaunch,
@@ -823,6 +824,93 @@ describe("WorkspaceClient multi-process manager", () => {
       expect(req2.requestId).not.toBe(req1.requestId);
       h(0).resolveRequest(req2.requestId, { states: [] });
       expect(await second).toMatchObject({ status: "ok" });
+    });
+  });
+
+  describe("active worktree id reads (#17069)", () => {
+    const idFor = (p: string) => `id-for-${path.resolve(p)}`;
+    const requestsOf = (host: MockHost, type: string) =>
+      host.getAllRequests().filter((r: any) => r.type === type);
+
+    it("asks the window's host for the id alone, never for every snapshot", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const idPromise = client.getActiveWorktreeIdForWindowAsync(1);
+      await tick();
+      const [req] = requestsOf(h(0), "get-active-worktree-id");
+      expect(req).toBeDefined();
+      h(0).resolveRequest(req.requestId, { worktreeId: "wt-a" });
+
+      expect(await idPromise).toBe("wt-a");
+      expect(requestsOf(h(0), "get-all-states")).toHaveLength(0);
+    });
+
+    it("answers null for a window no host serves, without contacting a host", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      expect(await client.getActiveWorktreeIdForWindowAsync(999)).toBeNull();
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("reads a project's own host even after its window was rebound", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+      const loadB = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await loadB;
+
+      const idPromise = client.getActiveWorktreeIdForProjectAsync(
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      const [req] = requestsOf(h(0), "get-active-worktree-id");
+      expect(req).toBeDefined();
+      h(0).resolveRequest(req.requestId, { worktreeId: "wt-a" });
+
+      expect(await idPromise).toBe("wt-a");
+      expect(requestsOf(h(1), "get-active-worktree-id")).toHaveLength(0);
+    });
+
+    it("answers null when the entry's projectId does not match the caller's", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await loadA;
+
+      const callsBefore = h(0).sendWithResponse.mock.calls.length;
+      expect(
+        await client.getActiveWorktreeIdForProjectAsync("/project-a", idFor("/project-b"))
+      ).toBeNull();
+      expect(h(0).sendWithResponse.mock.calls.length).toBe(callsBefore);
+    });
+
+    it("waits for the initial load before reading, so a partial monitor map never answers", async () => {
+      const loadA = client.loadProject("/project-a", 1);
+      h(0).simulateReady();
+      await tick();
+      const loadReq = h(0).getLastRequest()!;
+      expect(loadReq.type).toBe("load-project");
+
+      const idPromise = client.getActiveWorktreeIdForProjectAsync(
+        "/project-a",
+        idFor("/project-a")
+      );
+      await tick();
+      expect(requestsOf(h(0), "get-active-worktree-id")).toHaveLength(0);
+
+      h(0).resolveRequest(loadReq.requestId);
+      await loadA;
+      await tick();
+      const [req] = requestsOf(h(0), "get-active-worktree-id");
+      expect(req).toBeDefined();
+      h(0).resolveRequest(req.requestId, { worktreeId: null });
+      expect(await idPromise).toBeNull();
     });
   });
 
@@ -2979,6 +3067,79 @@ describe("WorkspaceClient multi-process manager", () => {
       // Advance past the grace period — dispose should NOT be called again
       await vi.advanceTimersByTimeAsync(200_000);
       expect(h(0).dispose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("removeMergedWorktree (#17321)", () => {
+    const guard = {
+      expectedBranch: "feature/x",
+      expectedHead: "a".repeat(40),
+      notAfter: Number.MAX_SAFE_INTEGER,
+    };
+    const removeRequests = (host: MockHost) =>
+      host.getAllRequests().filter((request) => request.type === "remove-merged-worktree");
+
+    async function start(
+      confirm: () => Promise<boolean>,
+      projectId = `id-for-${pathResolve("/project-a")}`
+    ) {
+      const pending = client.removeMergedWorktree("/project-a", projectId, "/wt/x", guard, confirm);
+      await tick();
+      return pending;
+    }
+
+    it("starts the host no window holds, confirms once it is ready, then sends the guard", async () => {
+      const confirm = vi.fn(async () => true);
+      const pending = start(confirm);
+      await tick();
+      expect(mockHosts).toHaveLength(1);
+      expect(confirm).not.toHaveBeenCalled();
+
+      await readyAndResolveLoad(0);
+      await vi.waitFor(() => expect(removeRequests(h(0))).toHaveLength(1));
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(removeRequests(h(0))[0]).toMatchObject({ worktreeId: "/wt/x", guard });
+
+      h(0).resolveRequest(removeRequests(h(0))[0]!.requestId);
+      expect(await pending).toEqual({ outcome: "removed" });
+    });
+
+    it("sends nothing when the last check says no", async () => {
+      const pending = start(async () => false);
+      await readyAndResolveLoad(0);
+      expect(await pending).toEqual({ outcome: "declined" });
+      expect(removeRequests(h(0))).toEqual([]);
+    });
+
+    it("never routes to a host serving another project id", async () => {
+      const confirm = vi.fn(async () => true);
+      const result = await start(confirm, "some-other-project");
+      expect(result).toMatchObject({ outcome: "not-sent" });
+      expect(confirm).not.toHaveBeenCalled();
+    });
+
+    it("tells the host's refusal apart from an answer that never came", async () => {
+      const refused = start(async () => true);
+      await readyAndResolveLoad(0);
+      await vi.waitFor(() => expect(removeRequests(h(0))).toHaveLength(1));
+      h(0).rejectRequest(removeRequests(h(0))[0]!.requestId, new Error("The worktree has changes"));
+      expect(await refused).toEqual({ outcome: "refused", error: "The worktree has changes" });
+
+      const lost = start(async () => true);
+      await vi.waitFor(() => expect(removeRequests(h(0))).toHaveLength(2));
+      h(0).rejectRequest(
+        removeRequests(h(0))[1]!.requestId,
+        new BrokerError("TIMEOUT", "timed out")
+      );
+      expect(await lost).toMatchObject({ outcome: "lost" });
+
+      const partway = start(async () => true);
+      await vi.waitFor(() => expect(removeRequests(h(0))).toHaveLength(3));
+      h(0).rejectRequest(
+        removeRequests(h(0))[2]!.requestId,
+        Object.assign(new Error("fatal: could not remove"), { gitStarted: true })
+      );
+      expect(await partway).toMatchObject({ outcome: "lost" });
     });
   });
 });

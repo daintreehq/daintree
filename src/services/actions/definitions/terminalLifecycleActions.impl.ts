@@ -10,6 +10,7 @@ import {
 import { terminalClient } from "@/clients";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
 import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
@@ -27,6 +28,8 @@ import {
   terminalHasRunningAgentSession,
 } from "@/utils/destructiveSessionConfirm";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
+import { isAgentTerminal } from "@/utils/terminalType";
+import { hasLiveTerminalScreen } from "@/utils/terminalLiveScreen";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import {
   assertPlacementAllowed,
@@ -41,8 +44,10 @@ import {
   launchFromRestoreRecovery,
 } from "@/services/terminal/restoreRecoveryLaunch";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { OwnFallbackStepFailedError } from "@/services/actions/ownFallbackStep";
 import { logWarn } from "@/utils/logger";
 import {
+  ResetModesArgsSchema,
   RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
@@ -135,17 +140,17 @@ export const terminalLifecycleActionRuns = {
     const targetId = terminalId ?? focusedAtDispatch;
     if (targetId) {
       const target = state.panelsById[targetId];
+      const commit = userCloseCommit(ctx.dispatchSource, [targetId], () =>
+        usePanelStore.getState().trashPanel(targetId)
+      );
       if (target?.location === "grid" || target?.location === undefined) {
-        requestPanelClose({
-          hideIds: [targetId],
-          commit: () => usePanelStore.getState().trashPanel(targetId),
-        });
+        requestPanelClose({ hideIds: [targetId], commit });
       } else if (hasPanelCloseGuard(targetId)) {
         // A docked panel with unsaved work still asks before it is trashed.
         const proceed = await consultPanelCloseGuards([targetId]);
-        if (proceed) usePanelStore.getState().trashPanel(targetId);
+        if (proceed) commit();
       } else {
-        state.trashPanel(targetId);
+        commit();
       }
     }
   },
@@ -365,8 +370,12 @@ export const terminalLifecycleActionRuns = {
     // Unlike terminal.restart, this asks whatever the agent is doing: the
     // conversation follows the pane to another preset's home only when asked
     // to and when that home can find it (#16045), and a rate-limited agent is
-    // rarely `working` (#13746).
-    if (!isConfirmed(args, ctx)) {
+    // rarely `working` (#13746). Unasked, the one move it makes is the
+    // assistant's next own fallback step, when main offered that (#17917):
+    // the offer, not anything in the args, decides it, so `confirmed` sent
+    // alongside it still takes only that step.
+    const ownFallbackStep = ctx?.hostOwnFallbackStep === true && ctx.hostConfirmed !== true;
+    if (!ownFallbackStep && !isConfirmed(args, ctx)) {
       throw new Error(
         "Restarting on another preset interrupts the agent and discards its scrollback; pass confirmed: true"
       );
@@ -375,9 +384,23 @@ export const terminalLifecycleActionRuns = {
     const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) throw new Error("No terminal to restart on that preset");
     const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
-    const result = await state.restartTerminalOnPreset(targetId, presetId, {
-      keepConversation: keepConversation === true,
-    });
+    const options = { keepConversation: keepConversation === true };
+    const result = ownFallbackStep
+      ? await state.restartTerminalOnOwnFallbackStep(targetId, presetId, {
+          ...options,
+          ...(ctx?.dispatchDeadlineAt !== undefined ? { deadlineAt: ctx.dispatchDeadlineAt } : {}),
+        })
+      : await state.restartTerminalOnPreset(targetId, presetId, options);
+    if (result.needsConfirmation === true) {
+      throw new ConfirmationStagedError(
+        `Moving '${targetId}' to preset '${presetId}' wasn't the next step of its own fallback chain, so it needs confirmation. Nothing changed.`
+      );
+    }
+    if (ownFallbackStep && result.admitted === true) {
+      throw new OwnFallbackStepFailedError(
+        result.error ?? "Couldn't restart the terminal on that preset"
+      );
+    }
     if (!result.success) {
       throw new Error(result.error ?? "Couldn't restart the terminal on that preset");
     }
@@ -460,6 +483,46 @@ export const terminalLifecycleActionRuns = {
       peekTerminalService()?.resetRenderer(targetId, {
         force: isForegroundDispatch(ctx?.dispatchSource),
       });
+    }
+  },
+  "terminal.resetModes": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
+    const { terminalId } = ResetModesArgsSchema.parse(args ?? {});
+    requireExplicitTerminalIdForAgentDispatch("terminal.resetModes", terminalId, ctx);
+    const targetId = terminalId ?? focusedAtDispatch;
+    if (!targetId) throw new UnactionableTargetError("No terminal to reset: focus or name one.");
+    // Resolved in this view, so the confirm below reads the pane it acts on;
+    // the host still refuses one that exits in between.
+    const terminal = usePanelStore.getState().panelsById[targetId];
+    if (!hasLiveTerminalScreen(terminal)) {
+      throw new UnactionableTargetError(
+        `'${targetId}' isn't a running terminal in this project, so it has no modes to reset.`
+      );
+    }
+    // A shell a crashed program left behind resets at once. An agent the pane
+    // is still wired to would lose the paste and keyboard modes it relies on,
+    // and context injection refuses a pane without bracketed paste.
+    if (!isConfirmed(args, ctx) && isAgentTerminal(terminal)) {
+      stageConfirmation(
+        {
+          kind: "resetModes",
+          dispatchSource: ctx?.dispatchSource,
+          targetCount: 1,
+          runningAgentCount: 1,
+          terminalId: targetId,
+          terminalTitle: terminal.title,
+        },
+        "Resetting this terminal's modes"
+      );
+    }
+    clearPendingIf("resetModes");
+    if (!(await terminalClient.resetModes(targetId))) {
+      throw new Error(
+        `Couldn't reset the modes of terminal '${targetId}': it may have exited, or its terminal host didn't confirm the reset.`
+      );
     }
   },
   "terminal.rename": async (

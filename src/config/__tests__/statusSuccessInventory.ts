@@ -64,22 +64,6 @@ export interface ApprovedStatusSuccessSite {
 export type StatusSuccessInventory = Readonly<Record<string, readonly ApprovedStatusSuccessSite[]>>;
 
 export const STATUS_SUCCESS_INVENTORY = {
-  "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx": [
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      anchor: "w-5 h-5 text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recorded result of the bulk create the user just ran; leaves with the dialog",
-    },
-    {
-      category: "outcome",
-      signature: "text-status-success",
-      anchor: "w-4 h-4 text-status-success",
-      expectedOccurrences: 1,
-      rationale: "Recorded per-item result of the bulk create the user just ran",
-    },
-  ],
   "plugins/builtin/github/renderer/components/GitHubListItem.tsx": [
     {
       category: "outcome",
@@ -371,9 +355,10 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
-      anchor: "↑{ahead}",
+      anchor: "ahead`}",
       expectedOccurrences: 1,
-      rationale: "Ahead-arrow count against the upstream, as the sidebar card paints it",
+      rationale:
+        "Ahead arrow of the drift count, as the sidebar card paints it; the figure is neutral",
     },
   ],
   "src/components/ui/Callout.tsx": [
@@ -513,5 +498,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 55;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 57;
+export const EXPECTED_STATUS_SUCCESS_SITES = 53;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 55;

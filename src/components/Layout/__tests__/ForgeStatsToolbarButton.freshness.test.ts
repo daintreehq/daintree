@@ -54,13 +54,17 @@ describe("ForgeStatsToolbarButton freshness wiring", () => {
   });
 
   it("uses freshnessSuffix in ariaLabel and tooltipContent for freshness-aware copy", () => {
-    // Commits uses commitFreshnessLevel; issues + PRs use freshnessLevel.
+    // Commits uses commitFreshnessLevel; PRs use freshnessLevel; issues use
+    // issuesFreshnessLevel, which is freshnessLevel unless the project binds its
+    // issues to another tracker (#16944).
     const commitsMatch = source.match(/freshnessSuffix\(commitFreshnessLevel/g);
     const sharedMatch = source.match(/freshnessSuffix\(freshnessLevel/g);
+    const issuesMatch = source.match(/freshnessSuffix\(issuesFreshnessLevel/g);
     expect(commitsMatch).not.toBeNull();
     expect(commitsMatch?.length).toBe(2); // ariaLabel + tooltipContent
     expect(sharedMatch).not.toBeNull();
-    expect(sharedMatch!.length).toBeGreaterThanOrEqual(4); // 2 issues + 2 PRs
+    expect(sharedMatch!.length).toBeGreaterThanOrEqual(2); // 2 PRs
+    expect(issuesMatch?.length).toBe(2); // ariaLabel + tooltipContent
   });
 
   it("applies animate-badge-bump via animKey prop on all three ForgeStatPill instances", () => {

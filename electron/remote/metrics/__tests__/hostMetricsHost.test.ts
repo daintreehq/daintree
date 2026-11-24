@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostMetricsSummary } from "../../../../shared/types/remoteHosts.js";
+import type { AgentUsageReading } from "../../../../shared/types/ipc/agentUsage.js";
 import { Lane } from "../../link/frames.js";
 import { ControlKind, type LinkClientInfo } from "../../link/messages.js";
 import type { LinkSession } from "../../link/session.js";
@@ -10,6 +11,7 @@ import {
   waitFor,
 } from "../../link/__tests__/linkTestUtils.js";
 import {
+  AgentStopChangePayloadSchema,
   AgentWaitingPayloadSchema,
   AttentionPayloadSchema,
   MAX_PROCESS_TERMINALS,
@@ -31,7 +33,12 @@ import {
   type MetricsSessionSource,
   type WaitingEvent,
 } from "../hostMetricsHost.js";
-import type { AgentWaitingPayload, AttentionPayload } from "../linkMethods.js";
+import type {
+  AgentStopChangePayload,
+  AgentWaitingPayload,
+  AttentionPayload,
+} from "../linkMethods.js";
+import type { AgentStopChange } from "../agentStops.js";
 import { SummaryLoop } from "../summaryLoop.js";
 
 let dir: string;
@@ -76,10 +83,15 @@ class FakeServer implements MetricsSessionSource {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  attach(session: LinkSession, clientId: string, sessionId = `session-of-${clientId}`) {
+  attach(
+    session: LinkSession,
+    clientId: string,
+    sessionId = `session-of-${clientId}`,
+    client: Partial<LinkClientInfo> = {}
+  ) {
     const ctx = {
       session,
-      client: { clientId, clientName: clientId, platform: "darwin" as const },
+      client: { clientId, clientName: clientId, platform: "darwin" as const, ...client },
       sessionId,
     };
     this.sessions.push(ctx);
@@ -104,8 +116,10 @@ const NO_QUIET_HOURS = {
 
 function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
   fireWaiting: (payload: WaitingEvent) => void;
+  fireStop: (change: AgentStopChange) => void;
 } {
   let waiting: ((payload: WaitingEvent) => void) | null = null;
+  let stops: ((change: AgentStopChange) => void) | null = null;
   let clock = 0;
   return {
     loop: { subscribe: () => () => {}, latest: () => null },
@@ -124,11 +138,16 @@ function deps(overrides: Partial<MetricsHostDeps> = {}): MetricsHostDeps & {
       waiting = listener;
       return () => (waiting = null);
     },
+    onAgentStopChanges(listener) {
+      stops = listener;
+      return () => (stops = null);
+    },
     notificationSettings: () => NO_QUIET_HOURS,
     shellDecides: () => false,
     acceptsRemoteControl: () => true,
     now: () => (clock += 1000),
     fireWaiting: (payload) => waiting?.(payload),
+    fireStop: (change) => stops?.(change),
     ...overrides,
   };
 }
@@ -198,6 +217,251 @@ describe("installHostMetricsHostWith", () => {
     server.attach(p.host, "shell");
     expect(subscribe).toHaveBeenCalledTimes(1);
     dispose();
+  });
+
+  it("watches this host's agent usage only while it samples for a Shell (#17318)", async () => {
+    const server = new FakeServer();
+    const release = vi.fn();
+    const watchAgentUsage = vi.fn(() => release);
+    let listener: ((summary: HostMetricsSummary) => void) | null = null;
+    const dispose = installHostMetricsHostWith(
+      server,
+      deps({
+        watchAgentUsage,
+        loop: {
+          subscribe: (next) => {
+            listener = next;
+            return () => (listener = null);
+          },
+          latest: () => null,
+        },
+      })
+    );
+    expect(watchAgentUsage).not.toHaveBeenCalled();
+    const p = await pair();
+    server.attach(p.host, "shell");
+    const q = await pair();
+    server.attach(q.host, "shell-2");
+    expect(watchAgentUsage).toHaveBeenCalledTimes(1);
+    // The last Shell gone, the next sample stops the loop and lets the watch go.
+    server.sessions = [];
+    listener!(summary(1));
+    expect(release).toHaveBeenCalledTimes(1);
+    dispose();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  describe("agent usage tracking (#17981)", () => {
+    const READING: AgentUsageReading = {
+      agentId: "codex",
+      accountNames: ["Work"],
+      isDefault: true,
+      windowDurationMins: 300,
+      usedPercent: 40,
+      resetsAt: null,
+      observedAt: 1,
+    };
+
+    function usageLoop() {
+      let listener: ((next: HostMetricsSummary) => void) | null = null;
+      let latest: HostMetricsSummary | null = null;
+      return {
+        loop: {
+          subscribe: (next: (summary: HostMetricsSummary) => void) => {
+            listener = next;
+            return () => (listener = null);
+          },
+          latest: () => latest,
+        },
+        seed(next: HostMetricsSummary) {
+          latest = next;
+        },
+        sample(next: HostMetricsSummary) {
+          latest = next;
+          listener?.(next);
+        },
+      };
+    }
+
+    const withUsage = (sampledAt: number): HostMetricsSummary => ({
+      ...summary(sampledAt),
+      agentUsage: [READING],
+    });
+
+    /** Per frame received, whether it carried usage. */
+    function usageFrames(client: LinkSession): boolean[] {
+      const seen: boolean[] = [];
+      client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) =>
+        seen.push(body.agentUsage !== undefined)
+      );
+      return seen;
+    }
+
+    /** Per frame received, the usage it carried; absent when none. */
+    function usageBodies(client: LinkSession): Array<AgentUsageReading[] | undefined> {
+      const seen: Array<AgentUsageReading[] | undefined> = [];
+      client.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (body) => seen.push(body.agentUsage));
+      return seen;
+    }
+
+    it("reads nothing for a Shell that said either way in its HELLO until it confirms as its session opens", async () => {
+      const server = new FakeServer();
+      const watchAgentUsage = vi.fn(() => vi.fn());
+      const samples = usageLoop();
+      samples.seed(withUsage(1));
+      const dispose = installHostMetricsHostWith(
+        server,
+        deps({ watchAgentUsage, loop: samples.loop })
+      );
+      const p = await pair();
+      const seen = usageFrames(p.client);
+      // It may have turned tracking off between its HELLO and now.
+      server.attach(p.host, "shell", undefined, { agentUsage: true });
+      await waitFor(() => seen.length === 1);
+      expect(seen).toEqual([false]);
+      expect(watchAgentUsage).not.toHaveBeenCalled();
+
+      await p.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: true });
+      expect(watchAgentUsage).toHaveBeenCalledTimes(1);
+      samples.sample(withUsage(2));
+      await waitFor(() => seen.length === 2);
+      expect(seen).toEqual([false, true]);
+      dispose();
+    });
+
+    it("starts no usage watch for a Shell that doesn't track usage, and sends it none", async () => {
+      const server = new FakeServer();
+      const watchAgentUsage = vi.fn(() => vi.fn());
+      const samples = usageLoop();
+      samples.seed(withUsage(1));
+      const dispose = installHostMetricsHostWith(
+        server,
+        deps({ watchAgentUsage, loop: samples.loop })
+      );
+      const p = await pair();
+      const seen = usageFrames(p.client);
+      server.attach(p.host, "shell", undefined, { agentUsage: false });
+      samples.sample(withUsage(2));
+      await waitFor(() => seen.length === 2);
+      // The cached frame handed over on attach carries none either.
+      expect(seen).toEqual([false, false]);
+      expect(watchAgentUsage).not.toHaveBeenCalled();
+      dispose();
+    });
+
+    it("shares one watch between Shells that disagree, and sends usage only where it's tracked", async () => {
+      const server = new FakeServer();
+      const release = vi.fn();
+      const watchAgentUsage = vi.fn(() => release);
+      const samples = usageLoop();
+      const dispose = installHostMetricsHostWith(
+        server,
+        deps({ watchAgentUsage, loop: samples.loop })
+      );
+      const legacy = await pair();
+      const off = await pair();
+      const seenLegacy = usageBodies(legacy.client);
+      const seenOff = usageBodies(off.client);
+      // A Shell from before the switch never says, and keeps getting usage.
+      server.attach(legacy.host, "legacy");
+      server.attach(off.host, "off", undefined, { agentUsage: false });
+      expect(watchAgentUsage).toHaveBeenCalledTimes(1);
+      samples.sample(withUsage(1));
+      await waitFor(() => seenLegacy.length === 1 && seenOff.length === 1);
+      expect(seenLegacy).toEqual([[READING]]);
+      expect(seenOff).toEqual([undefined]);
+
+      await off.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: true });
+      await legacy.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: false });
+      expect(watchAgentUsage).toHaveBeenCalledTimes(1);
+      expect(release).not.toHaveBeenCalled();
+      samples.sample(withUsage(2));
+      await waitFor(() => seenLegacy.length === 2 && seenOff.length === 2);
+      expect(seenLegacy).toEqual([[READING], undefined]);
+      expect(seenOff).toEqual([undefined, [READING]]);
+
+      // The last Shell that wanted it turning off lets the watch go at once.
+      await off.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: false });
+      expect(release).toHaveBeenCalledTimes(1);
+      await expect(
+        off.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: "no" })
+      ).rejects.toThrow();
+      dispose();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets the watch go when the last Shell that tracks usage leaves", async () => {
+      const server = new FakeServer();
+      const release = vi.fn();
+      const watchAgentUsage = vi.fn(() => release);
+      const samples = usageLoop();
+      const dispose = installHostMetricsHostWith(
+        server,
+        deps({ watchAgentUsage, loop: samples.loop })
+      );
+      const on = await pair();
+      const off = await pair();
+      const other = await pair();
+      server.attach(on.host, "on", undefined, { agentUsage: true });
+      server.attach(off.host, "off", undefined, { agentUsage: false });
+      server.attach(other.host, "other", undefined, { agentUsage: false });
+      await on.client.call(MetricsLinkMethod.AGENT_USAGE_DEMAND, { enabled: true });
+      expect(watchAgentUsage).toHaveBeenCalledTimes(1);
+      // A Shell that never wanted it leaving changes nothing.
+      off.host.close("gone");
+      await waitFor(() => !off.host.isOpen);
+      expect(release).not.toHaveBeenCalled();
+      on.host.close("gone");
+      await waitFor(() => release.mock.calls.length === 1);
+      dispose();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads usage for no Shell while the host's own switch is off, and picks up when it's on", async () => {
+      const server = new FakeServer();
+      const release = vi.fn();
+      const watchAgentUsage = vi.fn(() => release);
+      const samples = usageLoop();
+      let hostOn = false;
+      let changed: (() => void) | null = null;
+      const dispose = installHostMetricsHostWith(
+        server,
+        deps({
+          watchAgentUsage,
+          loop: samples.loop,
+          agentUsageTracking: () => hostOn,
+          onAgentUsageTrackingChanged: (listener) => {
+            changed = listener;
+            return () => (changed = null);
+          },
+        })
+      );
+      samples.seed(withUsage(0));
+      const p = await pair();
+      const seen = usageFrames(p.client);
+      server.attach(p.host, "shell");
+      samples.sample(withUsage(1));
+      await waitFor(() => seen.length === 2);
+      // The cached frame handed over on attach carries none either.
+      expect(seen).toEqual([false, false]);
+      expect(watchAgentUsage).not.toHaveBeenCalled();
+
+      hostOn = true;
+      changed!();
+      expect(watchAgentUsage).toHaveBeenCalledTimes(1);
+      samples.sample(withUsage(2));
+      await waitFor(() => seen.length === 3);
+      expect(seen).toEqual([false, false, true]);
+
+      hostOn = false;
+      changed!();
+      expect(release).toHaveBeenCalledTimes(1);
+      samples.sample(withUsage(3));
+      await waitFor(() => seen.length === 4);
+      expect(seen).toEqual([false, false, true, false]);
+      dispose();
+      expect(changed).toBe(null);
+    });
   });
 
   it("hands a Shell that attaches later the latest summary straight away", async () => {
@@ -844,6 +1108,219 @@ describe("installHostMetricsHostWith", () => {
     await waitFor(() => heard.legacy === 1);
     expect(heard.mac).toBe(1);
     dispose();
+  });
+});
+
+describe("agent stops (#17933)", () => {
+  function hear(p: { client: LinkSession }): AgentStopChangePayload[] {
+    const heard: AgentStopChangePayload[] = [];
+    p.client.registerCallHandler(
+      MetricsLinkMethod.AGENT_STOP_CHANGED,
+      AgentStopChangePayloadSchema,
+      (body) => {
+        heard.push(body);
+        return null;
+      }
+    );
+    return heard;
+  }
+
+  const stopSent = (spy: { mock: { calls: unknown[][] } }) =>
+    spy.mock.calls.filter(([method]) => method === MetricsLinkMethod.AGENT_STOP_CHANGED);
+
+  it("tells every Shell that reads them, summary-only too, with facts and its own ping", async () => {
+    const server = new FakeServer();
+    const a = await pair();
+    const b = await pair();
+    // This host's clock, from just after both links began.
+    const t0 = Math.max(a.host.startedAt.wall, b.host.startedAt.wall);
+    // This host's clocks, a second after then.
+    const d = deps({
+      clock: () => ({ wall: t0 + 1_000, mono: performance.now() + 1_000 }),
+      acceptsRemoteControl: () => false,
+    });
+    const dispose = installHostMetricsHostWith(server, d);
+    const heardA = hear(a);
+    const heardB = hear(b);
+    b.client.ping();
+    b.client.ping();
+    await waitFor(() => b.host.peerPingNonce === 1);
+    server.attach(a.host, "a", undefined, { agentStopChanges: true });
+    server.attach(b.host, "b", undefined, { agentStopChanges: true });
+
+    d.fireStop({
+      terminalId: "t1",
+      projectId: "p1",
+      stopped: true,
+      state: "completed",
+      seenAt: t0 + 200,
+    });
+    d.fireStop({
+      terminalId: "t1",
+      projectId: "p1",
+      stopped: false,
+      state: null,
+      seenAt: t0 + 900,
+    });
+    // Seen ahead of the moment it's sent, by a clock stepped back: no age, never a negative one.
+    d.fireStop({
+      terminalId: "t2",
+      projectId: null,
+      stopped: true,
+      state: "exited",
+      seenAt: t0 + 5_000,
+    });
+    await waitFor(() => heardA.length === 3 && heardB.length === 3);
+    expect(heardA).toEqual([
+      {
+        terminalId: "t1",
+        projectId: "p1",
+        stopped: true,
+        state: "completed",
+        seenAt: t0 + 200,
+        ageMs: 800,
+        afterPing: null,
+      },
+      {
+        terminalId: "t1",
+        projectId: "p1",
+        stopped: false,
+        state: null,
+        seenAt: t0 + 900,
+        ageMs: 100,
+        afterPing: null,
+      },
+      {
+        terminalId: "t2",
+        projectId: null,
+        stopped: true,
+        state: "exited",
+        seenAt: t0 + 5_000,
+        ageMs: 0,
+        afterPing: null,
+      },
+    ]);
+    // Each Shell's frame names that Shell's own newest ping.
+    expect(heardB.map((body) => body.afterPing)).toEqual([1, 1, 1]);
+    dispose();
+  });
+
+  it("sends none to a Shell whose HELLO doesn't say it reads them, so nothing is refused", async () => {
+    const server = new FakeServer();
+    const d = deps();
+    const dispose = installHostMetricsHostWith(server, d);
+    const older = await pair();
+    const declined = await pair();
+    const current = await pair();
+    const heardCurrent = hear(current);
+    const sent = [vi.spyOn(older.host, "call"), vi.spyOn(declined.host, "call")];
+    server.attach(older.host, "older");
+    server.attach(declined.host, "declined", undefined, { agentStopChanges: false });
+    server.attach(current.host, "current", undefined, { agentStopChanges: true });
+
+    d.fireStop({
+      terminalId: "t1",
+      projectId: null,
+      stopped: true,
+      state: "exited",
+      seenAt: Date.now(),
+    });
+    await waitFor(() => heardCurrent.length === 1);
+    for (const spy of sent) expect(stopSent(spy)).toEqual([]);
+    dispose();
+  });
+
+  it("never sends a link a stop seen before it began, though a stop taken back still goes", async () => {
+    const server = new FakeServer();
+    const p = await pair();
+    const began = p.host.startedAt;
+    // A second into the link, by this host's clocks.
+    const d = deps({ clock: () => ({ wall: began.wall + 1_000, mono: began.mono + 1_000 }) });
+    const dispose = installHostMetricsHostWith(server, d);
+    const heard = hear(p);
+    server.attach(p.host, "back", undefined, { agentStopChanges: true });
+
+    // Seen while this Shell had no link: the link that came up after never hears it.
+    const stop = { projectId: null, state: "completed" as const, stopped: true };
+    d.fireStop({ ...stop, terminalId: "t1", seenAt: began.wall - 1 });
+    d.fireStop({
+      terminalId: "t1",
+      projectId: null,
+      stopped: false,
+      state: null,
+      seenAt: began.wall - 1,
+    });
+    d.fireStop({ ...stop, terminalId: "t2", seenAt: began.wall });
+    await waitFor(() => heard.length === 2);
+    expect(heard.map((body) => [body.terminalId, body.stopped])).toEqual([
+      ["t1", false],
+      ["t2", true],
+    ]);
+    dispose();
+  });
+
+  it("keeps sending fresh stops after this host's clock is stepped back behind a link's start", async () => {
+    const server = new FakeServer();
+    const p = await pair();
+    const began = p.host.startedAt;
+    // An hour back on the wall clock, while a second has really passed.
+    const stepped = began.wall - 3_600_000;
+    const d = deps({ clock: () => ({ wall: stepped, mono: began.mono + 1_000 }) });
+    const dispose = installHostMetricsHostWith(server, d);
+    const heard = hear(p);
+    server.attach(p.host, "steady", undefined, { agentStopChanges: true });
+
+    d.fireStop({
+      terminalId: "t1",
+      projectId: null,
+      stopped: true,
+      state: "completed",
+      seenAt: stepped - 100,
+    });
+    await waitFor(() => heard.length === 1);
+    expect(heard[0]).toMatchObject({ terminalId: "t1", stopped: true, ageMs: 100 });
+    dispose();
+  });
+
+  it("holds nothing for a link that is down, retries none, and sends nothing once disposed", async () => {
+    const server = new FakeServer();
+    const d = deps({ now: () => Date.now() });
+    const dispose = installHostMetricsHostWith(server, d);
+    const gone = await pair();
+    const refusing = await pair();
+    const live = await pair();
+    const heardLive = hear(live);
+    server.attach(gone.host, "gone", undefined, { agentStopChanges: true });
+    server.attach(refusing.host, "refusing", undefined, { agentStopChanges: true });
+    server.attach(live.host, "live", undefined, { agentStopChanges: true });
+    gone.host.close("link down");
+    await waitFor(() => gone.client.isClosed);
+    const sentOnGone = vi.spyOn(gone.host, "call");
+    const sentOnRefusing = vi.spyOn(refusing.host, "call").mockRejectedValue(new Error("refused"));
+    const sentOnLive = vi.spyOn(live.host, "call");
+
+    d.fireStop({
+      terminalId: "t1",
+      projectId: null,
+      stopped: true,
+      state: "completed",
+      seenAt: Date.now(),
+    });
+    await waitFor(() => heardLive.length === 1);
+    expect(sentOnGone).not.toHaveBeenCalled();
+    // A Shell that couldn't take it is never sent it again; the others still were.
+    expect(stopSent(sentOnRefusing)).toHaveLength(1);
+
+    dispose();
+    d.fireStop({
+      terminalId: "t2",
+      projectId: null,
+      stopped: true,
+      state: "completed",
+      seenAt: Date.now(),
+    });
+    expect(stopSent(sentOnLive)).toHaveLength(1);
+    expect(stopSent(sentOnRefusing)).toHaveLength(1);
   });
 });
 

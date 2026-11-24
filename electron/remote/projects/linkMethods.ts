@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeProjectDisplay } from "../../../shared/utils/projectDisplay.js";
 import type {
   CheckDestinationPayload,
   CloneAndOpenOutcome,
@@ -92,6 +93,11 @@ export type LinkPushBranchPayload = PushBranchPayload & { opId?: string };
 export const BUNDLE_SINK_PREFIX = "daintree-bundle:";
 
 const text = (max: number) => z.string().max(max);
+// Optional everywhere it rides: a malformed one is dropped, never the request carrying it.
+const display = z
+  .unknown()
+  .transform((value) => normalizeProjectDisplay(value) ?? undefined)
+  .optional();
 const hostPath = z.string().min(1).max(4096);
 const projectId = z.string().min(1).max(256);
 const opId = z.string().min(1).max(128);
@@ -145,6 +151,7 @@ export const StartCloneSchema = z.object({
     depth: z.enum(["full", "shallow", "partial"]),
   }),
   setupRecipeId: z.string().min(1).max(256).nullable(),
+  display,
   assistant: z.literal(true).optional(),
   destinationGrant: token.nullable().optional(),
 });
@@ -156,6 +163,7 @@ export const OpenSchema = z.object({
   branch: branchTarget.nullable(),
   branchRemoteUrl: z.string().max(4096).nullable(),
   navigateOnly: z.boolean().optional(),
+  display,
   assistant: z.literal(true).optional(),
 });
 export const OpenFolderSchema = z.object({ path: hostPath });
@@ -178,7 +186,12 @@ export const StartPlaceWorktreeSchema: z.ZodType<PlaceWorktreePayload> = z.objec
     recipeId: z.string().min(1).max(256).nullable(),
   }),
 });
-export const ListDirectorySchema = z.object({ path: hostPath, showHidden: z.boolean().optional() });
+export const ListDirectorySchema = z.object({
+  path: hostPath,
+  showHidden: z.boolean().optional(),
+  // A mode from a newer Shell this host doesn't know lists in full rather than failing.
+  metadata: z.enum(["full", "picker"]).optional().catch(undefined),
+});
 export const BundleSendSchema = z.object({ token, sinkToken: token });
 export const BundleTokenSchema = z.object({ token });
 
@@ -210,6 +223,7 @@ const branchCheck = z.union([
 export const SourceDescriptionSchema: z.ZodType<SourceProjectDescription> = z.object({
   projectId,
   projectName: text(1024),
+  display,
   projectPath: hostPath,
   worktreePath: hostPath,
   branch: text(512).nullable(),

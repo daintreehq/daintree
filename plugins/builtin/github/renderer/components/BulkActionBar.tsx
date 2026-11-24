@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { Button, IconButton } from "@daintreehq/plugin-ui";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { Issue, PR } from "@shared/types/forge";
+import { pluralNoun } from "@/lib/pluralize";
 
 interface BulkActionBarProps {
   mode: "issue" | "pr";
@@ -57,7 +58,7 @@ export function BulkActionBar({
   if (count <= 0) return null;
 
   const noun = mode === "pr" ? "pull request" : "issue";
-  const hiddenNote = hiddenCount > 0 ? ` · ${hiddenCount} not shown` : "";
+  const hiddenNote = hiddenCount > 0 ? ` · ${hiddenCount.toLocaleString()} not shown` : "";
 
   return (
     /* This REPLACES the standard footer rather than stacking under it. The bar
@@ -74,8 +75,8 @@ export function BulkActionBar({
       <span className="ps-2 text-xs text-text-secondary tabular-nums truncate">
         {/* Neutral count. A `status-info` chip on a multi-select membership
             total was reading as an alert about nothing. */}
-        <span className="font-medium text-text-primary">{count}</span>{" "}
-        {count === 1 ? noun : `${noun}s`} selected{hiddenNote}
+        <span className="font-medium text-text-primary">{count.toLocaleString()}</span>{" "}
+        {pluralNoun(count, noun)} selected{hiddenNote}
       </span>
       <div className="flex-1" />
       <Button
@@ -86,7 +87,7 @@ export function BulkActionBar({
         data-testid="bulk-action-create-worktrees-button"
         icon="worktree"
       >
-        {count === 1 ? "Create worktree" : "Create worktrees"}
+        Create {pluralNoun(count, "worktree")}
       </Button>
       <IconButton
         variant="ghost"

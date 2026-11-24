@@ -3,6 +3,7 @@ import {
   disposeStore,
   expectedExposedIds,
   forbiddenCallSample,
+  fullTierCallBattery,
   loadMcpModules,
   loadRealManifest,
   MCP_TIERS,
@@ -13,7 +14,6 @@ import {
   readResultPayload,
   requiredOutputKeys,
   RESOURCE_TAG_ARG,
-  SELF_GATED_TOOLS,
   taggedTerminalId,
   type CallOutcome,
   type ListedTool,
@@ -321,9 +321,7 @@ export const mcpSessionScenarios: PerfScenario[] = [
       // refusing is the right answer for all of them and none belongs in a
       // battery whose oracle is "every call is admitted". PERF-283 grades them
       // both ways.
-      const battery = [...expectedExposedIds(manifest, "full", false)]
-        .filter((id) => !SELF_GATED_TOOLS.has(id))
-        .sort();
+      const battery = fullTierCallBattery(manifest);
       // Mirrors `buildToolOutputSchema`: only an object-typed schema is
       // advertised, and only an advertised one makes the client validate.
       const schemaCarrying = new Set(

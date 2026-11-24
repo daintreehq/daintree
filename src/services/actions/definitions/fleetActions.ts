@@ -87,6 +87,9 @@ export function registerFleetActions(actions: ActionRegistry): void {
     // Injects keystrokes into agent terminals — closed to plugin dispatch so it
     // can't be an end-run around the `agent:input` capability (#10558).
     denyPluginDispatch: true,
+    // Types into whichever armed agents are waiting at the moment it runs, so a
+    // replay from `action.repeatLast` would answer prompts nobody has read (#17205).
+    nonRepeatable: true,
     scope: "renderer",
     run: (args: unknown, ctx: ActionContext) => runFleetAction("fleet.accept", args, ctx),
   }));
@@ -102,6 +105,10 @@ export function registerFleetActions(actions: ActionRegistry): void {
     danger: "safe",
     // Injects keystrokes into agent terminals — closed to plugin dispatch (#10558).
     denyPluginDispatch: true,
+    // Runtime-escalated to a confirm at 5+ targets, and the fleet bar's confirm
+    // re-dispatches with `{ confirmed: true }`: recorded into `lastAction`, that
+    // would let `action.repeatLast` reject past the prompt (#17205).
+    nonRepeatable: true,
     scope: "renderer",
     argsSchema: confirmedArgsSchema,
     run: (args: unknown, ctx: ActionContext) => runFleetAction("fleet.reject", args, ctx),
@@ -118,6 +125,8 @@ export function registerFleetActions(actions: ActionRegistry): void {
     danger: "safe",
     // Injects control keystrokes into agent terminals — closed to plugin dispatch (#10558).
     denyPluginDispatch: true,
+    // Confirms at 3+ targets; same replay hazard as `fleet.reject` (#17205).
+    nonRepeatable: true,
     scope: "renderer",
     argsSchema: confirmedArgsSchema,
     run: (args: unknown, ctx: ActionContext) => runFleetAction("fleet.interrupt", args, ctx),
@@ -207,6 +216,9 @@ export function registerFleetActions(actions: ActionRegistry): void {
     // Re-broadcasts the last (arbitrary, often \r-terminated) payload into
     // terminals — closed to plugin dispatch so it can't inject commands (#10558).
     denyPluginDispatch: true,
+    // Re-sends a recorded payload into terminals; a replay would fire it at
+    // whatever failures are recorded later, unseen (#17205).
+    nonRepeatable: true,
     scope: "renderer",
     run: (args: unknown, ctx: ActionContext) => runFleetAction("fleet.retryFailures", args, ctx),
   }));

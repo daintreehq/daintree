@@ -1,21 +1,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectSettings, RunCommand } from "@shared/types";
 
-const { getSettingsMock, detectRunnersMock } = vi.hoisted(() => ({
+const { getSettingsMock, detectRunnersMock, changeLinksMock } = vi.hoisted(() => ({
   getSettingsMock: vi.fn(),
   detectRunnersMock: vi.fn(),
+  changeLinksMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
   projectClient: {
     getSettings: getSettingsMock,
     detectRunners: detectRunnersMock,
+    changeLinks: changeLinksMock,
   },
+  invalidateProjectSettingsCache: vi.fn(),
 }));
 
 import {
+  changeProjectLinks,
   cleanupProjectSettingsStore,
+  patchCachedProjectLinks,
   patchCachedProjectSettings,
+  refreshCachedProjectLinks,
   prePopulateProjectSettings,
   useProjectSettingsStore,
 } from "../projectSettingsStore";
@@ -333,6 +339,191 @@ describe("projectSettingsStore", () => {
       runCommands: [],
       devServerCommand: "pnpm dev",
       browserAllowedHosts: ["example.com"],
+    });
+  });
+
+  describe("Project links (#17091)", () => {
+    const staging = { id: "a", title: "Staging", url: "https://staging.example.com/" };
+
+    it("puts the list main saved into the cache, and leaves it on a refusal", async () => {
+      const prod = { id: "b", title: "Prod", url: "https://prod.example.com/" };
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], links: [staging] },
+      });
+      const change = { op: "add" as const, title: "Prod", url: "https://prod.example.com" };
+
+      changeLinksMock.mockResolvedValueOnce({ saved: true, links: [staging, prod], link: prod });
+      await changeProjectLinks({ projectId: "project-a", actor: "user", change });
+      expect(changeLinksMock).toHaveBeenLastCalledWith({
+        projectId: "project-a",
+        actor: "user",
+        change,
+      });
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([staging, prod]);
+
+      changeLinksMock.mockResolvedValueOnce({
+        saved: false,
+        code: "limit",
+        message: "This project already has 50 links",
+      });
+      const refused = await changeProjectLinks({ projectId: "project-a", actor: "user", change });
+      expect(refused.saved).toBe(false);
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([staging, prod]);
+    });
+
+    it("keeps the cached links through settings saved from a copy without them", () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], links: [staging] },
+      });
+
+      useProjectSettingsStore.getState().setSettings({
+        runCommands: [],
+        devServerCommand: "pnpm dev",
+      });
+      useProjectSettingsStore.getState().setSettings({
+        runCommands: [],
+        links: [],
+        devServerCommand: "pnpm dev",
+      });
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "pnpm dev",
+        links: [staging],
+      });
+    });
+
+    it("replaces the cached links with the list main saved, even an empty one", () => {
+      const prod = { id: "b", title: "Prod", url: "https://prod.example.com/" };
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], devServerCommand: "dev", links: [staging] },
+      });
+
+      patchCachedProjectLinks("project-a", [prod, staging]);
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([prod, staging]);
+
+      patchCachedProjectLinks("project-b", [staging]);
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([prod, staging]);
+
+      patchCachedProjectLinks("project-a", []);
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "dev",
+        links: [],
+      });
+    });
+
+    it("reads main's links for a launchpad, unless the cache changed while it read", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], links: [] },
+      });
+      getSettingsMock.mockResolvedValueOnce({ runCommands: [], links: [staging] });
+      await refreshCachedProjectLinks("project-a");
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([staging]);
+
+      // A change lands while the read is out: the read predates it.
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+      const refresh = refreshCachedProjectLinks("project-a");
+      patchCachedProjectLinks("project-a", []);
+      read.resolve({ runCommands: [], links: [staging] });
+      await refresh;
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([]);
+    });
+
+    it("lands the newest of two overlapping reads, whichever answers first", async () => {
+      const prod = { id: "b", title: "Prod", url: "https://prod.example.com/" };
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], links: [] },
+      });
+      const older = createDeferred<ProjectSettings>();
+      const newer = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+
+      const first = refreshCachedProjectLinks("project-a");
+      const second = refreshCachedProjectLinks("project-a");
+      older.resolve({ runCommands: [], links: [staging] });
+      await first;
+      // The older answer stands aside for the read still out.
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([]);
+      newer.resolve({ runCommands: [], links: [staging, prod] });
+      await second;
+
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([staging, prod]);
+    });
+
+    it("keeps a links read through an unrelated settings write landing meanwhile", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], links: [] },
+      });
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+
+      const refresh = refreshCachedProjectLinks("project-a");
+      useProjectSettingsStore.getState().setSettings({ runCommands: [], devServerCommand: "dev" });
+      read.resolve({ runCommands: [], links: [staging] });
+      await refresh;
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "dev",
+        links: [staging],
+      });
+    });
+
+    it("keeps links queued during the first load over a stale copy saved meanwhile", async () => {
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+      detectRunnersMock.mockResolvedValueOnce([]);
+
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+      patchCachedProjectLinks("project-a", [staging]);
+      // A save built from a copy read before the link was added.
+      useProjectSettingsStore.getState().setSettings({ runCommands: [], devServerCommand: "dev" });
+      read.resolve({ runCommands: [] });
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([staging]);
+    });
+
+    it("lets a revalidation keep what it read while taking links patched meanwhile", async () => {
+      useProjectSettingsStore.setState({
+        projectId: "project-a",
+        settings: { runCommands: [], devServerCommand: "old", links: [] },
+      });
+      const read = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(read.promise);
+      detectRunnersMock.mockResolvedValueOnce([]);
+
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+      patchCachedProjectLinks("project-a", [staging]);
+      read.resolve({ runCommands: [], devServerCommand: "new", links: [] });
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings).toEqual({
+        runCommands: [],
+        devServerCommand: "new",
+        links: [staging],
+      });
+    });
+
+    it("applies links saved during the initial load once that load lands", async () => {
+      const settingsRead = createDeferred<ProjectSettings>();
+      getSettingsMock.mockReturnValueOnce(settingsRead.promise);
+      detectRunnersMock.mockResolvedValueOnce([]);
+      const load = useProjectSettingsStore.getState().loadSettings("project-a");
+
+      patchCachedProjectLinks("project-a", [staging]);
+      settingsRead.resolve({ runCommands: [] });
+      await load;
+
+      expect(useProjectSettingsStore.getState().settings?.links).toEqual([staging]);
     });
   });
 });

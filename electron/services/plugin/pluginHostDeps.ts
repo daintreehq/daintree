@@ -1,5 +1,9 @@
 import { isAppError } from "../../utils/errorTypes.js";
-import { getPluginCapabilityConsentService } from "../plugin-capability/instances.js";
+import {
+  getPluginCapabilityConsentService,
+  getPluginCapabilityConsentStore,
+} from "../plugin-capability/instances.js";
+import type { AssistantPluginNotification } from "../assistantPluginNotifications.js";
 import type { PluginArtifactService } from "./PluginArtifactService.js";
 import { type HostGitFactory } from "./pluginHostGit.js";
 import type { PluginProcessManager } from "./PluginProcessManager.js";
@@ -253,6 +257,14 @@ export interface PluginHostFactoryDeps {
    * the plugin nothing.
    */
   pluginNotificationsBlocked: (pluginId: string, projectId: string | null) => Promise<boolean>;
+  /**
+   * Where a notification the plugin marked for an assistant (#18154) is
+   * offered to the assistants watching for one, once it passed the user's
+   * silence, mute and budget; loaded on first use. Absent, none reaches one.
+   */
+  assistantNotifications?: () => Promise<{
+    publish(notification: AssistantPluginNotification, raisedEpoch?: number): void;
+  }>;
 }
 
 /**
@@ -321,6 +333,41 @@ export async function ensureCapabilityConsent(
     plugin.manifest.capabilities ?? [],
     scopeKey
   );
+}
+
+/**
+ * Whether a plugin may already use a consent-gated capability without being
+ * asked: it declares it, and is a built-in or holds the user's lasting grant
+ * under the same scope {@link ensureCapabilityConsent} keys one by. Never
+ * prompts, so a read the user didn't ask for — a list, a push — can carry what
+ * the capability covers without raising a dialog. A one-time approval grants
+ * only the call that asked, and answers false here.
+ */
+export function holdsCapabilityConsent(
+  deps: Pick<PluginHostFactoryDeps, "plugins" | "declaredCapabilities">,
+  pluginId: string,
+  capability: BuiltInPluginCapability
+): boolean {
+  if (!deps.declaredCapabilities(pluginId).has(capability)) return false;
+  const plugin = deps.plugins.get(pluginId);
+  if (!plugin) return false;
+  if (plugin.isBuiltin) return true;
+  try {
+    return getPluginCapabilityConsentStore().hasGrant({
+      pluginId,
+      capability,
+      scopeKey: plugin.binding?.projectId ?? "global",
+    });
+  } catch (err) {
+    // Read from timers and pushes as well as calls, where a throw would reach
+    // the process rather than the plugin: a store that can't be read grants
+    // nothing.
+    console.error(
+      `[PluginHost] could not read plugin "${pluginId}"'s "${capability}" grant; treating it as not granted:`,
+      err
+    );
+    return false;
+  }
 }
 
 /**

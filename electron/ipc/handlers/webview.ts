@@ -11,6 +11,7 @@ import type {
   CdpLogEntrySource,
   SerializedConsoleRow,
   CdpPropertyDescriptor,
+  CdpGetPropertiesResult,
 } from "../../../shared/types/ipc/webviewConsole.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
@@ -21,7 +22,71 @@ import {
   unfreezeWebContents,
 } from "../../utils/webContentsLifecycle.js";
 import { acquireCdpLease, type CdpLease } from "../../services/cdp/WebContentsCdpService.js";
-import { MAX_CONSOLE_ROWS } from "../../../shared/config/devPreviewConsole.js";
+import {
+  MAX_CONSOLE_ROWS,
+  MAX_LIVE_OBJECT_ROWS,
+} from "../../../shared/config/devPreviewConsole.js";
+
+/**
+ * One pane's CDP remote-object handles, owned per console row rather than per
+ * pane, so retiring a row can release exactly its handles.
+ */
+interface PaneObjectLedger {
+  /**
+   * Every row the renderer still holds, oldest first, mirroring its
+   * MAX_CONSOLE_ROWS cap. The value is the handles the row still owns, or null
+   * once they were released: the row keeps its place in the cap without
+   * pinning anything in the guest's heap.
+   */
+  rows: Map<number, Set<string> | null>;
+  /** The newest MAX_LIVE_OBJECT_ROWS row ids, oldest first. */
+  live: number[];
+  /** Rows the user has expanded: their handles outlive the live window. */
+  inspected: Set<number>;
+}
+
+function createPaneObjectLedger(): PaneObjectLedger {
+  return { rows: new Map(), live: [], inspected: new Set() };
+}
+
+/**
+ * The handles no other pane's rows still own. One console call is recorded for
+ * every pane capturing the guest, with the same handles, so a pane letting go
+ * of a row must not release what another pane has kept — an expanded row, or
+ * one still inside that pane's window. Free with a single pane on the guest.
+ */
+function unsharedObjectIds(
+  session: CdpSession,
+  paneId: string,
+  objectIds: Iterable<string>
+): string[] {
+  const ids = [...objectIds];
+  const others: PaneObjectLedger[] = [];
+  for (const [otherPaneId, ledger] of session.rowObjectIdsByPane) {
+    if (otherPaneId !== paneId) others.push(ledger);
+  }
+  if (others.length === 0) return ids;
+  return ids.filter((objectId) => {
+    for (const ledger of others) {
+      for (const owned of ledger.rows.values()) {
+        if (owned?.has(objectId)) return false;
+      }
+    }
+    return true;
+  });
+}
+
+/** Forget every row. Returns the handles they still owned, for the caller to release or drop. */
+function resetPaneObjectLedger(ledger: PaneObjectLedger): string[] {
+  const ids: string[] = [];
+  for (const rowIds of ledger.rows.values()) {
+    if (rowIds) for (const objectId of rowIds) ids.push(objectId);
+  }
+  ledger.rows.clear();
+  ledger.live.length = 0;
+  ledger.inspected.clear();
+  return ids;
+}
 
 interface CdpSession {
   /**
@@ -35,12 +100,8 @@ interface CdpSession {
   paneIds: Set<string>;
   navigationGeneration: number;
   groupDepthByPane: Map<string, number>;
-  /**
-   * CDP remote-object handles, owned per console row rather than per pane, so
-   * evicting a row can release exactly its handles. Insertion order is the
-   * emission order, which makes the inner map the eviction FIFO.
-   */
-  rowObjectIdsByPane: Map<string, Map<number, Set<string>>>;
+  /** CDP remote-object handle ownership, per capturing pane. */
+  rowObjectIdsByPane: Map<string, PaneObjectLedger>;
   /**
    * Replay reconciliation, one watermark per event stream. `Runtime.enable` and
    * `Log.enable` both re-deliver their guest-side buffer, so a stop/start cycle
@@ -403,12 +464,13 @@ function objectIdsFromArgs(args: CdpRemoteArg[]): string[] {
 }
 
 /**
- * Record a row's handle ownership and evict past the renderer's row cap.
+ * Record a row's handle ownership, release the handles of the row that just
+ * aged out of the live window, and evict past the renderer's row cap.
  *
  * Every emitted row gets a record, including rows carrying no handles, because
- * the renderer's cap counts rows, not handles — mirroring it here is what keeps
- * main's eviction boundary identical to the store's without an extra IPC round
- * trip per eviction. See MAX_CONSOLE_ROWS.
+ * the renderer's caps count rows, not handles — mirroring them here is what
+ * keeps main's boundaries identical to the store's without an IPC round trip
+ * per eviction. See MAX_CONSOLE_ROWS and MAX_LIVE_OBJECT_ROWS.
  */
 function recordRowObjects(
   wcId: number,
@@ -417,19 +479,35 @@ function recordRowObjects(
   rowId: number,
   objectIds: string[]
 ): void {
-  let rows = session.rowObjectIdsByPane.get(paneId);
-  if (!rows) {
-    rows = new Map();
-    session.rowObjectIdsByPane.set(paneId, rows);
+  let ledger = session.rowObjectIdsByPane.get(paneId);
+  if (!ledger) {
+    ledger = createPaneObjectLedger();
+    session.rowObjectIdsByPane.set(paneId, ledger);
   }
-  rows.set(rowId, new Set(objectIds));
+  ledger.rows.set(rowId, new Set(objectIds));
+  ledger.live.push(rowId);
 
-  while (rows.size > MAX_CONSOLE_ROWS) {
-    const oldest = rows.keys().next();
+  if (ledger.live.length > MAX_LIVE_OBJECT_ROWS) {
+    const aged = ledger.live.shift();
+    if (aged !== undefined && !ledger.inspected.has(aged)) {
+      const agedIds = ledger.rows.get(aged);
+      if (agedIds) {
+        // Re-setting an existing key keeps its place in the cap's FIFO.
+        ledger.rows.set(aged, null);
+        if (agedIds.size > 0) releaseObjectIds(wcId, unsharedObjectIds(session, paneId, agedIds));
+      }
+    }
+  }
+
+  while (ledger.rows.size > MAX_CONSOLE_ROWS) {
+    const oldest = ledger.rows.keys().next();
     if (oldest.done) break;
-    const evictedIds = rows.get(oldest.value);
-    rows.delete(oldest.value);
-    if (evictedIds && evictedIds.size > 0) releaseObjectIds(wcId, evictedIds);
+    const evictedIds = ledger.rows.get(oldest.value);
+    ledger.rows.delete(oldest.value);
+    ledger.inspected.delete(oldest.value);
+    if (evictedIds && evictedIds.size > 0) {
+      releaseObjectIds(wcId, unsharedObjectIds(session, paneId, evictedIds));
+    }
   }
 }
 
@@ -438,17 +516,21 @@ async function releaseObjectsForPane(
   session: CdpSession,
   paneId: string
 ): Promise<void> {
-  const rows = session.rowObjectIdsByPane.get(paneId);
-  if (!rows || rows.size === 0) return;
+  const ledger = session.rowObjectIdsByPane.get(paneId);
+  if (!ledger) return;
+  await releaseLedger(wc, session, paneId, ledger);
+}
 
-  const ids: string[] = [];
-  for (const rowIds of rows.values()) {
-    for (const objectId of rowIds) ids.push(objectId);
-  }
+async function releaseLedger(
+  wc: Electron.WebContents,
+  session: CdpSession,
+  paneId: string,
+  ledger: PaneObjectLedger
+): Promise<void> {
   // Drop ownership before awaiting: an expansion result landing mid-release
   // must not attach new handles to a record that is about to disappear, and
   // must not read a released row as still owning anything.
-  rows.clear();
+  const ids = unsharedObjectIds(session, paneId, resetPaneObjectLedger(ledger));
   if (ids.length === 0) return;
 
   await Promise.allSettled(
@@ -658,7 +740,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
 
     if (!session.rowObjectIdsByPane.has(paneId)) {
-      session.rowObjectIdsByPane.set(paneId, new Map());
+      session.rowObjectIdsByPane.set(paneId, createPaneObjectLedger());
     }
 
     // Sessions outlive capture (see handleStopConsoleCapture), so tie their
@@ -707,7 +789,8 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
               // handle when the execution context went away.
               for (const pid of session.paneIds) {
                 session.groupDepthByPane.set(pid, 0);
-                session.rowObjectIdsByPane.get(pid)?.clear();
+                const ledger = session.rowObjectIdsByPane.get(pid);
+                if (ledger) resetPaneObjectLedger(ledger);
                 const payload = {
                   paneId: pid,
                   navigationGeneration: session.navigationGeneration,
@@ -747,7 +830,8 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             // a second time.
             for (const pid of session.paneIds) {
               session.groupDepthByPane.set(pid, 0);
-              session.rowObjectIdsByPane.get(pid)?.clear();
+              const ledger = session.rowObjectIdsByPane.get(pid);
+              if (ledger) resetPaneObjectLedger(ledger);
               const payload = {
                 paneId: pid,
                 navigationGeneration: session.navigationGeneration,
@@ -981,14 +1065,18 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     session: CdpSession,
     paneId: string
   ): Promise<void> {
-    const wc = webContents.fromId(webContentsId);
-    if (wc && !wc.isDestroyed()) {
-      await releaseObjectsForPane(wc, session, paneId);
-    }
-
+    // Membership goes before the release is awaited: CDP events keep arriving
+    // during that await, and a row recorded into a ledger that is then dropped
+    // would keep its handles with nothing left to release them.
     session.paneIds.delete(paneId);
     session.groupDepthByPane.delete(paneId);
+    const ledger = session.rowObjectIdsByPane.get(paneId);
     session.rowObjectIdsByPane.delete(paneId);
+
+    const wc = webContents.fromId(webContentsId);
+    if (ledger && wc && !wc.isDestroyed()) {
+      await releaseLedger(wc, session, paneId, ledger);
+    }
 
     // If no more panes are capturing, give up the domain leases but keep the
     // session. Holding it keeps the replay bookkeeping, so the replay a later
@@ -1033,7 +1121,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     paneId: unknown,
     rowId: unknown,
     objectId: unknown
-  ): Promise<{ properties: CdpPropertyDescriptor[] }> => {
+  ): Promise<CdpGetPropertiesResult> => {
     if (
       typeof webContentsId !== "number" ||
       typeof paneId !== "string" ||
@@ -1053,14 +1141,22 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
 
     // Expansion is only meaningful for a handle the named row still owns. A row
-    // that was evicted, cleared or invalidated by navigation is gone from the
-    // renderer too, and inspecting it would mint descendants nothing can own.
+    // whose handles were released — aged out of the live window, evicted,
+    // cleared, or invalidated by navigation — would mint descendants nothing
+    // can own; the renderer is told so it stops offering the expansion.
     // Checking the handle itself — not just that the row exists — keeps a
     // caller from inspecting an arbitrary objectId through a live row.
-    const session = sessions.get(webContentsId);
-    if (!session?.rowObjectIdsByPane.get(paneId)?.get(rowId)?.has(objectId)) {
+    const ledger = sessions.get(webContentsId)?.rowObjectIdsByPane.get(paneId);
+    const owned = ledger?.rows.get(rowId);
+    if (!ledger || !owned) {
+      return { properties: [], released: true };
+    }
+    if (!owned.has(objectId)) {
       return { properties: [] };
     }
+    // Pinned from the request on, as the renderer pins it: someone is looking
+    // at this row, so its handles stay past the live window.
+    ledger.inspected.add(rowId);
 
     try {
       const result = await wc.debugger.sendCommand("Runtime.getProperties", {
@@ -1119,7 +1215,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       // Re-check ownership after the await. If the row lost it while the
       // request was in flight, these descendants belong to nobody — release
       // them rather than letting a late result resurrect released ownership.
-      const rowIds = sessions.get(webContentsId)?.rowObjectIdsByPane.get(paneId)?.get(rowId);
+      const rowIds = sessions.get(webContentsId)?.rowObjectIdsByPane.get(paneId)?.rows.get(rowId);
       if (rowIds) {
         for (const id of descendantIds) rowIds.add(id);
       } else if (descendantIds.length > 0) {

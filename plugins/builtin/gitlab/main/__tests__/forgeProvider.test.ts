@@ -804,6 +804,7 @@ describe("findPRsByBranches", () => {
     const init = fetchMock().mock.calls[0]?.[1] as RequestInit | undefined;
     const body = JSON.parse(String(init?.body)) as { query: string };
     expect(body.query).toContain("detailedMergeStatus");
+    expect(body.query).toContain("userNotesCount");
     expect(result?.get("feature/a")?.number).toBe(12);
     expect(result?.get("feature/a")?.mergeState).toBe("conflicts");
     expect(result?.has("feature/b")).toBe(true);
@@ -882,6 +883,862 @@ describe("getCIStatus", () => {
   it("returns null when the MR has no pipeline", async () => {
     fetchMock().mockResolvedValue(jsonResponse({ iid: 3, state: "opened", head_pipeline: null }));
     await expect(gitlabForgeProvider.getCIStatus(REPO, 3)).resolves.toBeNull();
+  });
+});
+
+describe("checks.getChecks", () => {
+  const getChecks = (iid: number) => gitlabForgeProvider.checks!.getChecks(REPO, iid);
+
+  // Signed in by default: the commit statuses list is only read with a token.
+  beforeEach(async () => {
+    await connectAs("https://gitlab.com", "glpat-secret");
+  });
+  const SHA = "c0ffee";
+  const pipelineOf = (overrides: Record<string, unknown> = {}) => ({
+    id: 77,
+    sha: SHA,
+    ref: "refs/merge-requests/3/head",
+    status: "running",
+    ...overrides,
+  });
+  const mrWith =
+    (pipeline: Record<string, unknown> = {}) =>
+    () =>
+      jsonResponse({ iid: 3, state: "opened", head_pipeline: pipelineOf(pipeline) });
+
+  type ListRoute = (page: string) => Response;
+  /** Answers only the pages a test names; any other page is a request it didn't expect. */
+  const pages =
+    (byPage: Record<string, () => Response>): ListRoute =>
+    (page) =>
+      byPage[page]?.() ?? jsonResponse({ message: `unexpected page ${page}` }, { status: 500 });
+
+  /** Answers the MR read and each list by path, so call order doesn't matter. */
+  function routeChecks(routes: {
+    mr: () => Response;
+    jobs?: ListRoute;
+    bridges?: ListRoute;
+    statuses?: ListRoute;
+  }) {
+    const empty = pages({ "1": () => jsonResponse([]) });
+    fetchMock().mockImplementation(async (input: unknown) => {
+      const url = new URL(String(input));
+      const page = url.searchParams.get("page") ?? "1";
+      if (url.pathname.endsWith("/jobs")) return (routes.jobs ?? empty)(page);
+      if (url.pathname.endsWith("/bridges")) return (routes.bridges ?? empty)(page);
+      if (url.pathname.endsWith("/statuses")) return (routes.statuses ?? empty)(page);
+      return routes.mr();
+    });
+  }
+
+  const requestedUrls = () => fetchMock().mock.calls.map((call) => requestUrl(call));
+
+  it("lists the head pipeline's jobs and trigger jobs as checks", async () => {
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({
+        "1": () =>
+          jsonResponse([
+            {
+              id: 1,
+              name: "rspec",
+              stage: "test",
+              status: "failed",
+              allow_failure: false,
+              web_url: "https://gitlab.com/group/project/-/jobs/1",
+            },
+            { id: 2, name: "lint", stage: "test", status: "running", allow_failure: false },
+            { id: 3, name: "build", stage: "build", status: "success", allow_failure: false },
+          ]),
+      }),
+      bridges: pages({
+        "1": () =>
+          jsonResponse([
+            {
+              id: 4,
+              name: "deploy-docs",
+              stage: "deploy",
+              status: "pending",
+              allow_failure: false,
+              web_url: "https://gitlab.com/group/project/-/jobs/4",
+              downstream_pipeline: {
+                id: 90,
+                status: "pending",
+                web_url: "https://gitlab.com/group/docs/-/pipelines/90",
+              },
+            },
+          ]),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map(({ rawData: _raw, ...check }) => check)).toEqual([
+      {
+        name: "rspec",
+        status: "completed",
+        conclusion: "failure",
+        detailsUrl: "https://gitlab.com/group/project/-/jobs/1",
+        workflow: "test",
+      },
+      { name: "lint", status: "in_progress", workflow: "test" },
+      { name: "build", status: "completed", conclusion: "success", workflow: "build" },
+      {
+        name: "deploy-docs",
+        status: "queued",
+        // A trigger job's result lives in the pipeline it started.
+        detailsUrl: "https://gitlab.com/group/docs/-/pipelines/90",
+        workflow: "deploy",
+      },
+    ]);
+    expect(requestedUrls()).toEqual(
+      expect.arrayContaining([
+        "https://gitlab.com/api/v4/projects/group%2Fproject/pipelines/77/jobs?include_retried=false&per_page=100&page=1",
+        "https://gitlab.com/api/v4/projects/group%2Fproject/pipelines/77/bridges?per_page=100&page=1",
+        `https://gitlab.com/api/v4/projects/group%2Fproject/repository/commits/${SHA}/statuses?pipeline_id=77&ref=refs%2Fmerge-requests%2F3%2Fhead&per_page=100&page=1`,
+      ])
+    );
+  });
+
+  it("adds the statuses an external CI posted into the pipeline, once each", async () => {
+    routeChecks({
+      mr: mrWith(),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, name: "rspec", status: "success" }]) }),
+      statuses: pages({
+        "1": () =>
+          jsonResponse([
+            // The job the jobs list already gave.
+            { id: 1, name: "rspec", status: "success", pipeline_id: 77 },
+            {
+              id: 500,
+              name: "jenkins",
+              status: "failed",
+              pipeline_id: 77,
+              target_url: "https://ci.example/job/42",
+            },
+            // Another pipeline on the same commit, from a GitLab older than 17.9.
+            { id: 400, name: "jenkins-branch", status: "failed", pipeline_id: 76 },
+          ]),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(
+      result?.checks.map(({ name, conclusion, detailsUrl }) => [name, conclusion, detailsUrl])
+    ).toEqual([
+      ["rspec", "success", undefined],
+      ["jenkins", "failure", "https://ci.example/job/42"],
+    ]);
+  });
+
+  it("reports the checks of a pipeline only an external CI ran", async () => {
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      statuses: pages({
+        "1": () => jsonResponse([{ id: 500, name: "jenkins", status: "failed", pipeline_id: 77 }]),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => check.name)).toEqual(["jenkins"]);
+  });
+
+  it("maps GitLab's job vocabulary onto check statuses and conclusions", async () => {
+    const statuses: Array<[Record<string, unknown>, string, string | undefined]> = [
+      [{ status: "created" }, "queued", undefined],
+      [{ status: "waiting_for_resource" }, "queued", undefined],
+      [{ status: "waiting_for_callback" }, "queued", undefined],
+      [{ status: "preparing" }, "queued", undefined],
+      [{ status: "pending" }, "queued", undefined],
+      [{ status: "scheduled" }, "queued", undefined],
+      [{ status: "canceling" }, "in_progress", undefined],
+      [{ status: "failed", failure_reason: "job_execution_timeout" }, "completed", "timed_out"],
+      [{ status: "failed", failure_reason: "stuck_or_timeout_failure" }, "completed", "timed_out"],
+      [{ status: "failed", failure_reason: "script_failure" }, "completed", "failure"],
+      [{ status: "canceled" }, "completed", "cancelled"],
+      [{ status: "skipped" }, "completed", "skipped"],
+      [{ status: "manual", allow_failure: false }, "completed", "action_required"],
+      [{ status: "manual", allow_failure: true }, "completed", "neutral"],
+      [{ status: "some_future_status" }, "completed", undefined],
+    ];
+    routeChecks({
+      mr: mrWith(),
+      jobs: pages({
+        "1": () =>
+          jsonResponse(statuses.map(([fields], i) => ({ id: i + 1, name: `job-${i}`, ...fields }))),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => [check.status, check.conclusion])).toEqual(
+      statuses.map(([, status, conclusion]) => [status, conclusion])
+    );
+  });
+
+  it("marks an allowed-to-fail job as not gating the merge", async () => {
+    routeChecks({
+      mr: mrWith({ status: "success" }),
+      jobs: pages({
+        "1": () =>
+          jsonResponse([
+            { id: 1, name: "flaky", status: "failed", allow_failure: true },
+            { id: 2, name: "unit", status: "failed", allow_failure: false },
+          ]),
+      }),
+    });
+
+    const [allowed, gating] = (await getChecks(3))!.checks;
+
+    expect(allowed).toMatchObject({ conclusion: "failure", required: false });
+    expect(gating.conclusion).toBe("failure");
+    // GitLab doesn't say whether a pipeline gates the merge, so nothing claims it does.
+    expect(gating).not.toHaveProperty("required");
+  });
+
+  it("reads every list of a fork's pipeline from the project it ran in", async () => {
+    routeChecks({ mr: mrWith({ project_id: 4242 }) });
+
+    await getChecks(3);
+
+    const lists = requestedUrls().filter((url) => !url.includes("/merge_requests/"));
+    expect(lists).toHaveLength(3);
+    for (const url of lists) {
+      expect(url).toMatch(/^https:\/\/gitlab\.com\/api\/v4\/projects\/4242\//);
+    }
+  });
+
+  it("pages every list to the end", async () => {
+    const twoPages = (prefix: string, firstId: number) =>
+      pages({
+        "1": () =>
+          jsonResponse([{ id: firstId, name: `${prefix}-1`, status: "success" }], {
+            headers: { "x-next-page": "2" },
+          }),
+        "2": () => jsonResponse([{ id: firstId + 1, name: `${prefix}-2`, status: "success" }]),
+      });
+    routeChecks({
+      mr: mrWith(),
+      jobs: twoPages("job", 1),
+      bridges: twoPages("bridge", 10),
+      statuses: twoPages("external", 20),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => check.name)).toEqual([
+      "job-1",
+      "job-2",
+      "bridge-1",
+      "bridge-2",
+      "external-1",
+      "external-2",
+    ]);
+  });
+
+  it("reads past a full page that arrived without pagination headers", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      id: i + 1,
+      name: `job-${i + 1}`,
+      status: "success",
+    }));
+    routeChecks({
+      mr: mrWith(),
+      // No `x-next-page` at all: a proxy that strips headers, not a last page.
+      jobs: pages({
+        "1": () => jsonResponse(fullPage),
+        "2": () => jsonResponse([{ id: 101, name: "job-101", status: "failed" }]),
+      }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks).toHaveLength(101);
+    expect(result?.checks.at(-1)?.name).toBe("job-101");
+  });
+
+  it.each([
+    ["newer first", [9, 4]],
+    ["older first", [4, 9]],
+  ])("keeps only the latest attempt of a retried trigger job (%s)", async (_order, ids) => {
+    const attempt = (id: number) => ({
+      id,
+      name: "downstream",
+      status: id === 9 ? "running" : "failed",
+    });
+    routeChecks({
+      mr: mrWith(),
+      bridges: pages({ "1": () => jsonResponse(ids.map(attempt)) }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => [check.name, check.status])).toEqual([
+      ["downstream", "in_progress"],
+    ]);
+  });
+
+  it("rejects a read whose pages shifted under it", async () => {
+    routeChecks({
+      mr: mrWith(),
+      // A retry between the two reads pushed job 2 back onto the second page.
+      jobs: pages({
+        "1": () =>
+          jsonResponse(
+            [
+              { id: 3, name: "c", status: "success" },
+              { id: 2, name: "b", status: "success" },
+            ],
+            { headers: { "x-next-page": "2" } }
+          ),
+        "2": () => jsonResponse([{ id: 2, name: "b", status: "success" }]),
+      }),
+    });
+
+    await expect(getChecks(3)).rejects.toThrow(/changed mid-read/);
+  });
+
+  it("rejects rather than returning a list that pagination cut short", async () => {
+    routeChecks({
+      mr: mrWith(),
+      // A next page that points back at itself never ends.
+      jobs: () =>
+        jsonResponse([{ name: "loop", status: "success" }], { headers: { "x-next-page": "1" } }),
+    });
+
+    await expect(getChecks(3)).rejects.toThrow(/pagination stalled/);
+  });
+
+  it("rejects a job it can't name instead of leaving it out", async () => {
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, status: "failed" }]) }),
+    });
+
+    await expect(getChecks(3)).rejects.toThrow(/no name/);
+  });
+
+  it("returns no checks for a merge request with no pipeline", async () => {
+    routeChecks({ mr: () => jsonResponse({ iid: 3, state: "opened", head_pipeline: null }) });
+
+    await expect(getChecks(3)).resolves.toEqual({ checks: [] });
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects when GitLab leaves the pipeline out, rather than reporting no checks", async () => {
+    // GitLab omits `head_pipeline` for an account that can't read pipelines.
+    routeChecks({ mr: () => jsonResponse({ iid: 3, state: "opened" }) });
+
+    await expect(getChecks(3)).rejects.toThrow(/didn't report the merge request's pipeline/);
+  });
+
+  it("rejects a pipeline it can't place on a commit", async () => {
+    routeChecks({ mr: mrWith({ sha: undefined }) });
+
+    await expect(getChecks(3)).rejects.toThrow(/no commit/);
+  });
+
+  it("lists a public pipeline's own jobs when read without a token", async () => {
+    // GitLab serves the job lists anonymously, but never the commit statuses.
+    gitlabForgeProvider.setCredentials?.(null);
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, name: "rspec", status: "failed" }]) }),
+      statuses: () => jsonResponse({ message: "401 Unauthorized" }, { status: 401 }),
+    });
+
+    const result = await getChecks(3);
+
+    expect(result?.checks.map((check) => check.name)).toEqual(["rspec"]);
+    expect(requestedUrls().some((url) => url.includes("/statuses"))).toBe(false);
+  });
+
+  it("rejects a signed-in read whose statuses fail on a later page", async () => {
+    // A token that expires mid-read: the external check on page 1 must not be
+    // dropped in favour of a list that looks complete.
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      jobs: pages({ "1": () => jsonResponse([{ id: 1, name: "rspec", status: "success" }]) }),
+      statuses: pages({
+        "1": () =>
+          jsonResponse([{ id: 500, name: "jenkins", status: "failed", pipeline_id: 77 }], {
+            headers: { "x-next-page": "2" },
+          }),
+        "2": () => jsonResponse({ message: "401 Unauthorized" }, { status: 401 }),
+      }),
+    });
+
+    await expect(getChecks(3)).rejects.toMatchObject({ status: 401 });
+  });
+
+  it("returns null for a merge request that doesn't exist", async () => {
+    routeChecks({ mr: () => jsonResponse({ message: "404 Not found" }, { status: 404 }) });
+
+    await expect(getChecks(3)).resolves.toBeNull();
+  });
+
+  // Only the merge request read may answer "no such merge request"; once it is
+  // found, a list that fails is a read that failed, whatever the status.
+  it.each(
+    (["jobs", "bridges", "statuses"] as const).flatMap((list) =>
+      [401, 403, 404, 429].map((status) => [list, status] as const)
+    )
+  )("rejects when the %s list answers %i", async (list, status) => {
+    routeChecks({
+      mr: mrWith({ status: "failed" }),
+      [list]: () => jsonResponse({ message: `${status}` }, { status }),
+    });
+
+    await expect(getChecks(3)).rejects.toMatchObject({ status });
+  });
+});
+
+function mrNode(iid: number, pipeline: { status: string } | null = { status: "SUCCESS" }) {
+  return {
+    iid: String(iid),
+    title: `MR ${iid}`,
+    state: "opened",
+    sourceBranch: `feature/${iid}`,
+    targetBranch: "main",
+    webUrl: `https://gitlab.com/group/project/-/merge_requests/${iid}`,
+    createdAt: "2026-07-02T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    headPipeline: pipeline,
+  };
+}
+
+function graphqlMRs(nodes: unknown[], hasNextPage = false) {
+  return jsonResponse({
+    data: { project: { mergeRequests: { pageInfo: { hasNextPage }, nodes } } },
+  });
+}
+
+function deferredFetch() {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>((res) => (resolve = res));
+  return { promise, resolve };
+}
+
+describe("batchLookups", () => {
+  const batch = gitlabForgeProvider.batchLookups!;
+
+  it("reads many MRs in one query and confirms the missing ones as null", async () => {
+    fetchMock().mockResolvedValue(graphqlMRs([mrNode(3), mrNode(9)]));
+
+    const result = await batch.findPRsByNumbers!(REPO, [9, 3, 3, 4, -1]);
+
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+    const body = requestBody(fetchMock().mock.calls[0]) as { variables: { iids: string[] } };
+    expect(body.variables.iids).toEqual(["3", "4", "9"]);
+    expect(result.get(3)?.title).toBe("MR 3");
+    expect(result.get(9)?.headRef).toBe("feature/9");
+    expect(result.has(4)).toBe(true);
+    expect(result.get(4)).toBeNull();
+    expect(result.has(-1)).toBe(false);
+  });
+
+  it("answers the CI read that follows from the same query", async () => {
+    fetchMock().mockResolvedValue(graphqlMRs([mrNode(3, { status: "RUNNING" }), mrNode(5, null)]));
+
+    await batch.findPRsByNumbers!(REPO, [3, 5, 6], { fresh: true });
+    const statuses = await batch.getCIStatuses!(REPO, [3, 5, 6]);
+
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+    expect(statuses.get(3)).toMatchObject({ state: "pending", total: 1, pending: 1 });
+    // No head pipeline and no such MR are both confirmed "no CI".
+    expect(statuses.has(5)).toBe(true);
+    expect(statuses.get(5)).toBeNull();
+    expect(statuses.get(6)).toBeNull();
+  });
+
+  it("re-reads on a fresh request and once the short cache lapses", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock().mockImplementation(async () => graphqlMRs([mrNode(3)]));
+      await batch.getCIStatuses!(REPO, [3]);
+      await batch.findPRsByNumbers!(REPO, [3]);
+      expect(fetchMock()).toHaveBeenCalledTimes(1);
+
+      await batch.findPRsByNumbers!(REPO, [3], { fresh: true });
+      expect(fetchMock()).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(5_001);
+      await batch.getCIStatuses!(REPO, [3]);
+      expect(fetchMock()).toHaveBeenCalledTimes(3);
+    } finally {
+      clearGitLabCaches();
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends every chunk of a large set at once", async () => {
+    const held: Array<() => void> = [];
+    fetchMock().mockImplementation(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          const { variables } = JSON.parse(String(init.body)) as { variables: { iids: string[] } };
+          held.push(() => resolve(graphqlMRs(variables.iids.map((iid) => mrNode(Number(iid))))));
+        })
+    );
+    const numbers = Array.from({ length: 45 }, (_, i) => i + 1);
+
+    const pending = batch.findPRsByNumbers!(REPO, numbers);
+    // All three chunks are on the wire before any of them answers.
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(3));
+    for (const release of held) release();
+
+    expect((await pending).size).toBe(45);
+  });
+
+  it("maps mergeability and comment counts the REST read would have given", async () => {
+    fetchMock().mockResolvedValue(
+      graphqlMRs([
+        { ...mrNode(3), detailedMergeStatus: "MERGEABLE", userNotesCount: 4 },
+        { ...mrNode(4), detailedMergeStatus: "CHECKING" },
+        { ...mrNode(5), detailedMergeStatus: "NOT_APPROVED" },
+      ])
+    );
+    const result = await batch.findPRsByNumbers!(REPO, [3, 4, 5]);
+    const body = requestBody(fetchMock().mock.calls[0]) as { query: string };
+    expect(body.query).toContain("userNotesCount");
+    expect(result.get(3)).toMatchObject({ mergeable: true, commentCount: 4 });
+    expect(result.get(4)?.mergeable).toBeNull();
+    expect(result.get(5)?.mergeable).toBe(false);
+  });
+
+  it("omits MRs a throttled or failed query didn't answer", async () => {
+    fetchMock().mockResolvedValue(jsonResponse({ message: "slow down" }, { status: 429 }));
+    expect((await batch.findPRsByNumbers!(REPO, [3])).size).toBe(0);
+    fetchMock().mockRejectedValue(new TypeError("fetch failed"));
+    expect((await batch.getCIStatuses!(REPO, [3])).size).toBe(0);
+    fetchMock().mockResolvedValue(jsonResponse({ data: { project: null } }));
+    expect((await batch.findPRsByNumbers!(REPO, [3])).size).toBe(0);
+    // A GraphQL error that isn't about the schema is a failed attempt too, and
+    // must not turn into a read per MR.
+    fetchMock().mockResolvedValue(jsonResponse({ errors: [{ message: "Request timed out" }] }));
+    expect((await batch.findPRsByNumbers!(REPO, [3, 4])).size).toBe(0);
+    expect(fetchMock().mock.calls.every((call) => requestUrl(call).endsWith("/api/graphql"))).toBe(
+      true
+    );
+  });
+
+  it("omits MRs a truncated window didn't return", async () => {
+    fetchMock().mockResolvedValue(graphqlMRs([mrNode(3)], true));
+    const result = await batch.findPRsByNumbers!(REPO, [3, 4]);
+    expect(result.get(3)?.number).toBe(3);
+    expect(result.has(4)).toBe(false);
+  });
+
+  // An instance whose schema predates the query would otherwise never answer,
+  // and every caller of the batch (the poller, `forge.getPRs`) needs one.
+  it("answers over REST, one read per MR, when the schema can't serve the query", async () => {
+    fetchMock().mockImplementation(async (url: string) => {
+      if (url.endsWith("/api/graphql")) {
+        return jsonResponse({
+          errors: [{ message: "Field 'detailedMergeStatus' doesn't exist on type 'MergeRequest'" }],
+        });
+      }
+      if (url.endsWith("/merge_requests/4")) return jsonResponse({}, { status: 404 });
+      if (url.endsWith("/merge_requests/5")) return jsonResponse({}, { status: 503 });
+      return jsonResponse({ iid: 3, state: "opened", head_pipeline: { status: "failed" } });
+    });
+
+    const prs = await batch.findPRsByNumbers!(REPO, [3, 4, 5]);
+    expect(prs.get(3)?.number).toBe(3);
+    expect(prs.has(4)).toBe(true);
+    expect(prs.get(4)).toBeNull();
+    expect(prs.has(5)).toBe(false);
+
+    // The same read carried the pipeline, so the CI answer needs no request.
+    fetchMock().mockClear();
+    expect((await batch.getCIStatuses!(REPO, [3])).get(3)?.state).toBe("failure");
+    expect(fetchMock()).not.toHaveBeenCalled();
+
+    // Later batches skip the query the instance already rejected.
+    await batch.findPRsByNumbers!(REPO, [3], { fresh: true });
+    expect(fetchMock().mock.calls.map(requestUrl)).toEqual([
+      "https://gitlab.com/api/v4/projects/group%2Fproject/merge_requests/3",
+    ]);
+  });
+
+  it("keeps a newer view cached when an older read answers after it went stale", async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = deferredFetch();
+      fetchMock().mockReturnValueOnce(pending.promise);
+      const older = batch.findPRsByNumbers!(REPO, [3]);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+      fetchMock().mockImplementation(async () => graphqlMRs([{ ...mrNode(3), state: "merged" }]));
+      await batch.findPRsByNumbers!(REPO, [3], { fresh: true });
+
+      // The newer view is past its freshness when the older read lands.
+      await vi.advanceTimersByTimeAsync(6_000);
+      pending.resolve(graphqlMRs([mrNode(3)]));
+      await older;
+
+      const calls = fetchMock().mock.calls.length;
+      expect((await batch.findPRsByNumbers!(REPO, [3])).get(3)?.state).toBe("merged");
+      expect(fetchMock().mock.calls.length).toBe(calls + 1);
+    } finally {
+      clearGitLabCaches();
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't replay a joined chunk's answer into the cache when a slower chunk finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      const twenty = Array.from({ length: 20 }, (_, i) => i + 1);
+      const olderChunk = deferredFetch();
+      fetchMock().mockReturnValueOnce(olderChunk.promise);
+      const older = batch.findPRsByNumbers!(REPO, twenty);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+      fetchMock().mockImplementationOnce(async () =>
+        graphqlMRs([{ ...mrNode(1), state: "merged" }])
+      );
+      await batch.findPRsByNumbers!(REPO, [1], { fresh: true });
+
+      // Past the fresh view's freshness, a wider batch joins the older chunk
+      // and adds a slow chunk of its own.
+      await vi.advanceTimersByTimeAsync(6_000);
+      const slowChunk = deferredFetch();
+      fetchMock().mockReturnValueOnce(slowChunk.promise);
+      const wider = batch.findPRsByNumbers!(REPO, [...twenty, 21]);
+      await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(3));
+      olderChunk.resolve(graphqlMRs(twenty.map((n) => mrNode(n))));
+      await older;
+      await vi.advanceTimersByTimeAsync(61_000);
+      slowChunk.resolve(graphqlMRs([mrNode(21)]));
+      await wider;
+
+      fetchMock().mockImplementation(async () => graphqlMRs([{ ...mrNode(1), state: "merged" }]));
+      expect((await batch.findPRsByNumbers!(REPO, [1])).get(1)?.state).toBe("merged");
+    } finally {
+      clearGitLabCaches();
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't let a REST-answered batch join an older single read", async () => {
+    fetchMock().mockImplementation(async () =>
+      jsonResponse({
+        errors: [{ message: "Field 'detailedMergeStatus' doesn't exist on type 'MergeRequest'" }],
+      })
+    );
+    await batch.findPRsByNumbers!(REPO, [9]);
+
+    const pending = deferredFetch();
+    fetchMock().mockReset();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const older = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+    fetchMock().mockImplementation(async () => jsonResponse({ iid: 3, state: "merged" }));
+
+    const batched = await batch.findPRsByNumbers!(REPO, [3]);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+    expect(batched.get(3)?.state).toBe("merged");
+    pending.resolve(jsonResponse({ iid: 3, state: "opened" }));
+    await older;
+  });
+
+  it("doesn't let a fresh batch join one already in flight", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const older = batch.findPRsByNumbers!(REPO, [3]);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    fetchMock().mockResolvedValue(graphqlMRs([{ ...mrNode(3), state: "merged" }]));
+    const fresh = await batch.findPRsByNumbers!(REPO, [3], { fresh: true });
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+    expect(fresh.get(3)?.state).toBe("merged");
+
+    // The older read lands last; its view of the MR must not replace the newer
+    // one the cache already holds.
+    pending.resolve(graphqlMRs([mrNode(3)]));
+    expect((await older).get(3)?.state).toBe("open");
+    expect((await batch.findPRsByNumbers!(REPO, [3])).get(3)?.state).toBe("merged");
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a batch answer that lands after an invalidation", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const stale = batch.findPRsByNumbers!(REPO, [3]);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    clearGitLabCaches();
+    pending.resolve(graphqlMRs([mrNode(3)]));
+    await stale;
+
+    fetchMock().mockResolvedValue(graphqlMRs([mrNode(3)]));
+    await batch.getCIStatuses!(REPO, [3]);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("in-flight read sharing", () => {
+  it("sends one request for an MR read and a CI read of the same MR", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValue(pending.promise);
+
+    const pr = gitlabForgeProvider.getPR(REPO, 3);
+    const ci = gitlabForgeProvider.getCIStatus(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+    pending.resolve(jsonResponse({ iid: 3, state: "opened", head_pipeline: { status: "failed" } }));
+
+    expect((await pr)?.number).toBe(3);
+    expect((await ci)?.state).toBe("failure");
+    expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets the toolbar's stats and an open first-page list share their reads", async () => {
+    fetchMock().mockImplementation(async () =>
+      jsonResponse([], { headers: { "x-total": "0", "x-next-page": "" } })
+    );
+
+    await Promise.all([
+      gitlabForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: false }),
+      gitlabForgeProvider.listIssues(REPO, { state: "open" }),
+      gitlabForgeProvider.listPRs(REPO, { state: "open" }),
+    ]);
+
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps differently filtered reads apart", async () => {
+    fetchMock().mockImplementation(async () => jsonResponse([]));
+    await Promise.all([
+      gitlabForgeProvider.listIssues(REPO, { state: "open" }),
+      gitlabForgeProvider.listIssues(REPO, { state: "closed" }),
+      gitlabForgeProvider.listIssues(REPO, { state: "open", search: "bug" }),
+    ]);
+    expect(fetchMock()).toHaveBeenCalledTimes(3);
+  });
+
+  it("sends a fresh single read on its own", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const older = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    fetchMock().mockResolvedValue(jsonResponse({ iid: 3, state: "merged" }));
+    expect((await gitlabForgeProvider.getPR(REPO, 3, { fresh: true }))?.state).toBe("merged");
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+    pending.resolve(jsonResponse({ iid: 3, state: "opened" }));
+    await older;
+  });
+
+  it("re-reads a merge's pins instead of joining a read already in flight", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const background = gitlabForgeProvider.getPR(REPO, 5);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    fetchMock()
+      .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened", target_branch: "release" }))
+      .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "merged", merge_commit_sha: "mc1" }));
+    // The background read saw `main`; the target has since moved.
+    await expect(
+      gitlabForgeProvider.mergePR(REPO, 5, { expectedBaseRef: "main" })
+    ).rejects.toThrow();
+    expect(fetchMock().mock.calls.some((call) => requestUrl(call).endsWith("/merge"))).toBe(false);
+    pending.resolve(jsonResponse({ iid: 5, state: "opened", target_branch: "main" }));
+    await background;
+  });
+
+  it("doesn't register a read whose auth resolved across an invalidation", async () => {
+    let releaseSettings!: () => void;
+    const settingsHeld = new Promise<void>((resolve) => (releaseSettings = resolve));
+    setInstanceUrlReader(async () => {
+      await settingsHeld;
+      return "https://gitlab.com";
+    });
+    const oldResponse = deferredFetch();
+    fetchMock().mockReturnValueOnce(oldResponse.promise);
+    const before = gitlabForgeProvider.getPR(REPO, 3);
+
+    // Invalidated while the read is still resolving where to go.
+    clearGitLabCaches();
+    releaseSettings();
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    // The old read is on the wire; a caller after the invalidation must not
+    // join it.
+    fetchMock().mockImplementation(async () =>
+      jsonResponse({ iid: 3, state: "opened", title: "after" })
+    );
+    const after = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(2));
+    oldResponse.resolve(jsonResponse({ iid: 3, state: "opened", title: "before" }));
+
+    expect((await after)?.title).toBe("after");
+    expect((await before)?.title).toBe("before");
+  });
+
+  it("sends a bypassCache list on its own", async () => {
+    fetchMock().mockImplementation(async () => jsonResponse([]));
+    await Promise.all([
+      gitlabForgeProvider.listIssues(REPO, { state: "open" }),
+      gitlabForgeProvider.listIssues(REPO, { state: "open", bypassCache: true }),
+    ]);
+    expect(fetchMock()).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts a new read once the shared one settles, including after a failure", async () => {
+    fetchMock().mockResolvedValueOnce(jsonResponse({ message: "boom" }, { status: 500 }));
+    await expect(gitlabForgeProvider.getPR(REPO, 3)).rejects.toThrow();
+    fetchMock().mockImplementation(async () => jsonResponse({ iid: 3, state: "opened" }));
+    await gitlabForgeProvider.getPR(REPO, 3);
+    await gitlabForgeProvider.getPR(REPO, 3);
+    expect(fetchMock()).toHaveBeenCalledTimes(3);
+  });
+
+  it("never shares a write", async () => {
+    fetchMock().mockImplementation(async () =>
+      jsonResponse({ iid: 3, state: "opened", notes: [], body: "hi", id: 1 })
+    );
+    await Promise.all([
+      gitlabForgeProvider.commentOnPR(REPO, 3, "hi"),
+      gitlabForgeProvider.commentOnPR(REPO, 3, "hi"),
+    ]);
+    const posts = fetchMock().mock.calls.filter(
+      (call) => (call[1] as RequestInit | undefined)?.method === "POST"
+    );
+    expect(posts).toHaveLength(2);
+  });
+
+  it("doesn't let a read that started before an invalidation answer a later caller", async () => {
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const before = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    clearGitLabCaches();
+    fetchMock().mockResolvedValue(jsonResponse({ iid: 3, state: "opened", title: "after" }));
+    const after = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(2));
+    pending.resolve(jsonResponse({ iid: 3, state: "opened", title: "before" }));
+
+    expect((await before)?.title).toBe("before");
+    expect((await after)?.title).toBe("after");
+  });
+
+  it("doesn't share a read across a credential change", async () => {
+    await connectAs("https://gitlab.com", "glpat-first");
+    const pending = deferredFetch();
+    fetchMock().mockReturnValueOnce(pending.promise);
+    const first = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(1));
+
+    await connectAs("https://gitlab.com", "glpat-second");
+    fetchMock().mockResolvedValue(jsonResponse({ iid: 3, state: "opened" }));
+    const second = gitlabForgeProvider.getPR(REPO, 3);
+    await vi.waitFor(() => expect(fetchMock()).toHaveBeenCalledTimes(2));
+    expect(requestHeaders(fetchMock().mock.calls[1]).Authorization).toBe("Bearer glpat-second");
+    pending.resolve(jsonResponse({ iid: 3, state: "opened" }));
+    await Promise.all([first, second]);
   });
 });
 

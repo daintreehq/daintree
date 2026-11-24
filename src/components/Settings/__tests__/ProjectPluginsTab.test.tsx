@@ -1773,3 +1773,182 @@ describe("ProjectPluginsTab unsaved panels (#16656)", () => {
     logged.mockRestore();
   });
 });
+
+describe("ProjectPluginsTab per-project package unsaved panels (#17215)", () => {
+  const INSTANCE_KEY = `project__${PROJECT_ID}__installed__acme.tools`;
+  const draft: PluginUnsavedPanel = {
+    panelId: "t1",
+    title: "Tools draft",
+    projectId: PROJECT_ID,
+    projectName: "Proj",
+  };
+  const notes: PluginUnsavedPanel = {
+    panelId: "t2",
+    title: "Tools notes",
+    projectId: PROJECT_ID,
+    projectName: "Proj",
+  };
+
+  async function openPackage() {
+    pluginApi.list.mockResolvedValue([
+      installed({ instanceMode: "project", enabledInProjects: [PROJECT_ID] }),
+      installed({ instanceId: INSTANCE_KEY, origin: "project", projectId: PROJECT_ID }),
+    ]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+    const toggle = screen.getByTestId("installed-plugin-instance-switch");
+    await waitFor(() => expect(toggle.getAttribute("aria-checked")).toBe("true"));
+    return toggle;
+  }
+
+  it("asks before turning this project's copy off, and Cancel leaves it running", async () => {
+    pluginApi.getUnsavedPanels.mockImplementation(async (id) =>
+      id === INSTANCE_KEY ? [draft] : []
+    );
+    const toggle = await openPackage();
+
+    fireEvent.click(toggle);
+    const dialog = await screen.findByRole("alertdialog");
+    expect(pluginApi.getUnsavedPanels).toHaveBeenCalledWith(INSTANCE_KEY);
+    expect(dialog.textContent).toContain("Turn off 'Acme Tools' in this project?");
+    expect(dialog.textContent).toContain("Tools draft");
+    expect(pluginApi.setProjectInstanceEnabled).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(pluginApi.setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(toggle);
+    fireEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Discard changes",
+      })
+    );
+    await waitFor(() =>
+      expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", false)
+    );
+    expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledTimes(1);
+    // The first ask, the second, and Discard's own re-read.
+    expect(pluginApi.getUnsavedPanels.mock.calls).toEqual([
+      [INSTANCE_KEY],
+      [INSTANCE_KEY],
+      [INSTANCE_KEY],
+    ]);
+  });
+
+  it("turns it off with no prompt when no panel holds unsaved work", async () => {
+    const toggle = await openPackage();
+
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", false)
+    );
+    expect(pluginApi.getUnsavedPanels).toHaveBeenCalledWith(INSTANCE_KEY);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("turns it on without checking for unsaved work", async () => {
+    pluginApi.list.mockResolvedValue([installed({ instanceMode: "project" })]);
+    pluginApi.getUnsavedPanels.mockResolvedValue([draft]);
+    seed([]);
+    render(<ProjectPluginsTab />);
+    await waitFor(() => expect(pluginApi.list).toHaveBeenCalled());
+    await select("Acme Tools");
+
+    fireEvent.click(screen.getByTestId("installed-plugin-instance-switch"));
+    await waitFor(() =>
+      expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", true)
+    );
+    expect(pluginApi.getUnsavedPanels).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("asks again at Discard when another panel turned dirty under the open prompt", async () => {
+    pluginApi.getUnsavedPanels.mockImplementation(async (id) =>
+      id === INSTANCE_KEY ? [draft] : []
+    );
+    const toggle = await openPackage();
+
+    fireEvent.click(toggle);
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).not.toContain("Tools notes");
+
+    pluginApi.getUnsavedPanels.mockImplementation(async (id) =>
+      id === INSTANCE_KEY ? [draft, notes] : []
+    );
+    fireEvent.click(within(dialog).getByRole("button", { name: "Discard changes" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alertdialog").textContent).toContain("Tools notes")
+    );
+    expect(pluginApi.setProjectInstanceEnabled).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Discard changes" })
+    );
+    await waitFor(() =>
+      expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", false)
+    );
+  });
+
+  it("stops the switch on its row when the check fails, and its Retry checks again", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    pluginApi.getUnsavedPanels.mockRejectedValueOnce(new Error("main unavailable"));
+    const toggle = await openPackage();
+
+    fireEvent.click(toggle);
+    const alert = await screen.findByRole("alert");
+    expect(alert.closest<HTMLElement>("[data-settings-row]")!.contains(toggle)).toBe(true);
+    expect(alert.textContent).toContain("Couldn't turn off Acme Tools in this project");
+    expect(alert.textContent).toContain("Couldn't check this plugin's panels");
+    expect(pluginApi.setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    await waitFor(() =>
+      expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledWith("acme.tools", false)
+    );
+    expect(pluginApi.getUnsavedPanels).toHaveBeenCalledTimes(2);
+    logged.mockRestore();
+  });
+
+  it("asks before the retry of a turn-off whose write failed", async () => {
+    pluginApi.setProjectInstanceEnabled.mockRejectedValueOnce(new Error("EACCES"));
+    const toggle = await openPackage();
+
+    fireEvent.click(toggle);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't turn off Acme Tools in this project");
+    pluginApi.getUnsavedPanels.mockResolvedValue([draft]);
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+
+    expect((await screen.findByRole("alertdialog")).textContent).toContain("Tools draft");
+    expect(pluginApi.setProjectInstanceEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes the prompt on its row when the Discard check fails, and Retry asks again", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    pluginApi.getUnsavedPanels.mockResolvedValue([draft]);
+    const toggle = await openPackage();
+
+    fireEvent.click(toggle);
+    const dialog = await screen.findByRole("alertdialog");
+    pluginApi.getUnsavedPanels.mockRejectedValueOnce(new Error("main unavailable"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Discard changes" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    const alert = await screen.findByRole("alert");
+    expect(alert.closest<HTMLElement>("[data-settings-row]")!.contains(toggle)).toBe(true);
+    expect(alert.textContent).toContain("Couldn't turn off Acme Tools in this project");
+    expect(alert.textContent).toContain("Couldn't check this plugin's panels");
+    expect(pluginApi.setProjectInstanceEnabled).not.toHaveBeenCalled();
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));
+    expect((await screen.findByRole("alertdialog")).textContent).toContain("Tools draft");
+    expect(pluginApi.setProjectInstanceEnabled).not.toHaveBeenCalled();
+    logged.mockRestore();
+  });
+});

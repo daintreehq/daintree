@@ -23,11 +23,12 @@ export interface DiffChangeSetEntry {
   insertions?: number | null;
   deletions?: number | null;
   /**
-   * Caller-owned key for the viewed-marker store (scoped per worktree).
-   * Callers keep their existing conventions: `staged:{path}` /
-   * `unstaged:{path}` (Review Hub), `{status}:{path}` (change list),
+   * Caller-owned key for the viewed-marker store (scoped per worktree):
+   * `working-tree:{path}` for every working-tree surface (one mark per file,
+   * shared by the Review Hub's staged and unstaged rows and the change list),
    * `base:{path}` (base-branch review), `since-review:{path}` (Review Hub's
-   * Since review view).
+   * Since review view). Not unique within a set: a partially staged file's two
+   * entries share it and differ by `side`.
    */
   viewedKey: string;
   /**
@@ -119,9 +120,23 @@ export interface StagingFileEntry {
  * In-progress repository operation state. `CLEAN` means no operation markers
  * and no unmerged entries; `DIRTY` means unmerged entries exist without an
  * operation marker (unusual). `MERGING`/`REBASING`/`CHERRY_PICKING`/`REVERTING`
- * correspond to the matching `.git/` state files.
+ * correspond to the matching `.git/` state files. `APPLYING_MAILBOX` is a
+ * halted `git am`, which shares `.git/rebase-apply` with the apply-backend
+ * rebase and is told apart by the `applying` file git writes inside it.
  */
-export type RepoState = "CLEAN" | "DIRTY" | "MERGING" | "REBASING" | "CHERRY_PICKING" | "REVERTING";
+export type RepoState =
+  "CLEAN" | "DIRTY" | "MERGING" | "REBASING" | "CHERRY_PICKING" | "REVERTING" | "APPLYING_MAILBOX";
+
+/**
+ * The halted operation a user chose to abort or continue, captured from the
+ * status they were shown (#17559). Main re-reads the worktree immediately
+ * before running git and refuses unless the same operation is still there.
+ */
+export interface RepoOperationPin {
+  operation: Exclude<RepoState, "CLEAN" | "DIRTY">;
+  /** `StagingStatus.repoOperationId` as shown, `null` when it could not be read. */
+  operationId: string | null;
+}
 
 /**
  * Why a worktree's git status read ended without an answer. `timed-out`: git
@@ -147,6 +162,16 @@ export interface ConflictedFileEntry {
   /** Human-readable label derived from the XY code (e.g. "both modified"). */
   label: string;
 }
+
+/**
+ * How a whole-file conflict resolution takes a side. A side that no longer has
+ * the file (a modify/delete conflict) is taken by deleting it; `both` is the
+ * one deletion offered when neither side has it. Main refuses a choice the
+ * index no longer agrees with, so what was confirmed is what runs.
+ */
+export type ConflictSideChoice =
+  | { resolution: "checkout"; side: "ours" | "theirs" }
+  | { resolution: "delete"; side: "ours" | "theirs" | "both" };
 
 /**
  * Normalized rebase-todo action. Aliases (`p`/`pick`, `s`/`squash`, etc.) collapse
@@ -261,6 +286,42 @@ export interface GitPushCommitPreview {
    * the preview is an approval of publishing exactly this commit (#15646).
    */
   headOid: string;
+  /**
+   * What is staged on top of `headOid`, read only when the caller asks for it
+   * with `includeStaged` (Commit & push's confirm, #17563). A host that
+   * predates the option never returns it, so its absence means "not read",
+   * never "nothing staged".
+   */
+  staged?: GitStagedSnapshot;
+}
+
+/**
+ * The staged changes a Commit & push confirm lists, and the identity a commit
+ * made under that confirm must match (#17563).
+ *
+ * Read in one pass against one tip, so the paths on screen and the identity
+ * the commit is held to can never describe two different states of the index.
+ */
+export interface GitStagedSnapshot {
+  /**
+   * Opaque. Covers the tip and every staged entry's path, mode and blob, so a
+   * change to a staged file's contents alone changes it.
+   */
+  identity: string;
+  /** The staged paths, in git's order. */
+  paths: string[];
+}
+
+/**
+ * What a Commit & push confirm showed about the commit itself: made on this
+ * branch, on top of this commit, from exactly these staged changes (#17563).
+ * Handed to the commit so it refuses rather than committing anything else when
+ * the index moved while the confirm was open.
+ */
+export interface GitCommitReview {
+  branch: string;
+  headOid: string;
+  stagedIdentity: string;
 }
 
 /**
@@ -292,6 +353,13 @@ export interface GitCommitResult {
    * is `null`.
    */
   parentOids: string[];
+  /**
+   * For a commit made under a {@link GitCommitReview}: the identity of what it
+   * actually contains over its parent, in {@link GitStagedSnapshot.identity}'s
+   * form, read back from the commit itself. `null` when that couldn't be read.
+   * Absent when no review was passed, or from a host that predates #17563.
+   */
+  stagedIdentity?: string | null;
 }
 
 /**
@@ -334,6 +402,24 @@ export interface GitRebaseCommitPreview {
    * the last fetch. Empty when the range could not be measured.
    */
   incoming: GitRemoteCommit[];
+  /**
+   * The commit the named branch pointed at once the ranges above were measured,
+   * read last so a commit landing mid-read shows up as a refusal on submit
+   * rather than an unnoticed substitution. `null` when it could not be read,
+   * which leaves the preview with nothing to approve.
+   */
+  headOid: string | null;
+}
+
+/**
+ * What a pull-and-rebase confirm put in front of the approver: this branch, at
+ * this commit. Handed to the pull so it refuses rather than rebasing whatever
+ * the worktree holds by then, when an agent switched branches or committed
+ * while the confirm was open (#17188).
+ */
+export interface GitPullRebaseReview {
+  branch: string;
+  headOid: string;
 }
 
 /**
@@ -347,6 +433,34 @@ export interface GitRebaseCommitPreview {
 export type GitBaseIntegrationKind = "rebase-onto-base" | "merge-base";
 
 /**
+ * Why a rebase-onto-base or merge-base would be refused as the worktree stands
+ * (#17189).
+ *
+ * Read by the preview from the same predicates the write refuses on, so the
+ * confirm can say so before approval rather than closing into a failure. The
+ * write still re-checks: the worktree can change after the preview.
+ *
+ * - `operation-in-progress`: a merge, rebase, cherry-pick, revert or `git am` is
+ *   halted.
+ * - `base-checked-out`: the worktree is on the base branch itself, so
+ *   integrating it would rewrite it.
+ * - `conflicts`: unmerged paths stand with no operation halted (what a failed
+ *   stash pop leaves).
+ * - `uncommitted-changes`: staged, unstaged or untracked files, each counted
+ *   once.
+ */
+export type GitBaseIntegrationBlocker =
+  | {
+      reason: "operation-in-progress";
+      operation: Exclude<RepoState, "CLEAN" | "DIRTY">;
+      rebaseStep: number | null;
+      rebaseTotalSteps: number | null;
+    }
+  | { reason: "base-checked-out" }
+  | { reason: "conflicts"; count: number }
+  | { reason: "uncommitted-changes"; count: number };
+
+/**
  * What a rebase-onto-base or merge-base would actually act on.
  *
  * Separate from {@link GitRebaseCommitPreview}, which is measured against the
@@ -354,15 +468,30 @@ export type GitBaseIntegrationKind = "rebase-onto-base" | "merge-base";
  * A base target may be a purely local branch in a repo with no remote at all,
  * which that shape cannot describe truthfully — so this one carries the short
  * ref as a string and names the remote only when there is one.
+ *
+ * A halted operation or a checked-out base branch stops the read before it
+ * measures anything, so the target, the range and the counts are `null` there:
+ * unmeasured, which must never read as "nothing to integrate". A dirty or
+ * conflicted tree is still measured, because what the operation WOULD do is
+ * worth seeing while deciding whether to commit first.
  */
 export interface GitBaseIntegrationCommitPreview {
   kind: GitBaseIntegrationKind;
-  /** The branch the operation would act on, as git resolved it. */
-  branch: string;
+  /**
+   * The branch the operation would act on, as git resolved it. `null` only
+   * when a halted operation stopped the read: a paused rebase detaches HEAD,
+   * and its branch is not the one a fresh read would name.
+   */
+  branch: string | null;
   /** The base branch the worktree measures itself against. */
   baseBranch: string;
-  /** Short ref the operation targets — `upstream/develop`, or a bare `develop`. */
-  compareRef: string;
+  /** What the write would refuse on right now, or `null` when nothing would. */
+  blocker: GitBaseIntegrationBlocker | null;
+  /**
+   * Short ref the operation targets — `upstream/develop`, or a bare `develop`.
+   * `null` when a blocker stopped the read before the target was resolved.
+   */
+  compareRef: string | null;
   /** Remote `compareRef` lives on, or `null` on the local-branch fallback. */
   remote: string | null;
   /**
@@ -372,8 +501,10 @@ export interface GitBaseIntegrationCommitPreview {
    * either has moved. Daintree runs many agents in parallel across worktrees,
    * so a commit landing while the dialog is open is ordinary rather than a
    * race to shrug at — without these the user could approve one replay set and
-   * get another. `null` when the ref did not resolve, which the caller treats
-   * as "nothing to pin" rather than as a match.
+   * get another. Captured before the range is measured, and every row and
+   * count describes them (#17583). Both are present whenever the range was
+   * measured, and both are `null` when a blocker stopped the read first; a tip
+   * that does not resolve fails the preview instead.
    */
   headOid: string | null;
   baseOid: string | null;
@@ -384,16 +515,19 @@ export interface GitBaseIntegrationCommitPreview {
    * that would be BROUGHT IN from the base.
    */
   commits: GitRemoteCommit[];
-  /** Commits in the whole set, which may exceed the returned `commits`. */
-  total: number;
   /**
-   * Commits the base has that the branch does not.
+   * Commits in the whole set, which may exceed the returned `commits`. `null`
+   * when unmeasured.
+   */
+  total: number | null;
+  /**
+   * Commits the base has that the branch does not. `null` when unmeasured.
    *
    * Carried for the same reason {@link GitRebaseCommitPreview.behind} is: an
    * empty replay set alone cannot tell "level with the base" from "purely
    * behind it". Both replay nothing; only the second one moves the branch.
    */
-  behind: number;
+  behind: number | null;
 }
 
 export interface StagingStatus {
@@ -403,6 +537,22 @@ export interface StagingStatus {
   conflicted: string[];
   /** Per-file conflict entries parsed from `git status --porcelain=v2` u-lines. */
   conflictedFiles: ConflictedFileEntry[];
+  /**
+   * Distinct worktree-relative paths whose conflict the index remembers
+   * resolving (`git ls-files --resolve-undo`). `staged` also holds the paths
+   * git merged cleanly, which never conflicted and never appear here, so this
+   * is what tells a resolution from the rest of the staged list.
+   *
+   * A merge strategy other than `ort` (`resolve`, or `recursive` before git
+   * made it an alias of `ort`) may also record the text merges it does by
+   * itself, which then read as resolutions here.
+   *
+   * Read only while an operation is stopped with something staged. Absent when
+   * it was not read or the read failed, which says nothing about any path; `[]`
+   * is a successful read that found none. Matched against `staged` by exact
+   * path, and a path here that is no longer staged is not a staged resolution.
+   */
+  resolveUndoPaths?: string[];
   isDetachedHead: boolean;
   currentBranch: string | null;
   hasRemote: boolean;
@@ -421,8 +571,28 @@ export interface StagingStatus {
    * named the push destination would describe the wrong repository.
    */
   pullSource: GitPushDestination | null;
+  /**
+   * Git reports `currentBranch` as having no commit yet (#17588). Present only
+   * on git's own word: a HEAD that merely failed to read leaves it absent. Such
+   * a branch has no push destination git can name until its first commit, so
+   * `pushDestination` is `null` here for want of a commit, not of configuration.
+   */
+  isUnbornBranch?: true;
   /** Current in-progress repository operation, or `CLEAN`/`DIRTY`. */
   repoState: RepoState;
+  /**
+   * Opaque identity of the operation `repoState` names, stable for its whole
+   * life (every rebase step, every failed `--continue`) and different for any
+   * operation that replaces it, including a restart of the same kind on the
+   * same commits (#17559). Abort and Continue hand it back as a
+   * {@link RepoOperationPin} so they act on the operation the user saw.
+   *
+   * `null` when nothing is in progress, and when this read could not identify
+   * the operation (an unreadable sentinel, or an operation that changed while
+   * the status was being read). A null pin is refused, so null never
+   * authorises anything.
+   */
+  repoOperationId: string | null;
   /** When `repoState === "REBASING"`, the current step number (1-based). Null otherwise. */
   rebaseStep: number | null;
   /** When `repoState === "REBASING"`, the total step count. Null otherwise. */

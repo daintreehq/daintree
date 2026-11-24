@@ -13,7 +13,9 @@ import { remoteReadableAssistantSlots } from "../../../shared/config/assistantSl
 import {
   AgentsPayloadSchema,
   AssistantLinkMethod,
+  ConversationMcpCallPayloadSchema,
   McpCallPayloadSchema,
+  McpCancelPayloadSchema,
   type AgentsAnswer,
   type McpCallAnswer,
   type McpCallPayload,
@@ -168,12 +170,19 @@ export function installHostMcpRelay(
     // sessions are kept by who they act for, so a read opens the one a call reuses.
     const specFor = (
       senderId: string,
-      target: { helpSessionId: string; projectId: string; tier: "core" | "full" },
+      target: {
+        helpSessionId: string;
+        conversationId?: string;
+        projectId: string;
+        tier: "core" | "full";
+      },
       global: boolean
     ): RelayMcpSessionSpec => ({
       linkSessionId: sessionId,
       senderId,
       helpSessionId: target.helpSessionId,
+      // Named by the sender this session proved, and held under it (#17919).
+      ...(target.conversationId !== undefined ? { conversationId: target.conversationId } : {}),
       projectId: target.projectId,
       tier: target.tier,
       shellName: client?.clientName || "Remote Shell",
@@ -189,7 +198,7 @@ export function installHostMcpRelay(
     });
     const relayCall =
       (global: boolean) =>
-      async (payload: McpCallPayload): Promise<McpCallAnswer> => {
+      async (payload: McpCallPayload & { conversationId?: string }): Promise<McpCallAnswer> => {
         if (disposed) throw noSender();
         const senderId = deps.senders()?.senderOf(session);
         if (!senderId) throw noSender();
@@ -208,6 +217,32 @@ export function installHostMcpRelay(
       AssistantLinkMethod.GLOBAL_MCP_CALL,
       McpCallPayloadSchema,
       relayCall(true)
+    );
+    // The caller's conversation (#17919), as the Shell's main named it, with
+    // the global mark carried as a field rather than by the method.
+    session.registerCallHandler(
+      AssistantLinkMethod.CONVERSATION_MCP_CALL,
+      ConversationMcpCallPayloadSchema,
+      ({ global, ...payload }) => relayCall(global === true)(payload)
+    );
+    // A cancel (#17985) reaches only this session's sender's calls from the
+    // help session it names, whichever of its sessions sent them. Taken even
+    // with control off since: stopping a call needs no consent.
+    session.registerCallHandler(
+      AssistantLinkMethod.MCP_CANCEL,
+      McpCancelPayloadSchema,
+      (payload) => {
+        if (disposed) throw noSender();
+        const senderId = deps.senders()?.senderOf(session);
+        if (!senderId) throw noSender();
+        if (runner.cancel(senderId, payload.helpSessionId, payload.callId) === "full") {
+          throw new AppError({
+            code: "RATE_LIMITED",
+            message: "This host already holds as many cancels for calls not yet here as it keeps",
+          });
+        }
+        return {};
+      }
     );
     session.registerCallHandler(
       AssistantLinkMethod.THROWAWAY_CALL,

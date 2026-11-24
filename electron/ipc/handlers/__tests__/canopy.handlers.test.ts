@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TRASH_TTL_MS } from "../../../../shared/config/trash.js";
+import canopyReaderManifest from "../../../services/canopy/canopy-reader-manifest.json" with { type: "json" };
 
 const ipcHandlers = vi.hoisted(() => new Map<string, unknown>());
 const ipcMainMock = vi.hoisted(() => ({
@@ -10,7 +11,13 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const state = vi.hoisted(() => ({
-  runs: [] as Array<{ runId: string; spawnedAt: number; workspaceId?: string; cwd?: string }>,
+  runs: [] as Array<{
+    runId: string;
+    spawnedAt: number;
+    workspaceId?: string;
+    cwd?: string;
+    worktreeId?: string;
+  }>,
   views: [] as Array<{ send: (channel: string, payload: unknown) => void }>,
   record: null as {
     spawnedAt: number;
@@ -188,9 +195,10 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     },
   },
 }));
-vi.mock("../../../services/globalAssistant.js", () => ({
-  peekGlobalAssistantService: () =>
+vi.mock("../../../services/globalAssistant.js", () => {
+  const globalService = () =>
     assistants.global && {
+      slot: 0,
       getState: () => ({
         phase: "running",
         generation: assistants.global?.generation ?? 0,
@@ -201,14 +209,25 @@ vi.mock("../../../services/globalAssistant.js", () => ({
       canWrite: (attachmentId: string, epoch: number) =>
         assistants.global?.holder?.attachmentId === attachmentId &&
         assistants.global.holder.epoch === epoch,
+    };
+  return {
+    peekGlobalAssistantServices: () => {
+      const service = globalService();
+      return service ? [service] : [];
     },
-}));
+    peekGlobalAssistantServiceForTerminal: (terminalId: string) => {
+      const service = globalService();
+      return service && assistants.global?.terminalId === terminalId ? service : null;
+    },
+  };
+});
 const saved = vi.hoisted(() => ({
   state: null as {
     terminals: Array<{ id: string; title: string; titleMode?: string; location?: string }>;
   } | null,
 }));
 const projectStore = vi.hoisted(() => ({
+  getProjectById: vi.fn((_projectId: string): { path: string } | null => null),
   enqueueProjectStateUpdate: vi.fn(
     async (_projectId: string, updater: (state: unknown) => unknown) => {
       const next = await updater(saved.state);
@@ -253,9 +272,18 @@ vi.mock("../../../store.js", () => ({
   },
 }));
 const gitBranch = vi.hoisted(() =>
-  vi.fn(async (_path: string) => "feature/login" as string | null)
+  vi.fn(
+    async (
+      _path: string
+    ): Promise<
+      { branch: string | null; unreadable: false } | { branch: null; unreadable: true }
+    > => ({
+      branch: "feature/login",
+      unreadable: false,
+    })
+  )
 );
-vi.mock("../../../utils/gitUtils.js", () => ({ getGitBranch: gitBranch }));
+vi.mock("../../../utils/gitUtils.js", () => ({ readGitBranch: gitBranch }));
 const localReader = vi.hoisted(() => ({
   read: vi.fn(),
   release: vi.fn(),
@@ -296,12 +324,27 @@ vi.mock("../../../services/canopy/canopyModels.js", async (importOriginal) => ({
   removeStaleUpdates,
 }));
 const broadcasts = vi.hoisted(() => vi.fn());
+/** The local views a filtered broadcast reached, of those `appViews` lists. */
+const reached = vi.hoisted(() => vi.fn());
+const appViews = vi.hoisted(() => [] as Array<{ id: number }>);
+const sends = vi.hoisted(() => vi.fn());
 const pushes = vi.hoisted(() => vi.fn());
 const handBacks = vi.hoisted(() => ({ markRead: vi.fn(), markUnread: vi.fn() }));
 vi.mock("../../utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../utils.js")>()),
   getProjectPushTargets: vi.fn(() => state.views),
   typedBroadcast: broadcasts,
+  typedBroadcastExcept: vi.fn(
+    (skip: (wc: unknown) => boolean, channel: string, payload: unknown) => {
+      broadcasts(channel, payload);
+      reached(
+        appViews.filter((wc) => !skip(wc)).map((wc) => wc.id),
+        channel,
+        payload
+      );
+    }
+  ),
+  typedSend: sends,
   broadcastToRenderer: pushes,
 }));
 
@@ -323,6 +366,10 @@ import { CanopyLocalReader, tryReaderModel } from "../../../services/canopy/cano
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 import { activeTerminalWatches, sizeHolds } from "../canopyTerminalWatch.js";
 import { markProjectlessView } from "../../../window/projectlessViews.js";
+import {
+  registerCachedViewWebContents,
+  unregisterCachedViewWebContents,
+} from "../../../window/webContentsRegistry.js";
 import { getIpcDispatcher } from "../../dispatcher.js";
 import { resetCanopyTrashRemovalsForTests } from "../../../services/pty/canopyTrashRemovals.js";
 import type { ClientEndpoint } from "../../endpoint.js";
@@ -352,6 +399,21 @@ function fakeSender(id: number) {
     isDestroyed: () => false,
   };
   return sender;
+}
+
+function fakeWindow() {
+  const emitter = new EventEmitter();
+  return Object.assign(emitter, {
+    minimized: false,
+    visible: true,
+    isDestroyed: () => false,
+    isMinimized(this: { minimized: boolean }) {
+      return this.minimized;
+    },
+    isVisible(this: { visible: boolean }) {
+      return this.visible;
+    },
+  });
 }
 
 function invoke(channel: string, sender: unknown, ...args: unknown[]) {
@@ -386,6 +448,7 @@ describe("canopy IPC", () => {
     state.runs = [{ runId: "run-1", spawnedAt: 100, workspaceId: "project-1" }];
     state.windows.clear();
     state.views = [];
+    appViews.length = 0;
     state.record = { spawnedAt: 100 };
     state.screen = MENU;
     state.redraw = redrawFor;
@@ -429,6 +492,25 @@ describe("canopy IPC", () => {
       await invoke(CANOPY_METHOD_CHANNELS.runBranch, sender, "run-1", { spawnedAt: 99 })
     ).toBeNull();
     expect(gitBranch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a branch read that failed rather than answer it branchless", async () => {
+    state.runs = [{ runId: "run-1", spawnedAt: 100, cwd: "/repo/worktrees/login" }];
+    const sender = fakeSender(5);
+    const read = () =>
+      invoke(CANOPY_METHOD_CHANNELS.runBranch, sender, "run-1", { spawnedAt: 100 });
+    expect(await read()).toBe("feature/login");
+
+    gitBranch.mockResolvedValueOnce({ branch: null, unreadable: true });
+    const failed = await outcome(read());
+    expect(failed.ok).toBe(false);
+    expect(failed.message).toContain("Couldn't read the run's branch");
+
+    expect(await read()).toBe("feature/login");
+
+    // A detached HEAD is an answer, not a failure.
+    gitBranch.mockResolvedValueOnce({ branch: null, unreadable: false });
+    expect(await read()).toBeNull();
   });
 
   it("searches only the terminals the fleet holds, answering with ids alone", async () => {
@@ -926,9 +1008,9 @@ describe("canopy IPC", () => {
     expect(models.ensure).not.toHaveBeenCalled();
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "on");
     expect(models.ensure).toHaveBeenCalled();
-    // Unpackaged, the shipped model is where the build fetched it.
+    // Unpackaged, the shipped model is the folder the build fetched this build's revision into.
     expect(vi.mocked(CanopyModels).mock.calls[0]?.[0]).toBe(
-      path.join("/repo", "electron", "resources", "canopy-reader")
+      path.join("/repo", "electron", "resources", "canopy-reader", canopyReaderManifest.revision)
     );
     // Updates go beside the user's data, never where earlier versions downloaded to.
     const options = vi.mocked(CanopyModels).mock.calls[0]?.[2];
@@ -936,6 +1018,8 @@ describe("canopy IPC", () => {
       updates: path.join("/tmp", "canopy", "reader-updates"),
       trial: expect.any(Function),
       build: "1.4.0",
+      // The dev build fetches it beside the running app (#17818): waited for, not damaged.
+      awaitBundled: true,
     });
 
     expect(models.cancel).not.toHaveBeenCalled();
@@ -1098,6 +1182,8 @@ describe("canopy IPC", () => {
       expect(vi.mocked(CanopyModels).mock.calls[0]?.[0]).toBe(
         path.join("/Applications/Daintree.app/Contents/Resources", "canopy-reader")
       );
+      // What a package ships is all there is: a bad copy is damaged, not on its way.
+      expect(vi.mocked(CanopyModels).mock.calls[0]?.[2]?.awaitBundled).toBe(false);
     } finally {
       if (resources) Object.defineProperty(process, "resourcesPath", resources);
       else delete (process as { resourcesPath?: string }).resourcesPath;
@@ -1578,6 +1664,29 @@ describe("canopy IPC", () => {
         ])
       );
       expect(readings.map((reading) => reading.runId)).toEqual(["run-0"]);
+    });
+
+    it("reads worktrees only for runs the fleet holds in the incarnation named, never as clean unchecked", async () => {
+      state.runs = [
+        { runId: "run-0", spawnedAt: 100, workspaceId: "project-1" },
+        { runId: "run-1", spawnedAt: 100, workspaceId: "project-1", worktreeId: "/wt/run-1" },
+        { runId: "run-2", spawnedAt: 100, workspaceId: "project-1", worktreeId: "/wt/run-2" },
+      ];
+      const readings = answer<Array<{ runId: string; work: { kind: string } }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.readWorktrees, fakeSender(1), [
+          { runId: "run-0", spawnedAt: 100 },
+          { runId: "run-1", spawnedAt: 100 },
+          { runId: "run-1", spawnedAt: 99 },
+          // Named only in an incarnation the fleet doesn't hold.
+          { runId: "run-2", spawnedAt: 99 },
+          { runId: "elsewhere", spawnedAt: 100 },
+        ])
+      );
+      // run-1's project isn't known here, so its worktree can't be checked against it.
+      expect(readings).toEqual([
+        { runId: "run-0", work: { kind: "not-applicable" } },
+        { runId: "run-1", work: { kind: "unreadable" } },
+      ]);
     });
   });
 
@@ -2257,6 +2366,154 @@ describe("canopy IPC", () => {
     await invoke(CANOPY_METHOD_CHANNELS.setShown, sender, ["run-2"]);
     expect(canopyPanelsListing("run-1")).toEqual([]);
     expect(canopyPanelsListing("run-2")).toEqual([31]);
+  });
+
+  describe("a window put away (#17061)", () => {
+    const snapshotOf = async (sender: unknown) => {
+      const result = (await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, sender)) as {
+        data?: CanopySnapshot;
+      };
+      return (result.data ?? result) as CanopySnapshot;
+    };
+
+    it.each([
+      ["minimize", "restore"],
+      ["hide", "show"],
+    ] as const)(
+      "reads at the background pace while the only open panel's window is put away by %s, and at once again on %s",
+      async (away, back) => {
+        const win = fakeWindow();
+        const sender = fakeSender(4);
+        state.windows.set(sender, win);
+        expect(active(await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true))).toBe(true);
+
+        win.emit(away);
+        expect((await snapshotOf(sender)).active).toBe(false);
+
+        win.emit(back);
+        expect((await snapshotOf(sender)).active).toBe(true);
+      }
+    );
+
+    it("keeps reading while another window still shows an open panel", async () => {
+      const first = fakeWindow();
+      const second = fakeWindow();
+      const a = fakeSender(4);
+      const b = fakeSender(6);
+      state.windows.set(a, first);
+      state.windows.set(b, second);
+      await invoke(CANOPY_METHOD_CHANNELS.setActive, a, true);
+      await invoke(CANOPY_METHOD_CHANNELS.setActive, b, true);
+
+      first.emit("minimize");
+      expect((await snapshotOf(a)).active).toBe(true);
+      second.emit("hide");
+      expect((await snapshotOf(a)).active).toBe(false);
+    });
+
+    it("doesn't start reading for a panel reopened while its window is put away", async () => {
+      const win = fakeWindow();
+      const sender = fakeSender(4);
+      state.windows.set(sender, win);
+      await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
+      win.emit("minimize");
+
+      await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, false);
+      expect(active(await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true))).toBe(false);
+
+      win.emit("restore");
+      expect((await snapshotOf(sender)).active).toBe(true);
+    });
+
+    it("counts a window already minimized when its first panel opens as put away", async () => {
+      const win = fakeWindow();
+      win.minimized = true;
+      const sender = fakeSender(4);
+      state.windows.set(sender, win);
+      expect(active(await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true))).toBe(false);
+
+      win.minimized = false;
+      win.emit("restore");
+      expect((await snapshotOf(sender)).active).toBe(true);
+    });
+
+    it("reads at a panel's pace in a shown window macOS calls not visible because it is covered", async () => {
+      const win = fakeWindow();
+      win.visible = false;
+      const sender = fakeSender(4);
+      state.windows.set(sender, win);
+      expect(active(await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true))).toBe(true);
+    });
+
+    it.each(["enter-full-screen", "focus"] as const)(
+      "comes back on %s with no restore, once the window is in sight",
+      async (event) => {
+        const win = fakeWindow();
+        const sender = fakeSender(4);
+        state.windows.set(sender, win);
+        await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
+        win.minimized = true;
+        win.emit("minimize");
+
+        win.emit(event);
+        expect((await snapshotOf(sender)).active).toBe(false);
+
+        // Covered, as macOS answers for a window just brought back: still back.
+        win.minimized = false;
+        win.visible = false;
+        win.emit(event);
+        expect((await snapshotOf(sender)).active).toBe(true);
+        expect(sends).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it("holds back no page for a panel whose window is put away", async () => {
+      const win = fakeWindow();
+      const sender = fakeSender(31);
+      state.windows.set(sender, win);
+      await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
+      await invoke(CANOPY_METHOD_CHANNELS.setShown, sender, ["run-1"]);
+      expect(canopyPanelsListing("run-1")).toEqual([31]);
+
+      win.emit("minimize");
+      expect(canopyPanelsListing("run-1")).toEqual([]);
+      win.emit("restore");
+      expect(canopyPanelsListing("run-1")).toEqual([31]);
+    });
+
+    it("sends no snapshot to a view put away or cached, and hands a returning window the current one", async () => {
+      const win = fakeWindow();
+      const canopyView = fakeSender(4);
+      state.windows.set(canopyView, win);
+      appViews.push({ id: 4 }, { id: 6 }, { id: 7 });
+      registerCachedViewWebContents({ id: 6 } as Electron.WebContents);
+      try {
+        await invoke(CANOPY_METHOD_CHANNELS.setActive, canopyView, true);
+        reached.mockClear();
+
+        win.emit("minimize");
+        await vi.waitFor(() =>
+          expect(reached).toHaveBeenCalledWith(
+            [7],
+            "canopy:snapshot-updated",
+            expect.objectContaining({ active: false })
+          )
+        );
+        expect(reached.mock.calls.every(([ids]) => !(ids as number[]).includes(4))).toBe(true);
+        expect(sends).not.toHaveBeenCalled();
+
+        win.emit("restore");
+        win.emit("show");
+        expect(sends).toHaveBeenCalledTimes(1);
+        expect(sends).toHaveBeenCalledWith(
+          win,
+          "canopy:snapshot-updated",
+          expect.objectContaining({ active: true })
+        );
+      } finally {
+        unregisterCachedViewWebContents(6);
+      }
+    });
   });
 
   it("refuses to read again a run Canopy hasn't read", async () => {
@@ -3370,21 +3627,6 @@ describe("canopy IPC", () => {
   });
 
   describe("who holds a terminal's size (#16333)", () => {
-    function fakeWindow() {
-      const emitter = new EventEmitter();
-      return Object.assign(emitter, {
-        minimized: false,
-        visible: true,
-        isDestroyed: () => false,
-        isMinimized(this: { minimized: boolean }) {
-          return this.minimized;
-        },
-        isVisible(this: { visible: boolean }) {
-          return this.visible;
-        },
-      });
-    }
-
     async function openHeld(sender = fakeSender(4)) {
       const view = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
         spawnedAt: 100,
@@ -3914,10 +4156,12 @@ describe("where Open in Assistant from the Canopy window finds a lane's view (#1
   });
 
   it("names the view with the global session's input, and none without one", async () => {
-    expect(await globalAssistantInputOwner()).toBeNull();
+    expect(await globalAssistantInputOwner("g")).toBeNull();
     assistants.global = { terminalId: "g", generation: 1, owner: 9 };
-    expect(await globalAssistantInputOwner()).toBe(9);
+    expect(await globalAssistantInputOwner("g")).toBe(9);
+    // Another session's terminal names that session's owner, never this one's (#18142).
+    expect(await globalAssistantInputOwner("other")).toBeNull();
     assistants.global = { terminalId: "g", generation: 1, owner: null };
-    expect(await globalAssistantInputOwner()).toBeNull();
+    expect(await globalAssistantInputOwner("g")).toBeNull();
   });
 });

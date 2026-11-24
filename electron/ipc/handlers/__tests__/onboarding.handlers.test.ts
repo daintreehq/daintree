@@ -51,6 +51,13 @@ vi.mock("../../../services/TelemetryService.js", () => ({
   setOnboardingCompleteTag: setOnboardingCompleteTagMock,
 }));
 
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils.js")>()),
+  broadcastToRenderer: broadcastToRendererMock,
+}));
+
 import { registerOnboardingHandlers } from "../onboarding.js";
 
 function getHandler(channel: string) {
@@ -242,6 +249,62 @@ describe("registerOnboardingHandlers — discovery IPC", () => {
     setOnboardingCompleteTagMock.mockClear();
     complete(null);
     expect(setOnboardingCompleteTagMock).toHaveBeenCalledWith(true);
+  });
+
+  it("reopenChecklist clears the persisted dismissal and keeps progress", () => {
+    registerOnboardingHandlers();
+    seedOnboarding({
+      checklist: {
+        dismissed: false,
+        celebrationShown: false,
+        items: {
+          openedProject: true,
+          launchedAgent: false,
+          createdWorktree: false,
+          ranSecondParallelAgent: false,
+        },
+      },
+    });
+    getHandler("onboarding:checklist-dismiss")(null);
+    expect(getHandler("onboarding:checklist-get")(null)).toMatchObject({ dismissed: true });
+
+    const reopened = getHandler("onboarding:checklist-reopen")(null);
+
+    const expected = {
+      dismissed: false,
+      celebrationShown: false,
+      items: {
+        openedProject: true,
+        launchedAgent: false,
+        createdWorktree: false,
+        ranSecondParallelAgent: false,
+      },
+    };
+    expect(reopened).toEqual(expected);
+    // A view hydrating later, or the next launch, reads it reopened too.
+    expect(getHandler("onboarding:checklist-get")(null)).toEqual(expected);
+  });
+
+  it("pushes every dismissal and reopen to all views, in order, with progress", () => {
+    registerOnboardingHandlers();
+    const items = {
+      openedProject: true,
+      launchedAgent: true,
+      createdWorktree: false,
+      ranSecondParallelAgent: false,
+    };
+    seedOnboarding({ checklist: { dismissed: false, celebrationShown: true, items } });
+
+    getHandler("onboarding:checklist-dismiss")(null);
+    getHandler("onboarding:checklist-reopen")(null);
+
+    const pushes = broadcastToRendererMock.mock.calls
+      .filter(([channel]) => channel === "onboarding:checklist-push")
+      .map(([, state]) => state);
+    expect(pushes).toEqual([
+      { dismissed: true, celebrationShown: true, items },
+      { dismissed: false, celebrationShown: true, items },
+    ]);
   });
 
   describe("tour", () => {

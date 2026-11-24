@@ -227,6 +227,7 @@ import {
 } from "../../services/mcp-server/driveTarget.js";
 import { FakeView, liveViews, projectKeys } from "./harness/fakeView.js";
 import { harnessState } from "./harness/harnessState.js";
+import { getWorkspaceClientRef } from "../../window/serviceRefs.js";
 import { waitUntil } from "./harness/poll.js";
 import { HOST_ID, startRemoteHarness, type RemoteHarness } from "./harness/remoteHarness.js";
 
@@ -240,6 +241,7 @@ let nextViewId = 20;
 
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+  currentScratch.id = null;
   await h?.dispose();
   h = null;
   pvmState.active = null;
@@ -425,6 +427,10 @@ describe("switching hosts (integration harness)", () => {
       const { harness, local } = await startWindowOnLocalProject();
       scratches.set(scratchId, { id: scratchId, name: "Spike", path: harness.dir, lastOpened: 1 });
       const client = harnessState.client!;
+      harnessState.projects.set("proj-2", {
+        ...harnessState.projects.get("proj-2")!,
+        status: "active",
+      });
       // The window moves from proj-2 into the scratch, then to the host.
       await client.client.switchWindowHost(from(local), {
         hostId: "local",
@@ -432,17 +438,25 @@ describe("switching hosts (integration harness)", () => {
         projectId: scratchId,
       });
       expect(pvmState.active).toBe(scratchId);
+      // The project it left is no longer held by the window, nor shown anywhere (#17186).
+      const workspace = getWorkspaceClientRef() as unknown as { releases: number[] };
+      expect(workspace.releases).toContain(shellWindow.id);
+      expect(harnessState.projects.get("proj-2")?.status).toBe("background");
       await client.client.switchWindowHost(from(activeView()), {
         hostId: HOST_ID,
         newWindow: false,
         projectId: "proj-1",
       });
+      // Only the way back may make it current again, not the first visit.
+      currentScratch.id = null;
+      const releasedBefore = workspace.releases.length;
       await expect(
         client.client.switchWindowHost(from(activeView()), { hostId: "local", newWindow: false })
       ).resolves.toEqual({ outcome: "switched", hostId: "local", projectId: scratchId });
       expect(pvmState.active).toBe(scratchId);
       // Activated as a scratch switch would: it is this machine's current workspace again.
       expect(currentScratch.id).toBe(scratchId);
+      expect(workspace.releases.length).toBeGreaterThan(releasedBefore);
     },
     TEST_TIMEOUT_MS
   );

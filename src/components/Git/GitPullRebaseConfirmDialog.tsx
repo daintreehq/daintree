@@ -20,7 +20,10 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isClientGitError } from "@/utils/clientGitError";
-import { useGitPullRebaseConfirmStore } from "@/store/gitPullRebaseConfirmStore";
+import {
+  declineFailedGitPullRebaseConfirmation,
+  useGitPullRebaseConfirmStore,
+} from "@/store/gitPullRebaseConfirmStore";
 import {
   buildGitRemoteOperationPreview,
   formatGitPushDestination,
@@ -61,6 +64,11 @@ import { pluralize } from "@/lib/pluralize";
 function GitPullRebaseConfirmDialogInner() {
   const pendingConfirm = useGitPullRebaseConfirmStore((s) => s.pendingConfirm);
   const resolveConfirmation = useGitPullRebaseConfirmStore((s) => s.resolveConfirmation);
+  // Identifies the request, where `cwd` only identifies the worktree: a request
+  // that supersedes another for the SAME worktree must read its own preview,
+  // because the worktree may have moved in between and the approval carries
+  // whatever this dialog shows (#17188).
+  const requestSeq = useGitPullRebaseConfirmStore((s) => s.requestSeq);
 
   const cwd = pendingConfirm?.cwd ?? null;
 
@@ -68,21 +76,24 @@ function GitPullRebaseConfirmDialogInner() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   /**
-   * The cwd the currently-held preview actually describes.
+   * The request (its `requestSeq`) the currently-held preview was read for.
    *
    * Approval is gated on this matching the pending request, not merely on
    * "something loaded". The dialog keeps its state across close/open — the host
-   * stays mounted and only returns null — so without this a second confirm for a
-   * DIFFERENT worktree renders the previous worktree's branch, upstream and commits
-   * for the frames between render and effect, with Pull and rebase enabled against
-   * them. In a window holding a dozen worktrees whose branches are all called
-   * something like `main`, nothing on screen would give that away.
+   * stays mounted and only returns null — so without this a second confirm
+   * renders the previous request's branch, upstream and commits for the frames
+   * between render and effect, with Pull and rebase enabled against them. In a
+   * window holding a dozen worktrees whose branches are all called something
+   * like `main`, nothing on screen would give that away. Keyed on the request
+   * rather than the cwd so a second confirm for the same worktree can't approve
+   * the first one's review either.
    */
-  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+  const [loadedFor, setLoadedFor] = useState<number | null>(null);
   const requestIdRef = useRef(0);
 
   const loadPreview = useCallback(() => {
     if (!cwd) return;
+    const forRequest = requestSeq;
     const requestId = ++requestIdRef.current;
     setIsLoading(true);
     setLoadError(null);
@@ -96,7 +107,7 @@ function GitPullRebaseConfirmDialogInner() {
         .then((result) => {
           if (requestIdRef.current !== requestId) return;
           setPreview(result);
-          setLoadedFor(cwd);
+          setLoadedFor(forRequest);
         })
         .catch((err: unknown) => {
           if (requestIdRef.current !== requestId) return;
@@ -114,7 +125,7 @@ function GitPullRebaseConfirmDialogInner() {
         }),
       { context: "GitPullRebaseConfirmDialog: load rebase preview" }
     );
-  }, [cwd]);
+  }, [cwd, requestSeq]);
 
   useEffect(() => {
     if (!cwd) {
@@ -141,7 +152,7 @@ function GitPullRebaseConfirmDialogInner() {
   useEffect(() => {
     return () => {
       if (useGitPullRebaseConfirmStore.getState().pendingConfirm) {
-        useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+        useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
       }
     };
   }, []);
@@ -161,7 +172,7 @@ function GitPullRebaseConfirmDialogInner() {
   // false and the read only begins in an effect, so a check that asked merely whether
   // loading had finished would classify the first painted frame as "no upstream" and
   // flash that error before anything had been read.
-  const isSettled = !isLoading && !loadError && loadedFor === cwd;
+  const isSettled = !isLoading && !loadError && loadedFor === requestSeq;
   const isPending = !isSettled && !loadError;
   // First of the blocking states: `git pull --rebase` refuses to start over any
   // halted operation, and a halted rebase also detaches HEAD — so without this it
@@ -175,6 +186,15 @@ function GitPullRebaseConfirmDialogInner() {
   const isUpstreamMissing =
     isSettled && !haltedOperation && branch !== null && hasRemote && upstream === null;
   const isLoaded = isSettled && !haltedOperation && commits !== null && upstream !== null;
+  // What approving approves: the branch and commit the replay set on screen was
+  // measured against (#17188). Read only from this request's own settled
+  // answer, so a click can never carry a review the dialog isn't showing.
+  const pullRebaseReview = isSettled ? (preview?.pullRebaseReview ?? null) : null;
+  // A measured range main could not pin to a commit. Practically unreachable —
+  // the commit is read right after the range — but a preview with nothing to
+  // pin the pull to has nothing to approve, and says so rather than leaving a
+  // dead button.
+  const isUnpinned = isLoaded && !pullRebaseReview;
   // Git refuses to rebase over uncommitted changes to tracked files, and the
   // handler refuses before it touches the network. Said here, before approval,
   // rather than as a failure after it. The refs and lists still render: what the
@@ -214,7 +234,9 @@ function GitPullRebaseConfirmDialogInner() {
   // surface whose entire job is showing what gets rewritten must not hand out an
   // approval in the one state where it cannot answer that. Fetching is a
   // non-destructive thing the user can go and do; approving past an unknown is not.
-  const confirmDisabled = !isLoaded || isUnfetched || isDirty || !!loadError;
+  //
+  // No review, no approval: the pull has to be pinned to what was shown.
+  const confirmDisabled = !isLoaded || isUnfetched || isDirty || !pullRebaseReview || !!loadError;
 
   // Names the one unmet prerequisite rather than leaving a dead button to be read as
   // arbitrary. Ordered by which the user can act on first.
@@ -234,9 +256,11 @@ function GitPullRebaseConfirmDialogInner() {
                 ? "Commit or stash to continue"
                 : isUnfetched
                   ? "Fetch the upstream to continue"
-                  : showPendingHint
-                    ? "Checking what would be replayed…"
-                    : null;
+                  : isUnpinned
+                    ? "Retry the preview to continue"
+                    : showPendingHint
+                      ? "Checking what would be replayed…"
+                      : null;
 
   const notice = loadError ? (
     <PreviewNotice
@@ -329,12 +353,23 @@ function GitPullRebaseConfirmDialogInner() {
       can&apos;t be worked out. Fetch it and retry. If it&apos;s still missing after that, check
       that the upstream branch exists and that the remote&apos;s fetch settings include it.
     </PreviewNotice>
+  ) : isUnpinned ? (
+    <PreviewNotice
+      tone="error"
+      title="Couldn't read which commit this branch is on"
+      onRetry={loadPreview}
+      retryTestId="git-pull-rebase-unpinned-retry"
+      testId="git-pull-rebase-unpinned"
+    >
+      Without it the pull can&apos;t be held to the commits shown here, so it can&apos;t be
+      approved. Retry the preview.
+    </PreviewNotice>
   ) : null;
 
   return (
     <ConfirmDialog
       isOpen={true}
-      onClose={() => resolveConfirmation(false)}
+      onClose={() => resolveConfirmation(null)}
       title="Pull and rebase local commits?"
       // Shown while the read is pending and when the rebase will actually rewrite
       // something. Everywhere else it described a rewrite the frame directly below
@@ -361,7 +396,9 @@ function GitPullRebaseConfirmDialogInner() {
       // fetch is not a reason to take away the way out of the dialog.
       confirmDisabled={confirmDisabled}
       hint={blockedReason}
-      onConfirm={() => resolveConfirmation(true)}
+      onConfirm={() => {
+        if (pullRebaseReview) resolveConfirmation(pullRebaseReview);
+      }}
     >
       <PreviewFrame>
         {notice}
@@ -484,6 +521,7 @@ export function GitPullRebaseConfirmDialog() {
       variant="component"
       componentName="GitPullRebaseConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => declineFailedGitPullRebaseConfirmation(requestSeq)}
     >
       <GitPullRebaseConfirmDialogInner />
     </ErrorBoundary>

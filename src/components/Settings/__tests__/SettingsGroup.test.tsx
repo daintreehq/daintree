@@ -264,6 +264,41 @@ describe("SettingsRow description wiring", () => {
     const trigger = screen.getByRole("combobox", { name: "Sound" });
     expect(describedText(trigger)).toContain("Turn on Play sound to choose one");
   });
+
+  it("says what keeps a setting from taking effect whichever way it is set, after its description", () => {
+    const { rerender } = render(
+      <SettingsGroup>
+        <SettingsSwitchCard
+          title="Notify my phone"
+          subtitle="Only while you're away"
+          note="No phone has notifications on."
+          isEnabled
+          onChange={noop}
+        />
+      </SettingsGroup>
+    );
+    const toggle = () => screen.getByRole("switch", { name: "Notify my phone" });
+    expect(describedText(toggle())).toBe("Only while you're away | No phone has notifications on.");
+    expect((toggle() as HTMLButtonElement).disabled).toBe(false);
+
+    rerender(
+      <SettingsGroup>
+        <SettingsDependents disabled reason="Turn on notifications first">
+          <SettingsSwitchCard
+            title="Notify my phone"
+            subtitle="Only while you're away"
+            note="No phone has notifications on."
+            disabledReason="Saving"
+            isEnabled={false}
+            onChange={noop}
+          />
+        </SettingsDependents>
+      </SettingsGroup>
+    );
+    expect(describedText(toggle())).toBe(
+      "Only while you're away | No phone has notifications on. | Saving | Turn on notifications first"
+    );
+  });
 });
 
 describe("Choices inside a group", () => {

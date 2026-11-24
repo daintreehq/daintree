@@ -34,6 +34,7 @@ import {
 } from "../../shared/config/helpAssistantTierAllowlists.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
+import type { McpServerService } from "./McpServerService.js";
 import { ASSISTANT_SCRATCH_ENV_VAR } from "./AssistantScratchService.js";
 import {
   ASSISTANT_RUN_CHECKPOINT_ENV_VAR,
@@ -47,9 +48,13 @@ import { agentSupportsAssistantContent } from "./AssistantContentMirror.js";
 import { resolveAssistantPluginKnowledge } from "./AssistantPluginKnowledge.js";
 import { setScheduledRunOfSession } from "./scheduledRuns/assistantWorkerLaunches.js";
 import type { HelpSessionProjectFacts } from "./helpSessionProjectMetadata.js";
-import type { PendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
+import type {
+  PendingHelpHibernation,
+  PendingHelpHibernationStore,
+} from "./PendingHelpHibernationStore.js";
 import { AssistantSessionFiles } from "./AssistantSessionFiles.js";
 import { HelpSessionError } from "./helpSessionError.js";
+import { publishHelpSessionService } from "./helpSessionRuntime.js";
 import {
   ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH,
   ASSISTANT_AGENT_DIR_KEY_PATTERN,
@@ -296,6 +301,26 @@ export interface HelpAdoptProbe {
   rows?: number;
 }
 
+/**
+ * Where main sends the conversation each Assistant's creations are held under
+ * (#17919): bound once a lane's spawn settles which conversation it runs, and
+ * forgotten once its lane can no longer resume it.
+ */
+export interface ConversationOwnershipListener {
+  bind(helpSessionId: string, conversationOwnershipId: string): void;
+  forget(conversationOwnershipId: string): void;
+}
+
+/** How a handover of coordination between lanes went (#18143): written, or refused with why. */
+export type LaneHandover = { written: Promise<void> } | { refused: "starting" | "unheld" };
+
+/** A conversation a lane ran, by what its resume would name and the ownership id it was given. */
+interface LaneConversation {
+  agentId: string;
+  agentSessionId: string;
+  conversationOwnershipId: string;
+}
+
 export interface AssistantLaneSnapshot {
   slotKey: string;
   agentSessionId: string;
@@ -376,6 +401,12 @@ interface HelpSessionRecord {
    */
   agentSessionId?: string;
   /**
+   * The ownership id main gave the conversation this session runs (#17919),
+   * set at its spawn: the lane's own when it resumed that conversation, a new
+   * one when it started fresh. Unset for an agent that can't resume.
+   */
+  conversationOwnershipId?: string;
+  /**
    * Renderer `ActionContext` snapshot bound at provision time. Returned by
    * `getActionContextForToken` so the MCP handshake can pin every tool call
    * to the worktree/terminal the user had focused when they launched the
@@ -415,6 +446,25 @@ interface HelpSessionRecord {
    * folder move or a Claude/Codex switch keeps the same store.
    */
   runCheckpointPath: string;
+}
+
+/** Conversation ownership (#17919), held by the MCP server's ownership ledger. */
+export function conversationOwnershipFor(
+  service: Pick<McpServerService, "bindHelpConversation" | "forgetAssistantConversation">
+): ConversationOwnershipListener {
+  return {
+    bind: (helpSessionId, conversationOwnershipId) =>
+      service.bindHelpConversation(helpSessionId, conversationOwnershipId),
+    forget: (conversationOwnershipId) =>
+      service.forgetAssistantConversation(conversationOwnershipId),
+  };
+}
+
+/** The ownership id a pointer write carries for the conversation `record` runs (#17919). */
+function ownershipOf(record: HelpSessionRecord): { conversationOwnershipId?: string } {
+  return record.conversationOwnershipId !== undefined
+    ? { conversationOwnershipId: record.conversationOwnershipId }
+    : {};
 }
 
 function projectPathHash(projectPath: string): string {
@@ -553,6 +603,11 @@ export class HelpSessionService {
    */
   private readonly panelVisibleByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string, sessionId: string) => void) | null = null;
+  private conversationOwnership: ConversationOwnershipListener | null = null;
+  // The conversation each lane ran before its pointer moved to another (#17919),
+  // one per lane: picking it back reopens what it launched, and the lane moving
+  // on again, or being cleared, forgets it.
+  private readonly previousConversationBySlotKey = new Map<string, LaneConversation>();
   private readonly sessionEndedListeners = new Set<(event: HelpSessionEndedEvent) => void>();
   private readonly sessionReattachedListeners = new Set<(lane: RunningLane) => void>();
   // Lanes main is resuming with no view (#16753, #16763), from the claim to
@@ -586,6 +641,18 @@ export class HelpSessionService {
    */
   setOnMcpSessionRevoked(cb: ((token: string, sessionId: string) => void) | null): void {
     this.onMcpSessionRevokedFn = cb;
+  }
+
+  /** Wire where conversation ownership goes (#17919). Idempotent, like the revoke callback. */
+  setConversationOwnershipListener(listener: ConversationOwnershipListener | null): void {
+    this.conversationOwnership = listener;
+  }
+
+  /** The ownership id of the conversation a live help session runs (#17919), or null. */
+  getConversationOwnershipId(sessionId: string): string | null {
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return null;
+    return record.conversationOwnershipId ?? null;
   }
 
   /**
@@ -720,6 +787,34 @@ export class HelpSessionService {
 
   setPendingHibernationStore(store: PendingHelpHibernationStore | null): void {
     this.pendingHibernationStore = store;
+    if (store) this.markPendingHibernationStoreWired?.();
+  }
+
+  private markPendingHibernationStoreWired: (() => void) | null = null;
+  private readonly pendingHibernationStoreWired = new Promise<void>((resolve) => {
+    this.markPendingHibernationStoreWired = resolve;
+  });
+
+  /**
+   * Whether the resume pointers read at boot are wired in, once they are or
+   * after `timeoutMs` if they never are: a lane read before then would say it
+   * keeps nothing when it does (#18142).
+   */
+  /** Resolves once the resume pointers read at boot are wired in, however long that takes. */
+  pendingHibernationStoreReady(): Promise<void> {
+    return this.pendingHibernationStore ? Promise.resolve() : this.pendingHibernationStoreWired;
+  }
+
+  whenPendingHibernationStoreWired(timeoutMs = 5_000): Promise<boolean> {
+    if (this.pendingHibernationStore) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), timeoutMs);
+      timer.unref?.();
+      void this.pendingHibernationStoreWired.then(() => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
   }
 
   /**
@@ -1685,6 +1780,7 @@ export class HelpSessionService {
             cwd: record.sessionPath,
             capturedAt: Date.now(),
             panelWasOpen: panelOpenAtCapture,
+            ...ownershipOf(record),
           })
           .catch((err) => {
             console.warn(
@@ -1780,6 +1876,12 @@ export class HelpSessionService {
             cwd: record.sessionPath,
             capturedAt: Date.now(),
             panelWasOpen,
+            ...this.ownershipAfterCapture(slotKey, {
+              agentId: record.agentId,
+              agentSessionId: record.agentSessionId ?? "",
+              conversationOwnershipId: record.conversationOwnershipId,
+              captured: capturedAgentSessionId,
+            }),
           })
           .catch((err) => {
             console.warn(
@@ -1966,22 +2068,129 @@ export class HelpSessionService {
    *
    * Agents with no resume support have nothing to point at and are skipped.
    */
-  recordLaneLaunchForToken(token: string, agentSessionId?: string): Promise<void> {
+  recordLaneLaunchForToken(
+    token: string,
+    agentSessionId?: string,
+    options?: { freshConversation?: true; forkedConversation?: true }
+  ): Promise<void> {
     if (!token || !this.pendingHibernationStore) return Promise.resolve();
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return Promise.resolve();
     if (!getEffectiveAgentConfig(record.agentId)?.resume) return Promise.resolve();
     const slotKey = assistantSlotKey(record.projectId, record.slot);
+    // A fork runs a conversation its id names nothing of: what it launches is
+    // its bearer's alone, and the one it forked from stays the lane's previous.
+    const conversationOwnershipId =
+      options?.forkedConversation === true
+        ? this.parkLaneConversation(slotKey)
+        : this.laneConversationFor(
+            slotKey,
+            record.agentId,
+            agentSessionId ?? "",
+            options?.freshConversation === true
+          );
     record.agentSessionId = agentSessionId || undefined;
+    record.conversationOwnershipId = conversationOwnershipId;
     this.bumpLaneRevision(slotKey);
     // The launch that held the claim has spent it.
     this.claimsBySlotKey.delete(slotKey);
-    return this.pendingHibernationStore.set(slotKey, {
+    const written = this.pendingHibernationStore.set(slotKey, {
       agentId: record.agentId,
       agentSessionId: agentSessionId ?? "",
       cwd: record.sessionPath,
       capturedAt: Date.now(),
+      ...(conversationOwnershipId !== undefined ? { conversationOwnershipId } : {}),
     });
+    if (conversationOwnershipId !== undefined) {
+      try {
+        this.conversationOwnership?.bind(record.sessionId, conversationOwnershipId);
+      } catch (err) {
+        console.warn("[HelpSessionService] Binding a conversation's ownership failed:", err);
+      }
+    }
+    return written;
+  }
+
+  /** Keep the conversation the lane points at as its previous one, giving the launch none. */
+  private parkLaneConversation(slotKey: string): undefined {
+    const entry = this.pendingHibernationStore?.get(slotKey) ?? null;
+    if (entry?.conversationOwnershipId) {
+      this.setPreviousConversation(slotKey, {
+        agentId: entry.agentId,
+        agentSessionId: entry.agentSessionId,
+        conversationOwnershipId: entry.conversationOwnershipId,
+      });
+    }
+    return undefined;
+  }
+
+  /**
+   * The ownership id for the conversation a lane's spawn runs (#17919). Kept
+   * only when the spawn reopens, by its exact id and on the same agent, the
+   * conversation the lane points at, or the one it pointed at before; anything
+   * else is a conversation of its own and gets a new id, so it inherits
+   * nothing. An empty id proves nothing, and neither does a resume main turned
+   * into a fresh start under the same id. Whatever the lane leaves behind
+   * becomes its previous conversation, and the one before that is forgotten.
+   */
+  private laneConversationFor(
+    slotKey: string,
+    agentId: string,
+    agentSessionId: string,
+    fresh: boolean
+  ): string {
+    const entry = this.pendingHibernationStore?.get(slotKey) ?? null;
+    const current: LaneConversation | undefined = entry?.conversationOwnershipId
+      ? {
+          agentId: entry.agentId,
+          agentSessionId: entry.agentSessionId,
+          conversationOwnershipId: entry.conversationOwnershipId,
+        }
+      : undefined;
+    const previous = this.previousConversationBySlotKey.get(slotKey);
+    const reopens = (kept: LaneConversation | undefined): kept is LaneConversation =>
+      kept !== undefined &&
+      !fresh &&
+      agentSessionId !== "" &&
+      kept.agentId === agentId &&
+      kept.agentSessionId === agentSessionId;
+    if (reopens(current)) return current.conversationOwnershipId;
+    if (reopens(previous)) {
+      this.setPreviousConversation(slotKey, current, previous.conversationOwnershipId);
+      return previous.conversationOwnershipId;
+    }
+    // A pointer holding no conversation of its own leaves the previous one in place.
+    if (current !== undefined) this.setPreviousConversation(slotKey, current);
+    return randomUUID();
+  }
+
+  /**
+   * Make `conversation` the lane's previous one, forgetting the one it
+   * replaces unless that is `keeping`, the conversation the lane now runs.
+   */
+  private setPreviousConversation(
+    slotKey: string,
+    conversation: LaneConversation | undefined,
+    keeping?: string
+  ): void {
+    const replaced = this.previousConversationBySlotKey.get(slotKey);
+    if (conversation !== undefined) this.previousConversationBySlotKey.set(slotKey, conversation);
+    else this.previousConversationBySlotKey.delete(slotKey);
+    if (
+      replaced !== undefined &&
+      replaced.conversationOwnershipId !== keeping &&
+      replaced.conversationOwnershipId !== conversation?.conversationOwnershipId
+    ) {
+      this.forgetConversationOwnership(replaced.conversationOwnershipId);
+    }
+  }
+
+  private forgetConversationOwnership(conversationOwnershipId: string): void {
+    try {
+      this.conversationOwnership?.forget(conversationOwnershipId);
+    } catch (err) {
+      console.warn("[HelpSessionService] Forgetting a conversation's ownership failed:", err);
+    }
   }
 
   /**
@@ -2028,11 +2237,55 @@ export class HelpSessionService {
       return Promise.resolve();
     }
     if (entry.agentSessionId === agentSessionId) return Promise.resolve();
+    const { conversationOwnershipId, ...rest } = entry;
     return this.pendingHibernationStore.set(lane.slotKey, {
-      ...entry,
+      ...rest,
       agentSessionId,
       capturedAt: Date.now(),
+      ...this.ownershipAfterCapture(lane.slotKey, {
+        agentId: entry.agentId,
+        agentSessionId: entry.agentSessionId,
+        conversationOwnershipId,
+        captured: agentSessionId,
+      }),
     });
+  }
+
+  /**
+   * The ownership id a capture's pointer write carries (#17919). A first id
+   * for a conversation the lane knew none for is that conversation's. One the
+   * run moved to from a conversation it knew (`/clear`, `/new`, `/resume`
+   * inside the CLI) is another conversation: it starts with none, and what the
+   * run launched stays the first's, kept as the lane's previous conversation.
+   */
+  private ownershipAfterCapture(
+    slotKey: string,
+    known: {
+      agentId: string;
+      agentSessionId: string;
+      conversationOwnershipId: string | undefined;
+      captured: string;
+    }
+  ): { conversationOwnershipId?: string } {
+    const { conversationOwnershipId } = known;
+    if (conversationOwnershipId === undefined) return {};
+    if (known.agentSessionId === "" || known.agentSessionId === known.captured) {
+      return { conversationOwnershipId };
+    }
+    // Back to the conversation the lane ran before: that one is current again.
+    const previous = this.previousConversationBySlotKey.get(slotKey);
+    const back =
+      previous !== undefined &&
+      previous.agentId === known.agentId &&
+      previous.agentSessionId === known.captured
+        ? previous.conversationOwnershipId
+        : undefined;
+    this.setPreviousConversation(
+      slotKey,
+      { agentId: known.agentId, agentSessionId: known.agentSessionId, conversationOwnershipId },
+      back
+    );
+    return back !== undefined ? { conversationOwnershipId: back } : {};
   }
 
   /**
@@ -2150,6 +2403,87 @@ export class HelpSessionService {
   }
 
   /**
+   * The lane chosen to coordinate `projectId`'s lanes (#18143), or null when
+   * none was or the pointers aren't wired yet.
+   */
+  getLaneCoordinator(projectId: string): number | null {
+    return this.pendingHibernationStore?.getCoordinator(projectId) ?? null;
+  }
+
+  /** Keep `slot` as the lane that coordinates, with nothing handed between lanes. */
+  setLaneCoordinator(projectId: string, slot: number): Promise<void> {
+    const store = this.pendingHibernationStore;
+    if (!store || store.getCoordinator(projectId) === slot) return Promise.resolve();
+    return store.commit({ coordinator: { projectId, slot } });
+  }
+
+  /**
+   * Hand coordination of `projectId`'s lanes from lane `from` to lane `to`
+   * (#18143). What `from` launched is held under its conversation's ownership
+   * id on every host, so the id moves rather than the records: `to` takes it
+   * and `from` takes the one `to` held, or a new one holding nothing. Each
+   * conversation stays what it was; only whose work it holds changes. Both
+   * lanes' pointers, every session record of each, and the choice are written
+   * in one snapshot, so a crash keeps all of it or none.
+   *
+   * Everything but the write happens before this returns. Refused, with
+   * nothing changed, when the pointers aren't wired or a launch holds `to`'s
+   * pointer (`starting`): that launch could start `to` afresh and park the
+   * work as a conversation it left. One holding `from`'s picks up whatever
+   * `from` then points at. Refused too while `from` holds work and `to` has
+   * neither a run nor a kept conversation to take it into (`unheld`), so the
+   * work is never left with a lane that no longer coordinates.
+   */
+  handOverLaneCoordination(projectId: string, from: number, to: number): LaneHandover {
+    const store = this.pendingHibernationStore;
+    if (!store || from === to) return { refused: "starting" };
+    const fromKey = assistantSlotKey(projectId, from);
+    const toKey = assistantSlotKey(projectId, to);
+    if (this.claimsBySlotKey.has(toKey)) return { refused: "starting" };
+    const held = this.laneOwnershipId(projectId, from);
+    const theirs = this.laneOwnershipId(projectId, to);
+    const toRuns = this.liveLaneRecord(projectId, to);
+    const coordinator = { projectId, slot: to };
+    if (held === undefined) return { written: store.commit({ coordinator }) };
+    if (theirs === undefined && toRuns === null && !store.get(toKey)) {
+      return { refused: "unheld" };
+    }
+    const given = theirs ?? randomUUID();
+    for (const record of this.sessionsById.values()) {
+      if (record.projectId !== projectId) continue;
+      if (record.slot === from && record.conversationOwnershipId === held) {
+        record.conversationOwnershipId = given;
+      } else if (
+        record.slot === to &&
+        (theirs !== undefined ? record.conversationOwnershipId === theirs : record === toRuns)
+      ) {
+        record.conversationOwnershipId = held;
+      }
+    }
+    const entries: Record<string, PendingHelpHibernation> = {};
+    const fromEntry = store.get(fromKey);
+    if (fromEntry?.conversationOwnershipId === held) {
+      entries[fromKey] = { ...fromEntry, conversationOwnershipId: given };
+    }
+    const toEntry = store.get(toKey);
+    if (toEntry) entries[toKey] = { ...toEntry, conversationOwnershipId: held };
+    return { written: store.commit({ entries, coordinator }) };
+  }
+
+  /** The ownership id a lane's work is held under now: its live run's, else its pointer's. */
+  private laneOwnershipId(projectId: string, slot: number): string | undefined {
+    return (
+      this.liveLaneRecord(projectId, slot)?.conversationOwnershipId ??
+      this.pendingHibernationStore?.get(assistantSlotKey(projectId, slot))?.conversationOwnershipId
+    );
+  }
+
+  private liveLaneRecord(projectId: string, slot: number): HelpSessionRecord | null {
+    const running = this.getRunningLaneSession(projectId, slot);
+    return running ? (this.sessionsById.get(running.sessionId) ?? null) : null;
+  }
+
+  /**
    * The user explicitly discarded this lane's conversation — Stop, Restart
    * conversation, or closing its tab (#13205). The only path that clears a
    * lane's pointer: a CLI exit, a crash, or a quit all leave it in place so
@@ -2182,9 +2516,21 @@ export class HelpSessionService {
     this.pendingCapturesBySlotKey.delete(slotKey);
     this.claimsBySlotKey.delete(slotKey);
     this.bumpLaneRevision(slotKey);
+    // Cleared, so nothing it launched is any conversation's to clean up (#17919).
+    const forgotten = new Set<string>();
+    const kept = this.pendingHibernationStore.get(slotKey)?.conversationOwnershipId;
+    if (kept) forgotten.add(kept);
+    const previous = this.previousConversationBySlotKey.get(slotKey);
+    if (previous) forgotten.add(previous.conversationOwnershipId);
+    this.previousConversationBySlotKey.delete(slotKey);
     for (const record of this.sessionsById.values()) {
-      if (record.projectId === projectId && record.slot === slot) record.agentSessionId = undefined;
+      if (record.projectId === projectId && record.slot === slot) {
+        record.agentSessionId = undefined;
+        if (record.conversationOwnershipId) forgotten.add(record.conversationOwnershipId);
+        record.conversationOwnershipId = undefined;
+      }
     }
+    for (const id of forgotten) this.forgetConversationOwnership(id);
     await this.pendingHibernationStore.clear(slotKey);
   }
 
@@ -3052,6 +3398,7 @@ export class HelpSessionService {
       mcpServerService.disconnectHelpBearer(token, sessionId)
     );
     this.setOnMcpSessionRepinned((token) => mcpServerService.resetHelpTransports(token));
+    this.setConversationOwnershipListener(conversationOwnershipFor(mcpServerService));
     if (!mcpServerService.isEnabled()) {
       // setEnabled() will only call start() internally if it has its own
       // `registry` already set — which it doesn't on cold boot if the
@@ -3161,3 +3508,4 @@ export class HelpSessionService {
 
 export const helpSessionService = new HelpSessionService();
 setScheduledRunOfSession((sessionId) => helpSessionService.getScheduledRunOf(sessionId));
+publishHelpSessionService(helpSessionService);

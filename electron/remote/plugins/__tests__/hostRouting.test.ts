@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const windows = vi.hoisted(() => ({ registry: null as unknown }));
+
 vi.mock("electron", () => ({ webContents: { fromId: vi.fn() } }));
 vi.mock("../../../window/windowRef.js", () => ({
-  getWindowRegistry: () => null,
+  getWindowRegistry: () => windows.registry,
   getProjectViewManager: () => null,
 }));
 
@@ -16,6 +18,7 @@ import {
   runInPluginInvocation,
 } from "../../../services/plugin/pluginFrontendRouting.js";
 import { installPluginHostRouting } from "../hostRouting.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../runtime.js";
 import type { DriveLeaseHolder } from "../../../../shared/types/remoteHosts.js";
 
 const PROJECT = "a".repeat(64);
@@ -266,5 +269,38 @@ describe("plugin frontend routing in Host mode", () => {
     for (const notify of leaseListeners) notify();
     expect(listener).toHaveBeenCalled();
     off();
+  });
+});
+
+describe("Host mode's own check for a window here", () => {
+  afterEach(() => {
+    windows.registry = null;
+    _resetRemoteServicesForTest();
+    _resetPluginFrontendRoutingForTesting();
+  });
+
+  it("counts a window on a Remote Host, leaving each call to pick a target on this machine (#17214)", () => {
+    const remoteView = { id: 9001, isDestroyed: () => false };
+    registerRemoteService("windowHosts", {
+      viewHost: (id: number) => (id === remoteView.id ? "staging-server" : "local"),
+    } as never);
+    windows.registry = {
+      getPrimary: () => ({
+        browserWindow: { isDestroyed: () => false },
+        services: { projectViewManager: { getActiveView: () => ({ webContents: remoteView }) } },
+      }),
+      all: () => [],
+    };
+    const teardown = installPluginHostRouting({
+      lease: { getDriveTarget: () => ({ kind: "vacant" }), onChange: () => () => {} },
+      registry: { onChange: () => () => {} },
+      hasLocalProjectView: () => false,
+    });
+
+    // An ambient agents.list read answers from that window, naming its host (#16845).
+    expect(resolvePluginFrontend(null, "acme.x")).toEqual({ kind: "local" });
+    windows.registry = null;
+    expect(resolvePluginFrontend(null, "acme.x")).toEqual({ kind: "none", reason: "vacant" });
+    teardown();
   });
 });

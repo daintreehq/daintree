@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { PathSegments } from "@/components/ui/PathSegments";
@@ -59,7 +59,6 @@ export function DevPreviewDestructiveConfirmDialog({
   const [meta, setMeta] = useState<DevPreviewDestructivePreviewMeta | null>(null);
   const [metaError, setMetaError] = useState<string | null>(null);
   const [sizes, setSizes] = useState<SizesState>("pending");
-  const requestIdRef = useRef(0);
 
   useEffect(() => {
     if (!isOpen || !projectId || !tier) {
@@ -69,7 +68,7 @@ export function DevPreviewDestructiveConfirmDialog({
       return;
     }
 
-    const requestId = ++requestIdRef.current;
+    let current = true;
     setMeta(null);
     setMetaError(null);
     setSizes("pending");
@@ -78,31 +77,52 @@ export function DevPreviewDestructiveConfirmDialog({
       window.electron.devPreview
         .getDestructivePreviewMeta({ panelId, projectId })
         .then((result) => {
-          if (requestIdRef.current !== requestId) return;
+          if (!current) return;
           setMeta(result);
         })
         .catch((err: unknown) => {
-          if (requestIdRef.current !== requestId) return;
+          if (!current) return;
           setMetaError(formatErrorMessage(err, "The dev server's folder couldn't be read."));
         }),
       { context: "DevPreviewDestructiveConfirmDialog: load meta" }
     );
 
+    // Each opening, and each tier within it, is its own scan session in main:
+    // closing, switching tier or unmounting cancels it, so a `du` over
+    // node_modules doesn't outlive the dialog that asked for it.
+    const sessionId = crypto.randomUUID();
     const skipNodeModules = tier === "restartAndClearCache";
+    const skipCacheDirs = !skipNodeModules;
     safeFireAndForget(
       window.electron.devPreview
-        .getDestructivePreviewSizes({ panelId, projectId, skipNodeModules })
+        .getDestructivePreviewSizes({
+          panelId,
+          projectId,
+          skipNodeModules,
+          skipCacheDirs,
+          sessionId,
+        })
         .then((result) => {
-          if (requestIdRef.current !== requestId) return;
+          if (!current) return;
           setSizes(result);
         })
         .catch(() => {
           // Non-blocking: sizes inform the decision, the directory list gates it.
-          if (requestIdRef.current !== requestId) return;
+          if (!current) return;
           setSizes("failed");
         }),
       { context: "DevPreviewDestructiveConfirmDialog: load sizes" }
     );
+
+    return () => {
+      current = false;
+      Promise.resolve()
+        .then(() => window.electron.devPreview.cancelDestructivePreviewSizes({ sessionId }))
+        .catch(() => {
+          // Best effort: a Host that predates the cancel, or a dropped link,
+          // leaves the opening's scans to their deadline.
+        });
+    };
   }, [isOpen, panelId, projectId, tier]);
 
   if (!tier) return null;

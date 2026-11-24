@@ -17,7 +17,12 @@ interface VoiceProviderInfo<Field extends VoiceApiKeyField> {
   keyField: Field;
 }
 
-export type VoiceTranscriptionProviderInfo = VoiceProviderInfo<TranscriptionKeyField>;
+/**
+ * A transcription provider: one that transcribes with the user's key, or the
+ * on-device model, which needs no key and is ready once its model is installed.
+ */
+export type VoiceTranscriptionProviderInfo =
+  ({ kind: "key" } & VoiceProviderInfo<TranscriptionKeyField>) | { kind: "device"; name: string };
 
 /**
  * One entry per transcription provider, naming the settings field that holds the key it
@@ -28,9 +33,10 @@ export const VOICE_TRANSCRIPTION_PROVIDERS: Record<
   VoiceTranscriptionProvider,
   VoiceTranscriptionProviderInfo
 > = {
-  openai: { name: "OpenAI", keyIssuer: "OpenAI", keyField: "openaiApiKey" },
-  deepgram: { name: "Deepgram", keyIssuer: "Deepgram", keyField: "deepgramApiKey" },
-  grok: { name: "Grok", keyIssuer: "xAI", keyField: "xaiApiKey" },
+  openai: { kind: "key", name: "OpenAI", keyIssuer: "OpenAI", keyField: "openaiApiKey" },
+  deepgram: { kind: "key", name: "Deepgram", keyIssuer: "Deepgram", keyField: "deepgramApiKey" },
+  grok: { kind: "key", name: "Grok", keyIssuer: "xAI", keyField: "xaiApiKey" },
+  local: { kind: "device", name: "On device" },
 };
 
 /** Cleanup and spoken rewrite run on the chosen cleanup provider, whichever provider transcribes. */
@@ -62,27 +68,52 @@ function providerInfo(provider: VoiceTranscriptionProvider): VoiceTranscriptionP
   return VOICE_TRANSCRIPTION_PROVIDERS[provider] ?? VOICE_TRANSCRIPTION_PROVIDERS.openai;
 }
 
-export function transcriptionKeyField(provider: VoiceTranscriptionProvider): TranscriptionKeyField {
-  return providerInfo(provider).keyField;
+/** Whether the provider transcribes on this device, with no key and nothing sent. */
+export function transcribesOnDevice(provider: VoiceTranscriptionProvider): boolean {
+  return providerInfo(provider).kind === "device";
+}
+
+/** The settings field holding the key the provider transcribes with; null for the on-device model. */
+export function transcriptionKeyField(
+  provider: VoiceTranscriptionProvider
+): TranscriptionKeyField | null {
+  const info = providerInfo(provider);
+  return info.kind === "key" ? info.keyField : null;
 }
 
 export function transcriptionProviderName(provider: VoiceTranscriptionProvider): string {
   return providerInfo(provider).name;
 }
 
-export function transcriptionKeyIssuer(provider: VoiceTranscriptionProvider): string {
-  return providerInfo(provider).keyIssuer;
+/** Who issues the provider's key; null for the on-device model. */
+export function transcriptionKeyIssuer(provider: VoiceTranscriptionProvider): string | null {
+  const info = providerInfo(provider);
+  return info.kind === "key" ? info.keyIssuer : null;
 }
 
 type KeySettings = Pick<VoiceInputSettings, "transcriptionProvider" | TranscriptionKeyField>;
 
-/** The key the selected provider transcribes with. */
+/** The key the selected provider transcribes with; empty for the on-device model. */
 export function transcriptionApiKey(settings: KeySettings): string {
-  return settings[transcriptionKeyField(settings.transcriptionProvider)];
+  const field = transcriptionKeyField(settings.transcriptionProvider);
+  return field ? settings[field] : "";
 }
 
 export function hasTranscriptionKey(settings: KeySettings): boolean {
   return !!transcriptionApiKey(settings);
+}
+
+/**
+ * Whether the selected provider has what it transcribes with: its key, or for
+ * the on-device model, the model installed and checked.
+ */
+export function transcriptionProviderReady(
+  settings: KeySettings,
+  localModelReady: boolean
+): boolean {
+  return transcribesOnDevice(settings.transcriptionProvider)
+    ? localModelReady
+    : hasTranscriptionKey(settings);
 }
 
 type CleanupKeySettings = Pick<VoiceInputSettings, "correctionProvider" | VoiceApiKeyField>;

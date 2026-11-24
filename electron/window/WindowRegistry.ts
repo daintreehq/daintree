@@ -1,6 +1,5 @@
 import type { BrowserWindow, MessagePortMain } from "electron";
 import type { EventBuffer } from "../services/EventBuffer.js";
-import type { PortalManager } from "../services/PortalManager.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { SurfaceViewManager } from "./SurfaceViewManager.js";
@@ -22,7 +21,6 @@ export interface FocusTrackingApp {
 }
 
 export interface WindowServices {
-  portalManager?: PortalManager;
   eventBuffer?: EventBuffer;
   projectSwitchService?: ProjectSwitchService;
   projectViewManager?: ProjectViewManager;
@@ -202,9 +200,7 @@ export class WindowRegistry {
       });
     // Only its readers go; the global assistant belongs to the installation.
     import("../services/globalAssistant.js")
-      .then(({ peekGlobalAssistantService }) =>
-        peekGlobalAssistantService()?.detachWindow(windowId)
-      )
+      .then(({ detachGlobalAssistantWindow }) => detachGlobalAssistantWindow(windowId))
       .catch((err) => {
         console.warn("[WindowRegistry] Detaching the global assistant failed:", err);
       });

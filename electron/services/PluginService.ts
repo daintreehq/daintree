@@ -20,10 +20,10 @@ import { createRequire as nodeCreateRequire } from "node:module";
 
 // ajv and ajv-formats are CJS-only with deep `module.exports = Class` exports.
 // NodeNext module resolution can't resolve these from ESM, so use createRequire
-// which is the canonical Node.js interop for CJS-in-ESM.
+// which is the canonical Node.js interop for CJS-in-ESM. They are required on
+// the first action input schema, not here: this module loads before the first
+// window is interactive, and most sessions never validate a plugin action.
 const req = nodeCreateRequire(import.meta.url);
-const Ajv: new (opts?: Record<string, unknown>) => AjvInstance = req("ajv");
-const addFormats: (ajv: AjvInstance) => void = req("ajv-formats");
 
 interface AjvInstance {
   compile(schema: Record<string, unknown>): ValidateFn;
@@ -195,6 +195,11 @@ import {
   type PanelLifecycleSourceHandle,
 } from "./plugin/PluginPanelLifecycleBroker.js";
 import {
+  PluginHostedViewConsumers,
+  type ViewConsumerDocumentWatcher,
+} from "./plugin/PluginHostedViewConsumers.js";
+import { getPluginHostedViewOwner } from "./plugin/PluginHostedViewRegistry.js";
+import {
   PLUGIN_ACTION_CATEGORY_MAX_LENGTH,
   isReservedActionCategory,
   normalizePluginActionCategory,
@@ -216,7 +221,8 @@ import {
   type ParsedPluginBlocklist,
   type PluginBlocklistMatch,
 } from "./plugin/PluginBlocklistService.js";
-import { PluginInstaller } from "./plugin/PluginInstaller.js";
+import { PluginInstaller, type PluginUpdateCheckOptions } from "./plugin/PluginInstaller.js";
+import { installedCatalogOf } from "./plugin/pluginCatalogSourceUrl.js";
 import { checkPluginEngineRange, type PluginEngineMismatch } from "./plugin/pluginEngineCompat.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
@@ -269,10 +275,17 @@ import { getHiddenSearchProviders } from "./plugin/searchProviderPreferences.js"
 import { unregisterForgeProviderImpls } from "./forgeProviderRegistry.js";
 import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import {
+  decorationServesForge,
   scopeMatchesPattern,
   unregisterFileDecorationProviderImpls,
 } from "./fileDecorationRegistry.js";
 import { unregisterWorktreeDeleteNotesBinding } from "./plugin/worktreeDeleteNotesRegistry.js";
+import {
+  pluginCloudProviderStatusChanged,
+  pluginDeclaresCloudProviders,
+  setPluginCloudProviderRuntime,
+  unbindPluginCloudProviders,
+} from "./plugin/pluginCloudProviders.js";
 import {
   collectWorktreeDeleteNotes as collectDeleteNotes,
   getWorktreeDeleteNotes as getDeleteNotes,
@@ -348,7 +361,7 @@ import {
 } from "./plugin/projectPluginSetupSkips.js";
 import type { PluginRecipeMetadataPatch, TerminalRecipe } from "../../shared/types/project.js";
 import { getPluginActionAuditService } from "./PluginActionAuditService.js";
-import { stableArgsSha256 } from "../utils/pluginMcpHash.js";
+import { safeArgsHash } from "./plugin/pluginAuditArgsHash.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { canDisposeIdlePluginWorker } from "../../shared/utils/workerGovernancePolicy.js";
 import type { WorkerResourceSnapshot } from "../../shared/types/workerGovernance.js";
@@ -428,6 +441,13 @@ const WORKTREE_CARD_READ_COALESCE_GRACE_MS = 250;
  * queued or in flight from before it, which the host-call deadline bounds.
  */
 const WORKTREE_CARD_TARGET_RETIRE_MS = 5 * 60_000;
+
+/**
+ * How often idle third-party workers are checked for retirement (#17068). A
+ * worker goes on the first sweep after its idle window, so this is how late
+ * past that window it can be.
+ */
+const PLUGIN_IDLE_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Why this dev plugin's manifest cannot be adopted right now, or `null` when it
@@ -548,19 +568,6 @@ function safeAppendAudit(
     getPluginActionAuditService().append(input);
   } catch (err) {
     console.error("[PluginService] Failed to append audit record:", err);
-  }
-}
-
-/**
- * SHA-256 of the dispatch args for forensic grouping, best-effort. A
- * serialization throw here must not mask the handler error, so it degrades to
- * an empty hash (the documented "hashing failed" sentinel).
- */
-function safeArgsHash(args: unknown[]): string {
-  try {
-    return stableArgsSha256(args);
-  } catch {
-    return "";
   }
 }
 
@@ -1160,6 +1167,25 @@ export class PluginService {
   /** Projects the host has been told are open, with their roots. */
   private readonly openProjectRoots = new Map<string, string>();
   /**
+   * Projects whose last full open ran to completion at this root (#17039). A
+   * repeat open of one is a warm switch back into a view that already holds
+   * the snapshot, while the watcher keeps its plugins in step with disk, so it
+   * skips rediscovery and the replay. Cleared by anything that could make the
+   * last open's result wrong: a close, a trust or mute change, a manual
+   * reload, or the watcher losing sight of the folder.
+   */
+  private readonly establishedProjectOpens = new Map<
+    string,
+    { readonly root: string; readonly observation: number }
+  >();
+  /** The full open in flight per project, so a second switch joins it rather than queueing another. */
+  private readonly pendingProjectOpens = new Map<
+    string,
+    { readonly root: string; readonly promise: Promise<void> }
+  >();
+  /** Roots whose last discovery threw: an open that swallowed that failure must not count as established. */
+  private readonly failedDiscoveryRoots = new Set<string>();
+  /**
    * Manager for child processes spawned via `host.process.spawn` (#9234).
    * Lazily constructed so the `node:child_process` spawn path only wires up
    * when a plugin actually uses it. The stream sink fans each process's
@@ -1272,6 +1298,12 @@ export class PluginService {
   readonly metrics: PluginMetricsService;
   /** sourceId → detach its `destroyed` listener. See `watchPanelLifecycleSource`. */
   private readonly panelLifecycleSourceCleanups = new Map<number, () => void>();
+  /** Plugin views each renderer has mounted outside the panel grid (#17068). */
+  private readonly hostedViewConsumers = new PluginHostedViewConsumers((viewIds) =>
+    this.noteViewConsumersMoved(viewIds.map((viewId) => this.viewConsumerOwner(viewId)))
+  );
+  /** The idle-dispose sweep; armed only while a third-party worker is alive. */
+  private idleSweepTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
   private readonly disposeRegistrySubscriptions: () => void;
   /**
@@ -1453,6 +1485,8 @@ export class PluginService {
         else if (change === "removed") this.pluginThemeRemovals.add(pluginId);
         this.schedulePluginThemeSync();
       },
+      readUserSetting: (pluginId, key, manifest) =>
+        this.readUserSettingForHost(pluginId, key, manifest),
     });
 
     this.promptDispatcher = new PluginUIPromptDispatcher({
@@ -1466,7 +1500,10 @@ export class PluginService {
       // renders a settings form whether or not the plugin is running.
       getManifest: (pluginId) =>
         (this.plugins.get(pluginId) ?? this.disabledPlugins.get(pluginId))?.manifest,
-      onSettingChanged: (pluginId) => this.emitSettingsChanged(pluginId),
+      onSettingChanged: (pluginId) => {
+        this.emitSettingsChanged(pluginId);
+        void this.contributions.refreshForgeSettingMatches(pluginId).catch(() => undefined);
+      },
     });
 
     this.accounts = new PluginAccountService({
@@ -1625,11 +1662,54 @@ export class PluginService {
   ingestPanelLifecycleEvents(
     sourceId: number,
     events: readonly unknown[],
-    sender?: PanelLifecycleSourceHandle
+    sender?: PanelLifecycleSourceHandle,
+    opts: { replay?: boolean } = {}
   ): void {
     if (this.disposed) return;
     if (sender) this.watchPanelLifecycleSource(sourceId, sender);
-    this.panelLifecycleBroker.ingest(sourceId, events);
+    this.noteViewConsumersMoved(this.panelLifecycleBroker.ingest(sourceId, events, opts));
+  }
+
+  /**
+   * Accept a renderer's plugin views mounted outside the panel grid (#17068),
+   * which have no panel record for the lifecycle batch to carry. Replaces that
+   * renderer's last report and is forgotten with its document.
+   */
+  ingestHostedViewConsumers(
+    sourceId: number,
+    watchDocument: ViewConsumerDocumentWatcher,
+    viewIds: readonly unknown[]
+  ): void {
+    if (this.disposed) return;
+    this.hostedViewConsumers.record(sourceId, watchDocument, viewIds);
+  }
+
+  /** Who owns a mounted view: a hosted view id, or the panel kind a surface draws. */
+  private viewConsumerOwner(viewId: string): string | undefined {
+    return getPluginHostedViewOwner(viewId) ?? getPanelKindConfig(viewId)?.extensionId;
+  }
+
+  /** `pluginId`'s views open in any renderer: grid panels in a live phase, and hosted mounts. */
+  private liveViewConsumerCount(pluginId: string): number {
+    return (
+      this.panelLifecycleBroker.livePanelCount(pluginId) +
+      this.hostedViewConsumers.count(pluginId, (viewId) => this.viewConsumerOwner(viewId))
+    );
+  }
+
+  /**
+   * A plugin's views opening, moving or closing is use of it, so a worker's
+   * idle window runs from its last view closing rather than from whenever the
+   * plugin was activated. Entries die with the plugin, so an unloaded one is
+   * never stamped.
+   */
+  private noteViewConsumersMoved(pluginIds: Iterable<string | undefined>): void {
+    const now = Date.now();
+    for (const pluginId of pluginIds) {
+      if (pluginId !== undefined && this.plugins.has(pluginId)) {
+        this.pluginWorkerActivity.set(pluginId, now);
+      }
+    }
   }
 
   /**
@@ -1664,7 +1744,7 @@ export class PluginService {
       // evicted says nothing about whether the user closed the panel, and a
       // false terminal event is the exact destructive misread this API exists
       // to prevent.
-      this.panelLifecycleBroker.clearSource(sourceId);
+      this.noteViewConsumersMoved(this.panelLifecycleBroker.clearSource(sourceId));
     };
     let unwatch: () => void;
     try {
@@ -1685,6 +1765,8 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    this.establishedProjectOpens.clear();
+    this.pendingProjectOpens.clear();
     // Before any unload below can forget a launch: teardown ends the plugins'
     // reach in memory only, and the records on disk carry it to the next run.
     detachPluginLaunchPersistence();
@@ -1737,6 +1819,8 @@ export class PluginService {
     for (const detach of this.panelLifecycleSourceCleanups.values()) detach();
     this.panelLifecycleSourceCleanups.clear();
     this.panelLifecycleBroker.dispose();
+    this.hostedViewConsumers.dispose();
+    this.syncIdleSweepTimer();
     // Drops the PtyClient subscriptions and force-kills any plugin PTY the
     // unload cascade above left running.
     this.pluginPtyTransport?.dispose();
@@ -1797,6 +1881,9 @@ export class PluginService {
       // Publish any authoritative snapshot an unload owed while the catalog
       // was still partial.
       this.broadcaster.flushDeferredCompleteSnapshots();
+      // Every plugin has loaded or failed to: a cloud account whose provider
+      // never registered can now say which (#17351).
+      pluginCloudProviderStatusChanged();
     }
   }
 
@@ -2944,6 +3031,9 @@ export class PluginService {
           this.removeHandlers(pluginId);
           this.unregisterImperativePluginActions(pluginId);
           this.flushPluginEventCleanups(pluginId);
+          // Not an event subscription (those hold a worker against idle disposal),
+          // so a provider bound before the throw goes here instead.
+          unbindPluginCloudProviders(pluginId);
         };
         this.cleanupMap.set(pluginId, rollback);
 
@@ -3067,6 +3157,7 @@ export class PluginService {
     }
 
     const { host, revoke } = this.createHost(pluginId);
+    const workerMode = plugin.devMode ? "dev" : "prod";
     const workerHost = new PluginDevWorkerHost({
       pluginId,
       // The host's own identity, so the worker-side proxy reports the real
@@ -3077,7 +3168,7 @@ export class PluginService {
       // reports activated without importing anything, then imports each command
       // handler on its first dispatch (#12274).
       bundlePath: plugin.resolvedMain ?? undefined,
-      mode: plugin.devMode ? "dev" : "prod",
+      mode: workerMode,
       permissionExecArgv,
     });
     const bridge = new PluginDevWorkerMainBridge({
@@ -3150,6 +3241,7 @@ export class PluginService {
             // latch from the generation before it, so a notes check it bound
             // before throwing would still be asked (#13805).
             unregisterWorktreeDeleteNotesBinding(pluginId);
+            unbindPluginCloudProviders(pluginId);
           }
         }
         if (result.ok) {
@@ -3176,10 +3268,11 @@ export class PluginService {
 
     const entry = { workerHost, bridge, revoke, cleanup: () => cleanup(), activation };
     this.pluginWorkers.set(pluginId, entry);
+    this.syncIdleSweepTimer();
     // Subscribed to the host's own lifecycle events rather than threaded through
     // the bridge: the supervisor respawns a crashed worker without telling this
     // service, so the process edges are only observable here (#12278).
-    const detachHealth = this.watchWorkerHealth(pluginId, entry);
+    const detachHealth = this.watchWorkerHealth(pluginId, entry, workerMode);
     this.setWorkerStatus(pluginId, "starting", null, null, { newGeneration: true });
 
     // Register the teardown disposer up front so a concurrent unloadPlugin()
@@ -3196,6 +3289,7 @@ export class PluginService {
       revoke();
       if (this.pluginWorkers.get(pluginId) === entry) {
         this.pluginWorkers.delete(pluginId);
+        this.syncIdleSweepTimer();
       }
     };
     this.cleanupMap.set(pluginId, cleanup);
@@ -3668,16 +3762,23 @@ export class PluginService {
    * `projectId` is the requesting view's project, and is required for the
    * same reason the handler's impl filter needs it: a plugin that project
    * hides must not be started by its file views.
+   *
+   * `codeForgeProviderId` is that project's resolved code forge: a provider
+   * gated on a forge it is not stays asleep (#17069).
    */
   async activatePluginsForFileDecorationScope(
     scope: string,
-    projectId: string | null
+    projectId: string | null,
+    codeForgeProviderId: string | null = null
   ): Promise<void> {
     if (typeof scope !== "string" || scope.length === 0) return;
     const targets: string[] = [];
     for (const [pluginId, plugin] of this.plugins) {
       for (const contribution of plugin.manifest.contributes.fileDecorationProviders) {
-        if (contribution.scopes.some((pattern) => scopeMatchesPattern(scope, pattern))) {
+        if (
+          contribution.scopes.some((pattern) => scopeMatchesPattern(scope, pattern)) &&
+          decorationServesForge(pluginId, contribution, codeForgeProviderId)
+        ) {
           targets.push(pluginId);
           break;
         }
@@ -3686,6 +3787,34 @@ export class PluginService {
     const visible = selectContributionsForProject(targets, (id) => id, projectId);
     if (visible.length === 0) return;
     await Promise.allSettled(visible.map((id) => this.activatePlugin(id)));
+  }
+
+  /**
+   * Why a cloud provider in `pluginId`'s namespace that no loaded plugin
+   * declares can't be used (#17351): the words its accounts and hosts show.
+   */
+  cloudProviderUnavailableReason(pluginId: string, providerId: string): string {
+    const from = `Its cloud provider comes from the ${pluginId} plugin`;
+    if (this.plugins.has(pluginId)) return `${from}, which no longer provides ${providerId}.`;
+    const blocked = this.blockedPlugins.get(pluginId);
+    if (blocked) return `${from}, which Daintree blocked: ${blocked.reason}`;
+    if (this.disabledPlugins.has(pluginId)) {
+      return `${from}, which is turned off. Turn it on in Settings → Plugins.`;
+    }
+    const loadError = this.getPluginLoadError(pluginId)?.message.split("\n")[0]?.trim();
+    if (loadError) return `${from}, which failed to load: ${loadError}`;
+    if (this.records.getInstalledRecord(pluginId)) {
+      return this.initialized ? `${from}, which didn't load.` : `${from}, which hasn't loaded yet.`;
+    }
+    return `${from}, which isn't installed.`;
+  }
+
+  /** Why `pluginId`'s worker failed to start this session (#17351), or null when it hasn't. */
+  cloudProviderStartFailure(pluginId: string): string | null {
+    const status = this.workerStatuses.get(pluginId);
+    if (status?.state !== "failed") return null;
+    const detail = status.detail?.split("\n")[0]?.trim();
+    return detail || (status.reason ?? "it stopped");
   }
 
   private worktreeDeleteNotesHost(): WorktreeDeleteNotesHost {
@@ -4042,6 +4171,9 @@ export class PluginService {
         this.requestWorkerSelfRestart(pluginId, boundPlugin),
       pluginNotificationsBlocked: (pluginId, projectId) =>
         this.pluginNotificationsBlocked(pluginId, projectId),
+      // Loaded only once a plugin marks a notification for an assistant (#18154).
+      assistantNotifications: async () =>
+        (await import("./assistantPluginNotifications.js")).assistantPluginNotifications(),
     };
   }
 
@@ -4735,8 +4867,9 @@ export class PluginService {
     const client = this.workspaceClient;
     if (!client || windowId === undefined) return null;
     try {
-      const snapshots = await client.getAllStatesAsync(windowId);
-      return snapshots.find((s) => s.isCurrent === true)?.id ?? null;
+      // Only the id crosses from the workspace host: every snapshot would be
+      // cloned into main per invocation to read one flag.
+      return await client.getActiveWorktreeIdForWindowAsync(windowId);
     } catch (err) {
       console.error("[PluginService] Failed to resolve active worktree for window:", err);
       return null;
@@ -4933,6 +5066,15 @@ export class PluginService {
     return this.pluginsRoot;
   }
 
+  /**
+   * The catalog the installed copy of `pluginId` came from (#17434): `null`
+   * when it isn't a catalog install (or isn't installed), `sourceUrl` absent
+   * for Daintree's own catalog.
+   */
+  getInstalledCatalog(pluginId: string): { sourceUrl?: string } | null {
+    return installedCatalogOf(this.records.getInstalledRecord(pluginId));
+  }
+
   registerHandler<TArgs, TResult>(
     pluginId: string,
     channel: string,
@@ -5123,6 +5265,8 @@ export class PluginService {
       let validator = this.actionValidators.get(channel);
       if (!validator) {
         if (!this.ajv) {
+          const Ajv: new (opts?: Record<string, unknown>) => AjvInstance = req("ajv");
+          const addFormats: (ajv: AjvInstance) => void = req("ajv-formats");
           this.ajv = new Ajv();
           addFormats(this.ajv);
         }
@@ -5462,8 +5606,11 @@ export class PluginService {
    * compares digests, or reads the catalog for a catalog install (#16781).
    * Purely informational — it never installs. Delegates to {@link PluginInstaller}.
    */
-  async checkForUpdate(pluginId: string): Promise<PluginCheckUpdateResult> {
-    return this.installer.checkForUpdate(pluginId);
+  async checkForUpdate(
+    pluginId: string,
+    options?: PluginUpdateCheckOptions
+  ): Promise<PluginCheckUpdateResult> {
+    return this.installer.checkForUpdate(pluginId, options);
   }
 
   /**
@@ -5697,6 +5844,14 @@ export class PluginService {
       detail,
     });
     this.emitRuntimeStatus(pluginId);
+    // A worker that failed to start leaves its cloud providers unavailable, until it starts
+    // again; a failure reworded (activation failed, then crash loop) rewords them too.
+    if (
+      (state === "failed" || prior?.state === "failed") &&
+      pluginDeclaresCloudProviders(pluginId)
+    ) {
+      pluginCloudProviderStatusChanged();
+    }
 
     // A crash reports as `starting` + `crashed` while the supervisor decides
     // whether to respawn, so it warns alongside an outright failure.
@@ -5727,7 +5882,8 @@ export class PluginService {
    */
   private watchWorkerHealth(
     pluginId: string,
-    entry: { workerHost: PluginDevWorkerHost }
+    entry: { workerHost: PluginDevWorkerHost },
+    mode: "dev" | "prod"
   ): () => void {
     const isCurrent = (): boolean => this.pluginWorkers.get(pluginId) === entry;
     const onReady = (): void => {
@@ -5752,6 +5908,14 @@ export class PluginService {
         "crash-loop",
         `Worker crashed repeatedly (code ${code}) and will not be restarted automatically`
       );
+      // The supervisor has stopped respawning, so a prod worker is as dead as a
+      // protocol violation leaves it: left in place, the activation latch would
+      // short-circuit every lazy trigger and its registrations would pin it
+      // against idle disposal forever (#17211). The failure published above
+      // survives the teardown, so open panels keep their recovery banner. A dev
+      // worker stays: its recovery is the artifact watcher reloading the whole
+      // plugin on the next save (#12277).
+      if (mode === "prod") this.deactivateWorker(pluginId);
     };
     const onProtocolViolation = (reason: string): void => {
       if (!isCurrent()) return;
@@ -6283,6 +6447,31 @@ export class PluginService {
    * them (the panel "needs setup" strip) re-reads. Scoped like runtime status:
    * a project instance's key stays in its own project's views.
    */
+  /**
+   * A user-scope setting's stored value, or its declared default, read the way
+   * `host.settings.get` reads it. Never a secret: the host routes on this.
+   */
+  private async readUserSettingForHost(
+    pluginId: string,
+    key: string,
+    manifest: Readonly<PluginManifest>
+  ): Promise<unknown> {
+    if (this.settings.isSecretKey(pluginId, key, manifest)) return undefined;
+    const filePath = this.settings.resolveSettingsFilePathForKey(
+      pluginId,
+      key,
+      "user",
+      null,
+      manifest
+    );
+    const stored = filePath
+      ? await this.settings.getOrCreateSettingsStore(pluginId, filePath).get<unknown>(key)
+      : undefined;
+    return stored !== undefined
+      ? stored
+      : this.settings.getDeclaredDefault(pluginId, key, manifest);
+  }
+
   private emitSettingsChanged(pluginId: string): void {
     if (this.disposed) return;
     const event = { name: "plugin:settings-changed" as const, payload: { pluginId } };
@@ -6576,7 +6765,16 @@ export class PluginService {
 
   private get projectPluginDeps(): ProjectPluginControllerDeps {
     return {
-      discover: (projectRoot) => discoverProjectPlugins(projectRoot),
+      discover: async (projectRoot) => {
+        try {
+          const result = await discoverProjectPlugins(projectRoot);
+          this.failedDiscoveryRoots.delete(projectRoot);
+          return result;
+        } catch (err) {
+          this.failedDiscoveryRoots.add(projectRoot);
+          throw err;
+        }
+      },
       loadProjectPlugin: (args) => this.loadProjectPluginInstance(args),
       unloadProjectPlugin: (instanceKey, options) => this.unloadPlugin(instanceKey, options),
       settleProjectPluginReload: (instanceKey, kept) => {
@@ -6654,9 +6852,86 @@ export class PluginService {
    * view would be invisible until the next unrelated mutation. The explicit
    * snapshot push at the end closes the same gap for a load that lands while
    * the view is still coming up.
+   *
+   * Only the first open of a project, or one after anything that invalidates
+   * it, does that work (#17039). A warm switch back into a project already
+   * open at the same root joins the open still in flight or, once that has
+   * landed and the watcher has kept the folder in sight since, only sweeps
+   * closed projects, wakes launch waiters and re-ensures the watcher:
+   * contribution broadcasts reach cached and frozen views alike, and a
+   * renderer that is actually new gets its own snapshot when it loads.
    */
   async onProjectOpened(projectId: string, projectRoot: string): Promise<void> {
     if (this.disposed) return;
+    const pending = this.pendingProjectOpens.get(projectId);
+    if (pending?.root === projectRoot) return pending.promise;
+    if (!pending && this.isProjectOpenEstablished(projectId, projectRoot)) {
+      this.wakeProjectOpenWaiters(projectId);
+      // Not awaited: it closes other projects, and holding this switch on it
+      // would let a newer open of this one land before the watcher sync below.
+      void this.projectPlugins.sweepClosedProjects(projectId).catch((err: unknown) => {
+        console.error("[PluginService] Closed-project sweep failed:", err);
+      });
+      await this.syncProjectPluginWatcher(projectId, projectRoot);
+      return;
+    }
+    return this.reconcileProjectOpen(projectId, projectRoot);
+  }
+
+  private isProjectOpenEstablished(projectId: string, projectRoot: string): boolean {
+    const established = this.establishedProjectOpens.get(projectId);
+    return (
+      established?.root === projectRoot &&
+      this.openProjectRoots.get(projectId) === projectRoot &&
+      // The controller's own closed-row sweep drops a project without a close
+      // reaching this service.
+      this.projectPlugins.isTracking(projectId) &&
+      this.projectPluginWatcherRegistry?.observationToken(projectId) === established.observation
+    );
+  }
+
+  private reconcileProjectOpen(projectId: string, projectRoot: string): Promise<void> {
+    this.establishedProjectOpens.delete(projectId);
+    const isCurrent = (): boolean => this.pendingProjectOpens.get(projectId)?.promise === promise;
+    // Discovery runs before the watcher arms, so a plugin landing in between
+    // is in the watcher's baseline but not loaded. Only an open the same
+    // unbroken observation spanned can be trusted to have seen everything;
+    // a project's first open never is, so its second open is still full.
+    const observedBefore = this.projectPluginWatcherRegistry?.observationToken(projectId) ?? null;
+    const promise: Promise<void> = this.runProjectOpen(projectId, projectRoot).then(
+      () => {
+        // No watcher (disabled trust, a subscribe that failed) means nothing
+        // keeps the plugins in step with disk, so every switch reconciles.
+        const observation = this.projectPluginWatcherRegistry?.observationToken(projectId) ?? null;
+        if (
+          isCurrent() &&
+          !this.disposed &&
+          observation !== null &&
+          observation === observedBefore &&
+          this.openProjectRoots.get(projectId) === projectRoot &&
+          !this.failedDiscoveryRoots.has(projectRoot)
+        ) {
+          this.establishedProjectOpens.set(projectId, { root: projectRoot, observation });
+        }
+        if (isCurrent()) this.pendingProjectOpens.delete(projectId);
+      },
+      (err: unknown) => {
+        if (isCurrent()) this.pendingProjectOpens.delete(projectId);
+        throw err;
+      }
+    );
+    this.pendingProjectOpens.set(projectId, { root: projectRoot, promise });
+    return promise;
+  }
+
+  private wakeProjectOpenWaiters(projectId: string): void {
+    const waiters = this.projectOpenWaiters.get(projectId);
+    if (!waiters) return;
+    this.projectOpenWaiters.delete(projectId);
+    for (const wake of waiters) wake();
+  }
+
+  private async runProjectOpen(projectId: string, projectRoot: string): Promise<void> {
     this.openProjectRoots.set(projectId, projectRoot);
     const opening = this.projectPlugins.onProjectOpened(projectId, projectRoot);
     // Queued now, not after the repository scan: the epoch is read at request
@@ -6665,11 +6940,7 @@ export class PluginService {
     const installed = this.reconcileInstalledInstances(projectId, projectRoot);
     // The open is queued now, so a launch that was waiting for it can wait on
     // the queue instead.
-    const waiters = this.projectOpenWaiters.get(projectId);
-    if (waiters) {
-      this.projectOpenWaiters.delete(projectId);
-      for (const wake of waiters) wake();
-    }
+    this.wakeProjectOpenWaiters(projectId);
     await Promise.all([opening, installed]);
     // Disposed meanwhile: the watcher sync below would build a fresh controller.
     if (this.disposed) return;
@@ -6753,6 +7024,7 @@ export class PluginService {
     // before the controller-only early return below.
     this.artifactService?.forgetProject(projectId);
     this.openProjectRoots.delete(projectId);
+    this.forgetProjectOpen(projectId);
     this.unloadInstalledInstancesOfProject(projectId);
     for (const [pluginId, byProject] of [...this.pluginWorktreeCardStatuses]) {
       if (!byProject.delete(projectId)) continue;
@@ -6787,6 +7059,9 @@ export class PluginService {
     projectId: string,
     decision: ProjectPluginTrustDecision
   ): Promise<void> {
+    // Disabled trust stops the watcher, so after any trust change the next
+    // switch in has to rediscover rather than trust what it last saw.
+    this.forgetProjectOpen(projectId);
     let failure: unknown;
     try {
       await this.projectPlugins.setTrust(projectId, decision);
@@ -6799,6 +7074,7 @@ export class PluginService {
   }
 
   async activateStagedProjectPlugin(projectId: string, pluginId: string): Promise<void> {
+    this.forgetProjectOpen(projectId);
     await this.projectPlugins.activateStaged(projectId, pluginId);
     await this.pushSnapshotToProject(projectId);
     await this.syncProjectPluginWatcher(projectId);
@@ -6811,6 +7087,8 @@ export class PluginService {
    * be told what is no longer there.
    */
   async setProjectPluginMuted(projectId: string, pluginId: string, muted: boolean): Promise<void> {
+    // Muting can free an installed instance's id for the next reconcile.
+    this.forgetProjectOpen(projectId);
     await this.projectPlugins.setMuted(projectId, pluginId, muted);
     await this.pushSnapshotToProject(projectId);
     await this.syncProjectPluginWatcher(projectId);
@@ -7041,7 +7319,16 @@ export class PluginService {
   async reloadProjectPlugins(projectId: string): Promise<void> {
     const root = projectStore.getProjectById(projectId)?.path;
     if (!root) return;
-    await this.onProjectOpened(projectId, root);
+    if (this.disposed) return;
+    // Queued now, behind any open in flight, so a close requested after it
+    // still supersedes it in the controller's chain.
+    await this.reconcileProjectOpen(projectId, root);
+  }
+
+  /** The next open of this project does the full rediscovery and replay again. */
+  private forgetProjectOpen(projectId: string): void {
+    this.establishedProjectOpens.delete(projectId);
+    this.pendingProjectOpens.delete(projectId);
   }
 
   // ----- Installed packages that opt into per-project instances (#14103) -----
@@ -7181,24 +7468,50 @@ export class PluginService {
     manifestId: string,
     opts: { uninstall: boolean; purge: boolean }
   ): void {
-    for (const key of [...this.installedInstanceKeys]) {
-      if (pluginManifestIdFromInstanceKey(key) !== manifestId) continue;
-      this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
-      this.dropInstalledInstance(key, opts.purge);
-    }
-    // Instances of a closed project are unloaded but keep their approvals; the
-    // code behind them is about to change or go, so those are purged too.
-    if (opts.purge) {
-      for (const projectId of this.projectInstanceStore.listForPackage(manifestId)) {
-        getPluginCapabilityConsentService().revokeAllForPlugin(
-          makeInstalledProjectInstanceKey(projectId, manifestId)
-        );
+    try {
+      for (const key of [...this.installedInstanceKeys]) {
+        if (pluginManifestIdFromInstanceKey(key) !== manifestId) continue;
+        this.installedInstanceEpochs.set(key, (this.installedInstanceEpochs.get(key) ?? 0) + 1);
+        this.dropInstalledInstance(key, opts.purge);
       }
+      // Instances of a closed project are unloaded but keep their approvals; the
+      // code behind them is about to change or go, so those are purged too.
+      if (opts.purge) {
+        for (const projectId of this.projectInstanceStore.listForPackage(manifestId)) {
+          getPluginCapabilityConsentService().revokeAllForPlugin(
+            makeInstalledProjectInstanceKey(projectId, manifestId)
+          );
+        }
+      }
+      if (opts.uninstall) {
+        this.projectInstanceStore.removePackage(manifestId);
+        this.projectInstancePackages.delete(manifestId);
+        this.forgetPackageInstanceLaunches(manifestId);
+      }
+    } finally {
+      // The installer carries on deleting the package when this throws, so a
+      // failed store write must not leave the instances' MCP state behind.
+      if (opts.uninstall) this.evictPackageInstanceMcpState(manifestId);
     }
-    if (opts.uninstall) {
-      this.projectInstanceStore.removePackage(manifestId);
-      this.projectInstancePackages.delete(manifestId);
-      this.forgetPackageInstanceLaunches(manifestId);
+  }
+
+  /**
+   * Drop the MCP server state of every per-project instance of an uninstalled
+   * package, including instances of a project that isn't open, whose stopped
+   * entries no unload reaches (#17212). The installer evicts the package's own
+   * id; these instance keys are only known here.
+   */
+  private evictPackageInstanceMcpState(manifestId: string): void {
+    try {
+      getPluginMcpSupervisor().removeStatesWhere((owner) => {
+        const parsed = parseProjectPluginInstanceKey(owner);
+        return parsed?.installed === true && parsed.manifestId === manifestId;
+      });
+    } catch (err) {
+      console.error(
+        `[PluginService] MCP state eviction for the instances of "${manifestId}" threw:`,
+        err
+      );
     }
   }
 
@@ -7251,6 +7564,7 @@ export class PluginService {
     manifestId: string,
     enabled: boolean
   ): Promise<void> {
+    this.forgetProjectOpen(projectId);
     if (!isProjectWorkspaceId(projectId)) {
       throw new Error(`setProjectInstanceEnabled: "${projectId}" is not a project id`);
     }
@@ -7892,6 +8206,7 @@ export class PluginService {
           devMode: plugin.devMode ?? false,
           activated: this.activatedPlugins.has(pluginId),
           panels: plugin.manifest.contributes.panels.length,
+          openViews: this.liveViewConsumerCount(pluginId),
           bootError: loadError ? loadError.message : null,
         },
       });
@@ -7934,10 +8249,11 @@ export class PluginService {
   /**
    * Governance sweep: dispose the workers of idle plugins that expose no live
    * surface a dead worker could break (see {@link canDisposeIdlePluginWorker}
-   * for the full disqualifier list). Deliberately conservative — most real
-   * plugins keep a panel, subscription, or process alive and are never
-   * eligible; the target is pure action/formatter plugins that were used once
-   * and have sat cold since.
+   * for the full disqualifier list). Runs every minute while a third-party
+   * worker is alive, and on entering the efficiency profile. Deliberately
+   * conservative: a plugin with a view open, a subscription, or a process
+   * running is never eligible; the target is a plugin whose views were all
+   * closed, or that was only ever dispatched, and that has sat cold since.
    */
   disposeIdlePluginWorkers(opts?: { now?: number; idleDisposeMs?: number }): {
     disposed: string[];
@@ -7991,7 +8307,7 @@ export class PluginService {
     return canDisposeIdlePluginWorker({
       isBuiltin: plugin.isBuiltin ?? false,
       devMode: plugin.devMode ?? false,
-      panelContributionCount: plugin.manifest.contributes.panels.length,
+      liveViewConsumerCount: this.liveViewConsumerCount(pluginId),
       mcpServerContributionCount: plugin.manifest.contributes.mcpServers.length,
       startupActivation: this.shouldActivateOnStartup(plugin.manifest),
       eventSubscriptionCount: this.pluginEventCleanups.get(pluginId)?.length ?? 0,
@@ -8008,6 +8324,39 @@ export class PluginService {
   }
 
   /**
+   * Arm the idle sweep while any third-party worker is alive, and disarm it
+   * with the last one, so vanilla Daintree, built-ins and dev sessions never
+   * run it (#17068).
+   */
+  private syncIdleSweepTimer(): void {
+    let wanted = false;
+    if (!this.disposed) {
+      for (const pluginId of this.pluginWorkers.keys()) {
+        const plugin = this.plugins.get(pluginId);
+        if (plugin && !plugin.isBuiltin && !plugin.devMode) {
+          wanted = true;
+          break;
+        }
+      }
+    }
+    if (wanted && this.idleSweepTimer === null) {
+      this.idleSweepTimer = setInterval(() => this.runIdleSweep(), PLUGIN_IDLE_SWEEP_INTERVAL_MS);
+      this.idleSweepTimer.unref?.();
+    } else if (!wanted && this.idleSweepTimer !== null) {
+      clearInterval(this.idleSweepTimer);
+      this.idleSweepTimer = null;
+    }
+  }
+
+  private runIdleSweep(): void {
+    try {
+      this.disposeIdlePluginWorkers();
+    } catch (err) {
+      console.error("[PluginService] Idle plugin worker sweep threw:", err);
+    }
+  }
+
+  /**
    * Narrow worker teardown: the worker, bridge, and activate-time imperative
    * registrations go; the plugin, its manifest contributions, and its
    * provenance record stay. The next lazy trigger (dispatch, panel open,
@@ -8016,10 +8365,11 @@ export class PluginService {
    * proof this teardown is re-entrant. Contrast `unloadPlugin`, which removes
    * the plugin entirely.
    *
-   * Two callers: the idle-dispose sweep, and a terminal protocol violation
-   * (#12276), which needs exactly this shape — the worker is unrecoverable, but
-   * the plugin itself did nothing to lose its contributions, and clearing the
-   * activation cache is what lets a re-open fork a fresh one.
+   * Callers: the idle-dispose sweep, a restart, and the two terminal worker
+   * failures — a protocol violation (#12276) and a prod crash loop (#17211) —
+   * which need exactly this shape: the worker is unrecoverable, but the plugin
+   * itself did nothing to lose its contributions, and clearing the activation
+   * cache is what lets a re-open fork a fresh one.
    */
   private deactivateWorker(pluginId: string): boolean {
     const entry = this.pluginWorkers.get(pluginId);
@@ -8063,6 +8413,9 @@ export class PluginService {
     );
     runUnloadStep(pluginId, "unregisterWorktreeDeleteNotesBinding", () =>
       unregisterWorktreeDeleteNotesBinding(pluginId)
+    );
+    runUnloadStep(pluginId, "unbindPluginCloudProviders", () =>
+      unbindPluginCloudProviders(pluginId)
     );
     runUnloadStep(pluginId, "cancelUiPrompts", () =>
       this.promptDispatcher.cancelForPlugin(pluginId)
@@ -8713,6 +9066,12 @@ export class PluginService {
           `Plugin "${pluginId}" cannot register action "${rawId}": id must be prefixed with the plugin's own id.`
         );
       }
+    }
+    // A plugin whose id spells a built-in action's namespace (`worktree.resource`)
+    // would otherwise shadow it here, as the manifest path already refuses: an
+    // assistant admitted for the plugin's action would run the built-in.
+    if (BUILT_IN_ACTION_ID_SET.has(id)) {
+      throw new Error(`Plugin "${pluginId}" action id "${id}" collides with a built-in action id`);
     }
 
     if (typeof title !== "string" || !title.trim()) {
@@ -9431,6 +9790,14 @@ export const pluginService = new PluginService(undefined, undefined, {
 setPluginAssistantReachSource({
   has: (actionId) => pluginService.isAssistantReachAction(actionId),
   ids: () => pluginService.listAssistantReachActionIds(),
+});
+
+setPluginCloudProviderRuntime({
+  activate: (pluginId) => pluginService.activatePlugin(pluginId),
+  isActivated: (pluginId) => pluginService.isPluginActivated(pluginId),
+  unavailableReason: (pluginId, providerId) =>
+    pluginService.cloudProviderUnavailableReason(pluginId, providerId),
+  startFailure: (pluginId) => pluginService.cloudProviderStartFailure(pluginId),
 });
 
 // E2E backdoor: activate a loaded plugin by id without adding a production IPC

@@ -163,7 +163,7 @@ export function detectPrefixFromIssue(
     return "refactor";
   }
 
-  if (/\bupdate(s|d|ing)?\b/.test(title) || /\bimprove(s|d|ing)?\b/.test(title)) {
+  if (/\bupdat(e|es|ed|ing)\b/.test(title) || /\bimprov(e|es|ed|ing)\b/.test(title)) {
     return "feature";
   }
 

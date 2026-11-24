@@ -13,6 +13,7 @@ import { forgeProviderServesRole } from "../../shared/utils/forgeProviderRoles.j
 import {
   extractHostname,
   hostnameMatchesAny,
+  normalizeConfiguredForgeHost,
   normalizeHostname,
   type ForgeProviderMatcher,
 } from "../../shared/utils/forgeHostnames.js";
@@ -83,7 +84,14 @@ function notifyMatchersChanged(): void {
 const PLUGIN_FORGE_PROVIDERS = new Map<string, RegisteredPluginProviders>();
 
 interface RegisteredPluginProviders {
+  /**
+   * What every reader sees: the manifest contributions with each one's
+   * setting-backed hostname ({@link ForgeProviderContribution.matchesSettingRef})
+   * folded into `matches`.
+   */
   contributions: ForgeProviderContribution[];
+  /** The manifest contributions as registered, before any setting hostname. */
+  declared: ForgeProviderContribution[];
   /**
    * Whether the owning plugin runs in-process, the only place
    * `host.registerForgeProvider` can bind an impl. An installed plugin
@@ -120,7 +128,11 @@ const PLUGIN_FORGE_PROVIDER_IMPLS = new Map<string, AnyForgeProviderImpl>();
 export function registerForgeProviders(
   pluginId: string,
   contributions: ForgeProviderContribution[],
-  options: { builtin?: boolean } = {}
+  options: {
+    builtin?: boolean;
+    /** Each `matchesSettingRef` contribution's current hostname, by contribution id. */
+    settingMatches?: ReadonlyMap<string, string | null>;
+  } = {}
 ): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   if (!Array.isArray(contributions) || contributions.length === 0) {
@@ -129,12 +141,74 @@ export function registerForgeProviders(
     notifyMatchersChanged();
     return;
   }
+  const declared = contributions.map(freezeContribution);
   PLUGIN_FORGE_PROVIDERS.set(pluginId, {
-    contributions: contributions.map(freezeContribution),
+    contributions: declared.map((c) =>
+      withSettingMatch(c, options.settingMatches?.get(c.id) ?? null)
+    ),
+    declared,
     builtin: options.builtin !== false,
   });
   notifyRegistryChanged();
   notifyMatchersChanged();
+}
+
+/**
+ * The contribution as readers see it: its manifest `matches` plus the
+ * hostname its `matchesSettingRef` setting currently names. Returns the
+ * declared object itself when there is nothing to add.
+ */
+function withSettingMatch(
+  declared: ForgeProviderContribution,
+  hostname: string | null
+): ForgeProviderContribution {
+  const host = declared.matchesSettingRef ? normalizeConfiguredForgeHost(hostname) : null;
+  if (host === null) return declared;
+  const normalizedHost = normalizeHostname(host);
+  if (
+    normalizedHost !== null &&
+    declared.matches.some((pattern) => normalizeHostname(pattern) === normalizedHost)
+  ) {
+    return declared;
+  }
+  return Object.freeze({
+    ...declared,
+    matches: Object.freeze([...declared.matches, host]) as unknown as string[],
+  });
+}
+
+/**
+ * Point a registered contribution's `matchesSettingRef` hostname at a new
+ * value (`null` clears it), after the setting it names changed. A no-op for an
+ * unregistered plugin, a contribution without the ref, or a value that leaves
+ * the effective matches as they were, so a spurious refresh notifies nobody.
+ * Returns whether the effective matches changed.
+ */
+export function setForgeProviderSettingMatch(
+  pluginId: string,
+  contributionId: string,
+  hostname: string | null
+): boolean {
+  const registered = PLUGIN_FORGE_PROVIDERS.get(pluginId);
+  if (!registered) return false;
+  const index = registered.declared.findIndex((c) => c.id === contributionId);
+  const declared = registered.declared[index];
+  if (!declared?.matchesSettingRef) return false;
+  const next = withSettingMatch(declared, hostname);
+  const current = registered.contributions[index];
+  if (
+    current &&
+    current.matches.length === next.matches.length &&
+    current.matches.every((pattern, i) => pattern === next.matches[i])
+  ) {
+    return false;
+  }
+  const contributions = [...registered.contributions];
+  contributions[index] = next;
+  PLUGIN_FORGE_PROVIDERS.set(pluginId, { ...registered, contributions });
+  notifyRegistryChanged();
+  notifyMatchersChanged();
+  return true;
 }
 
 function freezeContribution(c: ForgeProviderContribution): ForgeProviderContribution {

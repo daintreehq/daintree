@@ -204,6 +204,27 @@
       "when": 1794182400000,
       "tag": "0028_add_project_clone_state",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "6",
+      "when": 1794268800000,
+      "tag": "0029_status_and_live_run_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "6",
+      "when": 1794355200000,
+      "tag": "0030_decisions_missing_session_idx",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1794441600000,
+      "tag": "0031_decisions_deleted_events_index",
+      "breakpoints": true
     }
   ]
 }

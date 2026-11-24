@@ -124,6 +124,15 @@ describe("HeldComposerSendRow", () => {
     );
   });
 
+  it("says when the pane waits on a choice dialog, which would take the text as a choice", () => {
+    pane("waiting", "approval");
+    useHeldComposerSendStore.getState().noteHeld(send());
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
+    expect(screen.getByTestId("held-composer-send").textContent).toContain(
+      "waiting on a choice dialog, not its prompt"
+    );
+  });
+
   it("puts the text back ahead of a newer draft once withdrawn for editing", async () => {
     withdraw.mockResolvedValue(true);
     drafts.set(KEY, "a newer thought");
@@ -346,16 +355,19 @@ describe("HeldComposerSendRow", () => {
     expect(screen.getByTestId("held-composer-send")).toBeTruthy();
   });
 
-  it.each(["question", "approval"])(
+  it.each([
+    ["question", "question"],
+    ["approval", "choice dialog"],
+  ])(
     "says before sending that the text goes into the %s the pane was last seen at",
-    (reason) => {
+    (reason, named) => {
       pane("waiting", reason);
       useHeldComposerSendStore.getState().noteHeld(send());
       render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
       const button = screen.getByRole("button", { name: "Send now" });
       const hintId = button.getAttribute("aria-describedby");
       expect(hintId).toBeTruthy();
-      expect(document.getElementById(hintId!)?.textContent).toContain(`into that ${reason}`);
+      expect(document.getElementById(hintId!)?.textContent).toContain(`into that ${named}`);
       expect(sendNow).not.toHaveBeenCalled();
     }
   );

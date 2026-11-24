@@ -12,6 +12,7 @@ import type {
   OperationId,
   OperationOutcome,
   OperationProgress,
+  PendingHostPlacement,
 } from "../remoteHosts.js";
 import type { ProjectFocusOnActivateIntent } from "./project.js";
 import type { HostWakeSetup } from "../hostWake.js";
@@ -22,6 +23,10 @@ export interface AddHostPayload {
   connection: HostConnection;
   /** Added for this worktree's resource environment, and removed along with it. */
   ownerWorktreeId?: string;
+  /** A worktree waiting on the new host, written with the host so no restart can split them. */
+  pendingPlacement?: PendingHostPlacement;
+  /** Setup's check saw a machine where Daintree starts on connect (see {@link HostProbeResult.startsOnConnect}). */
+  startsOnConnect?: boolean;
 }
 
 export interface UpdateHostPayload {
@@ -30,8 +35,27 @@ export interface UpdateHostPayload {
   connection?: HostConnection;
   notificationsEnabled?: boolean;
   assistantControlEnabled?: boolean;
+  forwardSshAgent?: boolean;
   /** The host's wake setup (#16170); null removes it. */
   wake?: HostWakeSetup | null;
+  /**
+   * A worktree to open here once setup finishes; null removes it. One that
+   * carries a failure is recorded only on the placement it names (the same
+   * `requestedAt`): a cancelled or replaced one is left as it is.
+   */
+  pendingPlacement?: PendingHostPlacement | null;
+}
+
+/** What Settings shows beside a host's agent forwarding switch (#17432). */
+export interface HostAgentForwardingCheck {
+  /** Whether the agent this computer's ssh uses for the host is running. */
+  localAgent: boolean;
+  /**
+   * The `IdentityAgent` the host's ssh config sets for github.com, which takes
+   * the place of the forwarded agent there; null when it sets none. Absent
+   * while the host isn't connected, or when its build can't say.
+   */
+  hostIdentityAgent?: string | null;
 }
 
 export interface WindowHostInfo {
@@ -237,6 +261,13 @@ export interface HostProbeResult {
   advice: HostAdvice;
   /** What Daintree on the host last wrote about its Host mode setting; null when it wrote nothing. */
   hostModeState: HostModeObservation | null;
+  /**
+   * Linux over SSH or a cloud route, where PID 1 was seen not to be systemd:
+   * no user service can keep Host mode running, so Daintree there runs in the
+   * background once started and a connection from here starts it again.
+   * Absent or false everywhere else, including a WSL distro.
+   */
+  startsOnConnect?: boolean;
 }
 
 /** Where a host's build stands against this machine's, by release order. */
@@ -285,6 +316,13 @@ export interface HostModeObservation {
   /** What the process's updater has downloaded; absent with nothing staged, or in older files. */
   stagedUpdate?: StagedHostUpdate;
   enabled: boolean;
+  /**
+   * How the host is kept running when nothing starts it at login: "on-connect"
+   * where its machine has no init system to run a service under, so it runs
+   * until stopped and a Shell connecting starts it again. Absent where start
+   * at login applies, and in files written before it existed.
+   */
+  startMethod?: "on-connect";
   startAtLogin: boolean;
   /** The Daintree-owned login item or unit was on disk when the host last looked; null when unread. */
   startAtLoginInstalled: boolean | null;
@@ -380,6 +418,50 @@ export interface HostInstallPlan {
 export interface HostSetupTarget {
   connection: HostConnection;
 }
+
+/**
+ * A person's Sign in to an ssh host that refused a batch login: the one ssh
+ * that may prompt, with each of its prompts relayed to the view that asked.
+ */
+export interface StartSshSignInPayload {
+  /** Chosen by the view, so the prompts that arrive before the answer can be matched to it. */
+  attemptId: string;
+  connection: HostConnection;
+}
+
+/**
+ * How a sign-in ended. `signed-in` means ssh is logged in to the host (a
+ * master is up for every later call to ride), not that Daintree answers
+ * there. `failed` carries ssh's own words, one line, when it said any.
+ */
+export type SshSignInResult =
+  { status: "signed-in" } | { status: "cancelled" } | { status: "failed"; detail: string | null };
+
+export interface AnswerSshSignInPayload {
+  attemptId: string;
+  promptId: string;
+  /** What the person typed, handed to ssh once and kept nowhere. */
+  answer: string;
+}
+
+export interface CancelSshSignInPayload {
+  attemptId: string;
+}
+
+/** `secret`: ssh wants text back (a passphrase, a password, a code). `notice`: nothing to type (touch a security key). */
+export type SshSignInPromptKind = "secret" | "notice";
+
+/** Sent only to the view that started the sign-in; never carries an answer. */
+export type SshSignInEvent =
+  | {
+      type: "prompt";
+      attemptId: string;
+      promptId: string;
+      kind: SshSignInPromptKind;
+      /** ssh's prompt as it wrote it, made safe to show. */
+      text: string;
+    }
+  | { type: "prompt-closed"; attemptId: string; promptId: string };
 
 export interface PlanInstallPayload {
   connection: HostConnection;
@@ -521,4 +603,6 @@ export type RemoteHostsEvent =
    * A host was removed from this device. Every view drops what it kept under
    * the host's id (history, layout, toggles): no later host is given that id.
    */
-  | { type: "host-forgotten"; hostId: HostId };
+  | { type: "host-forgotten"; hostId: HostId }
+  /** Cloud accounts or a cloud host's machine changed: the whole cloud picture, credential-free. */
+  | { type: "cloud-changed"; snapshot: import("../cloudHosts.js").CloudHostsSnapshot };

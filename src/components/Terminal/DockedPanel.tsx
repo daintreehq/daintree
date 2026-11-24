@@ -54,8 +54,8 @@ export function DockedPanel({
     closeDockTerminal(terminal.id);
   }, [closeDockTerminal, terminal.id]);
 
-  const focusedId = usePanelStore((state) => state.focusedId);
-  const isFocused = focusedId === terminal.id;
+  // A boolean, so a focus change re-renders only the panel gaining or losing it.
+  const isFocused = usePanelStore((state) => state.focusedId === terminal.id);
 
   const kind = terminal.kind ?? "terminal";
   // Subscribe to definition registry mutations so a plugin re-registering its

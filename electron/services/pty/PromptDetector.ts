@@ -95,7 +95,7 @@ export function detectPrompt(
 
 // A row that is nothing but a rule: one of those Claude Code draws above and
 // below its input row, or the top or bottom edge of an older boxed input.
-const COMPOSER_FRAME_ROW = /^\s*[╭╰┌└]?[─━]{3,}[╮╯┐┘]?\s*$/;
+export const COMPOSER_FRAME_ROW = /^\s*[╭╰┌└]?[─━]{3,}[╮╯┐┘]?\s*$/;
 
 /**
  * The row of `lines` that is an agent's input row, empty, inside its frame

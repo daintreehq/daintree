@@ -1,5 +1,6 @@
 import type { AgentState } from "../agent.js";
 import type { AgentDirectorySubject } from "../agentDirectory.js";
+import type { GlobalAssistantSlot } from "../../config/globalAssistantSessions.js";
 
 /**
  * Narrow, display-only projection of the `ActionContext` snapshot pinned to a
@@ -85,7 +86,22 @@ export interface GlobalAssistantAttachmentInfo {
  * Never the bearer, the command line or the environment.
  */
 export interface GlobalAssistantState {
+  /** Which of the machine's global assistant sessions this is (#18142); 0 is the first. */
+  slot: GlobalAssistantSlot;
   phase: GlobalAssistantPhase;
+  /**
+   * Whether the session counts toward the machine's limit: running, starting,
+   * started on a chosen agent, or keeping a conversation. Only a stop frees it.
+   */
+  occupied: boolean;
+  /** The agent a person started it on, kept until it is stopped; null when it runs as the default. */
+  pinnedAgentId: string | null;
+  /**
+   * Whether it is the session that coordinates (#18143): the only one whose
+   * `host.call` acts on workers. A lone session always is; with two, the one
+   * the person chose.
+   */
+  coordinating: boolean;
   /** Bumps with every run, so a panel can tell a new session from the one it showed. */
   generation: number;
   agentId: string | null;
@@ -95,6 +111,19 @@ export interface GlobalAssistantState {
   inputOwner: string | null;
   /** Bumps whenever the input owner changes; a write quotes the epoch it held. */
   inputEpoch: number;
+}
+
+/**
+ * A replacement of the global assistant's run (#18140) as the person approved
+ * it: the agent and hand-off the new run starts from, and the run they were
+ * shown, which must still be the one there.
+ */
+export interface GlobalAssistantReplacement {
+  agentId: string;
+  prompt: string;
+  expected: { generation: number; phase: GlobalAssistantPhase };
+  /** The session it replaces, which must still coordinate (#18143); the first when absent. */
+  slot?: GlobalAssistantSlot;
 }
 
 /**
@@ -132,6 +161,8 @@ export interface GlobalAssistantInputStamp {
 export interface WindowGlobalAssistantPanel {
   showing: boolean;
   target: AgentDirectorySubject | null;
+  /** The session it showed (#18142); absent reads as the first. */
+  slot?: GlobalAssistantSlot;
 }
 
 /** A window's reader on the global assistant, and the input epoch it holds. */

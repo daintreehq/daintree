@@ -2,14 +2,29 @@ import { GitService } from "../../../../electron/services/GitService.js";
 import { repoContextCache } from "./GitHubCaches.js";
 import type { RepoContext } from "./types.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { githubWebBase, isServedGitHubHost } from "./GitHubHost.js";
 
-export function parseGitHubRepoUrl(url: string): { owner: string; repo: string } | null {
-  const normalized = url.replace(/^git@github\.com:/, "https://github.com/");
+/**
+ * Parse a git remote (or a pasted repository page URL) on a GitHub host this
+ * provider serves — github.com, or the configured Enterprise Server host —
+ * into its host, owner and repository. Any other host is null: its remote is
+ * no repository this provider can read.
+ */
+export function parseGitHubRepoUrl(
+  url: string
+): { host: string; owner: string; repo: string } | null {
+  if (typeof url !== "string") return null;
+  const trimmed = url.trim();
+
+  // SCP-like `[user@]host:owner/repo.git` has no scheme for URL to parse.
+  const scp = /^(?:[^@/:\s]+@)?([^:/\s]+):(?!\/\/)(.+)$/.exec(trimmed);
+  const normalized =
+    scp && !trimmed.includes("://") ? `ssh://${scp[1]}/${scp[2]!.replace(/^\/+/, "")}` : trimmed;
 
   try {
     const parsed = new URL(normalized);
-
-    if (parsed.hostname !== "github.com") {
+    const host = parsed.hostname.toLowerCase();
+    if (!isServedGitHubHost(host)) {
       return null;
     }
 
@@ -24,7 +39,7 @@ export function parseGitHubRepoUrl(url: string): { owner: string; repo: string }
       return null;
     }
 
-    return { owner: parts[0], repo: parts[1] };
+    return { host, owner: parts[0], repo: parts[1] };
   } catch {
     return null;
   }
@@ -71,7 +86,7 @@ export async function getRepoContext(cwd: string): Promise<RepoContext | null> {
     const parsed = parseGitHubRepoUrl(fetchUrl);
     if (!parsed) return null;
 
-    const context = { owner: parsed.owner, repo: parsed.repo };
+    const context = { host: parsed.host, owner: parsed.owner, repo: parsed.repo };
     repoContextCache.set(cwd, context);
     return context;
   } catch {
@@ -100,7 +115,9 @@ export async function withRepoContextRetry<T>(
       const freshContext = await getRepoContext(cwd);
       if (
         freshContext &&
-        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
+        (freshContext.host !== context.host ||
+          freshContext.owner !== context.owner ||
+          freshContext.repo !== context.repo)
       ) {
         return await fn(freshContext);
       }
@@ -116,7 +133,7 @@ export async function getRepoInfo(cwd: string): Promise<RepoContext | null> {
 export async function getRepoUrl(cwd: string): Promise<string | null> {
   const context = await getRepoContext(cwd);
   if (!context) return null;
-  return `https://github.com/${context.owner}/${context.repo}`;
+  return `${githubWebBase(context.host)}/${context.owner}/${context.repo}`;
 }
 
 export async function getIssueUrl(cwd: string, issueNumber: number): Promise<string | null> {

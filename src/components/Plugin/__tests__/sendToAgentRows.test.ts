@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import type { PluginAgentPane } from "@shared/types/plugin";
+import type { PluginAgentPaneObservation } from "@shared/types/plugin";
 import {
   buildSendToAgentRows,
   canSelectSendToAgentRow,
@@ -13,8 +13,8 @@ import {
 function pane(
   terminalId: string,
   worktreeId: string | null,
-  overrides: Partial<PluginAgentPane> = {}
-): PluginAgentPane {
+  overrides: Partial<PluginAgentPaneObservation> = {}
+): PluginAgentPaneObservation {
   return {
     terminalId,
     title: `Claude: ${terminalId}`,

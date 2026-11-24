@@ -289,6 +289,11 @@ import {
   holdDictationView,
 } from "../../services/voice/dictationViewHold.js";
 import {
+  BulkWorktreeRunRegistry,
+  _resetBulkWorktreeRunHoldsForTests,
+} from "../../services/BulkWorktreeRunRegistry.js";
+import type { BulkWorktreeRunSnapshot } from "../../../shared/types/ipc/bulkWorktreeRuns.js";
+import {
   _resetCachedViewFlushForTests,
   isCachedViewFlushPending,
   recordCachedViewFlushArmed,
@@ -357,6 +362,28 @@ function createMockWindow() {
       removeChildView: vi.fn(),
     },
     webContents: createMockWebContents(),
+  };
+}
+
+function liveBulkRun(runId: string): BulkWorktreeRunSnapshot {
+  return {
+    runId,
+    projectId: "proj-a",
+    mode: "issue",
+    phase: "running",
+    items: [{ number: 1, title: "Issue 1", stage: "worktree-creating", attempt: 1 }],
+    startedAt: 0,
+    updatedAt: 0,
+    controllable: true,
+  };
+}
+
+/** Holds the view as a live bulk run does; the returned function ends the run. */
+function runBulkCreationIn(webContentsId: number): () => void {
+  const registry = new BulkWorktreeRunRegistry({ broadcast: () => {}, sendCommand: () => true });
+  registry.publish(webContentsId, "proj-a", liveBulkRun("run-1"));
+  return () => {
+    registry.publish(webContentsId, "proj-a", { ...liveBulkRun("run-1"), phase: "done" });
   };
 }
 
@@ -2375,7 +2402,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     expect(manager.getAllViews().find((v) => v.projectId === "proj-a")?.state).toBe("cached");
   });
 
-  it("never CPU-throttles <webview> guests when their host is cached, and resets them on reactivation", async () => {
+  it("never touches <webview> guests on cache or reactivation, and never walks webContents to activate (#17039)", async () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -2409,12 +2436,14 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
       expect(vi.mocked(helper)).not.toHaveBeenCalledWith(guest);
     }
 
-    // Reactivate proj-a — its guest's rate is reset along with the host's.
+    // Reactivating proj-a has no CPU rate to reset, so it must not pay an
+    // O(all webContents) walk on the switch path either.
+    mockGetAllWebContents.mockClear();
     await manager.switchTo("proj-a", "/path/a");
     await flushImmediates();
 
-    expect(vi.mocked(unthrottleCpuWebContents)).toHaveBeenCalledWith(guest);
-    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalledWith(unrelated);
+    expect(mockGetAllWebContents).not.toHaveBeenCalled();
+    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalled();
   });
 });
 
@@ -4454,6 +4483,49 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
       expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("unsaved-work");
       expect(mgr.releaseCachedView("proj-a")).toBe(false);
       expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
+      expect(mgr.canReleaseCachedView("proj-b")).toBe(true);
+    });
+  });
+
+  describe("views running a bulk worktree creation (#17085)", () => {
+    beforeEach(() => _resetBulkWorktreeRunHoldsForTests());
+    afterEach(() => _resetBulkWorktreeRunHoldsForTests());
+
+    it("keeps the view however small the cap, and lets it go once the run ends", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      const endRun = runBulkCreationIn(webContentsIdFor(mgr, "proj-a"));
+
+      mgr.setCachedViewLimit(1);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+      expect(skippedLog()?.bulkRunHeldProjectIds).toEqual(["proj-a"]);
+      expect(mgr.isBulkWorktreeRunHeld("proj-a")).toBe(true);
+
+      endRun();
+      await flushImmediates();
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("keeps it through the forced reclaim, which takes everything else", async () => {
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedThreeViews(mgr);
+      runBulkCreationIn(webContentsIdFor(mgr, "proj-a"));
+
+      mgr.reclaimCachedViewsUnderPressure();
+
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+    });
+
+    it("won't hand the view to another window while the run goes on", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      runBulkCreationIn(webContentsIdFor(mgr, "proj-a"));
+
+      expect(mgr.getCachedViewReleaseBlock("proj-a")).toBe("worktree-creation");
+      expect(mgr.releaseCachedView("proj-a")).toBe(false);
       expect(mgr.canReleaseCachedView("proj-b")).toBe(true);
     });
   });

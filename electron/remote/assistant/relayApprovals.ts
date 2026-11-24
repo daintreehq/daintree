@@ -4,6 +4,7 @@ import {
   MCP_REMOTE_CONFIRM_MARGIN_MS,
   MCP_REMOTE_DISPATCH_TIMEOUT_MS,
 } from "../../../shared/config/mcpConfirmWindow.js";
+import type { GlobalCloseClass } from "../../../shared/types/assistantControl.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
 import type {
   ViewlessApprovalAsk,
@@ -43,6 +44,12 @@ export interface RelayApprovalAsk extends ViewlessApprovalAsk {
    * Never sent.
    */
   holdUntil?: number;
+  /**
+   * The global Assistant's close of a finished agent it didn't launch
+   * (#16750), and how this host read its stop. `requires-person` is answered
+   * only by the person: a skip coming back for it approves nothing.
+   */
+  closeClass?: GlobalCloseClass;
 }
 
 function codeOf(error: unknown): string | undefined {
@@ -92,6 +99,7 @@ export async function askShellApproval(
     argsHash,
     ...(ask.subject ? { subject: ask.subject.slice(0, 256) } : {}),
     lines: ask.lines,
+    ...(ask.closeClass !== undefined ? { closeClass: ask.closeClass } : {}),
   };
   // It may have been answered and the answer lost: nothing approved it here.
   const unanswered = (error: unknown): ViewlessApprovalDecision =>
@@ -132,7 +140,9 @@ export async function askShellApproval(
         ? { decision: "timeout" }
         : { decision: "approved", deadline: covered() };
     // The Shell's own "Never ask" (#15698): covered as an approval is, and said as a skip.
+    // Never for a close only the person may answer (#16750), whatever the Shell says.
     case "skip-preference":
+      if (ask.closeClass === "requires-person") return { decision: "unavailable" };
       return now() > answerBy
         ? { decision: "timeout" }
         : { decision: "approved", deadline: covered(), authorization: "skip-preference" };

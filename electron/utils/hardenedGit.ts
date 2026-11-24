@@ -452,7 +452,7 @@ function hardenedGitEnvOverrides(platform: NodeJS.Platform): NodeJS.ProcessEnv {
 
 /**
  * Hardened env for continue-style operations (`git rebase/merge/cherry-pick/
- * revert --continue`). Builds on `buildHardenedGitEnv` and adds the editor
+ * revert/am --continue`). Builds on `buildHardenedGitEnv` and adds the editor
  * suppression those commands need to run non-interactively — `git rebase
  * --continue` has no `--no-edit` flag, so `GIT_EDITOR=true` is the only way to
  * keep it from spawning an editor in the Electron main process.
@@ -530,7 +530,25 @@ export async function createHardenedGit(
 }
 
 /**
- * Hardened profile for `rebase/merge/cherry-pick/revert --continue`: the only
+ * A continue that stops is a failure even when stderr is empty: `git am
+ * --continue` says "You still have unmerged paths" on stdout and leaves stderr
+ * to the advice hints, which `advice.mergeConflict=false` silences, so the
+ * default handler would report the refused continue as done. Unlike
+ * {@link rejectEveryNonZeroExit}, stdout rides along on its own, because here it
+ * is git explaining the stop rather than a truncated answer.
+ */
+function rejectEveryStoppedContinue(
+  error: Buffer | Error | undefined,
+  result: { exitCode: number | null; stdOut: Buffer[]; stdErr: Buffer[] }
+): Buffer | Error | undefined {
+  if (error || result.exitCode === 0) return error;
+  const output = [...result.stdOut, ...result.stdErr];
+  if (output.length > 0) return Buffer.concat(output);
+  return new Error(`git exited with ${String(result.exitCode)} and no output`);
+}
+
+/**
+ * Hardened profile for `rebase/merge/cherry-pick/revert/am --continue`: the only
  * one allowed to set an editor, and only the non-interactive `true` from
  * `buildContinueEnv`.
  */
@@ -539,10 +557,14 @@ export async function createContinueGit(
   signal?: AbortSignal,
   platform: NodeJS.Platform = process.platform
 ): Promise<SimpleGit> {
-  return buildHardenedProfile(cwd, signal, platform, continueGitEnvOverrides(platform), {
-    ...UNSAFE_FLAGS,
-    allowUnsafeEditor: true,
-  });
+  return buildHardenedProfile(
+    cwd,
+    signal,
+    platform,
+    continueGitEnvOverrides(platform),
+    { ...UNSAFE_FLAGS, allowUnsafeEditor: true },
+    rejectEveryStoppedContinue
+  );
 }
 
 /**

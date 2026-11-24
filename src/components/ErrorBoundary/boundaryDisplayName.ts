@@ -10,7 +10,6 @@ const KNOWN_NAMES: Record<string, string> = {
   ContentGrid: "Panel grid",
   MainContent: "Main view",
   ContentDock: "Dock",
-  PortalDock: "Side dock",
   ReviewPane: "Review panel",
   FilePane: "File viewer",
   DiffPane: "Diff viewer",

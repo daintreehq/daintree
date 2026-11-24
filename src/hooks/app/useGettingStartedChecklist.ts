@@ -16,6 +16,17 @@ function isChecklistComplete(checklist: ChecklistState): boolean {
   return Object.values(checklist.items).every(Boolean);
 }
 
+// Steps only ever complete, so two copies of the checklist merge as a union:
+// neither can take back a step the other has already credited.
+function withStepsFrom(base: ChecklistState, other: ChecklistState | null): ChecklistState {
+  if (!other) return base;
+  const items = { ...base.items };
+  for (const key of Object.keys(other.items) as ChecklistItemId[]) {
+    if (other.items[key]) items[key] = true;
+  }
+  return { ...base, items, celebrationShown: base.celebrationShown || other.celebrationShown };
+}
+
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
 function isLaunchedAgentPanel(p: CarrierPanel | undefined): boolean {
@@ -121,6 +132,8 @@ function nextAgentScan(prev: AgentScan | null, state: PanelState, checkLaunch: b
 
 export interface GettingStartedChecklistState {
   visible: boolean;
+  /** Shown because the user asked (Help > Getting Started), not by the usual rules. */
+  forced: boolean;
   collapsed: boolean;
   checklist: ChecklistState | null;
   dismiss: () => void;
@@ -169,6 +182,9 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   // scoped so Help > Getting Started can always reopen it: a forced show sets
   // the latch (below) so it won't be re-collapsed against the user's intent.
   const hasAutoCollapsed = useRef(false);
+  // Bumped by every show and dismiss, so a reopen still in flight when the
+  // user dismisses can't bring the checklist back.
+  const visibilityRequest = useRef(0);
 
   useEffect(() => {
     checklistRef.current = checklist;
@@ -196,6 +212,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
 
   const dismiss = useCallback(() => {
     if (!isElectronAvailable()) return;
+    visibilityRequest.current += 1;
     safeFireAndForget(window.electron.onboarding.dismissChecklist(), {
       context: "Dismissing onboarding checklist (user action)",
     });
@@ -232,11 +249,15 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     if (!isElectronAvailable() || !isStateLoaded) return;
     if (!window.electron?.onboarding) return;
 
+    const request = visibilityRequest.current;
     // getOnboardingState shares the same-tick onboarding fetch with
     // useAgentWaitingNudge's effect in the same flush.
     Promise.all([getOnboardingState(), window.electron.onboarding.getChecklist()])
       .then(([onboarding, checklistState]) => {
         setOnboardingCompleted(onboarding.completed);
+        // A show or dismiss since this read began has already settled this
+        // view's copy; the read would put back the dismissal from before it.
+        if (request !== visibilityRequest.current && checklistRef.current !== null) return;
         setChecklist(checklistState);
         // The subscriptions below only see transitions, and their mount-time
         // reconcile ran before this resolved, against a null checklist. A
@@ -247,40 +268,29 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       .catch((err) => logError("Failed to load checklist state", err));
   }, [isStateLoaded, markItem]);
 
-  // Subscribe to main-process checklist pushes. Every active WebContentsView
-  // receives the push via `broadcastToRenderer`, so cached views stay in sync.
-  // We merge by taking the union of truthy items rather than overwriting — this
-  // prevents a pre-push `getChecklist()` hydration promise from clobbering a
-  // newer push.
+  // Subscribe to main-process checklist pushes. Main broadcasts every
+  // dismissal and reopen to every WebContentsView, in the order it applied
+  // them, so a cached project view follows a change made in another and the
+  // push's dismissal is the latest word. Steps merge as a union, so a push
+  // never takes back one this view has already credited.
   useEffect(() => {
     if (!isElectronAvailable() || !window.electron?.onboarding?.onChecklistPush) return;
     return window.electron.onboarding.onChecklistPush((next) => {
-      const before = checklistRef.current;
-      if (before && !isChecklistComplete(before) && isChecklistComplete(next)) {
+      const prev = checklistRef.current;
+      const merged = withStepsFrom(next, prev);
+      // Synced before anything reads it, so a markItem firing before React
+      // commits doesn't see the previous copy.
+      checklistRef.current = merged;
+      setChecklist(merged);
+      if (merged.dismissed || (prev && !isChecklistComplete(prev) && isChecklistComplete(merged))) {
         setForceShow(false);
       }
-      setChecklist((prev) => {
-        if (!prev) {
-          // Sync the ref synchronously so a markItem firing before React
-          // commits doesn't read a stale null value.
-          checklistRef.current = next;
-          return next;
-        }
-        const mergedItems = { ...prev.items } as typeof prev.items;
-        for (const key of Object.keys(next.items) as Array<keyof typeof next.items>) {
-          if (next.items[key] || prev.items[key]) mergedItems[key] = true;
-        }
-        const merged: ChecklistState = {
-          ...next,
-          items: mergedItems,
-          dismissed: prev.dismissed || next.dismissed,
-          celebrationShown: prev.celebrationShown || next.celebrationShown,
-        };
-        checklistRef.current = merged;
-        return merged;
-      });
+      // Reopened in another view: nothing was tracked here while dismissed.
+      if (prev?.dismissed && !merged.dismissed) {
+        reconcileCurrentState(markItem, () => checklistRef.current);
+      }
     });
-  }, []);
+  }, [markItem]);
 
   // Re-check auto-collapse whenever the committed checklist changes (hydration,
   // a markItem, or a cross-window push that flips `launchedAgent`). Runs after
@@ -342,23 +352,33 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   // Listen for Help > Getting Started menu action
   useEffect(() => {
     const handleShow = () => {
-      setForceShow(true);
+      if (!isElectronAvailable() || !window.electron?.onboarding) return;
+      const request = ++visibilityRequest.current;
       setCollapsed(false);
       // The user explicitly opened the checklist — don't auto-collapse it out
       // from under them for the rest of this mount.
       hasAutoCollapsed.current = true;
-      if (isElectronAvailable() && window.electron?.onboarding) {
-        window.electron.onboarding
-          .getChecklist()
-          .then((state) => {
-            setChecklist({ ...state, dismissed: false });
-          })
-          .catch((err) => logError("Failed to show getting started checklist", err));
-      }
+      window.electron.onboarding
+        .reopenChecklist()
+        .then((reopened) => {
+          if (request !== visibilityRequest.current) return;
+          // Published before the reconcile reads it: nothing was tracked while
+          // the checklist was dismissed, so steps finished since then are
+          // credited from what the stores hold now, and the live subscriptions
+          // pick up from here.
+          const state = withStepsFrom(reopened, checklistRef.current);
+          checklistRef.current = state;
+          setChecklist(state);
+          reconcileCurrentState(markItem, () => checklistRef.current);
+          // After the reconcile: crediting the last step there must not hide
+          // what the user just asked to see. A later completion still does.
+          setForceShow(true);
+        })
+        .catch((err) => logError("Failed to show getting started checklist", err));
     };
     window.addEventListener("daintree:show-getting-started", handleShow);
     return () => window.removeEventListener("daintree:show-getting-started", handleShow);
-  }, []);
+  }, [markItem]);
 
   // Notify when onboarding completes — show checklist in the same session
   const notifyOnboardingComplete = useCallback(() => {
@@ -392,6 +412,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
 
   return {
     visible,
+    forced: visible && forceShow,
     collapsed,
     checklist,
     dismiss,

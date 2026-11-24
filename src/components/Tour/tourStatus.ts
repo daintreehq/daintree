@@ -53,6 +53,14 @@ export async function readTourStatus(candidates: readonly string[]): Promise<Tou
   const progress = tourProgressFor(state.tours, tourId);
   const version = registration?.summary.version;
   const sameVersion = progress.contentVersion === version;
+  // A chapter this platform skips, or one a rewrite removed, is nowhere to resume.
+  const ids = registration?.summary.chapterIds;
+  const lastChapterId =
+    sameVersion &&
+    progress.lastChapterId !== undefined &&
+    (!ids || ids.includes(progress.lastChapterId))
+      ? progress.lastChapterId
+      : null;
   return {
     tourId,
     registered: registration !== undefined,
@@ -60,7 +68,7 @@ export async function readTourStatus(candidates: readonly string[]): Promise<Tou
     completed: progress.completed,
     completedCurrentVersion: progress.completed && progress.completedVersion === version,
     dismissed: progress.dismissed,
-    lastChapterId: sameVersion ? (progress.lastChapterId ?? null) : null,
+    lastChapterId,
     progressVersion: progress.contentVersion ?? null,
     lastOutcome: progress.lastOutcome ?? null,
     lastRunId: progress.lastRunId ?? null,

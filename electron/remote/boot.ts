@@ -19,13 +19,14 @@ import { installHostFileClient } from "./files/clientInstall.js";
 import { folderPackDir, sweepFolderPacks } from "./files/localFolderPack.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
+import { installIdleResourcePause } from "./client/idleResourcePauseInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
 import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js";
 import { installDecisionsHostsClient } from "./decisions/clientInstall.js";
 import { installVoicePaneHostsClient } from "./voice/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
 import { installHostPluginControlClient } from "./pluginControl/install.js";
-import { getRemoteService, requireRemoteService } from "./runtime.js";
+import { getRemoteService, registerRemoteService, requireRemoteService } from "./runtime.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
@@ -40,6 +41,7 @@ import { installPluginInstallSplits, installPluginParityClient } from "./plugins
 import { installSettingsCopyClient } from "./settingsCopy/install.js";
 import { installSettingsControlClient } from "./settingsControl/install.js";
 import { installPortForwardClient } from "./ports/clientInstall.js";
+import { installAgentForwardingClient } from "./agentForwarding/clientInstall.js";
 import { installHostSwitchService } from "./projects/clientInstall.js";
 import type { HostDescriptor, HostId } from "../../shared/types/remoteHosts.js";
 import type { LinkTransport } from "./client/transport.js";
@@ -59,6 +61,13 @@ import {
   redeliverClientWorktreePort,
 } from "./worktreePort/attach.js";
 import { createLogger } from "../utils/logger.js";
+import { getAgentUsageReadouts } from "../services/agentUsage/AgentUsageReadouts.js";
+import {
+  isAgentUsageTrackingEnabled,
+  onAgentUsageTrackingChanged,
+} from "../services/agentUsage/AgentUsageTracking.js";
+import { createAgentUsageHostsSource } from "./metrics/agentUsageHosts.js";
+import { installAgentUsageDemandPush } from "./metrics/agentUsageDemand.js";
 
 const logger = createLogger("main:boot");
 
@@ -281,6 +290,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       client: client.client,
       sessionFor: usedSessionFor,
       holdHost: (hostId) => client.manager.hold(hostId),
+      onApplied: (hostId, settings) => client.idleTimePicked(hostId, settings),
     })
   );
   const hostEntry = (hostId: string) =>
@@ -289,7 +299,9 @@ function startClient(options: StartRemoteHostsOptions): void {
     installPortForwardClient({
       onEndpointOpened: client.onEndpointOpened,
       hostForView: (webContentsId) => hostForView(webContentsId),
-      isKnownHost: (hostId) => hostEntry(hostId) !== undefined,
+      // One being removed or re-pointed is gone already: nothing forwarded meanwhile reaches its old machine.
+      isKnownHost: (hostId) =>
+        hostEntry(hostId) !== undefined && !client.client.isHostRetiring(hostId),
       onHostsChanged: (listener) => client.registry.onChange(listener),
       addUseCheck: (check) => client.manager.addUseCheck(check),
       onSessionOpened: (listener) => client.manager.onSessionOpened(listener),
@@ -307,6 +319,22 @@ function startClient(options: StartRemoteHostsOptions): void {
   );
   // This machine's alert choices, sent to every host it opens a session to (#14701).
   teardowns.push(installNotificationPolicyPush(client.manager));
+  // Whether this machine tracks agent usage, so a host reads it only for a Shell that does (#17981).
+  teardowns.push(
+    installAgentUsageDemandPush(client.manager, {
+      read: isAgentUsageTrackingEnabled,
+      onChanged: (listener) => onAgentUsageTrackingChanged(() => listener()),
+    })
+  );
+  // This computer's ssh-agent for a host's terminals, where its switch is on (#17432).
+  const agentForwarding = installAgentForwardingClient({
+    manager: client.manager,
+    windowShowing: (hostId) => client.windowsOn(hostId).length > 0,
+    registry: client.registry,
+    sessionFor: client.sessionFor,
+  });
+  teardowns.push(() => agentForwarding.dispose());
+  teardowns.push(registerRemoteService("agentForwardingClient", agentForwarding));
   // Host summaries and notifications: dials only hosts whose notifications are on.
   teardowns.push(
     installHostMetricsClient({
@@ -315,6 +343,10 @@ function startClient(options: StartRemoteHostsOptions): void {
       hostForView: client.hostForView,
       openHostForNotice: (windowId, notice) => client.client.openHostForNotice(windowId, notice),
     })
+  );
+  // Reads its summaries, so it goes before them on teardown.
+  teardowns.push(
+    installIdleResourcePause({ registry: client.registry, sessionFor: client.sessionFor })
   );
   // Canopy reading a host the view isn't bound to, This Mac included.
   teardowns.push(
@@ -338,14 +370,30 @@ function startClient(options: StartRemoteHostsOptions): void {
       registry: client.registry,
       manager: client.manager,
       sessionFor: client.sessionFor,
+      // A host's agents stopping, for the owner's phone (#17933): only links already up.
+      onAgentStopChanges: (listener) =>
+        getRemoteService("hostMetrics")?.onAgentStopChanges(listener) ?? (() => {}),
     })
   );
   // Dictation into a host's pane reads the pane's context from that host (#14782).
   teardowns.push(installVoicePaneHostsClient({ sessionFor: client.sessionFor }));
+  // The sidebar's usage readout takes in what every linked host reports (#17318).
+  teardowns.push(
+    getAgentUsageReadouts().setRemoteSource(
+      createAgentUsageHostsSource({
+        registry: client.registry,
+        manager: client.manager,
+        sessionFor: client.sessionFor,
+        metrics: () => getRemoteService("hostMetrics"),
+      })
+    )
+  );
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
   const observeHosts = () => {
     const metrics = getRemoteService("hostMetrics");
-    return client.client.list().map(({ descriptor, connection, summary }) => {
+    return client.client.list().map(({ descriptor, connection }) => {
+      // From metrics, not the list: the list leaves out an earlier link's, which is reported here as such.
+      const summary = metrics?.latest(descriptor.id) ?? null;
       const onLink =
         summary && metrics ? metrics.cameOn(summary, client.sessionFor(descriptor.id)) : null;
       return {
@@ -425,6 +473,7 @@ function startClient(options: StartRemoteHostsOptions): void {
       onHostsChanged: (listener) => client.registry.onChange(listener),
       addUseCheck: (check) => client.manager.addUseCheck(check),
       hostName: (hostId) => client.registry.get(hostId)?.name ?? "a removed host",
+      isRetiring: (hostId) => client.client.isHostRetiring(hostId),
     })
   );
   // This Shell's installed plugins reaching its hosts as themselves (#16767):

@@ -483,6 +483,9 @@ function KitHoverCard({
   const controlled = typeof open === "boolean";
   const shown = controlled ? open : ownOpen;
   const notify = fn(onOpenChange);
+  // A plugin holding `open` with no callback pins the card: no handler of ours
+  // may stand in for one, or Tooltip would count it as closable on Escape.
+  const pinned = controlled && notify === undefined;
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Why the card is up. Keyboard focus on the trigger keeps it until focus
   // leaves or Escape; the pointer keeps it while over the trigger, the card or
@@ -576,7 +579,7 @@ function KitHoverCard({
   return (
     <Tooltip
       open={shown}
-      onOpenChange={handleOpenChange}
+      onOpenChange={pinned ? undefined : handleOpenChange}
       delayDuration={delayOf(openDelay, DEFAULT_OPEN_DELAY)}
       // A hover card's body is the content: it stays while it is read, through
       // dialog transitions, and while the pointer crosses onto it (WCAG 1.4.13).
@@ -602,7 +605,7 @@ function KitHoverCard({
         onPointerEnter={enter}
         onPointerLeave={leaveCard}
         onEscapeKeyDown={() => {
-          escaping.current = true;
+          if (!pinned) escaping.current = true;
         }}
         {...HOVER_CARD_FENCE}
       >
@@ -1280,15 +1283,30 @@ function plainHeading(text: string): string {
 }
 
 /**
+ * How many leading lines are front matter, by the rules `remark-frontmatter`
+ * parses it with: a `---` or `+++` fence on the very first line and a matching
+ * closing fence, each allowed only trailing spaces or tabs. The rendered
+ * document shows that block as metadata, so its keys are never headings.
+ */
+function frontmatterLineCount(lines: readonly string[]): number {
+  const open = /^(---|\+\+\+)[ \t]*$/.exec((lines[0] ?? "").replace(/^\uFEFF/, ""));
+  if (!open) return 0;
+  for (let index = 1; index < lines.length; index++) {
+    if (lines[index]!.replace(/[ \t]+$/, "") === open[1]) return index + 1;
+  }
+  return 0;
+}
+
+/**
  * The headings of a Markdown document in order, ATX and setext, skipping
- * fenced code. Exported for tests.
+ * front matter and fenced code. Exported for tests.
  */
 export function markdownHeadings(markdown: string): PluginTocHeading[] {
   const out: PluginTocHeading[] = [];
-  const lines = markdown.split(/\r?\n/);
+  const lines = markdown.split(/\r\n?|\n/);
   let fence: { char: string; size: number } | null = null;
   let paragraph: string | null = null;
-  for (const line of lines) {
+  for (const line of lines.slice(frontmatterLineCount(lines))) {
     const fenceMatch = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     if (fence) {
       if (fenceMatch && fenceMatch[1]![0] === fence.char && fenceMatch[1]!.length >= fence.size) {
@@ -1316,6 +1334,11 @@ export function markdownHeadings(markdown: string): PluginTocHeading[] {
     if (setext && paragraph !== null) {
       const text = plainHeading(paragraph);
       if (text) out.push({ text, level: setext[1]![0] === "=" ? 1 : 2 });
+      paragraph = null;
+      continue;
+    }
+    // A rule is a block of its own, never the opening line of a setext heading.
+    if (/^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)) {
       paragraph = null;
       continue;
     }

@@ -28,7 +28,7 @@ import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
 import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
 import { cloneIgnoredDirectories } from "./worktreeClone.js";
-import { FileDiffCache } from "./fileDiffCache.js";
+import { FileDiffCache, type GitDiffFreshness, type GitDiffProbe } from "./fileDiffCache.js";
 import {
   classifyGitError,
   extractGitErrorMessage,
@@ -97,6 +97,11 @@ import { WorktreeEmitGate } from "./WorktreeEmitGate.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { sweepWorktreeAdminEntries } from "./worktreeAdminSweep.js";
+import { writeWorktreeCreationStamp } from "../utils/worktreeCreationStamp.js";
+import {
+  verifyUnattendedCheckout,
+  type UnattendedRemovalGuard,
+} from "./unattendedWorktreeRemoval.js";
 import {
   getGitDir,
   getGitCommonDir,
@@ -121,6 +126,7 @@ import {
   type PluginSetupOutcome,
 } from "./WorktreeSetupCoordinator.js";
 import { StatusAdmissionController } from "./StatusAdmissionController.js";
+import { SharedBaseRefResolver } from "./SharedBaseRefResolver.js";
 import {
   ACTIVE_WORKSPACE_POLLING_POLICY,
   type WorkspacePollingPolicy,
@@ -171,7 +177,18 @@ import {
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 import { ForgeRemoteDetector } from "./ForgeRemoteDetector.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
-import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
+import {
+  ResourceActionExecutor,
+  type ResourceActionOptions,
+  type ResourceActionResult,
+} from "./ResourceActionExecutor.js";
+import { IdlePauseService } from "./idlePause.js";
+import type {
+  IdlePauseCheck,
+  IdlePauseGuard,
+  IdlePausePolicy,
+  IdlePauseRunOutcome,
+} from "../../shared/types/idlePause.js";
 import { AttachmentService, type AttachmentActionResult } from "./AttachmentService.js";
 import {
   FileProjectAttachmentStore,
@@ -500,6 +517,8 @@ export class WorkspaceService {
     timeout: POLL_QUEUE_TASK_TIMEOUT_MS,
   });
   private readonly statusAdmission = new StatusAdmissionController();
+  // One base-ref resolution per repository rather than per linked worktree.
+  private readonly sharedBaseRefs = new SharedBaseRefResolver();
   /** When the last automatic focus revalidation ran; see FOCUS_REFRESH_THROTTLE_MS. */
   private lastFocusRefreshAt = 0;
   private mainBranch: string = "main";
@@ -558,15 +577,21 @@ export class WorkspaceService {
   private backgrounded = false;
   // The resume reprobe the PR poller waits on; see `resume()`.
   private pendingResumeSettle: Promise<void> | null = null;
-  // Credential changes that reached this host while backgrounded, the latest
-  // per provider, replayed once PR work resumes — they would otherwise fetch
-  // every worktree and poll PRs in a host nothing is looking at. Per provider
-  // because a set and a clear have different effects, and one provider's
-  // must not swallow another's.
+  // Credential changes that reached this host while backgrounded or with no
+  // window on screen, the latest per provider, replayed once PR work resumes —
+  // they would otherwise fetch every worktree and poll PRs in a host nothing is
+  // looking at. Per provider because a set and a clear have different effects,
+  // and one provider's must not swallow another's.
   private readonly deferredCredentialUpdates = new Map<
     string,
     import("../../shared/types/forge.js").Credentials | null
   >();
+  // A forge-settings change held back the same way. Owed as a full refresh:
+  // only that re-detects worktrees resolved against the previous provider.
+  private settingsRefreshOwed = false;
+  // Bumped by each restart that would run the owed refresh, and by a project
+  // switch or teardown, so only the latest restart's continuation may run it.
+  private owedRefreshGeneration = 0;
   private git: SimpleGit | null = null;
   /**
    * Whether the loaded folder is a git repository, as observed by `loadProject`.
@@ -590,7 +615,12 @@ export class WorkspaceService {
   // path would mint a stale id for any relocated project.
   private projectId: string | null = null;
   private projectEnvVars: Record<string, string> = {};
-  private lifecycleService = new WorktreeLifecycleService();
+  private lifecycleService = new WorktreeLifecycleService(undefined, undefined, (rootPath) =>
+    rootPath === this.projectRootPath && this.projectId
+      ? this.projectSettingsFilePath(this.projectId)
+      : null
+  );
+  private readonly idlePause = new IdlePauseService(this.lifecycleService);
   private readonly setupCoordinator: WorktreeSetupCoordinator;
   private listService = new WorktreeListService();
   private readonly fileDiffCache = new FileDiffCache();
@@ -1022,6 +1052,7 @@ export class WorkspaceService {
       emitUpdate: (monitor) => this.emitUpdate(monitor),
       sendEvent: (event) => this.sendEvent(event),
       lifecycleService: this.lifecycleService,
+      idlePause: this.idlePause,
     });
 
     this.setupCoordinator = new WorktreeSetupCoordinator({
@@ -1808,7 +1839,8 @@ export class WorkspaceService {
       this.mainBranch,
       this.pollQueue,
       ++this.worktreeGeneration,
-      this.statusAdmission
+      this.statusAdmission,
+      this.sharedBaseRefs
     );
 
     if (claimedIssue) {
@@ -1930,11 +1962,19 @@ export class WorkspaceService {
           const named = envKey !== "local" ? ownResource(envs, envKey) : undefined;
           if (named) {
             resourceConfig = named;
-          } else {
-            const keys = Object.keys(envs);
-            if (keys.length > 0) resourceConfig = envs[keys[0]];
+            resourceEnvironments = resolvedEnvs;
+          } else if (Object.keys(envs).length > 0) {
+            // The worktree can switch into one of the project's environments,
+            // but none is its own. Setup, actions and teardown resolve the
+            // environment by its exact key, so another one's commands are not
+            // published here: its Connect would reach a box this worktree
+            // doesn't own. Applying an empty block also drops the commands a
+            // refresh finds left over from an environment since renamed away.
+            if (monitor.resourceEnvironmentEpoch !== environmentEpoch) return;
+            applyResourceConfigToMonitor(monitor, {}, (cmd) => cmd, false);
+            if (monitor.isRunning && monitor.hasInitialStatus) this.emitUpdate(monitor);
+            return;
           }
-          if (resourceConfig) resourceEnvironments = resolvedEnvs;
         }
       }
       if (!resourceConfig) return;
@@ -2600,6 +2640,21 @@ export class WorkspaceService {
     return [...this.acknowledgedMutations];
   }
 
+  /**
+   * The id `getAllStates` would mark `isCurrent`, without building or sending
+   * a snapshot of every worktree to find it.
+   */
+  getActiveWorktreeId(requestId: string): void {
+    let worktreeId: string | null = null;
+    for (const monitor of this.monitors.values()) {
+      if (monitor.isCurrent) {
+        worktreeId = monitor.id;
+        break;
+      }
+    }
+    this.sendEvent({ type: "active-worktree-id", requestId, worktreeId });
+  }
+
   getMonitor(requestId: string, worktreeId: string): void {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) {
@@ -2756,7 +2811,13 @@ export class WorkspaceService {
             }
             await Promise.allSettled([
               this.refreshAll(reason === "focus"),
-              pullRequestService.refresh(),
+              // Discovery can outlast a lock or a pause; a focus pass then
+              // leaves PRs to the poller's restart. A focus pass also keeps a
+              // not-found issue's retry delay; only the user's own refresh
+              // looks it up again straight away.
+              reason === "focus" && !this.appliedPermissions.status
+                ? undefined
+                : pullRequestService.refresh({ preserveIssueBackoff: reason === "focus" }),
             ]);
           })(),
           HOST_REFRESH_TIMEOUT_MS,
@@ -2942,7 +3003,11 @@ export class WorkspaceService {
           }
         }
       }
-      await pullRequestService.refresh();
+      // The status pass above can take a while; a screen locked in the
+      // meantime leaves the PR catch-up to the poller's own restart.
+      if (this.appliedPermissions.status) {
+        await pullRequestService.refresh({ preserveIssueBackoff: true });
+      }
       this.sendEvent({ type: "refresh-result", requestId, success: true });
     } catch (error) {
       this.sendEvent({
@@ -3545,6 +3610,20 @@ export class WorkspaceService {
       };
       const canonicalWorktreeId = createdWorktree.id;
       const isActive = canonicalWorktreeId === this.activeWorktreeId;
+      // Only what is stamped here may ever be removed by the merged-worktree
+      // rule (#17321); a stamp that fails to land leaves the worktree to the
+      // person, which is the safe direction.
+      if (createdWorktree.gitDir) {
+        await writeWorktreeCreationStamp(createdWorktree.gitDir, {
+          createdAt: Date.now(),
+          branch: newBranch,
+        }).catch((error: unknown) => {
+          logWarn("[WorkspaceHost] could not stamp the new worktree as Daintree's", {
+            worktreePath: canonicalPath,
+            error: formatErrorMessage(error, "stamp write failed"),
+          });
+        });
+      }
 
       // Register the monitor SYNCHRONOUSLY before emitting the success event.
       // Two invariants depend on this ordering:
@@ -3973,6 +4052,59 @@ export class WorkspaceService {
     return this.setupCoordinator.approveLifecycleCommands(worktreeId, fingerprint);
   }
 
+  /** Whether idle pause can be on for the worktree's environment, and what it runs (#17925). */
+  async getIdlePausePolicy(worktreeId: string): Promise<IdlePausePolicy> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor || !this.projectRootPath) {
+      return { status: "unavailable", reason: "no-environment" };
+    }
+    return this.idlePause.policy(monitor.path, this.projectRootPath, monitor.worktreeMode);
+  }
+
+  async setIdlePause(worktreeId: string, enabled: boolean, fingerprint?: string): Promise<void> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor || !this.projectRootPath) throw new Error("Worktree not found");
+    await this.idlePause.setEnabled(
+      monitor.path,
+      this.projectRootPath,
+      monitor.worktreeMode,
+      enabled,
+      fingerprint
+    );
+  }
+
+  async checkIdlePause(worktreeId: string): Promise<IdlePauseCheck> {
+    const check = await this.resourceActionExecutor.checkIdlePause(worktreeId);
+    return check.ok ? { ok: true, guard: { ...check.guard, processEpoch: this.epoch } } : check;
+  }
+
+  /** Main's pause once the worktree's host granted its ended idle time: a manual pause, guarded. */
+  async runIdlePause(
+    requestId: string,
+    worktreeId: string,
+    guard: IdlePauseGuard
+  ): Promise<IdlePauseRunOutcome> {
+    // Checked by an earlier run of this host: nothing it saw holds now.
+    if (guard.processEpoch !== this.epoch) {
+      return { ran: false, reason: "The workspace host restarted since the pause was checked" };
+    }
+    const result = await this.resourceActionExecutor.runResourceAction(
+      requestId,
+      worktreeId,
+      "pause",
+      undefined,
+      { origin: "idle-pause", guard }
+    );
+    if (result.skipped) return { ran: false, reason: result.error ?? "Refused" };
+    // Cut short by the worktree's removal, which is no failure of the pause to report.
+    if (!result.success && result.error === "Aborted") return { ran: false, reason: "Aborted" };
+    return {
+      ran: true,
+      success: result.success,
+      ...(result.error !== undefined ? { error: result.error } : {}),
+    };
+  }
+
   /**
    * Clone the directories the lifecycle config's `cloneIgnored` names into a
    * new worktree, from the same config file its setup commands come from.
@@ -4009,11 +4141,60 @@ export class WorkspaceService {
     });
   }
 
-  private async runLifecycleTeardown(
+  /**
+   * What an unattended removal (#17321) re-checks before anything stops and
+   * again before each git attempt. A worktree whose delete would run teardown
+   * is refused, and teardown is never run for one: the person consented to
+   * losing a checkout that holds nothing, not to a project script or resource
+   * teardown running with no one watching. The active worktree is refused
+   * because removing it switches a view the person may be looking at, and one
+   * still being set up is in use.
+   */
+  private async assertUnattendedRemovalHolds(
     worktreeId: string,
     monitor: WorktreeMonitor,
-    force: boolean
+    guard: UnattendedRemovalGuard
   ): Promise<void> {
+    if (await pathIsMissing(monitor.path)) {
+      throw new Error("The worktree's folder is already gone");
+    }
+    const teardown = await this.getDeleteTeardownPreview(worktreeId);
+    if (teardown === null || teardown.phases.length > 0) {
+      throw new Error("Deleting the worktree would run teardown steps");
+    }
+    await verifyUnattendedCheckout(monitor.path, guard);
+    // After the reads, so a selection or a setup started while they ran counts.
+    this.assertUnattendedStateHolds(worktreeId, monitor, guard);
+  }
+
+  /**
+   * The synchronous half of {@link assertUnattendedRemovalHolds}, also run
+   * after the nested-worktree scan, the last await before git: nothing it
+   * reads needs a disk or a process, so it can follow every other check.
+   */
+  private assertUnattendedStateHolds(
+    worktreeId: string,
+    monitor: WorktreeMonitor,
+    guard: UnattendedRemovalGuard
+  ): void {
+    if (Date.now() > guard.notAfter) {
+      throw new Error("The removal request expired before it could run");
+    }
+    if (this.monitors.get(worktreeId) !== monitor) {
+      throw new Error("The worktree was replaced while it was checked");
+    }
+    if (monitor.isCurrent) {
+      throw new Error("The worktree is the active one");
+    }
+    if (monitor.branch !== guard.expectedBranch) {
+      throw new Error("The worktree is no longer on the branch its PR merged");
+    }
+    if (monitor.lifecycleStatus?.state === "running" || monitor.setupStatus?.state === "running") {
+      throw new Error("The worktree is still being set up");
+    }
+  }
+
+  private async runLifecycleTeardown(worktreeId: string, monitor: WorktreeMonitor): Promise<void> {
     // A plugin step still setting the worktree up is setting up one that is
     // about to be gone. A clone would still be writing into it, so its child
     // must have exited and its staging gone before git removes the tree.
@@ -4025,7 +4206,7 @@ export class WorkspaceService {
     if (!ctx) {
       return;
     }
-    await this.lifecycleService.runLifecycleTeardown(worktreeId, monitor, force, ctx);
+    await this.lifecycleService.runLifecycleTeardown(worktreeId, monitor, ctx);
   }
 
   async deleteWorktree(
@@ -4062,7 +4243,17 @@ export class WorkspaceService {
      * payload already carries the field; `handleWorktreePortRequest` in
      * `electron/workspace-host.ts` is the one hop that still has to forward it.
      */
-    branchOptions: { forceDeleteBranch?: boolean } = {}
+    branchOptions: {
+      forceDeleteBranch?: boolean;
+      /**
+       * Set only by main's merged-worktree rule (#17321): no one is there to
+       * consent, so the removal must lose nothing. Never forces, never deletes
+       * the branch, never runs teardown or prunes, and refuses unless the
+       * checkout is on `expectedBranch` at `expectedHead` with nothing
+       * uncommitted, read again right before git runs.
+       */
+      unattended?: UnattendedRemovalGuard;
+    } = {}
   ): Promise<void> {
     // Mutation-outbox replay short-circuit (#8405): a replay of an already
     // acknowledged delete must not re-run `git worktree remove` (which would
@@ -4080,8 +4271,12 @@ export class WorkspaceService {
     // Set once the attachment detaches have run, so a failure releases the
     // hold they took on the worktree — and only then.
     let attachmentsReserved = false;
+    let releaseIdlePause: (() => void) | undefined;
     let deletingMonitor: WorktreeMonitor | undefined;
     let restoreFileWatching: (() => void) | undefined;
+    // Set once git is asked to remove the checkout: a failure after that may
+    // have taken it anyway, which an unattended caller settles from the disk.
+    let gitStarted = false;
     try {
       markHostPerformance("wtdelete.host-start", { worktreeId });
       const monitor = this.monitors.get(worktreeId);
@@ -4101,6 +4296,14 @@ export class WorkspaceService {
 
       if (monitor.isMainWorktree) {
         throw new Error("Cannot delete the main worktree");
+      }
+
+      const unattended = branchOptions.unattended;
+      if (unattended) {
+        if (force || deleteBranch || branchOptions.forceDeleteBranch) {
+          throw new Error("An unattended removal never forces or deletes the branch");
+        }
+        await this.assertUnattendedRemovalHolds(worktreeId, monitor, unattended);
       }
 
       // Before every other guard and before teardown: no consent covers this,
@@ -4147,7 +4350,10 @@ export class WorkspaceService {
       if (await pathIsMissing(monitor.path)) {
         await this.guardPrunableSubmoduleStores(monitor.path);
       } else {
-        await this.guardSubmoduleDelete(monitor, worktreeId, force);
+        const needsForce = await this.guardSubmoduleDelete(monitor, worktreeId, force);
+        if (unattended && needsForce) {
+          throw new Error("Git would need --force to remove the worktree's submodules");
+        }
       }
 
       const branchToDelete = deleteBranch ? monitor.branch : undefined;
@@ -4157,6 +4363,9 @@ export class WorkspaceService {
       }
 
       if (monitor.isCurrent) {
+        // Became active while the guards above awaited: never switch a view
+        // away for a removal no one asked for.
+        if (unattended) throw new Error("The worktree is the active one");
         let mainWorktreeId: string | undefined;
         for (const [id, m] of this.monitors) {
           if (m.isMainWorktree) {
@@ -4170,8 +4379,19 @@ export class WorkspaceService {
         this.setActiveWorktree(`${requestId}-auto-switch`, mainWorktreeId);
       }
 
-      attachmentsReserved = true;
-      await this.runLifecycleTeardown(worktreeId, monitor, force);
+      if (!unattended) {
+        attachmentsReserved = true;
+        // The teardown runs outside the resource queue, so an idle pause is
+        // kept off it, and one already admitted is waited out first.
+        releaseIdlePause = this.resourceActionExecutor.holdAgainstIdlePause(worktreeId);
+        await this.resourceActionExecutor.whenIdlePauseSettled(worktreeId);
+        // A worktree made again at this path while the pause finished isn't the one asked about.
+        const live = this.monitors.get(worktreeId);
+        if (live !== undefined && live !== monitor) {
+          throw new Error("The worktree changed while its idle pause finished");
+        }
+        await this.runLifecycleTeardown(worktreeId, monitor);
+      }
 
       // Mark the metadata-subdir basename pending so the watcher event our own
       // `git worktree remove` produces is recognized and dropped — without
@@ -4192,6 +4412,8 @@ export class WorkspaceService {
         // ENOTDIR) fall through so we don't skip the remove on transient
         // permission issues; the remove call's own errors will surface.
         if (await pathIsMissing(monitor.path)) {
+          // A prune is a recovery the person asks for; it never runs unattended.
+          if (unattended) throw new Error("The worktree's folder is already gone");
           // The checkout is gone, but its module repositories are not: they live
           // under `.git/worktrees/<id>/modules`, which survives a `rm -rf` of the
           // working tree and is destroyed by `worktree prune`. So commits made
@@ -4224,8 +4446,21 @@ export class WorkspaceService {
           // narrows the window rather than closing it; closing it needs a
           // prepare/commit host API, which is a separate change.
           const needsMechanicalForce = await this.guardSubmoduleDelete(monitor, worktreeId, force);
-          // Last, so no other await sits between it and the removal.
-          await this.guardNestedWorktreeDelete(monitor);
+          if (unattended && needsMechanicalForce) {
+            throw new Error("Git would need --force to remove the worktree's submodules");
+          }
+          // An unattended removal re-reads the checkout here too; the nested
+          // scan stays last, since a worktree nested in the checkout is the
+          // one thing a removal can take that isn't its own.
+          const lastChecks = async () => {
+            if (unattended) {
+              await this.assertUnattendedRemovalHolds(worktreeId, monitor, unattended);
+            }
+            await this.guardNestedWorktreeDelete(monitor);
+            if (unattended) this.assertUnattendedStateHolds(worktreeId, monitor, unattended);
+          };
+          // Last, so no other await sits between them and the removal.
+          await lastChecks();
 
           const args = ["worktree", "remove"];
           if (force || needsMechanicalForce) {
@@ -4235,15 +4470,20 @@ export class WorkspaceService {
           // positional rather than parsed as a flag.
           args.push("--end-of-options", monitor.path);
           markHostPerformance("wtdelete.git-remove:start", { worktreeId });
+          gitStarted = true;
           const removeResult = await this.removeGitWorktreeWithRetry(
             this.git,
             args,
             monitor.path,
             // A lock retry waits up to seconds between attempts; a worktree
-            // nested in that window must stop the next one.
-            () => this.guardNestedWorktreeDelete(monitor)
+            // nested in that window, or a checkout changed in it, must stop
+            // the next one.
+            lastChecks
           );
           markHostPerformance("wtdelete.git-remove:end", { worktreeId });
+          if (removeResult === "stale" && unattended) {
+            throw new Error("Git no longer sees a checkout at the worktree's path");
+          }
           if (removeResult === "stale") {
             // Git no longer sees a checkout here, so this is the missing-path
             // branch reached late — and it needs that branch's guard.
@@ -4358,6 +4598,7 @@ export class WorkspaceService {
         requestId,
         success: false,
         error: (error as Error).message,
+        ...(branchOptions.unattended && gitStarted ? { gitStarted: true as const } : {}),
       });
       // Re-throw so the port path (`handleWorktreePortRequest`) can reject the
       // port `request()` with the same error string — without the throw, the
@@ -4367,6 +4608,8 @@ export class WorkspaceService {
       // `mutationId` and the `throwOnError` flag (`WorkspaceClient.sendWithResponse`
       // resolves via the delete-worktree-result event, not the promise return).
       if (throwOnError) throw error;
+    } finally {
+      releaseIdlePause?.();
     }
   }
 
@@ -5077,11 +5320,9 @@ export class WorkspaceService {
 
       const absolutePath = resolve(cwd, normalizedPath);
 
-      // Only a continuation read consults the cache: a first read is usually
-      // the only one (the diff panes never page), and the freshness probe
-      // costs a git spawn of its own. Paging thus computes the diff twice —
-      // once for the first window, once to fill the cache — instead of once
-      // per window.
+      // Only a continuation read consults the cache. A first read is usually
+      // the only one (the diff panes never page), so it fills the cache only
+      // once its diff turns out not to fit one window.
       const continuation = (offset ?? 0) > 0;
       const cacheKeyFor = (source: "file" | "git"): string =>
         FileDiffCache.key(source, cwd, gitPath, status, ignoreWhitespace === true, side);
@@ -5091,10 +5332,14 @@ export class WorkspaceService {
         sendWindow(cached);
         return true;
       };
-      const serve = (diff: string, key: string, freshness: string | null): void => {
-        const bytes = Buffer.from(diff, "utf-8");
+      const serve = (
+        bytes: Buffer,
+        key: string,
+        freshness: string | null,
+        probe: GitDiffProbe | null = null
+      ): void => {
         if (freshness !== null && bytes.byteLength > windowBytes) {
-          this.fileDiffCache.set(key, freshness, bytes);
+          this.fileDiffCache.set(key, freshness, bytes, probe);
         }
         sendWindow(bytes);
       };
@@ -5134,9 +5379,10 @@ export class WorkspaceService {
         const { readFile } = await import("fs/promises");
         // Taken before the read: a write that lands after it changes the key,
         // so the next window recomputes instead of serving what this read saw.
+        // An lstat, so a first read takes it too and can fill the cache.
         const fileKey = cacheKeyFor("file");
-        const freshness = continuation ? await FileDiffCache.fileFreshness(absolutePath) : null;
-        if (serveFromCache(fileKey, freshness)) return;
+        const freshness = await FileDiffCache.fileFreshness(absolutePath);
+        if (continuation && serveFromCache(fileKey, freshness)) return;
         // A newly added submodule is `added` with a path that is the
         // submodule's own checkout, so there is no file to inline. Git already
         // knows how to describe it (`new file mode 160000`), so fall through to
@@ -5171,16 +5417,20 @@ export class WorkspaceService {
 
           const diff = newFileDiff(gitPath, buffer.toString("utf-8"), entry.mode);
 
-          serve(diff, fileKey, freshness);
+          serve(Buffer.from(diff, "utf-8"), fileKey, freshness);
           return;
         }
       }
 
       const gitKey = cacheKeyFor("git");
-      const freshness = continuation
-        ? await FileDiffCache.gitFreshness(git, cwd, gitPath, absolutePath)
-        : null;
-      if (serveFromCache(gitKey, freshness?.key ?? null)) return;
+      const takeFreshness = () =>
+        FileDiffCache.gitFreshness(
+          git,
+          cwd,
+          gitPath,
+          absolutePath,
+          this.fileDiffCache.probe(gitKey)
+        );
 
       // `--no-textconv` blocks user-defined diff drivers that would otherwise
       // execute arbitrary binaries via `.gitattributes` textconv mappings.
@@ -5195,40 +5445,54 @@ export class WorkspaceService {
       // HEAD that moves away and back mid-diff cannot pass off a patch against
       // the other commit as fresh. The staged side leaves it off when HEAD is
       // unborn: `--cached` alone then diffs the index against the empty tree.
-      const baseRefArgs =
-        side === "unstaged"
-          ? []
-          : side === "staged"
-            ? ["--cached", ...(freshness ? [freshness.head] : [])]
-            : [freshness?.head ?? "HEAD"];
-      const diff = await runWithCappedStdout(cwd, GIT_FILE_DIFF_MAX_PATCH_BYTES, (capped) =>
-        capped.diff([
-          ...baseRefArgs,
-          "--no-ext-diff",
-          "--no-textconv",
-          "--no-color",
-          "--submodule=short",
-          ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
-          "--",
-          normalizedPath,
-        ])
-      );
-      if (diff === null) {
-        sendSentinel("FILE_TOO_LARGE");
-        return;
+      const trackedDiff = async (
+        freshness: GitDiffFreshness | null
+      ): Promise<{ sentinel: string } | { bytes: Buffer }> => {
+        const baseRefArgs =
+          side === "unstaged"
+            ? []
+            : side === "staged"
+              ? ["--cached", ...(freshness ? [freshness.head] : [])]
+              : [freshness?.head ?? "HEAD"];
+        const diff = await runWithCappedStdout(cwd, GIT_FILE_DIFF_MAX_PATCH_BYTES, (capped) =>
+          capped.diff([
+            ...baseRefArgs,
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+            "--",
+            normalizedPath,
+          ])
+        );
+        if (diff === null) return { sentinel: "FILE_TOO_LARGE" };
+        if (isBinaryDiffOutput(diff)) return { sentinel: "BINARY_FILE" };
+        if (!diff.trim()) return { sentinel: "NO_CHANGES" };
+        return { bytes: Buffer.from(diff, "utf-8") };
+      };
+
+      let freshness = continuation ? await takeFreshness() : null;
+      if (serveFromCache(gitKey, freshness?.key ?? null)) return;
+      let result = await trackedDiff(freshness);
+
+      // A first read probes only once its diff outgrows one window. That diff
+      // ran before the key existed, so it can't be cached under it: take the
+      // key, then diff again pinned to it — the cost a second window would
+      // otherwise pay, paid here so that every later window is a cache hit.
+      if (!continuation && "bytes" in result && result.bytes.byteLength > windowBytes) {
+        freshness = await takeFreshness();
+        if (freshness !== null) {
+          if (serveFromCache(gitKey, freshness.key)) return;
+          result = await trackedDiff(freshness);
+        }
       }
 
-      if (isBinaryDiffOutput(diff)) {
-        sendSentinel("BINARY_FILE");
+      if ("sentinel" in result) {
+        sendSentinel(result.sentinel);
         return;
       }
-
-      if (!diff.trim()) {
-        sendSentinel("NO_CHANGES");
-        return;
-      }
-
-      serve(diff, gitKey, freshness?.key ?? null);
+      serve(result.bytes, gitKey, freshness?.key ?? null, freshness?.probe ?? null);
     } catch (error) {
       this.sendEvent({
         type: "get-file-diff-result",
@@ -5359,8 +5623,20 @@ export class WorkspaceService {
    * what they may run. Replayed by main on host restart.
    */
   setWorkspacePowerPolicy(policy: WorkspacePollingPolicy): void {
+    const wasOnScreen = this.appPolicy.statusAllowed;
     this.appPolicy = { ...policy };
     this.reconcilePolling();
+    // PR polling follows status work: off with every window hidden, the screen
+    // locked, or the machine asleep.
+    if (policy.statusAllowed === wasOnScreen) return;
+    if (!policy.statusAllowed) {
+      this.prService.pause();
+      return;
+    }
+    // A paused host restarts it on its own resume(), and a resume still
+    // settling its remotes restarts it once they settle.
+    if (this.backgrounded || this.pendingResumeSettle) return;
+    this.resumePRWork();
   }
 
   /**
@@ -5479,6 +5755,9 @@ export class WorkspaceService {
 
   /** The PR side of `resume()`, run once the remotes have settled. */
   private resumePRWork(): void {
+    // Foregrounded with nothing on screen: the poller and any held-back
+    // credential change wait for a window to come back.
+    if (!this.appPolicy.statusAllowed) return;
     // A credential change held back while backgrounded refreshes PRs, so it
     // waits for the same settle the poller does.
     const deferred = [...this.deferredCredentialUpdates];
@@ -5486,7 +5765,21 @@ export class WorkspaceService {
     for (const [providerId, credentials] of deferred) {
       this.updateForgeCredentials(providerId, credentials);
     }
-    this.prService.resume();
+    const restarted = this.prService.resume();
+    if (!this.settingsRefreshOwed) return;
+    // After the restart's own check, which would otherwise re-resolve worktrees
+    // from the caches the refresh is clearing and leave it nothing to detect.
+    // Still owed if PR work stopped or began settling again meanwhile: the next
+    // restart runs it.
+    const generation = ++this.owedRefreshGeneration;
+    void restarted
+      .catch(() => {})
+      .then(() => {
+        if (generation !== this.owedRefreshGeneration || !this.settingsRefreshOwed) return;
+        if (!this.appliedPermissions.status || this.pendingResumeSettle) return;
+        this.settingsRefreshOwed = false;
+        void pullRequestService.refresh();
+      });
   }
 
   getPRStatus(requestId: string): void {
@@ -5507,9 +5800,15 @@ export class WorkspaceService {
     pullRequestService.setForgeSettings(args);
     // The issues binding may be what changed; its branch keys go with it.
     this.refreshIssueBranchClaim();
-    // A backgrounded host re-resolves when it is foregrounded; refreshing now
-    // would query the forge for a project nothing is showing (#12519).
-    if (!this.backgrounded) void pullRequestService.refresh();
+    // A backgrounded or off-screen host re-resolves when its poller restarts;
+    // refreshing now would query the forge for a project nothing is showing
+    // (#12519).
+    if (this.appliedPermissions.status) {
+      this.settingsRefreshOwed = false;
+      void pullRequestService.refresh();
+    } else {
+      this.settingsRefreshOwed = true;
+    }
     this.forgeRemoteDetector.updateRemoteName(args.forgeRemote);
   }
 
@@ -5530,7 +5829,7 @@ export class WorkspaceService {
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null
   ): void {
-    if (this.backgrounded || this.pendingResumeSettle) {
+    if (this.backgrounded || this.pendingResumeSettle || !this.appPolicy.statusAllowed) {
       this.deferredCredentialUpdates.set(providerId, credentials);
       return;
     }
@@ -5614,6 +5913,8 @@ export class WorkspaceService {
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
+    this.settingsRefreshOwed = false;
+    this.owedRefreshGeneration++;
 
     for (const id of this.monitors.keys()) {
       this.resourceActionExecutor.cleanupResourceActionState(id);
@@ -5623,6 +5924,7 @@ export class WorkspaceService {
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    this.sharedBaseRefs.clear();
     clearWorktreeDiffStatCache();
     this.agentActiveWorktreeIds.clear();
     // Drop in-flight fetch chains and per-repo failure state — the next
@@ -5714,8 +6016,8 @@ export class WorkspaceService {
     worktreeId: string,
     action: "provision" | "teardown" | "resume" | "pause" | "status",
     environmentId?: string,
-    options?: { origin?: "auto-poll" }
-  ): Promise<{ success: boolean; error?: string; output?: string }> {
+    options?: ResourceActionOptions
+  ): Promise<ResourceActionResult> {
     return this.resourceActionExecutor.runResourceAction(
       requestId,
       worktreeId,
@@ -5744,15 +6046,31 @@ export class WorkspaceService {
     return envs !== null && Object.keys(envs).length > 0;
   }
 
+  /**
+   * The environment keys a worktree's mode is resolved against, from the
+   * first settings file that has any: what a picker can offer that this host
+   * will find the commands for.
+   */
+  async resourceEnvironmentKeys(): Promise<string[]> {
+    if (!this.projectRootPath) return [];
+    const envs = await this.lifecycleService.loadProjectResourceEnvironments(this.projectRootPath);
+    return Object.keys(envs ?? {});
+  }
+
+  /** The settings file Project settings writes for `projectId`, or null without a userData root. */
+  private projectSettingsFilePath(projectId: string): string | null {
+    const userDataDir = process.env.DAINTREE_USER_DATA ?? "";
+    if (!userDataDir) return null;
+    // Settings live under `<userData>/projects/<id>/settings.json` (see
+    // ProjectStore's `projectsConfigDir`). DAINTREE_USER_DATA is the bare
+    // userData root, so the `projects` segment must be added here — without it
+    // the read silently missed and env vars never reached the host (#11282).
+    return settingsFilePath(pathResolve(userDataDir, "projects"), projectId);
+  }
+
   private async loadProjectEnvVars(projectId: string): Promise<Record<string, string>> {
     try {
-      const userDataDir = process.env.DAINTREE_USER_DATA ?? "";
-      if (!userDataDir) return {};
-      // Settings live under `<userData>/projects/<id>/settings.json` (see
-      // ProjectStore's `projectsConfigDir`). DAINTREE_USER_DATA is the bare
-      // userData root, so the `projects` segment must be added here — without it
-      // the read silently missed and env vars never reached the host (#11282).
-      const filePath = settingsFilePath(pathResolve(userDataDir, "projects"), projectId);
+      const filePath = this.projectSettingsFilePath(projectId);
       if (!filePath) return {};
       const raw = await readFile(filePath, "utf8");
       const parsed: unknown = JSON.parse(raw);
@@ -5782,6 +6100,8 @@ export class WorkspaceService {
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
+    this.settingsRefreshOwed = false;
+    this.owedRefreshGeneration++;
     this.resourceActionExecutor.dispose();
     this.attachmentService.dispose();
     this.setupCoordinator.dispose();
@@ -5790,6 +6110,7 @@ export class WorkspaceService {
     }
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
+    this.sharedBaseRefs.clear();
     clearWorktreeDiffStatCache();
     this.agentActiveWorktreeIds.clear();
     this.authFailureConfirmedNotified.clear();

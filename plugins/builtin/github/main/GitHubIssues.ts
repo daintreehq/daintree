@@ -7,10 +7,13 @@ import {
   buildBatchIssuesQuery,
   GRAPHQL_BATCH_CHUNK_SIZE,
 } from "./GitHubQueries.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import { rateLimitServiceForHost } from "./GitHubRateLimitService.js";
+import { githubApiBase } from "./GitHubHost.js";
+import { missingTokenMessage, requireGitHubClient } from "./queryInfra.js";
 import { parseGitHubError } from "./GitHubErrors.js";
 import { withRepoContextRetry } from "./GitHubRepoContext.js";
 import {
+  cacheOwner,
   issueListCache,
   issueTooltipCache,
   issueTooltipWrittenAt,
@@ -83,13 +86,12 @@ export async function assignIssue(
   issueNumber: number,
   username: string
 ): Promise<AssignIssueResult> {
-  const token = GitHubAuth.getToken();
-  if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-
   return withRepoContextRetry(cwd, async (context) => {
-    const url = `https://api.github.com/repos/${context.owner}/${context.repo}/issues/${issueNumber}/assignees`;
+    const token = GitHubAuth.getToken(context.host);
+    if (!token) {
+      throw new Error(missingTokenMessage(context.host));
+    }
+    const url = `${githubApiBase(context.host)}/repos/${context.owner}/${context.repo}/issues/${issueNumber}/assignees`;
 
     try {
       const response = await rateLimitAwareFetch(url, {
@@ -160,11 +162,11 @@ export async function assignIssue(
         avatarUrl: assignee.avatar_url ?? "",
       };
 
-      updateIssueAssigneeInCache(context.owner, context.repo, issueNumber, assigneeData);
+      updateIssueAssigneeInCache(cacheOwner(context), context.repo, issueNumber, assigneeData);
 
       return { username: assigneeData.login, avatarUrl: assigneeData.avatarUrl };
     } catch (error) {
-      throw new Error(parseGitHubError(error));
+      throw new Error(parseGitHubError(error, context.host));
     }
   });
 }
@@ -174,13 +176,12 @@ export async function unassignIssue(
   issueNumber: number,
   username: string
 ): Promise<void> {
-  const token = GitHubAuth.getToken();
-  if (!token) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-
   return withRepoContextRetry(cwd, async (context) => {
-    const url = `https://api.github.com/repos/${context.owner}/${context.repo}/issues/${issueNumber}/assignees`;
+    const token = GitHubAuth.getToken(context.host);
+    if (!token) {
+      throw new Error(missingTokenMessage(context.host));
+    }
+    const url = `${githubApiBase(context.host)}/repos/${context.owner}/${context.repo}/issues/${issueNumber}/assignees`;
 
     try {
       const response = await rateLimitAwareFetch(url, {
@@ -210,9 +211,9 @@ export async function unassignIssue(
         );
       }
 
-      removeIssueAssigneeFromCache(context.owner, context.repo, issueNumber, username);
+      removeIssueAssigneeFromCache(cacheOwner(context), context.repo, issueNumber, username);
     } catch (error) {
-      throw new Error(parseGitHubError(error), { cause: error });
+      throw new Error(parseGitHubError(error, context.host), { cause: error });
     }
   });
 }
@@ -344,12 +345,13 @@ export async function getIssueTooltipForContext(
   context: RepoContext,
   issueNumber: number
 ): Promise<IssueTooltipData | null> {
-  const client = GitHubAuth.createClient();
+  const client = GitHubAuth.createClient(context.host);
   if (!client) {
     return null;
   }
+  const rateLimits = rateLimitServiceForHost(context.host);
 
-  const cacheKey = `${context.owner}/${context.repo}:${issueNumber}`;
+  const cacheKey = `${cacheOwner(context)}/${context.repo}:${issueNumber}`;
   const cached = issueTooltipCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -367,7 +369,7 @@ export async function getIssueTooltipForContext(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
+    rateLimits.updateFromGraphQL(response, "GET_ISSUE_QUERY");
 
     const issue = response?.repository?.issue;
     if (!issue) {
@@ -463,11 +465,6 @@ function prewarmIssueTooltips(
 export async function listIssues(
   options: GitHubListOptions
 ): Promise<GitHubListResponse<GitHubIssue>> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-
   const resolvedSortOrder = options.sortOrder ?? "created";
   const orderBy = {
     field: resolvedSortOrder === "updated" ? "UPDATED_AT" : "CREATED_AT",
@@ -475,9 +472,11 @@ export async function listIssues(
   };
 
   return withRepoContextRetry(options.cwd, async (context) => {
+    const client = requireGitHubClient(context.host);
+    const rateLimits = rateLimitServiceForHost(context.host);
     const cacheKey = buildListCacheKey({
       type: "issue",
-      owner: context.owner,
+      owner: cacheOwner(context),
       repo: context.repo,
       state: options.state ?? "open",
       search: options.search ?? "",
@@ -497,7 +496,7 @@ export async function listIssues(
     // Captured before the network call: if the count-as-cache-buster bumps
     // the epoch mid-flight, this page predates the observed change and must
     // not repopulate the just-busted cache.
-    const epochAtStart = getRepoListEpoch("issue", context.owner, context.repo);
+    const epochAtStart = getRepoListEpoch("issue", cacheOwner(context), context.repo);
     const readAt = issueReadStamp();
 
     try {
@@ -521,13 +520,13 @@ export async function listIssues(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response, "SEARCH_ISSUES_QUERY");
+        rateLimits.updateFromGraphQL(response, "SEARCH_ISSUES_QUERY");
 
         const search = response?.search;
         const nodes = (search?.nodes ?? []) as Array<Record<string, unknown>>;
         const filteredNodes = nodes.filter(Boolean);
 
-        prewarmIssueTooltips(context.owner, context.repo, filteredNodes);
+        prewarmIssueTooltips(cacheOwner(context), context.repo, filteredNodes);
 
         result = {
           items: filteredNodes.map(parseIssueNode),
@@ -549,14 +548,14 @@ export async function listIssues(
           request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
-        gitHubRateLimitService.updateFromGraphQL(response, "LIST_ISSUES_QUERY");
+        rateLimits.updateFromGraphQL(response, "LIST_ISSUES_QUERY");
 
         const issues = response?.repository?.issues;
         const nodes = (issues?.nodes ?? []) as Array<Record<string, unknown>>;
         const totalCount = (issues?.totalCount as number) ?? undefined;
         const filteredNodes = nodes.filter(Boolean);
 
-        prewarmIssueTooltips(context.owner, context.repo, filteredNodes);
+        prewarmIssueTooltips(cacheOwner(context), context.repo, filteredNodes);
 
         result = {
           items: filteredNodes.map(parseIssueNode),
@@ -571,7 +570,7 @@ export async function listIssues(
         // total is held outside it: the ledger orders it by when this read was
         // issued, and an epoch moved by an unconfirmed REST delta must not
         // swallow it (#16866).
-        if (getRepoListEpoch("issue", context.owner, context.repo) === epochAtStart) {
+        if (getRepoListEpoch("issue", cacheOwner(context), context.repo) === epochAtStart) {
           issueListCache.set(cacheKey, result);
         }
         if (
@@ -581,13 +580,18 @@ export async function listIssues(
           Number.isSafeInteger(totalCount) &&
           totalCount >= 0
         ) {
-          updateRepoStatsCount(`${context.owner}/${context.repo}`, "issue", totalCount, readAt);
+          updateRepoStatsCount(
+            `${cacheOwner(context)}/${context.repo}`,
+            "issue",
+            totalCount,
+            readAt
+          );
         }
       }
 
       return result;
     } catch (error) {
-      throw new Error(parseGitHubError(error));
+      throw new Error(parseGitHubError(error, context.host));
     }
   });
 }
@@ -596,13 +600,10 @@ export async function getIssueByNumber(
   cwd: string,
   issueNumber: number
 ): Promise<GitHubIssue | null> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-
   try {
     return await withRepoContextRetry(cwd, async (context) => {
+      const client = requireGitHubClient(context.host);
+      const rateLimits = rateLimitServiceForHost(context.host);
       const response = (await client(GET_ISSUE_QUERY, {
         owner: context.owner,
         repo: context.repo,
@@ -610,7 +611,7 @@ export async function getIssueByNumber(
         request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
-      gitHubRateLimitService.updateFromGraphQL(response, "GET_ISSUE_QUERY");
+      rateLimits.updateFromGraphQL(response, "GET_ISSUE_QUERY");
 
       const issue = response?.repository?.issue;
       if (!issue) {
@@ -640,10 +641,8 @@ export async function getIssuesByNumbersForContext(
   context: RepoContext,
   numbers: number[]
 ): Promise<Array<GitHubIssue | null>> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
+  const client = requireGitHubClient(context.host);
+  const rateLimits = rateLimitServiceForHost(context.host);
 
   const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
   if (valid.length === 0) return [];
@@ -659,7 +658,7 @@ export async function getIssuesByNumbersForContext(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
-    gitHubRateLimitService.updateFromGraphQL(response);
+    rateLimits.updateFromGraphQL(response);
 
     const repo = response?.repository as Record<string, unknown> | undefined;
     for (const num of chunk) {
@@ -676,11 +675,6 @@ export async function getIssuesByNumbers(
   cwd: string,
   numbers: number[]
 ): Promise<Array<GitHubIssue | null>> {
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    throw new Error("GitHub token not configured. Set it in Settings.");
-  }
-
   const valid = numbers.filter((n) => typeof n === "number" && Number.isInteger(n) && n > 0);
   if (valid.length === 0) return [];
 

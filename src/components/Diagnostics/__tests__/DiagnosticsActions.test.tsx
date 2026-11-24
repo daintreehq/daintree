@@ -2,7 +2,8 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { EventsActions, LogsActions } from "../DiagnosticsActions";
+import { EventsActions, LogsActions, ProblemsActions } from "../DiagnosticsActions";
+import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 
 type NotifyPayload = {
   type: string;
@@ -28,6 +29,11 @@ vi.mock("@/lib/notify", () => ({
   notify: (payload: NotifyPayload) => mockNotify(payload),
 }));
 
+const mockLogError = vi.fn();
+vi.mock("@/utils/logger", () => ({
+  logError: (...args: unknown[]) => mockLogError(...args),
+}));
+
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
 }));
@@ -41,8 +47,6 @@ vi.mock("@/store", () => ({
   useErrorStore: () => ({ errors: [] }),
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-
 vi.mock("@/store/telemetryPreviewStore", () => ({
   useTelemetryPreviewStore: () => ({ active: false, events: [] }),
 }));
@@ -213,6 +217,7 @@ describe("LogsActions — auto-scroll toggle", () => {
 describe("EventsActions — ConfirmDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDispatch.mockResolvedValue({ ok: true, result: undefined });
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
   });
 
@@ -252,5 +257,123 @@ describe("EventsActions — ConfirmDialog", () => {
     // After dispatch resolves, dialog should close
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText("Clear events?")).toBeNull();
+    expect(mockNotify).not.toHaveBeenCalled();
+  });
+
+  it("keeps the confirmation open on a failed clear and retries from it", async () => {
+    mockDispatch.mockResolvedValue({ ok: false, error: { message: "bridge closed" } });
+    const clearDispatches = () =>
+      mockDispatch.mock.calls.filter((call) => call[0] === "eventInspector.clear");
+    render(<EventsActions />);
+
+    fireEvent.click(screen.getByText("Clear events"));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Couldn't clear events");
+    expect(screen.getByText("Clear events?")).toBeTruthy();
+    expect(mockLogError).toHaveBeenCalledWith(
+      "Failed to clear events",
+      expect.objectContaining({ message: "bridge closed" })
+    );
+    // The failure lives in the dialog, so nothing outside it can strand a retry.
+    expect(mockNotify).not.toHaveBeenCalled();
+    expect(clearDispatches()).toHaveLength(1);
+
+    let settleRetry!: (value: unknown) => void;
+    mockDispatch.mockReturnValue(
+      new Promise((resolve) => {
+        settleRetry = resolve;
+      })
+    );
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
+    // The old failure doesn't linger over the attempt that replaces it.
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await act(async () => settleRetry({ ok: true, result: undefined }));
+    await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
+    expect(clearDispatches()).toHaveLength(2);
+
+    fireEvent.click(screen.getByText("Clear events"));
+    const reopened = await screen.findByRole("alertdialog");
+    expect(within(reopened).queryByRole("alert")).toBeNull();
+    expect(
+      within(reopened).getByText("Clear events").closest("button")?.getAttribute("aria-disabled")
+    ).not.toBe("true");
+  });
+
+  it("drops the failure once the confirmation is cancelled", async () => {
+    mockDispatch.mockResolvedValue({ ok: false, error: { message: "bridge closed" } });
+    render(<EventsActions />);
+
+    fireEvent.click(screen.getByText("Clear events"));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Clear events"));
+    await screen.findByRole("alert");
+
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Cancel"));
+    await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
+
+    fireEvent.click(screen.getByText("Clear events"));
+    expect(await screen.findByText("Clear events?")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("locks the confirmation while the clear is in flight", async () => {
+    let settle!: (value: unknown) => void;
+    mockDispatch.mockReturnValue(
+      new Promise((resolve) => {
+        settle = resolve;
+      })
+    );
+    render(<EventsActions />);
+
+    fireEvent.click(screen.getByText("Clear events"));
+    const dialog = screen.getByRole("alertdialog");
+    const confirm = within(dialog).getByText("Clear events").closest("button")!;
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(confirm.getAttribute("aria-disabled")).toBe("true"));
+    fireEvent.click(confirm);
+    fireEvent.click(within(dialog).getByText("Cancel"));
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Clear events?")).toBeTruthy();
+
+    await act(async () => settle({ ok: true, result: undefined }));
+    await waitFor(() => expect(screen.queryByText("Clear events?")).toBeNull());
+  });
+});
+
+describe("ProblemsActions — Dismiss all", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDispatch.mockResolvedValue({ ok: true, result: undefined });
+    useDiagnosticsStore.setState({ tabFocusRequest: null });
+  });
+
+  it("asks the dock to take focus back once the button has nothing left to do", async () => {
+    render(<ProblemsActions />);
+    fireEvent.click(screen.getByText("Dismiss all"), { detail: 1 });
+
+    await waitFor(() =>
+      expect(useDiagnosticsStore.getState().tabFocusRequest).toEqual({ focusVisible: false })
+    );
+  });
+
+  it("asks for a visible ring when activated from the keyboard", async () => {
+    render(<ProblemsActions />);
+    fireEvent.click(screen.getByText("Dismiss all"), { detail: 0 });
+
+    await waitFor(() =>
+      expect(useDiagnosticsStore.getState().tabFocusRequest).toEqual({ focusVisible: true })
+    );
+  });
+
+  it("leaves focus alone when the dismissal fails", async () => {
+    mockDispatch.mockResolvedValue({ ok: false, error: { message: "nope" } });
+    render(<ProblemsActions />);
+    fireEvent.click(screen.getByText("Dismiss all"), { detail: 1 });
+
+    await waitFor(() => expect(mockDispatch).toHaveBeenCalled());
+    expect(useDiagnosticsStore.getState().tabFocusRequest).toBeNull();
   });
 });

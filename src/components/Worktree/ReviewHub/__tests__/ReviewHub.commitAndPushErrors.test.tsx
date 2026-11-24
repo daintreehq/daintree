@@ -300,11 +300,15 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   pushDestination: { remote: "origin", branch: "feature/test" },
   pullSource: { remote: "origin", branch: "feature/test" },
   repoState: "DIRTY",
+  repoOperationId: null,
   rebaseStep: null,
   rebaseTotalSteps: null,
   rebaseSequence: null,
   ...overrides,
 });
+
+/** What the approving pull-rebase confirm showed; the pull carries exactly this (#17188). */
+const PULL_REBASE_REVIEW = { branch: "feature/x", headOid: "f".repeat(40) };
 
 /**
  * `pullRebase` gates on the shared pull-rebase confirm (#8242), the same one
@@ -315,7 +319,7 @@ async function confirmPullRebase(): Promise<void> {
   await waitFor(() =>
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
   );
-  useGitPullRebaseConfirmStore.getState().resolveConfirmation(true);
+  useGitPullRebaseConfirmStore.getState().resolveConfirmation(PULL_REBASE_REVIEW);
 }
 
 describe("ReviewHub", () => {
@@ -969,7 +973,9 @@ describe("ReviewHub", () => {
         await Promise.resolve();
       });
 
-      await waitFor(() => expect(pullRebaseMock).toHaveBeenCalledWith(WORKTREE_PATH));
+      await waitFor(() =>
+        expect(pullRebaseMock).toHaveBeenCalledWith(WORKTREE_PATH, PULL_REBASE_REVIEW)
+      );
       await waitFor(() => expect(screen.queryByTestId("review-hub-push-error")).toBeNull());
       // refresh() called: once on initial load + once after commit (in
       // handleCommitAndPush) + once after pull-rebase success.
@@ -999,7 +1005,7 @@ describe("ReviewHub", () => {
         expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
       );
       expect(pullRebaseMock).not.toHaveBeenCalled();
-      useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+      useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
     });
 
     it("Pull-and-rebase failure surfaces conflict-unresolved through the banner", async () => {
@@ -1036,6 +1042,64 @@ describe("ReviewHub", () => {
           "conflict-unresolved"
         )
       );
+    });
+
+    it("a stale pull-rebase preview re-banners with a CTA that asks for a fresh confirm (#17188)", async () => {
+      pushMock.mockRejectedValue(
+        Object.assign(new Error("! [rejected]"), {
+          name: "GitOperationError",
+          gitReason: "push-rejected-outdated",
+          leaseSha: "abc123",
+          branchName: "feature/x",
+        })
+      );
+
+      await triggerCommitAndPush();
+      await screen.findByTestId("review-hub-push-error");
+
+      pullRebaseMock.mockRejectedValueOnce(
+        Object.assign(new Error("The branch changed since this pull and rebase was previewed"), {
+          name: "GitOperationError",
+          gitReason: "pull-rebase-review-stale",
+        })
+      );
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+      await act(async () => {
+        await confirmPullRebase();
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(screen.getByTestId("review-hub-push-error").getAttribute("data-reason")).toBe(
+          "pull-rebase-review-stale"
+        )
+      );
+      expect(pullRebaseMock).toHaveBeenCalledTimes(1);
+
+      // The CTA reopens the confirm for a fresh preview; it never retries the
+      // approval that just went stale.
+      await act(async () => {
+        fireEvent.click(screen.getByTestId("review-hub-push-error-cta"));
+        await Promise.resolve();
+      });
+      await waitFor(() =>
+        expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
+      );
+      expect(pullRebaseMock).toHaveBeenCalledTimes(1);
+
+      // The second pull carries the second approval, never the stale one.
+      const fresh = { branch: "feature/x", headOid: "a".repeat(40) };
+      pullRebaseMock.mockResolvedValueOnce(undefined);
+      await act(async () => {
+        useGitPullRebaseConfirmStore.getState().resolveConfirmation(fresh);
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(pullRebaseMock).toHaveBeenCalledTimes(2));
+      expect(pullRebaseMock).toHaveBeenLastCalledWith(WORKTREE_PATH, fresh);
     });
 
     it("Force-push CTA dispatches the action rather than pushing from this pane", async () => {
@@ -1285,12 +1349,14 @@ describe("ReviewHub", () => {
       expect(commitMock).toHaveBeenCalledTimes(1);
     });
 
-    describe("a confirmed Commit & push (#16790)", () => {
+    describe("a confirmed Commit & push (#16790, #17563)", () => {
       const DESTINATION = { remote: "origin", branch: "feature/test" };
+      const STAGED = "c".repeat(64);
       const listPushCommitsMock = vi.fn();
 
       beforeEach(() => {
-        // The tip the confirm shows is the one the default commit is made on.
+        // The tip and staged changes the confirm shows are the ones the default
+        // commit is made from.
         listPushCommitsMock.mockReset().mockResolvedValue({
           destination: DESTINATION,
           rangeBasis: "tracked",
@@ -1298,7 +1364,9 @@ describe("ReviewHub", () => {
           total: 0,
           behind: 0,
           headOid: COMMITTED.parentOids[0],
+          staged: { identity: STAGED, paths: ["src/index.ts"] },
         });
+        commitMock.mockResolvedValue({ ...COMMITTED, stagedIdentity: STAGED });
         Object.assign(window.electron.git, { listPushCommits: listPushCommitsMock });
       });
 
@@ -1325,6 +1393,11 @@ describe("ReviewHub", () => {
         await confirmCommitAndPush();
 
         await waitFor(() => expect(pushMock).toHaveBeenCalledTimes(1));
+        expect(commitMock).toHaveBeenCalledWith(WORKTREE_PATH, "feat: reviewed", {
+          branch: "feature/test",
+          headOid: COMMITTED.parentOids[0],
+          stagedIdentity: STAGED,
+        });
         expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH, undefined, undefined, {
           branch: "feature/test",
           headOid: COMMITTED.oid,
@@ -1334,8 +1407,13 @@ describe("ReviewHub", () => {
 
       it("keeps the commit but pushes nothing when it landed on a tip the confirm never showed", async () => {
         // An agent committed while the confirm was open, so the user's commit
-        // sits on top of history the preview never listed.
-        commitMock.mockResolvedValueOnce({ ...COMMITTED, parentOids: ["e".repeat(40)] });
+        // sits on top of history the preview never listed. Its contents match,
+        // so the parent is the only thing that differs.
+        commitMock.mockResolvedValueOnce({
+          ...COMMITTED,
+          parentOids: ["e".repeat(40)],
+          stagedIdentity: STAGED,
+        });
 
         await confirmCommitAndPush();
 
@@ -1364,6 +1442,45 @@ describe("ReviewHub", () => {
         });
         await waitFor(() =>
           expect(pushMock).toHaveBeenCalledWith(WORKTREE_PATH, undefined, undefined, fresh)
+        );
+      });
+
+      it("commits nothing and keeps the draft when the staged changes moved under the confirm", async () => {
+        // An agent restaged a listed file while the confirm was open: same
+        // branch, tip and file names, different contents. Main refuses.
+        commitMock.mockRejectedValueOnce(
+          new Error(
+            "[GitError|commit-review-stale||feature%2Ftest] This commit changed after it was reviewed: the staged changes are different. Nothing was committed or pushed. Commit and push again to review what is staged now."
+          )
+        );
+
+        await confirmCommitAndPush();
+
+        await waitFor(() => screen.getByText("Couldn't commit changes"));
+        expect(
+          screen.getByText(/^This commit changed after it was reviewed: the staged changes/)
+        ).toBeDefined();
+        expect(pushMock).not.toHaveBeenCalled();
+        expect(screen.queryByTestId("review-hub-push-error")).toBeNull();
+        expect((screen.getByLabelText("Commit message") as HTMLTextAreaElement).value).toBe(
+          "feat: reviewed"
+        );
+      });
+
+      it("keeps the commit but pushes nothing when it holds other staged changes than the confirm listed", async () => {
+        // Restaged between main's last check and git reading the index.
+        commitMock.mockResolvedValueOnce({ ...COMMITTED, stagedIdentity: "d".repeat(64) });
+
+        await confirmCommitAndPush();
+
+        const banner = await screen.findByTestId("review-hub-push-error");
+        expect(banner.getAttribute("data-reason")).toBe("push-review-stale");
+        // Says what actually happened to the local commit, not that the branch moved.
+        expect(banner.textContent).toMatch(/commit holds changes the review didn't show/);
+        expect(banner.textContent).not.toMatch(/branch moved/);
+        expect(pushMock).not.toHaveBeenCalled();
+        expect(screen.getByTestId("review-hub-push-error-cta").textContent?.trim()).toBe(
+          "Review push"
         );
       });
     });

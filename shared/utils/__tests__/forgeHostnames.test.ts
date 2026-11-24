@@ -3,6 +3,7 @@ import {
   extractHostname,
   hostnameMatchesAny,
   matchProviderForRemoteUrl,
+  normalizeConfiguredForgeHost,
   normalizeHostname,
   type ForgeProviderMatcher,
 } from "../forgeHostnames.js";
@@ -91,5 +92,40 @@ describe("matchProviderForRemoteUrl", () => {
 
   it("returns null for an empty matcher table", () => {
     expect(matchProviderForRemoteUrl("https://github.com/owner/repo.git", [])).toBe(null);
+  });
+});
+
+describe("normalizeConfiguredForgeHost", () => {
+  it.each([
+    ["github.example.com", "github.example.com"],
+    ["  GitHub.Example.com  ", "github.example.com"],
+    ["https://github.example.com", "github.example.com"],
+    ["https://github.example.com/", "github.example.com"],
+    ["https://github.example.com:443", "github.example.com"],
+    ["ghe", "ghe"],
+  ])("reads %j as %j", (input, expected) => {
+    expect(normalizeConfiguredForgeHost(input)).toBe(expected);
+  });
+
+  it.each([
+    ["", "empty"],
+    ["   ", "blank"],
+    ["http://github.example.com", "plain http"],
+    ["https://github.example.com:8443", "a custom port"],
+    ["github.example.com:8443", "a bare host with a port"],
+    ["https://github.example.com/team", "a path"],
+    ["https://github.example.com/?q=1", "a query"],
+    ["https://user:pw@github.example.com", "credentials"],
+    ["git@github.example.com:team/app.git", "a remote URL"],
+    ["*.example.com", "a wildcard"],
+    ["github example.com", "whitespace inside"],
+    ["www.ghe.example.com", "a www. host, which matching would read as ghe.example.com"],
+  ])("refuses %j (%s)", (input) => {
+    expect(normalizeConfiguredForgeHost(input)).toBeNull();
+  });
+
+  it("refuses anything that isn't a string", () => {
+    expect(normalizeConfiguredForgeHost(undefined)).toBeNull();
+    expect(normalizeConfiguredForgeHost(42)).toBeNull();
   });
 });

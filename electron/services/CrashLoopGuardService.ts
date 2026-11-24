@@ -88,8 +88,11 @@ export class CrashLoopGuardService {
     // reading state. Both are best-effort — boot must proceed even if cleanup
     // throws. Pruning before quarantine guarantees the current boot's
     // quarantined file (if any) is never pruned in the same run.
-    this.sweepStaleTmpFiles();
-    this.pruneCorruptedSiblings();
+    const entries = this.listUserData();
+    if (entries) {
+      this.sweepStaleTmpFiles(entries);
+      this.pruneCorruptedSiblings(entries);
+    }
 
     const state = this.readState();
     const now = Date.now();
@@ -297,13 +300,16 @@ export class CrashLoopGuardService {
    * the regex doesn't capture it). All errors are swallowed — boot must
    * proceed regardless.
    */
-  private sweepStaleTmpFiles(): void {
-    let entries: string[];
+  /** One listing shared by both boot sweeps; null when userData can't be read. */
+  private listUserData(): string[] | null {
     try {
-      entries = fs.readdirSync(this.userData);
+      return fs.readdirSync(this.userData);
     } catch {
-      return;
+      return null;
     }
+  }
+
+  private sweepStaleTmpFiles(entries: string[]): void {
     const now = Date.now();
     for (const entry of entries) {
       const match = TMP_FILE_RE.exec(entry);
@@ -329,13 +335,7 @@ export class CrashLoopGuardService {
    * timestamp embedded in the filename (descending), retain the newest N,
    * unlink the rest. Best-effort — boot must proceed even if cleanup fails.
    */
-  private pruneCorruptedSiblings(): void {
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(this.userData);
-    } catch {
-      return;
-    }
+  private pruneCorruptedSiblings(entries: string[]): void {
     const corrupted: Array<{ entry: string; ts: number }> = [];
     for (const entry of entries) {
       const match = CORRUPTED_FILE_RE.exec(entry);

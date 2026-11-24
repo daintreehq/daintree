@@ -68,6 +68,15 @@ function updatePanel(id: string, patch: Record<string, unknown>): void {
   for (const listener of [...panelListeners]) listener(terminalState, prevState);
 }
 
+/** Remove one panel the way the store would, telling every subscriber. */
+function removePanel(id: string): void {
+  const prevState = { ...terminalState, panelsById: { ...terminalState.panelsById } };
+  const panelsById = { ...terminalState.panelsById };
+  delete panelsById[id];
+  terminalState.panelsById = panelsById;
+  for (const listener of [...panelListeners]) listener(terminalState, prevState);
+}
+
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: usePanelStoreMock,
 }));
@@ -324,6 +333,108 @@ describe("useContextInjection", () => {
     expect(injectMock).not.toHaveBeenCalled();
   });
 
+  describe("panel-store watch", () => {
+    beforeEach(() => {
+      terminalState.panelsById = {
+        "term-agent": {
+          id: "term-agent",
+          worktreeId: "wt-1",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+        "term-2": { id: "term-2", worktreeId: "wt-1", agentState: "idle" },
+      };
+      terminalState.focusedId = "term-agent";
+      terminalState.panelIds = ["term-agent", "term-2"];
+    });
+
+    it("watches once, only while an injection waits, however many panes mount", async () => {
+      isAvailableMock.mockResolvedValue(true);
+      injectMock.mockResolvedValue({ fileCount: 1, stats: null });
+      const { result } = renderHook(() => useContextInjection("term-agent"));
+      const other = renderHook(() => useContextInjection("term-2"));
+      renderHook(() => useContextInjection());
+      expect(usePanelStoreMock.subscribe).not.toHaveBeenCalled();
+
+      let injectPromise!: Promise<void>;
+      act(() => {
+        injectPromise = result.current.inject("wt-1", "term-agent");
+      });
+      await vi.waitFor(() => expect(result.current.isPendingInjection).toBe(true));
+      expect(usePanelStoreMock.subscribe).toHaveBeenCalledTimes(1);
+
+      // A pane unmounting mid-wait leaves the wait watched.
+      other.unmount();
+      expect(panelListeners.size).toBe(1);
+
+      await act(async () => {
+        updatePanel("term-agent", { agentState: "idle" });
+        await injectPromise;
+      });
+      expect(result.current.isPendingInjection).toBe(false);
+      expect(injectMock).toHaveBeenCalledTimes(1);
+      // The run's own lock guard watched too, and is gone once it ends.
+      expect(panelListeners.size).toBe(0);
+    });
+
+    it("stops watching each time a waiting injection is cancelled", async () => {
+      const { result } = renderHook(() => useContextInjection("term-agent"));
+      for (let cycle = 0; cycle < 2; cycle++) {
+        let injectPromise!: Promise<void>;
+        act(() => {
+          injectPromise = result.current.inject("wt-1", "term-agent");
+        });
+        await vi.waitFor(() => expect(panelListeners.size).toBe(1));
+
+        await act(async () => {
+          cancelContextInjection();
+          await injectPromise;
+        });
+        expect(panelListeners.size).toBe(0);
+      }
+      expect(usePanelStoreMock.subscribe).toHaveBeenCalledTimes(2);
+    });
+
+    it("stops watching when the waiting pane is removed", async () => {
+      const { result } = renderHook(() => useContextInjection("term-agent"));
+      let injectPromise!: Promise<void>;
+      act(() => {
+        injectPromise = result.current.inject("wt-1", "term-agent");
+      });
+      await vi.waitFor(() => expect(panelListeners.size).toBe(1));
+
+      await act(async () => {
+        removePanel("term-agent");
+        await injectPromise;
+      });
+      expect(result.current.isPendingInjection).toBe(false);
+      expect(result.current.error).toBe("Terminal was deleted while waiting for agent");
+      expect(panelListeners.size).toBe(0);
+      expect(injectMock).not.toHaveBeenCalled();
+    });
+
+    it("never stays watching when the agent goes idle as the wait starts", async () => {
+      isAvailableMock.mockResolvedValue(true);
+      injectMock.mockResolvedValue({ fileCount: 1, stats: null });
+      usePanelStoreMock.subscribe.mockImplementationOnce((listener: PanelListener) => {
+        const agent = terminalState.panelsById["term-agent"];
+        terminalState.panelsById = {
+          ...terminalState.panelsById,
+          "term-agent": { ...agent, agentState: "idle" },
+        };
+        panelListeners.add(listener);
+        return () => panelListeners.delete(listener);
+      });
+      const { result } = renderHook(() => useContextInjection("term-agent"));
+
+      await act(async () => {
+        await result.current.inject("wt-1", "term-agent");
+      });
+      expect(injectMock).toHaveBeenCalledTimes(1);
+      expect(panelListeners.size).toBe(0);
+    });
+  });
+
   it("cancelling during the availability check aborts before any context is written", async () => {
     let resolveAvailable!: (value: boolean) => void;
     isAvailableMock.mockImplementation(
@@ -496,6 +607,7 @@ describe("useContextInjection", () => {
       });
 
       expect(result.current.isPendingInjection).toBe(false);
+      expect(panelListeners.size).toBe(0);
       expect(injectMock).not.toHaveBeenCalled();
       expect(addErrorMock).toHaveBeenCalledWith(
         expect.objectContaining({ message: `Context injection failed: ${LOCK_REFUSAL}` })

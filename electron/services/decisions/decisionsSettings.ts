@@ -49,6 +49,8 @@ export function defaultDecisionsSettings(): DecisionsSettings {
     askHumanAgents: [],
     terminalSnapshots: false,
     terminalSnapshotsConsentedAt: null,
+    holdPhonePushes: true,
+    agentStoppedPushes: false,
   };
 }
 
@@ -113,7 +115,13 @@ function recoveryKitRecord(
     relayOrigin,
     installationId: record.installationId,
     deviceId: record.deviceId,
+    ...(isKeyFileVersion(record.keys) ? { keys: record.keys } : {}),
   };
+}
+
+/** A key file version as `keyFileVersion` writes it: a SHA-256 in hex. */
+function isKeyFileVersion(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 }
 
 type RecordedRelay = Pick<DecisionsSettings, "relayOrigin" | "installationId" | "deviceId">;
@@ -231,6 +239,10 @@ export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
     // agreed to that; Decisions' own consent doesn't cover them.
     terminalSnapshots: value.terminalSnapshots === true && terminalSnapshotsConsentedAt !== null,
     terminalSnapshotsConsentedAt,
+    // On unless turned off: a setting saved before the field existed holds them.
+    holdPhonePushes: value.holdPhonePushes !== false,
+    // Off unless turned on: a setting saved before the field existed sends none.
+    agentStoppedPushes: value.agentStoppedPushes === true,
   };
 }
 

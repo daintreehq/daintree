@@ -411,10 +411,10 @@ export function ContextTab({
                   ) : (
                     <div className="flex items-center gap-2 flex-wrap">
                       <CheckCircle2 className="h-4 w-4 text-status-success" />
-                      <span className="text-sm font-medium text-text-primary">
-                        {testConfigResult.includedFiles} files would be included
+                      <span className="text-sm font-medium text-text-primary tabular-nums">
+                        {pluralize(testConfigResult.includedFiles, "file")} would be included
                       </span>
-                      <span className="text-xs text-text-secondary">
+                      <span className="text-xs text-text-secondary tabular-nums">
                         ({formatBytes(testConfigResult.includedSize)})
                       </span>
                       {testConfigResult.estimatedTokens !== undefined && (
@@ -425,8 +425,8 @@ export function ContextTab({
                     </div>
                   )}
                   {testConfigResult.excluded && testConfigResult.excluded.total > 0 && (
-                    <p className="text-xs text-text-secondary">
-                      {testConfigResult.excluded.total} excluded
+                    <p className="text-xs text-text-secondary tabular-nums">
+                      {testConfigResult.excluded.total.toLocaleString()} excluded
                       {describeTopExclusions(testConfigResult.excluded.byReason)}
                     </p>
                   )}
@@ -472,22 +472,24 @@ export function ContextTab({
                                 {file.path}
                               </span>
                             </TruncatedTooltip>
-                            <span className="text-text-secondary shrink-0">
+                            <span className="text-text-secondary shrink-0 tabular-nums">
                               {formatBytes(file.size)}
                             </span>
                           </li>
                         ))}
                       </ul>
                       {testConfigResult.files.length > FILE_PREVIEW_COUNT && (
-                        <button
+                        <Button
                           type="button"
+                          variant="link"
                           onClick={() => setShowAllFiles((value) => !value)}
-                          className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+                          aria-expanded={showAllFiles}
+                          className="text-xs"
                         >
                           {showAllFiles
                             ? "Show fewer"
                             : `Show ${testConfigResult.files.length - FILE_PREVIEW_COUNT} more`}
-                        </button>
+                        </Button>
                       )}
                     </div>
                   )}

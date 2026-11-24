@@ -138,7 +138,7 @@ export interface ShouldBlockResult {
 
 type StateChangeListener = (state: GitHubRateLimitPayload) => void;
 
-class GitHubRateLimitServiceImpl {
+export class GitHubRateLimitServiceImpl {
   private readonly states = new Map<string, BlockState>();
   private readonly listeners = new Set<StateChangeListener>();
   // Consecutive secondary-limit hits since the last `clear()` or 2xx response.
@@ -209,7 +209,11 @@ class GitHubRateLimitServiceImpl {
     const resetSeconds = parseIntOrNull(resetRaw);
     const resource = headers.get("x-ratelimit-resource") ?? GLOBAL_RESOURCE_KEY;
 
-    if (remaining === 0 && resetSeconds !== null) {
+    // `x-ratelimit-limit: 0` is a server with rate limiting turned off: a
+    // primary block recorded before that no longer holds either.
+    const limitless = parseIntOrNull(headers.get("x-ratelimit-limit")) === 0;
+    if (limitless) this.clearPrimaryBlock(resource);
+    if (remaining === 0 && resetSeconds !== null && !limitless) {
       this.markBlocked(
         "primary",
         resetSeconds * 1000 + PRIMARY_RESET_BUFFER_MS,
@@ -331,6 +335,14 @@ class GitHubRateLimitServiceImpl {
 
     const cost = typeof rateLimit.cost === "number" ? rateLimit.cost : null;
     const limit = typeof rateLimit.limit === "number" ? rateLimit.limit : null;
+    // A window with no limit describes no budget: an Enterprise Server with
+    // rate limiting turned off. Its `remaining: 0` is not an exhausted quota,
+    // and a budget read before the server turned limits off no longer holds.
+    if (limit !== null && limit <= 0) {
+      this.dropBudget();
+      this.clearPrimaryBlock("graphql");
+      return;
+    }
 
     if (queryLabel && cost !== null) {
       this._logGraphQLCost(queryLabel, cost, remaining, limit);
@@ -539,6 +551,15 @@ class GitHubRateLimitServiceImpl {
   }
 
   /** Drop any active block and budget state (token change, fresh 2xx, manual reset). */
+  /** Forget the observed GraphQL budget (and its throttle), keeping any block. */
+  private dropBudget(): void {
+    if (this._budgetState === null) return;
+    this._budgetState = null;
+    this._lastNotifiedMultiplier = 1;
+    this.clearBudgetResetTimer();
+    this.notifyListeners();
+  }
+
   clear(): void {
     this.consecutiveSecondaryHits = 0;
     const hadBudget = this._budgetState !== null;
@@ -576,6 +597,11 @@ class GitHubRateLimitServiceImpl {
   /** Test-only inspector for the observed GraphQL budget state. */
   _getBudgetStateForTests(): Readonly<BudgetState> | null {
     return this._budgetState;
+  }
+
+  /** Lift a primary (quota) block on `resource`; a secondary throttle stays. */
+  private clearPrimaryBlock(resource: string): void {
+    if (this.states.get(resource)?.kind === "primary") this.clearResource(resource);
   }
 
   private clearResource(resource: string): void {
@@ -716,4 +742,32 @@ export class GitHubRateLimitError extends Error {
   }
 }
 
+/** github.com's breaker, the one the host's rate-limit surfaces report. */
 export const gitHubRateLimitService = new GitHubRateLimitServiceImpl();
+
+/**
+ * Each GitHub Enterprise Server host gets a breaker of its own: its quota (or
+ * none, when the server turns rate limiting off) has nothing to do with
+ * github.com's, so a block on one must never stop requests to the other.
+ */
+const enterpriseRateLimitServices = new Map<string, GitHubRateLimitServiceImpl>();
+
+export function rateLimitServiceForHost(host: string): GitHubRateLimitServiceImpl {
+  const normalized = host.toLowerCase();
+  if (normalized === "github.com") return gitHubRateLimitService;
+  let service = enterpriseRateLimitServices.get(normalized);
+  if (!service) {
+    service = new GitHubRateLimitServiceImpl();
+    enterpriseRateLimitServices.set(normalized, service);
+  }
+  return service;
+}
+
+/** Drop a retired enterprise host's breaker, with its timers. */
+export function releaseRateLimitServiceForHost(host: string): void {
+  const normalized = host.toLowerCase();
+  const service = enterpriseRateLimitServices.get(normalized);
+  if (!service) return;
+  service.clear();
+  enterpriseRateLimitServices.delete(normalized);
+}

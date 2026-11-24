@@ -488,6 +488,7 @@ export class HostConnection {
           ...(state.restarting ? { restarting: true as const } : {}),
           ...(state.answered ? { answered: true as const } : {}),
           ...(state.retryAt === null ? { stoppedRetrying: true as const } : {}),
+          ...(state.retryAt === null && state.blocker ? { blocker: state.blocker } : {}),
         };
       case "version-mismatch":
         return { status: "version-mismatch", mismatch: state.mismatch, remote: state.remote };
@@ -1297,7 +1298,9 @@ export class RemoteHostManager {
   }
 
   private isSsh(hostId: HostId): boolean {
-    return this.options.registry.get(hostId)?.connection.kind === "ssh";
+    const kind = this.options.registry.get(hostId)?.connection.kind;
+    // A cloud machine is reached over ssh too, across the same networks.
+    return kind === "ssh" || kind === "cloud";
   }
 
   /** Watch the network while any ssh host's connection is wanted, and only then. */

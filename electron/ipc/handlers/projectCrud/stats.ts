@@ -13,12 +13,14 @@ import { store } from "../../../store.js";
 import { registerDeferredTask } from "../../../window/deferredInitQueue.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { canopyRefinementFor } from "../../../services/canopy/canopyRefinementSource.js";
+import { decisionAttentionFor } from "../../../services/runAnswerAttentionSource.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { isValidScratchId } from "../../../services/scratchStorePaths.js";
 import { CompletionAcknowledgementService } from "../../../services/CompletionAcknowledgementService.js";
 import { getWindowRegistry } from "../../../window/windowRef.js";
 import { getPowerPolicy, subscribePowerPolicy } from "../../../window/powerPolicy.js";
+import { loadedHelpSessionService } from "../../../services/helpSessionRuntime.js";
 import { BrowserWindow } from "electron";
 import {
   getFleetSnapshotServiceRef,
@@ -262,7 +264,6 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     // the palette would hydrate rows that still counted snoozed agents as
     // waiting, and the push path suppresses unchanged payloads, so nothing
     // would correct them until agent state next moved.
-    const { helpSessionService } = await import("../../../services/HelpSessionService.js");
     const runHandBack = runHandBackServiceInstance;
     const agentCounts = computeProjectAgentCounts(
       uniqueIds,
@@ -271,15 +272,17 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       runAttentionServiceInstance?.getActiveSnoozes(),
       // A hidden assistant reports nothing, exactly as the pushed status map
       // has it — the two paths answering differently is what #10989 was.
-      (id) => helpSessionService.isPanelVisible(id),
+      // Read without loading the service, as the pushed map reads it.
+      (id) => loadedHelpSessionService()?.isPanelVisible(id) ?? false,
       // Lets concurrent assistants be ranked by who needs the user,
       // rather than by whichever started last (#12108).
-      (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+      (terminalId) => loadedHelpSessionService()?.getSlotForTerminal(terminalId) ?? null,
       // Hand-back seen state and parks, as the pushed status map reads them.
       runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
       runAttentionServiceInstance?.getAll(),
       canopyRefinementFor,
-      runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined
+      runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined,
+      decisionAttentionFor
     );
 
     const result: BulkProjectStats = {};

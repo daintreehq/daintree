@@ -7,6 +7,7 @@ import { applyMergeObservation, sameMergeEpisode } from "./prMergeObservation.js
 import { createHardenedGit } from "../utils/hardenedGit.js";
 import { getForgeBridge } from "../workspace-host/forgeBridge.js";
 import { BatchLoader } from "../workspace-host/batchLoader.js";
+import { IssueLookupCoalescer } from "./IssueLookupCoalescer.js";
 import {
   PullRequestCiTracker,
   applyProbeHeadMove,
@@ -70,6 +71,9 @@ const UPDATE_DEBOUNCE_MS = 100;
 
 // Slow-cadence revalidation for resolved PRs to detect state changes (merged/closed)
 const RESOLVED_REVALIDATION_INTERVAL_MS = 90 * 1000; // 90 seconds
+// With no window focused nobody is reading the badges, and focus regain re-arms
+// at the focused cadence, so a merge or close only has to land eventually.
+const BLURRED_REVALIDATION_INTERVAL_MS = 5 * 60 * 1000;
 
 // Adaptive boost: when any resolved PR has CI in-flight (pending), drop
 // the revalidation cadence so users see green/red transitions promptly. 30s is
@@ -137,6 +141,7 @@ class PullRequestService {
   private revalidationsRunning = 0;
   private earlyRevalidationAt: number | undefined;
   private pollIntervalMs: number = FOCUSED_POLL_INTERVAL_MS;
+  private focused = true;
   private cwd: string = "";
   private isPolling: boolean = false;
   private consecutiveErrors: number = 0;
@@ -150,9 +155,15 @@ class PullRequestService {
   // change must not be handed its result.
   private refreshEpoch = 0;
   private refreshInFlightEpoch = -1;
+  // Whether the pass in flight keeps issue backoff. An explicit refresh can't
+  // be answered by such a pass: it may already have read the verdicts the
+  // explicit refresh just dropped.
+  private refreshInFlightPreservesIssueBackoff = false;
   private lastCheckAt: number = Number.NEGATIVE_INFINITY;
   private startupDelayTimer: NodeJS.Timeout | null = null;
   private startupDelayResolve: (() => void) | null = null;
+  // The current start()'s first check, which a repeat start() joins.
+  private initialCheck: Promise<void> = Promise.resolve();
 
   get isEnabled(): boolean {
     return this.nextRetryAt === 0 || Date.now() >= this.nextRetryAt;
@@ -165,6 +176,13 @@ class PullRequestService {
   // title still failed (or was never fetched) remains eligible for retry on
   // the next polling cycle (#8851).
   private issueTitleFetchedWorktrees = new Set<string>();
+  // One lookup per issue however many worktrees name it, and a number the
+  // forge didn't find waits out a growing delay instead of being asked about
+  // on every poll (#17070).
+  private readonly issueLookups = new IssueLookupCoalescer();
+  // The binding (branch + lookup key) each worktree was last told is not found,
+  // so a remembered verdict is announced once rather than on every poll.
+  private issueNotFoundAnnounced = new Map<string, string>();
   private detectedPRs = new Map<string, InternalLinkedPR>();
   // Worktrees whose authoritative "no PR" has already been announced, keyed to
   // the branch + provider it was decided for. A branch without a PR is never
@@ -400,6 +418,7 @@ class PullRequestService {
 
   private handleWorktreeRemove({ worktreeId }: { worktreeId: string }): void {
     this.announcedNoPR.delete(worktreeId);
+    this.issueNotFoundAnnounced.delete(worktreeId);
     if (this.candidates.has(worktreeId) || this.detectedPRs.has(worktreeId)) {
       const branchName = this.candidates.get(worktreeId)?.branchName;
       const clearedProviderId = this.detectedPRs.get(worktreeId)?.providerId;
@@ -595,6 +614,17 @@ class PullRequestService {
     this.providerNamespacedId = null;
     this.repoRef = null;
     this.disposeLoaders();
+    this.clearIssueLookups();
+  }
+
+  /**
+   * Forget remembered issue verdicts and detach pending lookups, so an answer
+   * given under a previous provider, repo or credential is neither reused nor
+   * delivered.
+   */
+  private clearIssueLookups(): void {
+    this.issueLookups.clear();
+    this.issueNotFoundAnnounced.clear();
   }
 
   /**
@@ -770,7 +800,8 @@ class PullRequestService {
    * synchronised PR refetch burst. Pass `startupDelayMs = 0` to check
    * immediately (focus-restore / resume(), which is not a crash-recovery
    * path). The returned promise resolves after the (delayed) first check, or
-   * immediately if stop()/reset() cancels the pending delay.
+   * immediately if stop()/reset() cancels the pending delay. A repeat call
+   * while polling joins that same first check.
    */
   public start(startupDelayMs?: number): Promise<void> {
     if (this.isPolling) {
@@ -778,7 +809,7 @@ class PullRequestService {
       // the project-switch hot path, where each sync log write adds main-thread
       // I/O. Diagnostic only, so keep it at debug.
       logDebug("PullRequestService already polling");
-      return Promise.resolve();
+      return this.initialCheck;
     }
 
     if (!this.cwd) {
@@ -802,10 +833,11 @@ class PullRequestService {
     });
 
     if (delay <= 0) {
-      return this.runInitialCheck();
+      this.initialCheck = this.runInitialCheck();
+      return this.initialCheck;
     }
 
-    return new Promise<void>((resolve) => {
+    this.initialCheck = new Promise<void>((resolve) => {
       this.startupDelayResolve = resolve;
       this.startupDelayTimer = setTimeout(() => {
         this.startupDelayTimer = null;
@@ -813,6 +845,7 @@ class PullRequestService {
         void this.runInitialCheck().finally(resolve);
       }, delay);
     });
+    return this.initialCheck;
   }
 
   /**
@@ -895,14 +928,29 @@ class PullRequestService {
    * disposes the first's in-flight coalescers mid-cycle and
    * `resolvePRsForBranches()` absorbs the disposal as `null`, silently skipping
    * those branches on the very click that promised fresh data.
+   *
+   * `preserveIssueBackoff` is for passes nobody asked for (window focus, wake):
+   * they keep a not-found issue number's retry delay, which an explicit refresh
+   * drops so the number is looked up again now. Lookups already in flight are
+   * left to finish either way, so joining a pass that started them still
+   * delivers their titles; an explicit refresh never joins a pass that kept
+   * the delays, and runs after it instead.
    */
-  public refresh(): Promise<void> {
+  public refresh(options?: { preserveIssueBackoff?: boolean }): Promise<void> {
+    const preserveIssueBackoff = options?.preserveIssueBackoff === true;
+    if (!preserveIssueBackoff) this.issueLookups.forgetVerdicts();
     const existing = this.refreshInFlight;
     // Join only a pass that still reflects the current configuration. Without
     // the epoch check, `updateForgeSettings()`'s follow-up refresh would be
     // handed a pass that resolved the PREVIOUS provider, and the new one would
     // never get a detection cycle.
-    if (existing && this.refreshInFlightEpoch === this.refreshEpoch) return existing;
+    if (
+      existing &&
+      this.refreshInFlightEpoch === this.refreshEpoch &&
+      (preserveIssueBackoff || !this.refreshInFlightPreservesIssueBackoff)
+    ) {
+      return existing;
+    }
     const epoch = this.refreshEpoch;
     // A superseded pass is chained after, not run alongside: two overlapping
     // passes are exactly the disposal race this single-flight exists to remove.
@@ -915,6 +963,7 @@ class PullRequestService {
       });
     this.refreshInFlight = run;
     this.refreshInFlightEpoch = epoch;
+    this.refreshInFlightPreservesIssueBackoff = preserveIssueBackoff;
     return run;
   }
 
@@ -978,6 +1027,7 @@ class PullRequestService {
     this.candidates.clear();
     this.resolvedWorktrees.clear();
     this.issueTitleFetchedWorktrees.clear();
+    this.clearIssueLookups();
     this.detectedPRs.clear();
     this.announcedNoPR.clear();
     this.consecutiveErrors = 0;
@@ -1003,10 +1053,11 @@ class PullRequestService {
   /**
    * Switch poll cadence based on global window-focus state. Focused = ~30s
    * (snappy enough that PR transitions surface promptly), blurred = ~120s
-   * (conserves GitHub API quota during long background sessions). Called
-   * from main via the workspace-host IPC pipe; powerMonitor.ts is the focus
-   * aggregator and idempotency guard, so this method is only invoked on a
-   * real focus-state transition.
+   * (conserves GitHub API quota during long background sessions). Resolved-PR
+   * revalidation follows the same signal. Called from main via the
+   * workspace-host IPC pipe; powerMonitor.ts is the focus aggregator and
+   * idempotency guard, so this method is only invoked on a real focus-state
+   * transition.
    *
    * On focus regain, also fires an immediate catch-up poll throttled to
    * FOCUS_CATCHUP_THROTTLE_MS (5s) — protects against rapid alt-tabbing
@@ -1017,6 +1068,11 @@ class PullRequestService {
   public setFocusCadence(focused: boolean): void {
     const targetInterval = focused ? FOCUSED_POLL_INTERVAL_MS : BLURRED_POLL_INTERVAL_MS;
     this.updatePollInterval(targetInterval);
+    const focusChanged = focused !== this.focused;
+    this.focused = focused;
+    if (focusChanged && this.isPolling) {
+      this.scheduleRevalidation();
+    }
 
     if (!focused || !this.isPolling) {
       return;
@@ -1236,7 +1292,8 @@ class PullRequestService {
    * `delayMs` asks for the next tick sooner than the cadence would. The
    * request is a deadline every later reschedule honours until a tick runs, so
    * a cadence change in between can't push it back out. A pass already under
-   * way reschedules when it settles, so it isn't raced by a second one.
+   * way re-arms when it settles, so nothing scheduled meanwhile can race it
+   * with a second one.
    */
   private scheduleRevalidation(delayMs?: number): void {
     if (!this.isPolling) {
@@ -1246,12 +1303,16 @@ class PullRequestService {
     if (delayMs !== undefined) {
       const at = Date.now() + delayMs;
       this.earlyRevalidationAt = Math.min(this.earlyRevalidationAt ?? at, at);
-      if (this.revalidationsRunning > 0) return;
+      // Blurred, the deadline waits for focus regain, and the armed tick keeps
+      // its time rather than being pushed back by every push.
+      if (!this.focused && this.revalidationTimer) return;
     }
 
     if (this.revalidationTimer) {
       clearTimeout(this.revalidationTimer);
+      this.revalidationTimer = null;
     }
+    if (this.revalidationsRunning > 0) return;
 
     if (!this.isEnabled) {
       const delay = this.nextRetryAt - Date.now();
@@ -1269,12 +1330,13 @@ class PullRequestService {
     if (this.boostExpiresAt !== null && this.boostExpiresAt <= Date.now()) {
       this.boostExpiresAt = null;
     }
-    const cadenceMs =
-      this.boostExpiresAt !== null
+    const cadenceMs = !this.focused
+      ? BLURRED_REVALIDATION_INTERVAL_MS
+      : this.boostExpiresAt !== null
         ? this.getBoostRevalidationIntervalMs()
         : RESOLVED_REVALIDATION_INTERVAL_MS;
     const intervalMs =
-      this.earlyRevalidationAt !== undefined && this.revalidationsRunning === 0
+      this.focused && this.earlyRevalidationAt !== undefined
         ? Math.min(Math.max(0, this.earlyRevalidationAt - Date.now()), cadenceMs)
         : cadenceMs;
 
@@ -1650,7 +1712,9 @@ class PullRequestService {
    * Fetch one candidate's issue title and announce it (#8851). A number an
    * issues provider claimed from the branch name is looked up through that
    * provider by its key, never as the code forge's issue of the same number
-   * (#13744). Failures are silent; the next cycle retries.
+   * (#13744). Worktrees naming the same issue share one lookup, and a number
+   * the forge didn't find, or couldn't look up, isn't asked about again until
+   * its retry time (#17070). Failures are silent.
    */
   private fetchIssueTitle(lookup: {
     worktreeId: string;
@@ -1662,25 +1726,54 @@ class PullRequestService {
     repo: RepoRef;
   }): Promise<void> {
     const { worktreeId, issueNumber, issueClaim, branchAtFetchStart, providerId, repo } = lookup;
-    const bridge = getForgeBridge();
-    const request = issueClaim
-      ? bridge.getIssueForLink({ projectPath: this.cwd, ...issueClaim })
-      : bridge.getIssue(providerId, repo, issueNumber);
-    return request
-      .then((issue) => {
+    const key = issueClaim
+      ? JSON.stringify(["claim", issueClaim.issueProviderId, issueClaim.issueKey])
+      : JSON.stringify([
+          "forge",
+          providerId,
+          repo.host.toLowerCase(),
+          repo.owner,
+          repo.repo,
+          issueNumber,
+        ]);
+    const generation = this.issueLookups.generation;
+    const projectPath = this.cwd;
+    return this.issueLookups
+      .lookup(key, () => {
+        const bridge = getForgeBridge();
+        return issueClaim
+          ? bridge.getIssueForLink({ projectPath, ...issueClaim })
+          : bridge.getIssue(providerId, repo, issueNumber);
+      })
+      .then((result) => {
+        // The provider or repo changed while the lookup ran, or before it
+        // started: the caller's snapshot can predate an invalidation that
+        // landed during one of its own awaits.
+        if (generation !== this.issueLookups.generation) return;
+        if (
+          this.providerNamespacedId !== providerId ||
+          this.repoRef?.host !== repo.host ||
+          this.repoRef?.owner !== repo.owner ||
+          this.repoRef?.repo !== repo.repo
+        ) {
+          return;
+        }
         // Branch-token check (lesson #2243): if the worktree's branch changed
         // during the fetch, the result is stale — don't write the fetched
         // marker, let the next pass retry against the new branch's issue.
         const current = this.candidates.get(worktreeId);
-        if (current?.branchName !== branchAtFetchStart) return;
+        if (!current || current.branchName !== branchAtFetchStart) return;
+        if (current.issueNumber !== issueNumber) return;
         if (
-          current?.issueClaim?.issueProviderId !== issueClaim?.issueProviderId ||
-          current?.issueClaim?.issueKey !== issueClaim?.issueKey
+          current.issueClaim?.issueProviderId !== issueClaim?.issueProviderId ||
+          current.issueClaim?.issueKey !== issueClaim?.issueKey
         ) {
           return;
         }
-        if (issue) {
+        if (result.kind === "found") {
+          const issue = result.issue;
           this.issueTitleFetchedWorktrees.add(worktreeId);
+          this.issueNotFoundAnnounced.delete(worktreeId);
           events.emit("sys:issue:detected", {
             worktreeId,
             issueNumber,
@@ -1699,10 +1792,14 @@ class PullRequestService {
               : {}),
             timestamp: Date.now(),
           });
-        } else {
-          // Null = forge confirmed not-found. Leave eligible for retry (no
-          // marker added) so private/transient cases get another chance on
-          // the next polling cycle.
+        } else if (result.kind === "missing") {
+          // Null = forge confirmed not-found. No fetched marker: the number
+          // stays eligible, so private/transient cases get another chance once
+          // its retry time comes round. A remembered verdict is announced once
+          // per binding, not on every poll that reads it.
+          const binding = `${branchAtFetchStart ?? ""}\0${key}`;
+          if (result.cached && this.issueNotFoundAnnounced.get(worktreeId) === binding) return;
+          this.issueNotFoundAnnounced.set(worktreeId, binding);
           events.emit("sys:issue:not-found", {
             worktreeId,
             issueNumber,

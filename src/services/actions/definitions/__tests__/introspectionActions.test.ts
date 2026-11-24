@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
+import { ACTIONS_LIST_WALK_LIMIT } from "@shared/config/mcpIntrospection";
 import type { ActionDefinition, ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { actionService } from "@/services/ActionService";
 import type { AnyActionDefinition } from "../../actionTypes";
@@ -56,7 +57,6 @@ vi.mock("@/services/ActionService", () => ({
   },
 }));
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => ({}) } }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: { getState: () => ({}) } }));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: { getState: () => ({}) } }));
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: { getState: () => ({}) },
@@ -457,6 +457,31 @@ describe("actions.list", () => {
     );
     // And no caller can ask for a page big enough to hold the whole registry.
     expect(listArgsSchema().safeParse({ limit: source.length }).success).toBe(false);
+  });
+
+  it("answers main's own walk with the registry in one page, from the offset asked (#17036)", async () => {
+    const source = makeEntries(OVERSIZED);
+    vi.mocked(actionService.list).mockReturnValueOnce(source).mockReturnValueOnce(source);
+    const def = registry.get("actions.list")!();
+    const walk = { ...stubCtx, actionsListWalk: true };
+
+    const whole = (await def.run({ limit: 100 } as never, walk)) as ListPage;
+    expect(whole.actions.map((a) => a.id)).toEqual(source.map((a) => a.id));
+    expect(whole.limit).toBe(ACTIONS_LIST_WALK_LIMIT);
+    expect(whole.hasMore).toBe(false);
+
+    const tail = (await def.run({ limit: 100, offset: 450 } as never, walk)) as ListPage;
+    expect(tail.actions.map((a) => a.id)).toEqual(source.slice(450).map((a) => a.id));
+  });
+
+  it("keeps the caller's own limit on every dispatch that isn't main's walk", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce(makeEntries(OVERSIZED));
+
+    const page = await listPage({ limit: 100 });
+
+    expect(page.actions).toHaveLength(100);
+    expect(page.limit).toBe(100);
+    expect(page.hasMore).toBe(true);
   });
 
   it("caps pages well below the size of the real action registry", async () => {

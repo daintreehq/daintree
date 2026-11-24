@@ -6,7 +6,6 @@ import { buildGlobalEnvPreloadBindings } from "../handlers/globalEnv.preload.js"
 import { buildHelpPreloadBindings } from "../handlers/help.preload.js";
 import { buildAccessibilityPreloadBindings } from "../handlers/accessibility.preload.js";
 import { buildEventInspectorPreloadBindings } from "../handlers/eventInspector.preload.js";
-import { buildPortalPreloadBindings } from "../handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "../handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "../handlers/plugin.preload.js";
 import { buildScratchPreloadBindings } from "../handlers/scratch/preload.js";
@@ -100,19 +99,6 @@ describe("leaf preload namespace bindings", () => {
     });
   });
 
-  describe("portal", () => {
-    it("routes create(payload) to portal:create with the payload forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue(undefined);
-      const bindings = buildPortalPreloadBindings(invoke);
-
-      const payload = { tabId: "t1", url: "https://example.com" };
-      await bindings.create(payload);
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("portal:create", payload);
-    });
-  });
-
   describe("devPreview", () => {
     it("routes ensure(request) to dev-preview:ensure with the request forwarded", async () => {
       const invoke = vi.fn().mockResolvedValue({ status: "running" });
@@ -129,6 +115,20 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("dev-preview:ensure", request);
+    });
+
+    it("routes a confirmation opening's sizes and its cancel to their channels", async () => {
+      const invoke = vi.fn().mockResolvedValue(undefined);
+      const bindings = buildDevPreviewPreloadBindings(invoke);
+
+      const request = { panelId: "panel1", projectId: "p1", sessionId: "s1" };
+      await bindings.getDestructivePreviewSizes(request);
+      await bindings.cancelDestructivePreviewSizes({ sessionId: "s1" });
+
+      expect(invoke.mock.calls).toEqual([
+        ["dev-preview:get-destructive-preview-sizes", request],
+        ["dev-preview:cancel-destructive-preview-sizes", { sessionId: "s1" }],
+      ]);
     });
   });
 
@@ -431,6 +431,24 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("onboarding:checklist-mark-item", "openedProject");
+    });
+
+    it("routes reopenChecklist() and returns main's checklist", async () => {
+      const state = {
+        dismissed: false,
+        celebrationShown: false,
+        items: {
+          openedProject: true,
+          launchedAgent: false,
+          createdWorktree: false,
+          ranSecondParallelAgent: false,
+        },
+      };
+      const invoke = vi.fn().mockResolvedValue(state);
+      const bindings = buildOnboardingPreloadBindings(invoke);
+
+      await expect(bindings.reopenChecklist()).resolves.toBe(state);
+      expect(invoke).toHaveBeenCalledWith("onboarding:checklist-reopen");
     });
   });
 });

@@ -6,6 +6,8 @@ const {
   listMock,
   dispatchMock,
   getDisplayComboMock,
+  getEffectiveComboMock,
+  getMock,
   getContextMock,
   notifyMock,
   selfNotifiesMock,
@@ -13,7 +15,9 @@ const {
 } = vi.hoisted(() => ({
   listMock: vi.fn(),
   dispatchMock: vi.fn(),
-  getDisplayComboMock: vi.fn(() => ""),
+  getDisplayComboMock: vi.fn<(id: string) => string>(() => ""),
+  getEffectiveComboMock: vi.fn<(id: string) => string | undefined>(() => undefined),
+  getMock: vi.fn<(id: string) => unknown>(() => null),
   getContextMock: vi.fn(),
   notifyMock: vi.fn(),
   selfNotifiesMock: vi.fn<(id: string) => boolean>(() => false),
@@ -23,6 +27,7 @@ const {
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     list: listMock,
+    get: getMock,
     dispatch: dispatchMock,
     getContext: getContextMock,
     selfNotifiesOnExecutionError: selfNotifiesMock,
@@ -37,7 +42,7 @@ vi.mock("@/lib/notify", () => ({
 vi.mock("@/services/KeybindingService", () => ({
   keybindingService: {
     getDisplayCombo: getDisplayComboMock,
-    getEffectiveCombo: () => undefined,
+    getEffectiveCombo: getEffectiveComboMock,
   },
 }));
 
@@ -51,6 +56,7 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
 import { useActionPalette } from "../useActionPalette";
+import { consumeDeferredPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { getActionCategoryLabel, orderActionCategories } from "@/config/actionCategoryOrder";
 import { ConfirmationStagedError } from "@/services/actions/confirmationStaged";
 import { publishPluginPaletteGates } from "@/services/plugin/pluginPaletteGating";
@@ -105,9 +111,13 @@ describe("useActionPalette", () => {
     // per-test so a stale `true` can't leak across tests and silence one.
     selfNotifiesMock.mockReturnValue(false);
     paletteArgsMock.mockReturnValue(null);
+    getMock.mockReturnValue(null);
+    getDisplayComboMock.mockReturnValue("");
+    getEffectiveComboMock.mockReturnValue(undefined);
     usePaletteStore.setState({ activePaletteId: null });
     useActionMruStore.setState({ actionUsageEntries: new Map() });
     useActionPrefsStore.setState({ pinnedActionIds: [], hiddenActionIds: [] });
+    consumeDeferredPaletteFocusRestore();
   });
 
   it("tolerates malformed action manifest entries with missing title", async () => {
@@ -557,6 +567,46 @@ describe("useActionPalette", () => {
     expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
   });
 
+  // The palette refocuses its opener ~100ms after closing; a command that
+  // opened a dialog or focused a panel by then must keep the keyboard (#16923).
+  it("hands the palette's focus restore to the command it runs", async () => {
+    dispatchMock.mockResolvedValue({ ok: true });
+    listMock.mockReturnValue([makeEntry("a.action", "Alpha")]);
+    const { result } = renderHook(() => useActionPalette());
+    act(() => result.current.open());
+    act(() => result.current.setQuery("alpha"));
+    await waitFor(() => expect(result.current.results.length).toBe(1));
+
+    act(() => result.current.executeAction(result.current.results[0]!));
+
+    expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
+    expect(result.current.isOpen).toBe(false);
+    // The hand-off runs the palette's guarded restore, which only refocuses the
+    // opener while nothing else holds the keyboard.
+    const receive = consumeDeferredPaletteFocusRestore();
+    expect(receive).not.toBeNull();
+    const restore = vi.fn();
+    receive!(restore);
+    expect(restore).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the opener restore for a dismissal and for a disabled row", async () => {
+    listMock.mockReturnValue([makeEntry("a.off", "Alpha off", false)]);
+    const { result } = renderHook(() => useActionPalette());
+    act(() => result.current.open());
+    act(() => result.current.setQuery("alpha"));
+    await waitFor(() => expect(result.current.results.length).toBe(1));
+
+    act(() => result.current.executeAction(result.current.results[0]!));
+    expect(result.current.isOpen).toBe(true);
+    expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+
+    act(() => result.current.close());
+    expect(result.current.isOpen).toBe(false);
+    expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   // The palette owns a generic `{ ok: false }` failure toast, but two kinds of
   // action self-notify and only on EXECUTION_ERROR: plugin actions (via
   // usePluginActions) and built-ins flagged `selfNotifiesOnExecutionError`.
@@ -717,6 +767,226 @@ describe("useActionPalette", () => {
       expect.anything(),
       expect.anything()
     );
+  });
+
+  describe("redirect rows", () => {
+    async function openOn(query: string) {
+      const hook = renderHook(() => useActionPalette());
+      act(() => hook.result.current.open());
+      act(() => hook.result.current.setQuery(query));
+      await waitFor(() => expect(hook.result.current.results.length).toBeGreaterThan(0), {
+        timeout: 2000,
+      });
+      return hook;
+    }
+
+    function rowFor(rows: readonly { id: string }[], id: string) {
+      const row = rows.find((r) => r.id === id);
+      if (!row) throw new Error(`no row for ${id}`);
+      return row as ReturnType<typeof useActionPalette>["results"][number];
+    }
+
+    it("greys a redirect row out with its target's reason when the target can't run", async () => {
+      dispatchMock.mockResolvedValue({ ok: true });
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+        {
+          ...makeEntry("worktree.openReviewHub", "Open Review Hub", false),
+          disabledReason: "Select a worktree first",
+        },
+      ]);
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(false);
+      expect(row.disabledReason).toBe("Select a worktree first");
+      expect(row.title).toBe("Commit");
+
+      act(() => result.current.executeAction(row));
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves a redirect row runnable when only its headless source is disabled", async () => {
+      dispatchMock.mockResolvedValue({ ok: true });
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit", false),
+          disabledReason: "Nothing staged",
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+        makeEntry("worktree.openReviewHub", "Open Review Hub"),
+      ]);
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(true);
+      expect(row.disabledReason).toBeUndefined();
+
+      act(() => result.current.executeAction(row));
+      expect(dispatchMock).toHaveBeenCalledWith("worktree.openReviewHub", {}, { source: "user" });
+    });
+
+    it("carries a target's palette-only precondition onto the redirect row", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+        {
+          ...makeEntry("worktree.openReviewHub", "Open Review Hub"),
+          paletteHidden: true,
+          paletteDisabled: true,
+          paletteDisabledReason: "Open a worktree first",
+        },
+      ]);
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(false);
+      expect(row.disabledReason).toBe("Open a worktree first");
+    });
+
+    it("reads a target that list() leaves out through get()", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+      ]);
+      getMock.mockImplementation((id) =>
+        id === "worktree.openReviewHub"
+          ? {
+              ...makeEntry("worktree.openReviewHub", "Open Review Hub", false),
+              disabledReason: "No worktree here",
+            }
+          : null
+      );
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(false);
+      expect(row.disabledReason).toBe("No worktree here");
+    });
+
+    it("shows the target's shortcut when the redirect row has none of its own", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("worktree.createWithRecipe", "Create managed worktree"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.createDialog.open",
+        },
+        makeEntry("worktree.createDialog.open", "New worktree"),
+      ]);
+      getEffectiveComboMock.mockImplementation((id) =>
+        id === "worktree.createDialog.open" ? "Cmd+K Cmd+N" : undefined
+      );
+      getDisplayComboMock.mockImplementation((id) =>
+        id === "worktree.createDialog.open" ? "⌘K ⌘N" : ""
+      );
+
+      const { result } = await openOn("managed");
+      const row = rowFor(result.current.results, "worktree.createWithRecipe");
+      expect(row.shortcut).toBe("Cmd+K Cmd+N");
+      expect(row.keybinding).toBe("⌘K ⌘N");
+    });
+
+    it("leaves a row whose target is gone runnable, so dispatch reports it", async () => {
+      dispatchMock.mockResolvedValue({
+        ok: false,
+        error: { code: "NOT_FOUND", message: "Action not found" },
+      });
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit", false),
+          disabledReason: "Nothing staged",
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+      ]);
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.enabled).toBe(true);
+      expect(row.disabledReason).toBeUndefined();
+
+      act(() => result.current.executeAction(row));
+      expect(dispatchMock).toHaveBeenCalledWith("worktree.openReviewHub", {}, { source: "user" });
+      await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
+    });
+
+    it("keeps a redirect row's own shortcut, which also runs the target", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("git.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "worktree.openReviewHub",
+        },
+        makeEntry("worktree.openReviewHub", "Open Review Hub"),
+      ]);
+      getEffectiveComboMock.mockImplementation((id) =>
+        id === "git.commit" ? "Cmd+K Cmd+C" : id === "worktree.openReviewHub" ? "Cmd+R" : undefined
+      );
+      getDisplayComboMock.mockImplementation((id) =>
+        id === "git.commit" ? "⌘K ⌘C" : id === "worktree.openReviewHub" ? "⌘R" : ""
+      );
+
+      const { result } = await openOn("commit");
+      const row = rowFor(result.current.results, "git.commit");
+      expect(row.shortcut).toBe("Cmd+K Cmd+C");
+      expect(row.keybinding).toBe("⌘K ⌘C");
+    });
+  });
+
+  describe("palette subtitles", () => {
+    const AGENT_DESCRIPTION =
+      "Rotate the widget. Name the zebrafish target explicitly, or the call fails.";
+
+    it("shows and searches the subtitle, never the MCP description behind it", async () => {
+      listMock.mockReturnValue([
+        {
+          ...makeEntry("widget.rotate", "Rotate widget"),
+          description: AGENT_DESCRIPTION,
+          paletteDescription: "Turn the focused widget a quarter",
+        },
+      ]);
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("quarter"));
+      await waitFor(() =>
+        expect(result.current.results.map((r) => r.id)).toEqual(["widget.rotate"])
+      );
+      expect(result.current.results[0]!.description).toBe("Turn the focused widget a quarter");
+
+      act(() => result.current.setQuery("zebrafish"));
+      await waitFor(() => expect(result.current.results).toEqual([]));
+    });
+
+    it("falls back to the description when no subtitle is declared or it is blank", async () => {
+      listMock.mockReturnValue([
+        { ...makeEntry("widget.rotate", "Rotate widget"), description: AGENT_DESCRIPTION },
+        {
+          ...makeEntry("widget.flip", "Flip widget"),
+          description: "Flip the zebrafish widget",
+          paletteDescription: "   ",
+        },
+      ]);
+
+      const { result } = renderHook(() => useActionPalette());
+      act(() => result.current.open());
+      act(() => result.current.setQuery("zebrafish"));
+      await waitFor(() => expect(result.current.results).toHaveLength(2));
+      const byId = new Map(result.current.results.map((r) => [r.id, r.description]));
+      expect(byId.get("widget.rotate")).toBe(AGENT_DESCRIPTION);
+      expect(byId.get("widget.flip")).toBe("Flip the zebrafish widget");
+    });
   });
 
   it("renders a requireContext (paletteDisabled) row as disabled-with-reason and no-ops on Enter", async () => {
@@ -1589,6 +1859,31 @@ describe("useActionPalette", () => {
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
+    it("takes a redirect row's enablement from the plugin command it runs", async () => {
+      publishPluginPaletteGates([["acme.review", { enablement: "acme.ready" }]]);
+      dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+      const { result } = await openWith([
+        {
+          ...makeEntry("builtin.commit", "Commit"),
+          requiresArgs: true,
+          paletteRedirectTo: "acme.review",
+        },
+        pluginCmd("acme.review", "Review"),
+      ]);
+      const commitRow = () => result.current.results.find((r) => r.id === "builtin.commit")!;
+      expect(commitRow().enabled).toBe(false);
+      expect(commitRow().disabledReason).toBeTruthy();
+      act(() => result.current.executeAction(commitRow()));
+      expect(dispatchMock).not.toHaveBeenCalled();
+
+      act(() => {
+        usePluginContextKeyStore.setState({ whenContext: { acme: { ready: true } } });
+      });
+      await waitFor(() => expect(commitRow().enabled).toBe(true));
+      act(() => result.current.executeAction(commitRow()));
+      expect(dispatchMock).toHaveBeenCalledWith("acme.review", {}, { source: "user" });
+    });
+
     it("does not dispatch collected arguments once the command's enablement has gone false", async () => {
       const spec = {
         fields: [
@@ -1677,6 +1972,28 @@ describe("useActionPalette", () => {
       expect(result.current.results[0]!.promptsForArgs).toBe(true);
     });
 
+    // Rows are memoized and every one takes executeAction as its click handler,
+    // so it must keep its identity while the user types and still act on the
+    // query as it stands when the row is clicked.
+    it("keeps one executeAction across queries that acts on the latest query", async () => {
+      paletteArgsMock.mockReturnValue(spec);
+      const { result } = await openPalette([pluginEntry()]);
+      const execute = result.current.executeAction;
+
+      act(() => result.current.setQuery("depl"));
+      await waitFor(() =>
+        expect(result.current.results.map((r) => r.id)).toEqual(["plugin.acme.deploy"])
+      );
+      expect(result.current.executeAction).toBe(execute);
+
+      act(() => execute(result.current.results[0]!));
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Environment", step: 1 });
+      expect(result.current.executeAction).toBe(execute);
+
+      act(() => result.current.argBack());
+      expect(result.current.query).toBe("depl");
+    });
+
     it("collects typed arguments step by step and dispatches them once", async () => {
       paletteArgsMock.mockReturnValue(spec);
       const { result } = await openPalette([pluginEntry()]);
@@ -1748,6 +2065,31 @@ describe("useActionPalette", () => {
         { env: "prod" },
         { source: "user" }
       );
+    });
+
+    it("hands off the focus restore only once the collected arguments dispatch", async () => {
+      paletteArgsMock.mockReturnValue({ fields: [spec.fields[0], spec.fields[1]] });
+      const { result } = await openPalette([pluginEntry()]);
+      act(() => result.current.executeAction(result.current.results[0]!));
+      // Still open, asking for an answer: nothing has closed the palette yet.
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Environment", step: 1 });
+      expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+
+      act(() => result.current.confirmSelection());
+      expect(result.current.argPrompt).toMatchObject({ fieldTitle: "Force", step: 2 });
+      expect(result.current.isOpen).toBe(true);
+      expect(dispatchMock).not.toHaveBeenCalled();
+      expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+
+      act(() => result.current.confirmSelection());
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "plugin.acme.deploy",
+        { env: "dev", force: true },
+        { source: "user" }
+      );
+      expect(result.current.isOpen).toBe(false);
+      expect(consumeDeferredPaletteFocusRestore()).not.toBeNull();
     });
 
     it("records MRU only when the command is finally dispatched", async () => {

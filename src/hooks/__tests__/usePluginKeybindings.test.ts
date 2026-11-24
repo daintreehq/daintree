@@ -152,7 +152,7 @@ describe("usePluginKeybindings", () => {
         item: {
           actionId: "p1.act",
           combo: "Cmd+Shift+8",
-          scope: "portal",
+          scope: "worktreeGrid",
           when: "terminalFocused",
           description: "Do the thing",
         },
@@ -169,7 +169,7 @@ describe("usePluginKeybindings", () => {
       expect(registerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           actionId: "p1.act",
-          scope: "portal",
+          scope: "worktreeGrid",
           when: "terminalFocused",
           description: "Do the thing",
         })
@@ -243,6 +243,63 @@ describe("usePluginKeybindings", () => {
       emit!({ keybindings: [], complete: true });
     });
     expect(keybindingService.findMatchingAction(event)).toBeUndefined();
+  });
+
+  it("drops a retired-scope binding on pull and push, never remapping it to global (#17245)", async () => {
+    let emit:
+      | ((payload: {
+          keybindings: Array<{
+            pluginId: string;
+            item: { actionId: string; combo: string; scope?: string };
+          }>;
+          complete: boolean;
+        }) => void)
+      | null = null;
+    onKeybindingsChangedMock.mockImplementation((cb: NonNullable<typeof emit>) => {
+      emit = cb;
+      return () => {};
+    });
+    Object.defineProperty(globalThis.navigator, "platform", {
+      value: "MacIntel",
+      configurable: true,
+    });
+    const retired = {
+      pluginId: "p1",
+      item: { actionId: "p1.retired", combo: "Cmd+Shift+7", scope: "portal" },
+    };
+    keybindingsMock.mockResolvedValue([retired, makeEntry("p1", "p1.live", "Cmd+Shift+8")]);
+
+    const { keybindingService } = await import("@/services/KeybindingService");
+    const registerSpy = vi.spyOn(keybindingService, "registerBinding");
+    const { usePluginKeybindings } = await import("../usePluginKeybindings");
+    renderHook(() => usePluginKeybindings());
+
+    await waitFor(() =>
+      expect(registerSpy).toHaveBeenCalledWith(expect.objectContaining({ actionId: "p1.live" }))
+    );
+    expect(registerSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "p1.retired" })
+    );
+    const pressRetired = new KeyboardEvent("keydown", {
+      key: "7",
+      code: "Digit7",
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(keybindingService.findMatchingAction(pressRetired)).toBeUndefined();
+
+    registerSpy.mockClear();
+    act(() => {
+      emit!({
+        keybindings: [retired, makeEntry("p1", "p1.other", "Cmd+Shift+9")],
+        complete: true,
+      });
+    });
+    expect(registerSpy).toHaveBeenCalledWith(expect.objectContaining({ actionId: "p1.other" }));
+    expect(registerSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "p1.retired" })
+    );
+    expect(keybindingService.findMatchingAction(pressRetired)).toBeUndefined();
   });
 
   it("unsubscribes from the push channel on unmount", async () => {

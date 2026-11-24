@@ -11,6 +11,7 @@ import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { useCodexQuota } from "@/hooks/useCodexQuota";
 import { useClaudeUsage } from "@/hooks/useClaudeUsage";
 import { windowLabel } from "@/utils/codexQuotaFormat";
+import { defaultLoginLabel, sanitizeLoginName } from "@shared/utils/agentAccounts";
 import { claudeWindowLabel } from "@/utils/agentAccountHeadroom";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import {
@@ -90,13 +91,20 @@ function useUnreadProjectCodexPresets(): string[] {
   }, [customPresets, projectPresets]);
 }
 
-/** The group name once a section holds several profiles; a lone one goes unnamed. */
-export function profileLabel(profile: CodexQuotaProfile): string {
+/**
+ * The group name once a section holds several profiles, or the default
+ * profile once the user has named its login (#17080); a lone unnamed one goes
+ * unnamed.
+ */
+export function profileLabel(profile: CodexQuotaProfile, defaultLoginName?: string): string {
   // Accounts first: they're what a home is for now (#16040); presets that
   // still name one follow.
   const names = [...(profile.accountNames ?? []), ...profile.presetNames].join(", ");
   if (!profile.isDefault) return names;
-  return names ? `Default profile · ${names}` : "Default profile";
+  const login = sanitizeLoginName(defaultLoginName)
+    ? defaultLoginLabel(defaultLoginName)
+    : "Default profile";
+  return names ? `${login} · ${names}` : login;
 }
 
 export { windowLabel };
@@ -221,14 +229,19 @@ function CodexQuotaGroup({
   );
 }
 
-function CodexQuota() {
-  const { profiles, refresh } = useCodexQuota(true);
+function CodexQuota({ isActive }: { isActive: boolean }) {
+  const { profiles, refresh } = useCodexQuota(isActive);
   const now = useGlobalMinuteClock();
   const unreadProjectPresets = useUnreadProjectCodexPresets();
+  const defaultLoginName = useAgentSettingsStore(
+    (s) => s.settings?.agents?.codex?.defaultLoginName
+  );
   const several = profiles !== null && profiles.length > 1;
+  const named = sanitizeLoginName(defaultLoginName) !== undefined;
 
   return (
     <SettingsSection
+      id="agents-account-quota"
       title="Account quota"
       description={
         several
@@ -247,7 +260,11 @@ function CodexQuota() {
           <CodexQuotaGroup
             key={profile.key}
             profile={profile}
-            label={several ? profileLabel(profile) : undefined}
+            label={
+              several || (named && profile.isDefault)
+                ? profileLabel(profile, defaultLoginName)
+                : undefined
+            }
             now={now}
             refresh={refresh}
           />
@@ -352,22 +369,27 @@ function ClaudeUsageRow({
 
 /**
  * The group name for one login. A lone default-login group goes unnamed while
- * no account is saved; any other group is named, so a reading never looks
+ * no account is saved and the login has no name of its own (#17080); any other group is named, so a reading never looks
  * like it describes a login it doesn't.
  */
 export function claudeUsageGroupLabels(
   accounts: readonly ClaudeUsageAccount[],
-  hasSavedAccounts: boolean
+  hasSavedAccounts: boolean,
+  defaultLoginName?: string
 ): (string | undefined)[] {
   const others = accounts.filter((account) => account.kind === "other").length;
   let otherIndex = 0;
-  const lone = accounts.length === 1 && accounts[0]!.kind === "default" && !hasSavedAccounts;
+  const named = sanitizeLoginName(defaultLoginName) !== undefined;
+  const lone =
+    accounts.length === 1 && accounts[0]!.kind === "default" && !hasSavedAccounts && !named;
   return accounts.map((account) => {
     if (lone) return undefined;
     const names = account.accountNames.join(", ");
     switch (account.kind) {
-      case "default":
-        return names ? `Default login · ${names}` : "Default login";
+      case "default": {
+        const login = defaultLoginLabel(defaultLoginName);
+        return names ? `${login} · ${names}` : login;
+      }
       case "account":
         return names;
       case "other":
@@ -385,13 +407,18 @@ export function claudeUsageGroupLabels(
  * so this is never a live figure: each row is the latest message a pane showed
  * for one limit, under the login that pane ran on.
  */
-function ClaudeUsage() {
-  const { accounts, failed, refresh } = useClaudeUsage(true);
+function ClaudeUsage({ isActive }: { isActive: boolean }) {
+  const { accounts, failed, refresh } = useClaudeUsage(isActive);
   const now = useGlobalMinuteClock();
   const hasSavedAccounts = useAgentSettingsStore(
     (s) => (s.settings?.agents?.claude?.accounts?.length ?? 0) > 0
   );
-  const labels = accounts ? claudeUsageGroupLabels(accounts, hasSavedAccounts) : [];
+  const defaultLoginName = useAgentSettingsStore(
+    (s) => s.settings?.agents?.claude?.defaultLoginName
+  );
+  const labels = accounts
+    ? claudeUsageGroupLabels(accounts, hasSavedAccounts, defaultLoginName)
+    : [];
 
   let body: ReactNode;
   if (accounts === null) {
@@ -447,6 +474,7 @@ function ClaudeUsage() {
 
   return (
     <SettingsSection
+      id="agents-account-quota"
       title="Account quota"
       description="Claude Code's own usage messages, as your terminals showed them. Not a live account reading."
     >
@@ -462,8 +490,15 @@ function ClaudeUsage() {
  * never read, so its section shows what its panes printed (#16370) beside
  * "View usage".
  */
-export function AgentQuotaSection({ agentId }: { agentId: string }) {
-  if (agentId === "codex") return <CodexQuota />;
-  if (agentId === "claude") return <ClaudeUsage />;
+export function AgentQuotaSection({
+  agentId,
+  isActive = true,
+}: {
+  agentId: string;
+  /** False while Settings shows another page: read only while it can be seen (#17981). */
+  isActive?: boolean;
+}) {
+  if (agentId === "codex") return <CodexQuota isActive={isActive} />;
+  if (agentId === "claude") return <ClaudeUsage isActive={isActive} />;
   return null;
 }

@@ -14,6 +14,7 @@ import {
   HostModeOffError,
   TransportError,
   UnusableConnectionError,
+  WslDistroMissingError,
   type LinkOpenOptions,
   type LinkTransport,
   type LinkTransportConnection,
@@ -71,8 +72,10 @@ const WSL_DISTRO_NOT_FOUND = /WSL_E_DISTRO_NOT_FOUND/;
 const RUNTIME_DIR_NAME = /^[A-Za-z0-9._-]+$/;
 
 /**
- * One line of sh: print the first live Host's discovery file. The names are
- * fixed identifiers, never input, and are checked before they are spliced in.
+ * One line of sh: print the first live Host's discovery file, in the uid's
+ * runtime directory or, for a distro booted without systemd, under the
+ * home's cache (see host/hostSocketPath.ts). The names are fixed
+ * identifiers, never input, and are checked before they are spliced in.
  */
 export function buildWslDiscoveryScript(dirNames: readonly string[]): string {
   if (dirNames.length === 0 || !dirNames.every((name) => RUNTIME_DIR_NAME.test(name))) {
@@ -80,7 +83,7 @@ export function buildWslDiscoveryScript(dirNames: readonly string[]): string {
   }
   return [
     `u=$(id -u)`,
-    `for n in ${dirNames.join(" ")}; do d="/run/user/$u/$n"; f="$d/${HOST_DISCOVERY_NAME}"; if [ -f "$f" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$f"); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then head -c ${MAX_DISCOVERY_BYTES} "$f"; exit 0; fi; fi; done`,
+    `for n in ${dirNames.join(" ")}; do for d in "/run/user/$u/$n" "$HOME/.cache/$n/run"; do f="$d/${HOST_DISCOVERY_NAME}"; if [ -f "$f" ] && [ -S "$d/${HOST_SOCKET_NAME}" ]; then p=$(sed -n 's/.*"pid":\\([0-9][0-9]*\\).*/\\1/p' "$f"); if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then head -c ${MAX_DISCOVERY_BYTES} "$f"; exit 0; fi; fi; done; done`,
     `exit ${NO_HOST_EXIT}`,
   ].join("; ");
 }
@@ -173,7 +176,7 @@ export class WslTransport implements LinkTransport {
       const detail = failureDetail(result, `wsl.exe exited with ${result.code}`);
       // wsl.exe's own code for a name it doesn't know: only installing or renaming one changes it.
       if (isWslServiceFailure(result.code) && WSL_DISTRO_NOT_FOUND.test(detail)) {
-        throw new UnusableConnectionError(`${distro} isn't installed in WSL`, detail);
+        throw new WslDistroMissingError(distro, detail);
       }
       throw new TransportError(`Couldn't reach ${distro} through WSL`, detail);
     }

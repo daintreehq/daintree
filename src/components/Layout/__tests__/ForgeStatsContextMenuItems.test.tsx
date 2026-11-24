@@ -64,6 +64,26 @@ describe("ForgeStatsContextMenuItems", () => {
     ]);
   });
 
+  it("names the tracker serving the pill's list, and keeps the repository the code forge's", () => {
+    const { container } = render(
+      <ForgeStatsContextMenuItems
+        segment="issues"
+        projectPath="/repo"
+        providerName="GitHub"
+        segmentProviderName="Linear"
+        canOpenRepo
+      />
+    );
+
+    expect(menuEntries(container)).toEqual([
+      "View all issues on Linear",
+      "separator",
+      "View repository on GitHub",
+      "separator",
+      "chrome:forge-stats:right",
+    ]);
+  });
+
   it.each([
     { segment: "issues", label: "View all issues on GitLab", actionId: "forge.openIssues" },
     { segment: "prs", label: "View all pull requests on GitLab", actionId: "forge.openPRs" },

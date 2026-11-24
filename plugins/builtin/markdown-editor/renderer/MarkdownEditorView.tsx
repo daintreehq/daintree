@@ -1,12 +1,28 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import { useShallow } from "zustand/react/shallow";
 import { EditorView } from "@codemirror/view";
 import { EditorState, EditorSelection } from "@codemirror/state";
 import { openSearchPanel } from "@codemirror/search";
 import type { LanguageSupport } from "@codemirror/language";
 import type { FileEditorViewProps } from "@/registry/fileEditorRegistry";
 import { loadMarkdownSupport } from "@/components/FileViewer/codeMirrorLanguages";
-import { countLines, detectLineEnding } from "@/components/FileViewer/FileMetadataFacts";
-import { activateMarkdownLink } from "@/components/Markdown/markdownRenderPolicy";
+import {
+  countLines,
+  detectLineEnding,
+  type FileLineEnding,
+} from "@/components/FileViewer/FileMetadataFacts";
+import { utf8ByteLength } from "@shared/utils/folderUpload";
+import { activateMarkdownLink } from "@/components/Markdown/markdownLinkPolicy";
 // The host banner for the conflict strip only: its Compare action has to stay
 // focusable while unavailable, and a kit Button can only be natively disabled.
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -25,12 +41,20 @@ import {
 } from "@daintreehq/plugin-ui";
 import { cn } from "@/lib/utils";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
+import { canPanelTakeFind } from "@/lib/findInPanel";
 import { MarkdownEditorStatusBar } from "./MarkdownEditorStatusBar.js";
 import { DocumentController } from "./documentController.js";
 import { identityKey } from "../shared/ids.js";
-import { currentText, useDocumentStateStore, type DocumentRecord } from "./documentStateStore.js";
+import {
+  currentText,
+  useDocumentStateStore,
+  type DocumentBase,
+  type DocumentRecord,
+} from "./documentStateStore.js";
 import {
   buildMarkdownEditorExtensions,
+  docUtf8Bytes,
+  externalChange,
   themeCompartment,
   wrapCompartment,
 } from "./markdownEditorExtensions.js";
@@ -62,6 +86,107 @@ function EditorSkeleton() {
   );
 }
 
+/** The live buffer's size, measured by CodeMirror as it changes rather than from a string. */
+interface BufferMetrics {
+  lines: number;
+  bytes: number;
+}
+
+function measure(state: EditorState): BufferMetrics {
+  // An empty buffer has no lines, as the reader's strip counts it.
+  return { lines: state.doc.length === 0 ? 0 : state.doc.lines, bytes: state.field(docUtf8Bytes) };
+}
+
+/**
+ * One view's buffer metrics, read by its status line alone: typing re-renders
+ * the strip, never the editor shell around it (#17071).
+ */
+function createMetricsSource() {
+  let value: BufferMetrics | null = null;
+  const listeners = new Set<() => void>();
+  return {
+    get: (): BufferMetrics | null => value,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    set: (next: BufferMetrics | null) => {
+      if (next?.lines === value?.lines && next?.bytes === value?.bytes) return;
+      value = next;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+type MetricsSource = ReturnType<typeof createMetricsSource>;
+
+function LiveStatusBar({
+  metrics,
+  base,
+  dirty,
+  draftText,
+  ...rest
+}: {
+  metrics: MetricsSource;
+  base: DocumentBase | null;
+  dirty: boolean;
+  /** The committed draft, for a document with no buffer mounted to measure. */
+  draftText: string | null;
+  filePath: string;
+  saving: boolean;
+  saveBlocked: boolean;
+  onSave: () => void;
+}) {
+  const live = useSyncExternalStore(metrics.subscribe, metrics.get);
+  const baseFacts = useMemo(
+    () => (base ? { lines: countLines(base.text), ending: detectLineEnding(base.text) } : null),
+    [base]
+  );
+  const crlf = base?.eol === "\r\n";
+  const bom = base?.hasBom ? 3 : 0;
+  let lineCount: number;
+  let bufferEnding: FileLineEnding | null;
+  let byteLength: number;
+  if (!dirty && base && baseFacts) {
+    // A clean document is the file, so it reports the size Source mode reads off disk.
+    lineCount = baseFacts.lines;
+    bufferEnding = baseFacts.ending;
+    byteLength = base.size;
+  } else if (live) {
+    // A draft has no disk size yet; it reports what a save would write — its
+    // own ending and BOM re-applied to the `\n`-joined, BOM-less buffer,
+    // which holds no other break.
+    lineCount = live.lines;
+    bufferEnding = live.lines > 1 ? "LF" : null;
+    byteLength = live.bytes + (crlf ? Math.max(0, live.lines - 1) : 0) + bom;
+  } else {
+    const text = draftText ?? "";
+    lineCount = countLines(text);
+    bufferEnding = detectLineEnding(text);
+    byteLength = utf8ByteLength(text) + (crlf ? Math.max(0, lineCount - 1) : 0) + bom;
+  }
+  // What the file has, not what a save would write. The buffer stores the
+  // dominant ending as `\n` and keeps any lone CR, so a `\n` here is the
+  // file's own ending and a CR is a CR.
+  const lineEnding = base?.mixedEol
+    ? "mixed"
+    : bufferEnding === "LF" && crlf
+      ? "CRLF"
+      : bufferEnding;
+  return (
+    <MarkdownEditorStatusBar
+      {...rest}
+      lineCount={lineCount}
+      byteLength={byteLength}
+      hasBom={base?.hasBom ?? false}
+      eolLabel={crlf ? "CRLF" : "LF"}
+      lineEnding={lineEnding}
+      dirty={dirty}
+    />
+  );
+}
+
 /**
  * The file panel's Edit mode for Markdown (#12323): a CodeMirror buffer over
  * the document the controller owns. The view is transient — it mounts and
@@ -80,7 +205,33 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
       DocumentController.acquire({ panelId, filePath, fileName, rootPath, worktreePath, projectId })
     );
   }, [panelId, filePath, fileName, rootPath, worktreePath, projectId]);
-  const record = useDocumentStateStore((state) => state.records[key]);
+  const [showCompare, setShowCompare] = useState(false);
+  const [metrics] = useState(createMetricsSource);
+  // Flips when a buffer starts or stops being measured, not as it changes.
+  const measuring = useSyncExternalStore(metrics.subscribe, () => metrics.get() !== null);
+  // The shell's own state, not the draft text: typing leaves every field here
+  // as it was, so it re-renders nothing (#17071). Text is taken only while a
+  // surface shows or copies it, or no buffer is there to measure.
+  const record = useDocumentStateStore(
+    useShallow((state) => {
+      const current = state.records[key];
+      if (!current) return undefined;
+      const showsText =
+        !measuring || showCompare || current.storageWarning !== null || current.status !== "ready";
+      return {
+        status: current.status,
+        refusal: current.refusal,
+        base: current.base,
+        dirty: current.draft !== null,
+        conflict: current.conflict,
+        saving: current.saving,
+        error: current.error,
+        storageWarning: current.storageWarning,
+        loadGeneration: current.loadGeneration,
+        text: showsText ? currentText(current) : null,
+      };
+    })
+  );
   const polarity = useDaintreeTheme().colorMode;
 
   useEffect(() => {
@@ -103,11 +254,8 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   }, []);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
-  // The text this view last handed the controller, so a store update that
-  // echoes our own typing is not re-applied to the buffer.
-  const lastLocalTextRef = useRef<string | null>(null);
-  const [showCompare, setShowCompare] = useState(false);
   const [confirmLoadDisk, setConfirmLoadDisk] = useState(false);
   const [saveAsPath, setSaveAsPath] = useState<string | null>(null);
   const [saveAsError, setSaveAsError] = useState<string | null>(null);
@@ -133,7 +281,6 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     if (!ready || !host || !language || !controller) return;
     const inputs = liveInputsRef.current;
     const text = currentText(controller.record()) ?? "";
-    lastLocalTextRef.current = text;
     const restore = controller.takeViewState();
     const clampedAnchor = restore ? Math.min(restore.anchor, text.length) : 0;
     const clampedHead = restore ? Math.min(restore.head, text.length) : 0;
@@ -141,29 +288,66 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
       state: EditorState.create({
         doc: text,
         selection: EditorSelection.single(clampedAnchor, clampedHead),
-        extensions: buildMarkdownEditorExtensions({
-          language,
-          polarity: inputs.polarity,
-          wrapLines: inputs.wrapLines,
-          ariaLabel: inputs.fileName,
-          callbacks: {
-            onChange: (next) => {
-              lastLocalTextRef.current = next;
-              controller.setText(next);
+        extensions: [
+          buildMarkdownEditorExtensions({
+            language,
+            polarity: inputs.polarity,
+            wrapLines: inputs.wrapLines,
+            ariaLabel: inputs.fileName,
+            pinnedTopInset: () => headerRef.current?.offsetHeight ?? 0,
+            callbacks: {
+              onChange: (doc) => controller.edit(doc),
+              onSave: () => void controller.save(),
+              onFollowLink: (href) => {
+                const { filePath: file, rootPath: root } = liveInputsRef.current;
+                activateMarkdownLink(href, { filePath: file, rootPath: root });
+              },
             },
-            onSave: () => void controller.save(),
-            onFollowLink: (href) => {
-              const { filePath: file, rootPath: root } = liveInputsRef.current;
-              activateMarkdownLink(href, { filePath: file, rootPath: root });
+          }),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) metrics.set(measure(update.state));
+          }),
+          // Typing a sibling panel ran ahead of the shared draft: commit it on
+          // the way in, so this buffer is caught up before a key lands in it.
+          // Leaving commits too, so whatever the user goes to sees it all.
+          EditorView.domEventHandlers({
+            focus: () => {
+              controller.flushPending();
+              return false;
             },
-          },
-        }),
+            blur: () => {
+              controller.flushPending();
+              return false;
+            },
+          }),
+        ],
       }),
       parent: host,
     });
     viewRef.current = view;
+    metrics.set(measure(view.state));
     if (restore) view.scrollDOM.scrollTop = restore.scrollTop;
+    // A sibling panel on the same document committed typing: catch the
+    // buffer up. Our own commits come back through here too, and are skipped
+    // by who made them rather than by comparing the document.
+    let synced = text;
+    const unsubscribe = useDocumentStateStore.subscribe((state) => {
+      const latest = state.records[key];
+      // A replaced document gets a fresh editor, not a patched one.
+      if (!latest || latest.loadGeneration !== loadGeneration) return;
+      const next = currentText(latest);
+      if (next === null || next === synced) return;
+      synced = next;
+      if (controller.committedHere(next)) return;
+      const doc = view.state.doc;
+      if (doc.toString() === next) return;
+      view.dispatch({
+        changes: { from: 0, to: doc.length, insert: next },
+        annotations: externalChange.of(true),
+      });
+    });
     return () => {
+      unsubscribe();
       controller.rememberViewState({
         anchor: view.state.selection.main.anchor,
         head: view.state.selection.main.head,
@@ -171,8 +355,12 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
       });
       view.destroy();
       viewRef.current = null;
+      metrics.set(null);
     };
-  }, [ready, language, loadGeneration, controller]);
+  }, [ready, language, loadGeneration, controller, key, metrics]);
+
+  // Leaving Edit commits what was typed before the next mode paints from it.
+  useLayoutEffect(() => () => controller?.flushPending(), [controller]);
 
   useEffect(() => {
     viewRef.current?.dispatch({
@@ -186,27 +374,13 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     });
   }, [polarity]);
 
-  // A sibling panel on the same document typed: catch the buffer up. The
-  // record is read from the store at that moment rather than captured, so the
-  // effect keys on the version alone.
-  const textVersion = record?.textVersion ?? 0;
-  useEffect(() => {
-    const view = viewRef.current;
-    const latest = useDocumentStateStore.getState().records[key];
-    if (!view || !latest) return;
-    const text = currentText(latest);
-    if (text === null || text === lastLocalTextRef.current) return;
-    const doc = view.state.doc;
-    if (doc.toString() === text) return;
-    lastLocalTextRef.current = text;
-    view.dispatch({ changes: { from: 0, to: doc.length, insert: text } });
-  }, [textVersion, key]);
-
   // Cmd+F from the panel chrome lands in this editor's find bar while the
-  // panel is focused, as it does for Source mode.
+  // panel is focused, as it does for Source mode. A modal over the panel keeps
+  // it out.
   useEffect(() => {
     if (!props.isFocused) return;
     const handler = () => {
+      if (!canPanelTakeFind(hostRef.current)) return;
       if (viewRef.current) openSearchPanel(viewRef.current);
     };
     window.addEventListener("daintree:find-in-panel", handler);
@@ -255,9 +429,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
 
   const compareDiff = useMemo(() => {
     if (!showCompare || !record?.conflict || record.conflict.text === null) return null;
-    return unifiedDiff(record.conflict.text, currentText(record) ?? "", {
-      path: props.fileName,
-    });
+    return unifiedDiff(record.conflict.text, record.text ?? "", { path: props.fileName });
   }, [showCompare, record, props.fileName]);
 
   if (
@@ -294,7 +466,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
   }
 
   if (record.status === "unavailable" && !record.base) {
-    const orphanDraft = record.draft?.text ?? null;
+    const orphanDraft = record.dirty ? record.text : null;
     return (
       <div className="flex h-full flex-col items-center gap-3 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
         <EmptyState
@@ -333,181 +505,180 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
     );
   }
 
-  const base = record.base;
-  const text = currentText(record) ?? "";
-  const dirty = record.draft !== null;
-  const lineCount = countLines(text);
-  const eolLabel = base?.eol === "\r\n" ? "CRLF" : "LF";
-  // What the file has, not what a save would write. The buffer stores the
-  // dominant ending as `\n` and keeps any lone CR, so a `\n` here is the
-  // file's own ending and a CR is a CR.
-  const bufferEnding = detectLineEnding(text);
-  const lineEnding = base?.mixedEol
-    ? "mixed"
-    : bufferEnding === "LF" && base?.eol === "\r\n"
-      ? "CRLF"
-      : bufferEnding;
-  // A clean document is the file, so it reports the size Source mode reads off
-  // disk. A draft has no disk size yet; it reports what a save would write —
-  // its own ending and BOM re-applied to the `\n`-joined, BOM-less buffer.
-  const byteLength =
-    !dirty && base
-      ? base.size
-      : new TextEncoder().encode(text).byteLength +
-        (base?.eol === "\r\n" ? Math.max(0, lineCount - 1) : 0) +
-        (base?.hasBom ? 3 : 0);
-
   return (
     <div className="flex min-h-full flex-col" data-testid="markdown-editor">
-      <MarkdownEditorStatusBar
-        filePath={filePath}
-        lineCount={lineCount}
-        byteLength={byteLength}
-        hasBom={base?.hasBom ?? false}
-        eolLabel={eolLabel}
-        lineEnding={lineEnding}
-        dirty={dirty}
-        saving={record.saving}
-        saveBlocked={record.conflict !== null}
-        onSave={() => void handleSave()}
-      />
+      {/* Pinned by sticking to the pane body, which is the scroller in a grid
+          cell and in a content-sized dialog alike. A scroller of the view's own
+          would need `h-full`, which collapses to the content's height inside a
+          dialog and leaves that scroller never scrolling. Opaque, because the
+          document passes beneath it. */}
+      <div
+        ref={headerRef}
+        className="sticky top-0 z-10 shrink-0 bg-surface-canvas"
+        data-testid="markdown-editor-header"
+      >
+        <LiveStatusBar
+          metrics={metrics}
+          base={record.base}
+          dirty={record.dirty}
+          draftText={record.dirty ? record.text : null}
+          filePath={filePath}
+          saving={record.saving}
+          saveBlocked={record.conflict !== null}
+          onSave={() => void handleSave()}
+        />
+      </div>
 
-      {record.status === "unavailable" && (
-        <Callout
-          variant="strip"
-          severity="warning"
-          title="File isn't where it was"
-          role="status"
-          aria-live="polite"
-          actionPlacement="below"
-          action={
-            <>
+      {/* `isolate` keeps CodeMirror's gutters (z-index 200), its find bar (300)
+          and the comparison's sticky file header inside this layer, so none
+          paints over the strip as it scrolls beneath. */}
+      <div className="isolate flex flex-1 flex-col">
+        {record.status === "unavailable" && (
+          <Callout
+            variant="strip"
+            severity="warning"
+            title="File isn't where it was"
+            role="status"
+            aria-live="polite"
+            actionPlacement="below"
+            action={
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon="refresh"
+                  // The banner's own mark for its recommended action, which the
+                  // forced-colours rules draw with the heavier border.
+                  data-notification-action="primary"
+                  onClick={() => void controller.revalidate()}
+                >
+                  Retry
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-notification-action="primary"
+                  onClick={() =>
+                    setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1"))
+                  }
+                >
+                  Save draft as…
+                </Button>
+              </>
+            }
+          >
+            The draft is kept. Save it somewhere else, or retry once the file is back.
+          </Callout>
+        )}
+
+        {record.conflict && (
+          <InlineStatusBanner
+            severity="warning"
+            title={record.conflict.tooLarge ? "File on disk is over 2 MiB" : "File changed on disk"}
+            description={
+              record.conflict.tooLarge
+                ? "It grew past the editor's limit, so it can't be compared or loaded here. Your draft is kept and saving is held; save the draft elsewhere."
+                : "Your draft is kept and saving is held. Compare the two, load the disk version, or save the draft elsewhere."
+            }
+            role="status"
+            ariaLive="polite"
+            actions={[
+              {
+                id: "compare",
+                label: showCompare ? "Hide comparison" : "Compare",
+                onClick: () => {
+                  controller.flushPending();
+                  setShowCompare((value) => !value);
+                },
+                disabled: record.conflict.text === null,
+              },
+              {
+                id: "load-disk",
+                label: "Load disk version",
+                onClick: () => setConfirmLoadDisk(true),
+                disabled: record.conflict.tooLarge,
+              },
+              {
+                id: "save-as",
+                label: "Save draft as…",
+                onClick: () => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1")),
+              },
+            ]}
+          />
+        )}
+
+        {record.error && (
+          <Callout
+            variant="strip"
+            severity="error"
+            title="Couldn't save"
+            actionPlacement="below"
+            action={
               <Button
                 variant="outline"
                 size="sm"
                 icon="refresh"
-                // The banner's own mark for its recommended action, which the
-                // forced-colours rules draw with the heavier border.
                 data-notification-action="primary"
-                onClick={() => void controller.revalidate()}
+                onClick={() => void handleSave()}
               >
                 Retry
               </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                data-notification-action="primary"
-                onClick={() => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1"))}
-              >
-                Save draft as…
-              </Button>
-            </>
-          }
-        >
-          The draft is kept. Save it somewhere else, or retry once the file is back.
-        </Callout>
-      )}
-
-      {record.conflict && (
-        <InlineStatusBanner
-          severity="warning"
-          title={record.conflict.tooLarge ? "File on disk is over 2 MiB" : "File changed on disk"}
-          description={
-            record.conflict.tooLarge
-              ? "It grew past the editor's limit, so it can't be compared or loaded here. Your draft is kept and saving is held; save the draft elsewhere."
-              : "Your draft is kept and saving is held. Compare the two, load the disk version, or save the draft elsewhere."
-          }
-          role="status"
-          ariaLive="polite"
-          actions={[
-            {
-              id: "compare",
-              label: showCompare ? "Hide comparison" : "Compare",
-              onClick: () => setShowCompare((value) => !value),
-              disabled: record.conflict.text === null,
-            },
-            {
-              id: "load-disk",
-              label: "Load disk version",
-              onClick: () => setConfirmLoadDisk(true),
-              disabled: record.conflict.tooLarge,
-            },
-            {
-              id: "save-as",
-              label: "Save draft as…",
-              onClick: () => setSaveAsPath(props.filePath.replace(/(\.[^./\\]+)?$/, "-draft$1")),
-            },
-          ]}
-        />
-      )}
-
-      {record.error && (
-        <Callout
-          variant="strip"
-          severity="error"
-          title="Couldn't save"
-          actionPlacement="below"
-          action={
-            <Button
-              variant="outline"
-              size="sm"
-              icon="refresh"
-              data-notification-action="primary"
-              onClick={() => void handleSave()}
-            >
-              Retry
-            </Button>
-          }
-        >
-          {record.error}
-        </Callout>
-      )}
-
-      {record.storageWarning && (
-        <Callout
-          variant="strip"
-          severity="warning"
-          title="Draft isn't backed up"
-          role="status"
-          aria-live="polite"
-          actionPlacement="below"
-          action={
-            // The copy announces itself; keep its label swap out of the warning's live region.
-            <span aria-live="off" className="inline-flex">
-              <CopyButton
-                label="Copy draft"
-                text={text}
-                variant="outline"
-                size="sm"
-                data-notification-action="primary"
-                data-testid="markdown-editor-copy-draft"
-              />
-            </span>
-          }
-        >
-          {record.storageWarning}
-        </Callout>
-      )}
-
-      {compareDiff !== null && (
-        <div
-          className="border-b border-border-default diff-scroll-root"
-          data-testid="markdown-editor-compare"
-        >
-          <Suspense fallback={<EditorSkeleton />}>
-            <LazyDiffViewer diff={compareDiff} viewType="unified" wrapLines />
-          </Suspense>
-        </div>
-      )}
-
-      <div
-        ref={hostRef}
-        className={cn(
-          "flex-1 text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible",
-          !ready && "hidden"
+            }
+          >
+            {record.error}
+          </Callout>
         )}
-        data-testid="markdown-editor-host"
-      />
+
+        {record.storageWarning && (
+          <Callout
+            variant="strip"
+            severity="warning"
+            title="Draft isn't backed up"
+            role="status"
+            aria-live="polite"
+            actionPlacement="below"
+            action={
+              // The copy announces itself; keep its label swap out of the warning's live region.
+              <span aria-live="off" className="inline-flex">
+                <CopyButton
+                  label="Copy draft"
+                  text={record.text ?? ""}
+                  variant="outline"
+                  size="sm"
+                  data-notification-action="primary"
+                  data-testid="markdown-editor-copy-draft"
+                />
+              </span>
+            }
+          >
+            {record.storageWarning}
+          </Callout>
+        )}
+
+        {compareDiff !== null && (
+          <div
+            className="border-b border-border-default diff-scroll-root"
+            data-testid="markdown-editor-compare"
+          >
+            <Suspense fallback={<EditorSkeleton />}>
+              <LazyDiffViewer diff={compareDiff} viewType="unified" wrapLines />
+            </Suspense>
+          </div>
+        )}
+
+        <div
+          ref={hostRef}
+          className={cn(
+            // The find bar stays inside the editor, where its horizontal-scroll
+            // follow and the find-mode highlight rules reach it, and sticks
+            // just under the strip: `top-7` is the strip's fixed `h-7`
+            // (FILE_METADATA_STRIP_CLASS).
+            "flex-1 text-sm leading-[inherit] [&_.cm-editor]:min-h-full [&_.cm-scroller]:!overflow-visible [&_.cm-panels-top]:!top-7",
+            !ready && "hidden"
+          )}
+          data-testid="markdown-editor-host"
+        />
+      </div>
 
       <ConfirmDialog
         open={confirmLoadDisk}

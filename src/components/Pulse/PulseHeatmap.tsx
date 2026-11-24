@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent } from "react";
+import type { CSSProperties, FocusEvent, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import type { HeatCell, PulseRangeDays } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -12,6 +12,10 @@ import {
   type CalendarKey,
 } from "./pulseCalendar";
 import { pluralize } from "@/lib/pluralize";
+import {
+  isTooltipFocusOpenSuppressed,
+  notifyTooltipPointerActivity,
+} from "@/lib/tooltipDismissRegistry";
 
 interface PulseHeatmapProps {
   cells: HeatCell[];
@@ -126,49 +130,37 @@ function PulseHeatmapCell({
   ) as CSSProperties;
 
   return (
-    // 0ms: dense scrub-hover surface — skip-delay alone doesn't cover the cold first-cell hover (mirrors GitHub contribution-heatmap).
-    // autoDismiss off: this tooltip is the only place a day's date and count
-    // are shown, so it stays while the cell is hovered or focused rather than
-    // vanishing mid-read after the app-wide hint window.
-    <Tooltip delayDuration={0} autoDismiss={false}>
-      <TooltipTrigger asChild>
-        <button
-          ref={cellRef}
-          type="button"
-          role="gridcell"
-          aria-colindex={col + 1}
-          data-cell-date={cell.date}
-          // Forced colors strips the ring's box-shadow; this hook lets that
-          // mode redraw the latest-active marker as an outline.
-          data-latest-active={cell.isMostRecentActive ? "" : undefined}
-          // Clamp to >=1 for the CSS-level cue so a future renderer that emits
-          // a positive-count cell with level: 0 doesn't render a 0-sized
-          // CanvasText shape under forced-colors. The data layer currently
-          // never produces this combination, but the input type permits it.
-          data-heat-level={cell.count > 0 && cell.level > 0 ? Math.min(4, cell.level) : undefined}
-          style={{
-            width: `${CELL_SIZE_PX}px`,
-            height: `${CELL_SIZE_PX}px`,
-            ...getCellStyle(cell),
-            ...ringStyle,
-          }}
-          className={cn(
-            "pulse-heat-cell relative overflow-hidden rounded-2xs shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
-            // Cells sit 3px apart, so an outside ring would land on the neighbours.
-            "focus-visible:-outline-offset-2",
-            cell.isMostRecentActive && "ring-1 ring-text-primary/25 ring-offset-1"
-          )}
-          aria-label={`${formatted}: ${getCountText(cell)}`}
-          tabIndex={isActive ? 0 : -1}
-        >
-          {cell.count > 0 && <span aria-hidden="true" className="pulse-heat-cell-shape" />}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="text-xs">
-        <span className="font-medium">{formatted}</span>
-        <span className="ml-1 text-text-secondary">{getCountText(cell)}</span>
-      </TooltipContent>
-    </Tooltip>
+    <button
+      ref={cellRef}
+      type="button"
+      role="gridcell"
+      aria-colindex={col + 1}
+      data-cell-date={cell.date}
+      // Forced colors strips the ring's box-shadow; this hook lets that
+      // mode redraw the latest-active marker as an outline.
+      data-latest-active={cell.isMostRecentActive ? "" : undefined}
+      // Clamp to >=1 for the CSS-level cue so a future renderer that emits
+      // a positive-count cell with level: 0 doesn't render a 0-sized
+      // CanvasText shape under forced-colors. The data layer currently
+      // never produces this combination, but the input type permits it.
+      data-heat-level={cell.count > 0 && cell.level > 0 ? Math.min(4, cell.level) : undefined}
+      style={{
+        width: `${CELL_SIZE_PX}px`,
+        height: `${CELL_SIZE_PX}px`,
+        ...getCellStyle(cell),
+        ...ringStyle,
+      }}
+      className={cn(
+        "pulse-heat-cell relative overflow-hidden rounded-2xs shrink-0 border-0 p-0 cursor-default transition-[transform,background-color,box-shadow] duration-150",
+        // Cells sit 3px apart, so an outside ring would land on the neighbours.
+        "focus-visible:-outline-offset-2",
+        cell.isMostRecentActive && "ring-1 ring-text-primary/25 ring-offset-1"
+      )}
+      aria-label={`${formatted}: ${getCountText(cell)}`}
+      tabIndex={isActive ? 0 : -1}
+    >
+      {cell.count > 0 && <span aria-hidden="true" className="pulse-heat-cell-shape" />}
+    </button>
   );
 }
 
@@ -183,6 +175,27 @@ const KEYS: readonly CalendarKey[] = [
 
 function isCalendarKey(key: string): key is CalendarKey {
   return (KEYS as readonly string[]).includes(key);
+}
+
+type TipSource = "hover" | "focus" | "touch";
+
+// A click is a PointerEvent in Chromium, and its pointerType names the input
+// that produced it: "touch" for a tap, "mouse" or "pen" for those, empty for
+// the click a keyboard activation synthesises.
+function isTouchClick(event: MouseEvent): boolean {
+  const native = event.nativeEvent;
+  return "pointerType" in native && native.pointerType === "touch";
+}
+
+// The card is portaled over the days above the one it names, which are the ones
+// a finger reaches for next, so a tap meant for one of them lands on the card.
+// The day beneath the finger is the one asked for.
+function cellDateUnder(grid: HTMLElement, x: number, y: number): string | null {
+  for (const el of document.elementsFromPoint(x, y)) {
+    if (grid.contains(el))
+      return el.closest("[data-cell-date]")?.getAttribute("data-cell-date") ?? null;
+  }
+  return null;
 }
 
 /**
@@ -232,6 +245,151 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
     if (el) cellRefs.current.set(date, el);
     else cellRefs.current.delete(date);
   }, []);
+
+  // One tooltip for the whole grid, anchored to the hovered, focused or tapped
+  // cell by position, instead of a Radix tree per cell (up to 180 per card).
+  // The date stays set after a close so the card keeps its text through the
+  // exit fade. Hover, focus and touch share it: whichever moved last owns the
+  // readout.
+  const [tip, setTip] = useState<{
+    date: string | null;
+    open: boolean;
+    source: TipSource | null;
+  }>({ date: null, open: false, source: null });
+  const gridRef = useRef<HTMLDivElement>(null);
+  const pointerDownRef = useRef(false);
+  const tipPosition = tip.date ? positions.get(tip.date) : undefined;
+  const tipCell = tipPosition ? weeks[tipPosition.col]?.[tipPosition.row] : undefined;
+
+  // A tap's readout has no pointer or focus to end it, so one whose day left
+  // the range would otherwise sit there empty.
+  useEffect(() => {
+    setTip((prev) =>
+      prev.open && prev.date !== null && !positions.has(prev.date)
+        ? { ...prev, open: false, source: null }
+        : prev
+    );
+  }, [positions]);
+
+  const cellDateOf = (grid: HTMLElement, target: EventTarget): string | null => {
+    // The card is portaled but still a React child of the grid, so its pointer
+    // events bubble here; only a node actually inside the grid is a cell.
+    if (!(target instanceof Element) || !grid.contains(target)) return null;
+    return target.closest("[data-cell-date]")?.getAttribute("data-cell-date") ?? null;
+  };
+
+  // `source` is who owns the readout: the pointer leaving only closes what the
+  // pointer opened, and a blur only what focus opened, so one input ending
+  // never wipes out the other's. A tap's readout is neither: the pointerleave a
+  // lifted finger fires and a blur between days leave it up, and it closes on a
+  // second tap, a tap elsewhere, a scroll, Escape, or focus leaving the grid for
+  // another control (`handleBlur`).
+  const showTip = (date: string, source: TipSource) => {
+    setTip((prev) =>
+      prev.date === date &&
+      prev.open &&
+      // Focus coming back to the day a tap has open (the window regaining it)
+      // is that tap's readout, not a new owner of it.
+      (prev.source === source || (source === "focus" && prev.source === "touch"))
+        ? prev
+        : { date, open: true, source }
+    );
+  };
+
+  const hideTip = (...sources: TipSource[]) => {
+    setTip((prev) =>
+      prev.open && (sources.length === 0 || (prev.source !== null && sources.includes(prev.source)))
+        ? { ...prev, open: false, source: null }
+        : prev
+    );
+  };
+
+  // The day a tap opened closes on a tap of the same day; any other day, or one
+  // whose readout focus or hover opened, takes the readout over.
+  const toggleTouchTip = (date: string) => {
+    setTip((prev) =>
+      prev.open && prev.date === date && prev.source === "touch"
+        ? { ...prev, open: false, source: null }
+        : { date, open: true, source: "touch" }
+    );
+  };
+
+  const handlePointerOver = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch") return;
+    notifyTooltipPointerActivity();
+    const date = cellDateOf(event.currentTarget, event.target);
+    if (date) showTip(date, "hover");
+    else hideTip("hover");
+  };
+
+  const handlePointerLeave = () => hideTip("hover");
+
+  // A press hands the screen to whatever the cell does, and the focus it
+  // causes is not a request for a tooltip: mirrors the shared trigger. The
+  // flag is cleared on a timer rather than pointerup, which never arrives
+  // here when the press is released outside the grid. A finger's press leaves
+  // the readout alone: the tap's click decides it, and closing here would only
+  // be undone a moment later.
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    pointerDownRef.current = true;
+    setTimeout(() => {
+      pointerDownRef.current = false;
+    }, 0);
+    if (event.pointerType !== "touch") hideTip();
+  };
+
+  // A touch screen has no hover, and the focus a tap causes is a side effect,
+  // so the click is where a tap states its request for a day's readout. Every
+  // other activation (a mouse click, a keyboard Enter or Space) hands the
+  // screen to the cell and closes it, as before.
+  const handleClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!isTouchClick(event)) {
+      hideTip();
+      return;
+    }
+    const grid = event.currentTarget;
+    const { target } = event;
+    const date =
+      target instanceof Node && !grid.contains(target)
+        ? cellDateUnder(grid, event.clientX, event.clientY)
+        : cellDateOf(grid, target);
+    if (date) toggleTouchTip(date);
+    else hideTip();
+  };
+
+  const handleFocus = (event: FocusEvent<HTMLDivElement>) => {
+    if (pointerDownRef.current || isTooltipFocusOpenSuppressed()) return;
+    const date = cellDateOf(event.currentTarget, event.target);
+    if (date) showTip(date, "focus");
+  };
+
+  // Focus leaving the grid for another control ends a tap's readout along with
+  // a focus one: with auto-dismiss off nothing else would, and the card would
+  // sit over whatever the keyboard user moved on to. Focus going nowhere (the
+  // window losing it, a tap on bare space) leaves a tap's readout to the taps
+  // and presses that dismiss it.
+  const handleBlur = (event: FocusEvent<HTMLDivElement>) => {
+    const next = event.relatedTarget;
+    if (next instanceof Node && !event.currentTarget.contains(next)) hideTip("focus", "touch");
+    else hideTip("focus");
+  };
+
+  const handleTipOpenChange = (next: boolean) => {
+    if (!next) hideTip();
+  };
+
+  // Radix closes the card on any press outside it, ahead of the click that
+  // finishes the tap: a tap on the open day would close it on the press and
+  // the click would reopen it, and a tap on another day would flash shut
+  // between the two. A press in the grid is the grid's to resolve; one
+  // anywhere else still dismisses.
+  const handleCardPointerDownOutside = (event: {
+    detail: { originalEvent: { target: EventTarget | null } };
+    preventDefault: () => void;
+  }) => {
+    const { target } = event.detail.originalEvent;
+    if (target instanceof Node && gridRef.current?.contains(target)) event.preventDefault();
+  };
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
@@ -301,7 +459,8 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
       </div>
 
       <div
-        className="col-start-2 row-start-2 flex flex-col"
+        ref={gridRef}
+        className="relative col-start-2 row-start-2 flex flex-col"
         style={{ gap: `${GAP_PX}px` }}
         role="grid"
         aria-label={`Activity over the last ${rangeDays} days, one column per week`}
@@ -310,7 +469,45 @@ export function PulseHeatmap({ cells, rangeDays, describedBy }: PulseHeatmapProp
         aria-colcount={weeks.length}
         data-testid="pulse-heatmap"
         onKeyDown={handleKeyDown}
+        onPointerOver={handlePointerOver}
+        onPointerLeave={handlePointerLeave}
+        onPointerDown={handlePointerDown}
+        onClick={handleClick}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
       >
+        {/* 0ms: dense scrub-hover surface (mirrors GitHub's contribution
+            heatmap). autoDismiss off: this tooltip is the only place a day's
+            date and count are shown, so it stays while the cell is hovered,
+            focused or tapped rather than vanishing mid-read after the app-wide
+            hint window. */}
+        <Tooltip open={tip.open} onOpenChange={handleTipOpenChange} autoDismiss={false}>
+          <TooltipTrigger asChild>
+            <span
+              aria-hidden="true"
+              data-testid="pulse-heatmap-tooltip-anchor"
+              className="pointer-events-none absolute"
+              style={{
+                left: `${(tipPosition?.col ?? 0) * PITCH_PX}px`,
+                top: `${(tipPosition?.row ?? 0) * PITCH_PX}px`,
+                width: `${CELL_SIZE_PX}px`,
+                height: `${CELL_SIZE_PX}px`,
+              }}
+            />
+          </TooltipTrigger>
+          <TooltipContent
+            side="top"
+            className="text-xs"
+            onPointerDownOutside={handleCardPointerDownOutside}
+          >
+            {tipCell && (
+              <>
+                <span className="font-medium">{formatDay(tipCell)}</span>
+                <span className="ml-1 text-text-secondary">{getCountText(tipCell)}</span>
+              </>
+            )}
+          </TooltipContent>
+        </Tooltip>
         {WEEKDAY_LABELS.map((_, row) => (
           <div
             key={row}

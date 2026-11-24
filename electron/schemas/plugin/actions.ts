@@ -12,6 +12,7 @@ import {
   DENY_PLUGIN_DISPATCH_ACTION_IDS,
 } from "../../../shared/config/actionIds.js";
 import { KEY_ACTION_VALUES } from "../../../shared/types/keymap.js";
+import { PLUGIN_KEYBINDING_SCOPES } from "../../../shared/config/pluginKeybindingScopes.js";
 import {
   FILE_EDITOR_MAX_PATH_PATTERNS,
   FileEditorPathPatternSchema,
@@ -60,14 +61,16 @@ export const KeybindingContributionSchema = z
   .object({
     actionId: z.string().min(1),
     combo: z.string().min(1),
-    // Closed to the renderer's KeyScope union (src/services/keybindingUtils.ts).
+    // Closed to the plugin scope vocabulary (shared/config/pluginKeybindingScopes.ts).
     // An unknown scope would never match the active scope and silently produce an
     // inert binding, so reject it at the manifest gate instead. Defaults to
-    // "global" in the renderer hook when omitted. The former "terminal",
-    // "modal", and "worktreeList" scopes were removed — they were never
-    // activated, so bindings declared under them could not fire.
+    // "global" in the renderer hook when omitted. A retired scope ("portal")
+    // still parses so existing manifests load; the binding is dropped and the
+    // advisories say why. The former "terminal", "modal", and "worktreeList"
+    // scopes were removed outright — they were never activated, so bindings
+    // declared under them could not fire.
     scope: z
-      .enum(["global", "portal", "worktreeGrid", "dev-preview"], {
+      .enum(PLUGIN_KEYBINDING_SCOPES, {
         error: (issue) => {
           switch (issue.input) {
             case "terminal":
@@ -93,7 +96,7 @@ export const ContextMenuContributionSchema = z
     // `"panel"` removed (#10512) — no renderer surface consumed it, so a
     // contributed panel context-menu item was dead. Reject it at the manifest
     // gate so authors get a clear error instead of a silently-ignored item.
-    location: z.enum(["worktree", "terminal", "file", "browser", "project"]),
+    location: z.enum(["worktree", "terminal", "file", "browser", "project", "assistant"]),
     label: z.string().min(1),
     when: z.string().min(1).optional(),
     // Host-evaluated row match for `location: "file"`, AND-ed with `when`.
@@ -104,6 +107,14 @@ export const ContextMenuContributionSchema = z
       .array(FileEditorPathPatternSchema)
       .min(1)
       .max(FILE_EDITOR_MAX_PATH_PATTERNS)
+      .optional(),
+    // The id handed to the plugin's availability handler (#18141). Plugin-local
+    // and never a command name: the host invokes one fixed channel with it.
+    availability: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,64}$/, {
+        message: "availability must be 1-64 letters, digits, '_' or '-'",
+      })
       .optional(),
   })
   .strict()

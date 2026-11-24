@@ -25,12 +25,13 @@ import { pluralize } from "@/lib/pluralize";
 
 export function FleetDraftingPill(): ReactElement | null {
   const armOrder = useFleetArmingStore((s) => s.armOrder);
+  const crossHostTargets = useFleetArmingStore((s) => s.crossHostTargets);
   // What Enter will actually reach: the armed panes that pass the same
-  // eligibility gate the broadcast applies at dispatch, minus this pane. A
-  // membership count here overstated the fan-out whenever an armed pane had
-  // lost its PTY or had its input locked.
+  // eligibility gate the broadcast applies at dispatch, minus this pane, and
+  // every armed agent on another host. A membership count here overstated the
+  // fan-out whenever an armed pane had lost its PTY or had its input locked.
   const skippedIds = useFleetTargetOverridesStore((s) => s.skippedIds);
-  const peerCount = usePanelStore((state) => {
+  const localPeerCount = usePanelStore((state) => {
     let n = 0;
     for (const id of armOrder) {
       if (id === state.focusedId) continue;
@@ -40,6 +41,10 @@ export function FleetDraftingPill(): ReactElement | null {
     }
     return n;
   });
+  let peerCount = localPeerCount;
+  for (const target of crossHostTargets) {
+    if (!skippedIds.has(target.key)) peerCount += 1;
+  }
 
   // Previews rebuild on each keystroke, but locking a peer changes nothing the
   // composer sees, so rebuild them here or the rows go stale until the next one.
@@ -70,9 +75,10 @@ export function FleetDraftingPill(): ReactElement | null {
   useEscapeStack(open, () => setOpen(false));
 
   // Per-target overrides are ephemeral per-broadcast (#8691). The broadcast
-  // pipeline (fleetEnterBroadcast.doSend) reads the snapshot taken at
-  // Enter-press time and clears in its `finally`, so this effect only
-  // covers the "user opened, edited, then dismissed without sending" case.
+  // pipeline (fleetEnterBroadcast.doSend) sends the snapshot taken at
+  // Enter-press time and consumes it once it settles. Whatever is left goes
+  // whenever this runs with the popover closed: dismissed, or nothing in the
+  // draft left to preview.
   useEffect(() => {
     if (!open) {
       useFleetTargetOverridesStore.getState().clear();
@@ -242,6 +248,14 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
 
   const handleTextareaKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      // An IME's Enter confirms a candidate and its Escape dismisses the
+      // candidate list, so neither is this field's shortcut. Chromium also
+      // reports keyCode 229 for the keydown that commits. Still kept from the
+      // pane's input bar behind the popover, but the IME gets the key.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+        if (e.key === "Enter" || e.key === "Escape") e.stopPropagation();
+        return;
+      }
       if (e.key === "Enter") {
         // Enter inside the override field must not bubble to the primary
         // pane's input bar — that handler would call

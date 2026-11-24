@@ -57,6 +57,8 @@ interface SlotEntry {
   pluginId: string | null;
   /** User-facing name for the slot's error fallback. Falls back to generic copy. */
   label: string | undefined;
+  /** Starts loading a deferred view's chunk; absent for views bundled eagerly. */
+  preload: (() => Promise<unknown>) | undefined;
 }
 
 const REGISTRY = new Map<string, SlotEntry>();
@@ -114,7 +116,7 @@ function guardSlot(slotId: string, entry: SlotEntry): AnyComponent {
 export function registerBuiltinView(
   slotId: string,
   component: AnyComponent,
-  opts?: { pluginId?: string; label?: string }
+  opts?: { pluginId?: string; label?: string; preload?: () => Promise<unknown> }
 ): void {
   if (REGISTRY.has(slotId)) {
     console.warn(`[builtinRendererRegistry] Slot "${slotId}" already registered, overwriting`);
@@ -123,6 +125,7 @@ export function registerBuiltinView(
     component,
     pluginId: opts?.pluginId ?? null,
     label: opts?.label,
+    preload: opts?.preload,
   });
   guarded.delete(slotId);
   notifyRegistryChanged();
@@ -179,6 +182,19 @@ export function getBuiltinView<P>(slotId: string): ComponentType<P> | null {
   const { pluginMetaById, disabledPluginIds } = usePluginRuntimeStore.getState();
   const entry = resolveEntry(slotId, REGISTRY.get(slotId), pluginMetaById, disabledPluginIds);
   return entry ? (entry.component as ComponentType<P>) : null;
+}
+
+/**
+ * Warms a deferred slot view's chunk ahead of its first render — a hover on
+ * the control that opens it — so the open paints the view rather than its
+ * loading box. Gated like {@link getBuiltinView}: a disabled plugin's view, or
+ * one whose enablement is still unknown, is never fetched. A failed load is
+ * dropped here; the render that needs the view retries and reports it.
+ */
+export function preloadBuiltinView(slotId: string): void {
+  const { pluginMetaById, disabledPluginIds } = usePluginRuntimeStore.getState();
+  const entry = resolveEntry(slotId, REGISTRY.get(slotId), pluginMetaById, disabledPluginIds);
+  entry?.preload?.().catch(() => {});
 }
 
 /**

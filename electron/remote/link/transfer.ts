@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { AppError } from "../../utils/errorTypes.js";
 import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { BULK_CHUNK_BYTES, Lane } from "./frames.js";
+import { BULK_CHUNK_BYTES, Lane, allocFramePayload } from "./frames.js";
 import {
   BulkKind,
   type LinkMessage,
@@ -127,31 +127,44 @@ export function bytesTransferSource(bytes: Uint8Array): TransferSource {
   };
 }
 
-/** Hash the file up front, then serve reads from one open handle. */
-export async function fileTransferSource(filePath: string): Promise<TransferSource> {
+/**
+ * Hash the file up front, then serve reads from one open handle. Hashing a
+ * large file on a slow drive takes a while, so an abort stops it between
+ * chunks: the read in flight finishes, no other starts, and the handle closes.
+ */
+export async function fileTransferSource(
+  filePath: string,
+  signal?: AbortSignal
+): Promise<TransferSource> {
+  signal?.throwIfAborted();
   const handle = await fs.open(filePath, "r");
   try {
+    signal?.throwIfAborted();
     const { size } = await handle.stat();
     const hash = crypto.createHash("sha256");
     const buf = Buffer.allocUnsafe(BULK_CHUNK_BYTES);
     for (let offset = 0; offset < size;) {
+      signal?.throwIfAborted();
       const { bytesRead } = await handle.read(buf, 0, buf.byteLength, offset);
       if (bytesRead === 0) break;
       hash.update(buf.subarray(0, bytesRead));
       offset += bytesRead;
     }
+    signal?.throwIfAborted();
     return {
       size,
       sha256: hash.digest("hex"),
       read: async (offset, length) => {
-        const out = Buffer.alloc(length);
+        // Every byte is read before it is returned, so the chunk skips the
+        // zero fill, and a whole one frames without a copy.
+        const out = allocFramePayload(length);
         let got = 0;
         while (got < length) {
           const { bytesRead } = await handle.read(out, got, length - got, offset + got);
           if (bytesRead === 0) break;
           got += bytesRead;
         }
-        return out.subarray(0, got);
+        return got === length ? out : out.subarray(0, got);
       },
       close: () => handle.close(),
     };

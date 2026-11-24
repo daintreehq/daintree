@@ -12,6 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, render, cleanup } from "@testing-library/react";
 import type { PtyPanelData } from "@shared/types/panel";
+import { PANEL_PARKING_ATTRIBUTE } from "@/components/Panel/panelHeaderFit";
 
 const closeDockTerminalMock = vi.fn();
 
@@ -183,6 +184,22 @@ describe("DockPanelOffscreenContainer stable-wrapper relocation (#9927)", () => 
     act(() => captured!("panel-1", target));
     expect(wrapper.parentElement).toBe(target);
     expect(document.querySelector('[data-testid="docked-panel"]')).toBe(initial);
+  });
+
+  it("marks a parked pane so its header skips measurement, and not once revealed (#17049)", () => {
+    renderContainer();
+    const panel = document.querySelector('[data-testid="docked-panel"]')!;
+    const parking = `[${PANEL_PARKING_ATTRIBUTE}]`;
+    expect(panel.closest(parking)).not.toBeNull();
+
+    const target = document.createElement("div");
+    document.body.appendChild(target);
+    act(() => captured!("panel-1", target));
+    expect(panel.closest(parking)).toBeNull();
+
+    act(() => captured!("panel-1", null));
+    expect(panel.closest(parking)).not.toBeNull();
+    target.remove();
   });
 
   it("uses moveBefore to relocate the wrapper when the destination supports it", () => {

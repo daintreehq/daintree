@@ -213,8 +213,23 @@ describe("PluginViewDiagnosticsFallback", () => {
 
     fireEvent.click(button);
 
-    await waitFor(() => expect(button.textContent).toBe("Copied"));
+    await waitFor(() => expect(button.textContent).toContain("Copied"));
     expect(button.getAttribute("aria-label")).toBe("Copy diagnostics");
+  });
+
+  it("holds the copy button's width through the confirmation", async () => {
+    renderFallback();
+    const button = screen.getByTestId("plugin-view-diagnostics-copy");
+    const sizers = () =>
+      Array.from(button.querySelectorAll("[data-label]")).map((el) =>
+        el.getAttribute("data-label")
+      );
+    expect(sizers()).toEqual(expect.arrayContaining(["Copy diagnostics", "Copied"]));
+
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button.textContent).toContain("Copied"));
+    expect(sizers()).toEqual(expect.arrayContaining(["Copy diagnostics", "Copied"]));
   });
 
   it("opens the log file from View logs", () => {

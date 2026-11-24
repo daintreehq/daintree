@@ -3,6 +3,7 @@ import type { ProjectSettings, RunCommand } from "../types";
 import { useProjectStore } from "../store/projectStore";
 import { useProjectSettingsStore } from "../store/projectSettingsStore";
 import { projectClient } from "@/clients";
+import { withProjectSettingsWrite } from "@/clients/projectClient";
 import { logError } from "@/utils/logger";
 import { updateBrandingCache } from "./useProjectBranding";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -156,128 +157,71 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
     [targetId, useGlobalStore, setSettings, currentProject?.id, localAllDetectedRunners]
   );
 
-  const promoteToSaved = useCallback(
-    async (command: RunCommand) => {
+  // Pins and unpins edit the commands of a fresh read inside the settings write
+  // queue, not of this view's cached copy: other writers save to disk without
+  // touching the cache, and a whole save of the cache would revert them (#17199).
+  const editRunCommands = useCallback(
+    async (edit: (commands: RunCommand[]) => RunCommand[], failure: string) => {
       const currentSettings = useGlobalStore ? storeSettings : localSettings;
       if (!currentSettings || !targetId) return;
-      if (currentSettings.runCommands.some((c) => c.command === command.command)) return;
-
-      const updated = [...currentSettings.runCommands, command];
 
       try {
-        await projectClient.saveSettings(targetId, {
-          ...currentSettings,
-          runCommands: updated,
+        await withProjectSettingsWrite(targetId, async () => {
+          const stored = await projectClient.getSettings(targetId);
+          const commands = stored.runCommands ?? [];
+          const updated = edit(commands);
+          const newSettings = updated === commands ? stored : { ...stored, runCommands: updated };
+          if (newSettings !== stored) {
+            await projectClient.saveSettings(targetId, newSettings);
+          }
+
+          // Published before the queue moves on, so a later write's copy is never
+          // followed by this older one.
+          if (latestTargetIdRef.current !== targetId) return;
+
+          if (useGlobalStore) {
+            if (useProjectSettingsStore.getState().projectId === targetId) {
+              setSettings(newSettings);
+            }
+          } else {
+            setLocalSettings(newSettings);
+            const savedCommandStrings = new Set(updated.map((c) => c.command));
+            setLocalDetectedRunners(
+              localAllDetectedRunners.filter((d) => !savedCommandStrings.has(d.command))
+            );
+          }
         });
-
-        // Guard against race condition: verify project hasn't changed
-        if (latestTargetIdRef.current !== targetId) {
-          return;
-        }
-
-        const newSettings = {
-          ...currentSettings,
-          runCommands: updated,
-        };
-
-        if (useGlobalStore) {
-          // Double-check store still belongs to this project
-          if (useProjectSettingsStore.getState().projectId === targetId) {
-            setSettings(newSettings);
-          }
-        } else {
-          setLocalSettings(newSettings);
-          const savedCommandStrings = new Set(updated.map((c) => c.command));
-          setLocalDetectedRunners(
-            localAllDetectedRunners.filter((d) => !savedCommandStrings.has(d.command))
-          );
-        }
-
-        // Also update global store if this is the current project
-        if (targetId === currentProject?.id) {
-          if (useProjectSettingsStore.getState().projectId === targetId) {
-            setSettings(newSettings);
-          }
-        }
 
         setLocalError(null);
       } catch (err) {
-        logError("Failed to promote command", err);
-        setLocalError(formatErrorMessage(err, "Failed to promote command"));
+        logError(failure, err);
+        setLocalError(formatErrorMessage(err, failure));
         throw err;
       }
     },
-    [
-      useGlobalStore,
-      storeSettings,
-      localSettings,
-      targetId,
-      setSettings,
-      currentProject?.id,
-      localAllDetectedRunners,
-    ]
+    [useGlobalStore, storeSettings, localSettings, targetId, setSettings, localAllDetectedRunners]
+  );
+
+  const promoteToSaved = useCallback(
+    (command: RunCommand) =>
+      editRunCommands(
+        (commands) =>
+          commands.some((c) => c.command === command.command) ? commands : [...commands, command],
+        "Failed to promote command"
+      ),
+    [editRunCommands]
   );
 
   const removeFromSaved = useCallback(
-    async (commandString: string) => {
-      const currentSettings = useGlobalStore ? storeSettings : localSettings;
-      if (!currentSettings || !targetId) return;
-
-      const updated = currentSettings.runCommands.filter((c) => c.command !== commandString);
-
-      try {
-        await projectClient.saveSettings(targetId, {
-          ...currentSettings,
-          runCommands: updated,
-        });
-
-        // Guard against race condition: verify project hasn't changed
-        if (latestTargetIdRef.current !== targetId) {
-          return;
-        }
-
-        const newSettings = {
-          ...currentSettings,
-          runCommands: updated,
-        };
-
-        if (useGlobalStore) {
-          // Double-check store still belongs to this project
-          if (useProjectSettingsStore.getState().projectId === targetId) {
-            setSettings(newSettings);
-          }
-        } else {
-          setLocalSettings(newSettings);
-          // Recompute detected runners after removal
-          const savedCommandStrings = new Set(updated.map((c) => c.command));
-          setLocalDetectedRunners(
-            localAllDetectedRunners.filter((d) => !savedCommandStrings.has(d.command))
-          );
-        }
-
-        // Also update global store if this is the current project
-        if (targetId === currentProject?.id) {
-          if (useProjectSettingsStore.getState().projectId === targetId) {
-            setSettings(newSettings);
-          }
-        }
-
-        setLocalError(null);
-      } catch (err) {
-        logError("Failed to remove command", err);
-        setLocalError(formatErrorMessage(err, "Failed to remove command"));
-        throw err;
-      }
-    },
-    [
-      useGlobalStore,
-      storeSettings,
-      localSettings,
-      targetId,
-      setSettings,
-      currentProject?.id,
-      localAllDetectedRunners,
-    ]
+    (commandString: string) =>
+      editRunCommands(
+        (commands) =>
+          commands.some((c) => c.command === commandString)
+            ? commands.filter((c) => c.command !== commandString)
+            : commands,
+        "Failed to remove command"
+      ),
+    [editRunCommands]
   );
 
   const refresh = useCallback(async () => {

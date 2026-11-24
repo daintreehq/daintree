@@ -17,7 +17,7 @@ import { mintRemoteOperationId } from "@/clients/operationsClient";
 import { runHostOperation } from "@/hooks/useHostConnection";
 import { useDohertyGate } from "@/hooks";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { validateFolderName } from "@shared/utils/folderName";
+import { validateHostFolderName } from "@/utils/validateHostFolderName";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -33,9 +33,9 @@ import {
   EMOJI_SLOT_CLASS,
   OpenDestinationControl,
   PathCaption,
-  ProjectGroupField,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
+import { ProjectGroupField } from "./ProjectGroupField";
 import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 import { join as joinPath } from "@shared/utils/path";
 import {
@@ -251,7 +251,7 @@ export function CloneRepoDialog({
   const hasFinalizedRef = useRef(false);
   // The running clone's operation id, so Stop cancels this clone and no other.
   const cloneOpIdRef = useRef<string | null>(null);
-  const { groups, groupId, setGroupId } = useProjectCreationGroup(isOpen);
+  const { groups, groupId, setGroupId, createGroup } = useProjectCreationGroup(isOpen);
 
   const suggestedEmoji = useMemo(() => {
     const trimmed = folderName.trim();
@@ -510,7 +510,7 @@ export function CloneRepoDialog({
   // URL-derived name is non-empty — keeps the empty-state quiet while ensuring
   // a bad auto-derived name (e.g. URL ending in "con.git") still surfaces.
   const folderNameError =
-    folderNameEdited || folderName.trim() !== "" ? validateFolderName(folderName) : null;
+    folderNameEdited || folderName.trim() !== "" ? validateHostFolderName(folderName) : null;
   const isBusy = isCloning || isStarting;
   const canClone =
     isValidCloneUrl(url, shorthandHost) &&
@@ -916,6 +916,7 @@ export function CloneRepoDialog({
                   groups={groups}
                   value={groupId}
                   onChange={setGroupId}
+                  onCreate={createGroup}
                   disabled={isBusy}
                 />
                 <FormRow label="Open in" selfLabelled>

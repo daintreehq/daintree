@@ -9,11 +9,13 @@ import {
   useRef,
   useState,
 } from "react";
-import type { RefObject } from "react";
-import type { StagingFileEntry, GitStatus } from "@shared/types";
+import type { ConflictSideChoice, StagingFileEntry, GitStatus } from "@shared/types";
+import type { GitDiffSide, RepoOperationPin } from "@shared/types/git";
+import { isClientGitError } from "@/utils/clientGitError";
 import type { PanelLocation } from "@shared/types/panel";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 import {
   PANE_TOOLBAR_ICON_BUTTON_CLASS,
   PANE_TOOLBAR_ICON_CLASS,
@@ -27,6 +29,7 @@ import { useUIStore } from "@/store/uiStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
+import { findWorktreeByPath } from "@/lib/diffFreshness";
 import { useReviewCommitDraftStore } from "@/store/reviewCommitDraftStore";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
@@ -52,6 +55,7 @@ import {
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
 import { useNewPRLink } from "./useNewPRLink";
+import { usePullRequestTerm } from "./usePullRequestTerm";
 import { ReviewHubContext } from "./ReviewHubContext";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
@@ -103,6 +107,7 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { systemClient } from "@/clients/systemClient";
 import { announceOpenInEditorFallback } from "@/utils/openInEditorFallback";
+import { joinWorktreeFilePath } from "@/utils/worktreePaths";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
@@ -124,6 +129,7 @@ import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { BranchBadge } from "@/components/ui/BranchBadge";
 import { Badge } from "@/components/ui/badge";
 import { pluralize } from "@/lib/pluralize";
+import { toRepoOperationState } from "@/components/Git/repoOperationCopy";
 
 /**
  * Floor for the dialog-hosted body, so the pane stops resizing itself around
@@ -135,6 +141,21 @@ const DIALOG_MIN_BODY_HEIGHT = "min-h-[22rem]";
 
 /** Ragged widths so the loading rows read as file paths, not as a table. */
 const SKELETON_FILE_ROW_WIDTHS = ["w-64", "w-48", "w-56"] as const;
+
+/**
+ * The hub selection a diff was opened or retargeted for, compared by identity:
+ * the working-tree pick and base-branch file are replaced on every gesture, and
+ * a since-review pick is its path.
+ */
+type HubDiffSelection = object | string;
+
+interface HubDiffTarget {
+  panelId: string;
+  selection: HubDiffSelection;
+  filePath: string;
+  viewedKey: string | undefined;
+  fileSide: GitDiffSide | undefined;
+}
 
 export interface ReviewHubContentProps {
   /**
@@ -196,6 +217,21 @@ export interface ReviewHubContentProps {
 
 const selectNoProviderHealth = () => null;
 
+const BASE_BRANCH_STATUS: Record<string, GitStatus> = {
+  A: "added",
+  D: "deleted",
+  M: "modified",
+  R: "renamed",
+  C: "copied",
+  U: "conflicted",
+};
+
+// The panel keys its file actions and diff mode on this status, and stepping
+// reads it from the change set, so the open path must map it the same way.
+function baseBranchGitStatus(status: string): GitStatus {
+  return BASE_BRANCH_STATUS[status] ?? "modified";
+}
+
 /**
  * Self-contained Review & Commit surface. All staging-status fetches,
  * subscriptions, push/pull-rebase IPC, and UI interaction state live in this
@@ -230,7 +266,9 @@ export function ReviewHubContent({
     loadError,
     refresh,
     readWithCapture,
+    refreshWithCapture,
     debouncedBgRefreshRef,
+    isOpenPath,
     beginOpen: beginStatusOpen,
     reset: resetStatus,
   } = useReviewHubStatus({ isOpen, worktreePath, worktreeId });
@@ -316,6 +354,44 @@ export function ReviewHubContent({
   useEffect(() => {
     if (hasCommitDraft) setCommitSeed(null);
   }, [hasCommitDraft]);
+  const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
+  const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
+    null
+  );
+  const mainBranch = useWorktreeStore(
+    (state) =>
+      Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
+  );
+  // The comparison reads the two branch tips, never the working tree, so only
+  // a commit moving either one makes it stale. The base tip is read where that
+  // branch is checked out; a detached worktree keeps its old `branch` name.
+  const baseBranchHeads = useWorktreeStore((state) => {
+    let baseHead: string | undefined;
+    for (const wt of state.worktrees.values()) {
+      if (wt.branch === mainBranch && !wt.isDetached) {
+        baseHead = wt.worktreeChanges?.headOid;
+        break;
+      }
+    }
+    const head = findWorktreeByPath(state.worktrees, worktreePath)?.worktreeChanges?.headOid;
+    return `${baseHead ?? ""}..${head ?? ""}`;
+  });
+  const {
+    baseBranchFiles,
+    baseBranchLoading,
+    baseBranchRefreshing,
+    baseBranchError,
+    fetchBaseBranch,
+    invalidate: invalidateBaseBranch,
+    notifyHeadMoved: notifyBaseBranchHeadMoved,
+  } = useReviewHubBaseBranch({
+    worktreePath,
+    mainBranch,
+    currentBranch: status?.currentBranch,
+    heads: baseBranchHeads,
+    active: isOpen && diffMode === "base-branch",
+    setSelectedBaseBranchFile,
+  });
   const {
     pushError,
     showPushBanner,
@@ -332,6 +408,7 @@ export function ReviewHubContent({
     pullRebasing,
     handleCommit,
     handleCommitAndPush,
+    handleCommitThenReviewPush,
     handleRetryPush,
     handlePushClean,
     confirmPullRebase,
@@ -344,6 +421,7 @@ export function ReviewHubContent({
     setActionError,
     debouncedBgRefreshRef,
     onCommitted: dropCommittedMessage,
+    onHeadMoved: notifyBaseBranchHeadMoved,
   });
   const [selectedFile, setSelectedFile] = useState<{
     path: string;
@@ -360,27 +438,6 @@ export function ReviewHubContent({
     useCallback((state) => selectViewedSet(state, worktreePath), [worktreePath])
   );
   const setStoreViewed = useDiffViewedStore((state) => state.setViewed);
-  const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
-  const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
-    null
-  );
-  const mainBranch = useWorktreeStore(
-    (state) =>
-      Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
-  );
-  const {
-    baseBranchFiles,
-    baseBranchLoading,
-    baseBranchError,
-    fetchBaseBranch,
-    invalidate: invalidateBaseBranch,
-    reset: resetBaseBranch,
-  } = useReviewHubBaseBranch({
-    worktreePath,
-    mainBranch,
-    currentBranch: status?.currentBranch,
-    setSelectedBaseBranchFile,
-  });
   // Diff panels opened by this hub. The selection state above stays the record
   // of "a diff is open" (the hub clears it on commit, worktree switch, and
   // conflict-mode entry), but the panel itself owns stepping between files once
@@ -392,6 +449,44 @@ export function ReviewHubContent({
   const [selectedSinceReviewPath, setSelectedSinceReviewPath] = useState<string | null>(null);
   const hasSinceReviewSelection = selectedSinceReviewPath !== null;
   const dialogStack = usePanelDialogStore((state) => state.dialogStack);
+  // The file this hub last put in its panel, and the selection it put there
+  // for. Once open, the panel's own sidebar and stepper move it without the
+  // hub hearing about it, so this is how the hub tells "the panel still shows
+  // my file" from "the user stepped elsewhere".
+  const hubTargetRef = useRef<HubDiffTarget | null>(null);
+
+  // Point the open panel at the hub's file. A new selection is the user asking
+  // for that file, so it always lands. The same selection re-run (a poll
+  // moving its status or section) only follows while the panel is still on
+  // what the hub last put there: a background refresh must never pull a panel
+  // the user stepped to another file back to the one first clicked.
+  const retargetHubDiff = useCallback(
+    (
+      id: string,
+      selection: HubDiffSelection,
+      filePath: string,
+      fileStatus: GitStatus,
+      viewedKey: string | undefined,
+      fileSide?: GitDiffSide
+    ) => {
+      const store = usePanelStore.getState();
+      const last = hubTargetRef.current;
+      const panel = store.panelsById[id];
+      if (
+        last?.panelId === id &&
+        last.selection === selection &&
+        panel?.kind === "diff" &&
+        (panel.filePath !== last.filePath ||
+          panel.viewedKey !== last.viewedKey ||
+          panel.fileSide !== last.fileSide)
+      ) {
+        return;
+      }
+      hubTargetRef.current = { panelId: id, selection, filePath, viewedKey, fileSide };
+      store.setDiffPanelFile(id, filePath, fileStatus, viewedKey, fileSide);
+    },
+    []
+  );
 
   // Layer the diff above this hub when the hub is itself the presented dialog;
   // a plain open would supersede it, destroying the staging surface (draft,
@@ -419,6 +514,7 @@ export function ReviewHubContent({
   // if something is layered above it.
   useEffect(() => {
     if (!diffPanelId || dialogStack.includes(diffPanelId)) return;
+    hubTargetRef.current = null;
     setDiffPanelId(null);
     setSelectedFile(null);
     setSelectedBaseBranchFile(null);
@@ -462,11 +558,7 @@ export function ReviewHubContent({
   const savedScrollTop = useRef(0);
   const conflictSectionRef = useRef<HTMLDivElement>(null);
   const unstagedSectionRef = useRef<HTMLDivElement>(null);
-  // Row element that opened a diff modal; AppDialog falls back to it when the
-  // trigger unmounted (e.g. the file left the list while the modal was open).
-  const diffTriggerRef = useRef<HTMLElement | null>(null);
-  const openSinceReviewFile = useCallback((path: string, trigger: HTMLElement) => {
-    diffTriggerRef.current = trigger;
+  const openSinceReviewFile = useCallback((path: string) => {
     setSelectedSinceReviewPath(path);
   }, []);
   // Clearing or replacing a mark drops the reviewed state for good (the point
@@ -559,6 +651,7 @@ export function ReviewHubContent({
     focusedIndex,
     setFocusedIndex,
     writeCursorKey,
+    reconcileCursor,
     fileListRef,
     movingListFocusRef,
     stagedListRef,
@@ -594,11 +687,11 @@ export function ReviewHubContent({
     resetForPathRef.current = worktreePath;
     // Bumps the comparison's request generation, so the old worktree's answer
     // can't land as this one's, and drops its cached files.
-    resetBaseBranch();
+    invalidateBaseBranch();
     selectionAnchorRef.current = null;
     setFocusedIndex(-1);
     writeCursorKey(null);
-  }, [worktreePath, resetBaseBranch, selectionAnchorRef, setFocusedIndex, writeCursorKey]);
+  }, [worktreePath, invalidateBaseBranch, selectionAnchorRef, setFocusedIndex, writeCursorKey]);
 
   const sortedBaseBranchFiles = useMemo(
     () =>
@@ -631,8 +724,9 @@ export function ReviewHubContent({
 
   // Changesets handed to the diff modals so they can render the
   // review-workspace sidebar. Indexed identically to the modal's
-  // `currentFileIndex`, and viewed keys match the hub's own conventions so
-  // markers stay in sync across both surfaces.
+  // `currentFileIndex`, and viewed keys match the hub's own rows so markers
+  // stay in sync across both surfaces; `side` tells a partially staged file's
+  // twins apart.
   const workingTreeChangeSet = useMemo(
     (): DiffChangeSetEntry[] =>
       navigableItems.map((item) => ({
@@ -640,7 +734,7 @@ export function ReviewHubContent({
         status: item.file.status,
         insertions: item.file.insertions,
         deletions: item.file.deletions,
-        viewedKey: `${item.section}:${item.file.path}`,
+        viewedKey: workingTreeViewedKey(item.file.path),
         side: item.section,
       })),
     [navigableItems]
@@ -648,17 +742,9 @@ export function ReviewHubContent({
 
   const baseBranchChangeSet = useMemo((): DiffChangeSetEntry[] | undefined => {
     if (!sortedBaseBranchFiles) return undefined;
-    const statusMap: Record<string, GitStatus> = {
-      A: "added",
-      D: "deleted",
-      M: "modified",
-      R: "renamed",
-      C: "copied",
-      U: "conflicted",
-    };
     return sortedBaseBranchFiles.map((file) => ({
       path: file.path,
-      status: statusMap[file.status] ?? "modified",
+      status: baseBranchGitStatus(file.status),
       insertions: file.insertions,
       deletions: file.deletions,
       viewedKey: `base:${file.path}`,
@@ -728,28 +814,33 @@ export function ReviewHubContent({
   const liveWorkingTreeItem =
     selectedFileIndex !== null ? navigableItems[selectedFileIndex] : undefined;
   const liveWorkingTreeStatus = liveWorkingTreeItem?.file.status ?? selectedFile?.status;
-  // Section-scoped, matching `workingTreeChangeSet`: it is the only thing that
-  // separates the staged and unstaged rows of a partially staged file, which
-  // otherwise share both path and status.
-  const liveWorkingTreeViewedKey = liveWorkingTreeItem
-    ? `${liveWorkingTreeItem.section}:${liveWorkingTreeItem.file.path}`
-    : selectedFile
-      ? `${selectedFile.section}:${selectedFile.path}`
-      : undefined;
+  // The panel's cursor, matching `workingTreeChangeSet`: the side is the only
+  // thing that separates the staged and unstaged rows of a partially staged
+  // file, which otherwise share path, status and Viewed key.
+  const liveWorkingTreePath = liveWorkingTreeItem?.file.path ?? selectedFile?.path;
+  const liveWorkingTreeViewedKey =
+    liveWorkingTreePath === undefined ? undefined : workingTreeViewedKey(liveWorkingTreePath);
+  const liveWorkingTreeSide = liveWorkingTreeItem?.section ?? selectedFile?.section;
   useEffect(() => {
     if (!selectedFile || !liveWorkingTreeStatus) return;
     const store = usePanelDialogStore.getState();
     if (diffPanelId) {
-      usePanelStore
-        .getState()
-        .setDiffPanelFile(
-          diffPanelId,
-          selectedFile.path,
-          liveWorkingTreeStatus,
-          liveWorkingTreeViewedKey
-        );
+      retargetHubDiff(
+        diffPanelId,
+        selectedFile,
+        selectedFile.path,
+        liveWorkingTreeStatus,
+        liveWorkingTreeViewedKey,
+        liveWorkingTreeSide
+      );
       return;
     }
+    const opened = {
+      selection: selectedFile,
+      filePath: selectedFile.path,
+      viewedKey: liveWorkingTreeViewedKey,
+      fileSide: liveWorkingTreeSide,
+    };
     void openDiffDialog(store, {
       kind: "diff",
       filePath: selectedFile.path,
@@ -758,18 +849,30 @@ export function ReviewHubContent({
       changeSet: changeSetsRef.current.workingTree,
       title: basename(selectedFile.path),
       ...(liveWorkingTreeViewedKey && { viewedKey: liveWorkingTreeViewedKey }),
+      ...(liveWorkingTreeSide && { fileSide: liveWorkingTreeSide }),
       ...(worktreeId && { worktreeId }),
     })
       // A refused or superseded open resolves null. Drop the selection with it,
       // or this effect sees "selection, no panel" and retries forever.
-      .then((newPanelId) => (newPanelId ? setDiffPanelId(newPanelId) : setSelectedFile(null)));
+      .then((newPanelId) => {
+        if (!newPanelId) {
+          setSelectedFile(null);
+          return;
+        }
+        // What was asked for, not what the panel shows by now: a step taken
+        // before the open settled is the user's, not the hub's.
+        hubTargetRef.current = { panelId: newPanelId, ...opened };
+        setDiffPanelId(newPanelId);
+      });
   }, [
     selectedFile,
     liveWorkingTreeStatus,
     liveWorkingTreeViewedKey,
+    liveWorkingTreeSide,
     diffPanelId,
     worktreeId,
     openDiffDialog,
+    retargetHubDiff,
   ]);
 
   useEffect(() => {
@@ -777,49 +880,89 @@ export function ReviewHubContent({
     const store = usePanelDialogStore.getState();
     const viewedKey = `base:${selectedBaseBranchFile.path}`;
     if (diffPanelId) {
-      usePanelStore
-        .getState()
-        .setDiffPanelFile(diffPanelId, selectedBaseBranchFile.path, "modified", viewedKey);
+      retargetHubDiff(
+        diffPanelId,
+        selectedBaseBranchFile,
+        selectedBaseBranchFile.path,
+        baseBranchGitStatus(selectedBaseBranchFile.status),
+        viewedKey
+      );
       return;
     }
     void openDiffDialog(store, {
       kind: "diff",
       filePath: selectedBaseBranchFile.path,
-      fileStatus: "modified",
+      fileStatus: baseBranchGitStatus(selectedBaseBranchFile.status),
       diffSource: "base-branch",
       baseBranch: mainBranch,
       changeSet: changeSetsRef.current.baseBranch,
       title: basename(selectedBaseBranchFile.path),
       viewedKey,
       ...(worktreeId && { worktreeId }),
-    }).then((newPanelId) =>
-      newPanelId ? setDiffPanelId(newPanelId) : setSelectedBaseBranchFile(null)
-    );
-  }, [selectedBaseBranchFile, diffPanelId, worktreeId, mainBranch, openDiffDialog]);
+    }).then((newPanelId) => {
+      if (!newPanelId) {
+        setSelectedBaseBranchFile(null);
+        return;
+      }
+      hubTargetRef.current = {
+        panelId: newPanelId,
+        selection: selectedBaseBranchFile,
+        filePath: selectedBaseBranchFile.path,
+        viewedKey,
+        fileSide: undefined,
+      };
+      setDiffPanelId(newPanelId);
+    });
+  }, [
+    selectedBaseBranchFile,
+    diffPanelId,
+    worktreeId,
+    mainBranch,
+    openDiffDialog,
+    retargetHubDiff,
+  ]);
 
   useEffect(() => {
     if (!selectedSinceReviewPath) return;
     const store = usePanelDialogStore.getState();
     const viewedKey = `since-review:${selectedSinceReviewPath}`;
+    const fileStatus =
+      changeSetsRef.current.sinceReview?.find((entry) => entry.path === selectedSinceReviewPath)
+        ?.status ?? "modified";
     if (diffPanelId) {
-      usePanelStore
-        .getState()
-        .setDiffPanelFile(diffPanelId, selectedSinceReviewPath, "modified", viewedKey);
+      retargetHubDiff(
+        diffPanelId,
+        selectedSinceReviewPath,
+        selectedSinceReviewPath,
+        fileStatus,
+        viewedKey
+      );
       return;
     }
     void openDiffDialog(store, {
       kind: "diff",
       filePath: selectedSinceReviewPath,
-      fileStatus: "modified",
+      fileStatus,
       diffSource: "since-review",
       changeSet: changeSetsRef.current.sinceReview,
       title: basename(selectedSinceReviewPath),
       viewedKey,
       ...(worktreeId && { worktreeId }),
-    }).then((newPanelId) =>
-      newPanelId ? setDiffPanelId(newPanelId) : setSelectedSinceReviewPath(null)
-    );
-  }, [selectedSinceReviewPath, diffPanelId, worktreeId, openDiffDialog]);
+    }).then((newPanelId) => {
+      if (!newPanelId) {
+        setSelectedSinceReviewPath(null);
+        return;
+      }
+      hubTargetRef.current = {
+        panelId: newPanelId,
+        selection: selectedSinceReviewPath,
+        filePath: selectedSinceReviewPath,
+        viewedKey,
+        fileSide: undefined,
+      };
+      setDiffPanelId(newPanelId);
+    });
+  }, [selectedSinceReviewPath, diffPanelId, worktreeId, openDiffDialog, retargetHubDiff]);
 
   // Keep the open panel's change set in step with the live poll. The store
   // bails on a value-equal set, so a quiet poll costs nothing.
@@ -942,6 +1085,10 @@ export function ReviewHubContent({
     return null;
   });
 
+  // The provider a linked pull request came from; asked whatever the chip shows
+  // so the word is in hand by the time a pull request appears.
+  const prTerm = usePullRequestTerm(forgeHealthProviderId);
+
   const providerHealth = useForgeProviderHealthStore(
     forgeHealthProviderId
       ? selectForgeProviderHealth(forgeHealthProviderId)
@@ -1025,9 +1172,11 @@ export function ReviewHubContent({
     handleToggleUnstaged,
   } = useReviewHubStagingActions({
     worktreePath,
+    isOpenPath,
     refresh,
     derivedStaged,
     derivedUnstaged,
+    unstaged: status?.unstaged ?? null,
     selectedPaths,
     selectionSection,
     setActionError,
@@ -1043,10 +1192,11 @@ export function ReviewHubContent({
 
   useEffect(() => {
     if (isOpen) {
-      // This branch also re-runs when worktreePath changes while open (via
-      // `refresh`'s identity): drop the previous worktree's staging status so
-      // the file list and readiness rail never mix two worktrees' state. The
-      // cache is keyed by worktree, so what it seeds is this worktree's.
+      // This branch also re-runs when worktreePath changes while open: drop the
+      // previous worktree's staging status so the file list and readiness rail
+      // never mix two worktrees' state. The cache is keyed by worktree, so what
+      // it seeds is this worktree's. The status subscription has already sent
+      // the opening's read, after its first capture.
       beginStatusOpen();
       setActionError(null);
       clearPushError();
@@ -1054,15 +1204,14 @@ export function ReviewHubContent({
       const hasDraft =
         useReviewCommitDraftStore.getState().draftsByWorktree[worktreePath] !== undefined;
       setCommitSeed(seed && !hasDraft ? { worktreePath, message: seed } : null);
-      void refresh();
     } else {
       // Abandons every in-flight read by bumping its request generation, and
       // clears the loading flags those reads' `finally` blocks no longer will:
       // left true they strand `useDohertyGate` (skeleton flashes on reopen) and
-      // deadlock base-branch (handleDiffModeChange refuses to refetch while
+      // deadlock base-branch (its Refresh refuses to ask again while
       // baseBranchLoading is true).
       resetStatus();
-      resetBaseBranch();
+      invalidateBaseBranch();
       resetPush();
       setActionError(null);
       setSelectedFile(null);
@@ -1090,13 +1239,12 @@ export function ReviewHubContent({
     }
   }, [
     isOpen,
-    refresh,
     writeCursorKey,
     worktreePath,
     beginStatusOpen,
     clearPushError,
     resetStatus,
-    resetBaseBranch,
+    invalidateBaseBranch,
     resetPush,
     setFocusedIndex,
     setSelectedPaths,
@@ -1104,12 +1252,35 @@ export function ReviewHubContent({
     selectionAnchorRef,
   ]);
 
+  const repoState = status?.repoState ?? "CLEAN";
+  const isOperationState = toRepoOperationState(repoState) !== null;
+
   useEffect(() => {
     if (!isOpen || !autoStageOnOpen) return;
     if (!status || !statusIsFresh) return;
     if (hasAutoStagedRef.current) return;
+    // Never over a conflict or a halted operation: staging everything would
+    // stage conflicted files markers and all, which marks them resolved, and
+    // the conflict panel owns what gets staged there. Opening the hub to
+    // resolve or continue one is ordinary (#17559), not an edge case. The
+    // one-shot is spent here too, as it is over staged files below: the
+    // tree the operation leaves when it finishes is not what was opened.
+    const halted = status.repoState !== "CLEAN" && status.repoState !== "DIRTY";
+    if (status.conflicted.length > 0 || halted) {
+      hasAutoStagedRef.current = true;
+      return;
+    }
     if (status.staged.length > 0) {
       // Already staged from a prior session — skip and mark as handled.
+      hasAutoStagedRef.current = true;
+      return;
+    }
+    // `git add -A` would record every conflicted path as resolved, markers and
+    // all, and conflicts sit in neither list, so one unrelated edit was enough
+    // to set it off (#17552). Mid-operation there is no commit to prepare
+    // either. Consumed rather than deferred: a conflict cleared later in this
+    // opening must not trigger a repository-wide add the user never asked for.
+    if (status.conflicted.length > 0 || status.conflictedFiles.length > 0 || isOperationState) {
       hasAutoStagedRef.current = true;
       return;
     }
@@ -1128,6 +1299,8 @@ export function ReviewHubContent({
         await window.electron.git.stageAll(worktreePath);
         await refresh();
       } catch (err) {
+        // Its Retry would stage the worktree the hub has since moved off.
+        if (!isOpenPath(worktreePath)) return;
         hasAutoStagedRef.current = false;
         setActionError({
           title: "Couldn't stage all files",
@@ -1141,8 +1314,10 @@ export function ReviewHubContent({
     autoStageOnOpen,
     status,
     statusIsFresh,
+    isOperationState,
     refresh,
     worktreePath,
+    isOpenPath,
     handleStageAll,
     debouncedBgRefreshRef,
   ]);
@@ -1168,95 +1343,139 @@ export function ReviewHubContent({
     }
   }, [diffMode, marksLoaded, hasReviewMark]);
 
+  // Undefined until a status is read; null once it says HEAD is detached.
+  const statusBranch = status ? status.currentBranch : undefined;
   useEffect(() => {
-    if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
+    // On the base itself or detached there is nothing to compare, and the
+    // `vs` option is disabled for both.
+    if (diffMode === "base-branch" && (statusBranch === null || statusBranch === mainBranch)) {
       invalidateBaseBranch();
       setDiffMode("working-tree");
       setSelectedBaseBranchFile(null);
     }
-  }, [status?.currentBranch, mainBranch, diffMode, invalidateBaseBranch]);
-  const handleAbortOperation = useCallback(async () => {
-    setActionError(null);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.abortRepositoryOperation(worktreePath);
-      await refresh();
-    } catch (err) {
-      setActionError({
-        title: "Couldn't abort repository operation",
-        detail: formatErrorMessage(err, "Failed to abort repository operation"),
-      });
-      throw err;
-    }
-  }, [worktreePath, refresh, debouncedBgRefreshRef]);
-
-  const handleContinueOperation = useCallback(
-    async function continueOperation(): Promise<void> {
+  }, [statusBranch, mainBranch, diffMode, invalidateBaseBranch]);
+  // Both carry the operation the panel showed when the user chose (#17559),
+  // and Main refuses if another has replaced it. That refusal ran no git, so
+  // the banner offers no Retry, which would only send the same stale choice
+  // again; the refresh puts the operation that is there now on screen to
+  // choose from instead.
+  const handleAbortOperation = useCallback(
+    async (chosen: RepoOperationPin) => {
       setActionError(null);
       debouncedBgRefreshRef.current?.cancel();
       try {
-        await window.electron.git.continueRepositoryOperation(worktreePath);
+        await window.electron.git.abortRepositoryOperation(worktreePath, chosen);
         await refresh();
       } catch (err) {
-        setActionError({
-          title: "Couldn't continue repository operation",
-          detail: formatErrorMessage(err, "Failed to continue repository operation"),
-          retry: () => void continueOperation().catch(() => {}),
-        });
+        // The conflict writes below all still throw for ConflictPanel, which
+        // guards a move itself; only the banner is this hub's, and it belongs
+        // to the worktree the write was for (#17584).
+        if (isOpenPath(worktreePath)) {
+          const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+          setActionError({
+            title: "Couldn't abort repository operation",
+            detail: formatErrorMessage(err, "Failed to abort repository operation"),
+          });
+          if (changed) void refresh().catch(() => {});
+        }
         throw err;
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
+  );
+
+  // Each handler retries itself from its own error banner. A named function
+  // expression referenced from inside its own body is a declaration the React
+  // Compiler cannot hoist, and it abandons the whole component over it, so the
+  // recursion goes through a local const instead. The retry keeps the choice it
+  // was made for, so it continues that operation or is refused, never whichever
+  // one has replaced it since.
+  const handleContinueOperation = useCallback(
+    (chosen: RepoOperationPin): Promise<void> => {
+      const continueOperation = async (): Promise<void> => {
+        setActionError(null);
+        debouncedBgRefreshRef.current?.cancel();
+        try {
+          await window.electron.git.continueRepositoryOperation(worktreePath, chosen);
+          await refresh();
+        } catch (err) {
+          if (isOpenPath(worktreePath)) {
+            const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+            setActionError({
+              title: "Couldn't continue repository operation",
+              detail: formatErrorMessage(err, "Failed to continue repository operation"),
+              ...(changed ? {} : { retry: () => void continueOperation().catch(() => {}) }),
+            });
+            if (changed) void refresh().catch(() => {});
+          }
+          throw err;
+        }
+      };
+      return continueOperation();
+    },
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   const handleOpenInEditor = useCallback(
-    async function openInEditor(args: string | { path: string; line?: number }): Promise<void> {
-      setActionError(null);
-      const filePath = typeof args === "string" ? args : args.path;
-      const line = typeof args === "string" ? undefined : args.line;
-      try {
-        const base = worktreePath.replace(/\\/g, "/").replace(/\/+$/, "");
-        const tail = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+    (args: string | { path: string; line?: number }): Promise<void> => {
+      const openInEditor = async (): Promise<void> => {
+        setActionError(null);
+        const filePath = typeof args === "string" ? args : args.path;
+        const line = typeof args === "string" ? undefined : args.line;
+        // Built before the try: the compiler rejects conditionals and optional
+        // chaining inside one. Read at click time rather than subscribing —
+        // without it the main process never loads the project's preferred-editor
+        // setting.
         const payload: { path: string; line?: number; projectId?: string } = {
-          path: `${base}/${tail}`,
-          // Read at click time rather than subscribing — without it the main
-          // process never loads the project's preferred-editor setting.
+          path: joinWorktreeFilePath(worktreePath, filePath),
           projectId: useProjectStore.getState().currentProject?.id,
         };
         if (typeof line === "number" && Number.isFinite(line) && line > 0) {
           payload.line = line;
         }
-        announceOpenInEditorFallback(await window.electron.system.openInEditor(payload));
-      } catch (err) {
-        setActionError({
-          title: "Couldn't open file in editor",
-          detail: formatErrorMessage(err, "Failed to open file in editor"),
-          retry: () => void openInEditor(args),
-        });
-      }
+        try {
+          announceOpenInEditorFallback(await window.electron.system.openInEditor(payload));
+        } catch (err) {
+          setActionError({
+            title: "Couldn't open file in editor",
+            detail: formatErrorMessage(err, "Failed to open file in editor"),
+            retry: () => void openInEditor(),
+          });
+        }
+      };
+      return openInEditor();
     },
     [worktreePath]
   );
 
   const handleCheckoutOursTheirs = useCallback(
-    async (filePath: string, side: "ours" | "theirs") => {
+    async (filePath: string, choice: ConflictSideChoice) => {
       setActionError(null);
       debouncedBgRefreshRef.current?.cancel();
       try {
-        await window.electron.git.checkoutOursTheirs(worktreePath, filePath, side);
+        await window.electron.git.checkoutOursTheirs(worktreePath, filePath, choice);
         await refresh();
       } catch (err) {
-        setActionError({
-          title: side === "ours" ? "Couldn't take ours" : "Couldn't take theirs",
-          detail: formatErrorMessage(
-            err,
-            side === "ours" ? "Failed to take ours" : "Failed to take theirs"
-          ),
-        });
+        if (isOpenPath(worktreePath)) {
+          // Main refuses a choice the index no longer agrees with, and the read
+          // that would have shown the change was cancelled above: read again so
+          // the row offers what is there now.
+          debouncedBgRefreshRef.current?.();
+          const action =
+            choice.resolution === "delete"
+              ? "delete file"
+              : choice.side === "ours"
+                ? "take ours"
+                : "take theirs";
+          setActionError({
+            title: `Couldn't ${action}`,
+            detail: formatErrorMessage(err, `Failed to ${action}`),
+          });
+        }
         throw err;
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   // Same body as handleStageFile but rethrows so ConflictPanel can roll back
@@ -1271,14 +1490,16 @@ export function ReviewHubContent({
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError({
-          title: "Couldn't mark file resolved",
-          detail: formatErrorMessage(err, "Failed to mark file resolved"),
-        });
+        if (isOpenPath(worktreePath)) {
+          setActionError({
+            title: "Couldn't mark file resolved",
+            detail: formatErrorMessage(err, "Failed to mark file resolved"),
+          });
+        }
         throw err;
       }
     },
-    [worktreePath, refresh, debouncedBgRefreshRef]
+    [worktreePath, isOpenPath, refresh, debouncedBgRefreshRef]
   );
 
   const handleFocusBlocker = useCallback(
@@ -1316,6 +1537,55 @@ export function ReviewHubContent({
     [fileListExpanded, setFileListExpanded, worktreePath, fileListRef]
   );
 
+  // A bulk button that unmounted while it held focus, recorded mid-commit and
+  // handed on by the layout effect below once every mutation has landed — the
+  // composer's enabled state and the list's rows are then the new ones. Owned
+  // here, not by the section: staging everything can leave a clean tree, which
+  // removes both sections and the composer in that same commit.
+  const orphanedBulkFocusRef = useRef<{
+    section: FileStageRowSection;
+    button: HTMLButtonElement;
+  } | null>(null);
+  // Whether this hub's layout effects are connected. An Activity hide (or a
+  // StrictMode replay) disconnects them parent-first, so this clears before the
+  // button's own cleanup reports: a record taken then could only be consumed
+  // on reveal, against whatever the hidden tree has since become.
+  const bulkHandoffLiveRef = useRef(false);
+  useLayoutEffect(() => {
+    bulkHandoffLiveRef.current = true;
+    return () => {
+      bulkHandoffLiveRef.current = false;
+      orphanedBulkFocusRef.current = null;
+    };
+  }, []);
+  const handleBulkActionFocusOrphaned = useCallback(
+    (section: FileStageRowSection, button: HTMLButtonElement) => {
+      if (bulkHandoffLiveRef.current) orphanedBulkFocusRef.current = { section, button };
+    },
+    []
+  );
+  const refreshButtonRef = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    const orphan = orphanedBulkFocusRef.current;
+    if (orphan === null) return;
+    orphanedBulkFocusRef.current = null;
+    // Still connected: a StrictMode replay or an Activity hide, not a removal.
+    if (orphan.button.isConnected) return;
+    // Something else took focus during the commit; it keeps it.
+    const doc = orphan.button.ownerDocument;
+    if (doc.activeElement !== null && doc.activeElement !== doc.body) return;
+    // Staging leaves something to commit, so the message is next; unstaging
+    // leaves files to pick through, and the list is where that happens.
+    // Refresh is the one control a clean tree still has.
+    const message =
+      orphan.section === "unstaged"
+        ? rootRef.current?.querySelector<HTMLTextAreaElement>(
+            '[data-testid="review-hub-commit-message"]:not(:disabled)'
+          )
+        : null;
+    (message ?? fileListRef.current ?? refreshButtonRef.current)?.focus({ preventScroll: true });
+  });
+
   const handleReadinessCta = useCallback(
     (cta: ReviewReadinessCta) => {
       switch (cta.kind) {
@@ -1352,23 +1622,16 @@ export function ReviewHubContent({
   // same way and hand focus back to the same row on close. A second opener
   // would drift from this one the first time either changed.
   const openFileDiff = useCallback(
-    (
-      section: FileStageRowSection,
-      filePath: string,
-      fileStatus: GitStatus,
-      triggerEl: HTMLElement | null
-    ) => {
+    (section: FileStageRowSection, filePath: string, fileStatus: GitStatus) => {
       setSelectedPaths((prev) => (prev.size === 0 ? prev : new Set()));
       setSelectionSection((prev) => (prev === null ? prev : null));
       selectionAnchorRef.current = filePath;
-      diffTriggerRef.current = triggerEl;
       setSelectedFile({ path: filePath, status: fileStatus, section });
     },
     [setSelectedPaths, setSelectionSection, selectionAnchorRef]
   );
 
-  const handleOpenBaseBranchFile = useCallback((file: CrossWorktreeFile, trigger: HTMLElement) => {
-    diffTriggerRef.current = trigger;
+  const handleOpenBaseBranchFile = useCallback((file: CrossWorktreeFile) => {
     setSelectedBaseBranchFile(file);
   }, []);
 
@@ -1433,12 +1696,7 @@ export function ReviewHubContent({
       }
 
       // Plain click: clear any selection, open diff.
-      openFileDiff(
-        section,
-        filePath,
-        fileStatus,
-        e.currentTarget instanceof HTMLElement ? e.currentTarget : null
-      );
+      openFileDiff(section, filePath, fileStatus);
     },
     [
       derivedStaged,
@@ -1469,11 +1727,7 @@ export function ReviewHubContent({
   });
 
   const renderRowMenu = useCallback(
-    (
-      file: StagingFileEntry,
-      section: FileStageRowSection,
-      triggerRef: RefObject<HTMLElement | null>
-    ) =>
+    (file: StagingFileEntry, section: FileStageRowSection) =>
       renderFileRowMenuItems(
         {
           absolutePath: join(worktreePath, file.path),
@@ -1485,22 +1739,16 @@ export function ReviewHubContent({
         {
           // Routed through the hub's own opener so the menu lands on the same
           // overlay a click does, with the same selection reset.
-          onOpenDiff: () => openFileDiff(section, file.path, file.status, triggerRef.current),
+          onOpenDiff: () => openFileDiff(section, file.path, file.status),
           hasChanges: true,
         }
       ),
     [renderFileRowMenuItems, worktreePath, openFileDiff]
   );
 
-  const handleDiffModeChange = useCallback(
-    (mode: DiffMode) => {
-      setDiffMode(mode);
-      if (mode === "base-branch" && baseBranchFiles === null && !baseBranchLoading) {
-        void fetchBaseBranch();
-      }
-    },
-    [baseBranchFiles, baseBranchLoading, fetchBaseBranch]
-  );
+  // Entering base-branch mode needs no fetch here: the comparison hook asks
+  // whenever it is on screen without a current answer.
+  const handleDiffModeChange = useCallback((mode: DiffMode) => setDiffMode(mode), []);
 
   useReviewHubKeyboard({
     isOpen,
@@ -1513,6 +1761,8 @@ export function ReviewHubContent({
     setSelectedFile,
     selectedBaseBranchFile,
     setSelectedBaseBranchFile,
+    selectedSinceReviewPath,
+    setSelectedSinceReviewPath,
     fileListExpanded,
     diffMode,
     openFileDiff,
@@ -1535,10 +1785,12 @@ export function ReviewHubContent({
 
   if (!isOpen) return null;
 
-  const totalChanges =
-    (status?.staged.length ?? 0) +
-    (status?.unstaged.length ?? 0) +
-    (status?.conflicted.length ?? 0);
+  // A partially staged path appears in both sections but is one changed file.
+  const totalChanges = new Set([
+    ...(status?.staged ?? []).map((f) => f.path),
+    ...(status?.unstaged ?? []).map((f) => f.path),
+    ...(status?.conflicted ?? []),
+  ]).size;
   const hasConflicts = (status?.conflicted.length ?? 0) > 0;
   const hasStagedSelection = selectionSection === "staged" && selectedPaths.size > 0;
   const hasUnstagedSelection = selectionSection === "unstaged" && selectedPaths.size > 0;
@@ -1556,13 +1808,10 @@ export function ReviewHubContent({
       : diffMode === "since-review"
         ? sinceReviewView.kind === "comparing"
         : loading;
-  const refreshSpinning = diffMode === "working-tree" && isBackgroundRefreshing;
-  const repoState = status?.repoState ?? "CLEAN";
-  const isOperationState =
-    repoState === "MERGING" ||
-    repoState === "REBASING" ||
-    repoState === "CHERRY_PICKING" ||
-    repoState === "REVERTING";
+  const refreshSpinning =
+    diffMode === "base-branch"
+      ? baseBranchRefreshing
+      : diffMode === "working-tree" && isBackgroundRefreshing;
   // The main worktree can sit on any branch, so nothing bounds the name: past
   // 20 characters the label ends early so the mode switch keeps its size in
   // the one-row header, and the full name becomes its accessible name. Cut at
@@ -1632,6 +1881,7 @@ export function ReviewHubContent({
                 worktreePR={worktreePR}
                 worktreePath={worktreePath}
                 newPRLink={newPRLink}
+                prTerm={prTerm}
                 onOpenExternal={(url) => void systemClient.openExternal(url)}
               />
             </div>
@@ -1720,15 +1970,15 @@ export function ReviewHubContent({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
+                    ref={refreshButtonRef}
                     onClick={() => {
                       if (diffMode === "base-branch") {
                         if (!baseBranchLoading) void fetchBaseBranch();
                       } else if (diffMode === "since-review") {
                         if (!refreshBusy) reviewMark.retryCompare();
                       } else if (!loading) {
-                        void refresh();
-                        // A fresh capture too, so a mark covers what this read shows.
-                        readWithCapture(true);
+                        // After a fresh capture, so a mark covers what this read shows.
+                        refreshWithCapture();
                       }
                     }}
                     // Not `disabled`: pressing it would drop keyboard focus to the page.
@@ -2171,7 +2421,7 @@ export function ReviewHubContent({
                         {/* One label in both states (house rule: toggle labels
                             never change); the chevron and `aria-expanded`
                             carry open versus closed. */}
-                        <span>Files ({totalChanges})</span>
+                        <span className="tabular-nums">Files ({totalChanges})</span>
                       </button>
                     </div>
                     {fileListExpanded && (
@@ -2242,13 +2492,16 @@ export function ReviewHubContent({
                               movingListFocusRef.current
                             )
                               return;
-                            if (focusedIndex < 0) {
+                            // Reconciled first: focus handed here in the commit
+                            // that moved rows finds an index from before the move.
+                            const cursorIndex = reconcileCursor();
+                            if (cursorIndex < 0) {
                               const first = navigableItems[0]!;
                               setFocusedIndex(0);
                               writeCursorKey(`${first.section}:${first.file.path}`);
                             } else {
                               fileListRef.current
-                                ?.querySelector<HTMLElement>(`[data-row-index="${focusedIndex}"]`)
+                                ?.querySelector<HTMLElement>(`[data-row-index="${cursorIndex}"]`)
                                 ?.scrollIntoView({ behavior: "instant", block: "nearest" });
                             }
                           }}
@@ -2291,6 +2544,7 @@ export function ReviewHubContent({
                                   ? handleUnstageFiltered()
                                   : handleUnstageAll());
                             }}
+                            onBulkActionFocusOrphaned={handleBulkActionFocusOrphaned}
                             viewedFiles={viewedFiles}
                             onViewedChange={handleViewedChange}
                             renderRowMenu={renderRowMenu}
@@ -2328,6 +2582,7 @@ export function ReviewHubContent({
                                   ? handleStageFiltered()
                                   : handleStageAll());
                             }}
+                            onBulkActionFocusOrphaned={handleBulkActionFocusOrphaned}
                             viewedFiles={viewedFiles}
                             onViewedChange={handleViewedChange}
                             renderRowMenu={renderRowMenu}
@@ -2384,6 +2639,8 @@ export function ReviewHubContent({
               onRestoreCommitSeed={restoreCommitSeed}
               onCommit={handleCommit}
               onCommitAndPush={handleCommitAndPush}
+              isUnbornBranch={status.isUnbornBranch === true}
+              onCommitThenReviewPush={handleCommitThenReviewPush}
               onFocusBlocker={handleFocusBlocker}
               isPushing={isPushing}
               pushProgress={pushProgress}

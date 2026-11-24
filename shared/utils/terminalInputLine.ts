@@ -23,7 +23,7 @@ const SGR = /\x1b\[([0-9;:]*)m/g;
 
 const TOKEN =
   // eslint-disable-next-line no-control-regex -- walks the serializer's own escape sequences
-  /\x1b\[([0-9;:]*)m|\x1b\[(\d*)C|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-9;:?<=>]*[ -/]*[@-~]|\x1b[^[\]]|[^\x1b]/gu;
+  /\x1b\[([0-9;:]*)m|\x1b\[(\d*)C|\x1b\[(\d*)X|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[[0-9;:?<=>]*[ -/]*[@-~]|\x1b[^[\]]|[^\x1b]/gu;
 
 /** The rows the generic drop treats as an input box: any prompt glyph, then a gap. */
 const GENERIC_PROMPT_ROW = /^\s*(?:❯|›|>)\s/;
@@ -56,7 +56,11 @@ interface Cell {
 interface SgrState {
   dim: boolean;
   inverse: boolean;
+  /** The background as its SGR parameters (`48;2;30;30;30`, `44`); `""` is the terminal's default. */
+  bg: string;
 }
+
+const PLAIN: SgrState = { dim: false, inverse: false, bg: "" };
 
 /**
  * The state after an SGR with these parameters. A colon group (`4:2` double
@@ -65,16 +69,25 @@ interface SgrState {
  * component of 2 or 7 is never read as dim or inverse.
  */
 function applySgr(state: SgrState, params: string): SgrState {
-  if (params === "") return { dim: false, inverse: false };
-  let { dim, inverse } = state;
+  if (params === "") return PLAIN;
+  let { dim, inverse, bg } = state;
   const parts = params.split(";");
   for (let i = 0; i < parts.length; i++) {
     const code = Number(parts[i]!.split(":")[0]);
     if ((code === 38 || code === 48 || code === 58) && !parts[i]!.includes(":")) {
-      i += parts[i + 1] === "5" ? 2 : parts[i + 1] === "2" ? 4 : 0;
+      const args = parts[i + 1] === "5" ? 2 : parts[i + 1] === "2" ? 4 : 0;
+      if (code === 48) bg = parts.slice(i, i + args + 1).join(";");
+      i += args;
+    } else if (code === 48) {
+      bg = parts[i]!;
+    } else if (code === 49) {
+      bg = "";
+    } else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
+      bg = String(code);
     } else if (code === 0) {
       dim = false;
       inverse = false;
+      bg = "";
     } else if (code === 2) {
       dim = true;
     } else if (code === 22) {
@@ -85,18 +98,32 @@ function applySgr(state: SgrState, params: string): SgrState {
       inverse = false;
     }
   }
-  return { dim, inverse };
+  return { dim, inverse, bg };
 }
 
-/** A row's cells, with the SGR state it starts in carried in and the state it ends in returned. */
-function rowCells(row: string, state: SgrState): { cells: Cell[]; state: SgrState } {
+interface RowRead {
+  cells: Cell[];
+  /**
+   * The background the row is painted in: that of its last written cell or
+   * erase (`ESC[nX`). The serializer writes nothing for a row left in the
+   * default background, so a row with neither is the default, whatever SGR
+   * state it carries.
+   */
+  bg: string;
+}
+
+/** A row's cells and background, with the SGR state it starts in carried in. */
+function rowCells(row: string, state: SgrState): RowRead {
   const cells: Cell[] = [];
   let current = state;
+  let bg = "";
   for (const match of row.matchAll(TOKEN)) {
     const token = match[0];
     const index = match.index;
     if (match[1] !== undefined) {
       current = applySgr(current, match[1]);
+    } else if (match[3] !== undefined) {
+      bg = current.bg;
     } else if (match[2] !== undefined) {
       const parsed = match[2] === "" ? 1 : Number.parseInt(match[2], 10);
       const count = Math.min(
@@ -107,6 +134,7 @@ function rowCells(row: string, state: SgrState): { cells: Cell[]; state: SgrStat
         cells.push({ char: " ", dim: current.dim, inverse: false, start: index, end: index });
       }
     } else if (token.codePointAt(0)! >= 0x20) {
+      bg = current.bg;
       cells.push({
         char: token,
         dim: current.dim,
@@ -116,7 +144,7 @@ function rowCells(row: string, state: SgrState): { cells: Cell[]; state: SgrStat
       });
     }
   }
-  return { cells, state: current };
+  return { cells, bg };
 }
 
 function plainOf(cells: readonly Cell[]): string {
@@ -144,15 +172,27 @@ interface ScreenRows {
   rows: string[];
   /** Row `i` as plain text, for matching a box's rows; read from the bottom, so built on demand. */
   plain(i: number): string;
+  /**
+   * Row `i`'s cells and background. SGR state carries across rows, so it is
+   * walked from the very top of the serialized screen, once for every row.
+   */
+  read(i: number): RowRead;
 }
 
 function readRows(serialized: string): ScreenRows {
   const switchAt = serialized.lastIndexOf(ALT_SCREEN_ENTER);
   const split = switchAt === -1 ? 0 : switchAt + ALT_SCREEN_ENTER.length;
+  const prefix = serialized.slice(0, split);
   const rows = serialized.slice(split).split("\n");
   const plain = new Map<number, string>();
+  const reads = new Map<number, RowRead>();
+  const starts: SgrState[] = [stateAfter(prefix, PLAIN)];
+  const startOf = (i: number): SgrState => {
+    for (let r = starts.length - 1; r < i; r++) starts.push(stateAfter(rows[r]!, starts[r]!));
+    return starts[i]!;
+  };
   return {
-    prefix: serialized.slice(0, split),
+    prefix,
     rows,
     plain: (i) => {
       let text = plain.get(i);
@@ -162,29 +202,24 @@ function readRows(serialized: string): ScreenRows {
       }
       return text;
     },
+    read: (i) => {
+      let read = reads.get(i);
+      if (read === undefined) {
+        read = rowCells(rows[i]!, startOf(i));
+        reads.set(i, read);
+      }
+      return read;
+    },
   };
-}
-
-/**
- * The cells of rows `from` to `to`, inclusive. SGR state carries across rows,
- * so it is walked from the very top of the serialized screen.
- */
-function cellsOf(screen: ScreenRows, from: number, to: number): Cell[][] {
-  let state = stateAfter(screen.prefix, { dim: false, inverse: false });
-  for (let r = 0; r < from; r++) state = stateAfter(screen.rows[r]!, state);
-  const out: Cell[][] = [];
-  for (let r = from; r <= to; r++) {
-    const read = rowCells(screen.rows[r]!, state);
-    state = read.state;
-    out.push(read.cells);
-  }
-  return out;
 }
 
 interface CompiledRule {
   promptRow: RegExp;
   border: RegExp;
+  band: boolean;
+  echoGlyphDim: boolean;
   placeholders: RegExp[];
+  emptyShowsPlaceholder: boolean;
 }
 
 const compiled = new WeakMap<AgentInputSuggestionConfig, CompiledRule>();
@@ -195,7 +230,10 @@ function compile(rule: AgentInputSuggestionConfig): CompiledRule {
     entry = {
       promptRow: new RegExp(rule.promptRowPattern, "u"),
       border: new RegExp(rule.borderPattern, "u"),
+      band: rule.frame === "band",
+      echoGlyphDim: rule.echoGlyphStyle === "dim",
       placeholders: (rule.placeholderPatterns ?? []).map((pattern) => new RegExp(pattern, "u")),
+      emptyShowsPlaceholder: rule.emptyShowsPlaceholder === true,
     };
     compiled.set(rule, entry);
   }
@@ -214,26 +252,62 @@ interface BoxRow {
  * blank as the box draws them. Rows that open with the glyph anywhere else are
  * echoes of messages already sent; an echo that happens to sit under a rule
  * runs into unindented transcript or a dialog before any edge, so it is no box.
+ *
+ * A `band` box has no rules; see {@link bandBox}.
  */
 function findBox(screen: ScreenRows, rule: CompiledRule): BoxRow[] | null {
   candidates: for (let i = screen.rows.length - 1; i > 0; i--) {
     const match = rule.promptRow.exec(screen.plain(i));
-    if (match === null || !rule.border.test(screen.plain(i - 1))) continue;
+    if (match === null) continue;
+    if (rule.echoGlyphDim && screen.read(i).cells.find((cell) => !isBlank(cell))?.dim) continue;
+    const skip = Array.from(match[0]).length;
+    if (rule.band) return bandBox(screen, rule, i, skip);
+    if (!rule.border.test(screen.plain(i - 1))) continue;
     for (let r = i + 1; r < screen.rows.length && r <= i + MAX_BOX_ROWS; r++) {
       const row = screen.plain(r);
-      if (rule.border.test(row)) return boxRows(screen, i, r - 1, Array.from(match[0]).length);
+      if (rule.border.test(row)) return boxRows(screen, i, r - 1, skip);
       if (row.trim() !== "" && !/^\s/u.test(row)) continue candidates;
     }
   }
   return null;
 }
 
+/**
+ * The box a prompt row at `i` opens in a tint of its own: from the blank row
+ * of that tint above it to the blank row of that tint that closes the band,
+ * so a blank line inside a draft stays inside the box. A selected option drawn
+ * in a highlight of its own is not the band's tint. The lowest prompt row that
+ * isn't an echo decides: a frame it doesn't close is no box, never an older
+ * band further up, such as a composer frame left in scrollback.
+ */
+function bandBox(screen: ScreenRows, rule: CompiledRule, i: number, skip: number): BoxRow[] | null {
+  const tint = screen.read(i).bg;
+  if (!rule.border.test(screen.plain(i - 1))) return null;
+  if (tint === "" || screen.read(i - 1).bg !== tint) return null;
+  for (let r = i + 1; r < screen.rows.length && r <= i + MAX_BOX_ROWS; r++) {
+    const row = screen.plain(r);
+    if (screen.read(r).bg !== tint) {
+      return r - 1 > i && rule.border.test(screen.plain(r - 1))
+        ? boxRows(screen, i, r - 2, skip)
+        : null;
+    }
+    if (row.trim() !== "" && !/^\s/u.test(row)) return null;
+  }
+  return null;
+}
+
 function boxRows(screen: ScreenRows, from: number, to: number, skip: number): BoxRow[] {
-  return cellsOf(screen, from, to).map((row, index) => {
-    if (index === 0) return { row: from, cells: row.slice(skip) };
+  const out: BoxRow[] = [];
+  for (let r = from; r <= to; r++) {
+    const row = screen.read(r).cells;
+    if (r === from) {
+      out.push({ row: r, cells: row.slice(skip) });
+      continue;
+    }
     const indent = row.findIndex((cell) => !isBlank(cell));
-    return { row: from + index, cells: indent === -1 ? [] : row.slice(indent) };
-  });
+    out.push({ row: r, cells: indent === -1 ? [] : row.slice(indent) });
+  }
+  return out;
 }
 
 /**
@@ -298,7 +372,12 @@ function read(serialized: string, rule: AgentInputSuggestionConfig | undefined):
   const styled = suggestionCells(box);
   const visible = box.flatMap((row) => row.cells.filter((cell) => !isBlank(cell)));
   const base = { screen, box, styled };
-  if (visible.length === 0) return { ...base, inputLine: { state: "empty", text: "" } };
+  if (visible.length === 0) {
+    // A box that always shows a placeholder when empty and shows nothing holds
+    // something that isn't drawn: spaces, or a draft its frame was misread around.
+    if (compiledRule.emptyShowsPlaceholder) return { ...unknown, screen };
+    return { ...base, inputLine: { state: "empty", text: "" } };
+  }
   if (visible.every((cell) => styled.has(cell))) {
     const text = boxText(box, (cell) => styled.has(cell) || isBlank(cell));
     if (compiledRule.placeholders.some((pattern) => pattern.test(text))) {
@@ -368,6 +447,31 @@ export function observeInputLine(
   return { inputLine: reading.inputLine, marked: rebuild(reading.screen, rows) };
 }
 
+export interface InputBoxScreen {
+  /** The rows on view as plain text: cursor moves as spaces, styling and line ends dropped. */
+  rows: string[];
+  /**
+   * The first row below the input box's bottom edge, or null when `rule` finds
+   * no box. Rows from here on are drawn under the box, which reading the box
+   * itself never looks at.
+   */
+  belowBox: number | null;
+}
+
+/** The rows on view of `serialized`, and where the input box `rule` finds there ends. */
+export function readInputBoxScreen(
+  serialized: string,
+  rule: AgentInputSuggestionConfig | undefined
+): InputBoxScreen {
+  const screen = readRows(serialized);
+  const box = rule === undefined ? null : findBox(screen, compile(rule));
+  return {
+    rows: screen.rows.map((_, i) => screen.plain(i).trimEnd()),
+    // A box's last row is its last content row, with its closing edge under it.
+    belowBox: box === null ? null : box[box.length - 1]!.row + 2,
+  };
+}
+
 /**
  * The serialized screen with the input box's suggestion taken out, for a
  * reader that wants only what is on screen for certain (Canopy). By `rule`
@@ -391,7 +495,7 @@ export function dropInputSuggestion(serialized: string, rule?: AgentInputSuggest
     const rows = [...screen.rows];
     rows[i] = removeCells(
       rows[i]!,
-      cellsOf(screen, i, i)[0]!.filter((cell) => cell.dim)
+      screen.read(i).cells.filter((cell) => cell.dim)
     );
     return rebuild(screen, rows);
   }

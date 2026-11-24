@@ -6,6 +6,8 @@ import type { ScheduledRunRef } from "../../../shared/types/panel.js";
 import type { ResolvedModelCatalog } from "../../../shared/types/ipc/agentCapabilities.js";
 import { LAUNCH_CONTEXT_AGENT_IDS } from "../../../shared/config/agentLaunchContext.js";
 import {
+  getAgentConfigFolderAccount,
+  getAgentDisplayTitle,
   getEffectiveAgentConfig,
   getEffectiveRegistry,
   type AgentPreset,
@@ -22,7 +24,13 @@ import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLau
 import {
   buildAgentLaunchPlan,
   buildLaunchIdentity,
+  findUnloadedLaunchPreset,
 } from "../../../shared/utils/agentLaunchPlan.js";
+import {
+  describeLaunchAccount,
+  launchAnswer,
+  listAgentAccountIdentities,
+} from "../../../shared/utils/agentAccounts.js";
 import {
   launchModelRefusal,
   resolveAgentLaunchKind,
@@ -31,6 +39,7 @@ import {
 import { buildAvailableAgentListing, listedAgentIds } from "../../../shared/utils/agentListing.js";
 import {
   getMergedPresetIdentities,
+  settleLaunchPreset,
   type PresetInventoryState,
 } from "../../../shared/utils/agentPresets.js";
 import {
@@ -59,6 +68,7 @@ import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
 import {
   AgentLaunchArgsSchema,
+  AgentListAccountsArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
 } from "./viewlessArgsSchemas.js";
@@ -700,6 +710,90 @@ export async function runAgentListPresets(
       entry?.customPresets,
       sources.ccrPresets,
       sources.projectPresets
+    ),
+  });
+}
+
+/**
+ * One agent's accounts with no view (#17079), read from the settings and
+ * preset sources a launch here resolves against, so the account it says a
+ * launch in a worktree uses is the one `agent.launch` would sign in as.
+ */
+export async function runAgentListAccounts(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
+  const parsed = AgentListAccountsArgsSchema.safeParse(request.args ?? {});
+  if (!parsed.success) return validationFailure(request.actionId, parsed.error);
+  const { agentId, worktreeId } = parsed.data;
+  if (!isEffectivelyRegisteredAgent(agentId)) {
+    return failure("VALIDATION_ERROR", unknownAgentIdMessage(agentId));
+  }
+  if (!getAgentConfigFolderAccount(agentId)) {
+    return failure(
+      "VALIDATION_ERROR",
+      `${getAgentDisplayTitle(agentId)} has no accounts: it signs in one way only.`
+    );
+  }
+  const unread = failure(
+    "EXECUTION_ERROR",
+    "Couldn't read the agent settings, so no accounts were listed."
+  );
+  const entryOf = (settings: AgentSettings) =>
+    settings.agents && Object.hasOwn(settings.agents, agentId)
+      ? settings.agents[agentId]
+      : undefined;
+  // The identities need only the settings; presets matter only to a worktree's answer.
+  if (worktreeId === undefined) {
+    const settings = await deps.agents.getSettings().catch(() => null);
+    // An unread settings file is a failure, never an agent with no accounts.
+    if (!settings) return unread;
+    return success({ accounts: listAgentAccountIdentities(entryOf(settings)) });
+  }
+  const sources = await readPresetSources(agentId, project.path, deps);
+  if (!sources.settings) return unread;
+  const { settings } = sources;
+  const entry = entryOf(settings);
+  const accounts = listAgentAccountIdentities(entry);
+
+  let worktrees: Awaited<ReturnType<typeof readProjectWorktrees>>;
+  try {
+    worktrees = await readProjectWorktrees(project, deps);
+  } catch (err) {
+    return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to read worktrees"));
+  }
+  // Refused as a launch here refuses it, without echoing the id, which can be a path.
+  if (worktrees !== null && !worktrees.some((candidate) => candidate.id === worktreeId)) {
+    return failure(
+      "VALIDATION_ERROR",
+      "No worktree in this project has that id. Use an id from the worktree listing."
+    );
+  }
+  const settled = settleLaunchPreset(
+    agentId,
+    entry ?? {},
+    worktreeId,
+    undefined,
+    sources.ccrPresets,
+    sources.projectPresets
+  );
+  const presetsComplete =
+    findUnloadedLaunchPreset({
+      agentId,
+      isAgent: true,
+      worktreeId,
+      settings,
+      ccrPresets: sources.ccrPresets,
+      projectPresets: sources.projectPresets,
+      presetInventory: sources.presetInventory,
+      options: undefined,
+    }) === undefined;
+  return success({
+    accounts,
+    worktreeLaunch: launchAnswer(
+      describeLaunchAccount(entry, worktreeId, settled.preset),
+      presetsComplete
     ),
   });
 }

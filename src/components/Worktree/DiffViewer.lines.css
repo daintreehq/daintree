@@ -431,19 +431,25 @@
 .diff-viewer .diff-hunk-header-expanders button {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  padding: 1px 6px;
+  /* A 24px target (WCAG 2.5.8), pulled back into the row's height by the
+     margin so the hunk header keeps its rhythm, as the action buttons do. */
+  min-height: 24px;
+  margin-block: -4px;
+  padding: 0 6px;
   border-radius: var(--radius-sm);
   color: var(--color-text-primary);
-  background: var(--color-border-default);
+  background: var(--color-overlay-soft);
   font-size: var(--text-2xs);
+  cursor: pointer;
   transition-property: color, background-color;
   transition-duration: 150ms;
   transition-timing-function: ease-out;
 }
 
 .diff-viewer .diff-hunk-header-expanders button:hover {
-  background: color-mix(in oklab, var(--color-border-default) 80%, var(--color-text-primary));
+  background: var(--color-overlay-hover);
 }
 
 /* Per-hunk copy: the shared CopyButton, surfaced on header hover (or keyboard
@@ -469,10 +475,11 @@
   margin-block: -4px;
 }
 
-/* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
-   header when scrollIntoView lands a hunk at block: "start". */
-.diff-viewer tbody.diff-hunk {
-  scroll-margin-top: 56px;
+/* Hunk stepping lands a hunk's first changed row at block: "start". Clear the
+   sticky file header (56px, as the note gutter above) and keep the three lines
+   of context git leads a hunk with in sight above it. */
+.diff-viewer tr.diff-hunk-anchor {
+  scroll-margin-top: calc(56px + 3lh);
 }
 
 /* Selection styling */

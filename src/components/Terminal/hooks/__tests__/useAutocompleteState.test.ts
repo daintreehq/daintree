@@ -20,12 +20,16 @@ describe("useAutocompleteState", () => {
   let setActiveCompletionContext: ReturnType<typeof vi.fn<Props["setActiveCompletionContext"]>>;
   let lastQueryRef: { current: string };
   let rootRef: { current: HTMLDivElement | null };
+  let menuRef: { current: HTMLElement | null };
+  let modalEditorHostRef: { current: HTMLElement | null };
 
   beforeEach(() => {
     setSelectedIndex = vi.fn<Props["setSelectedIndex"]>();
     setActiveCompletionContext = vi.fn<Props["setActiveCompletionContext"]>();
     lastQueryRef = { current: "" };
     rootRef = { current: document.createElement("div") };
+    menuRef = { current: null };
+    modalEditorHostRef = { current: null };
   });
 
   function base(overrides: Partial<Props> = {}): Props {
@@ -34,6 +38,8 @@ describe("useAutocompleteState", () => {
       activeCompletionContext: null,
       autocompleteItems: [],
       rootRef: rootRef as Props["rootRef"],
+      menuRef: menuRef as Props["menuRef"],
+      modalEditorHostRef: modalEditorHostRef as Props["modalEditorHostRef"],
       selectedIndex: 0,
       setSelectedIndex,
       lastQueryRef: lastQueryRef as Props["lastQueryRef"],
@@ -97,6 +103,80 @@ describe("useAutocompleteState", () => {
         })
       );
       expect(setSelectedIndex).toHaveBeenCalledWith(0);
+    });
+  });
+
+  describe("disabled rows", () => {
+    const disabled = (key: string): AutocompleteItem => ({ ...item(key), disabled: true });
+
+    it("starts a session on the first row that can be acted on", () => {
+      render(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [disabled("x"), disabled("y"), item("z")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(2);
+    });
+
+    it("moves off a row that turns disabled when items refresh for the same query", () => {
+      const { rerender } = render(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [item("x"), item("y")],
+          selectedIndex: 0,
+        })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [disabled("x"), item("y")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(1);
+    });
+  });
+
+  describe("disabled rows after a refresh", () => {
+    it("clamps onto an enabled row when the selected key vanishes", () => {
+      const { rerender } = render(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [item("a"), item("b"), item("c")],
+          selectedIndex: 2,
+        })
+      );
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: atContext("a"),
+          autocompleteItems: [item("x"), { ...item("y"), disabled: true }],
+          selectedIndex: 2,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(0);
+    });
+
+    it("drops a chosen `#` row back to no selection when it turns disabled", () => {
+      const hash: ActiveCompletionContext = { triggerChar: "#", start: 0, tokenEnd: 2, query: "1" };
+      const rows = [item("r1"), item("r2")];
+      const { rerender } = render(
+        base({ activeCompletionContext: hash, autocompleteItems: rows, selectedIndex: -1 })
+      );
+      // The reader arrows onto r1: that is the row the session remembers.
+      rerender(base({ activeCompletionContext: hash, autocompleteItems: rows, selectedIndex: 0 }));
+      setSelectedIndex.mockClear();
+      rerender(
+        base({
+          activeCompletionContext: hash,
+          autocompleteItems: [{ ...item("r1"), disabled: true }, item("r2")],
+          selectedIndex: 0,
+        })
+      );
+      expect(setSelectedIndex).toHaveBeenCalledWith(-1);
     });
   });
 
@@ -232,6 +312,33 @@ describe("useAutocompleteState", () => {
       });
 
       expect(setActiveCompletionContext).not.toHaveBeenCalled();
+    });
+
+    // The Expanded Editor's dialog is portalled out of the composer's root,
+    // with the editor and the menu in it.
+    it("keeps the context for a press in the portalled menu or editor host", () => {
+      const dialog = document.createElement("div");
+      menuRef.current = document.createElement("div");
+      modalEditorHostRef.current = document.createElement("div");
+      const row = document.createElement("button");
+      menuRef.current.appendChild(row);
+      dialog.append(menuRef.current, modalEditorHostRef.current);
+      document.body.appendChild(dialog);
+      render(base({ isAutocompleteOpen: true }));
+
+      act(() => {
+        row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+        modalEditorHostRef.current!.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true })
+        );
+      });
+      expect(setActiveCompletionContext).not.toHaveBeenCalled();
+
+      act(() => {
+        dialog.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+      });
+      expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+      dialog.remove();
     });
   });
 });

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import type { SettingsTabClose } from "../settingsTabClose";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -110,7 +111,7 @@ async function expandReadyAgents() {
   fireEvent.click(toggle);
 }
 
-async function renderGeneralTab(appVersion = "1.0.0") {
+async function renderGeneralTab(appVersion = "1.0.0", onClose?: SettingsTabClose) {
   const { GeneralTab } = await import("../GeneralTab");
   return render(
     <GeneralTab
@@ -118,6 +119,7 @@ async function renderGeneralTab(appVersion = "1.0.0") {
       onNavigateToAgents={vi.fn()}
       activeSubtab="overview"
       onSubtabChange={vi.fn()}
+      onClose={onClose}
     />
   );
 }
@@ -531,6 +533,42 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
       ([event]) => event instanceof CustomEvent && event.type === "daintree:open-agent-setup-wizard"
     );
     expect(wizardEvent).toBeTruthy();
+
+    dispatchSpy.mockRestore();
+  });
+
+  it("setup wizard button closes Settings first and opens the wizard after it has gone", async () => {
+    setupDispatchMock(
+      {
+        claude: "missing",
+        gemini: "missing",
+        codex: "missing",
+        opencode: "missing",
+        cursor: "missing",
+      },
+      { agents: {} } as unknown as AgentSettings
+    );
+    let afterClose: ((closed: boolean) => void) | undefined;
+    const onClose = vi.fn(async (cb?: (closed: boolean) => void) => {
+      afterClose = cb;
+      return true;
+    });
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    const wizardCalls = () =>
+      dispatchSpy.mock.calls.filter(
+        ([e]) => e instanceof CustomEvent && e.type === "daintree:open-agent-setup-wizard"
+      );
+
+    await renderGeneralTab("1.0.0", onClose);
+    await waitFor(() => expect(screen.getByText("Run setup wizard")).toBeTruthy());
+    fireEvent.click(screen.getByText("Run setup wizard"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(wizardCalls()).toHaveLength(0);
+    afterClose?.(false);
+    expect(wizardCalls()).toHaveLength(0);
+    afterClose?.(true);
+    expect(wizardCalls()).toHaveLength(1);
 
     dispatchSpy.mockRestore();
   });

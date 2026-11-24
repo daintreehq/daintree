@@ -74,6 +74,8 @@ export interface PendingCreationDraft {
   prompt?: string;
   /** Whether the issue was to be quoted ahead of `prompt`. */
   includeIssue?: boolean;
+  /** Whether the worktree was to open on its environment's machine once provisioned. */
+  openOnMachine?: boolean;
 }
 
 export interface PendingCreation extends PendingCreationDraft {
@@ -163,6 +165,14 @@ export interface DeletedWorktree {
    * lets the card say *why* rather than just appearing stuck (#11259).
    */
   holdReason: DeletedWorktreeHoldReason | null;
+  /**
+   * The remaining the sweep is holding the countdown at, set exactly while
+   * `holdReason` is. `expiresAt` is re-pinned to `now + heldRemainingMs` on
+   * every pass against the sweep's own clock, so this is what a held readout
+   * shows: the card's clock sleeps through a hold (#17051), and inferring the
+   * held value from the deadline cannot follow the sweep's re-arms.
+   */
+  heldRemainingMs?: number;
   /**
    * Identity anchor for where the row renders: the id of the live worktree that
    * sat immediately after this row in the last published sidebar order (its
@@ -259,7 +269,15 @@ function basenameOf(path: string): string | null {
  * worktree sessions.
  */
 export function getDeletedWorktreeTerminalIds(worktreeId: string): string[] {
-  const { panelIdsByWorktreeId, panelsById } = usePanelStore.getState();
+  return selectDeletedWorktreeTerminalIds(usePanelStore.getState(), worktreeId);
+}
+
+/** {@link getDeletedWorktreeTerminalIds} over a given panel-store state, for selectors. */
+export function selectDeletedWorktreeTerminalIds(
+  state: Pick<ReturnType<typeof usePanelStore.getState>, "panelIdsByWorktreeId" | "panelsById">,
+  worktreeId: string
+): string[] {
+  const { panelIdsByWorktreeId, panelsById } = state;
   const ids = panelIdsByWorktreeId[worktreeId];
   if (!ids || ids.length === 0) return [];
   return ids.filter((id) => {
@@ -403,7 +421,11 @@ interface WorktreeSelectionState {
   dismissDeletedWorktree: (worktreeId: string) => void;
   setDeletedWorktreeCleanupState: (
     worktreeId: string,
-    next: { expiresAt: number | null; holdReason: DeletedWorktreeHoldReason | null }
+    next: {
+      expiresAt: number | null;
+      holdReason: DeletedWorktreeHoldReason | null;
+      heldRemainingMs?: number;
+    }
   ) => void;
   clearRestoreTarget: (worktreeId: string) => void;
   retargetParkedFleetSelection: (worktreeId: string) => void;
@@ -1143,13 +1165,19 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   // Deadline and hold reason move together: a held tick rewrites the pinned
   // expiry every second, and splitting these into two mutators would re-render
   // the sidebar twice for what is one logical state change.
-  setDeletedWorktreeCleanupState: (worktreeId, { expiresAt, holdReason }) => {
+  setDeletedWorktreeCleanupState: (worktreeId, { expiresAt, holdReason, heldRemainingMs }) => {
     set((state) => {
       const entry = state.deletedWorktrees.get(worktreeId);
       if (!entry) return state;
-      if (entry.expiresAt === expiresAt && entry.holdReason === holdReason) return state;
+      if (
+        entry.expiresAt === expiresAt &&
+        entry.holdReason === holdReason &&
+        entry.heldRemainingMs === heldRemainingMs
+      ) {
+        return state;
+      }
       const next = new Map(state.deletedWorktrees);
-      next.set(worktreeId, { ...entry, expiresAt, holdReason });
+      next.set(worktreeId, { ...entry, expiresAt, holdReason, heldRemainingMs });
       return { deletedWorktrees: next };
     });
   },

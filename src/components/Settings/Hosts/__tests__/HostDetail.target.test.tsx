@@ -207,6 +207,36 @@ describe("HostDetail SSH target", () => {
   });
 });
 
+describe("HostDetail SSH target dialog a11y", () => {
+  it("links a failed check to the target field, and hands focus back to the trigger on close", async () => {
+    client.probe.mockImplementation(async () => {
+      throw new Error("boom");
+    });
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    const trigger = screen.getByRole("button", { name: "Change target…" });
+    // Opened from a control that is gone by the time the dialog closes, as a
+    // menu item is: only the trigger ref can take focus back.
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    act(() => opener.focus());
+    fireEvent.click(trigger);
+    opener.remove();
+    const field = screen.getByDisplayValue("greg@studio");
+    fireEvent.change(field, { target: { value: "greg@newbox" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Check target" }));
+    });
+
+    const alert = await screen.findByRole("alert");
+    const describedBy = (field.getAttribute("aria-describedby") ?? "").split(" ");
+    expect(describedBy).toContain(alert.id);
+    expect(field.getAttribute("aria-invalid")).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+});
+
 describe("HostDetail name", () => {
   it("follows a rename made in another window when nothing was typed here", () => {
     const { rerender } = render(<HostDetail entry={entry("studio-01")} onBack={() => {}} />);

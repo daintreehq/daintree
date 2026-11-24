@@ -5,7 +5,7 @@ import {
   toPluginFocusedPanel,
 } from "../../shared/utils/pluginFocusedPanel.js";
 
-/** The focused panel, plus the project view it was reported from (`null` for the Portal). */
+/** The focused panel, plus the project view it was reported from, when that is known. */
 export interface FocusedPanelState {
   readonly panel: PluginFocusedPanel;
   readonly workspaceId: string | null;
@@ -13,11 +13,6 @@ export interface FocusedPanelState {
 
 export const NO_FOCUSED_PANEL_STATE: FocusedPanelState = Object.freeze({
   panel: NO_FOCUSED_PANEL,
-  workspaceId: null,
-});
-
-const PORTAL_FOCUSED_STATE: FocusedPanelState = Object.freeze({
-  panel: Object.freeze({ kind: "portal", agent: false, worktreeId: null }),
   workspaceId: null,
 });
 
@@ -52,14 +47,13 @@ export interface FocusedPanelSenderChecks {
 /**
  * Which kind of panel has real focus, app-wide (#13221). Each fact comes from
  * the process that can actually observe it: the panel (kind, agent flag,
- * worktree) from the project view's renderer, Portal focus from the Portal
- * view's own webContents, and OS foreground from the BrowserWindow, because a
- * child view's webContents does not reliably blur when its window does.
+ * worktree) from the project view's renderer, and OS foreground from the
+ * BrowserWindow, because a child view's webContents does not reliably blur
+ * when its window does.
  */
 export class FocusedPanelTracker {
   private readonly reports = new Map<number, SenderReport>();
   private readonly remoteReports = new Map<number, RemoteReport>();
-  private readonly portalFocusedWindows = new Set<number>();
   private focusedWindowId: number | null = null;
   private seq = 0;
   /** When this machine's own screen last gained focus or reported a panel, on the shared `seq` clock. */
@@ -105,16 +99,6 @@ export class FocusedPanelTracker {
   blurWindow(windowId: number): void {
     if (this.focusedWindowId !== windowId) return;
     this.focusedWindowId = null;
-    this.recompute();
-  }
-
-  setPortalFocused(windowId: number, focused: boolean): void {
-    if (focused) {
-      this.portalFocusedWindows.add(windowId);
-      if (windowId === this.focusedWindowId) this.localActivitySeq = ++this.seq;
-    } else {
-      this.portalFocusedWindows.delete(windowId);
-    }
     this.recompute();
   }
 
@@ -177,7 +161,6 @@ export class FocusedPanelTracker {
   }
 
   removeWindow(windowId: number): void {
-    this.portalFocusedWindows.delete(windowId);
     for (const [id, report] of this.reports) {
       if (report.windowId === windowId) this.reports.delete(id);
     }
@@ -201,14 +184,12 @@ export class FocusedPanelTracker {
       return this.resolveLocal();
     }
     if (remote.panel.kind === null) return NO_FOCUSED_PANEL_STATE;
-    if (remote.panel.kind === "portal") return PORTAL_FOCUSED_STATE;
     return { panel: remote.panel, workspaceId: remote.workspaceId };
   }
 
   private resolveLocal(): FocusedPanelState {
     const windowId = this.focusedWindowId;
     if (windowId === null) return NO_FOCUSED_PANEL_STATE;
-    if (this.portalFocusedWindows.has(windowId)) return PORTAL_FOCUSED_STATE;
     const { isFocused, isActive, workspaceOf } = this.checks;
     const inWindow: Array<[number, SenderReport]> = [];
     for (const entry of this.reports) {
@@ -224,9 +205,6 @@ export class FocusedPanelTracker {
     }
     if (latest === null || latest[1].panel.kind === null) return NO_FOCUSED_PANEL_STATE;
     const [id, report] = latest;
-    // The Portal is app-wide however it was observed, so it never carries a
-    // project — a project plugin must not see it through the dock's chrome.
-    if (report.panel.kind === "portal") return PORTAL_FOCUSED_STATE;
     return { panel: report.panel, workspaceId: workspaceOf?.(id) ?? report.workspaceId };
   }
 

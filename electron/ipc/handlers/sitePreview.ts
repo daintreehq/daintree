@@ -31,6 +31,10 @@ const setModeSchema = z
   .object({ sessionId: z.string().min(1).max(128), mode: modeSchema })
   .strict();
 
+const setPausedSchema = z
+  .object({ sessionId: z.string().min(1).max(128), paused: z.boolean() })
+  .strict();
+
 function requireProject(ctx: IpcContext): string {
   if (!ctx.projectId) {
     throw new AppError({
@@ -57,6 +61,13 @@ export const sitePreviewNamespace = defineIpcNamespace({
       setModeSchema,
       async (ctx, payload): Promise<SitePreviewBindingState> =>
         getSitePreviewBridge().setMode(requireProject(ctx), payload.sessionId, payload.mode),
+      { withContext: true }
+    ),
+    setPaused: opValidated(
+      SITE_PREVIEW_METHOD_CHANNELS.setPaused,
+      setPausedSchema,
+      async (ctx, payload): Promise<void> =>
+        getSitePreviewBridge().setPaused(requireProject(ctx), payload.sessionId, payload.paused),
       { withContext: true }
     ),
     clearSelection: opValidated(

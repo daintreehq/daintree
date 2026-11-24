@@ -11,13 +11,27 @@ export function sortWorktreesForComparison(
 }
 
 /**
+ * The branch a worktree can be compared by, or undefined when it has none. The
+ * monitor keeps the last branch name on a snapshot whose HEAD has since been
+ * detached, so the branch's presence alone would compare the old tip while the
+ * checkout sits at another commit.
+ */
+export function comparableBranch(
+  wt: Pick<WorktreeSnapshot, "branch" | "isDetached"> | null | undefined
+): string | undefined {
+  if (!wt || wt.isDetached) return undefined;
+  return wt.branch || undefined;
+}
+
+/**
  * The comparison is branch against branch, so the branch is what an option
  * names. A detached worktree has none to compare and is offered disabled
  * rather than accepted and silently ignored.
  */
 export function worktreeOptionLabel(wt: WorktreeSnapshot): string {
-  if (!wt.branch) return `${wt.name} (detached)`;
-  return wt.isMainWorktree ? `${wt.branch} (main worktree)` : wt.branch;
+  const branch = comparableBranch(wt);
+  if (!branch) return `${wt.name} (detached)`;
+  return wt.isMainWorktree ? `${branch} (main worktree)` : branch;
 }
 
 export type ComparisonSide = "base" | "compare";
@@ -41,10 +55,14 @@ export function comparisonBlocker(
 ): ComparisonBlocker | null {
   if (baseId && !base) return { kind: "missing", side: "base" };
   if (compareId && !compare) return { kind: "missing", side: "compare" };
-  if (base && !base.branch) return { kind: "detached", side: "base", name: base.name };
-  if (compare && !compare.branch) return { kind: "detached", side: "compare", name: compare.name };
-  if (!base?.branch || !compare?.branch) return { kind: "unchosen" };
-  if (base.branch === compare.branch) return { kind: "same-branch", branch: base.branch };
+  if (base && !comparableBranch(base)) return { kind: "detached", side: "base", name: base.name };
+  if (compare && !comparableBranch(compare)) {
+    return { kind: "detached", side: "compare", name: compare.name };
+  }
+  const baseBranch = comparableBranch(base);
+  const compareBranch = comparableBranch(compare);
+  if (!baseBranch || !compareBranch) return { kind: "unchosen" };
+  if (baseBranch === compareBranch) return { kind: "same-branch", branch: baseBranch };
   return null;
 }
 
@@ -53,6 +71,34 @@ export function comparisonBlocker(
  * enough that git emits the whole file as one hunk.
  */
 export const WHOLE_FILE_CONTEXT_LINES = 100_000;
+
+/** The blob ids a single-file diff's `index` line names, as [base, compare]. */
+function diffBlobIds(diff: string): [string, string] | null {
+  const match = /^index ([0-9a-f]+)\.\.([0-9a-f]+)/m.exec(diff);
+  return match ? [match[1]!, match[2]!] : null;
+}
+
+/**
+ * The compare side's committed text for `patch`, out of a whole-file diff of
+ * the same file read separately. Each read resolves the branches on its own,
+ * so a commit landing between them leaves the two describing different blobs,
+ * and that source would reveal lines the patch never compared: the viewer's
+ * hunk check only sees the lines both share. Null when they disagree; both
+ * reads print full ids, and an abbreviation is never trusted as a prefix.
+ */
+export function committedSourceForPatch(fullDiff: string | null, patch: string): string | null {
+  if (fullDiff === null) return null;
+  const patchBlobs = diffBlobIds(patch);
+  const fullBlobs = diffBlobIds(fullDiff);
+  if (
+    patchBlobs &&
+    fullBlobs &&
+    (patchBlobs[0] !== fullBlobs[0] || patchBlobs[1] !== fullBlobs[1])
+  ) {
+    return null;
+  }
+  return committedSourceFromFullDiff(fullDiff);
+}
 
 /**
  * The compare side's committed text, read back out of a diff generated with

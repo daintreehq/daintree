@@ -18,18 +18,23 @@ import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
  * through to Gravatar without issuing IPC. Network resolution, caching, and
  * rate-limit handling all live behind the IPC boundary in the provider — the
  * hook never blocks render and never sees backoff state.
+ *
+ * `enabled: false` asks nothing — not the avatar, not the provider — for a
+ * surface that isn't showing the avatar yet (#17072).
  */
 export function useForgeAuthorAvatar({
   email,
   cwd,
+  enabled = true,
 }: {
   email: string | undefined;
   cwd: string | undefined;
+  enabled?: boolean;
 }): string | undefined {
   const [avatarUrl, setAvatarUrl] = useState<string | undefined>(undefined);
   const projectId = useProjectStore((s) => s.currentProject?.id ?? null);
-  const { entry } = useResolvedForgeProvider(projectId);
-  const providerResolved = entry !== null;
+  const { entry } = useResolvedForgeProvider(enabled ? projectId : null);
+  const providerResolved = enabled && entry !== null;
 
   useEffect(() => {
     setAvatarUrl(undefined);

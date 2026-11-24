@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/paneToolbarStyles";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { writeMainClipboard } from "@/lib/mainClipboard";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { pluralize } from "@/lib/pluralize";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
@@ -326,6 +327,7 @@ const ConsoleRow = memo(function ConsoleRow({
             revealing the 24px target never grows the row. */}
           <CopyButton
             text={copyText}
+            write={writeMainClipboard}
             aria-label="Copy console message"
             tooltip="Copy message"
             tooltipSide="left"
@@ -495,7 +497,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
   const showJump = !isAtBottom && filtered.length > 0;
   const jumpPresence = useAnimatedPresence({ isOpen: showJump, animationDuration: 0 });
 
-  const { copied: allCopied, copy: copyAll } = useCopyWithFeedback();
+  const { copied: allCopied, copy: copyAll } = useCopyWithFeedback({ write: writeMainClipboard });
   const handleCopyVisible = useCallback(async () => {
     const ok = await copyAll(serializeConsoleMessages(filtered));
     if (!ok) useAnnouncerStore.getState().announce(COPY_FAILED_LABEL, "assertive");
@@ -548,6 +550,33 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     ? `No ${noun} match “${truncateQuery(trimmedSearch)}”`
     : `No ${noun}`;
 
+  const copyVisibleButton = (
+    <button
+      type="button"
+      onClick={() => void handleCopyVisible()}
+      disabled={filtered.length === 0}
+      className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+      aria-label="Copy visible console messages"
+    >
+      {allCopied ? (
+        <Check aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
+      ) : (
+        <Copy aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
+      )}
+    </button>
+  );
+  const clearButton = (
+    <button
+      type="button"
+      onClick={handleClear}
+      disabled={allMessages.length === 0}
+      className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
+      aria-label="Clear console"
+    >
+      <Trash2 aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
+    </button>
+  );
+
   return (
     <div className="flex h-full flex-col bg-surface-canvas">
       {/* Toolbar. In a narrow pane the filter field and the actions wrap
@@ -583,34 +612,22 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
 
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => void handleCopyVisible()}
-                  disabled={filtered.length === 0}
-                  className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
-                  aria-label="Copy visible console messages"
-                >
-                  {allCopied ? (
-                    <Check aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
-                  ) : (
-                    <Copy aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
-                  )}
-                </button>
+                {filtered.length > 0 ? (
+                  copyVisibleButton
+                ) : (
+                  <span className="inline-flex">{copyVisibleButton}</span>
+                )}
               </TooltipTrigger>
               <TooltipContent side="bottom">Copy visible messages</TooltipContent>
             </Tooltip>
 
             <Tooltip>
               <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={handleClear}
-                  disabled={allMessages.length === 0}
-                  className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
-                  aria-label="Clear console"
-                >
-                  <Trash2 aria-hidden="true" className={PANE_TOOLBAR_ICON_CLASS} />
-                </button>
+                {allMessages.length > 0 ? (
+                  clearButton
+                ) : (
+                  <span className="inline-flex">{clearButton}</span>
+                )}
               </TooltipTrigger>
               <TooltipContent side="bottom">Clear console</TooltipContent>
             </Tooltip>

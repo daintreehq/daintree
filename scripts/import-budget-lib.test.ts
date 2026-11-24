@@ -6,6 +6,7 @@ import {
   walkEagerGraph,
   scanForbiddenModules,
   ELEMENT_PICKER_FRAMEWORK_PATTERNS,
+  MAIN_ON_DEMAND_PATTERNS,
   scanSyncViolations,
   scanAllowlistMarkers,
   hasAllowlistMarker,
@@ -670,6 +671,40 @@ describe("scanForbiddenModules", () => {
       { file: "electron/services/decisions/decisionsSettings.ts", label: "Decisions" },
       { file: "electron/services/decisions/index.ts", label: "Decisions" },
       { file: "node_modules/@daintreehq/decisions-client/dist/index.js", label: "Decisions" },
+    ]);
+  });
+
+  it("catches the feature code main loads on demand, and not its light halves", () => {
+    const found = scanForbiddenModules(
+      [
+        "electron/schemas/plugin.ts",
+        "electron/schemas/plugin/providers.ts",
+        "electron/schemas/pluginManifestAdvisories.ts",
+        "electron/schemas/pluginIdentifiers.ts",
+        "electron/services/HelpSessionService.ts",
+        "electron/services/helpSessionRuntime.ts",
+        "electron/services/VoiceCorrectionService.ts",
+        "electron/services/voiceCleanupClaude.ts",
+        "electron/services/voiceOpeningCommand.ts",
+        "shared/config/voiceCorrection.ts",
+        "shared/config/voiceCorrectionClaude.ts",
+        "shared/config/voiceCorrectionOpenAI.ts",
+        "shared/config/voiceCorrectionPolicy.ts",
+      ],
+      MAIN_ON_DEMAND_PATTERNS
+    );
+
+    expect(found).toEqual([
+      { file: "electron/schemas/plugin.ts", label: "Plugin manifest schema" },
+      { file: "electron/schemas/plugin/providers.ts", label: "Plugin manifest schema" },
+      { file: "electron/schemas/pluginManifestAdvisories.ts", label: "Plugin manifest schema" },
+      { file: "electron/services/HelpSessionService.ts", label: "HelpSessionService" },
+      { file: "electron/services/voiceCleanupClaude.ts", label: "Voice cleanup" },
+      { file: "electron/services/VoiceCorrectionService.ts", label: "Voice cleanup" },
+      { file: "electron/services/voiceOpeningCommand.ts", label: "Voice cleanup" },
+      { file: "shared/config/voiceCorrection.ts", label: "Voice cleanup" },
+      { file: "shared/config/voiceCorrectionClaude.ts", label: "Voice cleanup" },
+      { file: "shared/config/voiceCorrectionOpenAI.ts", label: "Voice cleanup" },
     ]);
   });
 

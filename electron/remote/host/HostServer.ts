@@ -772,7 +772,7 @@ export class HostServer {
  * is a symlink: a socket in someone else's directory could be swapped out
  * from under us.
  */
-async function prepareOwnerOnlyDir(dir: string): Promise<void> {
+export async function prepareOwnerOnlyDir(dir: string): Promise<void> {
   try {
     await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   } catch (err) {
@@ -797,7 +797,7 @@ async function prepareOwnerOnlyDir(dir: string): Promise<void> {
  * socket lock; the file is also re-checked to be the one probed before it is
  * unlinked, for a process that doesn't take the lock.
  */
-async function clearStaleSocket(socketPath: string): Promise<void> {
+export async function clearStaleSocket(socketPath: string): Promise<void> {
   let stat;
   try {
     stat = await fs.lstat(socketPath);

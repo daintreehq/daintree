@@ -16,6 +16,7 @@ import { DaintreeIcon } from "@/components/icons";
 import { pluralize } from "@/lib/pluralize";
 import { schedulesClient } from "@/clients/schedulesClient";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { getPermissionAutoArgs, isAgentTerminalBypassSupported } from "@shared/types/agentSettings";
 import {
   isScheduleAssistantAgentId,
   SCHEDULE_ASSISTANT_AGENT_ID,
@@ -57,9 +58,9 @@ import {
   MISSED_RUN_OPTIONS,
   OVERLAP_CONSEQUENCE,
   OVERLAP_OPTIONS,
-  formatNextRunRelative,
-  formatRunInstant,
+  unlistedWorktreeLabel,
 } from "./scheduleWords";
+import { formatNextRunRelative, formatRunInstant } from "./runTime";
 
 export interface WorktreeChoice {
   /** Null is the project's main checkout. */
@@ -262,6 +263,8 @@ interface ScheduleEditorProps {
   /** A new schedule opened from a starter: its name, cadence and prompt fill the draft. */
   starter?: ScheduleStarter | null;
   worktrees: readonly WorktreeChoice[];
+  /** The project's worktree ids once known, null until then: a target missing from `worktrees` is only called missing against a known list. */
+  worktreeIds: ReadonlySet<string> | null;
   now: number;
   /** What main judges "Run when Daintree isn't running" by; null until it has answered. */
   osJobContext: ScheduleOsJobContext | null;
@@ -311,6 +314,7 @@ export function ScheduleEditor({
   defaultAgentId,
   starter = null,
   worktrees,
+  worktreeIds,
   now,
   osJobContext,
   projectSwitches,
@@ -341,7 +345,7 @@ export function ScheduleEditor({
   const loadLatestRef = useRef<HTMLButtonElement>(null);
 
   const agents = useFirstAgentOptions();
-  const { presets, preset, stopsAtPrompts } = useScheduleLaunchOptions(
+  const { presets, preset, presetStatus, stopsAtPrompts } = useScheduleLaunchOptions(
     draft.agentId,
     draft.presetId
   );
@@ -439,9 +443,13 @@ export function ScheduleEditor({
     { value: NO_PRESET_VALUE, label: "No preset" },
     ...presets.map((p) => ({ value: p.id, label: p.name })),
   ];
-  const presetMissing = draft.presetId !== null && preset === undefined;
-  if (presetMissing) {
-    presetOptions.push({ value: draft.presetId!, label: "Missing preset" });
+  // A preset its stores haven't read yet is shown as loading, never as missing.
+  const presetMissing = presetStatus === "missing";
+  if (draft.presetId !== null && (presetMissing || presetStatus === "loading")) {
+    presetOptions.push({
+      value: draft.presetId,
+      label: presetMissing ? "Missing preset" : "Loading preset…",
+    });
   }
 
   const worktreeOptions: SettingsSelectOption[] = [
@@ -452,7 +460,10 @@ export function ScheduleEditor({
     { value: NEW_WORKTREE_VALUE, label: "New worktree for each run" },
   ];
   if (draft.worktreeId !== null && !worktrees.some((choice) => choice.id === draft.worktreeId)) {
-    worktreeOptions.push({ value: draft.worktreeId, label: "Missing worktree" });
+    worktreeOptions.push({
+      value: draft.worktreeId,
+      label: unlistedWorktreeLabel(draft.worktreeId, worktreeIds),
+    });
   }
 
   const agentName = getEffectiveAgentConfig(draft.agentId)?.name ?? "This agent";
@@ -667,17 +678,35 @@ export function ScheduleEditor({
                 <div className="px-4 py-3">
                   <Callout
                     severity="warning"
-                    title="This run will stop at permission prompts"
+                    title="This run may stop at permission prompts"
                     action={
                       <Button variant="outline" size="sm" onClick={onOpenAgentSettings}>
                         Agent settings
                       </Button>
                     }
                   >
-                    {agentName} asks before it runs commands or edits files with{" "}
-                    {preset ? `the ${preset.name} preset` : "no preset"}, and nobody will be there
-                    to answer. Choose a preset that skips permission prompts, or the run waits until
-                    you open it.
+                    {getPermissionAutoArgs(draft.agentId).length > 0 ? (
+                      <>
+                        {agentName} launches on its own permission defaults with{" "}
+                        {preset ? `the ${preset.name} preset` : "no preset"}, and nobody will be
+                        there to answer a prompt. Choose a preset set to Auto, so {agentName}{" "}
+                        approves actions under its own rules, or to Skip all, which approves
+                        everything; otherwise the run waits until you open it.
+                      </>
+                    ) : isAgentTerminalBypassSupported(draft.agentId) ? (
+                      <>
+                        {agentName} asks before it runs commands or edits files with{" "}
+                        {preset ? `the ${preset.name} preset` : "no preset"}, and nobody will be
+                        there to answer. Choose a preset that skips permission prompts, or the run
+                        waits until you open it.
+                      </>
+                    ) : (
+                      <>
+                        {agentName} launches on its own permission defaults with{" "}
+                        {preset ? `the ${preset.name} preset` : "no preset"}, and Daintree has no
+                        flag to skip its prompts, so the run waits at any prompt until you open it.
+                      </>
+                    )}
                   </Callout>
                 </div>
               )}

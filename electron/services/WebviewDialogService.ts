@@ -16,6 +16,8 @@ class WebviewDialogService {
   private pendingDialogs = new Map<string, PendingDialog>();
   private pendingOAuthSessionStorage = new Map<string, Promise<SessionStorageEntry[]>>();
   private destroyedListeners = new Set<number>();
+  /** Panels whose find bar is open, by the view embedding them. */
+  private findOpen = new Map<number, Set<string>>();
 
   registerPanel(webContentsId: number, panelId: string, kind?: string): void {
     const wc = webContents.fromId(webContentsId);
@@ -65,6 +67,35 @@ class WebviewDialogService {
         this.destroyedListeners.delete(webContentsId);
       });
     }
+  }
+
+  /**
+   * A view says whether its find bar over one of its panels is open. While it
+   * is, an Escape from that panel's guest is the bar's alone: the page, and a
+   * picker in it holding a selection, never see it. Kept per view, so a view
+   * only ever speaks for the panels it embeds.
+   */
+  setFindOpen(embedderId: number, panelId: string, open: boolean): void {
+    if (!open) {
+      this.findOpen.get(embedderId)?.delete(panelId);
+      return;
+    }
+    let panels = this.findOpen.get(embedderId);
+    if (!panels) {
+      const embedder = webContents.fromId(embedderId);
+      if (!embedder || embedder.isDestroyed()) return;
+      panels = new Set();
+      this.findOpen.set(embedderId, panels);
+      const forget = () => this.findOpen.delete(embedderId);
+      embedder.once("destroyed", forget);
+      // A reload starts the view's find bars over shut, without telling anyone.
+      embedder.on("did-navigate", () => this.findOpen.get(embedderId)?.clear());
+    }
+    panels.add(panelId);
+  }
+
+  isFindOpen(embedderId: number, panelId: string): boolean {
+    return this.findOpen.get(embedderId)?.has(panelId) ?? false;
   }
 
   getPanelId(webContentsId: number): string | undefined {

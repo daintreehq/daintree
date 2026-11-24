@@ -31,7 +31,6 @@ vi.mock("@/components/Git/gitRemoteOperationPreview", async (importOriginal) => 
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
 vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, useOverlayState: () => {} };
@@ -60,6 +59,11 @@ function rebaseButton(): HTMLElement {
   return screen.getByRole("button", { name: "Pull and rebase" });
 }
 
+/** A full commit id, as main's read-last `rev-parse` reports it. */
+function oid(char: string): string {
+  return char.repeat(40);
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => {
@@ -77,7 +81,7 @@ describe("GitPullRebaseConfirmDialog", () => {
 
   afterEach(() => {
     if (useGitPullRebaseConfirmStore.getState().pendingConfirm) {
-      useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+      useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
     }
     cleanup();
     vi.restoreAllMocks();
@@ -91,6 +95,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       commits: [],
       pushRange: null,
       rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0 },
+      pullRebaseReview: { branch: "feature/y", headOid: oid("f") },
     });
     render(<GitPullRebaseConfirmDialog />);
 
@@ -101,7 +106,8 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(mocks.buildPreview).toHaveBeenCalledWith("/repo", "pull-rebase");
   });
 
-  it("resolves the awaited confirm promise with the user's decision", async () => {
+  it("approves with the branch and commit the preview was measured against (#17188)", async () => {
+    const review = { branch: "main", headOid: oid("1") };
     mocks.buildPreview.mockResolvedValue({
       branch: "main",
       destination: { remote: "origin", branch: "main" },
@@ -109,16 +115,17 @@ describe("GitPullRebaseConfirmDialog", () => {
       commits: [],
       pushRange: null,
       rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0 },
+      pullRebaseReview: review,
     });
     render(<GitPullRebaseConfirmDialog />);
 
-    let decision: boolean | undefined;
+    let decision: unknown;
     await act(async () => {
       void useGitPullRebaseConfirmStore
         .getState()
         .requestConfirmation("/repo")
-        .then((ok) => {
-          decision = ok;
+        .then((result) => {
+          decision = result;
         });
     });
 
@@ -126,7 +133,35 @@ describe("GitPullRebaseConfirmDialog", () => {
       rebaseButton().click();
     });
 
-    expect(decision).toBe(true);
+    expect(decision).toEqual({ confirmed: true, review });
+  });
+
+  it("declines with no review when cancelled", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [],
+      pushRange: null,
+      rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0 },
+      pullRebaseReview: { branch: "main", headOid: oid("1") },
+    });
+    render(<GitPullRebaseConfirmDialog />);
+
+    let decision: unknown;
+    await act(async () => {
+      void useGitPullRebaseConfirmStore
+        .getState()
+        .requestConfirmation("/repo")
+        .then((result) => {
+          decision = result;
+        });
+    });
+    await act(async () => {
+      screen.getByRole("button", { name: "Cancel" }).click();
+    });
+
+    expect(decision).toEqual({ confirmed: false, review: null });
   });
 
   function cancelButton(): HTMLElement {
@@ -141,6 +176,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       commits: [{ hash: "abcdef1234567", message: "Fix the thing", author: "Ada" }],
       pushRange: null,
       rebaseRange: { total: 1, rangeBasis: "tracked" as const, behind: 0 },
+      pullRebaseReview: { branch: "main", headOid: oid("1") },
       ...overrides,
     };
   }
@@ -233,6 +269,171 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
+  // A second request for the SAME worktree used to keep the first one's preview:
+  // the read was keyed on the cwd, so nothing re-read it, and Pull and rebase
+  // stayed enabled against rows measured before the supersede (#17188). The
+  // worktree may have moved in between, and the approval carries what is shown.
+  it("re-reads the preview when a second request supersedes the first on the same worktree", async () => {
+    mocks.buildPreview.mockResolvedValue(
+      loaded({
+        commits: [{ hash: "aaaaaaa1111", message: "First read", author: "Ada" }],
+        pullRebaseReview: { branch: "main", headOid: oid("a") },
+      })
+    );
+    render(<GitPullRebaseConfirmDialog />);
+
+    let first!: Promise<unknown>;
+    await act(async () => {
+      first = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+    expect(screen.getByText("First read")).toBeTruthy();
+    expect(mocks.buildPreview).toHaveBeenCalledTimes(1);
+
+    const gate = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValue(gate.promise);
+    let decision: unknown;
+    await act(async () => {
+      void useGitPullRebaseConfirmStore
+        .getState()
+        .requestConfirmation("/repo")
+        .then((result) => {
+          decision = result;
+        });
+    });
+
+    await expect(first).resolves.toEqual({ confirmed: false, review: null });
+    expect(mocks.buildPreview).toHaveBeenCalledTimes(2);
+    expect(mocks.buildPreview).toHaveBeenLastCalledWith("/repo", "pull-rebase");
+    expect(screen.queryByText("First read")).toBeNull();
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
+
+    const fresh = { branch: "main", headOid: oid("b") };
+    await act(async () => {
+      gate.resolve(
+        loaded({
+          commits: [{ hash: "bbbbbbb2222", message: "Second read", author: "Ada" }],
+          pullRebaseReview: fresh,
+        })
+      );
+      await gate.promise;
+    });
+    expect(screen.getByText("Second read")).toBeTruthy();
+
+    await act(async () => {
+      rebaseButton().click();
+    });
+    expect(decision).toEqual({ confirmed: true, review: fresh });
+  });
+
+  it("never lets the superseded request's late answer settle the new one", async () => {
+    const stale = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(stale.promise);
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    const current = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(current.promise);
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    await act(async () => {
+      stale.resolve(
+        loaded({
+          commits: [{ hash: "aaaaaaa1111", message: "Stale read", author: "Ada" }],
+          pullRebaseReview: { branch: "main", headOid: oid("a") },
+        })
+      );
+      await stale.promise;
+    });
+    expect(screen.queryByText("Stale read")).toBeNull();
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
+
+    await act(async () => {
+      current.resolve(loaded());
+      await current.promise;
+    });
+    expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
+  });
+
+  // The harmful order: the superseded read lands AFTER the current one. Without
+  // the per-read identity guard it would overwrite the current request's state
+  // and leave the dialog on the wrong rows or stuck unsettled.
+  it("keeps the current request's preview when the superseded read lands after it", async () => {
+    const stale = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(stale.promise);
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    const current = deferred<ReturnType<typeof loaded>>();
+    mocks.buildPreview.mockReturnValueOnce(current.promise);
+    let decision: unknown;
+    await act(async () => {
+      void useGitPullRebaseConfirmStore
+        .getState()
+        .requestConfirmation("/repo")
+        .then((result) => {
+          decision = result;
+        });
+    });
+
+    const fresh = { branch: "main", headOid: oid("b") };
+    await act(async () => {
+      current.resolve(
+        loaded({
+          commits: [{ hash: "bbbbbbb2222", message: "Current read", author: "Ada" }],
+          pullRebaseReview: fresh,
+        })
+      );
+      await current.promise;
+    });
+    await act(async () => {
+      stale.resolve(
+        loaded({
+          commits: [{ hash: "aaaaaaa1111", message: "Stale read", author: "Ada" }],
+          pullRebaseReview: { branch: "main", headOid: oid("a") },
+        })
+      );
+      await stale.promise;
+    });
+
+    expect(screen.getByText("Current read")).toBeTruthy();
+    expect(screen.queryByText("Stale read")).toBeNull();
+    expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
+    await act(async () => {
+      rebaseButton().click();
+    });
+    expect(decision).toEqual({ confirmed: true, review: fresh });
+  });
+
+  // No review, no approval: a pull has to be held to what was shown, and a
+  // preview main could not pin to a commit has nothing to hold it to.
+  it("blocks approval and offers a retry when the branch's commit couldn't be read", async () => {
+    mocks.buildPreview.mockResolvedValue(loaded({ pullRebaseReview: null }));
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-pull-rebase-unpinned")).toBeTruthy();
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).not.toBeNull();
+
+    mocks.buildPreview.mockResolvedValue(loaded());
+    await act(async () => {
+      screen.getByTestId("git-pull-rebase-unpinned-retry").click();
+    });
+    expect(screen.queryByTestId("git-pull-rebase-unpinned")).toBeNull();
+    expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
+  });
+
   // A measured-empty range is a real answer and a different one from "not measured".
   // It must not render as a commit list, and it must not read as a warning either:
   // there is nothing to be careful about.
@@ -312,7 +513,7 @@ describe("GitPullRebaseConfirmDialog", () => {
     });
     expect(screen.queryByText(/stops mid-rebase/i)).toBeNull();
 
-    useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+    useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
     unmount();
 
     mocks.buildPreview.mockResolvedValue(loaded());
@@ -512,7 +713,7 @@ describe("GitPullRebaseConfirmDialog", () => {
         void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
       });
       const text = screen.getByTestId("git-pull-rebase-upstream-summary").textContent ?? "";
-      act(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(false));
+      act(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(null));
       view.unmount();
       return text;
     };
@@ -535,7 +736,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       });
       const id = screen.getByRole("dialog").getAttribute("aria-describedby");
       const present = id !== null && document.getElementById(id) !== null;
-      act(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(false));
+      act(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(null));
       view.unmount();
       return present;
     };

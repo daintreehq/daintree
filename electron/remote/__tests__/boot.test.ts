@@ -50,12 +50,14 @@ const m = vi.hoisted(() => {
   const hostEntries: Array<{
     descriptor: { id: string; connection: { kind: "ssh"; target: string } };
   }> = [];
+  const retiringHosts = new Set<string>();
   const client = {
     client: {
       connect: vi.fn(),
       openHostForNotice: vi.fn(async (_window: unknown, _notice: unknown) => ({})),
       list: vi.fn(() => hostEntries),
       isDisconnectedByPerson: vi.fn((hostId: string) => hostId === "control-on"),
+      isHostRetiring: vi.fn((hostId: string) => retiringHosts.has(hostId)),
     },
     sessionFor: vi.fn((_hostId: string) => null as unknown),
     onEndpointOpened: vi.fn((l: (hostId: string, info: unknown) => void) => {
@@ -138,6 +140,7 @@ const m = vi.hoisted(() => {
     hostUploadsDispose: vi.fn(() => record("host uploads dispose")),
     attachHostUploads: vi.fn(),
     hostEntries,
+    retiringHosts,
     installPluginClient: vi.fn(),
     uninstallPluginClient: vi.fn(() => record("uninstall plugin client")),
     installPortForwardClient: vi.fn(),
@@ -146,6 +149,10 @@ const m = vi.hoisted(() => {
     uninstallHostSwitchService: vi.fn(() => record("uninstall host switch service")),
     installHostPortService: vi.fn(),
     uninstallHostPortService: vi.fn(() => record("uninstall host port service")),
+    installHostAgentForwarding: vi.fn(),
+    disposeHostAgentForwarding: vi.fn(async () => record("dispose host agent forwarding")),
+    installAgentForwardingClient: vi.fn(),
+    disposeAgentForwardingClient: vi.fn(() => record("dispose agent forwarding client")),
     installProjectsHost: vi.fn(),
     uninstallProjectsHost: vi.fn(() => record("uninstall projects host")),
     installPluginHost: vi.fn(),
@@ -416,10 +423,25 @@ vi.mock("../settingsControl/install.js", () => ({
     return m.uninstallSettingsControlHost;
   }),
 }));
+vi.mock("../host/machineKeeperHost.js", () => ({
+  installMachineKeeperHost: vi.fn(() => () => {}),
+}));
 vi.mock("../ports/clientInstall.js", () => ({
   installPortForwardClient: vi.fn((deps: unknown) => {
     m.installPortForwardClient(deps);
     return m.uninstallPortForwardClient;
+  }),
+}));
+vi.mock("../agentForwarding/hostForwarder.js", () => ({
+  installHostAgentForwarding: vi.fn((deps: { server: unknown }) => {
+    m.installHostAgentForwarding(deps);
+    return { socketForSpawn: async () => null, dispose: m.disposeHostAgentForwarding };
+  }),
+}));
+vi.mock("../agentForwarding/clientInstall.js", () => ({
+  installAgentForwardingClient: vi.fn((deps: unknown) => {
+    m.installAgentForwardingClient(deps);
+    return { check: async () => ({ localAgent: false }), dispose: m.disposeAgentForwardingClient };
   }),
 }));
 vi.mock("../ports/hostPorts.js", () => ({
@@ -560,6 +582,11 @@ vi.mock("../pluginControl/hostInstall.js", () => ({
 vi.mock("../client/viewRequests.js", () => ({
   installViewReverseRequests: vi.fn(() => m.uninstallViewRequests),
 }));
+// Boot reaps a crashed launch's advert from the real socket directory; not this machine's.
+vi.mock("../host/advertRecord.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../host/advertRecord.js")>()),
+  reapOrphanedAdvert: vi.fn(),
+}));
 // The real service over the real listener, with the system (store, launchd,
 // systemd, mDNS, keychain) faked: boot must never touch this machine.
 vi.mock("../host/hostModeDefaults.js", async () => {
@@ -640,6 +667,7 @@ beforeEach(() => {
   m.viewFilter.current = null;
   m.mcpResolver.current = null;
   m.hostEntries.length = 0;
+  m.retiringHosts.clear();
   vi.clearAllMocks();
   _resetRemoteServicesForTest();
 });
@@ -792,10 +820,14 @@ describe("startRemoteHosts", () => {
     m.hostEntries.push({
       descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5 },
       connection: { status: "disconnected" },
-      summary,
+      summary: null,
     } as never);
     await startRemoteHosts({ hostMode: false });
-    registerRemoteService("hostMetrics", { receiptOf, cameOn: () => null } as never);
+    registerRemoteService("hostMetrics", {
+      receiptOf,
+      cameOn: () => null,
+      latest: (hostId: string) => (hostId === "control-on" ? summary : null),
+    } as never);
     const [deps] = control.installHostControl.mock.calls[0] as [
       { observeHosts(): Array<Record<string, unknown>> },
     ];
@@ -809,17 +841,22 @@ describe("startRemoteHosts", () => {
     const cameOn = vi.fn((held: object, session: unknown) =>
       held === summary ? session === current : null
     );
+    // The host list leaves out an earlier link's summary (#17921); host control reads it from metrics.
     m.hostEntries.push({
       descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5 },
       connection: { status: "connected", rttMs: null },
-      summary,
+      summary: null,
     } as never);
     await startRemoteHosts({ hostMode: false });
-    registerRemoteService("hostMetrics", { receiptOf: () => null, cameOn } as never);
+    registerRemoteService("hostMetrics", {
+      receiptOf: () => null,
+      cameOn,
+      latest: (hostId: string) => (hostId === "control-on" ? summary : null),
+    } as never);
     const [deps] = control.installHostControl.mock.calls[0] as [
       { observeHosts(): Array<Record<string, unknown>> },
     ];
-    expect(deps.observeHosts()[0]).toMatchObject({ summaryFromCurrentLink: false });
+    expect(deps.observeHosts()[0]).toMatchObject({ summary, summaryFromCurrentLink: false });
     expect(cameOn).toHaveBeenLastCalledWith(summary, null);
 
     m.client.sessionFor.mockReturnValueOnce(current);
@@ -843,8 +880,13 @@ describe("startRemoteHosts", () => {
         session(hostId: string): Promise<unknown>;
         addUseCheck(check: (hostId: string) => boolean): () => void;
         hostName(hostId: string): string;
+        isRetiring(hostId: string): boolean;
       },
     ];
+    // A host being re-pointed is asked of the client, so no credential reaches its old machine (#17207).
+    m.retiringHosts.add("control-on");
+    expect(deps.isRetiring("control-on")).toBe(true);
+    expect(deps.isRetiring("studio-01")).toBe(false);
     // Relayed calls keep their host's link through the manager's own idle sweep.
     const check = () => true;
     deps.addUseCheck(check);
@@ -1002,6 +1044,10 @@ describe("startRemoteHosts", () => {
     });
     expect(deps.isKnownHost("studio-01")).toBe(true);
     expect(deps.isKnownHost("studio-02")).toBe(false);
+    // Being re-pointed, it is the old machine still: nothing is forwarded to it meanwhile (#17207).
+    m.retiringHosts.add("studio-01");
+    expect(deps.isKnownHost("studio-01")).toBe(false);
+    m.retiringHosts.delete("studio-01");
     const onSession = () => {};
     deps.onSessionOpened(onSession);
     expect(m.client.manager.onSessionOpened).toHaveBeenCalledWith(onSession);
@@ -1301,6 +1347,8 @@ describe("startRemoteHosts", () => {
   it("serves ports, project moves and plugins only while listening, on the server's sessions", async () => {
     await startRemoteHosts({ hostMode: false });
     expect(m.installHostPortService).not.toHaveBeenCalled();
+    expect(m.installHostAgentForwarding).not.toHaveBeenCalled();
+    expect(getRemoteService("agentForwardingHost")).toBeUndefined();
     expect(m.installProjectsHost).not.toHaveBeenCalled();
     expect(m.installPluginHost).not.toHaveBeenCalled();
     expect(m.installPluginParityHost).not.toHaveBeenCalled();
@@ -1308,12 +1356,18 @@ describe("startRemoteHosts", () => {
     const hostMode = getRemoteService("hostMode")!;
     await hostMode.startListening();
     expect(m.installHostPortService).toHaveBeenCalledWith(m.server);
+    expect(m.installHostAgentForwarding).toHaveBeenCalledWith(
+      expect.objectContaining({ server: m.server })
+    );
+    expect(getRemoteService("agentForwardingHost")).toBeDefined();
     expect(m.installProjectsHost).toHaveBeenCalledWith(m.server);
     expect(m.installPluginHost).toHaveBeenCalledTimes(1);
     expect(m.installPluginParityHost).toHaveBeenCalledWith(m.server);
 
     await hostMode.stopListening();
     expect(m.uninstallHostPortService).toHaveBeenCalledTimes(1);
+    expect(m.disposeHostAgentForwarding).toHaveBeenCalledTimes(1);
+    expect(getRemoteService("agentForwardingHost")).toBeUndefined();
     expect(m.uninstallProjectsHost).toHaveBeenCalledTimes(1);
     expect(m.uninstallPluginHost).toHaveBeenCalledTimes(1);
     expect(m.uninstallPluginParityHost).toHaveBeenCalledTimes(1);
@@ -1345,8 +1399,23 @@ describe("startRemoteHosts", () => {
       registry: m.client.registry,
       manager: m.client.manager,
       sessionFor: m.client.sessionFor,
+      onAgentStopChanges: expect.any(Function),
     });
     expect(decisionsHosts.installDecisionsHost).not.toHaveBeenCalled();
+
+    // Hosts' agents' stops come from the summaries' client, read when Decisions asks (#17933).
+    const [deps] = decisionsHosts.installDecisionsHostsClient.mock.calls[0] as [
+      { onAgentStopChanges(listener: () => void): () => void },
+    ];
+    const listener = vi.fn();
+    expect(() => deps.onAgentStopChanges(listener)()).not.toThrow();
+    const offStops = vi.fn();
+    const onAgentStopChanges = vi.fn((_l: unknown) => offStops);
+    const offMetrics = registerRemoteService("hostMetrics", { onAgentStopChanges } as never);
+    deps.onAgentStopChanges(listener)();
+    expect(onAgentStopChanges).toHaveBeenCalledWith(listener);
+    expect(offStops).toHaveBeenCalledTimes(1);
+    offMetrics();
 
     const hostMode = getRemoteService("hostMode")!;
     await hostMode.startListening();
@@ -1653,12 +1722,14 @@ describe("stopRemoteHosts", () => {
       "uninstall settings copy host",
       "uninstall plugin parity host",
       "uninstall projects host",
+      "dispose host agent forwarding",
       "uninstall host port service",
       "host uploads dispose",
       "host files dispose",
       "disposeAllTerminalBridges",
       "host.dispose",
       "server.close",
+      "dispose agent forwarding client",
       "uninstall port forward client",
       "uninstall settings control client",
       "uninstall settings copy client",

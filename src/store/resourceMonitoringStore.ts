@@ -16,11 +16,31 @@ export interface TerminalResourceState {
   processCount?: number;
 }
 
+/**
+ * The samples one poll carried. A fresh wrapper per poll, so a subscriber can
+ * tell a new poll from a store update that delivered none.
+ */
+export interface ResourceSampleBatch {
+  samples: TerminalResourceBatchPayload;
+  /**
+   * When the host took the samples (epoch ms). The census backs off from 2.5s
+   * to 15s between polls, so a consumer that turns samples into a rate needs
+   * this rather than a per-sample constant.
+   */
+  sampledAt: number;
+}
+
 interface ResourceMonitoringStore {
   enabled: boolean;
   metrics: Map<string, TerminalResourceState>;
+  /**
+   * The latest poll. Each PTY host shard polls on its own, so a batch covers
+   * only the terminals of the shard that sent it; a per-poll consumer reads
+   * these samples rather than every entry in `metrics`.
+   */
+  lastBatch: ResourceSampleBatch | null;
   setEnabled: (enabled: boolean) => void;
-  updateMetrics: (batch: TerminalResourceBatchPayload) => void;
+  updateMetrics: (batch: TerminalResourceBatchPayload, sampledAt?: number) => void;
   removePanel: (id: string) => void;
   clear: () => void;
 }
@@ -66,22 +86,27 @@ function sameSample(entry: TerminalResourceState, sample: TerminalResourceSample
 export const useResourceMonitoringStore = create<ResourceMonitoringStore>((set) => ({
   enabled: false,
   metrics: new Map(),
+  lastBatch: null,
 
   setEnabled: (enabled) =>
     set(() => {
       if (!enabled) {
-        return { enabled, metrics: new Map() };
+        return { enabled, metrics: new Map(), lastBatch: null };
       }
       return { enabled };
     }),
 
-  updateMetrics: (batch) =>
+  updateMetrics: (batch, sampledAt = Date.now()) =>
     set((state) => {
-      // Always a new Map: the leak detector evaluates every entry once per
-      // batch, and its cadence must not depend on whether anything moved.
-      const next = new Map(state.metrics);
-      for (const [id, sample] of Object.entries(batch)) {
-        const existing = next.get(id);
+      const ids = Object.keys(batch);
+      if (ids.length === 0) return state;
+      // The map is replaced only when an entry is; the poll itself is always
+      // published, so the leak detector's cadence doesn't depend on a sample
+      // moving.
+      let next: Map<string, TerminalResourceState> | null = null;
+      for (const id of ids) {
+        const sample = batch[id]!;
+        const existing = state.metrics.get(id);
         let repeats = 0;
         if (existing && sameSample(existing, sample)) {
           repeats = (repeatCounts.get(existing) ?? 0) + 1;
@@ -99,17 +124,19 @@ export const useResourceMonitoringStore = create<ResourceMonitoringStore>((set) 
           processCount: sample.processCount,
         };
         if (repeats > 0) repeatCounts.set(entry, repeats);
+        next ??= new Map(state.metrics);
         next.set(id, entry);
       }
-      return { metrics: next };
+      return { metrics: next ?? state.metrics, lastBatch: { samples: batch, sampledAt } };
     }),
 
   removePanel: (id) =>
     set((state) => {
+      if (!state.metrics.has(id)) return state;
       const next = new Map(state.metrics);
       next.delete(id);
       return { metrics: next };
     }),
 
-  clear: () => set({ metrics: new Map() }),
+  clear: () => set({ metrics: new Map(), lastBatch: null }),
 }));

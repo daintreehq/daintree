@@ -121,6 +121,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "View this project's agents",
     description:
       "Open the agent overview scoped to this project, grouped by worktree, or the whole fleet when this workspace has no worktree axis",
+    paletteDescription:
+      "Show or hide this project's agents, or the whole fleet when there's no worktree grouping",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -156,6 +158,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Switch to last workspace",
     description:
       "Switch to the workspace this window was in before the current one — a project or a scratch. Running it again returns to where you started.",
+    paletteDescription: "Switch back to the project or scratch this window showed before",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -260,6 +263,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Never sleep automatically",
     description:
       "Exempt a project from automatic sleep, so the idle background sweep never closes it. Manual Sleep project still works on it. Defaults to the current project; pass enabled to set the exemption explicitly, or omit it to flip the current state. This is unrelated to the system Keep awake setting and to pinning.",
+    paletteDescription: "Keep this project from sleeping automatically, or allow it again",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -292,6 +296,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Archive project",
     description:
       "File a project away: it leaves the project switcher's main list for a folded Archived section, but keeps its settings, worktrees, pin and group, and still surfaces if one of its agents runs or asks for input. Defaults to the current project. Reverse it with project.unarchive.",
+    paletteDescription:
+      "Move this project into the switcher's Archived section, keeping its settings",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -306,6 +312,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Unarchive project",
     description:
       "Bring an archived project back to where it was in the project switcher — its group, or Other projects. Defaults to the current project. Does nothing to a project that isn't archived.",
+    paletteDescription: "Bring this archived project back to its place in the project switcher",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -397,6 +404,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Sleep project",
     description:
       "Stop a project's terminals to free memory. Its layout, terminal scrollback and agent sessions come back when the project is reopened. Defaults to the current project; sleeping that one returns the window to the project picker. Asks the user to confirm unless the project is in the background with nothing running.",
+    paletteDescription:
+      "Stop this project's terminals to free memory and go back to the project picker",
     category: "project",
     kind: "command",
     danger: "confirm",
@@ -409,11 +418,31 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       runProjectAction("project.sleep", args, ctx, callbacks),
   }));
 
+  actions.set("project.sleepAll", () => ({
+    id: "project.sleepAll",
+    title: "Sleep all projects",
+    description:
+      "Stop the terminals of every open project, after the user confirms a preview naming each one. The user can choose to sleep at once, or to wait until every agent is observed idle or waiting for input, optionally asking working agents to pause first. Layout, scrollback and agent sessions come back on reopen. Only available to the user.",
+    paletteDescription: "Sleep every open project now, or once its agents are observed idle",
+    category: "project",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Stops the terminals and agent processes of every open project. Layout and sessions are kept for the reopen, but anything still running in them is lost.",
+    nonRepeatable: true,
+    keywords: ["shutdown", "reboot", "restart computer", "pack up", "pause"],
+    scope: "renderer",
+    run: (args: unknown, ctx: ActionContext) =>
+      runProjectAction("project.sleepAll", args, ctx, callbacks),
+  }));
+
   actions.set("project.restart", () => ({
     id: "project.restart",
     title: "Restart project…",
     description:
       "Restart the project open in this window without restarting the app: its terminals and agents stop, its workspace host is replaced, and it reopens here with its layout, scrollback and agent sessions. Other projects keep running. Defaults to the current project and only accepts that one. Always asks the user to confirm.",
+    paletteDescription:
+      "Restart this project's terminals, agents and workspace host after you confirm",
     category: "project",
     kind: "command",
     danger: "confirm",
@@ -432,6 +461,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     title: "Sleep idle projects",
     description:
       "Sleep every background project that has no agent working or waiting on the user and isn't open in a window, after the user confirms a preview naming each one with an estimate of its terminal memory. Takes no arguments. The estimate sums process memory and counts shared pages, so the memory actually freed is lower.",
+    paletteDescription:
+      "Sleep background projects with no working or waiting agent, after a preview",
     category: "project",
     kind: "command",
     danger: "confirm",

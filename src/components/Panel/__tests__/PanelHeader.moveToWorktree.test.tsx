@@ -205,10 +205,13 @@ describe("PanelHeader Move to worktree, through the real overlays", () => {
     expect(document.querySelector('[role="tooltip"]')).toBeNull();
   });
 
-  it("moves the panel from the keyboard and leaves focus off the button", async () => {
-    renderHeader();
+  it("moves the panel from the keyboard and leaves focus off the departed button", async () => {
+    const { unmount } = renderHeader();
+    // A move takes the panel out of this grid, and its header with it.
+    dispatchMock.mockImplementation(() => queueMicrotask(unmount));
     const trigger = await openPickerByKeyboard();
     await waitFor(() => expect(document.activeElement).toBe(searchField()));
+    const focusTrigger = vi.spyOn(trigger, "focus");
 
     // Main, then the panel's own worktree skipped, then feature-b.
     fireEvent.keyDown(searchField()!, { key: "ArrowDown" });
@@ -223,6 +226,24 @@ describe("PanelHeader Move to worktree, through the real overlays", () => {
     // Radix schedules its focus return on a zero-delay timer after the
     // content unmounts; let it run before checking where focus went.
     await act(() => new Promise((resolve) => setTimeout(resolve, RADIX_FOCUS_RETURN_TICK_MS)));
+    expect(focusTrigger).not.toHaveBeenCalled();
     expect(document.activeElement).not.toBe(trigger);
+  });
+
+  it("returns a move that left the panel in place to the menu button (#17202)", async () => {
+    renderHeader();
+    const trigger = await openPickerByKeyboard();
+    await waitFor(() => expect(document.activeElement).toBe(searchField()));
+    const focusTrigger = vi.spyOn(trigger, "focus");
+
+    fireEvent.keyDown(searchField()!, { key: "ArrowDown" });
+    fireEvent.keyDown(searchField()!, { key: "Enter" });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(searchField()).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    // Picked from the keyboard, so the ring comes back with it.
+    expect(focusTrigger).toHaveBeenCalledWith({ preventScroll: true });
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
   });
 });

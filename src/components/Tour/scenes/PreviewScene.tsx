@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   ArrowRight,
+  ChevronUp,
   FolderTree,
   Globe,
   MonitorPlay,
@@ -18,7 +19,6 @@ import {
   MockSearchField,
   MockSpotlight,
   MockStreamingLines,
-  reveal,
   useMockCursor,
 } from "@daintreehq/tour/kit";
 import {
@@ -36,7 +36,8 @@ const MENU = { x: LAUNCHER.x - 8, y: LAUNCHER.y + 14, width: 164 };
 // The menu's fourth row, Dev preview, on its label.
 const DEV_PREVIEW_ITEM = { anchor: "menu-3", dx: -7 };
 const RUN_BUTTON = { anchor: "dev-run" };
-const CONSOLE_TOGGLE = { anchor: "dev-console", dx: 2 };
+const DRAWER_TOGGLE = { anchor: "dev-drawer", dx: -20 };
+const CONSOLE_TAB = { anchor: "dev-console-tab" };
 
 export const CURSOR: readonly CursorStep[] = [
   { cue: "launch", at: { anchor: "launcher" } },
@@ -45,8 +46,11 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "pickpreview", offset: 0.1, at: DEV_PREVIEW_ITEM, click: true },
   { cue: "start", at: RUN_BUTTON },
   { cue: "start", offset: 0.5, at: RUN_BUTTON, click: true },
-  { cue: "console", at: CONSOLE_TOGGLE },
-  { cue: "console", offset: 0.5, at: CONSOLE_TOGGLE, click: true },
+  { cue: "output", at: DRAWER_TOGGLE },
+  { cue: "output", offset: 0.4, at: DRAWER_TOGGLE, click: true },
+  // "console" is the chapter's last word, so the pointer is already there as it lands.
+  { cue: "console", offset: -0.45, at: CONSOLE_TAB },
+  { cue: "console", offset: 0.05, at: CONSOLE_TAB, click: true },
 ];
 
 /** The shop's storefront as the dev server renders it — a page, not UI chrome. */
@@ -77,6 +81,93 @@ function MockPage({ withSearch }: { withSearch: boolean }) {
           {[0, 1].map((i) => (
             <span key={i} className="rounded-md bg-overlay-medium" />
           ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The drawer along the bottom of the preview, as the app draws it: a bar that
+ * toggles it, the server's status, and once open the Output and Console tabs.
+ */
+function OutputDrawer({
+  status,
+  open,
+  tab,
+}: {
+  status: string;
+  open: boolean;
+  tab: "output" | "console";
+}) {
+  return (
+    <div className="absolute inset-x-0 bottom-0 flex flex-col border-t border-border-default bg-surface-panel">
+      <div className="flex h-5 min-w-0 items-center text-3xs">
+        <span
+          data-tour-anchor="dev-drawer"
+          className="flex min-w-0 flex-1 items-center gap-1 border-r border-border-subtle px-2 font-semibold text-text-primary"
+        >
+          <ChevronUp
+            className={cn(
+              "size-2.5 shrink-0 transition-transform duration-150 ease-out",
+              open && "rotate-180"
+            )}
+            aria-hidden="true"
+          />
+          <span className="truncate">Output drawer</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-1 px-2 text-text-secondary">
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              status === "Running"
+                ? "bg-server-running"
+                : status === "Starting"
+                  ? "bg-server-starting"
+                  : "bg-server-stopped"
+            )}
+          />
+          {status}
+        </span>
+      </div>
+      <div
+        data-tour-anchor="dev-logs"
+        className={cn(
+          "flex flex-col overflow-hidden transition-[height] duration-200 ease-out",
+          open ? "h-[64px]" : "h-0"
+        )}
+      >
+        <div className="flex h-5 shrink-0 items-center gap-2 border-y border-border-subtle px-2 text-3xs">
+          {(["output", "console"] as const).map((id) => (
+            <span
+              key={id}
+              data-tour-anchor={id === "console" ? "dev-console-tab" : "dev-output-tab"}
+              className={cn(
+                "rounded-sm px-1",
+                tab === id
+                  ? "bg-overlay-selected font-medium text-text-primary"
+                  : "text-text-secondary"
+              )}
+            >
+              {id === "output" ? "Output" : "Console"}
+            </span>
+          ))}
+          <span className="text-text-secondary">Diagnostics</span>
+        </div>
+        <div className="flex min-w-0 flex-col gap-0.5 p-1.5 font-mono text-3xs text-text-secondary [&>span]:truncate">
+          {tab === "output" ? (
+            <>
+              <span>VITE ready in 312 ms</span>
+              <span>➜ Local: localhost:5173</span>
+              <span>hmr update /Header.tsx</span>
+            </>
+          ) : (
+            <>
+              <span>[vite] connected.</span>
+              <span>SearchBox mounted</span>
+              <span>GET /api/search?q=shoe 200</span>
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -120,23 +211,29 @@ export function PreviewScene() {
   const starting = useCue("start", 0.55);
   const running = useCue("start", 0.9);
   const live = useCue("live", 0.6);
-  const consoleCue = useCue("console");
-  const drawer = useCue("console", 0.6);
+  const outputCue = useCue("output");
+  const drawer = useCue("output", 0.5);
+  const consoleCue = useCue("console", -0.45);
+  const consoleTab = useCue("console", 0.15);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
 
   // The trigger, then what it produced: the launcher row, Run, the new search
-  // box on the live page, the console button, then the logs it opened.
-  const spot = drawer
+  // box on the live page, the drawer's bar, the logs it opened, then Console.
+  const spot = consoleTab
     ? ["dev-logs"]
     : consoleCue
-      ? ["dev-console"]
-      : live
-        ? ["dev-search"]
-        : opened
-          ? ["dev-run"]
-          : menu
-            ? ["menu-3"]
-            : ["launcher"];
+      ? ["dev-console-tab"]
+      : drawer
+        ? ["dev-logs"]
+        : outputCue
+          ? ["dev-drawer"]
+          : live
+            ? ["dev-search"]
+            : opened
+              ? ["dev-run"]
+              : menu
+                ? ["menu-3"]
+                : ["launcher"];
 
   return (
     <MockApp
@@ -168,35 +265,15 @@ export function PreviewScene() {
                   <span className="flex h-4 min-w-0 flex-1 items-center truncate rounded-sm bg-surface-input px-1.5 text-3xs text-text-secondary">
                     localhost:5173
                   </span>
-                  <span data-tour-anchor="dev-console" className="inline-flex">
-                    <SquareTerminal aria-hidden="true" />
-                  </span>
                 </div>
               }
             >
               {running ? <MockPage withSearch={live} /> : <StartPrompt starting={starting} />}
-              <div
-                data-tour-anchor="dev-logs"
-                className={cn(
-                  "absolute inset-x-0 bottom-0 flex h-[72px] flex-col border-t border-border-default bg-surface-panel",
-                  reveal(drawer)
-                )}
-              >
-                <div className="flex h-5 min-w-0 items-center gap-2 border-b border-border-subtle px-2 text-3xs">
-                  <span className="font-medium text-text-primary">Output</span>
-                  <span className="text-text-secondary">Console</span>
-                  <span className="truncate text-text-secondary">Diagnostics</span>
-                  <span className="flex-1" />
-                  <span className="shrink-0 rounded-full border border-border-strong px-1.5 text-text-secondary">
-                    Running
-                  </span>
-                </div>
-                <div className="flex min-w-0 flex-col gap-0.5 p-1.5 font-mono text-3xs text-text-secondary [&>span]:truncate">
-                  <span>VITE ready in 312 ms</span>
-                  <span>➜ Local: localhost:5173</span>
-                  <span>hmr update /Header.tsx</span>
-                </div>
-              </div>
+              <OutputDrawer
+                status={running ? "Running" : starting ? "Starting" : "Stopped"}
+                open={drawer}
+                tab={consoleTab ? "console" : "output"}
+              />
             </MockPanel>
           )}
         </MockGrid>

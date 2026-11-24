@@ -3,7 +3,11 @@ import * as React from "react";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetTooltipFocusSuppressionForTests } from "@/lib/tooltipFocusSuppression";
-import { useOverlayFocusRestore, type OverlayFocusRestore } from "../overlay-focus-restore";
+import {
+  restoreFocusIfStranded,
+  useOverlayFocusRestore,
+  type OverlayFocusRestore,
+} from "../overlay-focus-restore";
 
 /**
  * The close-time focus policy every anchored overlay now shares, driven through
@@ -333,6 +337,164 @@ describe("dropdown close-time focus policy", () => {
   });
 });
 
+describe("dropdown close that hands focus off", () => {
+  // A launch from a menu row sends focus to the panel it opens, and that can
+  // land before the menu's close or after it. The close must neither steal it
+  // back nor strand focus on document.body when it never comes.
+  function renderHandoffDropdown() {
+    let overlay: OverlayFocusRestore | null = null;
+    function Capture() {
+      overlay = useOverlayFocusRestore();
+      return null;
+    }
+    const { unmount } = render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>trigger</DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <Capture />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
+    const trigger = document.querySelector("button") as HTMLButtonElement;
+    return { trigger, unmount, expectHandoff: () => overlay!.expectHandoff() };
+  }
+
+  // Item click (detail 1 for a pointer, 0 for Radix's Enter/Space), then for the
+  // keyboard the keydown that bubbles to the content after the item's click.
+  const pick = {
+    pointer: () => contentProps().onClick(itemClick(1)),
+    keyboard: () => {
+      contentProps().onClick(itemClick(0));
+      contentProps().onKeyDown();
+    },
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps focus on a surface the handoff reached before the close", () => {
+    const { trigger, expectHandoff } = renderHandoffDropdown();
+    const focusSpy = vi.spyOn(trigger, "focus");
+    const panel = document.createElement("textarea");
+    document.body.appendChild(panel);
+
+    act(() => {
+      expectHandoff();
+      contentProps().onClick(itemClick(1));
+    });
+    panel.focus();
+    const event = closeEvent();
+    act(() => contentProps().onCloseAutoFocus(event));
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    // Radix's own restoration would have pulled focus back to the trigger.
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(panel);
+    panel.remove();
+  });
+
+  it.each(["pointer", "keyboard"] as const)(
+    "keeps focus on a surface a %s-picked handoff reached after the close",
+    (gesture) => {
+      const { trigger, expectHandoff } = renderHandoffDropdown();
+      const focusSpy = vi.spyOn(trigger, "focus");
+      const panel = document.createElement("textarea");
+      document.body.appendChild(panel);
+
+      act(() => {
+        expectHandoff();
+        pick[gesture]();
+      });
+      act(() => contentProps().onCloseAutoFocus(closeEvent()));
+      panel.focus();
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(focusSpy).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(panel);
+      panel.remove();
+    }
+  );
+
+  it("leaves a trigger that unmounted before the fallback alone", () => {
+    const { trigger, unmount, expectHandoff } = renderHandoffDropdown();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => {
+      expectHandoff();
+      pick.pointer();
+    });
+    act(() => contentProps().onCloseAutoFocus(closeEvent()));
+    unmount();
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns focus ringless when a pointer-picked handoff never came", () => {
+    const { trigger, expectHandoff } = renderHandoffDropdown();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => {
+      expectHandoff();
+      contentProps().onClick(itemClick(1));
+    });
+    act(() => contentProps().onCloseAutoFocus(closeEvent()));
+    // Nothing synchronously: the handoff gets its chance first.
+    expect(focusSpy).not.toHaveBeenCalled();
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("returns focus with its ring when a keyboard-picked handoff never came", () => {
+    // Radix selects on Enter by calling .click() from the item's keydown, so
+    // the keydown reaches the content after the item armed the handoff; that
+    // keystroke must not disarm it.
+    const { trigger, expectHandoff } = renderHandoffDropdown();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => {
+      expectHandoff();
+      pick.keyboard();
+    });
+    const event = closeEvent();
+    act(() => contentProps().onCloseAutoFocus(event));
+    expect(focusSpy).not.toHaveBeenCalled();
+    act(() => {
+      vi.runAllTimers();
+    });
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("does not carry an unspent handoff into the next opening", () => {
+    const { expectHandoff } = renderHandoffDropdown();
+    act(() => expectHandoff());
+    act(() => captured.rootOnOpenChange?.(true));
+
+    const event = closeEvent();
+    act(() => contentProps().onCloseAutoFocus(event));
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+});
+
 describe("context menu close-time focus policy", () => {
   function renderContextMenu() {
     render(
@@ -395,7 +557,9 @@ describe("popover close-time focus policy", () => {
       content: captured.popoverContent as {
         onPointerDown: () => void;
         onPointerDownOutside: () => void;
-        onClick: (event: React.MouseEvent) => void;
+        // Capture phase on the popover: a row that stops its click must not
+        // hide the gesture.
+        onClickCapture: (event: React.MouseEvent) => void;
         onCloseAutoFocus: (event: {
           preventDefault: () => void;
           defaultPrevented: boolean;
@@ -408,7 +572,7 @@ describe("popover close-time focus policy", () => {
     const { trigger, content } = renderPopover();
     const focusSpy = vi.spyOn(trigger, "focus");
 
-    act(() => content.onClick(optionClick(1)));
+    act(() => content.onClickCapture(optionClick(1)));
     const event = closeEvent();
     act(() => content.onCloseAutoFocus(event));
 
@@ -426,7 +590,7 @@ describe("popover close-time focus policy", () => {
 
     const button = document.createElement("button");
     document.body.appendChild(button);
-    act(() => content.onClick({ target: button, detail: 1 } as unknown as React.MouseEvent));
+    act(() => content.onClickCapture({ target: button, detail: 1 } as unknown as React.MouseEvent));
     const event = closeEvent();
     act(() => content.onCloseAutoFocus(event));
 
@@ -481,6 +645,157 @@ describe("popover close-time focus policy", () => {
   });
 });
 
+describe("stranded-focus fallback for a consumer that owns its restoration", () => {
+  // `AppPalettePopover` cancels the restoration on closes where something else
+  // is meant to take focus, and asks for this behind it so a modal click-away
+  // or a declined launch doesn't leave focus on `document.body` (#17202).
+  function renderOwnedPopover() {
+    let overlay: OverlayFocusRestore | null = null;
+    function Probe() {
+      overlay = useOverlayFocusRestore();
+      return null;
+    }
+    render(
+      <Popover>
+        <Probe />
+        <PopoverTrigger>trigger</PopoverTrigger>
+        <PopoverContent>body</PopoverContent>
+      </Popover>
+    );
+    return {
+      overlay: () => overlay!,
+      trigger: document.querySelector("button") as HTMLButtonElement,
+      content: captured.popoverContent as {
+        onPointerDownOutside: () => void;
+        onKeyDownCapture: () => void;
+        onClickCapture: (event: React.MouseEvent) => void;
+      },
+    };
+  }
+
+  function returnTarget() {
+    const target = document.createElement("button");
+    document.body.appendChild(target);
+    return target;
+  }
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("restores nothing until a task has passed, and nothing once focus is taken", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+    const taker = returnTarget();
+
+    act(() => overlay().restoreIfStranded());
+    expect(focusSpy).not.toHaveBeenCalled();
+    taker.focus();
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(taker);
+    taker.remove();
+  });
+
+  it("falls back to the recorded trigger, ringed when no pointer was involved", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => overlay().restoreIfStranded());
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("prefers the target it is handed over the trigger", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const triggerSpy = vi.spyOn(trigger, "focus");
+    const target = returnTarget();
+    const targetSpy = vi.spyOn(target, "focus");
+
+    act(() => overlay().restoreIfStranded(target));
+    act(() => vi.runAllTimers());
+
+    expect(triggerSpy).not.toHaveBeenCalled();
+    expect(targetSpy).toHaveBeenCalledTimes(1);
+    target.remove();
+  });
+
+  it("reads the gesture when asked, so a later reset cannot turn a pointer pick ringed", () => {
+    const { overlay, trigger, content } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => content.onClickCapture(optionClick(1)));
+    act(() => {
+      overlay().restoreIfStranded();
+      overlay().deferToRadix();
+    });
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+  });
+
+  it("lets a keystroke supersede the pointer gesture before it", () => {
+    const { overlay, trigger, content } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => content.onClickCapture(optionClick(1)));
+    act(() => content.onKeyDownCapture());
+    act(() => overlay().restoreIfStranded());
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("takes an explicit ring decision over the gesture", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => overlay().restoreIfStranded(null, true));
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+  });
+
+  it("keeps the ring it was told to keep, even after a pointer pick", () => {
+    const { overlay, trigger, content } = renderOwnedPopover();
+    const focusSpy = vi.spyOn(trigger, "focus");
+
+    act(() => content.onClickCapture(optionClick(1)));
+    act(() => overlay().restoreIfStranded(null, false));
+    act(() => vi.runAllTimers());
+
+    expect(focusSpy.mock.calls).toEqual([[{ preventScroll: true }]]);
+  });
+
+  it("resolves the recorded trigger when asked, not when the task runs", () => {
+    const { overlay, trigger } = renderOwnedPopover();
+    const triggerSpy = vi.spyOn(trigger, "focus");
+    const replacement = returnTarget();
+    const replacementSpy = vi.spyOn(replacement, "focus");
+
+    act(() => overlay().restoreIfStranded());
+    act(() => overlay().setRestoreTarget(replacement));
+    act(() => vi.runAllTimers());
+
+    expect(triggerSpy).toHaveBeenCalledTimes(1);
+    expect(replacementSpy).not.toHaveBeenCalled();
+    replacement.remove();
+  });
+
+  it("leaves a target that left the document alone", () => {
+    const { overlay } = renderOwnedPopover();
+    const target = returnTarget();
+    const targetSpy = vi.spyOn(target, "focus");
+
+    act(() => overlay().restoreIfStranded(target));
+    target.remove();
+    act(() => vi.runAllTimers());
+
+    expect(targetSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("tooltip suppression on the restored focus", () => {
   it("marks the element focus lands on, whichever close it was", async () => {
     const { isTooltipSuppressedForElement } = await import("@/lib/tooltipFocusSuppression");
@@ -511,5 +826,49 @@ describe("tooltip suppression on the restored focus", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("restoreFocusIfStranded", () => {
+  let target: HTMLButtonElement;
+  let layer: HTMLDivElement;
+  let field: HTMLInputElement;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    target = document.createElement("button");
+    layer = document.createElement("div");
+    field = document.createElement("input");
+    layer.appendChild(field);
+    document.body.append(target, layer);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    target.remove();
+    layer.remove();
+  });
+
+  it("counts focus left inside the closing layer as stranded", () => {
+    field.focus();
+    restoreFocusIfStranded(target, { ringless: true, strandedWithin: layer });
+    vi.runAllTimers();
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("leaves focus inside a layer it was not told about", () => {
+    field.focus();
+    restoreFocusIfStranded(target, { ringless: true });
+    vi.runAllTimers();
+    expect(document.activeElement).toBe(field);
+  });
+
+  it("restores nothing once cancelled", () => {
+    (document.activeElement as HTMLElement | null)?.blur();
+    const focusSpy = vi.spyOn(target, "focus");
+    const cancel = restoreFocusIfStranded(target, { ringless: false });
+    cancel();
+    vi.runAllTimers();
+    expect(focusSpy).not.toHaveBeenCalled();
   });
 });

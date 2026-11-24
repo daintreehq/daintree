@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { CanopyTerminal, type CanopyStreamState } from "@/components/Canopy/CanopyTerminal";
 import { assistantTerminalApi } from "@/services/assistantSubject";
+import { GLOBAL_ASSISTANT_HISTORY_ID } from "@/store/commandHistoryStore";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
@@ -143,6 +144,8 @@ export function GlobalAssistantTerminal({
             cwd=""
             agentId={agentId}
             disabled={!canType}
+            // No project's: its prompts are kept apart, offered beside every project's.
+            historyProjectId={GLOBAL_ASSISTANT_HISTORY_ID}
             onSend={({ text, imagePaths }) => void submit(text, imagePaths)}
             submitText={submit}
             onSendKey={sendKey}

@@ -2,7 +2,7 @@
  * Dev preview panels, one launch on a repo with a feature worktree:
  *   - Panel chrome in the unconfigured state (address-bar routing, zoom).
  *   - A configured dev server: Running, guest content, Output drawer,
- *     Diagnostics timeline, guest console capture, promote to portal.
+ *     Diagnostics timeline, guest console capture.
  *   - Next.js `next dev` gets `--turbopack` injected and its styles paint.
  *   - Per-worktree sessions: main and feature panels run side by side on
  *     different origins, and closing one leaves the other running.
@@ -35,8 +35,6 @@ const PROJECT_NAME = "Dev Preview Test";
 const FEATURE_BRANCH = "feature/test-branch";
 const DEV_SERVER_COMMAND = "node dev-server.cjs";
 const CAPTURE_MARKER = "e2e-console-capture-error";
-const COOKIE_NAME = "dt_promote_e2e";
-const COOKIE_VALUE = "carried-over";
 const GUEST_BACKGROUND = "rgb(30, 60, 120)";
 const DEV_PREVIEW_ADDRESS_BAR_RE = /^(?:https?:\/\/)?(?:localhost|dp-[a-z0-9-]+\.localhost):\d+$/;
 const DEV_PREVIEW_PROXY_HOST_RE = /^(?:localhost|dp-[a-z0-9-]+\.localhost)$/;
@@ -696,103 +694,6 @@ test.describe.serial("Core: Dev Preview", () => {
       const mainAfter = await getWorktreeSession(window, mainWorktreeId);
       expect(mainAfter?.status).toBe("running");
       expect(mainAfter?.predictedUrl).toBe(upstreamUrlMain);
-    });
-  });
-
-  // Last: the promoted portal's native view sits above the renderer, so pointer
-  // input to the grid after this point is unreliable. Promotes the main
-  // worktree's panel, which the registry block leaves running.
-  test.describe.serial("Promote to Portal", () => {
-    test("promoting a dev preview opens a portal tab sharing the session cookie", async () => {
-      test.info().annotations.push({
-        type: "platform-skip",
-        description: "Windows CI: portal not supported with GPU disabled",
-      });
-      test.skip(
-        process.platform === "win32" && !!process.env.CI,
-        "Windows CI: portal not supported with GPU disabled"
-      );
-      const { window } = ctx;
-
-      await switchWorktree(window, "main");
-
-      // The address bar shows the dev server's own address; the guest (and the
-      // portal tab promoted from it) sits on the panel's stable proxy origin.
-      const consoleBar = window.locator('[aria-controls^="console-drawer-"]').locator("..").first();
-      await expect(consoleBar.locator('[role="status"]')).toContainText("Running", {
-        timeout: T_LONG,
-      });
-      await expect(window.locator(SEL.browser.addressBar).first()).toHaveValue(
-        DEV_PREVIEW_ADDRESS_BAR_RE,
-        { timeout: T_LONG }
-      );
-      const portalUrlHost = new URL(await waitForGuestOrigin(window.locator("webview").first()))
-        .host;
-
-      // The server never sets this cookie, so the portal can only see it if
-      // promotion preserves the dev-preview session partition.
-      const readPreviewCookieState = async (): Promise<{ cookie: string; href: string } | null> => {
-        try {
-          return await window.evaluate(
-            async ({ name, value }) => {
-              const wv = document.querySelector("webview") as Electron.WebviewTag | null;
-              if (!wv) return null;
-              try {
-                return await wv.executeJavaScript(`(() => {
-                  document.cookie = ${JSON.stringify(`${name}=${value}; Path=/`)};
-                  return { cookie: document.cookie, href: window.location.href };
-                })()`);
-              } catch {
-                return null;
-              }
-            },
-            { name: COOKIE_NAME, value: COOKIE_VALUE }
-          );
-        } catch {
-          return null;
-        }
-      };
-
-      await expect.poll(readPreviewCookieState, { timeout: T_LONG }).toEqual(
-        expect.objectContaining({
-          cookie: expect.stringContaining(`${COOKIE_NAME}=${COOKIE_VALUE}`),
-          href: expect.stringContaining(portalUrlHost),
-        })
-      );
-
-      // Promote from the toolbar's More menu (the real user path).
-      await window.locator(SEL.browser.moreActions).click();
-      const promoteBtn = window.locator(SEL.browser.promoteToPortal);
-      await expect(promoteBtn).toBeVisible({ timeout: T_MEDIUM });
-      await promoteBtn.click();
-
-      const portalContainer = window.locator(SEL.portal.container);
-      await expect(portalContainer).toBeVisible({ timeout: T_LONG });
-      await expect(portalContainer.locator('[role="tab"]').first()).toBeVisible({
-        timeout: T_MEDIUM,
-      });
-
-      // The promoted WebContentsView must share the dev-preview session: its
-      // cookie jar carries the cookie set in the guest. The dev-preview guest
-      // itself is a "webview" and is excluded.
-      await expect
-        .poll(
-          async () =>
-            ctx.app.evaluate(
-              async ({ webContents }, { name, urlPart }) => {
-                for (const wc of webContents.getAllWebContents()) {
-                  if (wc.getType() === "webview") continue;
-                  if (!wc.getURL().includes(urlPart)) continue;
-                  const cookies = await wc.session.cookies.get({ name });
-                  if (cookies.length > 0) return cookies[0]!.value;
-                }
-                return null;
-              },
-              { name: COOKIE_NAME, urlPart: portalUrlHost }
-            ),
-          { timeout: T_LONG }
-        )
-        .toBe(COOKIE_VALUE);
     });
   });
 });

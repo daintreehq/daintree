@@ -4,6 +4,7 @@ import type {
   ProjectSettings,
   RunCommand,
   ProjectCloseResult,
+  ProjectSleepOptions,
   ProjectSleepResult,
   ProjectStats,
   BulkProjectStats,
@@ -11,6 +12,9 @@ import type {
   RecipeNameCollision,
   TerminalSnapshot,
   TabGroup,
+  ProjectLinksChangePayload,
+  ProjectLinksChangeResult,
+  DeclaredProjectLink,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import type {
@@ -88,6 +92,13 @@ export function withProjectSettingsWrite<T>(
   void turn.then(release, release);
   return turn;
 }
+
+/**
+ * A declared link as a Remote Host sends it. One built between #17252 and
+ * #17254 reads only package.json and names no source.
+ */
+type DeclaredLinkAsSent = Omit<DeclaredProjectLink, "source"> &
+  Partial<Pick<DeclaredProjectLink, "source">>;
 
 /**
  * Adds an approved host by reading the settings and saving them whole, as
@@ -288,6 +299,27 @@ export const projectClient = {
     return window.electron.project.saveSettings(projectId, settings);
   },
 
+  changeLinks: async (payload: ProjectLinksChangePayload): Promise<ProjectLinksChangeResult> => {
+    invalidateProjectSettingsCache(payload.projectId);
+    try {
+      return await window.electron.projectLinks.change(payload);
+    } finally {
+      // A read that landed while Main was writing may hold the file from before.
+      invalidateProjectSettingsCache(payload.projectId);
+    }
+  },
+
+  getDeclaredLinks: async (projectId: string): Promise<DeclaredProjectLink[]> => {
+    const links: DeclaredLinkAsSent[] = await window.electron.projectLinks.getDeclared({
+      projectId,
+    });
+    return links.map(({ source, title, url }) => ({
+      source: source ?? "package.json",
+      title,
+      url,
+    }));
+  },
+
   addBrowserAllowedHost: async (projectId: string, hostname: string): Promise<string[]> => {
     invalidateProjectSettingsCache(projectId);
     try {
@@ -320,9 +352,9 @@ export const projectClient = {
     return window.electron.project.close(projectId, options);
   },
 
-  sleepProject: (projectId: string): Promise<ProjectSleepResult> => {
+  sleepProject: (projectId: string, options?: ProjectSleepOptions): Promise<ProjectSleepResult> => {
     invalidateCurrentCache();
-    return window.electron.project.sleepProject(projectId);
+    return window.electron.project.sleepProject(projectId, options);
   },
 
   reopen: (

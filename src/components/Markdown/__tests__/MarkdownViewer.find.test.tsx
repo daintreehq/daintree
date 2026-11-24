@@ -18,6 +18,7 @@ vi.mock("@/components/FileViewer/CodeViewer", () => ({
 }));
 
 import { MarkdownViewer, type MarkdownViewerHandle } from "../MarkdownViewer";
+import { restoreFindHighlights, sole, stubFindHighlights } from "./findHighlightStub";
 
 const CONTENT = `# State management
 
@@ -62,8 +63,13 @@ async function openFind(ref: RefObject<MarkdownViewerHandle | null>) {
 const count = () => screen.getByRole("status").textContent;
 
 afterEach(() => {
-  cleanup();
-  document.body.innerHTML = "";
+  try {
+    cleanup();
+    document.body.innerHTML = "";
+  } finally {
+    // After unmount, so the painter's cleanup still sees the stub registry.
+    restoreFindHighlights();
+  }
 });
 
 describe("MarkdownViewer find in rendered mode (#16642)", () => {
@@ -90,6 +96,71 @@ describe("MarkdownViewer find in rendered mode (#16642)", () => {
     expect(count()).toBe("3 of 3");
     // Focus stays in the field while stepping.
     expect(document.activeElement).toBe(input);
+  });
+
+  // Stepping keeps the same matches, so only the two that change places are
+  // restyled; rewriting every highlight is a restyle per match per step (#17522).
+  it("moves only the current highlight when stepping", async () => {
+    const highlights = stubFindHighlights();
+    const { ref } = await renderRendered();
+    const input = await openFind(ref);
+    fireEvent.change(input, { target: { value: "store" } });
+    const first = sole(highlights.current());
+    // The table cell's match, then the code block's.
+    const [second, third] = [...highlights.matches()];
+    highlights.resetCounts();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(count()).toBe("2 of 3");
+    expect(sole(highlights.current())).toBe(second);
+    expect(highlights.matches().size).toBe(2);
+    expect(highlights.matches().has(first!)).toBe(true);
+    expect(highlights.matches().has(third!)).toBe(true);
+    for (const highlight of [highlights.matches(), highlights.current()]) {
+      expect({ adds: highlight.adds, deletes: highlight.deletes }).toEqual({ adds: 1, deletes: 1 });
+    }
+  });
+
+  it("repaints every highlight for a new query and clears them all on close", async () => {
+    const highlights = stubFindHighlights();
+    const { ref } = await renderRendered();
+    const input = await openFind(ref);
+    fireEvent.change(input, { target: { value: "store" } });
+    expect(count()).toBe("1 of 3");
+    const before = [...highlights.matches(), ...highlights.current()];
+
+    // The heading's "State management": the active index stays 0, so only the
+    // new matches can trigger the repaint.
+    fireEvent.change(input, { target: { value: "state" } });
+    expect(count()).toBe("1 of 1");
+    expect(highlights.matches().size).toBe(0);
+    expect(before).not.toContain(sole(highlights.current()));
+    expect(sole(highlights.current())!.toString()).toBe("State");
+
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("textbox", { name: "Find in document" })).toBeNull();
+    expect(highlights.matches().size + highlights.current().size).toBe(0);
+  });
+
+  it("drops and restores the other highlights as forced colours turn on and off", async () => {
+    const highlights = stubFindHighlights();
+    const { ref } = await renderRendered();
+    const input = await openFind(ref);
+    fireEvent.change(input, { target: { value: "store" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const current = sole(highlights.current());
+    const others = [...highlights.matches()];
+
+    act(() => highlights.media.setForced(true));
+    expect(highlights.matches().size).toBe(0);
+    expect(sole(highlights.current())).toBe(current);
+
+    act(() => highlights.media.setForced(false));
+    expect([...highlights.matches()]).toHaveLength(2);
+    for (const range of others) expect(highlights.matches().has(range)).toBe(true);
+    expect(sole(highlights.current())).toBe(current);
+    expect(count()).toBe("2 of 3");
   });
 
   it("says when nothing matches, and leaves nothing to step through", async () => {
@@ -147,5 +218,37 @@ describe("MarkdownViewer find in rendered mode (#16642)", () => {
 
     expect(codeOpenSearchMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("textbox", { name: "Find in document" })).toBeNull();
+  });
+
+  // The bar's row is sticky over the pane's top, so a heading scrolled flush
+  // to the top would sit under it (#17335).
+  it("lands a followed heading below the find bar while the bar is open", async () => {
+    const ref = createRef<MarkdownViewerHandle>();
+    const { getByTestId } = render(
+      <div data-testid="pane" style={{ overflowY: "auto" }}>
+        <MarkdownViewer
+          ref={ref}
+          content={"- [Risks](#risks)\n\n## Risks\n"}
+          filePath="/repo/docs/plan.md"
+          rootPath="/repo"
+          viewMode="rendered"
+        />
+      </div>
+    );
+    const heading = await screen.findByRole("heading", { name: "Risks" });
+    const pane = getByTestId("pane");
+    Object.defineProperty(pane, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(pane, "scrollHeight", { configurable: true, value: 4000 });
+    pane.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    heading.getBoundingClientRect = () => ({ top: 700 }) as DOMRect;
+
+    screen.getByRole("link", { name: "Risks" }).click();
+    const closed = pane.scrollTop;
+    pane.scrollTop = 0;
+    await openFind(ref);
+    screen.getByRole("link", { name: "Risks" }).click();
+
+    expect(closed).toBe(692);
+    expect(pane.scrollTop).toBe(644);
   });
 });

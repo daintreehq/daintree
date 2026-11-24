@@ -1,8 +1,9 @@
-import { useCallback, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import type React from "react";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { PopoverAnchor } from "@/components/ui/popover";
-import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
+import { LazyMoveToWorktreePicker } from "@/components/Panel/lazyMoveToWorktreePicker";
+import { createDeferredOverlayOpener } from "@/lib/deferredOverlayOpen";
 
 /** A zero-size point the picker hangs off, tracking the pane it sits in. */
 export interface MovePickerAnchor {
@@ -56,12 +57,19 @@ export function useMovePickerCoordination(
     pendingMovePickerRef.current = terminalId;
   }, [terminalId]);
 
+  // A pick whose picker is still loading; a menu opening or a different
+  // terminal drops it.
+  const [deferredOpener] = useState(createDeferredOverlayOpener);
+  useEffect(() => deferredOpener.cancel, [deferredOpener, terminalId]);
+
   const clearPendingMovePicker = useCallback(() => {
     pendingMovePickerRef.current = null;
-  }, []);
+    deferredOpener.cancel();
+  }, [deferredOpener]);
 
   const captureMovePickerAnchor = useCallback(
     (event: React.MouseEvent<HTMLElement>) => {
+      void LazyMoveToWorktreePicker.preload().catch(() => {});
       // The trigger wrapper is `display: contents` and has no box of its own.
       const pane = event.currentTarget.firstElementChild;
       if (!(pane instanceof HTMLElement)) {
@@ -118,13 +126,14 @@ export function useMovePickerCoordination(
       if (!anchor?.contextElement.isConnected) return false;
       // The picker takes focus into its search field; handing it back to the
       // pane first would only flash a ring on the way.
-      event.preventDefault();
-      setMovePickerAnchor(anchor);
-      setHasOpenedMovePicker(true);
-      setMovePickerPanelId(terminalId);
+      deferredOpener.open(LazyMoveToWorktreePicker, event, () => {
+        setMovePickerAnchor(anchor);
+        setHasOpenedMovePicker(true);
+        setMovePickerPanelId(terminalId);
+      });
       return true;
     },
-    [terminalId]
+    [deferredOpener, terminalId]
   );
 
   return {
@@ -164,15 +173,17 @@ export function MoveToWorktreeMenuPicker({
       modal={true}
     >
       <PopoverAnchor virtualRef={{ current: anchor }} />
-      <MoveToWorktreePicker
-        panelId={panelId}
-        currentWorktreeId={currentWorktreeId}
-        isOpen={isOpen}
-        onOpenChange={onOpenChange}
-        returnFocusRef={returnFocusRef}
-        // Opens from the point the way the menu did.
-        align="start"
-      />
+      <Suspense fallback={null}>
+        <LazyMoveToWorktreePicker
+          panelId={panelId}
+          currentWorktreeId={currentWorktreeId}
+          isOpen={isOpen}
+          onOpenChange={onOpenChange}
+          returnFocusRef={returnFocusRef}
+          // Opens from the point the way the menu did.
+          align="start"
+        />
+      </Suspense>
     </AppPalettePopover>
   );
 }

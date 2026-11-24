@@ -33,20 +33,23 @@ import {
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
 import {
   AGENT_LAUNCH_ACTION_ID,
+  ASSISTANT_HANDOFF_ACTION_IDS,
   elevatedDangerRationale,
   resolveEffectiveActionDanger,
 } from "./actions/effectiveDanger";
 import { hostApprovalCoversPresetLaunch } from "@shared/utils/agentPresetLaunchConsent";
+import { ASSISTANT_PRESET_MOVE_DELEGATE } from "@shared/config/assistantConfirmationDelegation";
 
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
  * Substring match (no word boundaries) so `apiKey`, `authHeader`, `refreshToken`
  * are caught at any depth. Prompts are the user's own words to an agent and are
- * never logged, so `prompt`, `systemPrompt` and `initialPrompt` go too.
+ * never logged, so `prompt`, `systemPrompt` and `initialPrompt` go too, and
+ * `hunks` are lines of the user's files.
  * Module-level so we don't allocate a fresh matcher per recursive frame in
  * `redactSensitiveArgs`.
  */
-const SENSITIVE_ARG_FIELD_PATTERN = /token|password|secret|key|auth|credential|prompt/i;
+const SENSITIVE_ARG_FIELD_PATTERN = /token|password|secret|key|auth|credential|prompt|hunk/i;
 
 /** Max size for args in event payloads (prevents explosion) */
 const MAX_ARG_PAYLOAD_SIZE = 1024;
@@ -234,6 +237,21 @@ function cloneArgsForReplay(args: unknown): unknown {
       return undefined;
     }
   }
+}
+
+/**
+ * Whether a dispatch's args carry someone's approval past a confirmation: the
+ * `{ confirmed: true }` a runtime-escalated action's own prompt re-dispatches
+ * with. Recorded for `action.repeatLast`, it would apply that approval to
+ * whatever the action targets when it's replayed, without asking again
+ * (#17205). `options.confirmed` needs no check: a replay carries args only.
+ */
+function argsCarryConfirmation(args: unknown): boolean {
+  return (
+    typeof args === "object" &&
+    args !== null &&
+    (args as { confirmed?: unknown }).confirmed === true
+  );
 }
 
 export interface LastDispatchedAction {
@@ -699,20 +717,33 @@ export class ActionService {
         actionId,
         validatedArgs
       );
+    // The assistant's next-fallback tick (#17917): main offers it, and only
+    // this action's own run decides whether the move qualifies. That run hops
+    // or refuses; it never switches, so it needs no approval to enter.
+    const ownFallbackStep =
+      source === "agent" &&
+      options?.ownFallbackStep === true &&
+      actionId === ASSISTANT_PRESET_MOVE_DELEGATE;
     if (
       effectiveDanger === "confirm" &&
       !pluginPresetApproved &&
-      (source === "plugin" || (source === "agent" && !options?.confirmed))
+      (source === "plugin" || (source === "agent" && !options?.confirmed && !ownFallbackStep))
     ) {
       // A plugin has no confirmation to give, so the configured-launch refusal
       // names what to drop rather than pointing at a dialog it can't reach.
       const pluginLaunchConfig =
         source === "plugin" && actionId === AGENT_LAUNCH_ACTION_ID && definition.danger === "safe";
+      const pluginHandoff =
+        source === "plugin" &&
+        ASSISTANT_HANDOFF_ACTION_IDS.has(actionId) &&
+        definition.danger === "safe";
       const error: ActionError = {
         code: "CONFIRMATION_REQUIRED",
         message: pluginLaunchConfig
           ? `Action "${actionId}" can't take agentLaunchFlags, env, systemPrompt, presetId, or a prompt or model starting with "-" from a plugin: plugins can give an agent a task, not choose how it runs.`
-          : `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
+          : pluginHandoff
+            ? `Action "${actionId}" can't take a prompt starting with "-" from a plugin: the agent would read it as an option, not a first turn.`
+            : `Action "${actionId}" requires explicit confirmation from ${source} sources.`,
       };
       return { ok: false, error };
     }
@@ -728,6 +759,10 @@ export class ActionService {
       source === "user" && !definition.suppressShortcutHint
         ? useUIStore.getState().overlayClaimEpoch
         : null;
+
+    // Read before `run()`: args an action doesn't validate are the caller's
+    // object, which the run could change.
+    const confirmedDispatch = argsCarryConfirmation(validatedArgs);
 
     try {
       // Derive (don't mutate — `context` may be a shared object from the
@@ -767,6 +802,9 @@ export class ActionService {
         // And the preset half (#16047): the change a human was shown, so an
         // injected `contextOverride` cannot claim an approval for another.
         hostApprovedPresetWrite: options?.hostApprovedPresetWrite,
+        // Same unconditional stamp, so a `contextOverride` can't turn a
+        // confirmed restart into a hop or claim the offer main never made.
+        hostOwnFallbackStep: ownFallbackStep ? true : undefined,
         // Same unconditional stamp (#16667): it silences an action's own
         // failure toast, so only the caller that will show the failure itself
         // may set it, never a `contextOverride`.
@@ -776,7 +814,11 @@ export class ActionService {
         // which may let an operator-only step through on them. A person's
         // approval needs the confirmation the gate above already required.
         hostCallerOrigin:
-          source === "agent" && options?.hostCallerOrigin === "assistant" ? "assistant" : undefined,
+          source === "agent" &&
+          (options?.hostCallerOrigin === "assistant" ||
+            options?.hostCallerOrigin === "global-assistant")
+            ? options.hostCallerOrigin
+            : undefined,
         hostPersonApproved:
           source === "agent" && options?.confirmed === true && options.hostPersonApproved === true
             ? true
@@ -785,6 +827,9 @@ export class ActionService {
         // gives up at this deadline, so a `contextOverride` must not be able
         // to stretch or plant one.
         dispatchDeadlineAt: options?.dispatchDeadlineAt,
+        // Same unconditional stamp (#17036), agent only: it widens what one
+        // `actions.list` page holds, which only main's own walk may ask for.
+        actionsListWalk: source === "agent" && options?.actionsListWalk === true ? true : undefined,
         // Same unconditional stamp: a plugin's identity comes from the host's
         // own bridge closure, never from a context the caller could shape.
         callerPluginId: source === "plugin" ? options?.callerPluginId : undefined,
@@ -832,11 +877,13 @@ export class ActionService {
       if (
         REPEATABLE_SOURCES.has(source) &&
         !definition.nonRepeatable &&
-        definition.danger === "safe"
+        definition.danger === "safe" &&
+        !confirmedDispatch
       ) {
         // Only danger:"safe" actions are eligible for repeat. Confirm-gated actions
         // rely on originating UI dialogs for consent — replaying them from a keybinding
-        // would silently bypass that UI and repeat a destructive op.
+        // would silently bypass that UI and repeat a destructive op. The same goes
+        // for a safe action's confirmed dispatch, whose consent was given once.
         this.lastAction = { actionId, args: cloneArgsForReplay(validatedArgs) };
       }
       void this.emitActionDispatchedEvent({
@@ -935,8 +982,27 @@ export class ActionService {
    * default keeps the full manifest for MCP.
    */
   list(ctx?: ActionContext, options?: { includeSchemas?: boolean }): ActionManifestEntry[] {
+    return this.collectManifest(ctx, options?.includeSchemas !== false, false);
+  }
+
+  /**
+   * The full manifest for a caller that hands it straight to IPC (#17036).
+   * Entries are fresh objects, but their schemas are the cached ones and their
+   * examples the definition's own, rather than copies: the send's own
+   * structured clone is the isolation `list()` pays a second clone for. Never
+   * keep or write to what this returns; in DEV the cached schemas are frozen,
+   * so a write to one throws.
+   */
+  listForTransfer(ctx?: ActionContext): ActionManifestEntry[] {
+    return this.collectManifest(ctx, true, true);
+  }
+
+  private collectManifest(
+    ctx: ActionContext | undefined,
+    includeSchemas: boolean,
+    borrowShared: boolean
+  ): ActionManifestEntry[] {
     const context = ctx ?? this.getActionContext();
-    const includeSchemas = options?.includeSchemas !== false;
     const entries: ActionManifestEntry[] = [];
     for (const definition of this.registry.values()) {
       if (definition.danger === "restricted") continue;
@@ -947,7 +1013,7 @@ export class ActionService {
           logWarn("Action isVisible threw", { actionId: definition.id, error: err });
         }
       }
-      entries.push(this.toManifestEntry(definition, context, includeSchemas));
+      entries.push(this.toManifestEntry(definition, context, includeSchemas, borrowShared));
     }
     return entries;
   }
@@ -967,7 +1033,8 @@ export class ActionService {
   private toManifestEntry(
     definition: AnyActionDefinition,
     context: ActionContext,
-    includeSchemas = true
+    includeSchemas = true,
+    borrowShared = false
   ): ActionManifestEntry {
     // Fail closed if isEnabled throws: a single broken action must not crash
     // ActionService.list(), which runs during initial render and would take
@@ -1050,7 +1117,9 @@ export class ActionService {
     // physically shares — can't poison subsequent list()/get() reads. A shallow
     // spread only isolated the top level (issue #9569). structuredClone is safe
     // here: z.toJSONSchema finalizes through a JSON round-trip, so the cached
-    // value has no cycles or non-cloneable shapes.
+    // value has no cycles or non-cloneable shapes. A transfer borrows them
+    // instead, since its IPC send clones them anyway.
+    const share = <T>(value: T): T => (borrowShared ? value : structuredClone(value));
     const entry: ActionManifestEntry = {
       id: definition.id,
       name: definition.id,
@@ -1064,8 +1133,8 @@ export class ActionService {
         danger: definition.danger,
         category: definition.category,
       }),
-      inputSchema: schemas?.inputSchema ? structuredClone(schemas.inputSchema) : undefined,
-      outputSchema: schemas?.outputSchema ? structuredClone(schemas.outputSchema) : undefined,
+      inputSchema: schemas?.inputSchema ? share(schemas.inputSchema) : undefined,
+      outputSchema: schemas?.outputSchema ? share(schemas.outputSchema) : undefined,
       enabled,
       disabledReason,
       requiresArgs,
@@ -1076,10 +1145,11 @@ export class ActionService {
     if (definition.deprecated) entry.deprecated = { ...definition.deprecated };
     if (definition.pluginId) entry.pluginId = definition.pluginId;
     if (definition.pluginId && definition.pluginName) entry.pluginName = definition.pluginName;
-    if (definition.examples) entry.examples = structuredClone(definition.examples);
+    if (definition.examples) entry.examples = share(definition.examples);
     if (definition.dangerRationale) entry.dangerRationale = definition.dangerRationale;
     if (paletteHidden) entry.paletteHidden = true;
     if (paletteRedirectTo) entry.paletteRedirectTo = paletteRedirectTo;
+    if (definition.paletteDescription) entry.paletteDescription = definition.paletteDescription;
     if (paletteDisabled) entry.paletteDisabled = true;
     if (paletteDisabledReason) entry.paletteDisabledReason = paletteDisabledReason;
     return entry;

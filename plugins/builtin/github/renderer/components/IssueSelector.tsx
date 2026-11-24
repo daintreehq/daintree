@@ -210,7 +210,9 @@ export function IssueSelector({
     handleOpenChange(false);
   };
 
-  const hasMore = nextCursor !== null && issues.length > 0;
+  // A page can come back empty and still carry a cursor (a tracker that filters
+  // after it pages, say), so the cursor alone says whether more exist.
+  const hasMore = nextCursor !== null;
   const { activeIndex, setActiveIndex, listRef, handleKeyDown } = useListboxCursor({
     // Load more is the list's last option, so the cursor reaches it like a row.
     itemCount: issues.length + (hasMore ? 1 : 0),
@@ -406,7 +408,8 @@ export function IssueSelector({
           {loading && issues.length === 0 ? (
             <ForgeOptionRowsSkeleton count={3} />
           ) : issues.length === 0 ? (
-            loadFailed ? null : trimmedQuery ? (
+            // No verdict on an empty set until its last page is in.
+            loadFailed || hasMore ? null : trimmedQuery ? (
               <EmptyState
                 variant="filtered-empty"
                 scale="popover"

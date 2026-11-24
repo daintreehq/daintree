@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { EXCHANGE_STATES } from "../exchange/types.js";
 import { AgentDirectorySchema } from "../../../shared/types/agentDirectory.js";
+import { GLOBAL_CLOSE_CLASSES } from "../../../shared/types/assistantControl.js";
 import {
   HOST_STATUS_MAX_LINES,
   HOST_STATUS_PROJECT_TERMINALS_MAX,
@@ -44,6 +45,24 @@ export const AssistantLinkMethod = {
    * the call again as MCP_CALL: that host admits it as any assistant's.
    */
   GLOBAL_MCP_CALL: "assistant.global-mcp-call",
+  /**
+   * Shell → Host: MCP_CALL naming the conversation the caller's lane runs
+   * (#17919), from the Shell's main and never the model, so the host holds
+   * what it makes under that conversation with the sender and the
+   * conversation resumed keeps it. Carries the global Assistant's mark itself.
+   * A host from before this answers UNSUPPORTED before anything runs, and the
+   * Shell sends the call again by GLOBAL_MCP_CALL or MCP_CALL.
+   */
+  CONVERSATION_MCP_CALL: "assistant.conversation-mcp-call",
+  /**
+   * Shell → Host: stop one of the MCP_CALL family's calls (#17985), named by
+   * its callId and the help session that sent it, for the sender this session
+   * proved. A running call's tool is told to stop; one not yet here starts
+   * stopped once its first send arrives; a settled one keeps its answer for a
+   * resend. The call's own answer says what came of it. A host from before
+   * this answers UNSUPPORTED, and its calls run until done or out of time.
+   */
+  MCP_CANCEL: "assistant.mcp-cancel",
   /**
    * Host → Shell: what this host saw of terminals one of the Shell's
    * assistants asked to hear about through MCP_CALL (#13500). Each names the
@@ -227,13 +246,38 @@ export const McpCallPayloadSchema = z
   .strict();
 export type McpCallPayload = z.infer<typeof McpCallPayloadSchema>;
 
+/** CONVERSATION_MCP_CALL's payload: MCP_CALL's, with the caller's conversation and global mark. */
+export const ConversationMcpCallPayloadSchema = McpCallPayloadSchema.extend({
+  conversationId: id,
+  global: z.literal(true).optional(),
+}).strict();
+
 /**
  * A relayed call as the Shell's runtime hands it on (#14545): its payload,
  * and whether the Shell's global Assistant made it, which the runtime knows
  * from its own lane and never from the model's arguments. That travels as
  * the method a call is sent by, GLOBAL_MCP_CALL, never as a payload field.
+ * With it, the conversation the caller's lane runs (#17919), from main's own
+ * record of the lane, which travels by CONVERSATION_MCP_CALL.
  */
-export type RelayCallRequest = McpCallPayload & { global?: true };
+export type RelayCallRequest = McpCallPayload & { global?: true; conversationId?: string };
+
+/** MCP_CANCEL's payload: the call, and the help session that sent it. */
+export const McpCancelPayloadSchema = z.object({ helpSessionId: id, callId: id }).strict();
+export type McpCancelPayload = z.infer<typeof McpCancelPayloadSchema>;
+
+/**
+ * A relayed call cancelled after it went out, whose cancel the host didn't
+ * take (#17985): too old to know it, or no answer to it. The call ran on to
+ * its own end, so the cancel can't be said to have held. `answer` is what the
+ * host answered the call with, when it did, for what the Shell keeps of it.
+ */
+export class RelayCancelUnconfirmedError extends Error {
+  readonly code = "CANCEL_UNCONFIRMED";
+  constructor(readonly answer?: McpCallAnswer) {
+    super("The host didn't confirm the cancel of a relayed call");
+  }
+}
 
 export const RELAY_REFUSALS = ["control-off", "no-project", "server-off"] as const;
 export type RelayRefusal = (typeof RELAY_REFUSALS)[number];
@@ -252,6 +296,13 @@ export const McpCallAnswerSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("unknown") }).strip(),
   /** That callId already named a different call. */
   z.object({ status: z.literal("conflict") }).strip(),
+  /**
+   * Its Shell cancelled it (#17985): `before` the host handed it to the tool,
+   * so nothing ran, or `after`, so the tool was told to stop and may have
+   * acted first. Only a Shell that sent MCP_CANCEL is answered this; one
+   * downgraded since that resends the call reads it as unreadable, so unknown.
+   */
+  z.object({ status: z.literal("cancelled"), dispatch: z.enum(["before", "after"]) }).strip(),
   /** Refused before anything ran; a newer host may name a reason this Shell doesn't know. */
   z
     .object({
@@ -598,6 +649,12 @@ export const RelayApprovePayloadSchema = z
     subject: z.string().min(1).max(256).optional(),
     /** What the call would do, read on the host from the target it acts on. */
     lines: z.array(z.string().max(MAX_RELAY_APPROVAL_LINE_CHARS)).max(MAX_RELAY_APPROVAL_LINES),
+    /**
+     * Set on, and only on, the global Assistant's close of a finished agent it
+     * didn't launch (#16750): how the host read that agent's stop. A Shell from
+     * before it rejects the field, which approves nothing.
+     */
+    closeClass: z.enum(GLOBAL_CLOSE_CLASSES).optional(),
   })
   .strict();
 export type RelayApprovePayload = z.infer<typeof RelayApprovePayloadSchema>;

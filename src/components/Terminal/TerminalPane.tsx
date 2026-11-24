@@ -26,11 +26,13 @@ import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
+import { canPanelTakeFind } from "@/lib/findInPanel";
 import { BANNER_ENTER_DURATION, BANNER_EXIT_DURATION } from "@/lib/animationUtils";
 import { XtermAdapter } from "./XtermAdapter";
-import { ArtifactOverlay } from "./ArtifactOverlay";
-
-import { TerminalSearchBar } from "./TerminalSearchBar";
+import { ArtifactOverlayGate } from "./ArtifactOverlayGate";
+import { LazyTerminalSearchBar } from "./LazyTerminalSearchBar";
+import { focusPaneSearchInput } from "./paneSearchFocus";
+import { targetOwnsCopy } from "./terminalCopyKey";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { TerminalChipRow } from "./TerminalChipRow";
 import { useGridScrollRoot } from "./GridScrollRootContext";
@@ -64,7 +66,7 @@ import { useTerminalSubmitStatus } from "./useTerminalSubmitStatus";
 import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
 import { isAttachedProcessRunning } from "./attachedProcessRunning";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
-import { UpdateCwdDialog } from "./UpdateCwdDialog";
+import { UpdateCwdDialogGate } from "./UpdateCwdDialogGate";
 import { CompactErrorList } from "../Errors/CompactErrorList";
 import { TerminalScratchpad } from "./TerminalScratchpad";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
@@ -79,6 +81,7 @@ import {
   useMemoryPressureWaitStore,
 } from "@/store/memoryPressureWaitStore";
 import { useDriveLeaseWaitStore } from "@/store/driveLeaseWaitStore";
+import { prepareUserClose } from "@/services/terminal/panelCloseHistory";
 import type { AgentCliDetail } from "@shared/types/ipc";
 import {
   useErrorStore,
@@ -516,6 +519,13 @@ function TerminalPaneComponent({
     processStartTimeRef.current = Date.now();
   }, [restartKey, inputTracker]);
 
+  // Half-typed input and a restart backoff belong to the terminal they came
+  // from, not to the tab the pane shows next (#16878).
+  useEffect(() => {
+    inputTracker.reset();
+    autoRestartAttemptRef.current = 0;
+  }, [id, inputTracker]);
+
   const updateVisibility = usePanelStore((state) => state.updateVisibility);
   const getTerminal = usePanelStore((state) => state.getTerminal);
   const restartTerminal = usePanelStore((state) => state.restartTerminal);
@@ -621,7 +631,9 @@ function TerminalPaneComponent({
         sessionPreservingExit: pty?.sessionPreservingExit === true,
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
-        runtimeStatus: pty?.runtimeStatus,
+        // Only a stop matters here; the flow statuses behind the rest change
+        // every frame a streaming agent writes, and would repaint the pane.
+        runtimeStopped: pty?.runtimeStatus === "exited" || pty?.runtimeStatus === "error",
         eagerAttach: pty?.eagerAttach ?? false,
         isHeldForRecovery: pty?.restoreRecovery !== undefined,
       };
@@ -636,7 +648,7 @@ function TerminalPaneComponent({
     sessionPreservingExit,
     isTrashedOrRemoved,
     spawnStatus,
-    runtimeStatus,
+    runtimeStopped,
     eagerAttach,
     isHeldForRecovery,
   } = terminalState;
@@ -873,7 +885,17 @@ function TerminalPaneComponent({
         setIsAutoRestarting(false);
       }
     };
-  }, [isExited, exitBehavior, exitCode, isTrashedOrRemoved, isRestarting, sessionPreservingExit]);
+    // `id` re-runs it on a tab switch, so the terminal left behind takes its
+    // pending restart with it, as an unmount would.
+  }, [
+    id,
+    isExited,
+    exitBehavior,
+    exitCode,
+    isTrashedOrRemoved,
+    isRestarting,
+    sessionPreservingExit,
+  ]);
 
   const isDragging = useIsDragging();
 
@@ -987,7 +1009,7 @@ function TerminalPaneComponent({
     const handleFindInPanel = () => {
       // A held pane has no terminal to search (#12434), and its query would
       // land in whichever search bar the document happens to hold.
-      if (!isFocused || isHeldPane) return;
+      if (!isFocused || isHeldPane || !canPanelTakeFind(containerRef.current)) return;
       // Remembered only on the way in, so a second Cmd+F from the search
       // field doesn't make the field the place to return to.
       if (!isSearchOpen || searchReturnRef.current?.paneId !== id) {
@@ -995,7 +1017,8 @@ function TerminalPaneComponent({
       }
       setIsSearchOpen(true);
       requestAnimationFrame(() => {
-        document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
+        // A modal that opened within the frame keeps the keys.
+        if (canPanelTakeFind(containerRef.current)) focusPaneSearchInput(containerRef.current);
       });
     };
 
@@ -1010,16 +1033,14 @@ function TerminalPaneComponent({
 
     // Handle Cmd+C to copy xterm selection regardless of which child has focus.
     // This is needed because agent terminals focus the hybrid input bar, so
-    // xterm's built-in copy handler never receives the copy event.
-    if (e.metaKey && e.key === "c") {
+    // xterm's built-in copy handler never receives the copy event. Text the
+    // user selected in a field or the composer copies itself instead.
+    if (e.metaKey && e.key === "c" && !targetOwnsCopy(e.target)) {
       const managed = peekTerminalService()?.get(id) ?? null;
       if (managed?.terminal.hasSelection()) {
-        const nativeSelection = window.getSelection()?.toString() ?? "";
-        if (nativeSelection.length === 0) {
-          e.preventDefault();
-          void navigator.clipboard.writeText(managed.terminal.getSelection());
-          return;
-        }
+        e.preventDefault();
+        void navigator.clipboard.writeText(managed.terminal.getSelection());
+        return;
       }
     }
 
@@ -1220,7 +1241,7 @@ function TerminalPaneComponent({
   };
 
   const handleTrash = () => {
-    trashPanel(id);
+    prepareUserClose([id])(() => trashPanel(id));
   };
 
   const handleDismissReconnectError = () => {
@@ -1411,6 +1432,23 @@ function TerminalPaneComponent({
   const relayRemovalCopy = relayRemoval ? describeRelayRemoval(relayRemoval) : null;
   // A dismissal holds until what the banner says changes.
   const [relayRemovalDismissed, setRelayRemovalDismissed] = useState<string | null>(null);
+
+  // A tab group shows each of its tabs in this one pane, so what the user
+  // opened or waved away here belongs to the tab they did it on: the terminal
+  // the pane moves to starts with none of it (#16878). Reset while rendering,
+  // so no frame of the new tab ever shows the old tab's state.
+  const [shownTerminalId, setShownTerminalId] = useState(id);
+  if (shownTerminalId !== id) {
+    setShownTerminalId(id);
+    setDismissedRestartPrompt(false);
+    setIsSearchOpen(false);
+    setIsUpdateCwdOpen(false);
+    setIsAutoRestarting(false);
+    setBlockedBannerDismissed(false);
+    setRelayDeployBannerDismissed(false);
+    setRelayUpdateBannerDismissed(false);
+    setRelayRemovalDismissed(null);
+  }
   // Folding and unfolding swap the control the keyboard is on; hand focus to
   // its counterpart once the swap has painted, unless it already moved on.
   const keepBlockedNoticeFocus = (label: string) => {
@@ -1505,7 +1543,7 @@ function TerminalPaneComponent({
     restartBannerVariant.type === "agent-resume-offer";
   const attachedProcessRunning = isAttachedProcessRunning({
     spawnStatus,
-    runtimeStatus,
+    runtimeStatus: runtimeStopped ? "exited" : undefined,
     isExited,
     isRestarting,
     hasSpawnError: Boolean(spawnError),
@@ -1613,8 +1651,11 @@ function TerminalPaneComponent({
       {/* The pane's notices, failures first, then what needs acting on, then
           advisories. The stack never takes more than a little under half the
           pane: past that it scrolls, so a pile of notices cannot squeeze the
-          terminal they are about out of view. */}
+          terminal they are about out of view. Keyed, so a tab switch swaps the
+          notices outright rather than fading the last tab's out, live
+          callbacks and all, over the next one. */}
       <div
+        key={`${id}-banners`}
         data-pane-banners
         className="flex shrink-0 flex-col max-h-[45%] overflow-y-auto overscroll-contain"
       >
@@ -1927,6 +1968,7 @@ function TerminalPaneComponent({
             />
           ) : spawnStatus === "missing-cli" && agentId ? (
             <MissingCliGate
+              key={id}
               agentId={agentId}
               detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}
               onRunAnyway={runMissingCliAnyway}
@@ -2002,9 +2044,9 @@ function TerminalPaneComponent({
                       hasBottomBar={showHybridInputBar}
                     />
                   </Suspense>
-                  <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
+                  <ArtifactOverlayGate key={id} terminalId={id} worktreeId={worktreeId} cwd={cwd} />
                   {isSearchOpen && (
-                    <TerminalSearchBar
+                    <LazyTerminalSearchBar
                       terminalId={id}
                       onClose={() => {
                         setIsSearchOpen(false);
@@ -2049,6 +2091,7 @@ function TerminalPaneComponent({
 
               {/* Outlives the composer: an agent that exited still says what became of the send. */}
               <HeldComposerSendRow
+                key={id}
                 terminalId={id}
                 agentId={effectiveAgentId}
                 canEdit={showHybridInputBar && !isHybridInputDisabled}
@@ -2099,7 +2142,8 @@ function TerminalPaneComponent({
         <TerminalScratchpad key={id} terminalId={id} />
       </div>
 
-      <UpdateCwdDialog
+      <UpdateCwdDialogGate
+        key={id}
         isOpen={isUpdateCwdOpen}
         terminalId={id}
         currentCwd={cwd}

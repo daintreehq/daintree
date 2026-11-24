@@ -15,15 +15,16 @@ import type {
   McpLogRecord,
 } from "../../../shared/types/ipc/mcpServer.js";
 import {
-  MCP_AUDIT_DEFAULT_MAX_RECORDS,
-  MCP_AUDIT_MAX_RECORDS,
-  MCP_AUDIT_MIN_RECORDS,
   MCP_AUDIT_SCHEMA_VERSION,
   computeMcpAuditSeverity,
   isAuditRecord,
   isGrantRecord,
 } from "../../../shared/types/ipc/mcpServer.js";
 import { auditRingStore } from "../persistence/auditRingStore.js";
+import {
+  AUDIT_RING_RETENTION,
+  normalizeAuditRingMaxRecords,
+} from "../persistence/auditRingRetention.js";
 import type { McpTier } from "./shared.js";
 import {
   AUDIT_FLUSH_DEBOUNCE_MS,
@@ -171,11 +172,13 @@ export interface McpAuditLogStore {
 // Persists the ring in SQLite `audit_rings` so settings writes to config.json
 // stay decoupled from audit appends and bootstrap never pays the parse cost of
 // the rings. `auditEnabled` / `auditMaxRecords` stay in config.json
-// (`mcpServer`), read via the injected config closures.
+// (`mcpServer`), read via the injected config closures. The service trims the
+// ring to the configured limit, so the store is handed the ceiling and keeps
+// the whole snapshot.
 const defaultLogStore: McpAuditLogStore = {
   read: () => auditRingStore.readAll("mcpAuditLog"),
   write: (records, options) =>
-    auditRingStore.writeAll("mcpAuditLog", records, MCP_AUDIT_DEFAULT_MAX_RECORDS, options),
+    auditRingStore.writeAll("mcpAuditLog", records, AUDIT_RING_RETENTION.mcpAuditLog.max, options),
 };
 
 function percentile(values: number[], p: number): number {
@@ -250,11 +253,7 @@ export class AuditService {
   }
 
   normalizeMaxRecords(value: unknown): number {
-    const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : NaN;
-    if (!Number.isFinite(n)) return MCP_AUDIT_DEFAULT_MAX_RECORDS;
-    if (n < MCP_AUDIT_MIN_RECORDS) return MCP_AUDIT_MIN_RECORDS;
-    if (n > MCP_AUDIT_MAX_RECORDS) return MCP_AUDIT_MAX_RECORDS;
-    return n;
+    return normalizeAuditRingMaxRecords("mcpAuditLog", value);
   }
 
   private classifyDispatchResult(outcome: AuditOutcome): {
@@ -302,6 +301,7 @@ export class AuditService {
     resultSummary?: string;
     resultMeta?: McpAuditRecord["resultMeta"];
     relay?: McpAuditRecord["relay"];
+    admission?: McpAuditRecord["admission"];
     /**
      * Whether the calling session is Daintree's own assistant. Not persisted:
      * it only decides which surface `tierHint` is read from, since the two
@@ -371,6 +371,9 @@ export class AuditService {
     }
     if (input.relay !== undefined) {
       record.relay = { ...input.relay };
+    }
+    if (input.admission !== undefined) {
+      record.admission = input.admission;
     }
 
     this.enqueueAndTrim(record);

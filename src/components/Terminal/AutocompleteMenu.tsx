@@ -3,9 +3,13 @@ import { isPointerClaimed } from "@/lib/pointerClaim";
 import type { CompletionKind } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
+import { KBD_COMPACT_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { PathTail } from "@/components/ui/PathTail";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
+import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
+import { isMac } from "@/lib/platform";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import {
@@ -81,6 +85,32 @@ export interface AutocompleteItem {
   insert?: AutocompleteInsert;
 }
 
+/** The first row a key can act on, or 0 when every row is disabled (the guards then act on nothing). */
+export function firstEnabledIndex(items: readonly AutocompleteItem[]): number {
+  const index = items.findIndex((item) => item.disabled !== true);
+  return index < 0 ? 0 : index;
+}
+
+/**
+ * The row an arrow lands on, wrapping and stepping over disabled rows. From no
+ * selection (-1) Down takes the first row and Up the last. Stays where it is
+ * when no row can take the selection.
+ */
+export function stepAutocompleteIndex(
+  items: readonly AutocompleteItem[],
+  from: number,
+  direction: 1 | -1
+): number {
+  const count = items.length;
+  if (count === 0) return from;
+  let at = from < 0 ? (direction === 1 ? -1 : 0) : from;
+  for (let tries = 0; tries < count; tries++) {
+    at = (at + direction + count) % count;
+    if (items[at]?.disabled !== true) return at;
+  }
+  return from;
+}
+
 /** The DOM id of the option at `index`, for the editor's `aria-activedescendant`. */
 export function autocompleteOptionId(listboxId: string, index: number): string {
   return `${listboxId}-option-${index}`;
@@ -110,7 +140,9 @@ export function getComboboxState({
     listboxId,
     expanded: isOpen,
     activeOptionId:
-      active && !staleKeys.has(active.key) ? autocompleteOptionId(listboxId, selectedIndex) : null,
+      active && active.disabled !== true && !staleKeys.has(active.key)
+        ? autocompleteOptionId(listboxId, selectedIndex)
+        : null,
   };
 }
 
@@ -221,6 +253,12 @@ export interface AutocompleteMenuProps {
    * pointer cannot steal the cursor from the keys.
    */
   onHoverIndex?: (index: number) => void;
+  /**
+   * `above` rises from the bottom of what it sits in (a composer's shell);
+   * `below` drops from wherever the caller's `style.top` puts it. The caller
+   * may also pin an `above` menu's bottom through `style.bottom`.
+   */
+  side?: "above" | "below";
   style?: React.CSSProperties;
   /**
    * The listbox's DOM id. The composer's editor is the combobox and names this
@@ -233,9 +271,11 @@ export interface AutocompleteMenuProps {
   /**
    * A line at the foot of the menu, outside the rows: the arrow keys and Enter
    * never reach it, and it stays while the rows narrow or empty. Clicking it runs
-   * `onClick`; the status region speaks it for anyone not using a pointer.
+   * `onClick`; the status region speaks it for anyone not using a pointer. Focus
+   * stays in the editor, so the keyboard path is `shortcut`, which the caller
+   * binds to the same `onClick` and the note shows and announces.
    */
-  note?: { text: string; onClick: () => void };
+  note?: { text: string; onClick: () => void; shortcut?: string };
 }
 
 export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps>(
@@ -248,6 +288,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       staleKeys,
       onSelect,
       onHoverIndex,
+      side = "above",
       style,
       listboxId,
       title,
@@ -263,6 +304,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
     // and fades out like its sibling overlays instead of popping on every
     // `/` or `@` keystroke.
     const skipMotion = useShouldSkipMotion();
+    const keyLabels = useKeyLabels();
     const { isVisible, shouldRender } = useAnimatedPresence({
       isOpen,
       animationDuration: getUiPaletteTransitionDuration("exit"),
@@ -312,6 +354,13 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         ? [tabFirstHint(firstItem)]
         : getKeyHints(selectedItem, isSelectedStale);
     const hasRows = items.length > 0;
+    const mac = isMac();
+    const noteShortcut = note?.shortcut;
+    const spokenNote = note
+      ? noteShortcut
+        ? `${note.text}, ${describeChord(noteShortcut, mac, keyLabels)} to open`
+        : note.text
+      : null;
     // Spoken for every state, shown only when there are no rows to show instead:
     // with rows on screen the header carries "Updating…" visibly. No row is
     // selected to carry the Tab instruction, so this says it.
@@ -332,15 +381,20 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         className={cn(
           // A column, so a height the caller caps (`maxHeight`) is taken from
           // the list, which scrolls, never from the header.
-          "absolute bottom-full mb-0 flex w-[420px] max-w-[calc(100vw-16px)] flex-col overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay",
-          "z-50 origin-bottom",
+          "absolute mb-0 flex w-[420px] max-w-[calc(100vw-16px)] flex-col overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay",
+          "z-50",
+          side === "above" ? "bottom-full origin-bottom" : "origin-top",
           // Reduced motion keeps the fade and drops the rise. The hook, not a
           // `motion-reduce:` class: it also answers the app's own "Reduce UI
           // animations" setting and performance mode, which the class can't.
           skipMotion ? "transition-opacity" : "transition-[opacity,translate,scale]",
           isVisible
             ? "opacity-100 translate-y-0 scale-100"
-            : cn("opacity-0", !skipMotion && "translate-y-0.5 scale-[0.99]")
+            : cn(
+                "opacity-0",
+                !skipMotion && "scale-[0.99]",
+                !skipMotion && (side === "above" ? "translate-y-0.5" : "-translate-y-0.5")
+              )
         )}
         style={{
           ...style,
@@ -351,7 +405,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         }}
       >
         {title && (
-          <div className="flex h-7 shrink-0 items-center justify-between gap-2 border-b border-tint/5 px-2">
+          <div className="flex h-7 shrink-0 items-center justify-between gap-2 border-b border-divider px-2">
             <span className={cn(PALETTE_SECTION_LABEL_CLASS, "min-w-0 truncate")}>{title}</span>
             {keyHints.length > 0 ? (
               <span
@@ -395,7 +449,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
             className={cn(hasRows ? "sr-only" : "px-2 py-1.5 text-xs text-text-secondary")}
           >
             {statusText}
-            {note && <span className="sr-only"> {note.text}</span>}
+            {spokenNote && <span className="sr-only"> {spokenNote}</span>}
           </div>
 
           <div
@@ -493,14 +547,34 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         {note && (
           <button
             type="button"
+            // Out of the Tab order like the rows: Tab belongs to the editor, and
+            // the note's shortcut is the keyboard path.
             tabIndex={-1}
-            aria-hidden="true"
+            aria-keyshortcuts={comboToAriaKeyshortcuts(noteShortcut, mac, keyLabels)}
             data-autocomplete-note=""
-            className="shrink-0 border-t border-tint/5 px-2 py-1 text-left text-3xs text-text-secondary transition-colors hover:text-text-primary"
+            className={cn(
+              "flex shrink-0 cursor-pointer items-center justify-between gap-2 border-t border-divider px-2 py-1 text-left text-3xs text-text-secondary hover:text-text-primary",
+              POPOVER_ROW_HOVER_CLASS,
+              PALETTE_ROW_FOCUS_CLASS
+            )}
             onMouseDown={(e) => e.preventDefault()}
-            onClick={note.onClick}
+            onClick={(e) => {
+              // A host that refocuses its editor on click would pull focus back
+              // under whatever the note opens.
+              e.stopPropagation();
+              note.onClick();
+            }}
           >
-            {note.text}
+            <span className="min-w-0">{note.text}</span>
+            {noteShortcut && (
+              // Named by `aria-keyshortcuts` and spoken by the status region.
+              <KbdChord
+                shortcut={noteShortcut}
+                density="compact"
+                className="shrink-0"
+                rootAttributes={{ "aria-hidden": "true" }}
+              />
+            )}
           </button>
         )}
       </div>

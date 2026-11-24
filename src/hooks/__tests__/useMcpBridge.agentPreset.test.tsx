@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
-    list: () => [],
+    listForTransfer: () => [],
     getDispatchMeta: mocks.get,
     dispatch: mocks.dispatch,
     getContext: mocks.getContext,
@@ -25,6 +25,7 @@ import {
   buildMcpConfirmPreview,
   mcpConfirmPreviewTitle,
   resolveMcpConfirmPreviewTarget,
+  resolveMcpPresetConfirmPreviewTarget,
   tagMcpSpawnSource,
   useMcpBridge,
 } from "../useMcpBridge";
@@ -254,7 +255,7 @@ describe("user-preset writes through the MCP bridge (#16047)", () => {
   });
 
   it("resolves an edit's preview against the stored preset, and none for a preset it can't find", async () => {
-    const target = resolveMcpConfirmPreviewTarget(
+    const target = await resolveMcpPresetConfirmPreviewTarget(
       "agent.updatePreset",
       { agentId: "codex", presetId: "user-work", envSet: { CODEX_HOME: "/c" } },
       undefined
@@ -264,7 +265,7 @@ describe("user-preset writes through the MCP bridge (#16047)", () => {
     const { lines } = await buildMcpConfirmPreview(target);
     expect(lines).toContain('  CODEX_HOME: "/a" → "/c"');
 
-    const removal = resolveMcpConfirmPreviewTarget(
+    const removal = await resolveMcpPresetConfirmPreviewTarget(
       "agent.deletePreset",
       { agentId: "codex", presetId: "user-work" },
       undefined
@@ -273,9 +274,17 @@ describe("user-preset writes through the MCP bridge (#16047)", () => {
     expect(mcpConfirmPreviewTitle(removal)).toBe("Preset to be removed");
 
     expect(
-      resolveMcpConfirmPreviewTarget(
+      await resolveMcpPresetConfirmPreviewTarget(
         "agent.deletePreset",
         { agentId: "codex", presetId: "user-gone" },
+        undefined
+      )
+    ).toBeUndefined();
+    // The synchronous resolver leaves preset writes to the async one.
+    expect(
+      resolveMcpConfirmPreviewTarget(
+        "agent.deletePreset",
+        { agentId: "codex", presetId: "user-work" },
         undefined
       )
     ).toBeUndefined();

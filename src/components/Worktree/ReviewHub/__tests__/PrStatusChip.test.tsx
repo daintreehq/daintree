@@ -2,13 +2,16 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { primeRadix } from "@/components/ui/radix-loader";
 import type { CIStatusState, NormalizedPRState } from "@shared/types/forge";
 import type { ForgeNewPRLink } from "@shared/types/ipc/forge";
 
+const getChecksMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@/clients/forgeClient", () => ({
   forgeClient: {
-    getChecks: vi.fn(),
+    getChecks: getChecksMock,
     getPR: vi.fn(() => Promise.resolve(null)),
     getRepoMetadata: vi.fn(() => Promise.resolve(null)),
   },
@@ -16,7 +19,10 @@ vi.mock("@/clients/forgeClient", () => ({
 
 import { PrStatusChip } from "../PrStatusChip";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 function triggerDescription(trigger: HTMLElement): string {
   const id = trigger.getAttribute("aria-describedby");
@@ -96,6 +102,62 @@ describe("PrStatusChip", () => {
     });
     expect(triggerDescription(trigger)).toMatch(/^Pull request #42 open — CI passing — /);
   });
+
+  it.each<[NormalizedPRState, string]>([
+    ["open", "open"],
+    ["merged", "merged"],
+    ["closed", "closed"],
+    ["declined", "closed"],
+  ])(
+    "names a GitLab merge request the way GitLab does when it is %s",
+    async (prState, stateWord) => {
+      await primeRadix();
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        }
+      );
+      getChecksMock.mockResolvedValue({ checks: [] });
+      const { getByRole, findByTestId } = render(
+        <PrStatusChip
+          hasRemote
+          worktreePath="/tmp/wt"
+          newPRLink={null}
+          prTerm="merge-request"
+          onOpenExternal={() => undefined}
+          worktreePR={{
+            prNumber: 42,
+            prUrl: "https://gitlab.com/o/r/-/merge_requests/42",
+            prState,
+            prCiStatus: {
+              state: "failure",
+              total: 1,
+              passed: 0,
+              failed: 1,
+              pending: 0,
+              rawData: {},
+            },
+          }}
+        />
+      );
+
+      // jsdom joins the chip's spans without the spaces a browser lays out.
+      const trigger = getByRole("button", {
+        name: new RegExp(`^Merge request\\s*!42\\s*${stateWord}\\s*failing\\s*show CI checks$`),
+      });
+      expect(triggerDescription(trigger)).toBe(`Merge request !42 ${stateWord} — CI failing`);
+      getByRole("button", { name: "View merge request !42" });
+
+      fireEvent.click(trigger);
+      await waitFor(() => expect(getChecksMock).toHaveBeenCalled());
+      expect((await findByTestId("pr-checks-popover")).getAttribute("aria-label")).toBe(
+        "CI checks for merge request !42"
+      );
+    }
+  );
 
   it("shows a pending merge GitHub reports, whoever armed it (#13747)", () => {
     const { getByTestId } = render(
@@ -182,6 +244,17 @@ describe("PrStatusChip", () => {
       fireEvent.click(getByRole("button", { name: /^No PR\s*open new pull request$/ }));
 
       expect(onOpenExternal).toHaveBeenCalledWith(url);
+    });
+
+    it("holds a 24px hit box for the new-PR chip without growing the header", () => {
+      const { getByTestId } = renderNoPr({
+        state: "ready",
+        term: "pull-request",
+        url: "https://github.com/o/r/compare/develop...topic?expand=1",
+      });
+      const link = getByTestId("pr-new-link");
+      expect(link.className).toContain("min-h-6");
+      expect(link.className).toContain("-my-0.5");
     });
 
     it("uses the forge's own word for it", () => {

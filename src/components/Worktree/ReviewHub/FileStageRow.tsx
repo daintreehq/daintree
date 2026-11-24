@@ -16,6 +16,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 
 const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string }> = {
   modified: {
@@ -95,7 +96,12 @@ interface FileStageRowProps {
    */
   virtualized?: boolean;
   viewed?: boolean;
-  onViewedChange?: (viewed: boolean) => void;
+  /**
+   * Takes the path, like `onToggle`, so the list can pass one function to every
+   * row: a closure per row is a new prop on every list render, which defeats
+   * the row's `memo` and re-renders the whole list on each cursor step.
+   */
+  onViewedChange?: (filePath: string, viewed: boolean) => void;
   /**
    * The shared file-row menu's items for this row (#11757). Built by the hub
    * once for the whole list — a hook per row would be a store subscription per
@@ -133,6 +139,10 @@ function FileStageRowComponent({
   renderRowMenu,
 }: FileStageRowProps) {
   const rowRef = useRef<HTMLDivElement | null>(null);
+  // The name button only lays its parts out; the directory and the file name
+  // each clip inside their own box, so each is measured where it clips.
+  const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
+  const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
   const config = STATUS_CONFIG[file.status] || STATUS_CONFIG.untracked;
   const { dir, base } = splitPath(file.path);
   const generated = isGeneratedFile(file.path);
@@ -168,9 +178,9 @@ function FileStageRowComponent({
 
   const handleViewedChange = useCallback(
     (checked: boolean | "indeterminate") => {
-      onViewedChange?.(checked === true);
+      onViewedChange?.(file.path, checked === true);
     },
-    [onViewedChange]
+    [onViewedChange, file.path]
   );
 
   const handleViewedClick = useCallback((e: React.MouseEvent) => {
@@ -229,7 +239,12 @@ function FileStageRowComponent({
           className="absolute inset-0 rounded-[var(--radius-sm)] ring-1 ring-inset ring-tint/30 pointer-events-none"
         />
       )}
-      <TruncatedTooltip content={file.path}>
+      <TruncatedTooltip
+        content={file.path}
+        isTruncated={dirTruncated || baseTruncated}
+        focusable={false}
+        contentClassName="font-mono [overflow-wrap:anywhere]"
+      >
         <button
           type="button"
           onClick={handleNameClick}
@@ -256,6 +271,7 @@ function FileStageRowComponent({
           </span>
           {dir && (
             <PathTail
+              ref={dirRef}
               data-testid="file-stage-row-dir"
               className={cn(
                 "shrink font-mono text-2xs transition-[color,opacity] duration-150 ease-out",
@@ -269,6 +285,7 @@ function FileStageRowComponent({
             </PathTail>
           )}
           <span
+            ref={baseRef}
             data-testid="file-stage-row-base"
             className={cn(
               "shrink truncate font-medium font-mono text-2xs transition-[color,opacity] duration-150 ease-out",
@@ -352,9 +369,35 @@ function FileStageRowComponent({
       <ContextMenuTrigger asChild onContextMenu={stopFileRowMenuPropagation}>
         {row}
       </ContextMenuTrigger>
-      <ContextMenuContent>{renderRowMenu(file, section, rowRef)}</ContextMenuContent>
+      <ContextMenuContent>
+        <FileStageRowMenuItems
+          renderRowMenu={renderRowMenu}
+          file={file}
+          section={section}
+          triggerRef={rowRef}
+        />
+      </ContextMenuContent>
     </ContextMenu>
   );
+}
+
+/**
+ * Radix mounts a context menu's content only while it is open, so building the
+ * items in a child of it, rather than as the content's children prop, keeps a
+ * closed row from assembling a whole menu on every render.
+ */
+function FileStageRowMenuItems({
+  renderRowMenu,
+  file,
+  section,
+  triggerRef,
+}: {
+  renderRowMenu: NonNullable<FileStageRowProps["renderRowMenu"]>;
+  file: StagingFileEntry;
+  section: FileStageRowSection;
+  triggerRef: RefObject<HTMLElement | null>;
+}) {
+  return renderRowMenu(file, section, triggerRef);
 }
 
 export const FileStageRow = memo(FileStageRowComponent);

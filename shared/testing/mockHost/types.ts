@@ -87,6 +87,10 @@ import type {
   PluginPanelActivity,
   SettingDefinition,
 } from "../../types/plugin.js";
+import type {
+  CloudProviderDescriptor,
+  CloudProviderImpl,
+} from "../../types/pluginCloudProvider.js";
 
 export interface RegisteredActionRecord {
   descriptor: PluginActionContribution;
@@ -258,6 +262,11 @@ export interface RegisteredWorktreeDeleteNotesProviderRecord {
   impl: WorktreeDeleteNotesProviderImpl;
 }
 
+export interface RegisteredCloudProviderRecord {
+  descriptor: CloudProviderDescriptor;
+  impl: CloudProviderImpl;
+}
+
 /**
  * A roster bound through `host.mcp.registerTools`. `tools` is the plugin's own
  * roster, `execute` functions included, so a test can call a tool directly with
@@ -412,6 +421,8 @@ export interface MockHostState {
   readonly serviceCalls: ReadonlyArray<ServiceCallRecord>;
   /** Live `host.registerWorktreeDeleteNotesProvider` bindings, one per id. */
   readonly registeredWorktreeDeleteNotesProviders: ReadonlyArray<RegisteredWorktreeDeleteNotesProviderRecord>;
+  /** Live `host.registerCloudProvider` bindings, one per id. */
+  readonly registeredCloudProviders: ReadonlyArray<RegisteredCloudProviderRecord>;
   /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
   readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
   readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
@@ -636,8 +647,12 @@ export interface MockHostState {
   simulateWorktreesResult(result: PluginWorktreesResult | null): void;
   /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
   simulateConfirmResponse(result: boolean): void;
-  /** Replace the agent panes `agents.list()` reports and `sendToAgent` targets. */
-  simulateAgentsChange(agents: PluginAgentPane[]): void;
+  /**
+   * Replace the agent panes `agents.list()` reports and `sendToAgent` targets.
+   * Each pane's `band` and `canopy` are reported as given, with a Canopy quote
+   * kept only when the manifest declares `terminal:read`.
+   */
+  simulateAgentsChange(agents: Omit<PluginAgentPane, "launchedByThisPlugin">[]): void;
   /**
    * Count `terminalId` as an agent this plugin launched, so the `host.agents`
    * input methods reach it. A `dispatch("agent.launch")` whose result reports
@@ -648,12 +663,16 @@ export interface MockHostState {
   /**
    * Replace what `agents.listAll()` reports and push it, frozen and reduced to
    * the allowlist like production, to every `onDidChangeAllAgents` subscriber.
+   * A Canopy quote on a run is kept only when the manifest declares
+   * `terminal:read`.
    */
   simulateAllAgentsChange(snapshot: PluginAllAgentsSnapshot): void;
   /**
    * Move focus and push it, reduced to the allowlist and frozen like
    * production, to every `onDidChangeFocusedPanel` subscriber. A value equal to
-   * the one a subscriber last received is not repeated, as in production.
+   * the one a subscriber last received is not repeated, as in production. The
+   * deprecated `"portal"` reads as `kind: null`, so it arrives as no panel, or
+   * not at all after one.
    */
   simulateFocusedPanelChange(focus: PluginFocusedPanel): void;
   /**
@@ -834,12 +853,17 @@ export interface CreateMockHostOptions {
   /**
    * The agent panes `agents.list()` reports and `sendToAgent` resolves a
    * `terminalId` against. A pane with `canDraft: false` refuses with its
-   * `draftRefusal`. Defaults to none.
+   * `draftRefusal`. Defaults to none. Each pane's `launchedByThisPlugin` is the
+   * mock's own: whether `simulateAgentLaunched` or a dispatched `agent.launch`
+   * counted it. A pane's `band` and `canopy` are reported as given, with a
+   * Canopy quote kept only when the manifest declares `terminal:read` — the
+   * mock takes declaring it as the user's grant, as it does for screen reads.
    */
-  agents?: PluginAgentPane[];
+  agents?: Omit<PluginAgentPane, "launchedByThisPlugin">[];
   /**
    * What `agents.listAll()` reports. Defaults to a healthy, empty app
-   * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`).
+   * (`{ agents: [], degraded: false, lastSuccessfulAt: 0 }`). A Canopy quote
+   * on a run is kept only when the manifest declares `terminal:read`.
    */
   allAgents?: PluginAllAgentsSnapshot;
   /**
@@ -850,7 +874,8 @@ export interface CreateMockHostOptions {
   /**
    * The focus `onDidChangeFocusedPanel` replays on subscribe. Defaults to no
    * focused panel (`kind: null`). For a project plugin it is taken to be inside
-   * its own project; `"portal"` reads as `kind: null`, as in production.
+   * its own project. The deprecated `"portal"` reads as `kind: null`, as in
+   * production.
    */
   focusedPanel?: PluginFocusedPanel;
   /**

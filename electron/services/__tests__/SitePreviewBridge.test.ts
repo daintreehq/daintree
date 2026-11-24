@@ -81,7 +81,7 @@ class FakeWebContents extends EventEmitter {
   }
 }
 
-function makeHarness(overrides: { guestProject?: string | null; panelKind?: string } = {}) {
+function makeHarness(overrides: { guestProject?: string | null; panelKind?: string | null } = {}) {
   const wc = new FakeWebContents();
   // The view that binds. Separate from the guest, which is a `<webview>` and
   // never a project view of its own.
@@ -102,7 +102,9 @@ function makeHarness(overrides: { guestProject?: string | null; panelKind?: stri
       return null;
     },
     resolveWebContentsId: (panelId) => (panelId === PANEL_ID ? WEB_CONTENTS_ID : undefined),
-    getPanelKind: () => overrides.panelKind ?? "dev-preview",
+    // null: a webview registered without a kind.
+    getPanelKind: () =>
+      overrides.panelKind === null ? undefined : (overrides.panelKind ?? "dev-preview"),
     resolveGuestProject: () =>
       overrides.guestProject === undefined ? PROJECT_ID : overrides.guestProject,
     newSessionId: () => `session-${++sessionCounter}`,
@@ -548,11 +550,37 @@ describe("SitePreviewBridge", () => {
     expect(foreign.wc.debugger.methods()).toEqual([]);
   });
 
-  it("refuses a panel that is not a dev preview", async () => {
+  it("binds a browser panel's guest under the same origin policy", async () => {
+    // A browser panel showing the dev server an agent started is the same
+    // preload-less guest; the policy, not the kind, decides what it may pick.
     const browserPanel = makeHarness({ panelKind: "browser" });
-    await expect(browserPanel.bind()).rejects.toThrow(/not a dev preview/i);
-    expect(browserPanel.wc.debugger.methods()).toEqual([]);
+    await browserPanel.bind({ mode: "select" });
+    expect(bootstraps(browserPanel)).toHaveLength(1);
+
+    browserPanel.wc.url = "https://github.com/";
+    browserPanel.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(browserPanel.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(true);
+    });
+    expect(bootstraps(browserPanel)).toHaveLength(1);
   });
+
+  it("withholds the bootstrap from a browser panel bound on a foreign page", async () => {
+    const browserPanel = makeHarness({ panelKind: "browser" });
+    browserPanel.wc.url = "https://example.com/";
+    await browserPanel.bind();
+    expect(bootstraps(browserPanel)).toHaveLength(0);
+    expect(browserPanel.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(true);
+  });
+
+  it.each([["terminal"], ["file"], [null]])(
+    "refuses a panel registered as %s",
+    async (panelKind) => {
+      const other = makeHarness({ panelKind });
+      await expect(other.bind()).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      expect(other.wc.debugger.methods()).toEqual([]);
+    }
+  );
 
   it("refuses a panel with no dev preview behind it", async () => {
     await expect(harness.bind({ panelId: "missing" })).rejects.toMatchObject({
@@ -875,6 +903,44 @@ describe("SitePreviewBridge", () => {
     expect(harness.bridge.getState(PROJECT_ID, "session-1")?.mode).toBe("browse");
   });
 
+  it("pauses the page's picker and starts the next document paused (#17067)", async () => {
+    await harness.bind();
+
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", true);
+    const last = evaluations(harness).at(-1);
+    expect(String(last?.params?.expression)).toContain("api.setPaused(true)");
+    expect(last?.params?.contextId).toBe(ISOLATED_CONTEXT_ID);
+
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(bootstraps(harness)).toHaveLength(2);
+    });
+    expect(bootstraps(harness)[0]).toContain("paused: false");
+    expect(bootstraps(harness).at(-1)).toContain("paused: true");
+
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", false);
+    expect(String(evaluations(harness).at(-1)?.params?.expression)).toContain(
+      "api.setPaused(false)"
+    );
+  });
+
+  it("re-applies a pause made while the bootstrap was still installing", async () => {
+    const releaseWorld = gate(harness.wc.debugger, "Page.createIsolatedWorld");
+
+    const bound = harness.bind({ mode: "select" });
+    await vi.waitFor(() => {
+      expect(harness.wc.debugger.methods()).toContain("Page.createIsolatedWorld");
+    });
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", true);
+    releaseWorld();
+    await bound;
+
+    expect(bootstraps(harness)[0]).toContain("paused: false");
+    expect(String(evaluations(harness).at(-1)?.params?.expression)).toContain(
+      "api.setPaused(true)"
+    );
+  });
+
   it("detaches when the guest webContents goes away", async () => {
     await harness.bind();
 
@@ -924,6 +990,7 @@ describe("SitePreviewBridge out-of-band ops", () => {
     });
     await harness.bridge.clearSelection(PROJECT_ID, "session-1");
     await harness.bridge.clearHover(PROJECT_ID, "session-1");
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", true);
 
     // The mode is still recorded — the next install bakes it in — but nothing
     // was driven in the third-party document, and no source path reached it.
@@ -933,6 +1000,20 @@ describe("SitePreviewBridge out-of-band ops", () => {
     const sources = evaluations(harness).map((c) => String(c.params?.expression));
     expect(sources.some((e) => e.includes("+page.svelte"))).toBe(false);
     expect(sources.some((e) => e.includes("Card.svelte"))).toBe(false);
+  });
+
+  it("carries a pause asked for while suspended into the resumed install", async () => {
+    const harness = await suspendedHarness();
+    const before = evaluations(harness).length;
+    await harness.bridge.setPaused(PROJECT_ID, "session-1", true);
+    expect(evaluations(harness)).toHaveLength(before);
+
+    harness.wc.url = "http://localhost:5173/";
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(bootstraps(harness)).toHaveLength(2);
+    });
+    expect(bootstraps(harness).at(-1)).toContain("paused: true");
   });
 
   it("carries the mode set while suspended into the resumed install", async () => {

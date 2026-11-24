@@ -1,6 +1,7 @@
 import { pluralize } from "@/lib/pluralize";
 import type {
   DecisionsExportResult,
+  DecisionsHistoryRemoveResult,
   DecisionsLocalDeleteResult,
   DecisionsRelayDeleteRefusal,
   DecisionsRelayDeleteResult,
@@ -24,7 +25,7 @@ export function describeExportResult(result: DecisionsExportResult): RelayObserv
         severity: "error",
         label: "No Decisions keys to open the history with",
         detail:
-          "The stored history is sealed under this computer's keys for its relay, and it holds none. Nothing was exported.",
+          "The stored history is encrypted with this computer's keys for its relay, and it holds none. Nothing was exported.",
       };
     case "key-storage":
       return {
@@ -41,6 +42,44 @@ export function describeExportResult(result: DecisionsExportResult): RelayObserv
       };
   }
 }
+
+/** What removing this computer's settled questions observed, in words. */
+export function describeHistoryRemoveResult(
+  result: DecisionsHistoryRemoveResult
+): RelayObservation {
+  switch (result.result) {
+    case "removed":
+      return result.count === 0
+        ? {
+            severity: "info",
+            label: "No settled questions to remove",
+            detail:
+              "History holds no question this computer asked whose delivery is finished. Nothing was removed.",
+          }
+        : {
+            severity: "success",
+            label: `Removed ${pluralize(result.count, "settled question")}`,
+            detail:
+              "They and their answers are gone from this computer's History and from the questions in later exports, though an export's audit log can still name them. Nothing was sent to the relay or your phones.",
+          };
+    case "failed":
+      return {
+        severity: "error",
+        label: "Couldn't remove settled questions",
+        detail: `${HISTORY_NOT_REMOVED[result.reason]} Nothing was removed.`,
+      };
+  }
+}
+
+const HISTORY_NOT_REMOVED: Record<
+  Extract<DecisionsHistoryRemoveResult, { result: "failed" }>["reason"],
+  string
+> = {
+  "disk-pressure": "Disk space is critical, so the database refuses writes.",
+  storage: "The database refused the removal.",
+  "store-unavailable":
+    "The stored history couldn't be opened when Decisions started. Turn Decisions off and on again to try again.",
+};
 
 function relayRefusal(
   host: string,
@@ -131,6 +170,8 @@ const NOTHING_DELETED: Record<
   storage: "The database refused the deletion.",
   keys: "The Decisions key file couldn't be moved.",
   model: "The decision model's files couldn't be moved.",
+  "keys-changed":
+    "This computer's Decisions keys weren't what the confirmation showed: they changed, or no recovery kit verified here covers them. Delete again to see what goes with them.",
 };
 
 /** What deleting this computer's Decisions data observed, in words. */

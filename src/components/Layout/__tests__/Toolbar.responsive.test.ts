@@ -146,8 +146,10 @@ describe("Toolbar responsive design — issue #4133", () => {
       const text = block![0];
       // Each signal the badge severity is derived from has a textual counterpart.
       expect(text).toMatch(/overflowIds\.includes\("problems"\) && errorCount > 0/);
-      // Unread and urgent ride on the same marks the menu rows wear.
-      expect(text).toMatch(/for \(const id of \["notification-center", "canopy"\] as const\)/);
+      // Unread, urgent and waiting ride on the same marks the menu rows wear.
+      expect(text).toMatch(
+        /for \(const id of \["notification-center", "canopy", "decisions-inbox"\] as const\)/
+      );
       expect(text).toMatch(/signalMark\(id\)/);
       // Agent observations come from the same per-session derivation as the
       // badge severity, never from the per-agent pip map — the name counts
@@ -325,23 +327,6 @@ describe("Toolbar responsive design — issue #4133", () => {
       // forms — a future contributor re-adding either would re-introduce a
       // round ring that contradicts the CSS shape rules.
       expect(badgeMatch![0]).not.toContain("ring-");
-    });
-  });
-
-  describe("overflow menu focus ring after pointer dismissal — issue #6119", () => {
-    it("sets the ref in onPointerDownOutside on the overflow DropdownMenuContent", () => {
-      expect(source).toMatch(
-        /onPointerDownOutside={\(\)\s*=>\s*{\s*overflowMenuPointerCloseRef\.current\s*=\s*true;?\s*}}/
-      );
-    });
-
-    it("conditionally preventDefault and resets the ref in onCloseAutoFocus", () => {
-      // Guards the reset line: deleting it would inherit suppression into a
-      // later keyboard close and break WAI-ARIA focus return.
-      expect(source).toContain("overflowMenuPointerCloseRef.current = false");
-      expect(source).toMatch(
-        /if\s*\(overflowMenuPointerCloseRef\.current\)\s*{\s*e\.preventDefault\(\);/
-      );
     });
   });
 

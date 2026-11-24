@@ -31,9 +31,7 @@ import type { FindInPageState } from "@/hooks/useFindInPage";
 import { WebviewDialog, type WebviewDialogRequest } from "../Browser/WebviewDialog";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useStoppedLoadFocus } from "@/hooks/useStoppedLoadFocus";
-
-// The main-process clipboard: the guest page may hold focus.
-const writeMainClipboard = (text: string) => window.electron.clipboard.writeText(text);
+import { writeMainClipboard } from "@/lib/mainClipboard";
 
 interface DevPreviewWebviewOverlaysProps {
   reconnectAttempt: number;
@@ -285,16 +283,28 @@ export function DevPreviewWebviewOverlays({
           description="The page may be stuck in a long-running operation."
           severity="warning"
           animated={false}
-          actions={[
-            {
-              id: "restart-dev-server",
-              label: restartLabel,
-              icon: RotateCw,
-              variant: "primary",
-              onClick: onRestartDevServer,
-              ariaLabel: restartLabel,
-            },
-          ]}
+          action={{
+            id: "reload",
+            label: "Reload",
+            icon: RotateCw,
+            variant: "primary",
+            onClick: onHardReload,
+            ariaLabel: "Reload preview page",
+          }}
+          trailingSlot={
+            <BannerOverflowMenu
+              ariaLabel="More preview recovery options"
+              actions={[
+                {
+                  id: "restart-dev-server",
+                  label: restartLabel,
+                  icon: RotateCw,
+                  onClick: onRestartDevServer,
+                  ariaLabel: restartLabel,
+                },
+              ]}
+            />
+          }
           onClose={onCloseUnresponsive}
         />
       )}

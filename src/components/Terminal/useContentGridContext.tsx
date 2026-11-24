@@ -40,10 +40,7 @@ import {
   panelDragOrigin,
   useArmedDropTarget,
 } from "@/components/DragDrop/useArmedDropTarget";
-import {
-  peek as peekTerminalService,
-  with as withTerminalService,
-} from "@/services/terminal/terminalInstanceServiceAccessor";
+import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import {
   subscribeOptimisticClose,
   getClosingIdsSnapshot,
@@ -1133,35 +1130,15 @@ export function useContentGridContext({
     return panels.length === 2 ? (panels as [PanelInstance, PanelInstance]) : null;
   }, [useTwoPaneSplitMode, tabGroups, getTabGroupPanels]);
 
+  // Entering or leaving the split re-lays every grid pane. Its resize joins the
+  // coalesced, chunked batch pass rather than fitting each pane synchronously
+  // in one task, so it merges with the split controller's own pass and any
+  // add/close pass in the same burst instead of running beside them.
   const prevModeRef = useRef<boolean>(useTwoPaneSplitMode);
-  const gridTerminalsRef = useRef(gridTerminals);
   useEffect(() => {
-    gridTerminalsRef.current = gridTerminals;
-  }, [gridTerminals]);
-
-  useEffect(() => {
-    const prevMode = prevModeRef.current;
-    const currentMode = useTwoPaneSplitMode;
-
-    if (prevMode !== currentMode) {
-      prevModeRef.current = currentMode;
-
-      const MODE_SWITCH_FIT_DELAY_MS = 50;
-      const timeoutId = window.setTimeout(() => {
-        if (isDraggingRef.current) return;
-
-        const ids = gridTerminalsRef.current.map((t) => t.id);
-        for (const id of ids) {
-          const managed = peekTerminalService()?.get(id) ?? null;
-          if (managed?.hostElement.isConnected) {
-            peekTerminalService()?.fit(id);
-          }
-        }
-      }, MODE_SWITCH_FIT_DELAY_MS);
-
-      return () => clearTimeout(timeoutId);
-    }
-    return undefined;
+    if (prevModeRef.current === useTwoPaneSplitMode) return;
+    prevModeRef.current = useTwoPaneSplitMode;
+    runGridBatchFit(false);
   }, [useTwoPaneSplitMode]);
 
   useEffect(() => {

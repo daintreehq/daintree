@@ -24,6 +24,8 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
+import { useDockPillHideHandoff } from "./dockFocusHandoff";
+import { useErrorTerminals } from "@/hooks/useTerminalSelectors";
 import { pluralize } from "@/lib/pluralize";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
@@ -43,12 +45,14 @@ export interface StatusContainerConfig {
 
 interface StatusContainerProps {
   config: StatusContainerConfig;
-  terminals: PtyPanelData[];
   compact?: boolean;
 }
 
-export function StatusContainer({ config, terminals, compact = false }: StatusContainerProps) {
+export function StatusContainer({ config, compact = false }: StatusContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
+  // Read here, not by the parent: closed, the pill is a count and keeps its list
+  // across a member's per-frame writes (#17053).
+  const terminals = useErrorTerminals(isOpen);
   const { activateTerminal, pingTerminal } = usePanelStore(
     useShallow((state) => ({
       activateTerminal: state.activateTerminal,
@@ -73,6 +77,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
   // Lagged count keeps the label stable while the pill fades out via the
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
+  const hideHandoff = useDockPillHideHandoff(count);
   const Icon = config.icon;
 
   useEffect(() => {
@@ -80,7 +85,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
   }, [count]);
 
   return (
-    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"}>
+    <span className="dock-status-pill" data-visible={count > 0 ? "true" : "false"} {...hideHandoff}>
       <Popover open={isOpen} onOpenChange={setIsOpen}>
         <Tooltip>
           <TooltipTrigger asChild>

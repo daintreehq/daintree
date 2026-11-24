@@ -30,7 +30,7 @@ function truncateForLog(raw: string): string {
 const SHA256_HEX_PATTERN = /^[0-9a-fA-F]{64}$/;
 
 /** The parameters that make an install link pinned or catalog-resolved. */
-const BINDING_PARAMS = ["sha256", "id", "version"] as const;
+const BINDING_PARAMS = ["sha256", "id", "version", "source"] as const;
 
 function refuse(reason: PluginDeepLinkRefusal): PluginDeepLinkIntent {
   return { action: "install-refused", reason };
@@ -48,10 +48,24 @@ function parseWebUrl(value: string): URL | null {
 }
 
 /**
- * The install link's intent. A link carrying `sha256`, `id` or `version` asks
- * for an install held to reviewed bytes, so a malformed one is refused with a
- * reason the user sees, never narrowed to an ordinary, unbound URL install.
- * Presence decides, not truthiness: an empty `sha256=` is still a pin.
+ * A catalog a link names (#17434): an `https://` URL without credentials, or
+ * `null`. Whether it is one the person added is main's to check when the
+ * preview runs, against the list as it stands then; a link never adds one.
+ */
+function parseCatalogSource(value: string): string | null {
+  const url = parseWebUrl(value);
+  if (!url || url.protocol !== "https:" || url.username !== "" || url.password !== "") {
+    return null;
+  }
+  return value;
+}
+
+/**
+ * The install link's intent. A link carrying `sha256`, `id`, `version` or
+ * `source` asks for an install held to reviewed bytes, so a malformed one is
+ * refused with a reason the user sees, never narrowed to an ordinary, unbound
+ * URL install. Presence decides, not truthiness: an empty `sha256=` is still a
+ * pin.
  */
 function parseInstallLink(params: URLSearchParams): PluginDeepLinkIntent | null {
   const bound = BINDING_PARAMS.some((name) => params.has(name));
@@ -69,14 +83,21 @@ function parseInstallLink(params: URLSearchParams): PluginDeepLinkIntent | null 
     if (params.has("url") || params.has("sha256")) return refuse("conflicting-params");
     const pluginId = params.get("id") ?? "";
     if (!isCommunityPluginId(pluginId)) return refuse("malformed-id");
-    if (!params.has("version")) return { action: "install-catalog", pluginId };
+    let sourceUrl: string | undefined;
+    if (params.has("source")) {
+      const source = parseCatalogSource(params.get("source") ?? "");
+      if (source === null) return refuse("malformed-source");
+      sourceUrl = source;
+    }
+    const catalog = sourceUrl === undefined ? {} : { sourceUrl };
+    if (!params.has("version")) return { action: "install-catalog", pluginId, ...catalog };
     const version = params.get("version") ?? "";
     if (!isRequestablePluginVersion(version)) return refuse("malformed-version");
-    return { action: "install-catalog", pluginId, version };
+    return { action: "install-catalog", pluginId, version, ...catalog };
   }
 
-  // A version names a catalog release, so without an id it means nothing.
-  if (params.has("version")) return refuse("conflicting-params");
+  // A version or a catalog names a catalog release, so without an id they mean nothing.
+  if (params.has("version") || params.has("source")) return refuse("conflicting-params");
 
   const sha256 = params.get("sha256") ?? "";
   if (!SHA256_HEX_PATTERN.test(sha256)) return refuse("malformed-sha256");
@@ -97,7 +118,7 @@ function parseInstallLink(params: URLSearchParams): PluginDeepLinkIntent | null 
  * Accepted shapes:
  * - `daintree://plugin/install?url=<http(s) archive url>`
  * - `daintree://plugin/install?url=<https archive url>&sha256=<64 hex>`
- * - `daintree://plugin/install?id=<publisher.name>[&version=<semver>]`
+ * - `daintree://plugin/install?id=<publisher.name>[&version=<semver>][&source=<https catalog url>]`
  * - `daintree://plugin/open?id=<publisher.name>`
  *
  * The nested install `url` is only required to be `http:`/`https:` here — the

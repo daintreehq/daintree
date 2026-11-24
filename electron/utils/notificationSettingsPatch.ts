@@ -1,5 +1,30 @@
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 
+const writeListeners = new Set<() => void>();
+
+/**
+ * Hears each runtime write of the notification settings, from Settings or a
+ * config import or its undo, so a reader that follows them (Decisions'
+ * presence, #17240) reads them again. Nothing listens unless one subscribed.
+ */
+export function onNotificationSettingsWritten(listener: () => void): () => void {
+  writeListeners.add(listener);
+  return () => {
+    writeListeners.delete(listener);
+  };
+}
+
+/** Called by every runtime writer once its write is done. */
+export function notificationSettingsWritten(): void {
+  for (const listener of Array.from(writeListeners)) {
+    try {
+      listener();
+    } catch (error) {
+      console.error("[Notifications] A settings listener threw:", error);
+    }
+  }
+}
+
 /** Minimal shape of the allowed-sound-file set, so callers needn't import SoundService. */
 export interface AllowedSoundFileLookup {
   has(value: string): boolean;
@@ -62,6 +87,9 @@ export function sanitizeNotificationSettingsPatch(
   }
   if (typeof s.uiFeedbackSoundEnabled === "boolean") {
     allowed.uiFeedbackSoundEnabled = s.uiFeedbackSoundEnabled;
+  }
+  if (typeof s.soundVolume === "number" && Number.isFinite(s.soundVolume)) {
+    allowed.soundVolume = Math.max(0, Math.min(1, s.soundVolume));
   }
   if (typeof s.flashEnabled === "boolean") {
     allowed.flashEnabled = s.flashEnabled;

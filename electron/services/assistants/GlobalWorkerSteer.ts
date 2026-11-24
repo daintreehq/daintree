@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto";
-import { WORKER_STEER_REFUSALS } from "../../../shared/types/assistantControl.js";
+import {
+  WORKER_STEER_REFUSALS,
+  type GlobalCloseClass,
+} from "../../../shared/types/assistantControl.js";
 import type { QueuedSendReceipt } from "../../../shared/types/queuedSend.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { classifyWorkerSteerCommand } from "../../../shared/config/workerSteerCommands.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { isHandBackStop } from "../../../shared/utils/runHandBack.js";
+import {
+  inputSuggestionRuleFor,
+  observeInputLine,
+} from "../../../shared/utils/terminalInputLine.js";
 import { stampAssistantPrompt } from "../../../shared/utils/assistantProvenance.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { planChoice } from "../../../shared/utils/terminalChoice.js";
@@ -33,9 +41,29 @@ import type { PtyClient } from "../PtyClient.js";
 import { AssistantTargetError } from "./AssistantTerminalControl.js";
 import { HoldRefusedError, type WorkerSteerQueue } from "./WorkerSteerQueue.js";
 
+/**
+ * A finished agent the global Assistant may close though it didn't launch it
+ * (#16750), as one read saw it: the run, how it may be closed, and the input
+ * it had seen, so a later read can tell it is still that.
+ */
+export interface GlobalCloseTarget {
+  generation: number;
+  closeClass: GlobalCloseClass;
+  agentId: string;
+  agentState: AgentState;
+  waitingReason?: WaitingReason;
+  lastStateChange?: number;
+  lastTypedInputAt?: number;
+  /** The panel's title, for the question put to the person. */
+  title?: string;
+  /** The worktree the panel sits in, whose git state the question reports (#18151). */
+  worktreeId?: string;
+}
+
 /** The pty-host record fields a steer reads. */
 export interface WorkerSteerRecord {
   projectId?: string;
+  title?: string;
   isAssistantTerminal?: boolean;
   detectedAgentId?: string;
   agentState?: AgentState;
@@ -144,6 +172,7 @@ interface ReachWording {
 }
 const STEERING: ReachWording = { doing: "Steering", undone: NOTHING_SENT };
 const SHOWING: ReachWording = { doing: "Showing the person", undone: "Nothing was shown." };
+const UPDATING: ReachWording = { doing: "Applying an update to", undone: NOTHING_SENT };
 
 function refuse(code: string, message: string): never {
   throw new AssistantTargetError(code, message);
@@ -557,6 +586,104 @@ export class GlobalWorkerSteer {
     await this.requireWorker(target, SHOWING);
     target.authorize();
     return show();
+  }
+
+  /**
+   * Run `apply`, a Claude Code update's request (#17908), once the run passes
+   * the gate and the caller's `authorize`. The request makes its own checks
+   * of the pane, and asks `authorize` again right before it types.
+   */
+  async applyUpdate<T>(target: WorkerSteerTarget, apply: () => Promise<T>): Promise<T> {
+    await this.requireWorker(target, UPDATING);
+    target.authorize();
+    return apply();
+  }
+
+  /**
+   * The global Assistant closing an agent it didn't launch (#16750): the run
+   * now under `terminalId`, if it is an agent worker of `projectId` whose stop
+   * handed its work back, or stopped on an error, with nothing in its input
+   * box but the CLI's own suggestion; null for anything else, and for
+   * anything that couldn't be read. The screen is read between two reads of
+   * the record, and a run replaced, a state that moved or a key typed in
+   * between is null: what was read is no longer what is there.
+   */
+  async closeTarget(projectId: string, terminalId: string): Promise<GlobalCloseTarget | null> {
+    try {
+      return await this.readCloseTarget(projectId, terminalId);
+    } catch {
+      return null;
+    }
+  }
+
+  private async readCloseTarget(
+    projectId: string,
+    terminalId: string
+  ): Promise<GlobalCloseTarget | null> {
+    if (this.writing.has(terminalId)) return null;
+    if (this.deps.getTerminalProjectId(terminalId) !== projectId) return null;
+    if (this.deps.isAssistantTerminal(terminalId)) return null;
+    const generation = this.deps.getLiveGeneration(terminalId);
+    if (generation === null) return null;
+    const before = await this.closeRecord(projectId, terminalId, generation);
+    if (before === null) return null;
+    const snapshot = await this.deps.serializedState(terminalId, { tailRows: 0 }).catch(() => null);
+    // `partial` says only that scrollback was left out: the screen, where the
+    // input box is, is whole.
+    if (snapshot === null) return null;
+    const after = await this.closeRecord(projectId, terminalId, generation);
+    if (
+      after === null ||
+      after.closeClass !== before.closeClass ||
+      after.agentId !== before.agentId ||
+      after.agentState !== before.agentState ||
+      after.waitingReason !== before.waitingReason ||
+      after.lastStateChange !== before.lastStateChange ||
+      after.lastTypedInputAt !== before.lastTypedInputAt
+    ) {
+      return null;
+    }
+    const inputLine = observeInputLine(snapshot.data, inputSuggestionRuleFor(after.agentId))
+      .inputLine.state;
+    return inputLine === "empty" || inputLine === "suggestion" ? after : null;
+  }
+
+  /** One read of a close target's record: who it is and how it stopped, or null. */
+  private async closeRecord(
+    projectId: string,
+    terminalId: string,
+    generation: number
+  ): Promise<GlobalCloseTarget | null> {
+    const record = await this.deps.getTerminal(terminalId).catch(() => null);
+    if (record === null) return null;
+    if (record.projectId !== undefined && record.projectId !== projectId) return null;
+    if (this.deps.getLiveGeneration(terminalId) !== generation) return null;
+    if (noWorkerWhy(terminalId, record) !== null) return null;
+    // A submission still going in is a turn starting, not one ended.
+    if (record.hasPendingSubmission === true) return null;
+    const agentState = record.agentState;
+    if (agentState === undefined) return null;
+    const closeClass: GlobalCloseClass | null = isHandBackStop(agentState, record.waitingReason)
+      ? "handback"
+      : agentState === "waiting" && record.waitingReason === "error"
+        ? "requires-person"
+        : null;
+    if (closeClass === null) return null;
+    return {
+      generation,
+      closeClass,
+      agentId: record.detectedAgentId!,
+      agentState,
+      ...(record.waitingReason !== undefined ? { waitingReason: record.waitingReason } : {}),
+      ...(record.lastStateChange !== undefined ? { lastStateChange: record.lastStateChange } : {}),
+      ...(record.lastTypedInputAt !== undefined
+        ? { lastTypedInputAt: record.lastTypedInputAt }
+        : {}),
+      ...(record.title !== undefined && record.title.trim().length > 0
+        ? { title: record.title.trim() }
+        : {}),
+      ...(record.worktreeId !== undefined ? { worktreeId: record.worktreeId } : {}),
+    };
   }
 
   private async exclusive<T>(target: WorkerSteerTarget, run: () => Promise<T>): Promise<T> {

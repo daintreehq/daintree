@@ -3,6 +3,7 @@ import {
   parseExactPin,
   parseNodeEngineRange,
   findNodeVersionDrift,
+  parseDockerfileNodeImage,
 } from "./check-node-version-drift.mjs";
 
 describe("check-node-version-drift", () => {
@@ -124,6 +125,25 @@ describe("check-node-version-drift", () => {
     });
   });
 
+  describe("parseDockerfileNodeImage", () => {
+    it("reads the version from the NODE_IMAGE build arg", () => {
+      const text = "# comment\nARG NODE_IMAGE=node:22.23.2-bookworm\nFROM ${NODE_IMAGE}\n";
+      expect(parseDockerfileNodeImage(text)).toBe("22.23.2");
+    });
+
+    it("rejects a Dockerfile without the build arg", () => {
+      expect(() => parseDockerfileNodeImage("FROM node:22.23.2-bookworm\n")).toThrow(
+        /ARG NODE_IMAGE/
+      );
+    });
+
+    it("rejects a floating major tag", () => {
+      expect(() => parseDockerfileNodeImage("ARG NODE_IMAGE=node:22-bookworm\n")).toThrow(
+        /not an exact x\.y\.z/
+      );
+    });
+  });
+
   describe("findNodeVersionDrift", () => {
     const engineRange = ">=22.13.0";
     const engineMinimum = "22.13.0";
@@ -173,6 +193,19 @@ describe("check-node-version-drift", () => {
       });
       expect(result.ok).toBe(false);
       expect(result.failures).toHaveLength(2);
+    });
+
+    it("flags the spotexec image when it builds on another Node", () => {
+      const result = findNodeVersionDrift({
+        nvmrcVersion: "22.13.0",
+        nodeVersionFile: "22.13.0",
+        engineRange,
+        engineMinimum,
+        containerVersion: "22.12.0",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0].file).toMatch(/[\\/]\.spotexec[\\/]Dockerfile$/);
     });
   });
 });

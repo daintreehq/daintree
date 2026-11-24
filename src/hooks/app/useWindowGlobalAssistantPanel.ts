@@ -9,12 +9,13 @@ type HelpPanelSnapshot = ReturnType<typeof useHelpPanelStore.getState>;
 
 function panelOf(state: HelpPanelSnapshot): WindowGlobalAssistantPanel {
   const showing = state.isOpen && state.globalSelected;
-  return { showing, target: showing ? state.globalTarget : null };
+  // The session goes with it either way, so Global opened later shows the one picked.
+  return { showing, target: showing ? state.globalTarget : null, slot: state.globalSlot };
 }
 
 function keyOf(panel: WindowGlobalAssistantPanel): string {
   const target = panel.target;
-  return `${panel.showing}:${target ? `${target.hostId}:${target.terminalId}:${target.incarnation}` : ""}`;
+  return `${panel.showing}:${panel.slot ?? ""}:${target ? `${target.hostId}:${target.terminalId}:${target.incarnation}` : ""}`;
 }
 
 function samePresentation(a: HelpPanelSnapshot, b: HelpPanelSnapshot): boolean {
@@ -22,6 +23,7 @@ function samePresentation(a: HelpPanelSnapshot, b: HelpPanelSnapshot): boolean {
     a.isOpen === b.isOpen &&
     a.globalSelected === b.globalSelected &&
     a.globalTarget === b.globalTarget &&
+    a.globalSlot === b.globalSlot &&
     a.activeSlot === b.activeSlot &&
     // Asking for the lane already on screen changes nothing above, and is still a choice.
     a.focusRequest === b.focusRequest

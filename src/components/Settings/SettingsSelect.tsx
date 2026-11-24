@@ -32,6 +32,8 @@ interface SettingsSelectProps {
   label: string;
   description?: ReactNode;
   error?: string;
+  /** A trailing control on the error's line, such as a Retry for a save that failed. */
+  errorAction?: ReactNode;
   touched?: boolean;
   isModified?: boolean;
   onReset?: () => void;
@@ -64,6 +66,7 @@ export function SettingsSelect({
   label,
   description,
   error,
+  errorAction,
   touched = true,
   isModified,
   onReset,
@@ -138,6 +141,7 @@ export function SettingsSelect({
         disabled={disabled}
         disabledReason={disabledReason}
         error={isError ? error : undefined}
+        errorAction={isError ? errorAction : undefined}
         control={({ labelId, descriptionId: rowDescriptionId, disabled: rowDisabled }) => (
           <Select
             value={value}
@@ -211,7 +215,11 @@ export function SettingsSelect({
           {description}
         </p>
       )}
-      {isError && <SettingsInlineError id={errorId}>{error}</SettingsInlineError>}
+      {isError && (
+        <SettingsInlineError id={errorId} action={errorAction}>
+          {error}
+        </SettingsInlineError>
+      )}
     </div>
   );
 }

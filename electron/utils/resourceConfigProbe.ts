@@ -1,6 +1,7 @@
 import { readFile } from "fs/promises";
 import os from "os";
 import path from "path";
+import { stripUtf8Bom } from "./stripUtf8Bom.js";
 
 export type ResourceConfigProbe = "none" | "configured" | "unknown";
 
@@ -21,7 +22,7 @@ async function readCandidate(filePath: string): Promise<ResourceConfigProbe> {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(stripUtf8Bom(raw));
   } catch {
     return "unknown";
   }
@@ -32,10 +33,18 @@ async function readCandidate(filePath: string): Promise<ResourceConfigProbe> {
     : "none";
 }
 
+export interface ResourceConfigProbeOptions {
+  /** The settings file Project settings writes for this project (`<userData>/projects/<id>/settings.json`). */
+  projectSettingsPath?: string | null;
+  homeDir?: string;
+  timeoutMs?: number;
+}
+
 /**
  * Whether the project declares a resource environment anywhere the workspace
- * host would load one from: the user's per-project config and settings, the
- * repository's, and each worktree's config. A stalled read is `unknown`.
+ * host would load one from: its Project settings, the user's per-project config
+ * and settings, the repository's, and each worktree's config. A stalled read is
+ * `unknown`.
  *
  * Read here rather than taken from the host's snapshot, whose
  * `hasResourceConfig` is filled in asynchronously after the monitor starts and
@@ -45,11 +54,15 @@ async function readCandidate(filePath: string): Promise<ResourceConfigProbe> {
 export async function probeResourceConfig(
   projectRoot: string,
   worktreePaths: readonly string[],
-  homeDir: string = os.homedir(),
-  timeoutMs: number = 5_000
+  {
+    projectSettingsPath = null,
+    homeDir = os.homedir(),
+    timeoutMs = 5_000,
+  }: ResourceConfigProbeOptions = {}
 ): Promise<ResourceConfigProbe> {
   const userDir = path.join(homeDir, ".daintree", "projects", sanitizePathSegment(projectRoot));
   const candidates = new Set([
+    ...(projectSettingsPath ? [projectSettingsPath] : []),
     path.join(userDir, "config.json"),
     path.join(userDir, "settings.json"),
     path.join(projectRoot, ".daintree", "config.json"),

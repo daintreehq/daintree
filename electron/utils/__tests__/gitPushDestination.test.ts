@@ -913,6 +913,60 @@ describe("resolveGitPushAndUpstream — parity with the separate resolvers", () 
     });
   }
 
+  it("skips the config read for tracking setup only, keeping the destination", async () => {
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["remote", "add", "fork", makeBare()]);
+    git(repo, ["config", "branch.topic.pushRemote", "fork"]);
+    git(repo, ["config", "push.default", "current"]);
+    git(repo, ["config", "push.autoSetupRemote", "true"]);
+    const client = hermeticClient(repo);
+    const remotes = (await client.getRemotes()).map((r) => r.name);
+    const configReads: string[][] = [];
+    const counting = {
+      raw: (args: string[]) => {
+        if (args[0] === "config") configReads.push(args);
+        return client.raw(args);
+      },
+      getRemotes: () => client.getRemotes(),
+    } as unknown as Parameters<typeof resolveGitPushAndUpstream>[0];
+
+    const full = await resolveGitPushAndUpstream(counting, "topic", remotes);
+    expect(full.push).toMatchObject({ destination: { establishesUpstream: true } });
+    expect(configReads).toHaveLength(1);
+
+    configReads.length = 0;
+    const shown = await resolveGitPushAndUpstream(counting, "topic", remotes, {
+      skipTrackingSetup: true,
+    });
+    expect(configReads).toHaveLength(0);
+    const { establishesUpstream: _, ...destination } =
+      full.push.status === "resolved" ? full.push.destination : ({} as never);
+    expect(shown).toEqual({ push: { status: "resolved", destination }, upstream: full.upstream });
+  });
+
+  it("still reads config for the name-mismatch repair when tracking setup is skipped", async () => {
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["config", "branch.topic.remote", "origin"]);
+    git(repo, ["config", "branch.topic.merge", "refs/heads/develop"]);
+    git(repo, ["config", "remote.origin.push", "refs/heads/topic:refs/for/topic"]);
+    const client = hermeticClient(repo);
+    const remotes = (await client.getRemotes()).map((r) => r.name);
+
+    const shown = await resolveGitPushAndUpstream(client, "topic", remotes, {
+      skipTrackingSetup: true,
+    });
+    // Without the push refspec this is the repairable same-name destination;
+    // only the config read can see the refspec that rules it out.
+    expect(shown.push).toEqual({ status: "unresolved", reason: "not-configured" });
+    git(repo, ["config", "--unset", "remote.origin.push"]);
+    const repaired = await resolveGitPushAndUpstream(client, "topic", remotes, {
+      skipTrackingSetup: true,
+    });
+    expect(repaired.push).toMatchObject({ destination: { requiresUpstreamRepair: true } });
+  });
+
   it("reads the refs once and never lists remotes itself", async () => {
     const calls: string[] = [];
     const combined = await resolveGitPushAndUpstream(

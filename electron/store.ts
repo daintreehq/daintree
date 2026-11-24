@@ -17,10 +17,12 @@ import type { DeviceAnswerSettings } from "../shared/types/ipc/deviceAnswer.js";
 import type { DecisionsSettings } from "../shared/types/decisions.js";
 import type { DecisionsHostRecord } from "../shared/types/decisionsHosts.js";
 import type { EditorConfig } from "../shared/types/editor.js";
+import type { CustomNotificationSound } from "../shared/types/ipc/notificationSounds.js";
 import type { DisplayIdentity } from "../shared/types/displayIdentity.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
+import type { MergedWorktreeRemovalReceipt } from "../shared/types/mergedWorktreeCleanup.js";
 import type { DevPreviewUserStoppedRecord } from "../shared/types/ipc/devPreview.js";
 import type {
   AssistantTurnRecord,
@@ -48,6 +50,7 @@ import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
 import type { CanopyMode } from "../shared/types/ipc/canopy.js";
 import type { WindowOpeningConfig } from "../shared/types/ipc/windowOpening.js";
 import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../shared/types/windowOpen.js";
+import { DEFAULT_HOST_IDLE_MINUTES } from "../shared/types/hostIdle.js";
 import type {
   DismissedSuggestion,
   SuggestedDictionaryEntry,
@@ -112,6 +115,7 @@ export interface StoreSchema {
     memoryLeakDetectionEnabled?: boolean;
     memoryLeakAutoRestartThresholdMb?: number;
     cachedProjectViews?: number;
+    osc52ClipboardEnabled?: boolean;
     // Appearance fields written by the terminal-config handlers. Declared so
     // the device/host split in shared/config/settingOwnership.ts covers them.
     fontSize?: TerminalConfig["fontSize"];
@@ -172,9 +176,23 @@ export interface StoreSchema {
     /** One of `IDLE_SHELL_THRESHOLD_MINUTES`; the service normalizes anything else. */
     idleShellThresholdMinutes: number;
   };
+  /**
+   * How long this machine, as a host, goes without seeing work before its idle
+   * time ends (#17357). Kept here so it is judged with no Shell attached; read
+   * through `hostIdleMinutesOf`, which folds anything out of bounds back to
+   * the default.
+   */
+  hostIdle: {
+    idleAfterMinutes: number;
+  };
   pluginBackgroundUpdateCheck: {
     enabled: boolean;
-    /** Wall-clock ms of the last completed pass; null until the first runs. */
+    /**
+     * Wall-clock ms of the last conclusive pass (one with no targets, or where at
+     * least one check answered); null until the first runs. A pass where every
+     * check failed leaves it alone so a later idle tick retries after a backoff
+     * instead of waiting a day.
+     */
     lastCheckedAt: number | null;
   };
   appState: {
@@ -288,6 +306,19 @@ export interface StoreSchema {
    * `electron/services/agentToolbarPins.ts`.
    */
   agentToolbarPins?: Record<string, boolean>;
+  /**
+   * The agent each global assistant session was started on by choice
+   * (#18142), by slot, kept until that session is stopped. See
+   * `electron/services/globalAssistant.ts`.
+   */
+  globalAssistantPinnedAgents?: Record<string, string>;
+  /**
+   * This machine's agent usage tracking switch (#17981); absent reads as on.
+   * See `electron/services/agentUsage/AgentUsageTracking.ts`.
+   */
+  agentUsageTrackingEnabled?: boolean;
+  /** Sounds imported on this device, by id; the WAVs live under `<userData>/sounds/custom/`. */
+  customNotificationSounds?: CustomNotificationSound[];
   notificationSettings: {
     enabled: boolean;
     completedEnabled: boolean;
@@ -301,6 +332,7 @@ export interface StoreSchema {
     workingPulseEnabled: boolean;
     workingPulseSoundFile: string;
     uiFeedbackSoundEnabled: boolean;
+    soundVolume?: number;
     flashEnabled: boolean;
     quietHoursEnabled: boolean;
     quietHoursStartMin: number;
@@ -466,6 +498,11 @@ export interface StoreSchema {
     };
   };
   pendingErrors: ErrorRecord[];
+  /**
+   * Worktrees the merged-worktree rule removed (#17321) that no window has
+   * put in its notification inbox yet. Written only by that rule's service.
+   */
+  mergedWorktreeRemovalReceipts: MergedWorktreeRemovalReceipt[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;
   gpu: {
     hardwareAccelerationDisabled: boolean;
@@ -730,6 +767,24 @@ export interface StoreSchema {
   >;
 
   /**
+   * The panes each Assistant conversation launched on this machine, by
+   * terminal id (#16845): what lets that conversation close them again after
+   * an app restart. Written and read only by `assistantPaneCreations.ts`,
+   * which treats every entry as untrusted on load. Additive key with no
+   * numbered migration, like `pluginLaunchedAgents`.
+   */
+  assistantPaneCreations?: Record<
+    string,
+    {
+      scope: "help" | "localRelay";
+      conversationId: string;
+      projectId: string;
+      seenAt: number;
+      lastCallAt?: number;
+    }
+  >;
+
+  /**
    * Per-project visibility for INSTALLED (global) plugins: which manifest ids
    * are hidden by default, plus each project's explicit answers, which win in
    * either direction. Absence everywhere means visible.
@@ -820,6 +875,16 @@ export interface StoreSchema {
    * never the repository. Same additive-key convention as above.
    */
   pluginNotificationSilences?: string[];
+
+  /**
+   * Plugin catalogs the person added beside Daintree's own (#17434), as
+   * normalized `https://` URLs in the order they were added. This machine's
+   * own settings, never a repository's, so a pull can't add one. Read and
+   * written only through `services/plugin/pluginCatalogSources.ts`, which
+   * checks each value again on every read. Same additive-key convention as
+   * above.
+   */
+  pluginCatalogSources?: string[];
 
   /**
    * Plugin search providers the user turned off in the quick switcher
@@ -950,6 +1015,12 @@ export interface StoreSchema {
     /** Host id → when a window last landed there; "local" is this machine. */
     lastUsed?: Record<string, number>;
   };
+  /**
+   * Cloud accounts (never their keys, which live in the keychain-sealed
+   * credential file) and the bindings that tie a host to a provider machine.
+   * Device-owned; additive key with no numbered migration, validated on load.
+   */
+  cloudHosts?: unknown;
   /** This machine as a host: whether it listens for Shells and starts at login. */
   hostMode?: { enabled: boolean; startAtLogin: boolean; advertise?: boolean };
   /**
@@ -1011,6 +1082,7 @@ const storeOptions = {
       hybridInputEnabled: true,
       hybridInputAutoFocus: true,
       screenReaderMode: "auto" as const,
+      osc52ClipboardEnabled: false,
     },
     // Defaults ON, unlike the opt-in lifecycle toggles around it: every editor
     // that restores a session at all does it without being asked, and the cost
@@ -1044,6 +1116,9 @@ const storeOptions = {
       thresholdMinutes: 15,
       includeIdleShells: false,
       idleShellThresholdMinutes: 60,
+    },
+    hostIdle: {
+      idleAfterMinutes: DEFAULT_HOST_IDLE_MINUTES,
     },
     // Background plugin update checks default OFF (#10893): a periodic network
     // re-fetch of every URL-installed plugin is an opt-in behavior, not a default.
@@ -1153,6 +1228,7 @@ const storeOptions = {
       auditRetention: 7 as const,
     },
     pendingErrors: [],
+    mergedWorktreeRemovalReceipts: [],
     errorFingerprints: {},
     gpu: {
       hardwareAccelerationDisabled: false,
@@ -1221,6 +1297,7 @@ const storeOptions = {
     projectPluginSetupSkips: {},
     projectPluginAccountBindings: {},
     pluginNotificationSilences: [],
+    pluginCatalogSources: [],
     hiddenSearchProviders: [],
     pluginContextProvidersOff: [],
     pluginWorktreeDeleteNoteMutes: [],
@@ -1254,16 +1331,25 @@ function resolveConfigPath(cwd: string | undefined): string | null {
 
 // On the valid path, `rawBuffer` carries the bytes already read here so the
 // caller can use them as the pre-construction wipe-detection snapshot instead
-// of reading config.json a second time. It is absent only on the fail-open
-// branch below, where no usable bytes were obtained.
+// of reading config.json a second time, and `parsed` carries their parse so an
+// unchanged file can seed the store's value cache without a third parse. Both
+// are absent only on the fail-open branch below, where no usable bytes were
+// obtained.
 type ConfigPreflightResult =
-  { status: "valid"; rawBuffer?: Buffer } | { status: "missing" } | { status: "corrupt" };
+  | { status: "valid"; rawBuffer?: Buffer; parsed?: Record<string, unknown> }
+  | { status: "missing" }
+  | { status: "corrupt" };
 
 function preflightValidateConfig(configPath: string): ConfigPreflightResult {
-  if (!fs.existsSync(configPath)) return { status: "missing" };
+  let raw: string;
   try {
-    const raw = fs.readFileSync(configPath, "utf8");
-    const parsed = JSON.parse(raw);
+    raw = fs.readFileSync(configPath, "utf8");
+  } catch {
+    // existsSync only on the failure path, so a present file costs one read.
+    return fs.existsSync(configPath) ? { status: "valid" } : { status: "missing" };
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return { status: "corrupt" };
     }
@@ -1274,7 +1360,11 @@ function preflightValidateConfig(configPath: string): ConfigPreflightResult {
     // file with invalid UTF-8 byte sequences that still parses as JSON: those
     // bytes round-trip through U+FFFD, so rawBuffer matches what electron-store
     // itself decodes and rewrites — which is exactly what detectStoreWipe needs.
-    return { status: "valid", rawBuffer: Buffer.from(raw, "utf8") };
+    return {
+      status: "valid",
+      rawBuffer: Buffer.from(raw, "utf8"),
+      parsed: parsed as Record<string, unknown>,
+    };
   } catch (err) {
     if (err instanceof SyntaxError) return { status: "corrupt" };
     return { status: "valid" };
@@ -1417,6 +1507,38 @@ export function _resetPendingSettingsRecovery(): void {
 
 let storeInstance: Store<StoreSchema> | undefined;
 
+// Options that change how conf turns the file into its `store` (validation,
+// decryption, a custom parser, migrations). Any of them rules out standing in
+// for conf's read with preflight's plain JSON.parse.
+const CACHE_SEED_BLOCKING_OPTIONS = [
+  "schema",
+  "encryptionKey",
+  "serialize",
+  "deserialize",
+  "migrations",
+] as const;
+
+/**
+ * The snapshot conf's `store` getter would return for a file preflight parsed,
+ * or null when that can't be reproduced exactly. conf hands back a
+ * null-prototype copy of the parsed root with its `__internal__` bookkeeping
+ * detached; a key that could spell that bookkeeping through dot-prop paths or
+ * escapes declines seeding rather than re-implementing conf's key parser.
+ */
+function confSnapshotFromPreflight(
+  storeOpts: object,
+  parsed: Record<string, unknown>
+): Record<string, unknown> | null {
+  const confOptions = storeOpts as Record<string, unknown>;
+  if (CACHE_SEED_BLOCKING_OPTIONS.some((option) => confOptions[option] !== undefined)) {
+    return null;
+  }
+  for (const key of Object.keys(parsed)) {
+    if (key.includes("__internal__") || key.includes("\\")) return null;
+  }
+  return Object.assign(Object.create(null) as Record<string, unknown>, parsed);
+}
+
 /**
  * Drop the cached store snapshot. The proxy invalidates automatically for all
  * mutations routed through it; this export exists for the rare paths that
@@ -1523,9 +1645,8 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
   if (storeInstance) return storeInstance;
 
   const configPath = resolveConfigPath(options.cwd);
-  storeWasFreshAtBoot = configPath !== null && !fs.existsSync(configPath);
-
   const preflight = configPath ? preflightValidateConfig(configPath) : null;
+  storeWasFreshAtBoot = preflight?.status === "missing";
   if (preflight?.status === "corrupt") {
     console.warn("[Store] Detected corrupt config.json");
     const quarantinedPath = quarantineCorruptConfig(configPath!) ?? undefined;
@@ -1553,6 +1674,17 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
     const postSnapshot = configPath ? readRawSnapshot(configPath) : null;
     const wipedDuringConstruction =
       preSnapshot !== null && detectStoreWipe(preSnapshot, postSnapshot);
+    // Byte-identical bytes before and after construction mean conf neither
+    // cleared nor rewrote the file, so preflight's parse is what the first
+    // store.get() would otherwise read and parse a third time.
+    const cacheSeed =
+      preflight?.status === "valid" &&
+      preflight.parsed &&
+      preflight.rawBuffer &&
+      postSnapshot !== null &&
+      preflight.rawBuffer.equals(postSnapshot)
+        ? confSnapshotFromPreflight(options, preflight.parsed)
+        : null;
     if (wipedDuringConstruction) {
       console.warn(
         "[Store] electron-store silently replaced config.json during construction; preserving .bak"
@@ -1577,6 +1709,7 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
       tightenFilePermissions(`${configFilePath}.bak`);
     };
     storeInstance = created;
+    if (cacheSeed) primaryStore.seed(cacheSeed);
     return created;
   } catch (error) {
     console.warn("[Store] Failed to initialize electron-store, using in-memory fallback:", error);
@@ -1685,7 +1818,11 @@ const STORE_MUTATING_METHODS = new Set(["set", "delete", "clear", "reset", "appe
  */
 function createCachedStoreProxy<TStore extends { path: string; store: unknown }>(
   getInstance: () => TStore
-): { proxy: TStore; invalidate: () => void } {
+): {
+  proxy: TStore;
+  invalidate: () => void;
+  seed: (snapshot: Record<string, unknown>) => void;
+} {
   let valueCache: Record<string, unknown> | null = null;
   // Bumped by every mutation, so a write-through set can tell whether a nested
   // write (from a synchronous change listener) superseded its snapshot.
@@ -1693,6 +1830,11 @@ function createCachedStoreProxy<TStore extends { path: string; store: unknown }>
   const invalidate = () => {
     mutationEpoch++;
     valueCache = null;
+  };
+  // Installs a snapshot the caller has already proven equal to the file's
+  // current `store`, so the first get() skips its read + parse.
+  const seed = (snapshot: Record<string, unknown>) => {
+    valueCache = snapshot;
   };
 
   const proxy = new Proxy({} as TStore, {
@@ -1765,8 +1907,9 @@ function createCachedStoreProxy<TStore extends { path: string; store: unknown }>
       return bound;
     },
     set(_target, prop, value) {
-      invalidate();
+      // Resolve first: a lazy init seeds the cache, which this write must drop.
       const instance = getInstance();
+      invalidate();
       return Reflect.set(instance as object, prop, value, instance);
     },
     has(_target, prop) {
@@ -1775,7 +1918,7 @@ function createCachedStoreProxy<TStore extends { path: string; store: unknown }>
     },
   });
 
-  return { proxy, invalidate };
+  return { proxy, invalidate, seed };
 }
 
 const primaryStore = createCachedStoreProxy(getOrLazyInitInstance);

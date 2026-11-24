@@ -6,6 +6,7 @@ import {
   DropdownMenu,
   Icon,
   Tooltip,
+  TruncatedTooltip,
   type DropdownMenuEntry,
 } from "@daintreehq/plugin-ui";
 import { avatarUrlAtSize } from "@/components/ui/Avatar";
@@ -17,6 +18,7 @@ import type { ForgeLabel, Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
 import { getPRStatusVisual, getPRStatusTooltip } from "../utils/prCIStatus";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
+import { writeMainClipboard } from "@/lib/mainClipboard";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   RAIL_SLOT,
@@ -123,17 +125,24 @@ export function GitHubListItem({
   const stateColor = getStateColor(item.state, isItemPR && item.isDraft);
   const stateLabel = getStateLabel(item.state, type, isItemPR && item.isDraft);
 
-  const [copied, setCopied] = useState(false);
+  // The number the tick belongs to rather than a bare flag, so a row handed a
+  // different item mid-dwell can never show the last item's copy as its own,
+  // not even for the frame before the reset below runs.
+  const [copiedNumber, setCopiedNumber] = useState<number | null>(null);
+  const copied = copiedNumber === item.number;
   const copyTimeoutRef = useRef<number | undefined>(undefined);
 
+  // Resets on an `<Activity>` reveal as well as on a new item: a tick that
+  // outlived either would describe a copy the user can no longer see.
+  const itemNumber = item.number;
   useEffect(() => {
-    setCopied(false);
+    setCopiedNumber(null);
     return () => {
       if (copyTimeoutRef.current) {
         clearTimeout(copyTimeoutRef.current);
       }
     };
-  }, []);
+  }, [itemNumber]);
 
   const rowModel = deriveRowModel(item, worktree, activeWorktreeId);
   const { isActiveWorktree } = rowModel;
@@ -162,22 +171,26 @@ export function GitHubListItem({
   };
 
   const handleCopyNumber = async () => {
+    const number = item.number;
     if (copyTimeoutRef.current) {
       clearTimeout(copyTimeoutRef.current);
     }
     try {
-      await navigator.clipboard.writeText(`#${item.number}`);
+      // The main-process clipboard, not `navigator.clipboard`, which refuses
+      // whenever the renderer document lacks focus (a guest webview holding
+      // it, say) — something this row has no say over.
+      await writeMainClipboard(`#${number}`);
       useAnnouncerStore.getState().announce("Copied", "polite");
-      setCopied(true);
+      setCopiedNumber(number);
       copyTimeoutRef.current = window.setTimeout(
-        () => setCopied(false),
+        () => setCopiedNumber(null),
         UI_ACTION_SUCCESS_DWELL_MS
       );
     } catch {
-      // The clipboard can refuse (permissions, a headless context). Say so
-      // rather than flashing a success tick for a copy that did not happen.
-      setCopied(false);
-      console.warn(`Could not copy #${item.number} to the clipboard`);
+      // The clipboard can refuse. Say so rather than flashing a success tick
+      // for a copy that did not happen.
+      setCopiedNumber(null);
+      console.warn(`Could not copy #${number} to the clipboard`);
     }
   };
 
@@ -445,7 +458,7 @@ export function GitHubListItem({
             {/* At 450px most titles truncate. The elaborate tooltips used to
                 be on the trivia while the one line you actually need to read
                 had none. */}
-            <Tooltip content={item.title} side="bottom">
+            <TruncatedTooltip content={item.title} side="bottom" focusable={false}>
               {/* The title is the resource's own name, so it goes where the
                   resource lives. The row around it is about running the work
                   locally; the text itself is the link out to the forge. */}
@@ -469,14 +482,14 @@ export function GitHubListItem({
                   handleOpenExternal();
                 }}
                 className={cn(
-                  "flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left",
-                  "cursor-pointer rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                  "flex-1 min-w-0 text-sm font-medium text-text-primary truncate text-left",
+                  "cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                   !isSelectionActive && "hover:underline"
                 )}
               >
                 {item.title}
               </button>
-            </Tooltip>
+            </TruncatedTooltip>
 
             {/* Trailing rail — every slot is persistent ink, no hover-only reveals.
                 Order matters: everything of variable width sits to the LEFT of the

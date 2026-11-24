@@ -48,7 +48,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { actionService } from "@/services/ActionService";
-import { EVENT_KIND_LABEL, isNotificationEventKind } from "@/lib/notify";
+import { EVENT_KIND_LABEL, isSilenceableEventKind } from "@/lib/notify";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { isScreenLocked, subscribeScreenLock } from "@/lib/powerPolicyState";
 import { COUNT_BADGE_CLASS } from "./badge";
@@ -546,24 +546,26 @@ function Toast({
                   {countBadge}
                 </h4>
               ) : null}
-              <div className="flex items-start gap-1.5">
-                {typeof notification.message !== "string" && notification.inboxMessage ? (
-                  <>
-                    <span className="sr-only">{notification.inboxMessage}</span>
-                    <div
-                      aria-hidden="true"
-                      className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words"
-                    >
+              {notification.title && notification.message === "" ? null : (
+                <div className="flex items-start gap-1.5">
+                  {typeof notification.message !== "string" && notification.inboxMessage ? (
+                    <>
+                      <span className="sr-only">{notification.inboxMessage}</span>
+                      <div
+                        aria-hidden="true"
+                        className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words"
+                      >
+                        {notification.message}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words">
                       {notification.message}
                     </div>
-                  </>
-                ) : (
-                  <div className="min-w-0 flex-1 text-xs text-text-secondary leading-snug break-words">
-                    {notification.message}
-                  </div>
-                )}
-                {!notification.title && countBadge}
-              </div>
+                  )}
+                  {!notification.title && countBadge}
+                </div>
+              )}
             </div>
           </div>
           {notification.progress ? <ToastProgress progress={notification.progress} /> : null}
@@ -705,7 +707,8 @@ function Toast({
         </div>
 
         {!standalone &&
-          (notification.context?.projectId || notification.context?.eventKind) &&
+          (notification.context?.projectId ||
+            isSilenceableEventKind(notification.context?.eventKind)) &&
           (() => {
             const eventKind = notification.context?.eventKind;
             return (
@@ -725,11 +728,11 @@ function Toast({
                   sideOffset={4}
                   className="z-[var(--z-toast-overlay)]"
                 >
-                  {isNotificationEventKind(eventKind) && (
+                  {isSilenceableEventKind(eventKind) && (
                     <DropdownMenuItem
                       onSelect={() => {
                         const projectId = notification.context?.projectId;
-                        if (!isNotificationEventKind(eventKind)) return;
+                        if (!isSilenceableEventKind(eventKind)) return;
                         handleDismiss();
                         void actionService.dispatch("project.silenceNotificationKind", {
                           kind: eventKind,

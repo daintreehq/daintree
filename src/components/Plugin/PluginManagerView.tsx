@@ -62,6 +62,8 @@ import { WINDOWS_CAPTION_WIDTH_PX } from "@shared/config/windowChrome";
 import { usePluginManager, type InstallOutcome } from "./usePluginManager";
 import { PluginDetailPane, SOURCE_BADGE_LABELS, pluginLabel } from "./PluginDetailPane";
 import { UnsavedPanelsCallout } from "./UnsavedPanelsCallout";
+import { PluginUninstallCloudAccounts } from "./PluginUninstallCloudAccounts";
+import { containTab, handFocusBack, isFocusStranded } from "./pluginManagerFocus";
 import { PluginInstallProgressBanner } from "./PluginInstallProgressBanner";
 import { PluginInstallConfirmDialog } from "./PluginInstallConfirmDialog";
 import {
@@ -69,7 +71,11 @@ import {
   describePluginInstallSource,
 } from "@shared/utils/pluginInstallSource";
 import { PluginCatalog } from "./PluginCatalog";
-import { PluginCommunityBrowse } from "./PluginCommunityBrowse";
+import {
+  PluginCommunityBrowse,
+  catalogName,
+  type InstalledListingState,
+} from "./PluginCommunityBrowse";
 import { Store } from "@/components/icons";
 import { PluginIconTile } from "./pluginIcons";
 import { pluginSignalFor } from "./pluginStatus";
@@ -339,9 +345,11 @@ interface PluginManagerViewProps {
  * Visibility is driven by `usePluginManagerStore` (mirrors `themeBrowserStore`);
  * `AppLayout` reads the `plugin-manager` overlay claim to mark its chrome
  * `inert` while this is open. The overlay is `role="region"` (not a modal
- * dialog) — it's a persistent first-class view, so it doesn't trap focus or
- * announce as a modal. Escape closes it via the LIFO escape stack, which also
- * lets nested confirm/URL dialogs close first (#2828).
+ * dialog) — it's a persistent first-class view, so it doesn't announce as a
+ * modal, though Tab wraps at its edges while it covers the workspace. Escape
+ * closes it via the LIFO escape stack, which also lets nested confirm/URL
+ * dialogs close first (#2828); a popover, select or plugin drawer open inside
+ * it takes its own Escape first (`nestedLayerOwnsEscape`).
  *
  * Nested confirm dialogs (uninstall, update, HTTP install) and the URL-input
  * dialog render at `zIndex="nested"` so they layer above this view and the LIFO
@@ -360,11 +368,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     syncEnter: true,
   });
   useEscapeStack(isOpen, close);
-  // The global keybinding layer takes Escape at window capture and pops the
-  // escape stack before Radix's menu ever sees the key, so an open Install
-  // menu has to be on the stack itself — otherwise Escape closes the whole
-  // view instead of the menu. Registered after the view's own entry, so LIFO
-  // pops the menu first.
+  // Escape reaches an open Install menu itself (`nestedLayerOwnsEscape`), but
+  // Cmd+W and `modal.close` pop the stack directly, so the menu is on it too.
+  // Registered after the view's own entry, so LIFO pops the menu first.
   const [isInstallMenuOpen, setIsInstallMenuOpen] = useState(false);
   useEscapeStack(isOpen && isInstallMenuOpen, () => setIsInstallMenuOpen(false));
   const skipMotion = useShouldSkipMotion();
@@ -434,8 +440,23 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   const showingBrowse = browsing && selectedPlugin === null && selectedProjectPlugin === null;
   // Installed copies by id, for Browse's markers. Project plugins are a
   // project's own folder, not installs, so they never mark a listing.
-  const installedVersions = useMemo(
-    () => new Map(pm.plugins.map((p) => [p.manifest.name, p.manifest.version])),
+  // A catalog install also says which catalog (#17434), so a listing from
+  // another one offers to replace it rather than claim it.
+  const installedListings = useMemo(
+    () =>
+      new Map<string, InstalledListingState>(
+        pm.plugins.map((p) => [
+          p.manifest.name,
+          {
+            version: p.manifest.version,
+            catalog: p.catalog
+              ? p.catalog.sourceUrl === undefined
+                ? {}
+                : { sourceUrl: p.catalog.sourceUrl }
+              : null,
+          },
+        ])
+      ),
     [pm.plugins]
   );
 
@@ -568,7 +589,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
   }, [installRunning, isOpen]);
 
   // Move focus into the view when it opens. Unlike the former modal dialog, a
-  // role="region" view doesn't trap focus, so without this the keyboard focus
+  // role="region" view doesn't take focus, so without this the keyboard focus
   // can stay on a background grid terminal — and `terminal.close` (Cmd+W) skips
   // the escape stack while a grid panel is focused, closing the terminal
   // instead of the view. Prefer the filter input when shown, else the close
@@ -591,14 +612,15 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
     if (!wasOpen || isOpen) return;
     const target = usePluginManagerStore.getState().returnFocusTarget;
     usePluginManagerStore.setState({ returnFocusTarget: null });
-    // The view stays painted, inert, through its exit fade, so focus that was
-    // inside it is either still there or already on the body.
-    const active = document.activeElement;
-    const focusIsStranded =
-      active === null || active === document.body || !!viewRef.current?.contains(active);
-    if (target?.isConnected && focusIsStranded) {
-      target.focus({ preventScroll: true });
-    }
+    // A frame on: the workspace behind the view stays inert until the
+    // overlay claim's release commits, after this effect, and focus can't
+    // land on an inert control. The view stays painted, inert, through its
+    // exit fade, so focus that was inside it is still there or on the body.
+    const frame = requestAnimationFrame(() => {
+      if (usePluginManagerStore.getState().isOpen) return;
+      if (isFocusStranded(viewRef.current)) handFocusBack(target);
+    });
+    return () => cancelAnimationFrame(frame);
   }, [isOpen]);
 
   // Re-validate the selection after every list refresh (reopen, uninstall,
@@ -854,12 +876,19 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       role="region"
       aria-label="Plugin manager"
       data-testid="plugin-manager-view"
+      // Lets a nested popover, select or drawer keep its Escape from the
+      // global handlers that would otherwise close the manager under it.
+      data-plugin-manager-open={isOpen ? "" : undefined}
       // Painted through its exit fade, but nothing in it takes a click or
       // focus once it is closing.
       inert={!isOpen || undefined}
+      // A click on bare canvas keeps focus in the view rather than dropping
+      // it to the body, where Tab would walk into whatever else takes focus.
+      tabIndex={-1}
       onFocus={(e) => {
         lastFocusedRef.current = e.target instanceof HTMLElement ? e.target : null;
       }}
+      onKeyDown={containTab}
       className={cn(
         "fixed inset-0 z-[var(--z-modal)] flex flex-col bg-surface-canvas",
         // A full-window view: it fades on the entry/exit tier and never moves,
@@ -1294,7 +1323,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         >
           {showingBrowse ? (
             <PluginCommunityBrowse
-              installedVersions={installedVersions}
+              installed={installedListings}
               installDisabled={pm.isInstalling || pm.urlReview !== null}
               onInstall={pm.previewCatalogListing}
               onViewInstalled={(pluginId) => {
@@ -1358,7 +1387,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         isOpen={pm.pendingUninstall !== null}
         onClose={pm.closeUninstall}
         title={pm.pendingUninstall ? `Uninstall '${pluginLabel(pm.pendingUninstall)}'?` : ""}
-        description="Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below."
+        description={`Removes the plugin and deletes its installed files, unloading its panels, commands, and integrations. Its settings, connected accounts, and stored data are kept unless you check the box below.${pm.pendingUninstall?.cloudAccounts?.length ? " Its cloud accounts follow the choice below." : ""}`}
         confirmLabel="Uninstall plugin"
         cancelLabel="Keep plugin"
         onConfirm={() => void pm.confirmUninstall()}
@@ -1367,6 +1396,14 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         zIndex="nested"
       >
         <UnsavedPanelsCallout verb="Uninstalling" panels={pm.uninstallPanels} className="mb-3" />
+        {pm.pendingUninstall?.cloudAccounts && pm.pendingUninstall.cloudAccounts.length > 0 && (
+          <PluginUninstallCloudAccounts
+            accounts={pm.pendingUninstall.cloudAccounts}
+            remove={pm.removeCloudAccounts}
+            onRemoveChange={pm.setRemoveCloudAccounts}
+            disabled={pm.isUninstalling}
+          />
+        )}
         <label className="flex cursor-pointer items-start gap-2 text-sm text-text-primary select-none">
           <Checkbox
             checked={pm.deleteSettings}
@@ -1381,6 +1418,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           Covers every project on this machine, secrets included, and signs the plugin out.
           Databases and files the plugin created are kept, as are settings under a repository's
           .daintree/.
+          {pm.pendingUninstall?.cloudAccounts && pm.pendingUninstall.cloudAccounts.length > 0
+            ? " Cloud accounts follow the choice above."
+            : null}
         </p>
         {/* A failed uninstall leaves this dialog open and sets the error, which
             the master column no longer renders while the dialog owns it — so
@@ -1600,6 +1640,16 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                         kind: "catalog",
                         repoLabel: describeCatalogRepo(pm.urlReview.catalog.repo),
                         installedOnDisk: pm.urlReview.installedOnDisk,
+                        ...(pm.urlReview.catalog.sourceUrl === undefined
+                          ? {}
+                          : { catalogLabel: catalogName(pm.urlReview.catalog.sourceUrl) }),
+                        ...(pm.urlReview.replacesCatalog === undefined
+                          ? {}
+                          : {
+                              replacesCatalogLabel: catalogName(
+                                pm.urlReview.replacesCatalog.sourceUrl
+                              ),
+                            }),
                       },
               }
         }

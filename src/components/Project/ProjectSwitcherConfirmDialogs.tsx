@@ -6,6 +6,7 @@ import type {
   DeleteScratchTarget,
   SearchableProject,
   SearchableScratch,
+  UseProjectSwitcherPaletteReturn,
 } from "@/hooks/useProjectSwitcherPalette";
 import { Callout } from "@/components/ui/Callout";
 import { pluralize } from "@/lib/pluralize";
@@ -21,11 +22,6 @@ export interface ProjectSwitcherConfirmState {
   onRemoveConfirmClose?: () => void;
   onConfirmRemove?: () => void;
   isRemovingProject?: boolean;
-  /** Frozen snapshot of the project pending a Sleep confirm, or null. */
-  sleepConfirmProject?: SearchableProject | null;
-  onSleepConfirmClose?: () => void;
-  onConfirmSleep?: () => void;
-  isSleepingProject?: boolean;
   /**
    * Target of a pending single-scratch delete confirmation, frozen when it
    * opened. Surfaced as a top-level ConfirmDialog above the palette.
@@ -147,10 +143,6 @@ export function ProjectSwitcherConfirmDialogs({
   onRemoveConfirmClose,
   onConfirmRemove,
   isRemovingProject = false,
-  sleepConfirmProject,
-  onSleepConfirmClose,
-  onConfirmSleep,
-  isSleepingProject = false,
   deleteScratchConfirm,
   onDismissDeleteScratchConfirm,
   onConfirmDeleteScratch,
@@ -262,61 +254,6 @@ export function ProjectSwitcherConfirmDialogs({
                       ? "Its clone is still running: removing it cancels the clone and discards the partly cloned folder."
                       : "The folder itself isn't touched, and recipes kept in the repository under .daintree/recipes/ stay."
                   }`}
-            </div>
-          </div>
-        </ConfirmDialog>
-      )}
-      {sleepConfirmProject && onSleepConfirmClose && onConfirmSleep && (
-        <ConfirmDialog
-          isOpen={true}
-          onClose={onSleepConfirmClose}
-          title={`Sleep '${sleepConfirmProject.name}'?`}
-          zIndex="nested"
-          confirmLabel="Sleep project"
-          cancelLabel="Cancel"
-          onConfirm={onConfirmSleep}
-          isConfirmLoading={isSleepingProject}
-          variant="default"
-        >
-          <div className="space-y-3">
-            <div>
-              <div className="font-medium text-sm">{sleepConfirmProject.name}</div>
-              <div className="text-xs text-text-secondary font-mono mt-1">
-                {sleepConfirmProject.path}
-              </div>
-            </div>
-            {(sleepConfirmProject.processCount > 0 ||
-              sleepConfirmProject.activeAgentCount > 0 ||
-              sleepConfirmProject.waitingAgentCount > 0) && (
-              <Callout severity="warning" title="Running processes will be stopped">
-                <div>
-                  {sleepConfirmProject.processCount > 0 && (
-                    <div>
-                      •{" "}
-                      {pluralize(
-                        sleepConfirmProject.processCount,
-                        "running process",
-                        "running processes"
-                      )}
-                    </div>
-                  )}
-                  {sleepConfirmProject.activeAgentCount > 0 && (
-                    <div>• {pluralize(sleepConfirmProject.activeAgentCount, "active agent")}</div>
-                  )}
-                  {sleepConfirmProject.waitingAgentCount > 0 && (
-                    <div>• {pluralize(sleepConfirmProject.waitingAgentCount, "waiting agent")}</div>
-                  )}
-                </div>
-              </Callout>
-            )}
-            {sleepConfirmProject.isActive && (
-              <div className="text-xs text-text-secondary">
-                This window returns to the project picker
-              </div>
-            )}
-            <div className="text-xs text-text-secondary">
-              The layout, terminal scrollback, and agent sessions come back when you reopen the
-              project.
             </div>
           </div>
         </ConfirmDialog>
@@ -433,5 +370,61 @@ export function ProjectSwitcherConfirmDialogs({
         </ConfirmDialog>
       )}
     </>
+  );
+}
+
+export type ProjectSwitcherConfirmSource = Pick<
+  UseProjectSwitcherPaletteReturn,
+  | "removeConfirmProject"
+  | "setRemoveConfirmProject"
+  | "confirmRemoveProject"
+  | "isRemovingProject"
+  | "deleteScratchConfirm"
+  | "dismissDeleteScratchConfirm"
+  | "confirmDeleteScratch"
+  | "isDeletingScratch"
+  | "deleteAllScratchesConfirm"
+  | "dismissDeleteAllScratchesConfirm"
+  | "confirmDeleteAllScratches"
+  | "isDeletingAllScratches"
+  | "saveAsProjectConfirm"
+  | "dismissSaveAsProjectConfirm"
+  | "openSavedProject"
+>;
+
+/**
+ * The one place a view renders the switcher's confirmations (#16919). The
+ * switcher is drawn by the ⌘P modal and the toolbar dropdown, and Close is also
+ * requested from the action palette and the toolbar pill with neither open, so
+ * the confirms can't live in a copy of the switcher: before any copy had
+ * mounted they rendered nowhere, and once both had they rendered twice.
+ */
+export function ProjectSwitcherConfirmHost({
+  projectSwitcher,
+  paletteInputRef,
+}: {
+  projectSwitcher: ProjectSwitcherConfirmSource;
+  /** The ⌘P palette's search box, a focus successor while the palette is open. */
+  paletteInputRef: React.RefObject<HTMLInputElement | null>;
+}) {
+  return (
+    <ProjectSwitcherConfirmDialogs
+      removeConfirmProject={projectSwitcher.removeConfirmProject}
+      onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
+      onConfirmRemove={() => void projectSwitcher.confirmRemoveProject()}
+      isRemovingProject={projectSwitcher.isRemovingProject}
+      deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
+      onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
+      onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
+      isDeletingScratch={projectSwitcher.isDeletingScratch}
+      deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+      onDismissDeleteAllScratchesConfirm={projectSwitcher.dismissDeleteAllScratchesConfirm}
+      onConfirmDeleteAllScratches={() => void projectSwitcher.confirmDeleteAllScratches()}
+      isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
+      saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
+      onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
+      onOpenSavedProject={projectSwitcher.openSavedProject}
+      paletteInputRef={paletteInputRef}
+    />
   );
 }

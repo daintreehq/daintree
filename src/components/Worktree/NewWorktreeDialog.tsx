@@ -1,4 +1,13 @@
-import { useState, useEffect, useRef, useMemo, useCallback, useId, Fragment } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  useId,
+  useSyncExternalStore,
+  Fragment,
+} from "react";
 import { Callout } from "@/components/ui/Callout";
 import { InlineError } from "@/components/ui/field";
 import { useShallow } from "zustand/react/shallow";
@@ -8,7 +17,12 @@ import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import {
+  useDohertyGate,
+  useSkeletonDisplayFloor,
+  useSkeletonGate,
+} from "@/hooks/useDeferredLoading";
+import { UI_SKELETON_FLOOR_MS } from "@/lib/animationUtils";
 import { FolderGit2, GitBranch } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
@@ -29,7 +43,7 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
-import { extractClosingIssueNumber } from "@/utils/closingIssueRef";
+import { buildSourcePrOptions, findUnambiguousPrRemoteBranch } from "@/utils/prWorktreeSource";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore, type PendingCreationDraft } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -72,10 +86,14 @@ import { useIssuePromptContext } from "./hooks/useIssuePromptContext";
 import { composeIssueFirstPrompt, issuePromptRef } from "./issuePromptContext";
 import { Textarea } from "@/components/ui/textarea";
 import { LazyWorktreePlacementRow } from "@/components/Hosts/Overview/LazyHostOverviewParts";
+import { canOfferResourceBoxHandoff } from "@/components/Hosts/resourceHostHandoff";
+import { openCreatedWorktreeOnMachine } from "./openCreatedWorktreeOnMachine";
 import type {
+  CloudMachineCommit,
   PlacementCommit,
   PlacementDraft,
 } from "@/components/Hosts/Overview/WorktreePlacementRow";
+import { startCloudWorktreePlacement } from "@/components/Hosts/cloudWorktreePlacement";
 
 import {
   PrHeader,
@@ -91,6 +109,7 @@ import {
   PathResolvedHint,
   EnvironmentRadioGroup,
   EnvironmentHint,
+  OpenOnMachineToggle,
   RecipePickerPopover,
   AgentPickerPopover,
   IssuePromptToggle,
@@ -107,6 +126,9 @@ const setupList = new Intl.ListFormat("en", { style: "long", type: "conjunction"
 
 const branchListCache = new Map<string, BranchInfo[]>();
 
+/** The branch area while the list loads: held space, the skeleton, or the form. */
+type BranchBody = "reserve" | "skeleton" | "form";
+
 export function clearBranchListCache(): void {
   branchListCache.clear();
 }
@@ -121,17 +143,19 @@ function isHostAbsolutePath(path: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(path) || /^[\\/]{2}[^\\/]/.test(path);
 }
 
-/** Collapse the normalized forge PR state to the workspace-host form (declined folds into closed). */
-function normalizeSourcePrState(state: PR["state"]): "open" | "closed" | "merged" {
-  switch (state) {
-    case "merged":
-      return "merged";
-    case "closed":
-    case "declined":
-      return "closed";
-    default:
-      return "open";
-  }
+const noopSubscribe = () => () => {};
+
+function useCloneStartsAgent(active: boolean, worktreeId: string | null): boolean {
+  return useSyncExternalStore(active ? usePanelStore.subscribe : noopSubscribe, () => {
+    if (!active || !worktreeId) return false;
+    try {
+      return recipeTerminalsStartAgent(
+        useRecipeStore.getState().generateRecipeFromActiveTerminals(worktreeId)
+      );
+    } catch {
+      return false;
+    }
+  });
 }
 
 interface NewWorktreeDialogProps {
@@ -158,6 +182,14 @@ export function NewWorktreeDialog({
 }: NewWorktreeDialogProps) {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
+  // Whether this opening's bootstrap has run. It sets `loading` a commit after
+  // the dialog opens, so until then a cold open can't read it.
+  const [bootstrapRan, setBootstrapRan] = useState(false);
+  // Whether this opening has shown the form: a refetch keeps it up rather than
+  // blanking it for the onset gate.
+  const [formShown, setFormShown] = useState(false);
+  // What the body last showed while open, held through AppDialog's exit.
+  const [lastBranchBody, setLastBranchBody] = useState<BranchBody>("form");
   // A failed branch list is a load state, not a field the user got wrong: it
   // holds until the list loads, whatever else is edited.
   const [branchLoadError, setBranchLoadError] = useState<string | null>(null);
@@ -168,6 +200,9 @@ export function NewWorktreeDialog({
   const [selectedExistingBranch, setSelectedExistingBranch] = useState<string | null>(null);
   const [recentBranchNames, setRecentBranchNames] = useState<string[]>([]);
   const [worktreeMode, setWorktreeMode] = useState<string>("local");
+  // The environment whose machine the worktree is to open on, so the choice
+  // never carries over to another environment however the pick changes.
+  const [openOnMachineFor, setOpenOnMachineFor] = useState<string | null>(null);
   const isCreatingRef = useRef(false);
   const baseBranchTouchedRef = useRef(false);
   // Set once the bootstrap has run for this open, so a Retry refetches the
@@ -274,9 +309,9 @@ export function NewWorktreeDialog({
   const [currentUser, setCurrentUser] = useState<string | undefined>(undefined);
   const [currentUserAvatar, setCurrentUserAvatar] = useState<string | undefined>(undefined);
 
-  const { projectSettings, configuredBranchPrefix } = useNewWorktreeProjectSettings({ isOpen });
+  const { projectSettings, configuredBranchPrefix, resourceEnvironments, environmentsLoaded } =
+    useNewWorktreeProjectSettings({ isOpen });
 
-  const resourceEnvironments = projectSettings?.resourceEnvironments;
   const hasAnyEnvironments = usableEnvironmentKeys(resourceEnvironments).length > 0;
 
   const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
@@ -356,10 +391,9 @@ export function NewWorktreeDialog({
     isCheckingBranch,
     isGeneratingPath,
     worktreePath,
-    setWorktreePath,
+    setCustomWorktreePath,
     branchWasAutoResolved,
     pathWasAutoResolved,
-    pathTouchedRef,
     consumeBranchResolution,
   } = useBranchValidation({
     branchInput,
@@ -506,6 +540,8 @@ export function NewWorktreeDialog({
   useEffect(() => {
     if (!isOpen) {
       bootstrappedRef.current = false;
+      setBootstrapRan(false);
+      setFormShown(false);
       return;
     }
     const isRefetch = bootstrappedRef.current;
@@ -516,6 +552,7 @@ export function NewWorktreeDialog({
     const cached = initialPR ? undefined : branchListCache.get(rootPath);
 
     setLoading(!cached);
+    setBootstrapRan(true);
     setBranchLoadError(null);
     setPrBranchResolved(null);
     setBranches(cached ?? []);
@@ -530,6 +567,7 @@ export function NewWorktreeDialog({
       setBranchMode(restoredExisting ? "existing" : "new");
       setSelectedExistingBranch(restoredExisting ? restoreDraft.branch : null);
       setWorktreeMode(restoreDraft?.worktreeMode ?? "local");
+      setOpenOnMachineFor(restoreDraft?.openOnMachine ? (restoreDraft.worktreeMode ?? null) : null);
     }
     // resetErrors() is NOT called here — touched refs are managed by individual hooks
 
@@ -566,20 +604,8 @@ export function NewWorktreeDialog({
         setBranches(branchList);
 
         if (initialPR?.headRef) {
-          // Any remote may carry the PR head — on a fork layout the forge is
-          // `upstream`, not `origin` (#11747). Matched as an exact
-          // `<remote>/<headRef>` rather than a suffix, so a head named `x`
-          // can't match `origin/feature/x`.
-          const remoteCandidates = branchList.filter(
-            (b) => b.remote && b.name === `${b.remote}/${initialPR.headRef}`
-          );
-          // A branch name is not a PR identity. When two remotes both carry the
-          // name they may be different commits, and this component has no way
-          // to tell which repo the PR belongs to — picking either could build
-          // the worktree from the wrong commit. Fall through to the PR-number
-          // fetch, which is authoritative. One match is unambiguous enough to
-          // keep the fast path (and is the single-remote case).
-          const remoteBranch = remoteCandidates.length === 1 ? remoteCandidates[0] : undefined;
+          // Ambiguous or absent remotes fall through to the PR-number fetch.
+          const remoteBranch = findUnambiguousPrRemoteBranch(branchList, initialPR.headRef);
           const localBranch = branchList.find((b) => b.name === initialPR.headRef && !b.remote);
           if (remoteBranch) {
             setBaseBranch(remoteBranch.name);
@@ -675,12 +701,49 @@ export function NewWorktreeDialog({
     }
   }, [isOpen, restoreDraft, settingsDefaultMode, settingsResourceEnvs]);
 
-  // Focus new branch input after loading
+  // A cold open (no cached list, or a PR) is pending from its first commit,
+  // before the bootstrap has set `loading`; a stale `loading` left by a close
+  // mid-load doesn't count for the next opening.
+  const branchesPending =
+    isOpen && !bootstrapRan ? !!initialPR || !branchListCache.has(rootPath) : loading;
+  // A load inside the onset gate shows no skeleton at all, and one that shows
+  // stays up for the floor rather than tearing down in the frame it appeared.
+  // The floor drops while closed, so a reopen starts from a fresh gate instead
+  // of inheriting the last opening's dwell.
+  const skeletonGate = useSkeletonGate(isOpen && branchesPending);
+  const showSkeleton = useSkeletonDisplayFloor(
+    // The gate's state lags its input by a render: a load that settles in the
+    // batch its timer fires in must not start a skeleton under the form.
+    isOpen && branchesPending && skeletonGate,
+    isOpen ? UI_SKELETON_FLOOR_MS : 0
+  );
+
+  // The body inside the gate holds the form's footprint invisibly, unless this
+  // opening already has the form up (a Retry, a refetch), which stays put.
+  const liveBranchBody: BranchBody = showSkeleton
+    ? "skeleton"
+    : branchesPending && !formShown
+      ? "reserve"
+      : "form";
   useEffect(() => {
-    if (isOpen && !loading) {
-      setTimeout(() => newBranchInputRef.current?.focus(), 0);
-    }
-  }, [isOpen, loading, newBranchInputRef]);
+    if (!isOpen) return;
+    setLastBranchBody(liveBranchBody);
+    if (liveBranchBody === "form") setFormShown(true);
+  }, [isOpen, liveBranchBody]);
+  // Closing resets the gate and floor for the next opening while AppDialog is
+  // still fading this one out, so the body keeps what it last showed.
+  const branchBody = isOpen ? liveBranchBody : lastBranchBody;
+  // Pending, or not yet showing the form. While closed the body is frozen, so a
+  // Create still mounted for the fade stays held if it was held at the close.
+  const formNotReady = branchesPending || branchBody !== "form";
+
+  // Focus the new branch input once the form itself is mounted, not when the
+  // load settles under a skeleton the floor is still holding.
+  useEffect(() => {
+    if (!isOpen || formNotReady) return;
+    const timer = setTimeout(() => newBranchInputRef.current?.focus(), 0);
+    return () => clearTimeout(timer);
+  }, [isOpen, formNotReady, newBranchInputRef]);
 
   // --- Form dirty check and dismiss guard ---
   const formDirty = useMemo(() => {
@@ -773,6 +836,29 @@ export function NewWorktreeDialog({
   const [placement, setPlacement] = useState<PlacementCommit | null>(null);
   const placementHost = placement?.hostName ?? null;
   const placementElsewhere = placement !== null;
+  // A new cloud machine chosen: the worktree is created here, then opens on
+  // the machine made for it, so nothing that runs here (an environment, a
+  // layout, an agent) is started for it.
+  const [cloudMachine, setCloudMachine] = useState<CloudMachineCommit | null>(null);
+  const newMachine = cloudMachine !== null;
+  const setupOff = placementElsewhere || newMachine;
+
+  // A worktree made here in an environment can follow its box there: only
+  // from a window on this machine that reaches hosts over ssh. Whether the
+  // box gets a name is known only from its status once it's provisioned,
+  // whichever file or setting the environment came from. Another host or a
+  // new cloud machine leaves the environment unused, so there's no box to follow.
+  const machineHandoffOffered =
+    worktreeMode !== "local" &&
+    !setupOff &&
+    !!projectId &&
+    // A Retry's environment that's no longer listed has no row to show the choice in.
+    usableEnvironmentKeys(resourceEnvironments).includes(worktreeMode) &&
+    canOfferResourceBoxHandoff();
+  const openOnMachine = openOnMachineFor !== null && openOnMachineFor === worktreeMode;
+  // Leaving for the box, nothing starts here: an agent or a layout started
+  // now would run on this machine, not on the one the worktree opens on.
+  const openOnMachineChosen = machineHandoffOffered && openOnMachine;
 
   const selectedRecipeStartsAgent = selectedRecipe
     ? recipeTerminalsStartAgent(selectedRecipe.terminals)
@@ -781,19 +867,14 @@ export function NewWorktreeDialog({
   // of their own — judged from the same snapshot Create will clone, so the
   // conflict is said here rather than in a toast after the fact.
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
-  // A panel-store selector, so the warning follows the source layout while the
-  // dialog is up — a terminal opened or closed behind it changes what Create
-  // launches. The helper reads the same store state the selector is handed.
-  const cloneStartsAgent = usePanelStore(() => {
-    if (!isOpen || selectedRecipeId !== CLONE_LAYOUT_ID || !activeWorktreeId) return false;
-    try {
-      return recipeTerminalsStartAgent(
-        useRecipeStore.getState().generateRecipeFromActiveTerminals(activeWorktreeId)
-      );
-    } catch {
-      return false;
-    }
-  });
+  // Follows the source layout while the dialog is up — a terminal opened or
+  // closed behind it changes what Create launches. The dialog stays mounted
+  // while closed, so the subscription exists only while `active`: a store
+  // selector would run on every status flush of a streaming agent (#17053).
+  const cloneStartsAgent = useCloneStartsAgent(
+    isOpen && selectedRecipeId === CLONE_LAYOUT_ID && !!activeWorktreeId && !openOnMachineChosen,
+    activeWorktreeId
+  );
   // The layout's own agent wins, so the dialog's agent and its prompt never
   // launch. The draft is kept in case the layout changes back.
   const layoutStartsAgent = selectedRecipeStartsAgent || cloneStartsAgent;
@@ -802,7 +883,11 @@ export function NewWorktreeDialog({
   // The issue goes only where the dialog says it goes: with an agent this
   // window starts, which no layout agent displaces. Create reads the same gate.
   const issuePromptApplies =
-    selectedIssue !== null && firstAgent !== undefined && !promptBlocked && !placementElsewhere;
+    selectedIssue !== null &&
+    firstAgent !== undefined &&
+    !promptBlocked &&
+    !setupOff &&
+    !openOnMachineChosen;
   const issuePrompt = useIssuePromptContext({
     enabled: isOpen && includeIssue && issuePromptApplies,
     cwd: rootPath,
@@ -846,28 +931,36 @@ export function NewWorktreeDialog({
       ? selectedExistingBranch!
       : (resolvedBranchName ?? result.fullBranchName!);
 
+    // The machine as the form stands now; the create below takes seconds.
+    const snapCloudMachine = cloudMachine?.machine() ?? null;
+    if (cloudMachine && !snapCloudMachine) {
+      isCreatingRef.current = false;
+      return;
+    }
     const snapBranchMode = branchMode;
     const snapUseExisting = snapBranchMode === "existing";
     const snapFromRemote = fromRemote;
     const snapWorktreePath = worktreePath.trim();
-    const snapWorktreeMode = worktreeMode;
+    const snapWorktreeMode = snapCloudMachine ? "local" : worktreeMode;
+    const snapOpenOnMachine = openOnMachineChosen;
+    const snapProjectId = projectId;
     const snapIssue = selectedIssue;
-    const snapRecipeId = selectedRecipeId;
-    const snapSelectedRecipe = selectedRecipe;
+    const snapRecipeId = snapCloudMachine ? null : selectedRecipeId;
+    const snapSelectedRecipe = snapCloudMachine ? undefined : selectedRecipe;
     const snapInitialPR = initialPR;
     const snapBranches = branches;
     const snapAssignToSelf = assignWorktreeToSelf;
     const snapCurrentUser = currentUser;
     const snapCurrentUserAvatar = currentUserAvatar;
     const snapBaseBranch = baseBranch;
-    const snapFirstAgent = firstAgent;
+    const snapFirstAgent = snapCloudMachine ? undefined : firstAgent;
     // Captured now, not after the async create: the layout the agent warning
     // judged is the layout that gets cloned.
     const snapSourceWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
     let snapCloneTerminals: ReturnType<
       ReturnType<typeof useRecipeStore.getState>["generateRecipeFromActiveTerminals"]
     > | null = null;
-    if (snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
+    if (!snapOpenOnMachine && snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
       try {
         snapCloneTerminals = useRecipeStore
           .getState()
@@ -894,8 +987,9 @@ export function NewWorktreeDialog({
 
     // Picks become the project's remembered setup only when they create
     // something: a discarded dialog leaves the next one as this one opened.
-    // An untouched field keeps following whatever seeded it.
-    if (projectId) {
+    // An untouched field keeps following whatever seeded it, and one that
+    // was off because the worktree leaves for its machine wasn't used.
+    if (projectId && !snapCloudMachine && !snapOpenOnMachine) {
       if (errors.touchedFields.recipe) {
         setLastSelectedWorktreeRecipeIdByProject(projectId, snapRecipeId);
       }
@@ -905,7 +999,12 @@ export function NewWorktreeDialog({
     }
     // Only a choice the user could see and make: the option shows with an
     // issue and an agent.
-    if (snapFirstAgent && snapIssue && snapIncludeIssue !== includeIssueInFirstPrompt) {
+    if (
+      !snapOpenOnMachine &&
+      snapFirstAgent &&
+      snapIssue &&
+      snapIncludeIssue !== includeIssueInFirstPrompt
+    ) {
       setIncludeIssueInFirstPrompt(snapIncludeIssue);
     }
 
@@ -924,6 +1023,7 @@ export function NewWorktreeDialog({
         // The user's own words; a Retry reads the issue afresh.
         prompt: snapFirstPrompt,
         includeIssue: snapIncludeIssue,
+        ...(snapOpenOnMachine ? { openOnMachine: true } : {}),
       });
     }
 
@@ -931,7 +1031,7 @@ export function NewWorktreeDialog({
 
     // Reset locally-captured form state so the next dialog open starts clean.
     setBranchInput("");
-    setWorktreePath("");
+    setCustomWorktreePath("");
     setFromRemote(false);
 
     void (async () => {
@@ -950,18 +1050,7 @@ export function NewWorktreeDialog({
           useExistingBranch,
           provisionResource: snapWorktreeMode !== "local" || undefined,
           worktreeMode: snapWorktreeMode,
-          // #8888: when created from the PR dropdown, capture the source PR so
-          // the host seeds the worktree's linked PR (and closing issue) eagerly
-          // instead of waiting for branch-name polling to rediscover it.
-          ...(snapInitialPR
-            ? {
-                sourcePrNumber: snapInitialPR.number,
-                sourcePrTitle: snapInitialPR.title,
-                sourcePrUrl: snapInitialPR.url,
-                sourcePrState: normalizeSourcePrState(snapInitialPR.state),
-                sourcePrLinkedIssueNumber: extractClosingIssueNumber(snapInitialPR.body),
-              }
-            : {}),
+          ...(snapInitialPR ? buildSourcePrOptions(snapInitialPR) : {}),
         };
 
         const actionResult = await actionService.dispatch(
@@ -973,10 +1062,23 @@ export function NewWorktreeDialog({
           throw new Error(actionResult.error.message);
         }
 
-        const { worktreeId } = actionResult.result as { worktreeId: string; branch: string };
+        const { worktreeId, branch: createdBranch } = actionResult.result as {
+          worktreeId: string;
+          branch: string;
+        };
         useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
         useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
         linkProviderIssue(worktreeId, snapIssue);
+        // The worktree exists here now: the machine made for it is asked for next,
+        // and its card follows the machine from here on.
+        if (snapCloudMachine && projectId) {
+          void startCloudWorktreePlacement({
+            projectId,
+            worktreeId,
+            branch: createdBranch || fullBranchName,
+            machine: snapCloudMachine,
+          });
+        }
 
         // Skip when the selected issue already lists the current user as an
         // assignee: the assign call would be a no-op and the resulting Undo
@@ -1086,7 +1188,17 @@ export function NewWorktreeDialog({
         // handed back to the user rather than becoming a silent second one.
         let layoutAgentConflict: "recipe-has-agent" | "layout-has-agent" | null = null;
 
-        if (snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
+        if (snapOpenOnMachine) {
+          // Its own wait on setup and the box's status; it reports what
+          // becomes of the handoff itself, and never fails the create.
+          void openCreatedWorktreeOnMachine({
+            worktreeId,
+            projectId: snapProjectId,
+            environment: snapWorktreeMode,
+            // What the host made, which a name taken meanwhile can differ from.
+            label: createdBranch || fullBranchName,
+          });
+        } else if (snapRecipeId === CLONE_LAYOUT_ID && snapSourceWorktreeId) {
           const notifyCloneFailed = (cloneErr: unknown) => {
             const message = formatErrorMessage(cloneErr, "Couldn't clone layout");
             notify({
@@ -1188,7 +1300,7 @@ export function NewWorktreeDialog({
           }
         }
 
-        if (snapFirstAgent) {
+        if (snapFirstAgent && !snapOpenOnMachine) {
           const launch: FirstAgentLaunch = {
             agentId: snapFirstAgent.id,
             agentName: snapFirstAgent.name,
@@ -1253,12 +1365,11 @@ export function NewWorktreeDialog({
 
   const handleWorktreePathChange = useCallback(
     (value: string) => {
-      setWorktreePath(value);
-      pathTouchedRef.current = true;
+      setCustomWorktreePath(value);
       markTouched("worktreePath");
       clearErrors();
     },
-    [setWorktreePath, pathTouchedRef, markTouched, clearErrors]
+    [setCustomWorktreePath, markTouched, clearErrors]
   );
 
   const handleBrowseClick = useCallback(async () => {
@@ -1267,8 +1378,7 @@ export function NewWorktreeDialog({
         source: "user",
       });
       if (result.ok && result.result) {
-        setWorktreePath(result.result as string);
-        pathTouchedRef.current = true;
+        setCustomWorktreePath(result.result as string);
         markTouched("worktreePath");
         clearErrors();
       }
@@ -1277,7 +1387,7 @@ export function NewWorktreeDialog({
       const message = formatErrorMessage(err, "Failed to open directory picker");
       setValidationError(`Failed to open directory picker: ${message}`, "worktree-path");
     }
-  }, [setWorktreePath, pathTouchedRef, markTouched, clearErrors, setValidationError]);
+  }, [setCustomWorktreePath, markTouched, clearErrors, setValidationError]);
 
   // Another host runs only a team recipe, from its own copy of the repository:
   // a cloned layout or a recipe kept on this host is never sent (#14991).
@@ -1347,11 +1457,14 @@ export function NewWorktreeDialog({
 
   const placedRecipeId = placedRecipe?.id ?? null;
   // The form as it stands, for another host to create: validated here, so the
-  // same errors show on the same fields as a create on this host would.
+  // same errors show on the same fields as a create on this host would. The
+  // path is the exception: its field isn't shown for another host, and an
+  // empty one leaves the folder to that host's own pattern.
   const getPlacementDraft = (): PlacementDraft | null => {
     // Nothing another host can create yet that this one couldn't: the same
     // gates as local Create (a PR branch that didn't resolve, checks in flight).
     if (
+      formNotReady ||
       isCheckingBranch ||
       isGeneratingPath ||
       (initialPR !== null && initialPR !== undefined && prBranchResolved === false)
@@ -1364,6 +1477,7 @@ export function NewWorktreeDialog({
       branchInput,
       selectedExistingBranch,
       worktreePath,
+      requirePath: false,
     });
     if (!result.valid) {
       setValidationError(result.error!.message, result.error!.field);
@@ -1385,10 +1499,15 @@ export function NewWorktreeDialog({
     };
   };
   const placementPending = placement?.status === "pending";
+  // A Retry that was to open on its machine waits for the list that says
+  // whether it still can: submitted before, it would start its agent here.
+  const handoffAwaitingEnvironments = openOnMachineFor !== null && !environmentsLoaded;
   const submitDisabled =
     placementPending ||
+    handoffAwaitingEnvironments ||
     (placement?.unavailable ?? null) !== null ||
-    loading ||
+    (cloudMachine?.blocked ?? null) !== null ||
+    formNotReady ||
     isCheckingBranch ||
     isGeneratingPath ||
     (initialPR !== null && initialPR !== undefined && prBranchResolved === false);
@@ -1432,35 +1551,38 @@ export function NewWorktreeDialog({
   // line that used to sit under the branch input restating its own value.
   const prBranchUnavailable =
     initialPR !== null && initialPR !== undefined && prBranchResolved === false;
-  const outcomeSummary = loading ? (
-    <span className="truncate">Loading branches…</span>
-  ) : prBranchUnavailable ? (
-    // The base below is a fallback, not the PR's branch — echoing it as the
-    // outcome would promise a checkout this dialog can't make.
-    <span className="truncate">The pull request&apos;s branch isn&apos;t available</span>
-  ) : isExistingMode ? (
-    selectedExistingBranch ? (
-      <BranchSummary
-        branch={selectedExistingBranch}
-        icon={<GitBranch className="w-3 h-3 shrink-0" aria-hidden="true" />}
-      />
+  // "Loading branches…" is said with the skeleton, not before it: a load inside
+  // the gate says nothing.
+  const outcomeSummary =
+    branchBody === "skeleton" ? (
+      <span className="truncate">Loading branches…</span>
+    ) : formNotReady ? null : prBranchUnavailable ? (
+      // The base below is a fallback, not the PR's branch — echoing it as the
+      // outcome would promise a checkout this dialog can't make.
+      <span className="truncate">The pull request&apos;s branch isn&apos;t available</span>
+    ) : isExistingMode ? (
+      selectedExistingBranch ? (
+        <BranchSummary
+          branch={selectedExistingBranch}
+          icon={<GitBranch className="w-3 h-3 shrink-0" aria-hidden="true" />}
+        />
+      ) : (
+        <span className="truncate">Pick a branch to continue</span>
+      )
+    ) : parsedBranch.fullBranchName && baseBranch ? (
+      <BranchSummary base={baseBranch} branch={parsedBranch.fullBranchName} />
     ) : (
-      <span className="truncate">Pick a branch to continue</span>
-    )
-  ) : parsedBranch.fullBranchName && baseBranch ? (
-    <BranchSummary base={baseBranch} branch={parsedBranch.fullBranchName} />
-  ) : (
-    // Submit stays enabled on purpose — clicking it names what is missing,
-    // which beats a disabled button that explains nothing. This is what keeps
-    // the not-yet-ready state from looking identical to the ready one.
-    <span className="truncate">
-      {branchLoadError && !isExistingMode
-        ? "Branches didn't load, so there's no base to pick"
-        : parsedBranch.fullBranchName
-          ? "Pick a base branch to continue"
-          : "Name the branch to continue"}
-    </span>
-  );
+      // Submit stays enabled on purpose — clicking it names what is missing,
+      // which beats a disabled button that explains nothing. This is what keeps
+      // the not-yet-ready state from looking identical to the ready one.
+      <span className="truncate">
+        {branchLoadError && !isExistingMode
+          ? "Branches didn't load, so there's no base to pick"
+          : parsedBranch.fullBranchName
+            ? "Pick a base branch to continue"
+            : "Name the branch to continue"}
+      </span>
+    );
 
   // Another host chosen, the footer says what stops its primary, or what
   // became of the last attempt, before the branch it creates.
@@ -1476,6 +1598,10 @@ export function NewWorktreeDialog({
         <span className="truncate">
           {placement.hostName}: {placement.unavailable}
         </span>
+      ) : cloudMachine?.blocked != null ? (
+        <span className="truncate">{cloudMachine.blocked}</span>
+      ) : handoffAwaitingEnvironments ? (
+        <span className="truncate">Loading environments…</span>
       ) : footerBusy && (isCheckingBranch || isGeneratingPath) ? (
         <span className="truncate">
           {isCheckingBranch ? "Checking the branch name…" : "Generating the path…"}
@@ -1553,6 +1679,24 @@ export function NewWorktreeDialog({
   // Said once, above the first of the rows it turns off: the agent's when no
   // issue or environment row comes before the Recipe row.
   const placementSetupNoteFirst = showIssueRow || hasAnyEnvironments;
+  // A new machine keeps the issue (it's linked here), but nothing here runs for the worktree.
+  const machineSkips = [
+    hasAnyEnvironments ? "environment" : null,
+    showRecipeRow ? "recipe" : null,
+    "agent",
+    showPromptRow ? "prompt" : null,
+  ].filter((skip): skip is string => skip !== null);
+  const newMachineNote = cloudMachine !== null && (
+    <div className="col-span-2" data-testid="new-machine-setup-note">
+      <Callout severity="info">
+        <p>
+          The {setupList.format(machineSkips)} {machineSkips.length === 1 ? "is" : "are"} off for a
+          new machine. Your {machineSkips.length === 1 ? "choice is" : "choices are"} kept for{" "}
+          {cloudMachine.homeName}.
+        </p>
+      </Callout>
+    </div>
+  );
   const placementSetupNote = placementHost !== null && homeName !== null && (
     <div className="col-span-2" data-testid="placement-setup-note">
       <Callout severity="info">
@@ -1615,6 +1759,45 @@ export function NewWorktreeDialog({
     },
   ];
 
+  // Built from the same flags as the resolved form and rendered in the same
+  // FormGrid, so the branch list resolving swaps content in without moving
+  // anything. A fixed-shape skeleton would guess the section list wrong
+  // whenever Setup is empty or carries extra rows. Bones pulse at once: they
+  // only mount as a skeleton once the onset gate has already been waited out.
+  const branchPlaceholder = (
+    <FormGrid>
+      {skeletonSections.map((section) => (
+        <FormSection
+          key={section.title}
+          title={section.title}
+          note={section.title === "Setup" ? "Optional" : undefined}
+          // The real switch, inert: the header row keeps its height and
+          // the rule its length, so the Branch heading doesn't move.
+          action={
+            section.title === "Branch" &&
+            !initialPR && <BranchModeControl branchMode={branchMode} onChange={() => {}} disabled />
+          }
+        >
+          {section.rows.map((row, index) =>
+            row === null ? (
+              // h-4, not h-3: the resolved hint row is as tall as its 16px
+              // checkbox, and 12px here grew the row by 4px on resolve.
+              <SkeletonBone key={index} immediate className={cn(HINT_CELL, "h-4 w-44")} />
+            ) : (
+              <Fragment key={index}>
+                <span className="text-xs text-text-secondary">{row}</span>
+                <SkeletonBone
+                  immediate
+                  className={row === "Prompt" ? "h-[76px] w-full" : "h-8 w-full"}
+                />
+              </Fragment>
+            )
+          )}
+        </FormSection>
+      ))}
+    </FormGrid>
+  );
+
   return (
     <>
       <AppDialog
@@ -1622,6 +1805,9 @@ export function NewWorktreeDialog({
         onClose={onClose}
         onBeforeClose={handleBeforeClose}
         size="lg"
+        // The surface holds focus until the form is in, rather than a footer
+        // button taking it for the frames before the branch field mounts.
+        initialFocus={branchBody === "form" ? undefined : "surface"}
         data-testid="new-worktree-dialog"
       >
         <AppDialog.Header>
@@ -1635,47 +1821,20 @@ export function NewWorktreeDialog({
 
         <AppDialog.Body className="space-y-5">
           {initialPR && <PrHeader pr={initialPR} />}
-          {loading ? (
-            <Skeleton label="Loading branches">
-              {/* Built from the same flags as the resolved form and rendered in
-                the same FormGrid, so the branch list resolving swaps content in
-                without moving anything. A fixed-shape skeleton would guess the
-                section list wrong whenever Setup is empty or carries extra rows. */}
-              <FormGrid>
-                {skeletonSections.map((section) => (
-                  <FormSection
-                    key={section.title}
-                    title={section.title}
-                    note={section.title === "Setup" ? "Optional" : undefined}
-                    // The real switch, inert: the header row keeps its height and
-                    // the rule its length, so the Branch heading doesn't move.
-                    action={
-                      section.title === "Branch" &&
-                      !initialPR && (
-                        <BranchModeControl branchMode={branchMode} onChange={() => {}} disabled />
-                      )
-                    }
-                  >
-                    {section.rows.map((row, index) =>
-                      row === null ? (
-                        // h-4, not h-3: the resolved hint row is as tall as its 16px
-                        // checkbox, and 12px here grew the row by 4px on resolve.
-                        <SkeletonBone key={index} className={cn(HINT_CELL, "h-4 w-44")} />
-                      ) : (
-                        <Fragment key={index}>
-                          <span className="text-xs text-text-secondary">{row}</span>
-                          <SkeletonBone
-                            className={row === "Prompt" ? "h-[76px] w-full" : "h-8 w-full"}
-                          />
-                        </Fragment>
-                      )
-                    )}
-                  </FormSection>
-                ))}
-              </FormGrid>
-            </Skeleton>
+          {branchBody === "skeleton" ? (
+            <Skeleton label="Loading branches">{branchPlaceholder}</Skeleton>
+          ) : branchBody === "reserve" ? (
+            // Inside the onset gate nothing is drawn, but the form's footprint
+            // is held: the dialog has no fixed height, and opening short to
+            // grow when the branches land would move everything in it.
+            <div aria-hidden="true" inert className="invisible">
+              {branchPlaceholder}
+            </div>
           ) : (
-            <>
+            // A refetch keeps the form on screen through the onset gate, but
+            // out of reach: a field touched against the emptied list would
+            // stop the reloaded one from seeding the base.
+            <div className="space-y-5" inert={branchesPending || undefined}>
               <FormGrid>
                 <FormSection
                   title="Branch"
@@ -1788,6 +1947,7 @@ export function NewWorktreeDialog({
                     getDraft={getPlacementDraft}
                     onLeave={onClose}
                     onCommitChange={setPlacement}
+                    onCloudChange={setCloudMachine}
                   />
                   {placement ? (
                     // This machine's folder picker can't reach another host's
@@ -1839,6 +1999,7 @@ export function NewWorktreeDialog({
 
                 <FormSection title="Setup" note="Optional">
                   {placementSetupNoteFirst && placementSetupNote}
+                  {newMachineNote}
 
                   {showIssueRow && (
                     <FormRow
@@ -1871,7 +2032,20 @@ export function NewWorktreeDialog({
                       selfLabelled
                       hint={
                         worktreeMode !== "local" &&
-                        !placementElsewhere && <EnvironmentHint worktreeMode={worktreeMode} />
+                        !setupOff && (
+                          <div className="flex min-w-0 flex-col gap-1.5">
+                            <EnvironmentHint worktreeMode={worktreeMode} />
+                            {machineHandoffOffered && (
+                              <OpenOnMachineToggle
+                                worktreeMode={worktreeMode}
+                                checked={openOnMachine}
+                                onCheckedChange={(checked) =>
+                                  setOpenOnMachineFor(checked ? worktreeMode : null)
+                                }
+                              />
+                            )}
+                          </div>
+                        )
                       }
                     >
                       <EnvironmentRadioGroup
@@ -1880,11 +2054,9 @@ export function NewWorktreeDialog({
                         resourceEnvironments={resourceEnvironments}
                         hasAnyEnvironments={hasAnyEnvironments}
                         describedBy={
-                          worktreeMode !== "local" && !placementElsewhere
-                            ? "environment-hint"
-                            : undefined
+                          worktreeMode !== "local" && !setupOff ? "environment-hint" : undefined
                         }
-                        disabled={placementElsewhere}
+                        disabled={setupOff}
                       />
                     </FormRow>
                   )}
@@ -1916,6 +2088,7 @@ export function NewWorktreeDialog({
                         onMarkTouched={() => {
                           if (!placementElsewhere) markTouched("recipe");
                         }}
+                        disabled={newMachine || openOnMachineChosen}
                         listId="recipe-selector"
                         describedBy={placedRecipeNote ? placedRecipeNoteId : undefined}
                         unavailableReason={recipeUnavailableReason}
@@ -1930,7 +2103,8 @@ export function NewWorktreeDialog({
                     htmlFor="first-agent-selector-trigger"
                     hint={
                       promptBlocked &&
-                      !placementElsewhere && (
+                      !setupOff &&
+                      !openOnMachineChosen && (
                         <p
                           id="first-agent-conflict"
                           className="text-xs text-balance text-text-secondary"
@@ -1952,9 +2126,11 @@ export function NewWorktreeDialog({
                       onSelectAgent={handleFirstAgentSelect}
                       listId="first-agent-selector"
                       describedBy={
-                        promptBlocked && !placementElsewhere ? "first-agent-conflict" : undefined
+                        promptBlocked && !setupOff && !openOnMachineChosen
+                          ? "first-agent-conflict"
+                          : undefined
                       }
-                      disabled={placementElsewhere}
+                      disabled={setupOff || openOnMachineChosen}
                     />
                   </FormRow>
 
@@ -1970,7 +2146,7 @@ export function NewWorktreeDialog({
                             issueRef={issuePromptRef(selectedIssue)}
                             checked={includeIssue}
                             onCheckedChange={handleIncludeIssueChange}
-                            disabled={promptBlocked || placementElsewhere}
+                            disabled={promptBlocked || setupOff || openOnMachineChosen}
                             state={issuePrompt.state}
                             onRetry={issuePrompt.retry}
                           />
@@ -1984,9 +2160,11 @@ export function NewWorktreeDialog({
                         value={firstPrompt}
                         onChange={(e) => setFirstPrompt(e.target.value)}
                         placeholder="First task for the agent (optional)"
-                        disabled={promptBlocked || placementElsewhere}
+                        disabled={promptBlocked || setupOff || openOnMachineChosen}
                         aria-describedby={
-                          promptBlocked && !placementElsewhere ? "first-agent-conflict" : undefined
+                          promptBlocked && !setupOff && !openOnMachineChosen
+                            ? "first-agent-conflict"
+                            : undefined
                         }
                       />
                     </FormRow>
@@ -2022,7 +2200,7 @@ export function NewWorktreeDialog({
                   <p>{errors.validationError}</p>
                 </Callout>
               )}
-            </>
+            </div>
           )}
         </AppDialog.Body>
 
@@ -2047,6 +2225,12 @@ export function NewWorktreeDialog({
                 <span className={cn("truncate", longPlacementHost ? "max-w-96" : "max-w-60")}>
                   {initialPR ? "Check out on" : "Create on"} {placement.hostName}
                 </span>
+              ) : newMachine ? (
+                initialPR ? (
+                  "Check out on new machine"
+                ) : (
+                  "Create on new machine"
+                )
               ) : initialPR ? (
                 "Check out"
               ) : (

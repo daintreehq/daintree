@@ -41,7 +41,7 @@ export function rememberStagingStatus(
     if (oldest !== undefined) cache.delete(oldest);
   }
   // Every accepted read is an observation of the worktree's staging sections,
-  // whoever asked for it, so Viewed marks on rows it shows changed lapse here.
+  // whoever asked for it, so Viewed marks on files it no longer lists lapse here.
   useDiffViewedStore.getState().reconcileViewed(worktreePath);
 }
 

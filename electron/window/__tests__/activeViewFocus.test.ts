@@ -41,7 +41,7 @@ function createScene() {
   const makeView = () => ({ webContents: makeWc() });
   const shell = makeWc();
   const projectView = makeView();
-  const portalView = makeView();
+  const siblingView = makeView();
   const surfaceView = makeView();
 
   const win = Object.assign(new EventEmitter(), {
@@ -49,7 +49,7 @@ function createScene() {
     destroyed: false,
     shell,
     contentView: {
-      children: [projectView, portalView, surfaceView] as FakeWindow["contentView"]["children"],
+      children: [projectView, siblingView, surfaceView] as FakeWindow["contentView"]["children"],
     },
     isFocused: () => win.active && !win.destroyed,
     isDestroyed: () => win.destroyed,
@@ -69,7 +69,7 @@ function createScene() {
     win.emit("blur");
   };
 
-  return { win, shell, projectView, portalView, surfaceView, makeView, activate, deactivate };
+  return { win, shell, projectView, siblingView, surfaceView, makeView, activate, deactivate };
 }
 
 const asWindow = (win: FakeWindow) => win as unknown as BrowserWindow;
@@ -90,17 +90,17 @@ describe("attachActiveViewFocus", () => {
     expect(shell.isFocused()).toBe(false);
   });
 
-  it("leaves focus with a browser panel that Chromium restored after the focus event", async () => {
-    const { win, projectView, portalView, activate } = createScene();
+  it("leaves focus with a sibling view that Chromium restored after the focus event", async () => {
+    const { win, projectView, siblingView, activate } = createScene();
     attachActiveViewFocus(asWindow(win), { getActiveView: () => asView(projectView) });
 
     activate();
     // Chromium hands the stored child focus back after the event has fired.
-    portalView.webContents.focus();
+    siblingView.webContents.focus();
 
     await flushImmediates();
     expect(projectView.webContents.focus).not.toHaveBeenCalled();
-    expect(portalView.webContents.isFocused()).toBe(true);
+    expect(siblingView.webContents.isFocused()).toBe(true);
   });
 
   it("never focuses a window revealed inactive, since focusing a view activates its window", async () => {
@@ -230,11 +230,11 @@ describe("focusActiveViewIfUnfocused", () => {
   });
 
   it("ignores destroyed and non-web children when looking for existing focus", () => {
-    const { win, projectView, portalView } = createScene();
+    const { win, projectView, siblingView } = createScene();
     win.active = true;
-    portalView.webContents.focused = true;
-    portalView.webContents.destroyed = true;
-    win.contentView.children = [{}, projectView, portalView];
+    siblingView.webContents.focused = true;
+    siblingView.webContents.destroyed = true;
+    win.contentView.children = [{}, projectView, siblingView];
 
     const focused = focusActiveViewIfUnfocused(asWindow(win), {
       getActiveView: () => asView(projectView),

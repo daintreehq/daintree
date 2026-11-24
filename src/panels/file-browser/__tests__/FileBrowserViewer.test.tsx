@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
 import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
+import type { DiffFontSize } from "@/store/preferencesStore";
+import { diffFontStyle } from "@/components/Worktree/diffFontSize";
 
 // FileBrowserViewer is the read-only preview beside the tree. #11319 added a
 // Source/Rendered toggle for markdown and #12205 extended it to HTML, mirroring
@@ -50,9 +52,17 @@ vi.mock("@/components/Markdown/MarkdownViewer", () => ({
 }));
 // The reading size is one app-level preference shared with the file panel; this
 // suite owns the toolbar gate and the forwarding, not the store's persistence.
-const { setMarkdownFontSizeMock, setDiffWrapLinesMock } = vi.hoisted(() => ({
-  setMarkdownFontSizeMock: vi.fn(),
-  setDiffWrapLinesMock: vi.fn(),
+const { setMarkdownFontSizeMock, setDiffWrapLinesMock, setMarkdownWrapLinesMock } = vi.hoisted(
+  () => ({
+    setMarkdownFontSizeMock: vi.fn(),
+    setDiffWrapLinesMock: vi.fn(),
+    setMarkdownWrapLinesMock: vi.fn(),
+  })
+);
+// Mutable so a test can seed the values it asserts are forwarded.
+const viewerPreferences = vi.hoisted(() => ({
+  markdownWrapLines: false,
+  diffFontSize: "m" as DiffFontSize,
 }));
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
@@ -62,6 +72,9 @@ vi.mock("@/store/preferencesStore", () => ({
       diffViewType: "unified",
       diffWrapLines: null,
       setDiffWrapLines: setDiffWrapLinesMock,
+      diffFontSize: viewerPreferences.diffFontSize,
+      markdownWrapLines: viewerPreferences.markdownWrapLines,
+      setMarkdownWrapLines: setMarkdownWrapLinesMock,
     }),
 }));
 // Diff mode (#13195). The hook is the seam: what this suite owns is the subject
@@ -129,6 +142,17 @@ vi.mock("@/components/FileViewer/CodeViewer", () => ({
       );
     }
   ),
+}));
+// The built-in viewer's host (#17336): the props it is mounted with are the
+// seam; the hosted view and the document behind it have tests of their own.
+const { viewerHostProps } = vi.hoisted(() => ({
+  viewerHostProps: [] as Array<Record<string, unknown>>,
+}));
+vi.mock("@/panels/file/PluginFileEditorHost", () => ({
+  default: (props: Record<string, unknown>) => {
+    viewerHostProps.push(props);
+    return <div data-testid="plugin-viewer-host" />;
+  },
 }));
 vi.mock("@/components/Html/HtmlViewer", () => ({
   HtmlViewer: (props: { previewUrl: string | null }) => (
@@ -254,7 +278,14 @@ import {
   __resetBuiltinRendererRegistryForTests,
 } from "@/registry/builtinRendererRegistry";
 import { usePluginRuntimeStore, _resetPluginRuntimeStoreForTest } from "@/store/pluginRuntimeStore";
+import {
+  usePluginHostedViewsStore,
+  _resetPluginHostedViewsStoreForTest,
+} from "@/store/pluginHostedViewsStore";
+import { useFileEditorChoicesStore } from "@/store/fileEditorChoicesStore";
+import type { PluginHostedViewDescriptor } from "@shared/types/plugin";
 import { useFileDocumentStore } from "@/store/fileDocumentStore";
+import { useFileBrowserDraftReviewStore } from "@/store/fileBrowserDraftReviewStore";
 import { FileBrowserViewer } from "../FileBrowserViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -278,6 +309,7 @@ import type { FolderListingStatus } from "../useFileBrowserTree";
 
 interface ViewerOpts {
   isFocused?: boolean;
+  rootPath?: string;
   editorContext?: { projectId: string; worktreePath: string | null; isFocused: boolean };
   panelId?: string;
   sidebarCollapsed?: boolean;
@@ -349,7 +381,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         panelId={opts.panelId ?? "panel-1"}
         isFocused={opts.isFocused}
         filePath={filePath}
-        rootPath="/repo"
+        rootPath={opts.rootPath ?? "/repo"}
         fileName={fileName}
         relativePath={
           opts.relativePath !== undefined ? opts.relativePath : filePath ? fileName : null
@@ -439,6 +471,9 @@ beforeEach(() => {
   readMock.mockResolvedValue({ content: "# hello" });
   setMarkdownFontSizeMock.mockReset();
   setDiffWrapLinesMock.mockReset();
+  setMarkdownWrapLinesMock.mockReset();
+  viewerPreferences.markdownWrapLines = false;
+  viewerPreferences.diffFontSize = "m";
   useDiffContentMock.mockReset();
   useDiffContentMock.mockReturnValue({ content: undefined, stale: false, retry: vi.fn() });
   dispatchMock.mockReset();
@@ -514,6 +549,35 @@ describe("FileBrowserViewer Source/Rendered toggle (#11319, #12205)", () => {
     rerender(viewerJsx("/repo/src/notes.txt", { isFocused: true }));
     window.dispatchEvent(new Event("daintree:find-in-panel"));
     expect(openSearchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // #16877: a modal over the panel holds the keyboard, so the focused panel
+  // under it keeps its find bar shut while the one in the modal opens.
+  it("leaves the find bar shut while a modal that doesn't hold the panel has the keys", async () => {
+    openSearchMock.mockClear();
+    const { container } = renderViewer("/repo/src/notes.txt", { isFocused: true });
+    await screen.findByTestId("code-viewer-mock");
+
+    const outside = document.createElement("div");
+    outside.setAttribute("role", "dialog");
+    outside.setAttribute("aria-modal", "true");
+    const button = document.createElement("button");
+    outside.appendChild(button);
+    document.body.appendChild(outside);
+    try {
+      button.focus();
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      expect(openSearchMock).not.toHaveBeenCalled();
+
+      // The same panel hosted inside the modal answers.
+      outside.appendChild(container);
+      button.focus();
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      expect(openSearchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      document.body.appendChild(container);
+      outside.remove();
+    }
   });
 
   // #16642: Markdown opens rendered, and Cmd+F there used to reach no viewer at
@@ -1521,6 +1585,22 @@ describe("FileBrowserViewer Diff mode (#13195)", () => {
 
     expect(setDiffWrapLinesMock).toHaveBeenCalledWith(true);
   });
+
+  it.each<DiffFontSize>(["s", "l"])(
+    "sizes the diff by the shared diffFontSize preference, as the diff panel does (%s, #16917)",
+    async (size) => {
+      viewerPreferences.diffFontSize = size;
+      readMock.mockResolvedValue({ content: "const a = 1;" });
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      renderViewer("/repo/app.ts", { changedFiles: [change("app.ts")] });
+
+      await clickMode("Diff");
+
+      expect(
+        screen.getByTestId("file-browser-diff").style.getPropertyValue("--diff-font-size")
+      ).toBe(diffFontStyle(size)["--diff-font-size"]);
+    }
+  );
 });
 
 describe("folder-selected state (#11620)", () => {
@@ -1931,6 +2011,104 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
   });
 
+  describe("Review draft (#17197)", () => {
+    afterEach(() => {
+      useFileBrowserDraftReviewStore.setState({ byPanelId: {} });
+    });
+
+    function requestReview(panelId: string, path: string) {
+      act(() => useFileBrowserDraftReviewStore.getState().requestReview(panelId, path));
+    }
+
+    function editChecked(): string | null {
+      return screen.getByRole("radio", { name: "Edit" }).getAttribute("aria-checked");
+    }
+
+    it("opens the draft's file in Edit when the request is waiting at mount", async () => {
+      enabled = true;
+      requestReview("panel-1", "notes.md");
+
+      renderViewer("/repo/notes.md", { editorContext: context });
+
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+      expect(editChecked()).toBe("true");
+      // Taken up once: it is the reader's own Edit choice from here on.
+      await waitFor(() =>
+        expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-1"]).toBeUndefined()
+      );
+      fireEvent.click(screen.getByRole("radio", { name: "Rendered" }));
+      expect(screen.queryByTestId("plugin-editor")).toBeNull();
+      expect(currentViewMode()).toBe("rendered");
+    });
+
+    it("opens Edit for the panel a reused viewer switches to, over the reset to defaults", async () => {
+      // A tab group renders one unkeyed viewer for whichever tab is active, and
+      // the switch resets the mode to the file's default.
+      enabled = true;
+      const viewer = renderViewer("/repo/notes.md", {
+        editorContext: context,
+        panelId: "panel-a",
+      });
+      await screen.findByTestId("markdown-viewer-mock");
+      // A choice made in panel A that the switch must drop, not carry.
+      await clickMode("Source");
+      expect(currentViewMode()).toBe("source");
+
+      requestReview("panel-b", "notes.md");
+      viewer.rerender(viewerJsx("/repo/notes.md", { editorContext: context, panelId: "panel-b" }));
+
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+      expect(editorProps.at(-1)).toMatchObject({ panelId: "panel-b" });
+      // Still Edit once the request is settled into the viewer's own state.
+      await waitFor(() =>
+        expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-b"]).toBeUndefined()
+      );
+      expect(editChecked()).toBe("true");
+    });
+
+    it("leaves another panel's request alone", async () => {
+      enabled = true;
+      requestReview("panel-b", "notes.md");
+      const waiting = useFileBrowserDraftReviewStore.getState().byPanelId["panel-b"];
+
+      renderViewer("/repo/notes.md", { editorContext: context, panelId: "panel-a" });
+
+      await screen.findByTestId("markdown-viewer-mock");
+      expect(screen.queryByTestId("plugin-editor")).toBeNull();
+      expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-b"]).toBe(waiting);
+    });
+
+    it("keeps the request while a filter holds the draft's file out of the viewer", async () => {
+      // The pane still names the selection, but a hiding filter leaves the
+      // viewer with nothing to show; taking the request up there would spend
+      // it on a body with no editor.
+      enabled = true;
+      requestReview("panel-1", "notes.md");
+      const waiting = useFileBrowserDraftReviewStore.getState().byPanelId["panel-1"];
+
+      const viewer = renderViewer(null, { editorContext: context, relativePath: "notes.md" });
+
+      await act(async () => {});
+      expect(useFileBrowserDraftReviewStore.getState().byPanelId["panel-1"]).toBe(waiting);
+      viewer.rerender(viewerJsx("/repo/notes.md", { editorContext: context }));
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    });
+
+    it("waits while the viewer shows a different file than the draft's", async () => {
+      enabled = true;
+      requestReview("panel-1", "docs/notes.md");
+
+      const viewer = renderViewer("/repo/other.md", { editorContext: context });
+
+      await screen.findByTestId("markdown-viewer-mock");
+      expect(screen.queryByTestId("plugin-editor")).toBeNull();
+      viewer.rerender(
+        viewerJsx("/repo/docs/notes.md", { editorContext: context, relativePath: "docs/notes.md" })
+      );
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+    });
+  });
+
   it("hands focus to the Rendered segment, not the first one, when leaving Edit for Rendered", async () => {
     enabled = true;
     renderViewer("/repo/notes.md", { editorContext: context });
@@ -1943,12 +2121,57 @@ describe("plugin-contributed editing in the file browser", () => {
     expect(document.activeElement).toBe(rendered);
   });
 
+  // The editor is handed the Source view's wrap preference, so Edit carries the
+  // same toggle FilePane's Edit does (#16917).
+  it.each([true, false])(
+    "offers the wrap toggle in Edit, on the preference the editor is handed (wrap %s)",
+    async (wrapLines) => {
+      enabled = true;
+      viewerPreferences.markdownWrapLines = wrapLines;
+      renderViewer("/repo/notes.md", { editorContext: context });
+      fireEvent.click(await screen.findByRole("radio", { name: "Edit" }));
+      expect(await screen.findByTestId("plugin-editor")).toBeTruthy();
+      expect(editorProps.at(-1)).toMatchObject({ wrapLines });
+
+      const wrap = screen.getByRole("button", { name: "Wrap long lines" });
+      expect(wrap.getAttribute("aria-pressed")).toBe(String(wrapLines));
+      fireEvent.click(wrap);
+
+      expect(setMarkdownWrapLinesMock).toHaveBeenCalledWith(!wrapLines);
+    }
+  );
+
   it("offers Edit without a hint when the plugin is already enabled", async () => {
     enabled = true;
     renderViewer("/repo/notes.md", { editorContext: context });
     expect(await screen.findByRole("radio", { name: "Edit" })).toBeTruthy();
     expect(screen.queryByTestId("file-editor-hint")).toBeNull();
     expect(enable).not.toHaveBeenCalled();
+  });
+
+  it("judges the editor's byte ceiling by the bytes the read reported", async () => {
+    enabled = true;
+    __resetFileEditorRegistryForTests();
+    registerFileEditor({
+      id: "markdown",
+      pluginId,
+      slot: "test.editor",
+      extensions: ["md"],
+      maxBytes: 4,
+    });
+    // Three characters, but more bytes on disk than the editor takes.
+    readMock.mockResolvedValue({ content: "abc", byteLength: 5 });
+    const over = renderViewer("/repo/notes.md", { editorContext: context });
+    await waitFor(() =>
+      expect(usePluginRuntimeStore.getState().pluginMetaById.has(pluginId)).toBe(true)
+    );
+    expect(await screen.findByRole("radio", { name: "Source" })).toBeTruthy();
+    expect(screen.queryByRole("radio", { name: "Edit" })).toBeNull();
+    over.unmount();
+
+    readMock.mockResolvedValue({ content: "# long decoded text\n", byteLength: 4 });
+    renderViewer("/repo/notes.md", { editorContext: context });
+    expect(await screen.findByRole("radio", { name: "Edit" })).toBeTruthy();
   });
 
   it("removes the hint when the plugin is enabled from Preferences", async () => {
@@ -2385,7 +2608,8 @@ describe("file menu on the viewer's content (#13423)", () => {
         isDirectory: false,
         status: "added",
       },
-      expect.objectContaining({ hasChanges: true })
+      // `Open file` would open a dialog onto the file this viewer is showing.
+      expect.objectContaining({ hasChanges: true, showOpenFile: false })
     );
   });
 
@@ -2521,5 +2745,181 @@ describe("Copy host path in a remote window (#15722)", () => {
       { path: "/repo/src/notes.txt" },
       { source: "user" }
     );
+  });
+});
+
+describe("a built-in viewer in the file browser (#17336)", () => {
+  const context = { projectId: "project-1", worktreePath: "/repo", isFocused: true };
+  let bridge: PropertyDescriptor | undefined;
+
+  function viewerView(pluginId: string, builtin: boolean): PluginHostedViewDescriptor {
+    return {
+      ...(builtin && { builtin: true }),
+      id: `plugin-view:${pluginId}/table`,
+      pluginId,
+      viewId: "table",
+      name: `${pluginId} fileEditor`,
+      componentPath: `plugin://${pluginId}/table.js`,
+      location: "fileEditor",
+      fileEditors: [
+        { id: "table", mode: "view", extensions: ["csv"], paths: [], maxBytes: 2 * 1024 * 1024 },
+      ],
+    };
+  }
+
+  function seedPlugins(plugins: Array<{ id: string; name: string; builtin: boolean }>) {
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: {
+        plugin: {
+          list: async () =>
+            plugins.map((plugin) => ({
+              instanceId: plugin.id,
+              disabled: false,
+              devMode: false,
+              isBuiltin: plugin.builtin,
+              manifest: { name: plugin.id, displayName: plugin.name },
+            })),
+          onProvenanceChanged: () => () => {},
+        },
+      },
+    });
+    usePluginHostedViewsStore.setState({
+      views: plugins.map((plugin) => viewerView(plugin.id, plugin.builtin)),
+    });
+  }
+
+  beforeEach(() => {
+    bridge = Object.getOwnPropertyDescriptor(window, "electron");
+    _resetPluginRuntimeStoreForTest();
+    useFileEditorChoicesStore.setState({ choices: {}, loaded: true });
+    viewerHostProps.length = 0;
+    readMock.mockResolvedValue({ content: "id,name\n1,Ada\n", byteLength: 15 });
+  });
+
+  afterEach(() => {
+    _resetPluginRuntimeStoreForTest();
+    _resetPluginHostedViewsStoreForTest();
+    useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+    if (bridge) Object.defineProperty(window, "electron", bridge);
+    else Reflect.deleteProperty(window, "electron");
+  });
+
+  it("opens a CSV in the built-in table, with Source one click away", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    renderViewer("/repo/users.csv", { editorContext: context });
+
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+    expect(viewerHostProps.at(-1)).toMatchObject({
+      panelId: "panel-1",
+      projectId: "project-1",
+      filePath: "/repo/users.csv",
+      rootPath: "/repo",
+    });
+    expect(screen.getByRole("radio", { name: "Rendered · CSV viewer" })).toBeTruthy();
+
+    await clickMode("Source");
+    expect(screen.queryByTestId("plugin-viewer-host")).toBeNull();
+    expect(screen.getByTestId("code-viewer-mock")).toBeTruthy();
+  });
+
+  it("offers no installed plugin's viewer", async () => {
+    seedPlugins([{ id: "acme.csv", name: "Acme CSV", builtin: false }]);
+    renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    await act(async () => {});
+    expect(screen.queryByRole("radio", { name: /Rendered/ })).toBeNull();
+    expect(viewerHostProps).toHaveLength(0);
+  });
+
+  it("offers the built-in viewer only inside a governed root", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    viewer.rerender(viewerJsx("/repo/users.csv"));
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    expect(screen.queryByTestId("plugin-viewer-host")).toBeNull();
+    expect(screen.queryByRole("radio", { name: /Rendered/ })).toBeNull();
+  });
+
+  it("never hands the next file the last file's size", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/small.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    let refuse: (error: unknown) => void = () => {};
+    readMock.mockReturnValueOnce(new Promise((_resolve, reject) => (refuse = reject)));
+    viewer.rerender(viewerJsx("/repo/big.csv", { editorContext: context }));
+    await act(async () => {});
+    expect(viewerHostProps.some((props) => props.filePath === "/repo/big.csv")).toBe(false);
+
+    await act(async () =>
+      refuse(
+        new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+          code: "FILE_TOO_LARGE",
+          sizeBytes: 3 * 1024 * 1024,
+        })
+      )
+    );
+    expect(await screen.findByTestId("file-browser-unavailable")).toBeTruthy();
+    expect(viewerHostProps.some((props) => props.filePath === "/repo/big.csv")).toBe(false);
+  });
+
+  it("never reuses a file's size when the browser comes back to it", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+    viewer.rerender(viewerJsx("/repo/photo.png", { editorContext: context }));
+    await act(async () => {});
+    viewerHostProps.length = 0;
+
+    readMock.mockReturnValueOnce(new Promise(() => {}));
+    viewer.rerender(viewerJsx("/repo/users.csv", { editorContext: context }));
+    await act(async () => {});
+    expect(viewerHostProps).toHaveLength(0);
+  });
+
+  it("never reuses a file's size across a change of root and back", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    const viewer = renderViewer("/repo/sub/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    readMock.mockReturnValue(new Promise(() => {}));
+    viewer.rerender(
+      viewerJsx("/repo/sub/users.csv", { editorContext: context, rootPath: "/repo/sub" })
+    );
+    await act(async () => {});
+    viewerHostProps.length = 0;
+    viewer.rerender(viewerJsx("/repo/sub/users.csv", { editorContext: context }));
+    await act(async () => {});
+    expect(viewerHostProps).toHaveLength(0);
+  });
+
+  it("shows a CSV too large for Source in the table, and Source points at it", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    readMock.mockRejectedValue(
+      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+        code: "FILE_TOO_LARGE",
+        sizeBytes: 1024 * 1024,
+      })
+    );
+    renderViewer("/repo/users.csv", { editorContext: context });
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+
+    await clickMode("Source");
+    const unavailable = await screen.findByTestId("file-browser-unavailable");
+    expect(unavailable.textContent).toContain("Too large for Source");
+    fireEvent.click(screen.getByRole("button", { name: "Show in Rendered" }));
+    expect(await screen.findByTestId("plugin-viewer-host")).toBeTruthy();
+  });
+
+  it("keeps Source for a CSV the read found isn't UTF-8", async () => {
+    seedPlugins([{ id: "daintree.csv-viewer", name: "CSV viewer", builtin: true }]);
+    readMock.mockResolvedValue({ content: "caf\ufffd\n", byteLength: 5, encoding: "invalid" });
+    renderViewer("/repo/legacy.csv", { editorContext: context });
+    expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+    await act(async () => {});
+    expect(viewerHostProps).toHaveLength(0);
   });
 });

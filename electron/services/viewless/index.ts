@@ -235,14 +235,13 @@ export async function createScheduledRunWorktreeLive(
 export async function restartTerminalWithoutViewLive(
   projectId: string,
   terminalId: string,
-  isCurrent: () => boolean,
-  beforeChange?: () => void
+  guards: import("./viewlessTerminalRestart.js").ViewlessRestartGuards
 ): Promise<import("./viewlessTerminalRestart.js").ViewlessRestartOutcome> {
   const [{ restartTerminalWithoutView }, deps] = await Promise.all([
     import("./viewlessTerminalRestart.js"),
     loadLiveDeps(),
   ]);
-  return restartTerminalWithoutView(projectId, terminalId, deps, isCurrent, beforeChange);
+  return restartTerminalWithoutView(projectId, terminalId, deps, guards);
 }
 
 /** The workspace identity a viewless result is stamped with, when it is a project. */

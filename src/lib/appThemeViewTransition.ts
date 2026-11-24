@@ -24,6 +24,29 @@ export function prefersReducedMotion(): boolean {
   );
 }
 
+const REDUCED_MOTION_BODY_ATTRIBUTES = ["data-reduce-animations", "data-performance-mode"];
+
+/**
+ * Calls `listener` whenever any input to {@link prefersReducedMotion} may have
+ * changed, so a loop that stops itself under reduced motion knows when to
+ * start again. The listener re-reads the predicate; a call is not a promise
+ * that the answer flipped. Returns an unsubscribe.
+ */
+export function subscribeReducedMotion(listener: () => void): () => void {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => {};
+  const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+  query.addEventListener("change", listener);
+  const observer = new MutationObserver(listener);
+  observer.observe(document.body, {
+    attributes: true,
+    attributeFilter: REDUCED_MOTION_BODY_ATTRIBUTES,
+  });
+  return () => {
+    query.removeEventListener("change", listener);
+    observer.disconnect();
+  };
+}
+
 function canRunThemeTransition(
   doc: ViewTransitionDocument | null
 ): doc is TransitionCapableDocument {

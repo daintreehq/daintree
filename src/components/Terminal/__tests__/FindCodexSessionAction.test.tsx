@@ -159,6 +159,32 @@ describe("FindCodexSessionAction", () => {
     );
   });
 
+  it("keeps a busy refresh glyph at full ink when motion is off and the spin can't show", async () => {
+    document.body.dataset.performanceMode = "true";
+    try {
+      findSessions.mockResolvedValueOnce(
+        ok([{ id: "sess-1", preview: "fix the flaky test", updatedAt: 1_700_000_000_000 }])
+      );
+      seed(panel("t-1"));
+
+      render(<FindCodexSessionAction panelId="t-1" />);
+      fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+      await screen.findByText("fix the flaky test");
+      const refresh = screen.getByRole("button", { name: "Refresh sessions" });
+      const glyph = () => refresh.querySelector("svg")!.getAttribute("class");
+      const atRest = glyph();
+
+      findSessions.mockReturnValueOnce(new Promise(() => {}));
+      fireEvent.click(refresh);
+      await waitFor(() => expect(refresh.getAttribute("aria-disabled")).toBe("true"));
+
+      // Busy never dims: a stepped-down glyph falls under the icon contrast floor.
+      expect(glyph()).toBe(atRest);
+    } finally {
+      delete document.body.dataset.performanceMode;
+    }
+  });
+
   it("shows an empty state when the folder has no sessions", async () => {
     findSessions.mockResolvedValue(ok([]));
     seed(panel("t-1"));

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 
 const ipcMainMock = vi.hoisted(() => {
@@ -30,6 +30,7 @@ const windowRefMock = vi.hoisted(() => ({
 const registryMock = vi.hoisted(() => ({
   getWebContentsForProject: vi.fn((_projectId: string): unknown[] => []),
   isCachedViewWebContents: vi.fn((_id: number): boolean => false),
+  getProjectForWebContents: vi.fn((_id: number): string | null => null),
 }));
 
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
@@ -40,17 +41,19 @@ vi.mock("../../../window/windowRef.js", () => ({
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getWebContentsForProject: registryMock.getWebContentsForProject,
   isCachedViewWebContents: registryMock.isCachedViewWebContents,
+  getProjectForWebContents: registryMock.getProjectForWebContents,
 }));
 
-// The dispatcher thaws a (possibly CDP-frozen) view before sending (#13119).
-// The fakes have no debugger, so the thaw is mocked; each test that inspects a
-// dispatch send drains it first.
+// The dispatcher thaws a CDP-frozen view before sending (#13119). The fakes
+// have no debugger, so the thaw is mocked and every fake counts as frozen; each
+// test that inspects a dispatch send drains it first.
 vi.mock("../../../utils/webContentsLifecycle.js", () => ({
+  isWebContentsFrozen: vi.fn(() => true),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { PluginRendererDispatcher, projectAgentPanes } from "../PluginRendererDispatcher.js";
-import { unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
+import { isWebContentsFrozen, unfreezeWebContents } from "../../../utils/webContentsLifecycle.js";
 
 /** Let a dispatch's awaited thaw settle so its send has run. */
 async function flushThaw(): Promise<void> {
@@ -432,6 +435,18 @@ describe("PluginRendererDispatcher", () => {
       d.dispose();
     });
 
+    it("sends to a view never frozen at once, with no thaw (#17036)", () => {
+      const wc = makeWebContents(7);
+      setFocusedWebContents(wc);
+      vi.mocked(isWebContentsFrozen).mockReturnValueOnce(false);
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+
+      void d.sendDispatchToRenderer("action.run", null);
+      expect(unfreezeWebContents).not.toHaveBeenCalled();
+      expect(wc.send).toHaveBeenCalled();
+      d.dispose();
+    });
+
     it("still sends when the thaw itself fails", async () => {
       const wc = makeWebContents(7);
       setFocusedWebContents(wc);
@@ -522,6 +537,55 @@ describe("PluginRendererDispatcher", () => {
     await expect(promise).resolves.toEqual([]);
     d.dispose();
   });
+
+  describe("sendAgentsListWithHost (#16845)", () => {
+    const PANE = {
+      terminalId: "t-1",
+      title: "Claude",
+      agentId: "claude",
+      worktree: null,
+      isFocused: false,
+      canDraft: true,
+    };
+
+    async function readAmbient(viewKey: string | null) {
+      const wc = makeWebContents(7);
+      setFocusedWebContents(wc);
+      registryMock.getProjectForWebContents.mockReturnValue(viewKey);
+      const d = new PluginRendererDispatcher({ isDisposed: () => false });
+      const promise = d.sendAgentsListWithHost(null, "acme.deploy");
+      await vi.waitFor(() => lastRequestId(wc, CHANNELS.PLUGIN_AGENTS_LIST_REQUEST));
+      const requestId = lastRequestId(wc, CHANNELS.PLUGIN_AGENTS_LIST_REQUEST);
+      ipcMainMock._emit(
+        CHANNELS.PLUGIN_AGENTS_LIST_RESPONSE,
+        { sender: { id: 7 } },
+        { requestId, agents: [PANE] }
+      );
+      const answer = await promise;
+      d.dispose();
+      return answer;
+    }
+
+    afterEach(() => {
+      registryMock.getProjectForWebContents.mockReturnValue(null);
+    });
+
+    it("names the Remote Host whose project the answering view shows", async () => {
+      await expect(readAmbient("studio-1:proj-9")).resolves.toEqual({
+        hostId: "studio-1",
+        projectId: "proj-9",
+        agents: [PANE],
+      });
+    });
+
+    it("names this machine for a view of a local project", async () => {
+      await expect(readAmbient("proj-9")).resolves.toEqual({
+        hostId: "local",
+        projectId: "proj-9",
+        agents: [PANE],
+      });
+    });
+  });
 });
 
 describe("projectAgentPanes", () => {
@@ -540,6 +604,24 @@ describe("projectAgentPanes", () => {
     const [projected] = projectAgentPanes([{ ...pane, cwd: "/secret", panelKind: "terminal" }]);
     expect(projected).toEqual(pane);
     expect(projected).not.toHaveProperty("cwd");
+  });
+
+  it("drops a view's claim about who launched a pane, which only main answers (#16845)", () => {
+    for (const claim of [true, false, "yes"]) {
+      const [projected] = projectAgentPanes([{ ...pane, launchedByThisPlugin: claim }]);
+      expect(projected).toEqual(pane);
+    }
+  });
+
+  it("drops a view's claim about where Pilot places a pane, which only main answers", () => {
+    const [projected] = projectAgentPanes([
+      {
+        ...pane,
+        band: "needs-you",
+        canopy: { readAt: 1, ask: "question", quote: "Paste your token here?" },
+      },
+    ]);
+    expect(projected).toEqual(pane);
   });
 
   it("drops malformed entries and keeps the rest", () => {

@@ -35,6 +35,7 @@ export const CANOPY_HOST_CHANNELS = [
   "canopy:run-branch",
   "canopy:search-screens",
   "canopy:read-input-lines",
+  "canopy:read-worktrees",
   "canopy:watch-terminal",
   "canopy:unwatch-terminal",
   "canopy:terminal-input",

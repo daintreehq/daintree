@@ -12,7 +12,7 @@ import {
   isExitConfirmationPending,
   setExitConfirmationPending,
 } from "../lifecycle/attachedShells.js";
-import { getActiveAgentCount, showUpdateWarning, type QuitImpact } from "../utils/quitWarning.js";
+import { getActiveAgents, showUpdateWarning, type QuitImpact } from "../utils/quitWarning.js";
 import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import { requestGracefulShutdownForUpdate } from "../lifecycle/shutdownCoordinator.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
@@ -440,16 +440,20 @@ class AutoUpdaterService {
     // Read+delete synchronously before any await so a crash between the two
     // doesn't re-fire on every subsequent boot. Mirrors the crash-counter
     // clear-on-read pattern in CrashRecoveryService.
+    // A delete rewrites and fsyncs the whole config file even for an absent key,
+    // so each one runs only when its key is actually stored.
     const raw = store.get("pendingUpdateVersion");
     const rawStage = store.get("pendingUpdateInstallStage");
-    try {
-      store.delete("pendingUpdateVersion");
-    } catch (err) {
-      console.error("[MAIN] Failed to clear pendingUpdateVersion:", err);
+    if (raw !== undefined) {
+      try {
+        store.delete("pendingUpdateVersion");
+      } catch (err) {
+        console.error("[MAIN] Failed to clear pendingUpdateVersion:", err);
+      }
     }
     // Separate try: a throw on the delete above must not strand the attempt
     // marker, or the next boot would pair it with a fresh version marker.
-    this.forgetInstallStage();
+    if (rawStage !== undefined) this.forgetInstallStage();
 
     if (typeof raw !== "string") return;
     const expected = raw.trim();
@@ -519,7 +523,7 @@ class AutoUpdaterService {
    */
   private restartImpact(): QuitImpact | null {
     const impact = {
-      activeAgents: getActiveAgentCount(getAgentAvailabilityStore()),
+      ...getActiveAgents(getAgentAvailabilityStore()),
       attachedShells: getAttachedShells(),
     };
     return impact.activeAgents > 0 || impact.attachedShells.length > 0 ? impact : null;

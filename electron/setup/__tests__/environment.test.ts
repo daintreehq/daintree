@@ -882,6 +882,29 @@ describe("reset-data", () => {
     });
   });
 
+  it("leaves a wipe bootstrap already made alone, so files written since survive", async () => {
+    process.argv = ["electron", "main.js", "--reset-data"];
+    fsMock.existsSync.mockReturnValue(true);
+    fsMock.readdirSync.mockReturnValue(["db.sqlite"]);
+    const early = await import("../earlyEnvironment.js");
+    early.applyDevUserDataPath();
+    early.resetUserDataIfRequested();
+    expect(fsMock.rmSync).toHaveBeenCalledTimes(1);
+    // The compile cache bootstrap enables between the two.
+    fsMock.readdirSync.mockReturnValue(["compile-cache"]);
+
+    await import("../environment.js");
+
+    expect(fsMock.rmSync).toHaveBeenCalledTimes(1);
+    expect(fsMock.rmSync).not.toHaveBeenCalledWith(
+      path.join("/tmp/test-appdata", "compile-cache"),
+      expect.anything()
+    );
+    expect(electronMock.app.setPath.mock.calls.filter(([key]) => key === "userData")).toHaveLength(
+      1
+    );
+  });
+
   it("does not wipe when neither trigger is present", async () => {
     fsMock.existsSync.mockReturnValue(false);
 

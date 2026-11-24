@@ -39,6 +39,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.resetModes",
   "terminal.restartOnPreset",
   "terminal.restartOnAccount",
   "terminal.restartAll",
@@ -55,7 +56,6 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "fleet.deleteNamedFleet",
   "worktree.resource.teardown",
   "worktree.resource.openOnHost",
-  "portal.links.remove",
   "keybinding.resetAll",
   "logs.clear",
   "eventInspector.clear",
@@ -63,6 +63,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "project.sleepAll",
   "schedules.runNow",
   "recipe.delete",
   "recipe.run",
@@ -73,6 +74,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.addAccount",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -102,6 +104,7 @@ const CONFIRMED_WIRED = [
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.resetModes",
   "terminal.restartOnPreset",
   "terminal.restartOnAccount",
   "terminal.restartAll",
@@ -110,7 +113,6 @@ const CONFIRMED_WIRED = [
   "worktree.sessions.trashAll",
   "worktree.sessions.restartAll",
   "worktree.sessions.clearHistory",
-  "worktree.resource.teardown",
   "worktree.resource.openOnHost",
   "keybinding.resetAll",
   "logs.clear",
@@ -138,7 +140,6 @@ const BYPASS_WIRED = new Set([
   // Deleted at once with an Undo toast from the UI (exactly restorable, D0 there);
   // danger:"confirm" still gates agent and palette dispatch, which get no Undo.
   "fleet.deleteNamedFleet",
-  "portal.links.remove",
   "git.push", // deferred-promise via gitPushConfirmStore; GitPushConfirmDialog resolves it
   "git.pullRebase", // IPC bypass in ReviewHubContent.tsx; ConfirmDialog wired but ID not co-located
   // Deferred-promise via gitWorktreeOperationConfirmStore (#12092); the dialog
@@ -154,8 +155,10 @@ const BYPASS_WIRED = new Set([
   "project.remove", // confirm in ProjectSwitcherPalette.tsx; action ID not co-located
   "project.sleep", // deferred-promise via projectSleepConfirmStore; ProjectSleepConfirmDialog resolves it
   "project.sleepIdle", // same store and dialog
+  "project.sleepAll", // same store and dialog
   "project.restart", // same store and dialog
   "schedules.runNow", // deferred-promise via scheduleRunConfirmStore; ScheduleRunConfirmDialog resolves it
+  "worktree.resource.teardown", // deferred-promise via worktreeResourceTeardownConfirmStore (#16948); WorktreeResourceTeardownConfirmDialog resolves it
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   // Agent/MCP-only batch kill (#12123); palette-hidden because it acts only on
@@ -175,6 +178,7 @@ const BYPASS_WIRED = new Set([
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.addAccount", // agent/MCP-only (#17079); palette-hidden, Settings adds through its own dialog and the agentAccounts IPC
   // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"
   // gates agent dispatch — no user-side ConfirmDialog to co-locate.
   "forge.createPR",
@@ -218,7 +222,6 @@ const CONFIRM_TOKENS = [
   "TerminalDestructiveActionConfirmDialog",
   "GitPushConfirmDialog",
   "ForcePushConfirmDialog",
-  "PortalCloseConfirmDialog",
 ];
 
 /**

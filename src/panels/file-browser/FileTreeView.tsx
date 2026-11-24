@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { SymlinkTooltip } from "./SymlinkTooltip";
+import { RowNameTooltip } from "./SymlinkTooltip";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   ChevronDown,
@@ -17,6 +17,7 @@ import { FILE_DRAG_MIME, encodeFileDragPaths } from "@/lib/fileDragPayload";
 import { resolveLocalFileSources, type TransferSource } from "@/lib/transferSources";
 import { currentHostId } from "@/hooks/useHostPlatform";
 import { Spinner } from "@/components/ui/Spinner";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { stopFileRowMenuPropagation } from "@/hooks/useFileRowMenuItems";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -32,6 +33,7 @@ import {
 import { getFileBrowserRowGitStatus, type FileBrowserGitStatusIndex } from "./fileBrowserGitStatus";
 import { getGitStatusPresentation } from "@/lib/gitStatusPresentation";
 import { useFileTreeDecorations } from "@/hooks/useFileTreeDecorations";
+import { useHasFileDecorationProvider } from "@/store/pluginRuntimeStore";
 import {
   FileDecorationBadge,
   resolveFileDecoration,
@@ -155,6 +157,7 @@ const ROW_HEIGHT_PX = 24;
 // so a scroll frame doesn't change the requested set on every row it passes.
 const DECORATION_OVERSCAN_ROWS = 20;
 const DECORATION_CHUNK_ROWS = 20;
+const NO_PATHS: string[] = [];
 
 /**
  * Virtualized directory tree.
@@ -236,8 +239,15 @@ export function FileTreeView({
     end: -1,
   });
 
+  // The scope names the root the rows are relative to, the same contract the
+  // worktree file list uses, so one provider decorates both surfaces. Which
+  // plugins answer is decided in main from this view's project; whether to ask
+  // at all is decided here, so a tree no plugin decorates does no per-scroll
+  // path work and sends no pull.
+  const decorationScope = basePath === "" ? "" : `worktree-files:${basePath}`;
+  const decorationsEnabled = useHasFileDecorationProvider(decorationScope);
   const decorationPaths = useMemo(() => {
-    if (renderedRange.end < renderedRange.start) return [];
+    if (!decorationsEnabled || renderedRange.end < renderedRange.start) return NO_PATHS;
     const first =
       Math.floor(
         Math.max(0, renderedRange.start - DECORATION_OVERSCAN_ROWS) / DECORATION_CHUNK_ROWS
@@ -246,15 +256,8 @@ export function FileTreeView({
       Math.ceil((renderedRange.end + DECORATION_OVERSCAN_ROWS + 1) / DECORATION_CHUNK_ROWS) *
       DECORATION_CHUNK_ROWS;
     return rows.slice(first, last).map((row) => row.path);
-  }, [rows, renderedRange]);
-  // The scope names the root the rows are relative to, the same contract the
-  // worktree file list uses, so one provider decorates both surfaces. Which
-  // plugins answer is decided in main from this view's project.
-  const decorations = useFileTreeDecorations(
-    `worktree-files:${basePath}`,
-    decorationPaths,
-    basePath !== ""
-  );
+  }, [decorationsEnabled, rows, renderedRange]);
+  const decorations = useFileTreeDecorations(decorationScope, decorationPaths, decorationsEnabled);
 
   const cursorIndex = useMemo(
     () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),
@@ -827,9 +830,9 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       {/* `min-w-0` is what lets `truncate` actually shrink here: a flex item
           defaults to `min-width: auto` and would otherwise push the trailing
           status marker out of the row instead of ellipsing the name. */}
-      <SymlinkTooltip description={symlinkDescription}>
+      <RowNameTooltip name={row.name} symlinkDescription={symlinkDescription}>
         <span className="min-w-0 truncate">{row.name}</span>
-      </SymlinkTooltip>
+      </RowNameTooltip>
       {symlinkMarkerId && (
         // Screen-reader only, and layout-neutral (`sr-only` is absolutely
         // positioned) so it can sit between the name and the `ml-auto` git
@@ -843,28 +846,41 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
         // Before the git marker, taking the trailing edge's `ml-auto`, so both
         // stay in their own column. The badge itself is presentational; the
         // provider's words ride the row's description.
-        <span className="ml-auto flex shrink-0 items-center" title={decorationView.label}>
-          <span id={decorationMarkerId} className="sr-only">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="ml-auto flex shrink-0 items-center">
+              <span id={decorationMarkerId} className="sr-only">
+                {decorationView.label}
+              </span>
+              <FileDecorationBadge decoration={decoration} />
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="end" className="break-words">
             {decorationView.label}
-          </span>
-          <FileDecorationBadge decoration={decoration} />
-        </span>
+          </TooltipContent>
+        </Tooltip>
       )}
       {gitPresentation && (
         // `ml-auto` parks the marker at the trailing edge so a column of them
         // scans vertically, rather than tracking each name's ragged end.
-        <span
-          id={gitMarkerId}
-          title={gitDescription ?? undefined}
-          className={cn(
-            "w-3 shrink-0 text-center font-bold",
-            !decorationView && "ml-auto",
-            gitPresentation.colorClass
-          )}
-        >
-          <span className="sr-only">{gitDescription}</span>
-          <span aria-hidden="true">{gitPresentation.marker}</span>
-        </span>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              id={gitMarkerId}
+              className={cn(
+                "w-3 shrink-0 text-center font-bold",
+                !decorationView && "ml-auto",
+                gitPresentation.colorClass
+              )}
+            >
+              <span className="sr-only">{gitDescription}</span>
+              <span aria-hidden="true">{gitPresentation.marker}</span>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="end" className="break-words">
+            {gitDescription}
+          </TooltipContent>
+        </Tooltip>
       )}
       {showLoadingSpinner && (
         // Subdued via the secondary text token (Spinner strokes currentColor) so

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.mock("electron", async () => (await import("./harness/fakeElectron.js")).electronMock);
 
@@ -383,6 +383,18 @@ import { FakeView } from "./harness/fakeView.js";
 import { memoryProjectStore } from "./harness/harnessState.js";
 import { waitUntil } from "./harness/poll.js";
 import { HOST_ID, startRemoteHarness, type RemoteHarness } from "./harness/remoteHarness.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 const TEST_TIMEOUT_MS = 60_000;
 /** A drive lease grace short enough to wait out, where a test needs one to run out. */
@@ -673,7 +685,11 @@ describe("a relaunch of the Shell against a host that stays up (integration harn
 
       await r.startShell();
 
-      expect(heard).toEqual([
+      // Cloud hosts announce their picture once at startup for the same reason
+      // (views that read before it started got the empty answer): one event,
+      // and never a connection event.
+      expect(heard.filter((h) => h.event.type === "cloud-changed")).toHaveLength(1);
+      expect(heard.filter((h) => h.event.type !== "cloud-changed")).toEqual([
         {
           event: {
             type: "hosts-changed",

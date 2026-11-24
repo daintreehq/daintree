@@ -44,6 +44,10 @@ const APPIMAGE_WRAPPER_LAUNCH_SUFFIXES = [
   ' --cli-path "$ABSOLUTE_PATH" &',
 ];
 
+// The `daintree call` client in the packaged script, between these lines.
+const CALL_CLIENT_START = "# >>> daintree call >>>";
+const CALL_CLIENT_END = "# <<< daintree call <<<";
+
 function appVersion(): string {
   try {
     return app.getVersion();
@@ -52,38 +56,106 @@ function appVersion(): string {
   }
 }
 
+function getPackagedScriptPath(): string {
+  if (app.isPackaged) return path.join(process.resourcesPath, CLI_SCRIPT_FILE);
+  // Dev: app path points at project root when running `electron .`
+  return path.join(app.getAppPath(), "scripts", CLI_SCRIPT_FILE);
+}
+
+/** The `daintree call` client block in a script's text, markers included; null without one. */
+function extractCallClient(source: string): string | null {
+  const start = source.indexOf(`\n${CALL_CLIENT_START}\n`);
+  const end = start < 0 ? -1 : source.indexOf(`\n${CALL_CLIENT_END}\n`, start);
+  if (end < 0) return null;
+  return source.slice(start + 1, end + 1 + CALL_CLIENT_END.length);
+}
+
 /**
- * The `daintree` command for an AppImage install. It answers the same flags as
- * the packaged CLI script (resources/daintree-cli.sh); the version is written
- * in because the image's app.asar can't be read without mounting it, and the
- * wrapper is rewritten whenever its content no longer matches.
+ * The `daintree call` client, copied out of the packaged script so an AppImage
+ * wrapper can carry it: the image's resources are only there while it runs.
+ * Null when the script can't be read or has no client block.
  */
-export function generateAppImageWrapper(appImagePath: string, version = appVersion()): string {
+function readCallClient(): string | null {
+  try {
+    const source = readFileIfExists(getPackagedScriptPath());
+    return source === null ? null : extractCallClient(source);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The `daintree` command for an AppImage install. It answers the same flags and
+ * commands as the packaged CLI script (resources/daintree-cli.sh); the version
+ * and the `call` client are written in because the image's files can't be read
+ * without mounting it, and the wrapper is rewritten whenever its content no
+ * longer matches. `--status` runs the client block's own when the block has
+ * one; without it (no block, or one kept from before #17904) the wrapper still
+ * answers, with the MCP fields it can't read as null.
+ */
+export function generateAppImageWrapper(
+  appImagePath: string,
+  version = appVersion(),
+  callClient = readCallClient()
+): string {
   const escaped = appImagePath.replace(/'/g, "'\\''");
   const quotedVersion = version.replace(/[^0-9A-Za-z.+-]/g, "");
+  // A repoint can pair this template with a block from an older install, which
+  // has `call` but no `session`.
+  const hasSession = callClient !== null && callClient.includes("\ndaintree_session() {\n");
+  const hasStatus = callClient !== null && callClient.includes("\ndaintree_status() {\n");
+  const callUsage =
+    (callClient === null
+      ? ""
+      : ` "       ${CLI_COMMAND_NAME} call <tool> [options]  (see ${CLI_COMMAND_NAME} call --help)"`) +
+    (hasSession
+      ? ` "       ${CLI_COMMAND_NAME} session start|end      (see ${CLI_COMMAND_NAME} session --help)"`
+      : "");
   return [
     "#!/usr/bin/env bash",
     APPIMAGE_WRAPPER_HEADER,
     "set -euo pipefail",
+    ...(callClient === null ? [] : [callClient]),
+    // `--json --status` asks the same as `--status --json`.
+    'if [ "${1:-}" = --json ] && { [ "${2:-}" = --status ] || [ "${2:-}" = -s ]; }; then set -- "$2" "$1" "${@:3}"; fi',
     'case "${1:-}" in',
     "  --help|-h)",
-    `    printf '%s\\n' "Usage: ${CLI_COMMAND_NAME} [directory]" "" "Open a directory as a project in Daintree." "" "Arguments:" "  directory    Path to open (defaults to current directory)" "" "Options:" "  -h, --help       Show this help message" "  -v, --version    Show the Daintree CLI version" "  -s, --status     Check if Daintree is running"`,
+    `    printf '%s\\n' "Usage: ${CLI_COMMAND_NAME} [directory]"${callUsage} "" "Open a directory as a project in Daintree." "" "Arguments:" "  directory    Path to open (defaults to current directory)" "" "Options:" "  -h, --help       Show this help message" "  -v, --version    Show the Daintree CLI version" "  -s, --status     Check if Daintree is running (exit 0 if it is, 1 if not)" "  --status --json  The same, as one JSON object: version, running, mcpEnabled and mcpPort"`,
     "    exit 0 ;;",
+    ...(callClient === null ? [] : ["  call)", "    shift", '    daintree_call "$@" ;;']),
+    ...(hasSession ? ["  session)", "    shift", '    daintree_session "$@" ;;'] : []),
     "  --version|-v)",
     `    echo "${CLI_COMMAND_NAME} ${quotedVersion}"`,
     "    exit 0 ;;",
     "  --status|-s)",
-    // The pattern also matches this script and any shell whose command line
-    // names it; only the app's own binary counts.
-    '    for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)"); do',
-    '      exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue',
-    '      exe="${exe% (deleted)}"',
-    '      if [ "${exe##*/}" = daintree ]; then echo "Daintree is running"; exit 0; fi',
-    "    done",
-    '    echo "Daintree is not running"; exit 1 ;;',
+    ...(hasStatus
+      ? ["    shift", `    daintree_status "${quotedVersion}" "$@" ;;`]
+      : [
+          '    if [ "${2:-}" = --json ] && [ "$#" -gt 2 ]; then',
+          `      echo "${CLI_COMMAND_NAME}: --status --json takes no other arguments" >&2; exit 2`,
+          "    fi",
+          "    running=false",
+          // The pattern also matches this script and any shell whose command
+          // line names it; only the app's own binary counts.
+          '    for pid in $(pgrep -f "(/|^)daintree([[:space:]]|$)|daintree-app"); do',
+          '      exe="$(readlink "/proc/$pid/exe" 2>/dev/null)" || continue',
+          '      exe="${exe% (deleted)}"',
+          '      case "${exe##*/}" in daintree|daintree-app) running=true; break ;; esac',
+          "    done",
+          `    if [ "\${2:-}" = --json ]; then echo "{\\"version\\":\\"${quotedVersion}\\",\\"running\\":$running,\\"mcpEnabled\\":null,\\"mcpPort\\":null}"`,
+          '    elif [ "$running" = true ]; then echo "Daintree is running"; else echo "Daintree is not running"; fi',
+          '    if [ "$running" = true ]; then exit 0; fi',
+          "    exit 1 ;;",
+        ]),
     "esac",
+    // One folder only: extra operands would otherwise be dropped silently.
+    'if [ "$#" -gt 1 ]; then',
+    `  echo "${CLI_COMMAND_NAME}: expected one directory, got $# arguments (quote a path that contains spaces)" >&2`,
+    `  echo "Usage: ${CLI_COMMAND_NAME} [directory]" >&2`,
+    "  exit 2",
+    "fi",
     'TARGET="${1:-.}"',
-    `ABSOLUTE_PATH="$(cd -- "$TARGET" 2>/dev/null && pwd -P)" || { echo "${CLI_COMMAND_NAME}: '$TARGET' is not a directory" >&2; exit 1; }`,
+    `ABSOLUTE_PATH="$(CDPATH= cd -- "$TARGET" 2>/dev/null && pwd -P)" || { echo "${CLI_COMMAND_NAME}: '$TARGET' is not a directory" >&2; exit 1; }`,
     // Single-token `=` form: Chromium's `second-instance` command-line
     // reconstruction can inject a switch between a bare flag and its value
     // (#11410).
@@ -123,7 +195,13 @@ export function repointAppImageWrapper(appImage: string, version?: string): bool
   if (current === null) return false;
   const named = appImageOfWrapper(current);
   if (named === null) return false;
-  const next = generateAppImageWrapper(appImage, version);
+  // A packaged script that can't be read leaves the installed client in place
+  // rather than writing a wrapper that has lost `call`.
+  const next = generateAppImageWrapper(
+    appImage,
+    version,
+    readCallClient() ?? extractCallClient(current)
+  );
   if (named === appImage && current === next) return false;
   if (named !== appImage && (!isAppImageUpdateRename(named, appImage) || fs.existsSync(named))) {
     return false;
@@ -164,11 +242,7 @@ function getScriptSourcePath(): string {
   if (isAppImage()) {
     return getAppImageWrapperPath();
   }
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, CLI_SCRIPT_FILE);
-  }
-  // Dev: app path points at project root when running `electron .`
-  return path.join(app.getAppPath(), "scripts", CLI_SCRIPT_FILE);
+  return getPackagedScriptPath();
 }
 
 function readFileIfExists(filePath: string): string | null {

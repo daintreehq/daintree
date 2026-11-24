@@ -15,7 +15,7 @@ import { ProjectWorktreeCreateDialog } from "./ProjectWorktreeCreateDialog";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
-import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
+import { MoveTerminalsDialogHost } from "./MoveTerminalsDialogHost";
 import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useRecipeDialogState } from "./useRecipeDialogState";
@@ -137,6 +137,7 @@ function ProjectDialogHost() {
     isRecipeManagerOpen,
     handleCloseRecipeEditor,
     handleCloseRecipeManager,
+    handleRecipeManagerCloseComplete,
     handleRecipeManagerEdit,
     handleRecipeManagerCreate,
   } = useRecipeDialogState();
@@ -182,12 +183,16 @@ function ProjectDialogHost() {
         variant="component"
         componentName="RecipeManager"
         resetKeys={[Number(isRecipeManagerOpen)]}
+        // A manager that fails mid-exit never completes it; a pick waiting on
+        // that exit goes ahead without it.
+        onError={handleRecipeManagerCloseComplete}
       >
         {shouldMountRecipeManager && (
           <Suspense fallback={null}>
             <LazyRecipeManager
               isOpen={isRecipeManagerOpen}
               onClose={handleCloseRecipeManager}
+              onCloseComplete={handleRecipeManagerCloseComplete}
               onEditRecipe={handleRecipeManagerEdit}
               onCreateRecipe={handleRecipeManagerCreate}
             />
@@ -269,7 +274,7 @@ function ProjectDialogHost() {
         )}
       </ErrorBoundary>
 
-      <DecisionsAttentionHost />
+      <MoveTerminalsDialogHost />
 
       <ErrorBoundary
         variant="component"

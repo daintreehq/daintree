@@ -273,6 +273,7 @@ function buildElectronStub() {
       onRevealRequested: vi.fn((_callback: (payload: VoiceRevealRequest) => void) => () => {}),
       onLiveLevel: vi.fn((_callback: (payload: VoiceLiveLevel) => void) => () => {}),
       onPauseRequested: vi.fn((_callback: (payload: VoicePauseRequest) => void) => () => {}),
+      onSessionVocabulary: vi.fn(() => () => {}),
       publishDetails: vi.fn().mockResolvedValue(undefined),
       setPausedLive: vi.fn().mockResolvedValue(true),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
@@ -4716,6 +4717,101 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     for (const listener of keyupListeners) listener({ code: "Period" });
     expect(stopSpy).toHaveBeenCalledTimes(1);
   });
+
+  // A voice key the keybinding resolver saw while this listener couldn't
+  // record it: the service was still loading, or dictation was off here (#17031).
+  describe("a press handed over by the keybinding resolver (#17031)", () => {
+    async function loadService() {
+      const electron = buildPttElectronStub();
+      const { windowListeners } = setupGlobals(electron);
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+      voiceRecordingService.initialize();
+      await vi.waitFor(() => {
+        expect(voiceRecordingService.recordsShortcutPresses()).toBe(true);
+      });
+      const releaseKey = (code: string) => {
+        for (const listener of windowListeners["keyup"] ?? []) listener({ code });
+      };
+      return { voiceRecordingService, stopSpy, releaseKey };
+    }
+
+    it("ends a push-to-talk recording when the adopted key comes back up", async () => {
+      const { voiceRecordingService, stopSpy, releaseKey } = await loadService();
+
+      voiceRecordingService.adoptShortcutPress({
+        code: "Period",
+        timeStamp: 0,
+        pressedAt: performance.now(),
+        released: false,
+      });
+      await startFromPress(voiceRecordingService);
+      releaseKey("Period");
+
+      expect(stopSpy).toHaveBeenCalledWith(
+        "Dictation stopped.",
+        expect.objectContaining({ preserveLiveText: true })
+      );
+    });
+
+    it("leaves the recording running for a press already released while it loaded", async () => {
+      const { voiceRecordingService, stopSpy, releaseKey } = await loadService();
+
+      voiceRecordingService.adoptShortcutPress({
+        code: "Period",
+        timeStamp: 0,
+        pressedAt: performance.now(),
+        released: true,
+      });
+      await startFromPress(voiceRecordingService);
+      releaseKey("Period");
+
+      expect(stopSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("matches no keystroke against the voice keys while dictation is off here (#17031)", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: false,
+      openaiApiKey: "sk-key",
+      recordingMode: "push-to-talk",
+    });
+    const { windowListeners } = setupGlobals(electron);
+    const { keybindingService } = await import("@/services/KeybindingService");
+    const matchesEvent = vi.mocked(keybindingService.matchesEvent);
+    const getEffectiveCombos = vi.mocked(keybindingService.getEffectiveCombos);
+    matchesEvent.mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Period"
+    );
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+    await Promise.resolve();
+    matchesEvent.mockClear();
+    getEffectiveCombos.mockClear();
+
+    const downEvent = {
+      code: "Period",
+      key: ".",
+      repeat: false,
+      metaKey: true,
+      shiftKey: false,
+      altKey: false,
+      ctrlKey: false,
+    };
+    for (const listener of windowListeners["keydown"] ?? []) listener(downEvent);
+
+    expect(voiceRecordingService.recordsShortcutPresses()).toBe(false);
+    expect(getEffectiveCombos).not.toHaveBeenCalled();
+    expect(matchesEvent).not.toHaveBeenCalled();
+    await startFromPress(voiceRecordingService);
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
+    expect(stopSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("VoiceRecordingService — a session another view owns (#14601)", () => {
@@ -5665,5 +5761,80 @@ describe("VoiceRecordingService — tap-or-hold mode (#14626)", () => {
     t.advance(1_000);
     t.release();
     expect(t.stopSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("VoiceRecordingService — on-device configuration (#17338)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function stubLocalModel(electron: ReturnType<typeof buildElectronStub>) {
+    let answer!: (state: { state: string; totalBytes: number; receivedBytes: number }) => void;
+    const voiceInput = electron.voiceInput as unknown as Record<string, unknown>;
+    voiceInput.getLocalModel = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    voiceInput.onLocalModelStatus = vi.fn(() => () => {});
+    return { answer: (state: string) => answer({ state, totalBytes: 10, receivedBytes: 10 }) };
+  }
+
+  it("waits for the launch's model check before deciding it isn't configured", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "",
+      transcriptionProvider: "local",
+      correctionEnabled: false,
+    });
+    const model = stubLocalModel(electron);
+    setupGlobals(electron);
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    // Initialized, so the model turning ready starts a refresh of its own
+    // while the start's read is still waiting on the check.
+    voiceRecordingService.initialize();
+    const configured = voiceRecordingService.refreshConfiguration();
+    await vi.waitFor(() => expect(electron.voiceInput.getSettings).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    model.answer("ready");
+    expect(await configured).toBe(true);
+  });
+
+  it("answers an overtaken read with the newer one's verdict", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings
+      .mockResolvedValueOnce({
+        enabled: true,
+        openaiApiKey: "",
+        transcriptionProvider: "local",
+        correctionEnabled: false,
+      })
+      .mockResolvedValueOnce({
+        enabled: true,
+        openaiApiKey: "sk-key",
+        transcriptionProvider: "openai",
+        correctionEnabled: false,
+      });
+    const model = stubLocalModel(electron);
+    setupGlobals(electron);
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const older = voiceRecordingService.refreshConfiguration();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Another view chose OpenAI with a key while the model check was running.
+    const newer = voiceRecordingService.refreshConfiguration();
+    expect(await newer).toBe(true);
+    model.answer("failed");
+    expect(await older).toBe(true);
   });
 });

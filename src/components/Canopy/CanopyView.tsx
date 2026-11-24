@@ -18,7 +18,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { clientErrorCode } from "@/utils/clientAppError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
-import { useEffectiveCombo } from "@/hooks";
+import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { isTerminalReservedCombo } from "@/services/terminalReservedKeys";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -34,8 +34,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
-import { itemArchived, itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
-import { searchPasteText } from "./canopySearch";
+import { itemInArchive, itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { canopyScreenGapWords, searchPasteText } from "./canopySearch";
 import { isWorkerEntry, type CanopyInboxEntry } from "./canopyInboxProjection";
 import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
@@ -530,6 +530,17 @@ const DOCKED_GLOBAL_DICTATION: CanopyReplyDictation = {
   message: "Dictation goes to an agent's reply. Click the reply to dictate into it.",
 };
 
+const DIALOG_DICTATION: CanopyReplyDictation = {
+  ok: false,
+  message: "Dictation goes to an agent's reply. Close the dialog to dictate into it.",
+};
+
+/** A dialog over Canopy holds the keyboard, as the Decisions inbox does (#18048); one Canopy sits in doesn't. */
+function dialogOverCanopy(): boolean {
+  const dialog = document.activeElement?.closest('[role="dialog"], [role="alertdialog"]');
+  return dialog != null && dialog.querySelector("[data-canopy-standalone]") === null;
+}
+
 function CanopyInbox({
   hostId,
   hostRow,
@@ -558,6 +569,8 @@ function CanopyInbox({
     remotes,
     participants,
     api,
+    searchScreens,
+    markAllReadReport,
     terminalApi,
     readings,
     canopy,
@@ -604,7 +617,29 @@ function CanopyInbox({
     searchKey,
     screenAsk,
     onScreen,
-  } = useCanopyInboxSearch({ isOpen, hostId, items, api, refreshedAt });
+    screenUnsearched,
+    screenRetry,
+    retryScreenSearch,
+  } = useCanopyInboxSearch({ isOpen, hostId, items, searchScreens, refreshedAt });
+  // The hosts whose terminals the search couldn't read, named in the host list's
+  // order: the panel's own host alone needs no name.
+  const screenGap = useMemo(() => {
+    if (screenUnsearched.length === 0) return null;
+    if (!everyHost) return canopyScreenGapWords(otherHost ? [hostName] : []);
+    const rows = hostRows ?? [];
+    const place = (id: HostId) => {
+      const index = rows.findIndex((row) => row.hostId === id);
+      return index === -1 ? rows.length : index;
+    };
+    return canopyScreenGapWords(
+      [...screenUnsearched]
+        .sort((a, b) => place(a) - place(b))
+        .map(
+          (id) =>
+            rows.find((row) => row.hostId === id)?.name ?? (id === ownHostId ? "This Mac" : id)
+        )
+    );
+  }, [screenUnsearched, everyHost, otherHost, hostName, hostRows, ownHostId]);
   const {
     roleFilter,
     setRoleFilter,
@@ -617,6 +652,7 @@ function CanopyInbox({
     assistantAsks,
     globalDocked,
     globalItem,
+    globalItems,
     workOf,
     showWorkOf,
     workPartial,
@@ -644,6 +680,7 @@ function CanopyInbox({
     firstAssistant,
     listRef,
     onlyReadMatch,
+    searchGap,
   } = useCanopyInboxFilters({
     isOpen,
     hostId,
@@ -666,6 +703,8 @@ function CanopyInbox({
     searchKey,
     screenAsk,
     onScreen,
+    screenGap,
+    screenRetry,
     listHidden,
   });
   // The band has rows of its own: only then do the band headings show.
@@ -736,7 +775,7 @@ function CanopyInbox({
   const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
 
   useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
-  const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
+  const { reserveUndo, clearUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
 
   // A held reorder is said once, not row by row as its scores land.
   const sortShown = workersShown && reorderWaiting;
@@ -755,6 +794,16 @@ function CanopyInbox({
     sortFocusedRef.current = false;
     searchRef.current?.focus({ preventScroll: true });
   }, [sortShown, searchRef]);
+  // Retry leaves once every host has searched, on its press or a refresh: the
+  // keyboard on it stays in the panel, on the search.
+  const retryRef = useRef<HTMLButtonElement>(null);
+  const retryFocusedRef = useRef(false);
+  const gapShown = searchGap !== null;
+  useLayoutEffect(() => {
+    if (gapShown || !retryFocusedRef.current) return;
+    retryFocusedRef.current = false;
+    searchRef.current?.focus({ preventScroll: true });
+  }, [gapShown, searchRef]);
   const {
     readNow,
     handlers,
@@ -775,6 +824,7 @@ function CanopyInbox({
     hostId,
     ownHostId,
     api,
+    markAllReadReport,
     terminalApi,
     listed,
     focusedItem,
@@ -789,6 +839,7 @@ function CanopyInbox({
     showsHost,
     isSelected,
     reserveUndo,
+    clearUndo,
     undoReads,
     menuOpenChanged,
     requestRank,
@@ -802,6 +853,8 @@ function CanopyInbox({
       // Typing to the docked global assistant: a dictation there must not
       // land in the agent's reply beside it.
       if (document.activeElement?.closest("[data-canopy-global]")) return DOCKED_GLOBAL_DICTATION;
+      // Typing in a dialog over Canopy (an answer in the Decisions inbox): the words aren't the reply's.
+      if (dialogOverCanopy()) return DIALOG_DICTATION;
       return (
         (selectedAssistant === null && focusedItem !== null
           ? detailRef.current?.dictation()
@@ -1036,7 +1089,7 @@ function CanopyInbox({
   // below the bar, so they are never that row.
   const leaveArchivedUp = () => {
     const above = projection.navigation.filter(
-      (entry) => entry.role === "assistant" || !itemArchived(entry.item)
+      (entry) => entry.role === "assistant" || !itemInArchive(entry.item)
     );
     if (assistantsBarLast(above.length)) return;
     focusEntryOrSearch(above[above.length - 1]);
@@ -1082,6 +1135,12 @@ function CanopyInbox({
     toggleRead,
     markAllRead,
     onSelectAll: bulkTrashable ? openBulkTrash : undefined,
+    retryStop: () => {
+      const retry = retryRef.current;
+      if (!retry) return false;
+      retry.focus();
+      return true;
+    },
     onPastEnd: () => focusArchivedBar() || (trashRef.current?.focusHeader() ?? false),
     sectionStop: { before: projection.sectionStart, focus: focusAssistantsBar },
   });
@@ -1391,9 +1450,9 @@ function CanopyInbox({
   const inboxEmpty: { words: string; note?: string } = searching
     ? {
         words:
-          shownInbox.inbox.length > 0
+          (shownInbox.inbox.length > 0
             ? `Nothing unread matches “${appliedQuery.trim()}”`
-            : `Nothing matches “${appliedQuery.trim()}”`,
+            : `Nothing matches “${appliedQuery.trim()}”`) + (searchGap === null ? "" : " so far"),
       }
     : workOf !== null
       ? {
@@ -1498,6 +1557,22 @@ function CanopyInbox({
       Launch an agent from the toolbar and it shows up here.
     </p>
   );
+
+  // Built outside the JSX: inline, the `|| undefined` over a list of ternaries
+  // is a shape React Compiler can't lower, and it gives up on the whole view.
+  const searchControls = [
+    listed.length > 0 || bandAssistants.length > 0 ? "canopy-inbox-list" : null,
+    sectionAssistants.length > 0 ? "canopy-assistants" : null,
+    archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
+  ]
+    .filter((id) => id !== null)
+    .join(" ");
+  const searchDescription = [
+    searchNotes.length > 0 ? "canopy-search-notes" : null,
+    searchGap !== null ? "canopy-search-gap" : null,
+  ]
+    .filter((id) => id !== null)
+    .join(" ");
 
   return (
     <CanopySurface isOpen={isOpen}>
@@ -1770,18 +1845,10 @@ function CanopyInbox({
                   data-canopy-search=""
                   placeholder="Search agents and their terminals"
                   aria-label="Search agents"
-                  aria-describedby={searchNotes.length > 0 ? "canopy-search-notes" : undefined}
+                  aria-describedby={searchDescription || undefined}
                   role="combobox"
                   aria-expanded={visible.length > 0}
-                  aria-controls={
-                    [
-                      listed.length > 0 || bandAssistants.length > 0 ? "canopy-inbox-list" : null,
-                      sectionAssistants.length > 0 ? "canopy-assistants" : null,
-                      archivedShown && shownInbox.archived.length > 0 ? "canopy-archived" : null,
-                    ]
-                      .filter((id) => id !== null)
-                      .join(" ") || undefined
-                  }
+                  aria-controls={searchControls || undefined}
                   aria-autocomplete="list"
                   aria-activedescendant={
                     selectedAssistant !== null
@@ -1805,6 +1872,34 @@ function CanopyInbox({
                       <p key={note}>{note}</p>
                     ))}
                   </div>
+                )}
+                {/* The matches listed are only what the hosts that searched found:
+                    said, with the same search asked again on Retry. */}
+                {searchGap !== null && (
+                  <Callout
+                    severity="warning"
+                    size="compact"
+                    className="mt-1.5"
+                    data-testid="canopy-search-incomplete"
+                    action={
+                      <Button
+                        ref={retryRef}
+                        variant="outline"
+                        size="xs"
+                        onFocus={() => {
+                          retryFocusedRef.current = true;
+                        }}
+                        onBlur={() => {
+                          retryFocusedRef.current = false;
+                        }}
+                        onClick={retryScreenSearch}
+                      >
+                        Retry
+                      </Button>
+                    }
+                  >
+                    <span id="canopy-search-gap">{searchGap}</span>
+                  </Callout>
                 )}
               </div>
               <div
@@ -2225,6 +2320,8 @@ function CanopyInbox({
                 globalPaneShown ? (
                   <CanopyGlobalAssistant
                     item={selectedGlobal ? selectedAssistant : globalItem}
+                    followsRow={selectedGlobal}
+                    candidates={globalItems}
                     refusal={assistantRefusal}
                     workOf={workOf?.assistantId ?? null}
                     // Docked, the agent beside it stays selected.
@@ -2326,18 +2423,33 @@ function CanopyInbox({
                         </>
                       ) : onlyReadMatch ? (
                         <>
-                          <p className="text-sm text-text-primary">No unread agent matches</p>
+                          <p className="text-sm text-text-primary">
+                            {searchGap === null
+                              ? "No unread agent matches"
+                              : "No unread agent matches so far"}
+                          </p>
                           <p className="text-xs text-text-secondary">
-                            Turn off Unread to see every agent that matches.
+                            {searchGap === null
+                              ? "Turn off Unread to see every agent that matches."
+                              : "Turn off Unread to see the matches found so far."}
                           </p>
                         </>
                       ) : searching ? (
-                        <>
-                          <p className="text-sm text-text-primary">No agent matches</p>
-                          <p className="text-xs text-text-secondary">
-                            Try other words, or press Esc to clear the search.
-                          </p>
-                        </>
+                        searchGap === null ? (
+                          <>
+                            <p className="text-sm text-text-primary">No agent matches</p>
+                            <p className="text-xs text-text-secondary">
+                              Try other words, or press Esc to clear the search.
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm text-text-primary">No agent matches so far</p>
+                            <p className="text-xs text-text-secondary">
+                              Some terminals couldn't be searched. Retry to search them again.
+                            </p>
+                          </>
+                        )
                       ) : unreadOnly && inbox.inbox.length > 0 ? (
                         <>
                           <p className="text-sm text-text-primary">Nothing unread</p>
@@ -2382,7 +2494,18 @@ function CanopyInbox({
       </div>
       {parkRunId !== null && (
         <Suspense fallback={null}>
-          <LazyParkRunDialog key={parkRunId} runId={parkRunId} onClose={closePark} />
+          <LazyParkRunDialog
+            key={parkRunId}
+            runId={parkRunId}
+            onClose={closePark}
+            // A park is the newest action, and Z can't take it back.
+            onSubmit={clearUndo}
+            // Should the row it was opened from have gone, the selected one.
+            restoreFocusTo={() =>
+              (focusedItem ? document.getElementById(canopyCardDomId(focusedItem.runId)) : null) ??
+              refreshRef.current
+            }
+          />
         </Suspense>
       )}
       <CanopyBulkTrashDialog
@@ -2392,6 +2515,7 @@ function CanopyInbox({
         entries={bulkTrash?.entries ?? NO_BULK_TRASH}
         more={bulkTrash?.more ?? 0}
         readInputLines={api.readInputLines}
+        readWorktrees={api.readWorktrees}
         onTrash={trashMany}
         // The selected row, where Z takes the trash back; once it leaves with
         // the trash, the panel moves the keyboard on as for any row that goes.

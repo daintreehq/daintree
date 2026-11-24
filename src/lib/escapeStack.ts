@@ -15,7 +15,13 @@ const stack: EscapeEntry[] = [];
  * dispatches the stack whenever it has entries, which would take Escape away
  * from an open Radix menu or popover before it could close itself.
  */
-const fallbacks: Array<{ handler: () => boolean }> = [];
+const fallbacks: Array<{ handler: EscapeFallback }> = [];
+
+/**
+ * Returns whether it acted. The event is the keypress being dispatched, for a
+ * fallback that only owns Escape from somewhere in particular.
+ */
+type EscapeFallback = (event?: KeyboardEvent) => boolean;
 
 export function registerEscape(
   handler: EscapeHandler,
@@ -58,7 +64,7 @@ export function hasHandlers(): boolean {
 }
 
 /** The handler returns whether it acted, so an idle fallback leaves the key alone. */
-export function registerEscapeFallback(handler: () => boolean): () => void {
+export function registerEscapeFallback(handler: EscapeFallback): () => void {
   // Its own entry, so disposing one registration never takes out another that
   // shares the callback.
   const entry = { handler };
@@ -69,10 +75,10 @@ export function registerEscapeFallback(handler: () => boolean): () => void {
   };
 }
 
-export function dispatchEscapeFallback(): boolean {
+export function dispatchEscapeFallback(event?: KeyboardEvent): boolean {
   for (let i = fallbacks.length - 1; i >= 0; i--) {
     try {
-      if (fallbacks[i]!.handler()) return true;
+      if (fallbacks[i]!.handler(event)) return true;
     } catch (err) {
       logError("Escape fallback threw", err);
       return true;

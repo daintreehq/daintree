@@ -15,6 +15,7 @@ import {
 type Record = {
   id: string;
   detectedAgentId?: string;
+  launchAgentId?: string;
   spawnedAt?: number;
   projectId?: string;
   kind?: string;
@@ -212,12 +213,15 @@ describe("admitPluginTerminalScreenRead", () => {
 });
 
 describe("screen text from a real headless terminal", () => {
+  const WITH_INPUT_LINE = { withInputLine: true };
+
   async function screenRead(
     rows: number,
     output: string,
     lines = 20,
-    options: { dropGhostInput?: boolean } = {},
-    detectedAgentId?: string
+    options: { dropGhostInput?: boolean; withInputLine?: boolean } = {},
+    detectedAgentId?: string,
+    launchAgentId?: string
   ) {
     const { Terminal } = await import("@xterm/headless");
     const serializeModule = await import("@xterm/addon-serialize");
@@ -230,7 +234,7 @@ describe("screen text from a real headless terminal", () => {
       serializeAddon: addon,
       preservedSnapshot: undefined,
     } as unknown as TerminalInfo;
-    const client = makeClient({ id: "t-1", projectId: "p-a", detectedAgentId });
+    const client = makeClient({ id: "t-1", projectId: "p-a", detectedAgentId, launchAgentId });
     client.getSerializedStateAsync.mockImplementation(async (_id, options) =>
       serializeTerminalTail("t-1", info, options?.tailRows ?? 0)
     );
@@ -290,9 +294,75 @@ describe("screen text from a real headless terminal", () => {
     expect(typed.status === "ok" && typed.text).toBe("⏺ Done.\n──────\n❯ add a test\n──────");
   });
 
+  it("tells a Claude Code suggestion from a typed draft on the same pane, leaving the text alone (#17092)", async () => {
+    const frame = (box: string) => `⏺ Done.\r\n──────\r\n${box}\r\n──────\r\n  ? for shortcuts`;
+    const suggested = await screenRead(
+      6,
+      frame("❯ \x1b[7mr\x1b[27m\x1b[2mun the gate table\x1b[22m"),
+      20,
+      WITH_INPUT_LINE,
+      "claude"
+    );
+    expect(suggested).toEqual({
+      status: "ok",
+      text: "⏺ Done.\n──────\n❯ run the gate table\n──────\n  ? for shortcuts",
+      lineCount: 5,
+      truncated: false,
+      inputLine: { state: "suggestion", text: "run the gate table" },
+    });
+    const typed = await screenRead(6, frame("❯ run the gate table"), 20, WITH_INPUT_LINE, "claude");
+    expect(typed).toMatchObject({
+      status: "ok",
+      text: "⏺ Done.\n──────\n❯ run the gate table\n──────\n  ? for shortcuts",
+      inputLine: { state: "typed", text: "run the gate table" },
+    });
+    const empty = await screenRead(6, frame("❯ "), 20, WITH_INPUT_LINE, "claude");
+    expect(empty).toMatchObject({ status: "ok", inputLine: { state: "empty", text: "" } });
+  });
+
+  it("reads the input box off the whole screen when the lines asked for stop above it", async () => {
+    const output =
+      "⏺ Done.\r\n──────\r\n❯ \x1b[2mcommit this\x1b[22m\r\n──────\r\n  ? for shortcuts";
+    const result = await screenRead(6, output, 1, WITH_INPUT_LINE, "claude");
+    expect(result).toEqual({
+      status: "ok",
+      text: "  ? for shortcuts",
+      lineCount: 1,
+      truncated: true,
+      inputLine: { state: "suggestion", text: "commit this" },
+    });
+  });
+
+  it("reports the box as unknown for an agent with no declared rule, and for a plain shell", async () => {
+    const output = "⏺ Done.\r\n› \x1b[2mExplain this codebase\x1b[22m";
+    await expect(screenRead(4, output, 20, WITH_INPUT_LINE, "gemini")).resolves.toMatchObject({
+      inputLine: { state: "unknown", text: "" },
+    });
+    await expect(screenRead(4, "$ ls", 20, WITH_INPUT_LINE)).resolves.toMatchObject({
+      inputLine: { state: "unknown", text: "" },
+    });
+  });
+
+  it("falls back to the agent a pane was launched as before detection names one", async () => {
+    const output = "⏺ Done.\r\n──────\r\n❯ \x1b[2mcommit this\x1b[22m\r\n──────";
+    await expect(
+      screenRead(4, output, 20, WITH_INPUT_LINE, undefined, "claude")
+    ).resolves.toMatchObject({ inputLine: { state: "suggestion", text: "commit this" } });
+    // A detected agent with no rule wins over the launch agent's rule.
+    await expect(
+      screenRead(4, output, 20, WITH_INPUT_LINE, "gemini", "claude")
+    ).resolves.toMatchObject({ inputLine: { state: "unknown", text: "" } });
+  });
+
+  it("leaves the input box out for an internal reader that does not ask for it", async () => {
+    const output = "⏺ Done.\r\n❯ \x1b[2mcommit this\x1b[22m";
+    const result = await screenRead(4, output, 20, { dropGhostInput: true }, "claude");
+    expect(result).toEqual({ status: "ok", text: "⏺ Done.\n❯", lineCount: 2, truncated: false });
+  });
+
   it("keeps the generic dim drop for an agent with no declared rule", async () => {
     const output = "⏺ Done.\r\n› \x1b[2mExplain this codebase\x1b[22m";
-    const result = await screenRead(4, output, 20, { dropGhostInput: true }, "codex");
+    const result = await screenRead(4, output, 20, { dropGhostInput: true }, "gemini");
     expect(result.status === "ok" && result.text).toBe("⏺ Done.\n›");
   });
 

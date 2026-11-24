@@ -337,6 +337,45 @@ describe("agentActions adversarial", () => {
     );
   });
 
+  it.each(["browser", "dev-preview"])(
+    "agent.launch hands a %s launch the caller's panel options, refusing a used id (#17221)",
+    async (agentId) => {
+      const callbacks = makeCallbacks();
+      const actions = setupActions(callbacks);
+      panelStoreMock.getState.mockReturnValue({ panelsById: { taken: { id: "taken" } } });
+
+      await expect(
+        callAction(actions, "agent.launch", { agentId, requestedId: "taken" })
+      ).rejects.toThrow(/already exists/);
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+
+      await callAction(
+        actions,
+        "agent.launch",
+        {
+          agentId,
+          requestedId: "fresh-id",
+          name: "Staging",
+          focusPolicy: "preserve",
+          excludeFromPersistence: true,
+          removeOnExit: true,
+        },
+        { dispatchSource: "plugin", callerPluginId: "acme.orchestrator" }
+      );
+      expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+        agentId,
+        expect.objectContaining({
+          requestedId: "fresh-id",
+          name: "Staging",
+          focusPolicy: "preserve",
+          excludeFromPersistence: true,
+          removeOnExit: true,
+          launchedByPluginId: "acme.orchestrator",
+        })
+      );
+    }
+  );
+
   // #12431: one agent-neutral field, mapped per CLI by the registry.
   it("agent.launch maps systemPrompt onto the agent's own append arguments", async () => {
     const callbacks = makeCallbacks();
@@ -863,6 +902,23 @@ describe("agentActions adversarial", () => {
     });
   });
 
+  it.each(["auto", "preserve", "take", undefined] as const)(
+    "agent.browser hands focus policy %s to the launcher, as agent.terminal does (#17221)",
+    async (focusPolicy) => {
+      const callbacks = makeCallbacks();
+      const actions = setupActions(callbacks);
+
+      await callAction(actions, "agent.terminal", { focusPolicy });
+      await callAction(actions, "agent.browser", { focusPolicy });
+
+      const [terminalCall, browserCall] = vi.mocked(callbacks.onLaunchAgent).mock.calls;
+      expect(terminalCall?.[0]).toBe("terminal");
+      expect(terminalCall?.[1]?.focusPolicy).toBe(focusPolicy);
+      expect(browserCall?.[0]).toBe("browser");
+      expect(browserCall?.[1]?.focusPolicy).toBe(focusPolicy);
+    }
+  );
+
   it("shortcut launch actions accept omitted args through ActionService dispatch", async () => {
     const { ActionService } = await import("../../../ActionService");
     const service = new ActionService();
@@ -1097,6 +1153,32 @@ describe("agentActions adversarial", () => {
       terminalId: "term-runtime",
       found: true,
     });
+  });
+
+  it("agent.getState carries a working agent's update footer, leaving its state alone (#17905)", async () => {
+    const updateInstalled = { observedAt: 1717000010000, namesRestart: true };
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["term-runtime"],
+      panelsById: {
+        "term-runtime": {
+          id: "term-runtime",
+          detectedAgentId: "claude",
+          agentState: "working",
+          lastStateChange: 1717000009000,
+          updateInstalled,
+        },
+      },
+    });
+
+    const actions = setupActions(makeCallbacks());
+    const result = await callAction(actions, "agent.getState", { agentId: "claude" });
+
+    expect(result).toMatchObject({ state: "working", waitingReason: null, updateInstalled });
+    // What a caller receives: the result as the registered schema parses it.
+    const def = actions.get("agent.getState")!() as {
+      resultSchema?: { parse: (v: unknown) => unknown };
+    };
+    expect(def.resultSchema?.parse(result)).toMatchObject({ updateInstalled });
   });
 
   it("agent.getState returns found:false with null fields when no panel matches", async () => {

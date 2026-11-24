@@ -100,6 +100,12 @@ vi.mock("../client/initClient.js", async (importOriginal) => {
   };
 });
 
+// Observed, not replaced: when the Shell reads this machine's name (#17027).
+vi.mock("../../utils/machineName.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../utils/machineName.js")>();
+  return { ...original, machineDisplayName: vi.fn(() => "harness-shell") };
+});
+
 vi.mock("../../ipc/handlers/app/state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../ipc/handlers/app/state.js")>()),
   readShellHydrateFields: () => ({ safeMode: false, crashCount: 0 }),
@@ -139,6 +145,7 @@ import {
   registerForgeProviders,
   unregisterForgeProviders,
 } from "../../services/forgeProviderRegistry.js";
+import { machineDisplayName } from "../../utils/machineName.js";
 import { requireRemoteService } from "../runtime.js";
 import type { FakeView } from "./harness/fakeView.js";
 import { harnessState } from "./harness/harnessState.js";
@@ -205,6 +212,24 @@ async function listFiles(dir: string): Promise<string[]> {
 }
 
 describe("Remote Hosts polish over the real link", () => {
+  it(
+    "names this machine to a host only once it dials one",
+    async () => {
+      vi.mocked(machineDisplayName).mockClear();
+      const r = await startRemoteHarness();
+      h = r;
+      // Booted, Host mode listening, nothing dialled: no subprocess for the name yet.
+      expect(machineDisplayName).not.toHaveBeenCalled();
+      await r.connect();
+      expect(r.shellIdentity().client.clientName).toBe("harness-shell");
+      expect(machineDisplayName).toHaveBeenCalledTimes(1);
+      await r.dropLink();
+      await r.restoreLink();
+      expect(machineDisplayName).toHaveBeenCalledTimes(1);
+    },
+    TEST_TIMEOUT_MS
+  );
+
   it(
     "upload: a pasted image shows real progress and Cancel stops the transfer mid-way, leaving nothing to insert",
     async () => {

@@ -7,10 +7,23 @@ import type {
   DecisionsSetupCheckStartResult,
   DecisionsStatus,
 } from "@shared/types/decisions";
+import { useState } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { DecisionsConnectionSection } from "../DecisionsConnectionSection";
+import type { ComponentProps } from "react";
+import { DecisionsConnectionSection as ConnectionSection } from "../DecisionsConnectionSection";
+import { DecisionsDisconnectDialog } from "../DecisionsDisconnectDialog";
+import { useRelayCheck } from "../useRelayCheck";
+
+/** The section with the relay check the tab hands it. */
+function DecisionsConnectionSection(
+  props: Omit<ComponentProps<typeof ConnectionSection>, "relay">
+) {
+  const relay = useRelayCheck();
+  return <ConnectionSection {...props} relay={relay} />;
+}
 
 const ORIGIN = "https://decisions.example.workers.dev";
+const HOST = "decisions.example.workers.dev";
 const checkRelay = vi.fn<(url: string) => Promise<DecisionsRelayCheck>>();
 const startSetupCheck = vi.fn<() => Promise<DecisionsSetupCheckStartResult>>();
 
@@ -91,6 +104,25 @@ describe("DecisionsConnectionSection relay check", () => {
     );
     expect(screen.getByText("decisions.example.workers.dev is ready to claim")).toBeTruthy();
     expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+  });
+
+  it("sends a bare host through the form's own submit, leaving the scheme to main", async () => {
+    checkRelay.mockResolvedValue({ result: "unclaimed", origin: ORIGIN, compatibility: SAME });
+    renderSection({ state: "not-connected" });
+
+    fireEvent.change(urlField(), { target: { value: ORIGIN } });
+    expect(urlField().validity.typeMismatch).toBe(false);
+    fireEvent.change(urlField(), { target: { value: "decisions.example.workers.dev" } });
+    // A URL field holds a bare host as a mismatch of its own, which neither
+    // stops the check nor reaches assistive tech as an invalid entry.
+    expect(urlField().validity.typeMismatch).toBe(true);
+    expect(urlField().getAttribute("aria-invalid")).toBe("false");
+    // requestSubmit, unlike a bare submit event, runs the form's own validation first.
+    await act(async () => {
+      urlField().form!.requestSubmit();
+    });
+    expect(checkRelay).toHaveBeenCalledExactlyOnceWith("decisions.example.workers.dev");
+    expect(urlField().getAttribute("aria-invalid")).toBe("false");
   });
 
   it.each<[string, DecisionsRelayCheck, string, RegExp]>([
@@ -236,6 +268,10 @@ describe("DecisionsConnectionSection relay check", () => {
     const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
     await act(async () => {});
     expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    // Nothing was wrong, so the check made on opening added nothing to the page (#18059).
+    expect(document.getElementById("decisions-relay-check")).toBeNull();
+    expect(document.getElementById("decisions-relay-versions")).toBeNull();
+    expect(checkButton("Check")).toBeTruthy();
 
     await act(async () => {
       view.rerender(
@@ -251,12 +287,17 @@ describe("DecisionsConnectionSection relay check", () => {
     const other = "https://other.example.workers.dev";
     const second = deferred<DecisionsRelayCheck>();
     checkRelay
-      .mockResolvedValueOnce({ result: "claimed", origin: ORIGIN, compatibility: SAME })
+      .mockResolvedValueOnce({
+        result: "unreachable",
+        origin: ORIGIN,
+        endpoint: "health",
+        reason: "dns",
+      })
       .mockReturnValueOnce(second.promise);
 
     const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
     await act(async () => {});
-    expect(screen.getByText("decisions.example.workers.dev is claimed")).toBeTruthy();
+    expect(screen.getByText("Couldn't reach decisions.example.workers.dev")).toBeTruthy();
 
     await act(async () => {
       view.rerender(
@@ -265,13 +306,13 @@ describe("DecisionsConnectionSection relay check", () => {
         </TooltipProvider>
       );
     });
-    expect(screen.queryByText("decisions.example.workers.dev is claimed")).toBeNull();
+    expect(screen.queryByText("Couldn't reach decisions.example.workers.dev")).toBeNull();
     expect(checkRelay).toHaveBeenLastCalledWith(other);
 
     await act(async () => {
-      second.resolve({ result: "claimed", origin: other, compatibility: SAME });
+      second.resolve({ result: "unreachable", origin: other, endpoint: "health", reason: "dns" });
     });
-    expect(screen.getByText("other.example.workers.dev is claimed")).toBeTruthy();
+    expect(screen.getByText("Couldn't reach other.example.workers.dev")).toBeTruthy();
   });
 
   it("starts nothing while the switch is changing", async () => {
@@ -310,18 +351,275 @@ describe("DecisionsConnectionSection relay check", () => {
     });
 
     expect(checkRelay).toHaveBeenCalledExactlyOnceWith(ORIGIN);
+    // The versions moved apart, which is worth a row; the relay answering as itself isn't.
+    expect(document.getElementById("decisions-relay-check")).toBeNull();
     expect(screen.getByText("The relay is behind Daintree")).toBeTruthy();
+    // Still asking and answering: information, not a warning.
+    const versions = document.getElementById("decisions-relay-versions")!;
     expect(
-      screen.getByText(
+      within(versions).getByText(
         /The relay runs 0\.0\.9, protocol 1\. Daintree expects 0\.1\.0, protocol 1\. Both speak protocol 1, so questions and answers work\./
       )
     ).toBeTruthy();
-    // Still asking and answering: information, not a warning.
-    const versions = document.getElementById("decisions-relay-versions")!;
     expect(versions.querySelector("[data-severity-glyph]")?.classList.contains("lucide-info")).toBe(
       true
     );
     expect(checkButton("Check again")).toBeTruthy();
+  });
+
+  it("shows the whole check of the relay set up here on Check, without calling it someone else's", async () => {
+    const asked = deferred<DecisionsRelayCheck>();
+    checkRelay
+      .mockResolvedValueOnce({
+        result: "claimed",
+        origin: ORIGIN,
+        compatibility: {
+          relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.0.9" },
+          daintree: SAME.daintree,
+          diverges: true,
+        },
+      })
+      .mockReturnValueOnce(asked.promise);
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+    expect(document.getElementById("decisions-relay-check")).toBeNull();
+    expect(screen.getByText("The relay is behind Daintree")).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(checkButton("Check again"));
+    });
+    const regions = () => screen.getAllByRole("status").map((region) => region.textContent ?? "");
+    expect(regions()).toContain("Checking the relay…");
+    expect(checkButton("Check again").getAttribute("aria-busy")).toBe("true");
+    await act(async () => {
+      asked.resolve({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+    });
+
+    expect(checkRelay).toHaveBeenCalledTimes(2);
+    const row = document.getElementById("decisions-relay-check")!;
+    expect(row.textContent).toContain(
+      "decisions.example.workers.dev answered as a Decisions relay"
+    );
+    expect(row.textContent).toContain("the relay this computer is set up with");
+    expect(row.textContent).not.toMatch(/already has an owner|is claimed/);
+    // What the person asked for, not what the check on opening saw.
+    expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+    expect(screen.queryByText("The relay is behind Daintree")).toBeNull();
+    expect(checkButton("Check again")).toBeTruthy();
+  });
+
+  it("says a version mismatch found on opening when it's the only row it adds", async () => {
+    checkRelay.mockResolvedValue({
+      result: "claimed",
+      origin: ORIGIN,
+      compatibility: {
+        relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.2.0" },
+        daintree: SAME.daintree,
+        diverges: true,
+      },
+    });
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    expect(document.getElementById("decisions-relay-check")).toBeNull();
+    expect(screen.getByText("The relay is newer than Daintree")).toBeTruthy();
+    const announced = screen
+      .getAllByRole("status")
+      .some((region) => region.textContent?.startsWith("The relay is newer than Daintree."));
+    expect(announced).toBe(true);
+  });
+
+  it("keeps a failed check the person asked for while the connection comes back and checks again", async () => {
+    const retry = deferred<DecisionsRelayCheck>();
+    checkRelay
+      .mockResolvedValueOnce({ result: "claimed", origin: ORIGIN, compatibility: SAME })
+      .mockRejectedValueOnce(new Error("Turn on Decisions to check a relay"))
+      .mockReturnValueOnce(retry.promise);
+    const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(checkButton("Check"));
+    });
+    const failed = () => document.getElementById("decisions-relay-url")!.textContent ?? "";
+    expect(failed()).toContain("Couldn't check the relay. Turn on Decisions");
+
+    const rerender = (status: DecisionsStatus) =>
+      view.rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={status} />
+        </TooltipProvider>
+      );
+    await act(async () => rerender({ state: "reconnecting", relayOrigin: ORIGIN }));
+    await act(async () => rerender({ state: "connected", relayOrigin: ORIGIN }));
+    expect(checkRelay).toHaveBeenCalledTimes(3);
+    expect(failed()).toContain("Couldn't check the relay. Turn on Decisions");
+    expect(checkButton("Check again")).toBeTruthy();
+
+    await act(async () => {
+      retry.resolve({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+    });
+    expect(failed()).not.toContain("Couldn't check the relay");
+    // The person asked about this relay, so its answer shows in full.
+    expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+  });
+
+  it("adds a row on opening only for what's wrong, and says it", async () => {
+    checkRelay.mockResolvedValue({
+      result: "unreachable",
+      origin: ORIGIN,
+      endpoint: "health",
+      reason: "timeout",
+    });
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    const row = document.getElementById("decisions-relay-check")!;
+    expect(within(row).getByText("Couldn't reach decisions.example.workers.dev")).toBeTruthy();
+    expect(within(row).getByText("It didn't answer in time")).toBeTruthy();
+    const announced = screen
+      .getAllByRole("status")
+      .map((region) => region.textContent ?? "")
+      .some((text) => text.startsWith("Couldn't reach decisions.example.workers.dev"));
+    expect(announced).toBe(true);
+    expect(checkButton("Check again")).toBeTruthy();
+  });
+
+  it("warns on opening when the relay set up here reports no owner", async () => {
+    checkRelay.mockResolvedValue({ result: "unclaimed", origin: ORIGIN, compatibility: SAME });
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    const row = document.getElementById("decisions-relay-check")!;
+    expect(within(row).getByText("decisions.example.workers.dev reports no owner")).toBeTruthy();
+    expect(row.textContent).toContain("it answered as one nobody has claimed");
+    expect(
+      row.querySelector("[data-severity-glyph]")?.classList.contains("lucide-triangle-alert")
+    ).toBe(true);
+    expect(row.textContent).not.toMatch(/ready to claim/);
+    expect(document.getElementById("decisions-relay-versions")).toBeNull();
+  });
+
+  it("says nothing while it checks on opening, or once it found nothing wrong", async () => {
+    const pending = deferred<DecisionsRelayCheck>();
+    checkRelay.mockReturnValue(pending.promise);
+    renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    const regions = () => screen.getAllByRole("status").map((region) => region.textContent ?? "");
+    expect(regions()).not.toContain("Checking the relay…");
+    expect(checkButton("Check").getAttribute("aria-busy")).not.toBe("true");
+
+    await act(async () => {
+      pending.resolve({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+    });
+    expect(regions().filter((text) => text !== "")).toEqual([
+      "Connected to decisions.example.workers.dev",
+    ]);
+  });
+
+  it("lets a check the person asked for win over the one made on opening, whichever answers last", async () => {
+    const opening = deferred<DecisionsRelayCheck>();
+    const asked = deferred<DecisionsRelayCheck>();
+    checkRelay.mockReturnValueOnce(opening.promise).mockReturnValueOnce(asked.promise);
+    const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+
+    await act(async () => {
+      fireEvent.click(checkButton("Check"));
+    });
+    // The connection drops and comes back while the asked-for check is out: it isn't replaced.
+    const rerender = (status: DecisionsStatus) =>
+      view.rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={status} />
+        </TooltipProvider>
+      );
+    await act(async () => rerender({ state: "reconnecting", relayOrigin: ORIGIN }));
+    await act(async () => rerender({ state: "connected", relayOrigin: ORIGIN }));
+    expect(checkRelay).toHaveBeenCalledTimes(2);
+
+    // The opening's answer arrives first and is dropped: the asked-for check is still out.
+    await act(async () => {
+      opening.resolve({ result: "unreachable", origin: ORIGIN, endpoint: "health", reason: "dns" });
+    });
+    expect(screen.queryByText("Couldn't reach decisions.example.workers.dev")).toBeNull();
+    expect(checkButton("Check").getAttribute("aria-busy")).toBe("true");
+
+    await act(async () => {
+      asked.resolve({ result: "claimed", origin: ORIGIN, compatibility: SAME });
+    });
+
+    expect(
+      screen.getByText("decisions.example.workers.dev answered as a Decisions relay")
+    ).toBeTruthy();
+    expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+    expect(screen.queryByText("Couldn't reach decisions.example.workers.dev")).toBeNull();
+  });
+
+  it("keeps the whole check the person asked for when the connection comes back and checks again", async () => {
+    checkRelay
+      .mockResolvedValueOnce({ result: "claimed", origin: ORIGIN, compatibility: SAME })
+      .mockResolvedValueOnce({ result: "claimed", origin: ORIGIN, compatibility: SAME })
+      .mockResolvedValueOnce({
+        result: "claimed",
+        origin: ORIGIN,
+        compatibility: {
+          relay: { protocolMin: 1, protocolMax: 1, workerVersion: "0.1.1" },
+          daintree: SAME.daintree,
+          diverges: true,
+        },
+      });
+    const view = renderSection({ state: "connected", relayOrigin: ORIGIN });
+    await act(async () => {});
+    await act(async () => {
+      fireEvent.click(checkButton("Check"));
+    });
+    expect(screen.getByText("Relay and Daintree versions match")).toBeTruthy();
+
+    const rerender = (status: DecisionsStatus) =>
+      view.rerender(
+        <TooltipProvider>
+          <DecisionsConnectionSection status={status} />
+        </TooltipProvider>
+      );
+    await act(async () => rerender({ state: "reconnecting", relayOrigin: ORIGIN }));
+    await act(async () => rerender({ state: "connected", relayOrigin: ORIGIN }));
+
+    expect(checkRelay).toHaveBeenCalledTimes(3);
+    // The new answer, in full: the relay row stays, and the versions say what changed.
+    expect(screen.getByText("The relay is newer than Daintree")).toBeTruthy();
+    expect(screen.queryByText("Relay and Daintree versions match")).toBeNull();
+    expect(document.getElementById("decisions-relay-check")).toBeTruthy();
+  });
+
+  it("shows what was observed about the rest of Decisions under the status, only while connected", () => {
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    const facts = <span>2 phones with notifications</span>;
+    const view = render(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={{ state: "connected", relayOrigin: ORIGIN }}
+          facts={facts}
+        />
+      </TooltipProvider>
+    );
+    const statusRow = () => document.getElementById("decisions-connection-status")!;
+    expect(within(statusRow()).getByText("2 phones with notifications")).toBeTruthy();
+    // Not part of what the status announces.
+    expect(screen.getAllByRole("status")[0]!.textContent).toBe(
+      "Connected to decisions.example.workers.dev"
+    );
+
+    view.rerender(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={{ state: "reconnecting", relayOrigin: ORIGIN }}
+          facts={facts}
+        />
+      </TooltipProvider>
+    );
+    expect(within(statusRow()).queryByText("2 phones with notifications")).toBeNull();
+    expect(statusRow().textContent).toContain("The connection closed");
   });
 
   it("checks a saved relay that isn't connected only when asked", async () => {
@@ -495,6 +793,111 @@ describe("DecisionsConnectionSection setup unfinished", () => {
     expect(screen.getByText(/The last setup check stopped at push configuration/)).toBeTruthy();
   });
 
+  function renderWithAgentsOff(status: DecisionsStatus, agentsOff = true) {
+    // A connected relay is checked on mount; that check never answers here.
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    return render(
+      <TooltipProvider>
+        <DecisionsConnectionSection status={status} agentsOff={agentsOff} />
+      </TooltipProvider>
+    );
+  }
+
+  it("keeps setup unfinished after every step passed while no agent is switched on, and takes the person to Agents (#18057)", () => {
+    const agents = document.createElement("section");
+    agents.id = "decisions-agents";
+    const firstSwitch = document.createElement("button");
+    firstSwitch.setAttribute("role", "switch");
+    agents.append(firstSwitch);
+    document.body.append(agents);
+    try {
+      renderWithAgentsOff({
+        state: "connected",
+        relayOrigin: ORIGIN,
+        recoveryKitVerifiedAt: 1,
+        setupCheck: { checkedAt: 2, failedStep: null },
+      });
+
+      expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+      expect(screen.getByText(/No agents are switched on for new launches/)).toBeTruthy();
+      expect(statusRow()).toContain("Connected to decisions.example.workers.dev");
+
+      fireEvent.click(screen.getByRole("button", { name: "Choose agents" }));
+      expect(document.activeElement).toBe(firstSwitch);
+    } finally {
+      agents.remove();
+    }
+  });
+
+  it("offers Agents beside the kit or the check while both are left", async () => {
+    const onFinishSetup = vi.fn();
+    checkRelay.mockReturnValue(new Promise(() => {}));
+    render(
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={{ state: "connected", relayOrigin: ORIGIN }}
+          onFinishSetup={onFinishSetup}
+          agentsOff
+        />
+      </TooltipProvider>
+    );
+    expect(screen.getByText(/none of it can be recovered/)).toBeTruthy();
+    expect(screen.getByText(/No agents are switched on/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Save recovery kit" }));
+    expect(onFinishSetup).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
+    cleanup();
+
+    startSetupCheck.mockReset().mockReturnValue(new Promise(() => {}));
+    renderWithAgentsOff({ state: "connected", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
+    expect(screen.getByText(/Run the setup check/)).toBeTruthy();
+    expect(screen.getByText(/No agents are switched on/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
+    const fromWarning = screen
+      .getAllByRole("button", { name: "Check setup" })
+      .find((button) => !button.hasAttribute("data-decisions-setup-check-start"))!;
+    await act(async () => {
+      fireEvent.click(fromWarning);
+    });
+    expect(startSetupCheck).toHaveBeenCalledOnce();
+  });
+
+  it("asks for agents for a relay set up but not connected, which launches still reach once it is", () => {
+    const finished: DecisionsStatus = {
+      state: "not-connected",
+      relayOrigin: ORIGIN,
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: null },
+    };
+    renderWithAgentsOff(finished);
+    expect(screen.getByText("Setup isn't finished")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Choose agents" })).toBeTruthy();
+    cleanup();
+
+    renderWithAgentsOff(finished, false);
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+  });
+
+  it("says nothing about agents with no relay set up, or for a relay revoked or unusable", () => {
+    renderWithAgentsOff({ state: "not-connected" });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    cleanup();
+
+    renderWithAgentsOff({ state: "revoked", relayOrigin: ORIGIN, recoveryKitVerifiedAt: 1 });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    cleanup();
+
+    renderWithAgentsOff({
+      state: "not-connected",
+      relayOrigin: ORIGIN,
+      problem: "storage",
+      recoveryKitVerifiedAt: 1,
+      setupCheck: { checkedAt: 2, failedStep: null },
+    });
+    expect(screen.queryByText("Setup isn't finished")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Choose agents" })).toBeNull();
+  });
+
   it("leaves a revoked relay, or one that can't be used, to say so on its own row", () => {
     renderSection({ state: "revoked", relayOrigin: ORIGIN });
     expect(statusRow()).toContain("Revoked by decisions.example.workers.dev");
@@ -504,5 +907,274 @@ describe("DecisionsConnectionSection setup unfinished", () => {
     renderSection({ state: "not-connected", relayOrigin: ORIGIN, problem: "keys" });
     expect(statusRow()).toContain("keys couldn't be read");
     expect(screen.queryByText("Setup isn't finished")).toBeNull();
+  });
+});
+
+describe("DecisionsConnectionSection disconnect focus", () => {
+  const disconnectRelay = vi.fn<() => Promise<DecisionsStatus>>();
+
+  /** The tab's part: the status main answers with replaces the one shown. */
+  function Section({ initial }: { initial: DecisionsStatus }) {
+    const [status, setStatus] = useState(initial);
+    return (
+      <TooltipProvider>
+        <DecisionsConnectionSection
+          status={status}
+          onChanged={(next) => {
+            if (next) setStatus(next);
+          }}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  beforeEach(() => {
+    checkRelay.mockReset();
+    startSetupCheck.mockReset();
+    disconnectRelay.mockReset();
+    const stub = electronStub();
+    Object.defineProperty(window, "electron", {
+      value: { ...stub, decisions: { ...stub.decisions, disconnectRelay } },
+      configurable: true,
+      writable: true,
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  it.each<[string, DecisionsStatus, string, string | null]>([
+    [
+      "a relay with a current kit",
+      {
+        state: "not-connected",
+        relayOrigin: ORIGIN,
+        keysStored: true,
+        keysVersion: "current.none",
+        recoveryKitVerifiedAt: 1,
+        recoveryKitCurrent: true,
+      },
+      "Disconnect relay",
+      null,
+    ],
+    [
+      "a relay with no current kit",
+      { state: "not-connected", relayOrigin: ORIGIN, keysStored: true },
+      "Disconnect relay",
+      HOST,
+    ],
+    [
+      "an unfinished setup's keys",
+      { state: "not-connected", keysStored: true, keysVersion: "staged.none" },
+      "Remove keys",
+      "Decisions keys",
+    ],
+  ])(
+    "hands focus to the relay URL field once removing %s takes its button away",
+    async (_, initial, label, typed) => {
+      disconnectRelay.mockResolvedValue({ state: "not-connected" });
+      render(<Section initial={initial} />);
+      await act(async () => {});
+
+      const trigger = screen.getByRole("button", { name: label });
+      trigger.focus();
+      fireEvent.click(trigger);
+      const confirm = within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: label,
+      });
+      if (typed !== null) {
+        fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+          target: { value: typed },
+        });
+      }
+      act(() => confirm.focus());
+      await act(async () => {
+        fireEvent.click(confirm);
+      });
+
+      // Main rechecks a one-click confirm against the keys as they are when its turn comes (#18064).
+      expect(disconnectRelay).toHaveBeenCalledExactlyOnceWith({
+        oneClick: typed === null,
+        relayOrigin: initial.relayOrigin ?? null,
+        keys: initial.keysVersion ?? null,
+      });
+      await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+      expect(screen.queryByRole("button", { name: label })).toBeNull();
+      await vi.waitFor(() => expect(document.activeElement).toBe(urlField()));
+    }
+  );
+
+  it("hands focus back to Disconnect relay when the confirm is cancelled", async () => {
+    render(<Section initial={{ state: "not-connected", relayOrigin: ORIGIN }} />);
+    await act(async () => {});
+
+    const trigger = screen.getByRole("button", { name: "Disconnect relay" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const cancel = within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" });
+    act(() => cancel.focus());
+    fireEvent.click(cancel);
+
+    await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(disconnectRelay).not.toHaveBeenCalled();
+  });
+});
+
+describe("DecisionsDisconnectDialog safeguard (#18064)", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  function renderDialog(props: { relayOrigin: string | null; kitCurrent: boolean }) {
+    const onConfirm = vi.fn();
+    const view = render(
+      <DecisionsDisconnectDialog
+        isOpen
+        keysStored
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={onConfirm}
+        {...props}
+      />
+    );
+    return { onConfirm, view };
+  }
+
+  function confirmButton(name = "Disconnect relay"): HTMLButtonElement {
+    return within(screen.getByRole("alertdialog")).getByRole("button", {
+      name,
+    }) as HTMLButtonElement;
+  }
+
+  function unavailable(element: HTMLElement): boolean {
+    return (
+      element.getAttribute("aria-disabled") === "true" ||
+      (element instanceof HTMLButtonElement && element.disabled)
+    );
+  }
+
+  it("asks for one click while a current kit holds the keys", () => {
+    const { onConfirm } = renderDialog({ relayOrigin: ORIGIN, kitCurrent: true });
+
+    expect(within(screen.getByRole("alertdialog")).queryByRole("textbox")).toBeNull();
+    fireEvent.click(confirmButton());
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("asks for the relay's address with no current kit, naming what can't be got back", () => {
+    const { onConfirm } = renderDialog({ relayOrigin: ORIGIN, kitCurrent: false });
+    const body = screen.getByRole("alertdialog").textContent ?? "";
+
+    expect(body).toContain(`only copy of ${HOST}'s owner keys`);
+    expect(body).toContain("sealed with a key only this computer holds can't be read again");
+    expect(body).toContain(`nobody can reconnect to ${HOST} as its owner`);
+    expect(body).toContain("Save and verify a recovery kit first");
+    expect(unavailable(confirmButton())).toBe(true);
+    fireEvent.click(confirmButton());
+
+    const field = within(screen.getByRole("alertdialog")).getByRole("textbox");
+    fireEvent.change(field, { target: { value: "decisions.example" } });
+    expect(unavailable(confirmButton())).toBe(true);
+    fireEvent.change(field, { target: { value: HOST } });
+    expect(unavailable(confirmButton())).toBe(false);
+    fireEvent.click(confirmButton());
+
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("takes back an address typed for other keys once the keys change while open", () => {
+    const view = render(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored
+        keysVersion="first.none"
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+    fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+      target: { value: HOST },
+    });
+    expect(unavailable(confirmButton())).toBe(false);
+
+    view.rerender(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored
+        keysVersion="second.none"
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    expect(unavailable(confirmButton())).toBe(true);
+  });
+
+  it("offers no kit to save when the key file is gone, still asking for the address", () => {
+    render(
+      <DecisionsDisconnectDialog
+        isOpen
+        relayOrigin={ORIGIN}
+        keysStored={false}
+        kitCurrent={false}
+        disconnecting={false}
+        error={null}
+        onCancel={() => {}}
+        onConfirm={() => {}}
+      />
+    );
+
+    expect(screen.getByRole("alertdialog").textContent).not.toContain("Save and verify");
+    expect(unavailable(confirmButton())).toBe(true);
+  });
+
+  it("asks for the keys' name for an unfinished setup's keys, which no kit can cover", () => {
+    const { onConfirm } = renderDialog({ relayOrigin: null, kitCurrent: true });
+
+    expect(unavailable(confirmButton("Remove keys"))).toBe(true);
+    expect(screen.getByRole("alertdialog").textContent).not.toContain("Save and verify");
+    fireEvent.change(within(screen.getByRole("alertdialog")).getByRole("textbox"), {
+      target: { value: "Decisions keys" },
+    });
+    fireEvent.click(confirmButton("Remove keys"));
+
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("puts the gate up while open when the kit stops covering the keys, and takes it down when one does", () => {
+    const { onConfirm, view } = renderDialog({ relayOrigin: ORIGIN, kitCurrent: true });
+    const rerender = (kitCurrent: boolean) =>
+      view.rerender(
+        <DecisionsDisconnectDialog
+          isOpen
+          relayOrigin={ORIGIN}
+          keysStored
+          kitCurrent={kitCurrent}
+          disconnecting={false}
+          error={null}
+          onCancel={() => {}}
+          onConfirm={onConfirm}
+        />
+      );
+
+    rerender(false);
+    expect(unavailable(confirmButton())).toBe(true);
+    fireEvent.click(confirmButton());
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    rerender(true);
+    expect(within(screen.getByRole("alertdialog")).queryByRole("textbox")).toBeNull();
+    fireEvent.click(confirmButton());
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(true);
   });
 });

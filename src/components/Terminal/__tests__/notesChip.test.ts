@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Text } from "@codemirror/state";
 import { EditorView, closeHoverTooltips } from "@codemirror/view";
 import type { DiffNote, PendingDiffNotes } from "@/components/Worktree/diffNotes";
 import {
   applyDiffNotesChipSource,
   currentDiffNotesChipEffects,
   notesChipField,
+  setDiffNotesChipSource,
 } from "../inputEditorExtensions/notesChip";
 
 const note = (id: string, filePath: string): DiffNote => ({
@@ -147,5 +148,31 @@ describe("notesChipField", () => {
     expect(chips(view)[0]!.label).toBe("1 note · clears on send");
     view.dispatch({ effects: currentDiffNotesChipEffects(view) });
     expect(chips(view)[0]!.label).toBe("2 notes · clears on send");
+  });
+
+  it("never reads a draft whole for a composer that can't take notes", () => {
+    const toString = vi.spyOn(Text.prototype, "toString");
+    onTestFinished(() => toString.mockRestore());
+    let state = EditorState.create({ doc: "Fix @notes", extensions: [notesChipField] });
+    const inactive = state.field(notesChipField);
+    for (const ch of " now") {
+      state = state.update({ changes: { from: state.doc.length, insert: ch } }).state;
+    }
+    state = state.update({ effects: setDiffNotesChipSource.of(null) }).state;
+    expect(state.field(notesChipField)).toBe(inactive);
+    expect(toString).not.toHaveBeenCalled();
+
+    state = state.update({
+      changes: { from: 0, insert: "Now " },
+      effects: setDiffNotesChipSource.of(source([])),
+    }).state;
+    expect(state.field(notesChipField).tokens.map((t) => [t.start, t.label])).toEqual([
+      [8, "No notes"],
+    ]);
+
+    toString.mockClear();
+    state = state.update({ effects: setDiffNotesChipSource.of(null) }).state;
+    expect(state.field(notesChipField).tokens).toEqual([]);
+    expect(toString).not.toHaveBeenCalled();
   });
 });

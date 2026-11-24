@@ -6,6 +6,7 @@ import { m } from "framer-motion";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
@@ -89,11 +90,13 @@ export function SystemRequirementsSection({
   // Warning state: has any warnings (warn severity tools not meeting version or missing)
   const hasWarning = allDone && warningTools.length > 0;
 
+  const showChecking = useDohertyGate(isChecking);
+
   const headerSummary = (
     <>
       <span className="text-sm font-medium text-text-primary">System requirements</span>
 
-      {isChecking && (
+      {isChecking && showChecking && (
         <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
           <Spinner size="xs" />
           Checking…
@@ -110,14 +113,26 @@ export function SystemRequirementsSection({
       {allDone && hasFatalFailure && (
         <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error">
           <CircleX className="w-3.5 h-3.5" />
-          Action required: {readyCount} of {totalCount} tools ready
+          <span>
+            Action required:{" "}
+            <span className="tabular-nums">
+              {readyCount} of {totalCount}
+            </span>{" "}
+            tools ready
+          </span>
         </span>
       )}
 
       {allDone && !hasFatalFailure && hasWarning && (
         <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning">
           <AlertTriangle className="w-3.5 h-3.5" />
-          Warning: {readyCount} of {totalCount} tools ready
+          <span>
+            Warning:{" "}
+            <span className="tabular-nums">
+              {readyCount} of {totalCount}
+            </span>{" "}
+            tools ready
+          </span>
         </span>
       )}
     </>

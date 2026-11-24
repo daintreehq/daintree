@@ -1,5 +1,5 @@
 import type {
-  PluginAgentPane,
+  PluginAgentPaneObservation,
   PluginSendToAgentRefusalReason,
   PluginSendToAgentResult,
 } from "@shared/types/plugin";
@@ -48,12 +48,14 @@ export function paneHandoffHeading(
 export function readDraftTargetInputs(): DraftTargetInputs {
   const panelState = usePanelStore.getState();
   const inputState = useTerminalInputStore.getState();
+  const arming = useFleetArmingStore.getState();
   return {
     panelsById: panelState.panelsById,
     backendStatus: panelState.backendStatus,
     hybridInputEnabled: inputState.hybridInputEnabled,
     voiceSubmittingIds: inputState.voiceSubmittingPanels,
-    armedIds: useFleetArmingStore.getState().armedIds,
+    armedIds: arming.armedIds,
+    crossHostTargetCount: arming.crossHostTargets.length,
   };
 }
 
@@ -63,7 +65,7 @@ export function getDraftRefusal(terminalId: string): PluginSendToAgentRefusalRea
 }
 
 /** This view's agent panes, as `host.agents.list()` and the picker read them. */
-export function listAgentPanes(): PluginAgentPane[] {
+export function listAgentPanes(): PluginAgentPaneObservation[] {
   const panelState = usePanelStore.getState();
   return buildAgentPanes({
     ...readDraftTargetInputs(),

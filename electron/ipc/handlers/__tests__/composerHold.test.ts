@@ -32,7 +32,9 @@ vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => 
         ? { capabilities: { queuesInputWhileWorking: true } }
         : id === "plain"
           ? { capabilities: {} }
-          : actual.getEffectiveAgentConfig(id),
+          : id === "lineless"
+            ? { capabilities: { noInputLineWhileWorking: true } }
+            : actual.getEffectiveAgentConfig(id),
   };
 });
 
@@ -41,28 +43,39 @@ import type { IpcContext } from "../../types.js";
 import type { NotifyTerminalInfo } from "../../../services/mcp-server/terminalNotify.js";
 
 function info(overrides: Partial<NotifyTerminalInfo> = {}): NotifyTerminalInfo {
-  return { agentState: "working", detectedAgentId: "gemini", hasPty: true, ...overrides };
+  return { agentState: "working", detectedAgentId: "lineless", hasPty: true, ...overrides };
 }
 
 describe("holdsComposerSend", () => {
-  it("holds for a working agent not declared to queue input", () => {
-    expect(holdsComposerSend(info())).toBe(true);
-  });
-
-  it("keeps the immediate send for any CLI declared to queue input mid-turn", () => {
+  it("holds mid-turn only for a CLI known to take down its input line", () => {
+    expect(holdsComposerSend(info({ detectedAgentId: "lineless" }))).toBe(true);
+    expect(holdsComposerSend(info({ detectedAgentId: "plain" }))).toBe(false);
     expect(holdsComposerSend(info({ detectedAgentId: "queuer" }))).toBe(false);
-    expect(holdsComposerSend(info({ detectedAgentId: "plain" }))).toBe(true);
+    expect(holdsComposerSend(info({ detectedAgentId: "antigravity" }))).toBe(false);
     expect(holdsComposerSend(info({ detectedAgentId: "claude" }))).toBe(false);
     expect(holdsComposerSend(info({ detectedAgentId: "codex" }))).toBe(false);
   });
 
-  it("keeps the immediate send at any prompt, idle, and in a shell", () => {
+  it("holds at a choice dialog, whatever the CLI", () => {
+    const atDialog = { agentState: "waiting", waitingReason: "approval" } as const;
+    expect(holdsComposerSend(info(atDialog))).toBe(true);
+    expect(holdsComposerSend(info({ ...atDialog, detectedAgentId: "claude" }))).toBe(true);
+    expect(holdsComposerSend(info({ ...atDialog, detectedAgentId: "plain" }))).toBe(true);
+  });
+
+  it("keeps the immediate send at a prompt, a prose question, an error, idle, and in a shell", () => {
     expect(holdsComposerSend(info({ agentState: "waiting", waitingReason: "prompt" }))).toBe(false);
     expect(holdsComposerSend(info({ agentState: "waiting", waitingReason: "question" }))).toBe(
       false
     );
+    expect(holdsComposerSend(info({ agentState: "waiting", waitingReason: "error" }))).toBe(false);
     expect(holdsComposerSend(info({ agentState: "idle" }))).toBe(false);
     expect(holdsComposerSend(info({ detectedAgentId: undefined }))).toBe(false);
+    expect(
+      holdsComposerSend(
+        info({ detectedAgentId: undefined, agentState: "waiting", waitingReason: "approval" })
+      )
+    ).toBe(false);
   });
 
   it("never holds for a pane that is gone or going", () => {
@@ -71,6 +84,11 @@ describe("holdsComposerSend", () => {
     expect(holdsComposerSend(info({ isExited: true }))).toBe(false);
     expect(holdsComposerSend(info({ isTrashed: true }))).toBe(false);
     expect(holdsComposerSend(info({ isClosing: true }))).toBe(false);
+    const atDialog = { agentState: "waiting", waitingReason: "approval" } as const;
+    expect(holdsComposerSend(info({ ...atDialog, hasPty: false }))).toBe(false);
+    expect(holdsComposerSend(info({ ...atDialog, isExited: true }))).toBe(false);
+    expect(holdsComposerSend(info({ ...atDialog, isTrashed: true }))).toBe(false);
+    expect(holdsComposerSend(info({ ...atDialog, isClosing: true }))).toBe(false);
   });
 });
 
@@ -118,6 +136,27 @@ describe("handleHold", () => {
       held: false,
       reason: "not-busy",
     });
+  });
+
+  it("lets a working agent's send go at once unless its CLI takes down its line", async () => {
+    pty.read = async () => info({ detectedAgentId: "plain", projectId: "project-1" });
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toEqual({
+      held: false,
+      reason: "not-busy",
+    });
+    expect(queue.hold).not.toHaveBeenCalled();
+  });
+
+  it("holds a send while a choice dialog is on screen", async () => {
+    pty.read = async () =>
+      info({
+        detectedAgentId: "claude",
+        agentState: "waiting",
+        waitingReason: "approval",
+        projectId: "project-1",
+      });
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toMatchObject({ held: true });
+    expect(queue.hold).toHaveBeenCalledWith(expect.objectContaining({ terminalId: "term-1" }));
   });
 
   it("passes on the queue's refusal", async () => {

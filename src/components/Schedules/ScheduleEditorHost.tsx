@@ -56,7 +56,7 @@ export function ScheduleEditorHost() {
   const clearEditor = useSchedulesViewStore((s) => s.clearEditor);
   const answerEditor = useSchedulesViewStore((s) => s.answerEditor);
   const open = useSchedulesViewStore((s) => s.open);
-  const { choices } = useWorktreeChoices();
+  const { choices, ids: worktreeIds } = useWorktreeChoices();
   const agents = useFirstAgentOptions();
   const osJob = useScheduleOsJob(editor !== null, editor?.key ?? null);
   // The project's switches decide whether "Run when Daintree isn't running"
@@ -132,6 +132,7 @@ export function ScheduleEditorHost() {
       defaultAgentId={editor.schedule?.launch.agentId ?? agents[0]?.id ?? ""}
       starter={editor.starter}
       worktrees={choices}
+      worktreeIds={worktreeIds}
       now={now}
       osJobContext={osJob.status?.context ?? null}
       projectSwitches={read ? (project.snapshot?.switches ?? null) : null}

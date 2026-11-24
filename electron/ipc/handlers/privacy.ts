@@ -1,5 +1,5 @@
 // eager-import-allow: reads privacy settings via store.get synchronously in the IPC handler
-import { app, shell } from "electron";
+import { app } from "electron";
 import { store } from "../../store.js";
 import {
   closeTelemetry,
@@ -11,6 +11,7 @@ import { clearAllSessionCaches } from "../../services/sessionCacheCleaner.js";
 import { typedBroadcast } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { PRIVACY_METHOD_CHANNELS } from "./privacy.preload.js";
+import { openWithDefaultApp } from "../../utils/openPath.js";
 import { armRelaunch } from "../../lifecycle/armRelaunch.js";
 import { RUN_DUE_SCHEDULES_FLAG } from "../../boot/dueScheduleLaunch.js";
 
@@ -51,9 +52,16 @@ export const privacyNamespace = defineIpcNamespace({
       if (typeof days !== "number" || !VALID_RETENTION.includes(days)) return;
       store.set("privacy.logRetentionDays", days);
     }),
-    openDataFolder: op(PRIVACY_METHOD_CHANNELS.openDataFolder, (): void => {
-      shell.showItemInFolder(app.getPath("userData"));
-    }),
+    openDataFolder: op(
+      PRIVACY_METHOD_CHANNELS.openDataFolder,
+      async (): Promise<{ opened: boolean }> => {
+        const openError = await openWithDefaultApp(app.getPath("userData"));
+        if (openError) {
+          console.warn("[privacy] Failed to open the data folder:", openError);
+        }
+        return { opened: openError === "" };
+      }
+    ),
     clearCache: op(
       PRIVACY_METHOD_CHANNELS.clearCache,
       (): Promise<{ cleared: number; failed: number }> => clearAllSessionCaches()

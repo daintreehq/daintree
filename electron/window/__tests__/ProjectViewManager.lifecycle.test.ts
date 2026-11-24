@@ -198,12 +198,18 @@ vi.mock("../../utils/openExternal.js", () => ({
   openExternalUrl: vi.fn(),
 }));
 
+const recoveryPageBackupInfoMock = vi.hoisted(() =>
+  vi.fn((): { backupTimestamp: number | null; panelCount: number | null } => ({
+    backupTimestamp: null,
+    panelCount: null,
+  }))
+);
+
 vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: vi.fn(() => ({
     recordCrash: vi.fn(),
     recordRendererGone: vi.fn(),
-    getLastBackupTimestamp: vi.fn(() => null),
-    getBackupPanelCount: vi.fn(() => null),
+    getRecoveryPageBackupInfo: recoveryPageBackupInfoMock,
   })),
 }));
 
@@ -1753,6 +1759,25 @@ describe("ProjectViewManager — startup view crash hook (#12954)", () => {
       expect(capturedIds()).toEqual([bWc.id]);
       expect(manager.getActiveProjectId()).toBe("proj-a");
     });
+
+    it("puts the backup timestamp and panel count on a project view's recovery page", async () => {
+      const setup = createManager();
+      const bWc = await coldSwitch(setup, "proj-b", "/b");
+      recoveryPageBackupInfoMock.mockReturnValueOnce({
+        backupTimestamp: 1_700_000_000_000,
+        panelCount: 0,
+      });
+
+      for (let i = 0; i < 3; i++) {
+        bWc._fire("render-process-gone", {}, { reason: "crashed", exitCode: 1 });
+      }
+      await flushImmediates();
+
+      expect(recoveryPageBackupInfoMock).toHaveBeenCalledTimes(1);
+      expect(bWc.loadURL).toHaveBeenLastCalledWith(
+        expect.stringMatching(/\/recovery\.html\?.*\bbackupTimestamp=1700000000000&panelCount=0$/)
+      );
+    });
   });
 });
 
@@ -2034,7 +2059,7 @@ describe("ProjectViewManager adversarial", () => {
     expect(aView.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 800, height: 600 });
   });
 
-  it("does not resize non-project children such as parked portal views (#10806)", async () => {
+  it("does not resize non-project children such as paint-surface views (#10806)", async () => {
     const win = createMockWindow();
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -2049,18 +2074,18 @@ describe("ProjectViewManager adversarial", () => {
     win.contentView.addChildView(aView);
     manager.registerInitialView(aView as never, "proj-a", "/a");
 
-    // A hidden portal tab: attached to contentView but never registered as a
-    // project view, parked far offscreen by PortalManager.
-    const portalView = { webContents: createMockWebContents(), setBounds: vi.fn() };
-    win.contentView.addChildView(portalView);
+    // A paint-surface view: attached to contentView at bounds SurfaceViewManager
+    // chose, never registered as a project view.
+    const surfaceView = { webContents: createMockWebContents(), setBounds: vi.fn() };
+    win.contentView.addChildView(surfaceView);
 
     const resize = getResizeHandler(win);
     expect(resize).toBeTypeOf("function");
-    portalView.setBounds.mockClear();
+    surfaceView.setBounds.mockClear();
     resize!();
 
-    // The portal view must keep its own (offscreen) bounds — yanking it to the
-    // full window would surface a hidden tab over the active project view.
-    expect(portalView.setBounds).not.toHaveBeenCalled();
+    // The surface keeps its own bounds — stretching it to the full window
+    // would cover the active project view.
+    expect(surfaceView.setBounds).not.toHaveBeenCalled();
   });
 });

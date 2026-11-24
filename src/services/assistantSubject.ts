@@ -1,6 +1,7 @@
 import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
 import type { AssistantOpenDestination } from "@shared/types/ipc/canopy";
 import type { GlobalAssistantInputStamp } from "@shared/types/ipc/help";
+import { GLOBAL_ASSISTANT_SLOT } from "@shared/config/globalAssistantSessions";
 import { LOCAL_HOST_ID, isLocalHostId, type HostId } from "@shared/types/remoteHosts";
 import type { CanopyTerminalApi } from "@/components/Canopy/canopyHostSource";
 import { canopyHostClient } from "@/clients/canopyHostClient";
@@ -224,12 +225,15 @@ function showGlobalAssistant(
   // Its input and lifecycle belong to windows of the machine it runs on.
   if (!watchedHere(subject)) return { ok: false, reason: "unsupported" };
   const panel = useHelpPanelStore.getState();
-  panel.selectGlobal({
-    hostId: destination.hostId,
-    scope: { kind: "global" },
-    terminalId: destination.terminalId,
-    incarnation: destination.incarnation,
-  });
+  panel.selectGlobal(
+    {
+      hostId: destination.hostId,
+      scope: { kind: "global" },
+      terminalId: destination.terminalId,
+      incarnation: destination.incarnation,
+    },
+    destination.slot ?? GLOBAL_ASSISTANT_SLOT
+  );
   panel.setOpen(true);
   panel.requestFocus();
   return { ok: true };

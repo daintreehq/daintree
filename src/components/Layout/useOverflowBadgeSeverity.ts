@@ -6,6 +6,7 @@ import { useNotificationHistoryStore } from "@/store/slices/notificationHistoryS
 import { useUIStore } from "@/store/uiStore";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { useAgentDiscoveryOnboarding } from "@/hooks/app/useAgentDiscoveryOnboarding";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
@@ -142,7 +143,11 @@ export function useOverflowBadgeSeverity(
   /** File watching is degraded or the topology watcher went dark. */
   watcherUnreliable = false,
   /** The Forge capsule is showing its "data unavailable" warning. */
-  forgeUnavailable = false
+  forgeUnavailable = false,
+  /** Questions waiting on the person, for the Decisions inbox button folded into the menu. */
+  decisionsWaitingCount = 0,
+  /** Deliveries stopped on the person's answers, the inbox button's warning (#18045). */
+  decisionsStoppedCount = 0
 ): OverflowBadgeSeverity {
   const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
@@ -168,6 +173,7 @@ export function useOverflowBadgeSeverity(
   const notificationCenterOpen = useUIStore((s) => s.notificationCenterOpen);
   const diagnosticsOpen = useDiagnosticsStore((s) => s.isOpen);
   const canopyOpen = useCanopyStore((s) => s.isOpen);
+  const decisionsInboxOpen = useDecisionsInboxStore((s) => s.isOpen);
 
   const availability = useCliAvailabilityStore(useShallow((s) => s.availability));
   const { loaded: onboardingLoaded, seenAgentIds } = useAgentDiscoveryOnboarding();
@@ -212,6 +218,22 @@ export function useOverflowBadgeSeverity(
     }
 
     if (
+      overflowIds.includes("decisions-inbox") &&
+      decisionsWaitingCount > 0 &&
+      !decisionsInboxOpen
+    ) {
+      waiting = true;
+    }
+
+    if (
+      overflowIds.includes("decisions-inbox") &&
+      decisionsStoppedCount > 0 &&
+      !decisionsInboxOpen
+    ) {
+      warning = true;
+    }
+
+    if (
       overflowIds.includes("notification-center") &&
       notificationUnreadCount > 0 &&
       !notificationCenterOpen
@@ -239,12 +261,15 @@ export function useOverflowBadgeSeverity(
     overflowIds,
     errorCount,
     canopyUrgentCount,
+    decisionsWaitingCount,
+    decisionsStoppedCount,
     watcherUnreliable,
     forgeUnavailable,
     overflowAgentTier,
     notificationCenterOpen,
     diagnosticsOpen,
     canopyOpen,
+    decisionsInboxOpen,
     notificationUnreadCount,
     availability,
     onboardingLoaded,

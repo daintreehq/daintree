@@ -20,7 +20,7 @@ import { ProjectTemplateFileList } from "./ProjectTemplateFileList";
 import { useProjectStore } from "@/store/projectStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
-import { validateFolderName } from "@shared/utils/folderName";
+import { validateHostFolderName } from "@/utils/validateHostFolderName";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
 import {
@@ -34,9 +34,9 @@ import {
   EMOJI_SLOT_CLASS,
   OpenDestinationControl,
   PathCaption,
-  ProjectGroupField,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
+import { ProjectGroupField } from "./ProjectGroupField";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 
@@ -86,7 +86,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   const templateHintId = useId();
 
   const createProjectFolder = useProjectStore((state) => state.createProjectFolder);
-  const { groups, groupId, setGroupId } = useProjectCreationGroup(isOpen);
+  const { groups, groupId, setGroupId, createGroup } = useProjectCreationGroup(isOpen);
 
   useEffect(() => {
     if (!isOpen) {
@@ -206,7 +206,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   const effectiveEmoji = pickedEmoji ?? suggestedEmoji;
 
   const handleCreate = useCallback(async () => {
-    const validationError = validateFolderName(folderName);
+    const validationError = validateHostFolderName(folderName);
     if (validationError) {
       setError(validationError);
       return;
@@ -275,7 +275,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
 
   // Validated as it is typed, not only on submit, so the footer never promises
   // a path that Create would then refuse.
-  const nameError = folderName.trim() ? validateFolderName(folderName) : null;
+  const nameError = folderName.trim() ? validateHostFolderName(folderName) : null;
   const shownError = error ?? nameError;
 
   const previewPath = useMemo(() => {
@@ -355,6 +355,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             groups={groups}
             value={groupId}
             onChange={setGroupId}
+            onCreate={createGroup}
             disabled={isCreating}
           />
           {templates.length > 0 && (

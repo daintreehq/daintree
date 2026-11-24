@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.mock("electron", async () => (await import("./harness/fakeElectron.js")).electronMock);
 
@@ -180,6 +180,18 @@ import type { FakeView } from "./harness/fakeView.js";
 import type { FakeWorkspaceHost } from "./harness/fakeWorkspaceHost.js";
 import { waitUntil } from "./harness/poll.js";
 import { HOST_ID, startRemoteHarness, type RemoteHarness } from "./harness/remoteHarness.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 const VIEW_A = 11; // studio-01:proj-1
 const TEST_TIMEOUT_MS = 60_000;

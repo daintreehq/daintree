@@ -10,7 +10,10 @@ import {
 import { getValidatedOverrides, saveKeybindingOverrides } from "./keybindingOverridesStore.js";
 import { getAllowedSoundFiles } from "./getSoundService.js";
 import { appCustomSchemesWriteSchema } from "../schemas/customSchemes.js";
-import { sanitizeNotificationSettingsPatch } from "../utils/notificationSettingsPatch.js";
+import {
+  notificationSettingsWritten,
+  sanitizeNotificationSettingsPatch,
+} from "../utils/notificationSettingsPatch.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { SAFE_AGENT_ID_PATTERN, UserAgentConfigSchema } from "../../shared/types/index.js";
 import {
@@ -187,6 +190,7 @@ const NOTIFICATION_FIELD_LABELS: Record<string, string> = {
   workingPulseEnabled: "Working pulse",
   workingPulseSoundFile: "Working pulse sound",
   uiFeedbackSoundEnabled: "Interface sounds",
+  soundVolume: "Notification volume",
   flashEnabled: "All-clear flash",
   quietHoursEnabled: "Quiet hours",
   quietHoursStartMin: "Quiet hours start",
@@ -206,6 +210,7 @@ function displayNotificationValue(key: string, value: unknown): string | undefin
       const seconds = Math.round(value / 1000);
       return seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds}s`;
     }
+    if (key === "soundVolume") return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
   }
   return displayScalar(value);
 }
@@ -1378,7 +1383,9 @@ export class ConfigBundleService {
   private notificationSettingsSection(): SectionHandler {
     const readSettings = (): Record<string, unknown> => {
       const settings = store.get("notificationSettings");
-      return isRecord(settings) ? settings : {};
+      // A volume never moved from full is absent; export and compare it as 100% so a
+      // copy to a host that turned its volume down brings it back up.
+      return isRecord(settings) ? { soundVolume: 1, ...settings } : {};
     };
 
     return {
@@ -1430,8 +1437,13 @@ export class ConfigBundleService {
           pending.push(key);
         }
 
-        for (const key of pending) {
-          store.set(`notificationSettings.${key}` as never, sanitized[key] as never);
+        try {
+          for (const key of pending) {
+            store.set(`notificationSettings.${key}` as never, sanitized[key] as never);
+          }
+        } finally {
+          // A write that landed before one that threw still counts.
+          if (pending.length > 0) notificationSettingsWritten();
         }
 
         const readBack = readSettings();
@@ -1446,6 +1458,7 @@ export class ConfigBundleService {
       },
       restore: async (snapshot) => {
         store.set("notificationSettings", (snapshot ?? {}) as never);
+        notificationSettingsWritten();
       },
     };
   }

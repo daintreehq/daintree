@@ -37,7 +37,11 @@ interface SchedulesViewState {
   /** The Schedules tab is in front: Project settings is open on it. */
   showing: boolean;
   editor: ScheduleEditorOpening | null;
-  /** What main answered the editor's last save or delete with, for the list to fold in at once. */
+  /**
+   * What main answered the editor's last save or delete with, for the list to
+   * fold in at once. Cleared once folded, so a later opening never shows it over
+   * the changes made since.
+   */
   editorAnswer: SchedulesSnapshot | null;
   open: (scheduleId?: string | null) => void;
   markLanded: (seq: number) => void;
@@ -46,6 +50,8 @@ interface SchedulesViewState {
   closeEditor: () => void;
   clearEditor: () => void;
   answerEditor: (snapshot: SchedulesSnapshot) => void;
+  /** Clears the answer the list folded in, unless a newer one has taken its place. */
+  takeEditorAnswer: (snapshot: SchedulesSnapshot) => void;
 }
 
 let openings = 0;
@@ -79,6 +85,8 @@ export const useSchedulesViewStore = create<SchedulesViewState>()((set) => ({
     set((state) => (state.editor?.open ? { editor: { ...state.editor, open: false } } : state)),
   clearEditor: () => set({ editor: null }),
   answerEditor: (snapshot) => set({ editorAnswer: snapshot }),
+  takeEditorAnswer: (snapshot) =>
+    set((state) => (state.editorAnswer === snapshot ? { editorAnswer: null } : state)),
 }));
 
 /** An edit is open, or a Schedules tab is in front: a run's notification leaves both alone. */

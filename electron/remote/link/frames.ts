@@ -67,6 +67,25 @@ function isLane(value: number): value is Lane {
   return Number.isInteger(value) && value >= 0 && value < LANE_COUNT;
 }
 
+// Payloads from allocFramePayload not yet framed. Membership is by the exact
+// view and is spent on first use, so a fragment (a different view of the same
+// bytes) or a second encode of the payload copies instead of writing a header
+// into bytes a queued frame may still hold.
+const headroomPayloads = new WeakSet<Uint8Array>();
+
+/**
+ * A payload with room for the frame header in front of it, so encodeFrame
+ * writes the header in place instead of copying the payload behind a new one.
+ * Its bytes start uninitialised: the caller fills every one, and leaves them
+ * alone once the payload is posted.
+ */
+export function allocFramePayload(length: number): Uint8Array {
+  const backing = Buffer.allocUnsafe(FRAME_HEADER_BYTES + length);
+  const payload = new Uint8Array(backing.buffer, backing.byteOffset + FRAME_HEADER_BYTES, length);
+  headroomPayloads.add(payload);
+  return payload;
+}
+
 export function encodeFrame(frame: LinkFrame, maxFrameBytes = DEFAULT_MAX_FRAME_BYTES): Uint8Array {
   if (!isLane(frame.lane)) throw new FrameProtocolError(`invalid lane ${frame.lane}`);
   if (!Number.isInteger(frame.kind) || frame.kind < 0 || frame.kind > 0xff) {
@@ -79,13 +98,19 @@ export function encodeFrame(frame: LinkFrame, maxFrameBytes = DEFAULT_MAX_FRAME_
   if (total > maxFrameBytes) {
     throw new FrameProtocolError(`frame of ${total} bytes exceeds ${maxFrameBytes}`);
   }
-  const out = new Uint8Array(total);
-  const view = new DataView(out.buffer);
+  const { payload } = frame;
+  let out: Uint8Array;
+  if (headroomPayloads.delete(payload)) {
+    out = new Uint8Array(payload.buffer, payload.byteOffset - FRAME_HEADER_BYTES, total);
+  } else {
+    out = new Uint8Array(total);
+    out.set(payload, FRAME_HEADER_BYTES);
+  }
+  const view = new DataView(out.buffer, out.byteOffset, FRAME_HEADER_BYTES);
   view.setUint32(0, total - 4);
   out[4] = frame.lane;
   out[5] = frame.kind;
   view.setUint32(6, frame.streamId);
-  out.set(frame.payload, FRAME_HEADER_BYTES);
   return out;
 }
 

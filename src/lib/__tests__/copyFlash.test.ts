@@ -10,6 +10,7 @@ import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import {
   _resetCopyFlashForTests,
   captureCopyFlash,
+  captureCopyFlashAt,
   dismissCopyFlash,
   getCopyFlash,
   invalidateCopyFlash,
@@ -118,5 +119,27 @@ describe("copyFlash", () => {
     noteCopyFlashPointer(120, 40);
     invalidateCopyFlash();
     expect(captureCopyFlash().origin).toBeNull();
+  });
+
+  it("anchors to a named element over the pointer, in the current view lifecycle", () => {
+    invalidateCopyFlash();
+    noteCopyFlashPointer(400, 600);
+    const tab = document.createElement("div");
+    tab.getBoundingClientRect = () =>
+      ({ left: 10, top: 20, right: 110, bottom: 52, width: 100, height: 32 }) as DOMRect;
+
+    const ticket = captureCopyFlashAt(tab);
+    expect(ticket.origin).toEqual({ kind: "rect", left: 10, top: 20, right: 110, bottom: 52 });
+
+    showCopyFlash(ticket);
+    expect(getCopyFlash()?.origin).toEqual(ticket.origin);
+  });
+
+  it("falls back to where the user acted when the element is gone or unmeasured", () => {
+    noteCopyFlashPointer(400, 600);
+    const detached = document.createElement("div");
+
+    expect(captureCopyFlashAt(null).origin).toEqual({ kind: "point", x: 400, y: 600 });
+    expect(captureCopyFlashAt(detached).origin).toEqual({ kind: "point", x: 400, y: 600 });
   });
 });

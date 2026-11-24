@@ -293,7 +293,10 @@ export interface AssistantPluginContent {
  * warnings: the assistant is still safe to launch, just without that content.
  */
 export interface AssistantContentSyncResult {
+  /** Files written this sync. */
   copied: number;
+  /** Desired files already on disk as they should be, left untouched. */
+  unchanged: number;
   removed: number;
   truncated: boolean;
   /** Skill dirs skipped for missing SKILL.md, as `<scope>:<sourceDir>/<name>`. */
@@ -338,12 +341,12 @@ function isUnderMirrorRoot(posixRelPath: string): boolean {
  * while managed files may still be on disk. Treating that as empty would
  * launch a session with stale unowned skills; throw instead (fail closed).
  */
-async function readManifest(sessionPath: string): Promise<string[]> {
+async function readManifest(sessionPath: string): Promise<{ files: string[]; raw: string | null }> {
   let raw: string;
   try {
     raw = await fs.readFile(path.join(sessionPath, MANIFEST_FILE), "utf-8");
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { files: [], raw: null };
     throw new Error(`Unreadable mirror manifest ${MANIFEST_FILE} — cannot prove mirror ownership`, {
       cause: err,
     });
@@ -365,17 +368,56 @@ async function readManifest(sessionPath: string): Promise<string[]> {
   ) {
     throw new Error(`Unsupported mirror manifest ${MANIFEST_FILE} — cannot prove mirror ownership`);
   }
-  return shape.files as string[];
+  return { files: shape.files as string[], raw };
 }
 
-async function writeManifest(sessionPath: string, files: string[]): Promise<void> {
+/**
+ * Writes the manifest unless `onDisk`, its current text, already says the
+ * same. Returns the text now on disk.
+ */
+async function writeManifest(
+  sessionPath: string,
+  files: string[],
+  onDisk: string | null
+): Promise<string> {
   const manifest: ManifestShape = { version: 1, files: [...new Set(files)].sort() };
-  await resilientAtomicWriteFile(
-    path.join(sessionPath, MANIFEST_FILE),
-    JSON.stringify(manifest, null, 2) + "\n",
-    "utf-8",
-    { mode: 0o600 }
-  );
+  const text = JSON.stringify(manifest, null, 2) + "\n";
+  if (text === onDisk) return text;
+  await resilientAtomicWriteFile(path.join(sessionPath, MANIFEST_FILE), text, "utf-8", {
+    mode: 0o600,
+  });
+  return text;
+}
+
+/**
+ * Whether `destAbs` is a regular file already holding `expected` — so a
+ * relaunch with nothing changed writes nothing. A plain copy (a source path)
+ * must also carry the source's permission bits, which `copyFile` would give
+ * it. Anything that can't be read says no, leaving the decision to the write.
+ */
+async function destAlreadyHolds(
+  destAbs: string,
+  expected: { text: string } | { source: string }
+): Promise<boolean> {
+  try {
+    const dest = await fs.lstat(destAbs);
+    if (!dest.isFile()) return false;
+    if ("text" in expected) {
+      if (dest.size !== Buffer.byteLength(expected.text, "utf8")) return false;
+      return (await fs.readFile(destAbs, "utf-8")) === expected.text;
+    }
+    const source = await fs.stat(expected.source);
+    if (dest.size !== source.size || (dest.mode & 0o7777) !== (source.mode & 0o7777)) {
+      return false;
+    }
+    const [current, wanted] = await Promise.all([
+      fs.readFile(destAbs),
+      fs.readFile(expected.source),
+    ]);
+    return current.equals(wanted);
+  } catch {
+    return false;
+  }
 }
 
 export interface WalkState {
@@ -824,7 +866,7 @@ export async function syncAssistantContent(
 
   const sessionBase = path.resolve(input.sessionPath);
   const chainCache = new Map<string, ChainVerdict>();
-  const previous = await readManifest(input.sessionPath);
+  const { files: previous, raw: manifestOnDisk } = await readManifest(input.sessionPath);
 
   let removed = 0;
   const removeManaged = async (staleRel: string): Promise<void> => {
@@ -856,9 +898,14 @@ export async function syncAssistantContent(
 
   // Superset manifest: every desired path is owned before its copy starts,
   // and stale paths stay owned until verification proves them gone.
-  await writeManifest(input.sessionPath, [...desired.keys(), ...staleRels]);
+  const supersetManifest = await writeManifest(
+    input.sessionPath,
+    [...desired.keys(), ...staleRels],
+    manifestOnDisk
+  );
 
   let copied = 0;
+  let unchanged = 0;
   const copyFailedRels = new Set<string>();
   for (const [destRel, sourceAbs] of desired) {
     const segments = destRel.split("/");
@@ -876,6 +923,15 @@ export async function syncAssistantContent(
       continue;
     }
     try {
+      let text = generated.get(destRel);
+      if (text === undefined && sanitizeRels.has(destRel)) {
+        text = stripExecutableFrontmatter(await fs.readFile(sourceAbs, "utf-8"));
+      }
+      const expected = text !== undefined ? { text } : { source: sourceAbs };
+      if (await destAlreadyHolds(destAbs, expected)) {
+        unchanged += 1;
+        continue;
+      }
       await fs.mkdir(path.dirname(destAbs), { recursive: true });
       // Replace (don't write through) an existing symlink at the destination —
       // copyFile follows file symlinks, which would land the bytes elsewhere.
@@ -885,12 +941,8 @@ export async function syncAssistantContent(
       } catch {
         // ENOENT — nothing at the destination yet
       }
-      const text = generated.get(destRel);
       if (text !== undefined) {
         await fs.writeFile(destAbs, text, "utf-8");
-      } else if (sanitizeRels.has(destRel)) {
-        const original = await fs.readFile(sourceAbs, "utf-8");
-        await fs.writeFile(destAbs, stripExecutableFrontmatter(original), "utf-8");
       } else {
         await fs.copyFile(sourceAbs, destAbs);
       }
@@ -968,7 +1020,7 @@ export async function syncAssistantContent(
   // stale paths still present. Successfully removed rels are retired so a
   // future unmanaged user file at the same relpath is never claimed; if this
   // write fails it propagates (fail closed) while the superset stays valid.
-  await writeManifest(input.sessionPath, [...desired.keys(), ...staleFailures]);
+  await writeManifest(input.sessionPath, [...desired.keys(), ...staleFailures], supersetManifest);
 
   let referenceFiles = 0;
   for (const destRel of desired.keys()) {
@@ -987,6 +1039,7 @@ export async function syncAssistantContent(
 
   return {
     copied,
+    unchanged,
     removed,
     truncated,
     omittedSkills,

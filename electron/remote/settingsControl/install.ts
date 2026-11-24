@@ -1,3 +1,4 @@
+import type { HostSettingLeaf } from "../../../shared/types/hostSettings.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { reconcileAfterConfigWrite, runConfigWrite } from "../../services/configBundleRuntime.js";
 import type { RemoteHostsClient } from "../client/RemoteHostsClient.js";
@@ -18,6 +19,8 @@ export interface SettingsControlClientDeps {
   /** The host's current open session, or null while it has none. */
   sessionFor(hostId: HostId): LinkSession | null;
   holdHost?(hostId: HostId): () => void;
+  /** A change that landed on a host's settings. */
+  onApplied?(hostId: HostId, settings: readonly HostSettingLeaf[]): void;
 }
 
 /**
@@ -32,6 +35,7 @@ export function installSettingsControlClient(deps: SettingsControlClientDeps): (
     new ClientSettingsControl({
       sessionFor: deps.sessionFor,
       holdHost: deps.holdHost,
+      onApplied: deps.onApplied,
       isKnownHost: (hostId) => entry(hostId) !== undefined,
       hostLabel: (hostId) => entry(hostId)?.descriptor.name || hostId,
     })

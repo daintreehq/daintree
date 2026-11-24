@@ -10,6 +10,8 @@ export * from "./brands";
 // Each was chosen to fit the metaphor.
 export {
   Activity, // project pulse / live activity heartbeat
+  AlarmClock, // a pane waiting to be continued at a set time — once its usage limit resets
+  AlarmClockCheck, // a pane continued at its set time — its usage limit reset and the line went in
   AlarmClockOff, // a project exempt from automatic sleep — the idle timer never runs out on it
   AppWindow, // where an opened folder or host lands — a window of its own or the current one
   Archive, // file a project away — out of the switcher's main list, everything about it kept
@@ -17,7 +19,7 @@ export {
   ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike; also moves a project group down the switcher
   ArrowDownAZ, // alphabetical sort order (A to Z)
   ArrowDownWideNarrow, // largest-first sort order — the Worktrees overview ordered by size on disk
-  ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
+  ArrowLeftRight, // swap two sides — the compare dialog's Base and Compare; also a settings search hit that lives in the other scope, where following it switches scope
   ArrowUp, // move a project group up the switcher — paired with ArrowDown
   ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
   AtSign, // @file reference handed to an agent's prompt
@@ -32,7 +34,7 @@ export {
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from the observed finished ring (DoneCircle)
   CircuitBoard, // an infrastructure branch (infra/) — system wiring, kept apart from the host machine's Server
-  CircleArrowUp, // a CLI below the version Daintree needs, or a host whose build was refused — the same up-arrow-in-a-circle plugins show for an available update
+  CircleArrowUp, // a CLI below the version Daintree needs, a host whose build was refused, or a pane whose CLI installed an update — the same up-arrow-in-a-circle plugins show for an available update
   CircleCheck, // a check that passed or a step that is done (setup, forge, review) — a finished agent draws DoneCircle on the family's own ring instead
   CircleDashed, // a check or step that has not run yet (PR checks, setup) — Pilot's snoozed band draws SnoozedCircle on the family's own ring instead
   CircleDot, // an open issue on forge surfaces — Pilot's idle band draws IdleCircle on the family's own ring instead
@@ -42,6 +44,7 @@ export {
   CircleStop, // a scheduled run that ended without a verdict — interrupted, stopped, replaced, or exited with no code seen
   CircleX, // anything that failed: CI, an environment, a pane that could not load — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
   Clock, // recency sort order (most recently opened first); a canopy row's time in its current state; a composer send held for its pane's next prompt
+  Cloud, // a cloud machine a provider runs as a host — the menu that starts and stops them
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output
@@ -64,21 +67,29 @@ export {
   HardDriveDownload, // a backup branch (backup/) — a stored snapshot, kept apart from archiving a project
   History, // resume closed session / session history
   Hourglass, // an environment reporting it is still coming up (starting, provisioning) — a shape beside the neutral status word, so the word keeps its contrast
+  Info, // a NOTE alert in rendered Markdown — GitHub's info glyph, the same shape the info severity wears through SEVERITY_GLYPH
   KeyRound, // forge credentials that stopped working — a key names what has to be fixed, and it shares a silhouette with nothing else here, so it survives forced colors
+  Laptop, // on-device transcription — the speech model runs on this computer, so the audio stays on it
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
+  Lightbulb, // a TIP alert in rendered Markdown — GitHub's light bulb, kept apart from the success check mark, since a tip says nothing finished
+  Link, // the toolbar's links launcher — the addresses saved with this project and the person's own
   Link2Off, // detach the issue linked to a worktree
-  ListChecks, // bulk selection of forge rows — the preset picker that selects many issues or PRs at once
+  ListChecks, // bulk selection of forge rows — the preset picker that selects many issues or PRs at once — and a pull request's CI checks, the links launcher's `…` row that opens them
   MemoryStick, // a terminal host's own memory budget — the governor's app-wide output pause
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
+  MessageSquareExclamationPoint, // an IMPORTANT alert in rendered Markdown — the nearest match to GitHub's report glyph
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
   NotebookPen, // a terminal's Scratchpad — throwaway notes kept beside that one pane
-  OctagonAlert, // a severe caution that has not failed: a pane's CPU or memory in its red band, a Why slow? alert, a dangerous plugin capability, a destructive consequence — never a failure (that is XCircle), so the band survives forced colors as its own shape
+  OctagonAlert, // a severe caution that has not failed: a pane's CPU or memory in its red band, a Why slow? alert, a dangerous plugin capability, a destructive consequence — never a failure (that is XCircle), so the band survives forced colors as its own shape; also a CAUTION alert in rendered Markdown
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   PanelTop, // the app toolbar — the strip along the top of the window
   Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts
+  Pilcrow, // ignore whitespace changes in a diff — the mark for the invisible characters a reindent or reformat touches
   Play, // start a schedule's run now, outside its cadence
+  Power, // start a stopped cloud machine — a machine being switched on, not media playing
+  PowerOff, // stop a running cloud machine (its programs end; its disk is kept)
   Plug, // agent (integration that plugs into the host system), including an agent's own branch namespace with no brand mark; also a terminal handed to an agent pane, paired with Unplug to take it back
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert
@@ -98,8 +109,9 @@ export {
   Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
   Timer, // a scheduled run still open, timed since its terminal started — which says nothing about whether the agent is working
-  TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
+  TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors; also a WARNING alert in rendered Markdown
   Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there; also detaching a project attachment (Cable) from the worktree holding it
   UserRound, // an agent's account — who it signs in as, chosen apart from its preset (#16040)
+  UserRoundCheck, // one account used everywhere — the agent's default, with every worktree pick and preset pin on another account cleared (#17893)
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

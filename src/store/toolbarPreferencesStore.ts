@@ -53,8 +53,10 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = ["launcher", "terminal", "file-b
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
   "voice-recording",
   "forge-stats",
+  "links-launcher",
   "plugin-tray",
   "canopy",
+  "decisions-inbox",
   "notification-center",
   "copy-tree",
   "resume-sessions",
@@ -80,7 +82,14 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
   },
 };
 
-const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "assistant-toggle", "portal-toggle"];
+const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "assistant-toggle"];
+
+/**
+ * Built-in buttons that no longer exist. A saved layout may still name one, so
+ * every hydration drops it rather than leaving a gap where it stood: the
+ * Portal's toggle went with the dock (#17256).
+ */
+const RETIRED_BUTTON_IDS: ReadonlySet<string> = new Set(["portal-toggle"]);
 
 /**
  * Home side lookup, used *only* to pick the survivor when an id sits on both
@@ -103,7 +112,9 @@ const LEFT_HOME_BUTTON_IDS: ToolbarButtonId[] = [
 const DEFAULT_LEFT_BUTTON_SET = new Set<AnyToolbarButtonId>(LEFT_HOME_BUTTON_IDS);
 
 function sanitizeButtonList(buttons: AnyToolbarButtonId[]): AnyToolbarButtonId[] {
-  const filtered = buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId));
+  const filtered = buttons.filter(
+    (id) => !FIXED_BUTTON_IDS.includes(id as ToolbarButtonId) && !RETIRED_BUTTON_IDS.has(id)
+  );
   // Dedupe by first occurrence. A persisted list can accumulate repeated ids —
   // chiefly duplicate `forge-stats` when the v10 `renameForgeStats` migration
   // collapses `github-stats` onto a list that already held `forge-stats`,
@@ -174,8 +185,11 @@ function mergeButtonList(
   // No list of our own: still honor a default the user parked on the other side.
   if (!persisted) return defaults.filter((id) => !onOtherSide.has(id));
 
-  const positioned = new Set([...persisted, ...onOtherSide]);
-  const result = [...persisted];
+  // A retired button holds no slot, so a missing default lands where it would
+  // in the same list saved without it.
+  const live = persisted.filter((id) => !RETIRED_BUTTON_IDS.has(id));
+  const positioned = new Set([...live, ...onOtherSide]);
+  const result = [...live];
 
   // Find buttons in defaults that aren't positioned on either side (new buttons)
   for (let i = 0; i < defaults.length; i++) {
@@ -277,7 +291,7 @@ function normalizePinnedButtons(value: unknown): ToolbarPinnedState {
   // is assignable to it, so no per-key assertion is needed.
   const result: Record<string, boolean> = {};
   for (const [key, entry] of Object.entries(value)) {
-    if (typeof entry === "boolean") result[key] = entry;
+    if (typeof entry === "boolean" && !RETIRED_BUTTON_IDS.has(key)) result[key] = entry;
   }
   return result;
 }
@@ -1073,9 +1087,11 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
         // side effect of where the throw landed, and it lets `hasHydrated()`
         // resolve at all.
         const persisted = (persistedState ?? {}) as Partial<ToolbarPreferencesState>;
+        // A side that isn't a list falls back to its defaults, keeping the
+        // rest of the blob (pins, launcher) rather than throwing it away.
         const healed = healCrossSideDuplicates(
-          persisted.layout?.leftButtons,
-          persisted.layout?.rightButtons
+          asButtonList(persisted.layout?.leftButtons),
+          asButtonList(persisted.layout?.rightButtons)
         );
         return {
           ...currentState,
@@ -1097,8 +1113,9 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
             // blob's pins into a blob that has none. There is no default pin map
             // to fall back to any more (#11667) — a profile with no persisted
             // pins has expressed no overrides, and every built-in it positions
-            // is therefore visible.
-            pinnedButtons: persisted.layout?.pinnedButtons ?? {},
+            // is therefore visible. Normalized like a write, so a retired
+            // button's pin never comes back into memory.
+            pinnedButtons: normalizePinnedButtons(persisted.layout?.pinnedButtons),
           }),
         };
       },

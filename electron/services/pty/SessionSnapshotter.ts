@@ -207,7 +207,11 @@ export class SessionSnapshotter {
       // serialize would otherwise stomp the sync snapshot written from kill().
       if (this.disposed || this.host.wasKilled) return;
       if (!state) return;
-      await persistSessionSnapshotAsync(this.host.id, state);
+      // A running terminal's screen is rewritten every few seconds, so this
+      // write skips the fsyncs that would make it survive a power cut: each is
+      // a drive-cache flush holding a libuv threadpool thread. The kill and
+      // shutdown writes that close a terminal's history stay durable.
+      await persistSessionSnapshotAsync(this.host.id, state, undefined, { durable: false });
       // Mark coverage only after a successful persist. Uses the entry epoch, so
       // content that changed mid-serialize (epoch > entry) still triggers a
       // later flush. contentEpoch counts chunk RECEIPT, not parse completion,

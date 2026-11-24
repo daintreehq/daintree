@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
 
 /**
  * The owner-only file next to the host socket that tells a client (through
@@ -31,14 +30,16 @@ export interface HostDiscoveryInfo {
   command?: string[];
 }
 
-const DiscoverySchema = z.object({
-  version: z.literal(1),
-  socketPath: z.string().min(1).max(1024),
-  token: z.string().regex(/^[0-9a-f]{64}$/),
-  pid: z.number().int().min(0),
-  startedAt: z.string().min(1).max(64).optional(),
-  command: z.array(z.string().min(1).max(4096)).min(1).max(4).optional(),
-});
+// Validated by hand rather than with zod: `--attach-stdio` reads this file, and
+// that bridge loads nothing it does not need (#17022). Lengths count code
+// points and integers must be safe, as zod's string and int checks do.
+const TOKEN_RE = /^[0-9a-f]{64}$/;
+
+const isBoundedString = (value: unknown, min: number, max: number): value is string => {
+  if (typeof value !== "string") return false;
+  const length = [...value].length;
+  return length >= min && length <= max;
+};
 
 /** Parse discovery file text; null for anything that is not a well-formed file. */
 export function parseDiscoveryInfo(text: string): HostDiscoveryInfo | null {
@@ -49,8 +50,23 @@ export function parseDiscoveryInfo(text: string): HostDiscoveryInfo | null {
   } catch {
     return null;
   }
-  const parsed = DiscoverySchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const { version, socketPath, token, pid, startedAt, command } = raw as Record<string, unknown>;
+  if (version !== 1) return null;
+  if (!isBoundedString(socketPath, 1, 1024)) return null;
+  if (typeof token !== "string" || !TOKEN_RE.test(token)) return null;
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid < 0) return null;
+  const info: HostDiscoveryInfo = { version, socketPath, token, pid };
+  if (startedAt !== undefined) {
+    if (!isBoundedString(startedAt, 1, 64)) return null;
+    info.startedAt = startedAt;
+  }
+  if (command !== undefined) {
+    if (!Array.isArray(command) || command.length < 1 || command.length > 4) return null;
+    if (!command.every((part) => isBoundedString(part, 1, 4096))) return null;
+    info.command = [...command];
+  }
+  return info;
 }
 
 export async function writeDiscoveryFile(filePath: string, info: HostDiscoveryInfo): Promise<void> {

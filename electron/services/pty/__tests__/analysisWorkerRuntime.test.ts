@@ -9,6 +9,21 @@ import {
 import { getPtyPowerLevel, resetPtyPowerLevelForTesting } from "../ptyPowerPolicy.js";
 import type { AnalysisFinalSnapshot, WorkerToHostMessage } from "../analysisWorkerProtocol.js";
 
+// Lets a test hold a restore's disk read open after the bytes are in.
+const restoreRead = vi.hoisted(() => ({ hold: null as Promise<void> | null }));
+vi.mock("../terminalSessionPersistence.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../terminalSessionPersistence.js")>();
+  return {
+    ...actual,
+    readSessionRestore: async (terminalId: string) => {
+      const hold = restoreRead.hold;
+      const payload = await actual.readSessionRestore(terminalId);
+      if (hold) await hold;
+      return payload;
+    },
+  };
+});
+
 // Exercises the worker-side protocol end-to-end without spawning a real
 // worker thread: the runtime + AnalysisSession (headless xterm, monitor) run
 // in-process, exactly as they do inside the worker.
@@ -181,6 +196,59 @@ describe("AnalysisWorkerRuntime", () => {
       const after = await serializeRequest(12);
       if (after.type !== "response") throw new Error("expected a response");
       expect(after.result).toMatchObject({ cols: 120, rows: 40 });
+    });
+
+    it("holds a restoring terminal's messages behind its disk read, and no other terminal's", async () => {
+      await fsp.writeFile(
+        path.join(userDataDir, "terminal-sessions", "restored.restore"),
+        "DAINTREE_SESSION_v2\n80x24\nfrom disk",
+        "utf8"
+      );
+      let release!: () => void;
+      restoreRead.hold = new Promise<void>((resolve) => (release = resolve));
+
+      runtime.handleMessage({
+        type: "create",
+        terminalId: "restored",
+        cols: 80,
+        rows: 24,
+        scrollback: 1000,
+        restore: true,
+        spawnedAt: 99,
+        epoch: 0,
+      });
+      runtime.handleMessage({
+        type: "data",
+        terminalId: "restored",
+        data: "live output\r\n",
+        flags: { agentLive: false },
+        epoch: 0,
+      });
+      const restoredResponse = serializeRequest(31);
+
+      // Another terminal on the same worker is served while the read is held.
+      sendData("other terminal\r\n");
+      runtime.handleMessage({
+        type: "request",
+        requestId: 32,
+        terminalId: "t1",
+        op: "serialize",
+        generation: 1,
+      });
+      const other = await waitFor(() =>
+        emitted.find((m) => m.type === "response" && m.requestId === 32)
+      );
+      if (other.type !== "response") throw new Error("expected a response");
+      expect((other.result as { data: string }).data).toContain("other terminal");
+      expect(emitted.some((m) => m.type === "response" && m.requestId === 31)).toBe(false);
+
+      restoreRead.hold = null;
+      release();
+      const restored = await restoredResponse;
+      if (restored.type !== "response") throw new Error("expected a response");
+      const data = (restored.result as { data: string }).data;
+      expect(data.indexOf("from disk")).toBeGreaterThanOrEqual(0);
+      expect(data.indexOf("from disk")).toBeLessThan(data.indexOf("live output"));
     });
 
     it("serializes the banner-aware persistence form itself when a restore banner exists", async () => {
@@ -466,7 +534,7 @@ describe("AnalysisWorkerRuntime", () => {
       timedRuntime.startMemorySampling(2000);
       // Re-arming while running must not double the cadence.
       timedRuntime.startMemorySampling(2000);
-      vi.advanceTimersByTime(6100);
+      vi.advanceTimersByTime(2000 + 2 * QUIET_MEMORY_SAMPLE_INTERVAL_MS + 100);
 
       const samples = timed.filter((m) => m.type === "memory-sample");
       expect(samples).toHaveLength(3);
@@ -481,49 +549,58 @@ describe("AnalysisWorkerRuntime", () => {
       vi.useRealTimers();
     });
 
-    it("stretches a quiet worker's cadence while saving and snaps back on heap activity (#12515)", () => {
-      vi.useFakeTimers();
-      try {
-        const timed: WorkerToHostMessage[] = [];
-        const timedRuntime = new AnalysisWorkerRuntime(
-          (msg) => timed.push(msg),
-          () => ({ heapUsed: 7, external: 3 })
-        );
-        const samples = () => timed.filter((m) => m.type === "memory-sample").length;
-        timedRuntime.handleMessage({
-          type: "power-policy",
-          level: "saving",
-          observationLevel: "saving",
-        });
-        expect(getPtyPowerLevel()).toBe("saving");
+    it.each(["active", "saving"] as const)(
+      "stretches a quiet worker's cadence while %s and snaps back on heap activity (#12515, #17043)",
+      (level) => {
+        vi.useFakeTimers();
+        try {
+          const timed: WorkerToHostMessage[] = [];
+          const timedRuntime = new AnalysisWorkerRuntime(
+            (msg) => timed.push(msg),
+            () => ({ heapUsed: 7, external: 3 })
+          );
+          const samples = () => timed.filter((m) => m.type === "memory-sample").length;
+          timedRuntime.handleMessage({
+            type: "power-policy",
+            level,
+            observationLevel: level,
+          });
+          expect(getPtyPowerLevel()).toBe(level);
 
-        timedRuntime.startMemorySampling(2000);
-        vi.advanceTimersByTime(2000);
-        expect(samples()).toBe(1);
+          timedRuntime.startMemorySampling(2000);
+          vi.advanceTimersByTime(2000);
+          expect(samples()).toBe(1);
 
-        // Quiet since the last sample → the next one waits the quiet cadence.
-        vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS - 1);
-        expect(samples()).toBe(1);
-        vi.advanceTimersByTime(1);
-        expect(samples()).toBe(2);
+          // Quiet since the last sample → the next one waits the quiet cadence.
+          vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS - 1);
+          expect(samples()).toBe(1);
+          vi.advanceTimersByTime(1);
+          expect(samples()).toBe(2);
 
-        // Metadata ticks never count as heap activity.
-        timedRuntime.handleMessage({ type: "focus", terminalId: "t-none" });
-        vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
-        expect(samples()).toBe(3);
+          // Metadata ticks never count as heap activity.
+          timedRuntime.handleMessage({ type: "focus", terminalId: "t-none" });
+          vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
+          expect(samples()).toBe(3);
 
-        // Heap-affecting traffic returns the next interval to the base cadence.
-        timedRuntime.handleMessage({ type: "free", terminalId: "t-none" });
-        vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
-        expect(samples()).toBe(4);
-        vi.advanceTimersByTime(2000);
-        expect(samples()).toBe(5);
+          // Heap-affecting traffic returns the next interval to the base cadence.
+          timedRuntime.handleMessage({ type: "free", terminalId: "t-none" });
+          vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
+          expect(samples()).toBe(4);
+          vi.advanceTimersByTime(2000);
+          expect(samples()).toBe(5);
 
-        timedRuntime.stopMemorySampling();
-      } finally {
-        resetPtyPowerLevelForTesting();
-        vi.useRealTimers();
+          // That activity was spent on one sample; quiet again, it backs off.
+          vi.advanceTimersByTime(2000);
+          expect(samples()).toBe(5);
+          vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS - 2000);
+          expect(samples()).toBe(6);
+
+          timedRuntime.stopMemorySampling();
+        } finally {
+          resetPtyPowerLevelForTesting();
+          vi.useRealTimers();
+        }
       }
-    });
+    );
   });
 });

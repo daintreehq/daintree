@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { isValidRemoteHostId, type HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { HostRegistry, type RemoteHostsStore, type RemoteHostsValue } from "../HostRegistry.js";
 
@@ -152,6 +152,55 @@ describe("HostRegistry", () => {
     expect(() => registry.update({ hostId: "missing", name: "x" })).toThrow(
       expect.objectContaining({ code: "NOT_FOUND" })
     );
+  });
+
+  it("keeps how Daintree runs there as last seen, written only on a change, and drops it with the target", () => {
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const host = registry.add({
+      name: "box",
+      connection: { kind: "ssh", target: "box.example" },
+      startsOnConnect: true,
+    });
+    expect(host.startsOnConnect).toBe(true);
+    expect(new HostRegistry(store).get(host.id)?.startsOnConnect).toBe(true);
+    const writes = store.writes;
+    expect(registry.recordStartsOnConnect(host.id, true)?.startsOnConnect).toBe(true);
+    expect(store.writes).toBe(writes);
+    expect(registry.recordStartsOnConnect(host.id, false)).not.toHaveProperty("startsOnConnect");
+    expect(new HostRegistry(store).get(host.id)).not.toHaveProperty("startsOnConnect");
+    registry.recordStartsOnConnect(host.id, true);
+    expect(new HostRegistry(store).get(host.id)?.startsOnConnect).toBe(true);
+    const moved = registry.update({
+      hostId: host.id,
+      connection: { kind: "ssh", target: "other.example" },
+    });
+    expect(moved).not.toHaveProperty("startsOnConnect");
+    expect(registry.recordStartsOnConnect("missing", true)).toBeNull();
+  });
+
+  it("never keeps a WSL distro as started on connect, from setup or a hand-edited file", () => {
+    const platform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32" });
+    onTestFinished(() => {
+      Object.defineProperty(process, "platform", { value: platform });
+    });
+    const store = memoryStore();
+    const registry = new HostRegistry(store);
+    const distro = registry.add({
+      name: "ubuntu",
+      connection: { kind: "wsl", distro: "Ubuntu" },
+      startsOnConnect: true,
+    });
+    expect(distro).not.toHaveProperty("startsOnConnect");
+    expect(registry.recordStartsOnConnect(distro.id, true)).not.toHaveProperty("startsOnConnect");
+    store.set("remoteHosts", {
+      ...(store.value as object),
+      hosts: [{ ...distro, startsOnConnect: true }],
+    } as never);
+    const reloaded = new HostRegistry(store).get(distro.id);
+    expect(reloaded?.connection).toEqual({ kind: "wsl", distro: "Ubuntu" });
+    expect(reloaded).not.toHaveProperty("startsOnConnect");
   });
 
   it("keeps assistant control apart from notifications, and across a rename and a change of target", () => {
@@ -331,6 +380,209 @@ describe("HostRegistry", () => {
     expect(registry.list().map((host) => "wake" in host)).toEqual([true, false, false]);
     const moved = registry.update({ hostId: "a", connection: { kind: "ssh", target: "mini" } });
     expect(moved).not.toHaveProperty("wake");
+  });
+
+  describe("agent forwarding switch (#17432)", () => {
+    const add = (registry: HostRegistry) =>
+      registry.add({ name: "studio", connection: { kind: "ssh", target: "me@studio" } });
+
+    it("starts off, keeps a change across a reload and a rename, and refuses a non-boolean", () => {
+      const store = memoryStore();
+      const registry = new HostRegistry(store);
+      const host = add(registry);
+      expect(host).not.toHaveProperty("forwardSshAgent");
+
+      registry.update({ hostId: host.id, forwardSshAgent: true });
+      registry.update({ hostId: host.id, name: "studio two" });
+      expect(new HostRegistry(store).get(host.id)?.forwardSshAgent).toBe(true);
+
+      expect(() =>
+        registry.update({ hostId: host.id, forwardSshAgent: "yes" as unknown as boolean })
+      ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+      registry.update({ hostId: host.id, forwardSshAgent: false });
+      expect(registry.get(host.id)).not.toHaveProperty("forwardSshAgent");
+    });
+
+    it("turns off when the host is pointed at another machine, even in an update asking for it", () => {
+      const registry = new HostRegistry(memoryStore());
+      const host = add(registry);
+      registry.update({ hostId: host.id, forwardSshAgent: true });
+
+      const moved = registry.update({
+        hostId: host.id,
+        connection: { kind: "ssh", target: "me@mini" },
+      });
+      expect(moved).not.toHaveProperty("forwardSshAgent");
+
+      const both = registry.update({
+        hostId: host.id,
+        connection: { kind: "ssh", target: "me@studio" },
+        forwardSshAgent: true,
+      });
+      expect(both).not.toHaveProperty("forwardSshAgent");
+
+      registry.update({ hostId: host.id, forwardSshAgent: true });
+      const same = registry.update({
+        hostId: host.id,
+        connection: { kind: "ssh", target: "me@studio" },
+      });
+      expect(same.forwardSshAgent).toBe(true);
+    });
+
+    it("reads anything but true a settings file left as off", () => {
+      const registry = new HostRegistry(
+        memoryStore({
+          hosts: [
+            { id: "a", name: "a", connection: { kind: "ssh", target: "a" }, forwardSshAgent: true },
+            { id: "b", name: "b", connection: { kind: "ssh", target: "b" }, forwardSshAgent: "1" },
+          ],
+        })
+      );
+      expect(registry.list().map((host) => host.forwardSshAgent === true)).toEqual([true, false]);
+      expect(registry.get("b")).not.toHaveProperty("forwardSshAgent");
+    });
+  });
+
+  describe("pending placement (#17355)", () => {
+    const placement = {
+      projectId: "proj-1",
+      worktreeId: "/repo/worktrees/feature-x",
+      worktreePath: "/repo/worktrees/feature-x",
+      label: "feature-x",
+      requestedAt: 1_000,
+    };
+
+    it("keeps a worktree waiting on the host's setup across a restart, until it's removed", () => {
+      const store = memoryStore();
+      const registry = new HostRegistry(store);
+      const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+      registry.update({ hostId: host.id, pendingPlacement: { ...placement, askFirst: true } });
+      registry.update({ hostId: host.id, name: "feature box" });
+
+      const restarted = new HostRegistry(store);
+      expect(restarted.get(host.id)?.pendingPlacement).toEqual({ ...placement, askFirst: true });
+
+      expect(restarted.update({ hostId: host.id, pendingPlacement: null })).not.toHaveProperty(
+        "pendingPlacement"
+      );
+      expect(new HostRegistry(store).get(host.id)).not.toHaveProperty("pendingPlacement");
+    });
+
+    it("adds a host with a worktree already waiting on it, made for that worktree", () => {
+      const store = memoryStore();
+      const registry = new HostRegistry(store);
+      const host = registry.add({
+        name: "feature-x",
+        connection: { kind: "cloud", bindingId: "cb_0123456789ab" },
+        pendingPlacement: { ...placement, createdMachine: true },
+      });
+      expect(host.pendingPlacement).toEqual({ ...placement, createdMachine: true });
+      expect(new HostRegistry(store).get(host.id)?.pendingPlacement).toEqual({
+        ...placement,
+        createdMachine: true,
+      });
+    });
+
+    it("refuses a host whose waiting worktree is missing its identity, adding nothing", () => {
+      const registry = new HostRegistry(memoryStore());
+      expect(() =>
+        registry.add({
+          name: "feature-x",
+          connection: { kind: "ssh", target: "feature-x" },
+          pendingPlacement: { ...placement, worktreeId: "" },
+        })
+      ).toThrow(/project, worktree and label/);
+      expect(registry.list()).toEqual([]);
+    });
+
+    it("records a failure only on the placement it names", () => {
+      const registry = new HostRegistry(memoryStore());
+      const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+      registry.update({ hostId: host.id, pendingPlacement: placement });
+      const failure = { message: "Host mode didn't start", at: 2_000 };
+
+      registry.update({ hostId: host.id, pendingPlacement: { ...placement, failure } });
+      expect(registry.get(host.id)?.pendingPlacement?.failure).toEqual(failure);
+
+      // Replaced by a newer placement: the older one's failure doesn't land on it.
+      const newer = { ...placement, requestedAt: 3_000 };
+      registry.update({ hostId: host.id, pendingPlacement: newer });
+      registry.update({ hostId: host.id, pendingPlacement: { ...placement, failure } });
+      expect(registry.get(host.id)?.pendingPlacement).toEqual(newer);
+
+      // Cancelled: a late failure doesn't bring it back.
+      registry.update({ hostId: host.id, pendingPlacement: null });
+      registry.update({ hostId: host.id, pendingPlacement: { ...newer, failure } });
+      expect(registry.get(host.id)).not.toHaveProperty("pendingPlacement");
+    });
+
+    it("refuses a placement missing what it opens, and drops one a settings file mangled", () => {
+      const registry = new HostRegistry(
+        memoryStore({
+          hosts: [
+            {
+              id: "a",
+              name: "a",
+              connection: { kind: "ssh", target: "a" },
+              pendingPlacement: placement,
+            },
+            {
+              id: "b",
+              name: "b",
+              connection: { kind: "ssh", target: "b" },
+              pendingPlacement: { ...placement, worktreePath: "" },
+            },
+            {
+              id: "c",
+              name: "c",
+              connection: { kind: "ssh", target: "c" },
+              pendingPlacement: { ...placement, requestedAt: "soon" },
+            },
+          ],
+        })
+      );
+      expect(registry.list().map((host) => "pendingPlacement" in host)).toEqual([
+        true,
+        false,
+        false,
+      ]);
+      expect(() =>
+        registry.update({
+          hostId: "b",
+          pendingPlacement: { ...placement, projectId: " " },
+        })
+      ).toThrow(expect.objectContaining({ code: "VALIDATION" }));
+      expect(registry.get("b")).not.toHaveProperty("pendingPlacement");
+    });
+
+    it("keeps a long worktree path exactly, cutting only what is shown", () => {
+      const registry = new HostRegistry(memoryStore());
+      const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+      const path = `/repo/${"deep/".repeat(150)}feature `;
+      const saved = registry.update({
+        hostId: host.id,
+        pendingPlacement: {
+          ...placement,
+          worktreeId: path,
+          worktreePath: path,
+          label: "x".repeat(800),
+        },
+      }).pendingPlacement;
+      expect(saved?.worktreeId).toBe(path);
+      expect(saved?.worktreePath).toBe(path);
+      expect(saved?.label.length).toBeLessThan(800);
+    });
+
+    it("drops the placement when the host is pointed at another machine", () => {
+      const registry = new HostRegistry(memoryStore());
+      const host = registry.add({ name: "box", connection: { kind: "ssh", target: "box" } });
+      registry.update({ hostId: host.id, pendingPlacement: placement });
+      const moved = registry.update({
+        hostId: host.id,
+        connection: { kind: "ssh", target: "mini" },
+      });
+      expect(moved).not.toHaveProperty("pendingPlacement");
+    });
   });
 
   it("forgets a host and reports changes", () => {

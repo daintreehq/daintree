@@ -140,6 +140,32 @@ describe("forgeProvider cross-references (#10620)", () => {
     expect(issue?.path).toEqual(["contributes", "forgeProviders", 0, "settingsScopeRef"]);
   });
 
+  it("accepts matchesSettingRef that names a user-scoped string setting", () => {
+    const result = manifestWith({
+      settings: [setting("enterpriseHost")],
+      forgeProviders: [forgeProvider({ matchesSettingRef: "enterpriseHost" })],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["names no declared setting", []],
+    ["names a secret", [{ id: "enterpriseHost", type: "secret" }]],
+    [
+      "names a project-scoped setting",
+      [{ id: "enterpriseHost", type: "string", scope: "project" }],
+    ],
+    ["names a non-string setting", [{ id: "enterpriseHost", type: "boolean" }]],
+  ])("rejects matchesSettingRef that %s", (_label, settings) => {
+    const result = manifestWith({
+      settings,
+      forgeProviders: [forgeProvider({ matchesSettingRef: "enterpriseHost" })],
+    });
+    expect(result.success).toBe(false);
+    const issue = issueWithCode(result, "forge_matches_setting_ref_invalid");
+    expect(issue?.path).toEqual(["contributes", "forgeProviders", 0, "matchesSettingRef"]);
+  });
+
   it("accepts viewRefs that name declared views", () => {
     const result = manifestWith({
       panels: [panel("v1")],
@@ -159,6 +185,29 @@ describe("forgeProvider cross-references (#10620)", () => {
     const issue = issueWithCode(result, "forge_view_ref_unknown");
     expect(issue).toBeDefined();
     expect(issue?.path).toEqual(["contributes", "forgeProviders", 0, "viewRefs", 1]);
+  });
+
+  it("accepts a decoration provider gated on one of the plugin's own forge providers (#17069)", () => {
+    const result = manifestWith({
+      forgeProviders: [forgeProvider({})],
+      fileDecorationProviders: [
+        { id: "review", scopes: ["worktree-diff:*"], forgeProvider: "prov" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a decoration provider gated on a forge provider the plugin does not declare (#17069)", () => {
+    const result = manifestWith({
+      forgeProviders: [forgeProvider({})],
+      fileDecorationProviders: [
+        { id: "plain", scopes: ["worktree-diff:*"] },
+        { id: "review", scopes: ["worktree-diff:*"], forgeProvider: "elsewhere" },
+      ],
+    });
+    expect(result.success).toBe(false);
+    const issue = issueWithCode(result, "file_decoration_forge_provider_unknown");
+    expect(issue?.path).toEqual(["contributes", "fileDecorationProviders", 1, "forgeProvider"]);
   });
 });
 

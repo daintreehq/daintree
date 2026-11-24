@@ -105,11 +105,13 @@ export function useHostWorktreeListings(
 
 /** A removed host's history goes with it; the id could come back as another machine. */
 export function pruneHostWorktrees(known: ReadonlySet<HostId>): void {
-  for (const id of [...entries.keys()]) {
-    if (known.has(id)) continue;
-    generations.delete(id);
-    setEntry(id, null);
-  }
+  for (const id of [...entries.keys()]) if (!known.has(id)) forgetHostWorktrees(id);
+}
+
+/** Drop a host's list and any answer still on its way, which was asked of the old machine. */
+export function forgetHostWorktrees(hostId: HostId): void {
+  generations.delete(hostId);
+  if (entries.has(hostId)) setEntry(hostId, null);
 }
 
 export function _resetHostWorktreesForTesting(): void {

@@ -248,6 +248,73 @@ export interface ChecksCapability {
   ): Promise<{ checks: CheckRun[] } | null>;
 }
 
+/**
+ * Normalized state of one deployment. `pending` has not started (queued, or
+ * waiting on an approval), `success` is deployed, and `inactive` no longer
+ * serves: superseded, torn down, or abandoned before it finished. `unknown` is
+ * a state this vocabulary doesn't model; the provider's own value stays in
+ * `rawData`.
+ */
+export type DeploymentState =
+  "pending" | "in_progress" | "success" | "failure" | "inactive" | "unknown";
+
+/**
+ * What {@link DeploymentsCapability.getDeployments} reports on: a branch by its
+ * short name (`feature/login`, not `refs/heads/feature/login`), or a pull
+ * request by number. Ask by pull request when there is one: a forge can tie
+ * deployments to a pull request, such as one made from its merge ref, that its
+ * branch alone doesn't reach.
+ */
+export type DeploymentTarget =
+  { kind: "branch"; branch: string } | { kind: "pullRequest"; prNumber: number };
+
+/**
+ * One deployment the forge recorded, as returned by
+ * {@link DeploymentsCapability.getDeployments}. Every field is the forge's own
+ * record: `url` is the address the deployment reported, never one built from a
+ * host's naming pattern, and it is absent when none was reported.
+ */
+export interface Deployment {
+  /** Provider's id for the deployment, stable within the repository. */
+  id: string;
+  /** Environment name exactly as the forge records it (`Preview – web`, `production`). */
+  environment: string;
+  state: DeploymentState;
+  /** Address the deployment's latest status reported, when it reported one. */
+  url?: string;
+  /** When the deployment was created, epoch milliseconds. */
+  createdAt: number;
+  /** When the deployment or its latest status last changed, epoch milliseconds. */
+  updatedAt: number;
+  /** Commit that was deployed, when the forge reports it. */
+  commitSha?: string;
+  /** Qualified ref the deployment was made from (`refs/heads/main`), when the forge recorded one rather than a commit. */
+  ref?: string;
+  rawData: unknown;
+}
+
+/**
+ * Optional read of where a branch or pull request is deployed, from the
+ * deployments the forge itself recorded for it (#17248). Nothing is read until
+ * a caller asks, so a project that never looks pays nothing.
+ *
+ * Returns the deployments the forge associates with the target, newest first
+ * by creation time, failed and inactive ones included. A provider may read only
+ * part of a target's history, so the list can be incomplete. One environment
+ * can appear more than once, such as a rollout still in progress beside the
+ * deployment it is replacing, so pick per environment rather than per row.
+ *
+ * `null` means the branch or pull request doesn't exist on the forge; one with
+ * nothing deployed returns `{ deployments: [] }`. A provider that can't read
+ * deployments at all leaves this field absent, and the host reports nothing.
+ */
+export interface DeploymentsCapability {
+  getDeployments(
+    repo: RepoRef,
+    target: DeploymentTarget
+  ): Promise<{ deployments: Deployment[] } | null>;
+}
+
 /** Result of validating stored credentials against the provider. */
 export interface AuthValidation {
   valid: boolean;
@@ -1040,7 +1107,11 @@ export interface BatchLookupCapability {
  * self-assignment" rather than an error.
  */
 export interface IdentityCapability {
-  getCurrentUser(): Promise<ForgeUser | null>;
+  /**
+   * `repo` is the repository the viewer is wanted for, for a provider whose
+   * account differs per host (a self-hosted instance beside the public one).
+   */
+  getCurrentUser(repo?: RepoRef): Promise<ForgeUser | null>;
 }
 
 /**
@@ -1212,7 +1283,12 @@ export interface ProjectHealthCapability {
  * Providers cache internally; the lookup must be cheap to call repeatedly.
  */
 export interface AvatarCapability {
-  resolveAuthorAvatar(email: string): Promise<string | null>;
+  /**
+   * `repo` is the repository the author committed to. A provider that serves
+   * more than one host answers only from that repository's own host, so an
+   * author's address never goes to a server the repository isn't on.
+   */
+  resolveAuthorAvatar(email: string, repo?: RepoRef): Promise<string | null>;
   /**
    * Synchronous counter that changes whenever a credential or instance change
    * invalidates earlier lookups. When present, the host shares one in-flight
@@ -1326,9 +1402,11 @@ export interface CloneCapability {
    * (tooling installed and signed in, or a valid stored credential). Drives
    * the host's path selection; an unauthenticated probe also means the clone
    * dialog shows no provider sign-in recovery affordance beyond the standard
-   * auth-failure banner.
+   * auth-failure banner. `url` is the repository about to be cloned, for a
+   * provider whose sign-in is per host (a self-hosted instance beside the
+   * public one).
    */
-  probeAuth(signal?: AbortSignal): Promise<CloneAuthProbe>;
+  probeAuth(signal?: AbortSignal, url?: string): Promise<CloneAuthProbe>;
   /**
    * Rewrite a clone URL to carry the provider's credentials (e.g. an
    * embedded token). Return `null` when no authenticated URL is available;
@@ -1736,6 +1814,7 @@ export interface ForgeCodeProviderImpl extends ForgeProviderBaseImpl {
   // Optional capabilities — host checks presence via a truthiness guard (see above).
   reviews?: ReviewCapability;
   checks?: ChecksCapability;
+  deployments?: DeploymentsCapability;
   approvals?: ApprovalCapability;
   autoMerge?: AutoMergeCapability;
   releases?: ReleaseCapability;
@@ -1889,6 +1968,16 @@ export interface ForgeProviderContribution {
    * must list at least one hostname.
    */
   matches: string[];
+  /**
+   * Exact `contributes.settings[].id` of a user-scoped `string` setting whose
+   * value is one more hostname this provider matches — a self-hosted instance
+   * the user names (GitHub Enterprise Server). The host reads it when the
+   * plugin loads and re-reads it whenever the setting changes, so routing
+   * follows the setting before the plugin activates. An empty value adds
+   * nothing; a value that isn't a bare hostname or an `https://` origin is
+   * ignored.
+   */
+  matchesSettingRef?: string;
   /**
    * Which roles the provider serves (#13700). Omitted means both, which is
    * every provider written before roles existed. An issues-only provider
@@ -2097,6 +2186,13 @@ export interface FileDecorationContribution {
   id: string;
   /** Exact scope strings or `prefix:*` wildcards this provider handles. */
   scopes: string[];
+  /**
+   * The `id` of one of this plugin's own `forgeProviders`. When set, the
+   * provider is started and asked for decorations only in a project whose
+   * code forge resolves to that provider, so a forge-specific decorator
+   * stays asleep in repositories hosted somewhere else.
+   */
+  forgeProvider?: string;
 }
 
 /**

@@ -1,17 +1,13 @@
 import type Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/forge.js";
-import { MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/mcpServer.js";
-import { PLUGIN_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/pluginAudit.js";
-import { PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/pluginMcpAudit.js";
-import { RUN_HISTORY_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/runHistory.js";
 import {
   LEGACY_CONFIG_AUDIT_RINGS,
   readAuditLogsFile,
   resolveAuditLogsPath,
   store,
 } from "../../store.js";
+import { normalizeAuditRingMaxRecords } from "./auditRingRetention.js";
 import { prepareRingStatements } from "./auditRingSql.js";
 import type { AuditRingName } from "./auditRingStore.js";
 import { getSharedDb, getSharedSqlite } from "./db.js";
@@ -34,16 +30,6 @@ import { fenceDbWorkerWrites } from "./dbWorkerClient.js";
  * (a crash before cleanup, a restored config.json) never imports a record
  * twice or brings back one the user has since cleared.
  */
-
-/** The caps the ring owners pass to `AuditRingStore.writeAll`. */
-const RING_CAPS: Record<AuditRingName, number> = {
-  mcpAuditLog: MCP_AUDIT_DEFAULT_MAX_RECORDS,
-  mcpTurnOutcomeLog: MCP_AUDIT_DEFAULT_MAX_RECORDS,
-  pluginAuditLog: PLUGIN_AUDIT_DEFAULT_MAX_RECORDS,
-  forgeAuditLog: FORGE_AUDIT_DEFAULT_MAX_RECORDS,
-  runHistoryRecords: RUN_HISTORY_DEFAULT_MAX_RECORDS,
-  pluginMcpAuditLog: PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
-};
 
 export const LEGACY_AUDIT_IMPORT_RECEIPT_KEY = "legacyAuditRingImport";
 
@@ -104,6 +90,16 @@ function existingIdentity(row: ExistingRingRow): string {
     // An unparseable row can only match itself.
   }
   return `json:${row.record}`;
+}
+
+/** The record limit the ring's owner keeps, from its `auditMaxRecords` setting. */
+function configuredCap(config: LegacyAuditRingImportDeps["config"], ring: AuditRingName): number {
+  const source = LEGACY_CONFIG_AUDIT_RINGS.find((entry) => entry.ring === ring);
+  const parent = source ? config.get(source.parentKey) : undefined;
+  return normalizeAuditRingMaxRecords(
+    ring,
+    isRecordObject(parent) ? parent.auditMaxRecords : undefined
+  );
 }
 
 function receiptEntry(ring: AuditRingName, identity: string): string {
@@ -168,6 +164,7 @@ function readReceipt(sqlite: Database.Database): Set<string> {
 function commitLegacyRings(
   sqlite: Database.Database,
   legacy: Map<AuditRingName, unknown[]>,
+  caps: ReadonlyMap<AuditRingName, number>,
   now: number
 ): void {
   const stmts = prepareRingStatements(sqlite);
@@ -189,7 +186,7 @@ function commitLegacyRings(
           existing,
           consumed
         );
-        const cap = RING_CAPS[ring];
+        const cap = caps.get(ring)!;
         const overCap = Math.max(
           0,
           Math.min(legacyRows.length, legacyRows.length + existing.length - cap)
@@ -290,7 +287,10 @@ export function importLegacyAuditRings(deps: LegacyAuditRingImportDeps = default
       }
     }
     try {
-      commitLegacyRings(sqlite, pending, deps.now());
+      const caps = new Map(
+        [...pending.keys()].map((ring) => [ring, configuredCap(deps.config, ring)] as const)
+      );
+      commitLegacyRings(sqlite, pending, caps, deps.now());
     } catch (error) {
       console.warn("[LegacyAuditRingImport] Import failed; sources left in place:", error);
       return;

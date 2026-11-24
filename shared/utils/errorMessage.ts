@@ -95,6 +95,9 @@ const GIT_REASON_TITLES = {
   "push-rejected-policy": "Push blocked by repository policy",
   "push-config-unsupported": "Push not possible with this remote's settings",
   "push-review-stale": "Branch changed since review",
+  "commit-review-stale": "Commit changed since review",
+  "pull-rebase-review-stale": "Branch changed since preview",
+  "repo-operation-changed": "Git operation changed",
   "pathspec-invalid": "Branch or path not found",
   "lfs-missing": "Git LFS object missing",
   "lfs-quota-exceeded": "Git LFS quota exceeded",
@@ -147,4 +150,14 @@ export function humanizeAppError(
   }
 
   return fallback;
+}
+
+/**
+ * The body for a notification titled `title`: the detail when it says something
+ * the title doesn't, otherwise empty so the title isn't printed twice (a caught
+ * error with no message of its own falls back to the same domain string the
+ * title uses).
+ */
+export function distinctDetail(detail: string, title: string): string {
+  return detail.trim() === title.trim() ? "" : detail;
 }

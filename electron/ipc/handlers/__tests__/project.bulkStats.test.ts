@@ -37,13 +37,14 @@ vi.mock("../../utils.js", () => ({
   broadcastToRenderer: vi.fn(),
   sendToRenderer: vi.fn(),
   // Registering the CRUD handlers starts real `ProjectStatsService` and
-  // `FleetSnapshotService` pollers whose compute broadcasts through this.
-  // Omitting it is what produced the CI red: the poller tick rejected with
-  // "No 'typedBroadcast' export is defined on the mock", and because that
-  // rejection only lands if the tick fires before teardown, it surfaced on a
-  // loaded runner and not locally. The disposer below stops the pollers; this
+  // `FleetSnapshotService` pollers whose compute broadcasts through
+  // `typedBroadcastLatestWins`. Omitting it is what produced the CI red: the
+  // poller tick rejected with "No export is defined on the mock", and because
+  // that rejection only lands if the tick fires before teardown, it surfaced on
+  // a loaded runner and not locally. The disposer below stops the pollers; this
   // stub keeps a tick that fires mid-test inside the unit boundary.
   typedBroadcast: vi.fn(),
+  typedBroadcastLatestWins: vi.fn(),
   typedHandle: (channel: string, handler: unknown) => {
     ipcMainMock.handle(channel, (_e: unknown, ...args: unknown[]) =>
       (handler as (...a: unknown[]) => unknown)(...args)
@@ -84,6 +85,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({
     getCurrentProject: vi.fn(() => null),
     updateProjectStatus: vi.fn(),
     updateProject: vi.fn(),
+    getCompletionWatermarks: vi.fn(() => []),
     getLastCompletionSeenMap: vi.fn(() => new Map<string, number>()),
   },
 }));
@@ -114,6 +116,7 @@ vi.mock("../../../services/CompletionAcknowledgementService.js", () => ({
 vi.mock("../../../services/ScratchStore.js", () => ({
   scratchStore: {
     getAllScratches: vi.fn(() => []),
+    getCompletionWatermarks: vi.fn(() => []),
     getLastCompletionSeenMap: vi.fn(() => new Map<string, number>()),
     markCompletionSeen: vi.fn(),
   },
@@ -172,6 +175,18 @@ import {
   ASSISTANT_PROJECTION_PARITY,
   PARITY_ASSISTANT_TERMINAL,
 } from "../../../services/__tests__/helpers/assistantProjectionParity.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 // Disposes the stats/fleet pollers after each test; see the helper for why
 // dropping the disposer is what produced this file's CI flake. Still returns
@@ -816,7 +831,9 @@ describe("registerProjectStatsHandlers — deferred initial compute", () => {
   });
 
   it("defers the initial compute via registerDeferredTask instead of firing it eagerly", async () => {
-    (projectStore.getAllProjects as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "p1" }]);
+    (projectStore.getCompletionWatermarks as ReturnType<typeof vi.fn>).mockReturnValue([
+      { id: "p1", lastCompletionSeenAt: null },
+    ]);
     const ptyClient = makePtyClient();
     const cleanup = registerProjectCrudHandlers(makeDeps(ptyClient));
 
@@ -840,7 +857,9 @@ describe("registerProjectStatsHandlers — deferred initial compute", () => {
   });
 
   it("deferred initial compute is a no-op once the service has stopped", async () => {
-    (projectStore.getAllProjects as ReturnType<typeof vi.fn>).mockReturnValue([{ id: "p1" }]);
+    (projectStore.getCompletionWatermarks as ReturnType<typeof vi.fn>).mockReturnValue([
+      { id: "p1", lastCompletionSeenAt: null },
+    ]);
     const ptyClient = makePtyClient();
     const cleanup = registerProjectCrudHandlers(makeDeps(ptyClient));
 

@@ -10,6 +10,7 @@ vi.mock("electron", () => ({
 import { createSessionServer } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
+import { helpConversationKey, helpOwnershipPrincipal } from "../resourceOwnership.js";
 import type { DispatchEnvelope } from "../shared.js";
 import type { TerminalProcessRecord } from "../worktreeProcessGuard.js";
 import type { WorktreeGitObservation } from "../worktreeRetirementGit.js";
@@ -34,6 +35,7 @@ describe("worktree.retireOwned (#15737)", () => {
     unstaged: 0,
     untracked: 0,
     conflicted: 0,
+    changedEntries: 0,
     hiddenFromStatus: 0,
     unpushedCommits: 0,
   };
@@ -129,6 +131,7 @@ describe("worktree.retireOwned (#15737)", () => {
     store.resourceOwnership.record(sessionId, [{ kind: "worktree", id: WORKTREE }]);
     return {
       store,
+      deps,
       census,
       git,
       deleteAnswer,
@@ -346,6 +349,59 @@ describe("worktree.retireOwned (#15737)", () => {
     expect(recheckedAt).toBeLessThan(deletedAt);
     expect(store.resourceOwnership.owns("s-full", "terminal", "terminal-1")).toBe(false);
     expect(store.resourceOwnership.owns("s-full", "worktree", WORKTREE)).toBe(false);
+  });
+
+  // #17919: the run the conversation launched before a resume is the resumed
+  // bearer's own, though the launch history names the bearer that made it.
+  it("retires for a resumed Assistant what its conversation launched before the resume", async () => {
+    const { store, deps, census, dispatchAction, waitForClosedPanelExits } = harness("s-help-a");
+    const ownership = store.resourceOwnership;
+    const conversation = helpConversationKey("conv-1");
+    ownership.release("s-help-a", "worktree", WORKTREE);
+    ownership.bindPrincipal("s-help-a", helpOwnershipPrincipal("help-a"));
+    ownership.attachConversation(helpOwnershipPrincipal("help-a"), conversation);
+    ownership.record(ownership.ownerOf("s-help-a"), [{ kind: "worktree", id: WORKTREE }]);
+    await launchPane(createSessionServer("s-help-a", deps));
+    census.processes = [ownPane()];
+    ownership.revokePrincipal(helpOwnershipPrincipal("help-a"));
+
+    seedLiveSession(store, "s-help-b", "core");
+    store.sessionOriginMap.set("s-help-b", "external");
+    ownership.bindPrincipal("s-help-b", helpOwnershipPrincipal("help-b"));
+    ownership.attachConversation(helpOwnershipPrincipal("help-b"), conversation);
+    const result = await callTool(createSessionServer("s-help-b", deps), retireCall());
+
+    expect(result.isError).toBeUndefined();
+    expect(payloadOf<{ closedTerminalIds: string[] }>(result).closedTerminalIds).toEqual([
+      "terminal-1",
+    ]);
+    expect(waitForClosedPanelExits).toHaveBeenCalledExactlyOnceWith(
+      [{ terminalId: "terminal-1", launchGeneration: 1 }],
+      expect.anything()
+    );
+    expect(dispatched(dispatchAction, "worktree.delete")).toHaveLength(1);
+    expect(ownership.list(ownership.ownerOf("s-help-b"))).toEqual([]);
+  });
+
+  it("refuses another conversation's bearer the run a conversation launched", async () => {
+    const { store, deps, census, dispatchAction } = harness("s-help-a");
+    const ownership = store.resourceOwnership;
+    ownership.bindPrincipal("s-help-a", helpOwnershipPrincipal("help-a"));
+    ownership.attachConversation(helpOwnershipPrincipal("help-a"), helpConversationKey("conv-1"));
+    await launchPane(createSessionServer("s-help-a", deps));
+    census.processes = [ownPane()];
+    ownership.revokePrincipal(helpOwnershipPrincipal("help-a"));
+
+    seedLiveSession(store, "s-help-c", "core");
+    store.sessionOriginMap.set("s-help-c", "external");
+    ownership.bindPrincipal("s-help-c", helpOwnershipPrincipal("help-c"));
+    ownership.attachConversation(helpOwnershipPrincipal("help-c"), helpConversationKey("conv-2"));
+    ownership.record(ownership.ownerOf("s-help-c"), [{ kind: "worktree", id: WORKTREE }]);
+    const result = await callTool(createSessionServer("s-help-c", deps), retireCall());
+
+    expect(result.isError).toBe(true);
+    expect(dispatched(dispatchAction, "terminal.close")).toHaveLength(0);
+    expect(dispatched(dispatchAction, "worktree.delete")).toHaveLength(0);
   });
 
   it("deletes straight away when no pane of its own is there", async () => {

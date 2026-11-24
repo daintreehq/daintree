@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useMemo } from "react";
-import { renderHook, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type { DiffSubject } from "../diffContentCache";
 import { useDiffContent } from "../useDiffContent";
 
@@ -40,6 +40,20 @@ function useSubject(filePath: string): DiffSubject {
 beforeEach(() => {
   requestDiffMock.mockReset();
 });
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+/** Lands the current diff, then runs out the dwell the next-file prefetch waits for. */
+async function settlePrefetch(): Promise<void> {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+}
 
 describe("useDiffContent", () => {
   it("never reports one file's patch under another file's subject", async () => {
@@ -87,10 +101,121 @@ describe("useDiffContent", () => {
     await waitFor(() => expect(result.current.content).toBe("ERROR"));
   });
 
+  it.each(["working-tree", "staged", "unstaged"] as const)(
+    "prefetches a %s next file only after the current diff has landed and been dwelled on",
+    async (source) => {
+      vi.useFakeTimers();
+      let land!: (value: { content: string }) => void;
+      requestDiffMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          land = resolve;
+        })
+      );
+      requestDiffMock.mockResolvedValue({ content: PATCH_B });
+      const next: DiffSubject = {
+        source,
+        worktreePath: "/repo",
+        filePath: "b.ts",
+        status: "modified",
+      };
+      const files = () => requestDiffMock.mock.calls.map(([s]) => s.filePath);
+
+      renderHook(() => useDiffContent(useSubject("a.ts"), next));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(files()).toEqual(["a.ts"]);
+
+      await act(async () => land({ content: PATCH_A }));
+      // Not on the next tick either: it waits out a dwell first.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(files()).toEqual(["a.ts"]);
+      await settlePrefetch();
+
+      expect(files()).toEqual(["a.ts", "b.ts"]);
+    }
+  );
+
+  it.each<DiffSubject>([
+    {
+      source: "base-branch",
+      worktreePath: "/repo",
+      filePath: "b.ts",
+      baseBranch: "main",
+      currentBranch: "feature",
+    },
+    {
+      source: "since-review",
+      worktreePath: "/repo",
+      worktreeId: "wt-1",
+      filePath: "b.ts",
+      side: undefined,
+      markRevision: 1,
+    },
+  ])("never prefetches a $source diff, which the cache would not keep", async (next) => {
+    vi.useFakeTimers();
+    requestDiffMock.mockResolvedValue({ content: PATCH_A });
+
+    renderHook(() => useDiffContent(useSubject("a.ts"), next));
+    await settlePrefetch();
+
+    expect(requestDiffMock.mock.calls.map(([s]) => s.filePath)).toEqual(["a.ts"]);
+  });
+
   it("holds no content for a null subject", () => {
     const { result } = renderHook(() => useDiffContent(null));
 
     expect(result.current.content).toBeUndefined();
     expect(requestDiffMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("useDiffContent — a hunk staged under an open diff (#17331)", () => {
+  function useSideSubject(source: "staged" | "unstaged" | "base-branch"): DiffSubject {
+    return useMemo(
+      () =>
+        source === "base-branch"
+          ? {
+              source,
+              worktreePath: "/repo",
+              filePath: "a.ts",
+              baseBranch: "main",
+              currentBranch: "feature",
+            }
+          : { source, worktreePath: "/repo", filePath: "a.ts", status: "modified" },
+      [source]
+    );
+  }
+
+  it.each(["staged", "unstaged"] as const)(
+    "reads a %s diff again once that file's diffs are evicted",
+    async (side) => {
+      const { evictCachedDiffsForFile } = await import("../diffContentCache");
+      let read = 0;
+      requestDiffMock.mockImplementation(async () => ({ content: `${PATCH_A}\n# read ${++read}` }));
+      const { result } = renderHook(() => useDiffContent(useSideSubject(side)));
+      await waitFor(() => expect(result.current.content).toBe(`${PATCH_A}\n# read 1`));
+
+      act(() => evictCachedDiffsForFile("/repo", "a.ts"));
+
+      await waitFor(() => expect(result.current.content).toBe(`${PATCH_A}\n# read 2`));
+      act(() => evictCachedDiffsForFile("/repo", "b.ts"));
+      await act(async () => {});
+      expect(requestDiffMock).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("leaves a diff that doesn't read the index alone", async () => {
+    const { evictCachedDiffsForFile } = await import("../diffContentCache");
+    requestDiffMock.mockResolvedValue({ content: PATCH_A });
+    const { result } = renderHook(() => useDiffContent(useSideSubject("base-branch")));
+    await waitFor(() => expect(result.current.content).toBe(PATCH_A));
+
+    act(() => evictCachedDiffsForFile("/repo", "a.ts"));
+    await act(async () => {});
+
+    expect(requestDiffMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -9,6 +9,8 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useProjectGroupsStore } from "@/store/projectGroupsStore";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
+import { useProjectSleepWaitStore } from "@/store/projectSleepWaitStore";
 import { notify } from "@/lib/notify";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { classifyAssistantActivity } from "@/lib/projectAssistantActivity";
@@ -96,8 +98,8 @@ export function useProjectSwitcherPalette({
   const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
   // A palette taking the store slot closes this one without `close()`, so the
-  // query is dropped here as well: a later opening that skips `open()` — the
-  // action palette's `/` route — would otherwise come back on the old text.
+  // query is dropped here as well: an opening that reaches only the store slot
+  // would otherwise come back on the old text.
   const [wasOpen, setWasOpen] = useState(isOpen);
   // The query an opening handed over. It ranks on the opening's own commit:
   // the deferral is for keystrokes, and lagging here would show browse rows
@@ -611,6 +613,34 @@ export function useProjectSwitcherPalette({
     openProject,
   });
 
+  // Every confirm the switcher raises sits in the modal layer above where the
+  // switcher opens, so opening it under one would hand the palette focus and
+  // Escape while the dialog on screen waits (#16919). The confirm is answered
+  // first. Sleep's and Restart's are the app-level sleep dialogs, and so is a
+  // Sleep waiting on its agents (#17882).
+  const sleepDialogOpen = useProjectSleepConfirmStore((s) => s.pendingConfirm !== null);
+  const sleepWaitOpen = useProjectSleepWaitStore((s) => s.run !== null);
+  const isConfirming =
+    sleepDialogOpen ||
+    sleepWaitOpen ||
+    projectMutations.stopConfirmProjectId !== null ||
+    projectMutations.removeConfirmProject !== null ||
+    scratchMutations.deleteScratchConfirm !== null ||
+    scratchMutations.deleteAllScratchesConfirm !== null ||
+    scratchMutations.saveAsProjectConfirm !== null;
+  const openUnlessConfirming = useCallback<typeof open>(
+    (nextMode, options) => {
+      if (!isConfirming) open(nextMode, options);
+    },
+    [isConfirming, open]
+  );
+  const toggleUnlessConfirming = useCallback<typeof toggle>(
+    (nextMode) => {
+      if (!isConfirming) toggle(nextMode);
+    },
+    [isConfirming, toggle]
+  );
+
   return {
     isOpen,
     mode,
@@ -622,9 +652,9 @@ export function useProjectSwitcherPalette({
     activeProject,
     selectedIndex,
     cycleRequest,
-    open,
+    open: openUnlessConfirming,
     close,
-    toggle,
+    toggle: toggleUnlessConfirming,
     setQuery,
     selectPrevious,
     selectNext,

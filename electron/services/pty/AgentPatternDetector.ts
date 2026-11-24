@@ -146,14 +146,19 @@ export function lastLinesOffset(text: string, lineCount: number): number {
  * (OpenCode), "esc to stop" (Cursor), and "Ctrl+C to interrupt" (Goose).
  */
 const INTERRUPT_HINT = String.raw`(?:esc|escape|ctrl\+c)(?:\s+again)?\s+to\s+(?:interrupt|cancel|stop)`;
+// Glyphs reach the String.raw patterns as `${}` strings, which the build
+// escapes; a tagged template's own text ships as written, and one glyph there
+// makes the analysis chunk every terminal's worker loads two-byte (#17023).
+// Marker superset: Claude v2.1.79 chars + legacy + Codex/Cursor dots +
+// Gemini/Goose/OpenCode braille U+2800–U+28FF.
+const STATUS_MARKERS = "·*✢✳✶✻✽●✼✾⟡◇◆○•∙∘◉⠀-⣿";
+const TIME_SEPARATORS = "·•∙⋅,";
 
 export const UNIVERSAL_PATTERN_CONFIG: PatternDetectionConfig = {
   primaryPatterns: [
-    // Full format: status marker + text + parenthesised interrupt hint
-    // (marker superset: Claude v2.1.79 chars + legacy + Codex/Cursor dots +
-    // Gemini/Goose/OpenCode braille U+2800–U+28FF).
+    // Full format: status marker + text + parenthesised interrupt hint.
     new RegExp(
-      String.raw`[·*✢✳✶✻✽●✼✾⟡◇◆○•∙∘◉⠀-⣿]\s+[^()\n]{2,80}\s*\((?:[^()\n]*?\s)?${INTERRUPT_HINT}`,
+      String.raw`[${STATUS_MARKERS}]\s+[^()\n]{2,80}\s*\((?:[^()\n]*?\s)?${INTERRUPT_HINT}`,
       "i"
     ),
     // Simple: interrupt hint near end of line (handles long/wrapped text).
@@ -165,7 +170,7 @@ export const UNIVERSAL_PATTERN_CONFIG: PatternDetectionConfig = {
     // "esc to cancel the dialog works." register as working.
     new RegExp(String.raw`${INTERRUPT_HINT}(?:[^)\n]{0,20}\)?|[^)\n]{0,60}\))$`, "im"),
     // Time + hint structures: "(15s · esc to interrupt)", "(14s, esc to cancel)"
-    new RegExp(String.raw`\(\d+[smh]?\s*[·•∙⋅,]?\s*${INTERRUPT_HINT}`, "i"),
+    new RegExp(String.raw`\(\d+[smh]?\s*[${TIME_SEPARATORS}]?\s*${INTERRUPT_HINT}`, "i"),
   ],
   fallbackPatterns: [
     // Common spinner characters followed by activity

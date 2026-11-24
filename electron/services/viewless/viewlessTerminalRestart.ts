@@ -17,8 +17,19 @@ import {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { mergeTerminalLaunchEnv } from "../../../shared/utils/terminalLaunchOptions.js";
 import { readSpawnProvenance } from "../../../shared/utils/scheduledRunProvenance.js";
+import { conversationStoreFor } from "../../../shared/utils/conversationStore.js";
 import type { TerminalFirstPrompt } from "../../../shared/types/panel.js";
 import type { ViewlessDeps } from "./ViewlessActionExecutor.js";
+
+/** What a restart with no view rechecks across its awaits, and what it runs once it goes ahead. */
+export interface ViewlessRestartGuards {
+  /** Whether the terminal still runs the launch the restart was asked for: read before the kill and again before the respawn. */
+  isCurrent?: () => boolean;
+  /** Whether the restart is still wanted: read only before the first change, since a restart under way has to finish its respawn. */
+  stillWanted?: () => boolean;
+  /** Runs once, right before the first change, and only for a restart that goes ahead. */
+  beforeChange?: () => void;
+}
 
 /** Why a restart with no view did not run, or that it did. */
 export type ViewlessRestartOutcome =
@@ -36,15 +47,17 @@ export type ViewlessRestartOutcome =
  * is: one waiting for input, one held for recovery, and an agent that already
  * quit to its shell. So is one saved with a retired model, whose drop needs a
  * view to show it, and one holding a model a restart can't select. An input lock is a view's own preference, kept in that
- * view, so with no view there is none to honour. `beforeChange` runs once,
- * right before the first change, and only for a restart that goes ahead.
+ * view, so with no view there is none to honour.
  */
 export async function restartTerminalWithoutView(
   projectId: string,
   terminalId: string,
   deps: ViewlessDeps,
-  isCurrent: () => boolean = () => true,
-  beforeChange: () => void = () => {}
+  {
+    isCurrent = () => true,
+    stillWanted = () => true,
+    beforeChange = () => {},
+  }: ViewlessRestartGuards = {}
 ): Promise<ViewlessRestartOutcome> {
   const pty = deps.getPtyReader();
   if (!pty) return "gone";
@@ -75,8 +88,9 @@ export async function restartTerminalWithoutView(
   }
 
   // The reads above wait on the pty-host and the disk; the terminal may have
-  // been relaunched meanwhile, and its successor isn't the one that leaked.
-  if (!isCurrent()) return "stale";
+  // been relaunched meanwhile, and its successor isn't the one that leaked, or
+  // the restart may no longer be wanted.
+  if (!isCurrent() || !stillWanted()) return "stale";
   beforeChange();
 
   let capturedSessionId: string | null = null;
@@ -199,9 +213,12 @@ export async function restartTerminalWithoutView(
                 resumedSessionId !== undefined && supportsSessionIdAssignment(agentId)
                   ? resumedSessionId
                   : undefined,
+              // Still in the account folder it was written under (#17087).
+              conversationStore: conversationStoreFor(snapshot.conversationStore, resumedSessionId),
               agentPresetId: snapshot.agentPresetId,
               agentPresetColor: snapshot.agentPresetColor,
               originalAgentPresetId: snapshot.originalPresetId,
+              fallbackChainIndex: snapshot.fallbackChainIndex,
               ...(keepsFirstPrompt ? { hasFirstPrompt: true } : {}),
               // Still the scheduled run's pane, so its next session names the
               // run (#15977).

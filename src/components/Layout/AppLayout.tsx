@@ -1,8 +1,6 @@
 import { useState, useCallback, useEffect, useRef, Suspense, lazy, type ReactNode } from "react";
-import { LazyPortalDock } from "@/lazyPanels";
 import { createPortal, flushSync } from "react-dom";
 import { cn } from "@/lib/utils";
-import { OVERLAY_SHEET_SHADOW_CLASS } from "@/components/ui/floatingSurface";
 import { Toolbar } from "./Toolbar";
 import { Sidebar } from "./Sidebar";
 import { TerminalDockRegion } from "./TerminalDockRegion";
@@ -10,13 +8,16 @@ const LazyDiagnosticsDock = lazy(() =>
   import("../Diagnostics").then((m) => ({ default: m.DiagnosticsDock }))
 );
 import { ErrorBoundary } from "../ErrorBoundary";
-import { PortalCloseConfirmDialog, PortalVisibilityController } from "../Portal";
-import { FleetArmingRibbon } from "@/components/Fleet";
+import { FleetArmingRibbonGate } from "@/components/Fleet/FleetArmingRibbonGate";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import { PluginPanelReloadConfirmDialog } from "@/components/Plugin/PluginPanelReloadConfirmDialog";
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
-import { ImportConfigDialog } from "@/components/Config/ImportConfigDialog";
+import { ImportConfigDialogGate } from "@/components/Config/ImportConfigDialogGate";
 import { ProjectDialogHost } from "./ProjectDialogHost";
+import { WakeContinueDialog } from "@/components/WakeContinue/WakeContinueDialog";
+import { DecisionQuestionHost } from "@/components/Decisions/DecisionQuestionHost";
+import { DecisionsAttentionHost } from "@/components/Decisions/DecisionsAttentionHost";
+import { DecisionsInboxHost } from "@/components/Decisions/DecisionsInboxHost";
 import { ChordIndicator } from "./ChordIndicator";
 
 import { AllClearOverlay } from "../AllClearOverlay";
@@ -25,7 +26,6 @@ import {
   useDockStore,
   useFocusStore,
   useHelpPanelStore,
-  usePortalStore,
   usePreferencesStore,
   useUIStore,
   type PanelState,
@@ -186,9 +186,9 @@ const MIN_MAIN_WIDTH = 240;
 // behavior) rather than staying blank. Far longer than a healthy restore.
 const SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS = 5000;
 
-// #11893: top edge for the body-portaled full-height overlays (ThemeBrowser,
-// PortalDock). They are position:fixed and paint under the --z-toolbar toolbar, so a
-// static top-12 clipped their top strip the moment a global banner pushed the
+// #11893: top edge for the body-portaled full-height ThemeBrowser overlay.
+// It is position:fixed and paints under the --z-toolbar toolbar, so a
+// static top-12 clipped its top strip the moment a global banner pushed the
 // toolbar down. `3rem` is the toolbar's own h-12; the var carries the banner
 // height, which is content-driven (description length, action count) and so has
 // no constant to hardcode. The 0px fallback keeps the no-banner case identical
@@ -260,7 +260,7 @@ export function AppLayout({
     });
   // ThemeBrowser claims the viewport only once its lazy chunk mounts. Entered
   // from Settings, the dialog's claim can drop before that (at once in
-  // performance mode), and the Portal's native view would flash in the gap.
+  // performance mode), and a native view would flash in the gap.
   // Its own id: claims don't count holders, so sharing ThemeBrowser's would
   // let either cleanup release both.
   useOverlayClaim("theme-browser-presence", themeBrowserRendered);
@@ -271,7 +271,7 @@ export function AppLayout({
   // The plugin manager (#9558) is a full-screen overlay; while it owns the
   // viewport its claim marks the app chrome inert, same as the theme browser.
   // The view itself is mounted in App.tsx (it carries deep-link props), so
-  // AppLayout only needs the inert coordination, not the portal.
+  // AppLayout only needs the inert coordination, not the mount.
   const isPluginManagerOpen = useOverlayOpen("plugin-manager");
   const chromeInert = isThemeBrowserOpen || isPluginManagerOpen;
   const reduceAnimations = usePreferencesStore((s) => s.reduceAnimations);
@@ -591,10 +591,7 @@ export function AppLayout({
       // ("the snapshot only owns the deltas it caused"). If the assistant was
       // never gesture-hidden (e.g. a sidebar-only gesture), an explicit toolbar
       // open during focus mode must survive the exit rather than be snapped shut.
-      // Likewise web chat opened during focus mode wins over the restore — the
-      // two are exclusive, and reopening the assistant would close it. Read
-      // live: the render's layout.portalOpen can lag a same-turn open.
-      const restoreAssistant = snapshot.hidAssistant && !usePortalStore.getState().isOpen;
+      const restoreAssistant = snapshot.hidAssistant;
       const assistantWasOpen = snapshot.assistantWasOpen;
       layout.toggleFocusMode({
         sidebarWidth,
@@ -714,16 +711,6 @@ export function AppLayout({
   }, []);
 
   useEffect(() => {
-    const handlePortalToggle = () => {
-      if (useUIStore.getState().hasOpenOverlays()) return;
-      layout.togglePortal();
-    };
-
-    window.addEventListener("daintree:toggle-portal", handlePortalToggle);
-    return () => window.removeEventListener("daintree:toggle-portal", handlePortalToggle);
-  }, [layout.togglePortal]);
-
-  useEffect(() => {
     const handleResetSidebarWidth = () => {
       if (useUIStore.getState().hasOpenOverlays()) return;
       setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
@@ -748,10 +735,6 @@ export function AppLayout({
   useEffect(() => {
     useMacroFocusStore.getState().setVisibility("sidebar", showSidebar);
   }, [showSidebar]);
-
-  useEffect(() => {
-    useMacroFocusStore.getState().setVisibility("portal", layout.portalOpen);
-  }, [layout.portalOpen]);
 
   useEffect(() => {
     useMacroFocusStore.getState().setVisibility("assistant", showAssistant);
@@ -817,12 +800,6 @@ export function AppLayout({
     window.addEventListener("mousedown", handleMouseDown, { capture: true });
     return () => window.removeEventListener("mousedown", handleMouseDown, { capture: true });
   }, []);
-
-  useEffect(() => {
-    if (!layout.portalOpen) {
-      window.electron.portal.hide();
-    }
-  }, [layout.portalOpen]);
 
   const handleSidebarResize = useCallback((newWidth: number) => {
     const attainable = viewportAttainableWidth(MIN_SIDEBAR_WIDTH, MIN_MAIN_WIDTH);
@@ -931,34 +908,23 @@ export function AppLayout({
   const [bannerEl, setBannerEl] = useState<HTMLDivElement | null>(null);
 
   // Feeds OVERLAY_TOP_OFFSET. Only the banner is measured — FleetArmingRibbon
-  // is deliberately excluded: it carries no positive z-index, so these overlays
-  // paint over it and it clips nothing, and offsetting below it would resize the
-  // PortalDock's native WebContentsView on every ribbon toggle.
+  // is deliberately excluded: it carries no positive z-index, so the overlay
+  // paints over it and it clips nothing.
   useGlobalBannerHeightVar(bannerEl);
 
   useEffect(() => {
-    const portalOffset = layout.portalOpen ? layout.portalWidth : 0;
-    // Two separate vars because they encode different layout truths.
-    // --portal-right-offset: width of the body-portaled Portal (web chat) only.
-    //   Used by toolbar dropdowns, which sit above the main row and only need
-    //   to dodge body-portaled overlays — the Assistant is a flex sibling
-    //   below the toolbar, not an overlay (issue #6800).
-    // --right-obstruction-offset: max of Portal and Assistant width — the
-    //   total occupied right-edge viewport space. Used by fixed body-portaled
-    //   elements (toaster, popovers, ReEntrySummary, GettingStartedChecklist,
-    //   ThemeBrowser overlay) that would otherwise be hidden behind whichever
-    //   is wider. Portal and Assistant are mutually exclusive, but take the
-    //   max rather than the sum so an overlap can never double-count (#6629).
-    const obstructionOffset = Math.max(portalOffset, effectiveAssistantWidth);
+    // --right-obstruction-offset: the right-edge viewport space the Assistant
+    // occupies. Fixed body-portaled elements (toaster, popovers, ReEntrySummary,
+    // GettingStartedChecklist, ThemeBrowser overlay) read it so they are never
+    // hidden behind it (#6629). Toolbar dropdowns sit above the main row, where
+    // the Assistant isn't, so they don't (#6800).
     const rootStyle = document.documentElement.style;
-    rootStyle.setProperty("--portal-right-offset", `${portalOffset}px`);
-    rootStyle.setProperty("--right-obstruction-offset", `${obstructionOffset}px`);
+    rootStyle.setProperty("--right-obstruction-offset", `${effectiveAssistantWidth}px`);
 
     return () => {
-      rootStyle.removeProperty("--portal-right-offset");
       rootStyle.removeProperty("--right-obstruction-offset");
     };
-  }, [layout.portalOpen, layout.portalWidth, effectiveAssistantWidth]);
+  }, [effectiveAssistantWidth]);
 
   return (
     <div
@@ -972,7 +938,6 @@ export function AppLayout({
         color: "var(--color-text-primary)",
       }}
     >
-      <PortalVisibilityController />
       {/* Save / Discard / Cancel for a dirty file panel, hosted above every
           pane so an unmounted (inactive-tab, maximised-away) panel keeps its
           guard (#12323). */}
@@ -1001,20 +966,28 @@ export function AppLayout({
           agentAvailability={agentAvailability}
           projectSwitcherPalette={projectSwitcherPalette}
         />
-        <FleetArmingRibbon />
+        <FleetArmingRibbonGate />
       </div>
       <TerminalDestructiveActionConfirmDialog />
       <PluginPanelReloadConfirmDialog />
-      <PortalCloseConfirmDialog />
       {isRelocationPending && (
         <Suspense fallback={null}>
           <LazyMoveOrRenameProjectDialog />
         </Suspense>
       )}
-      <ImportConfigDialog />
+      <ImportConfigDialogGate />
       {/* Not under the sidebar: these open from actions, the palette and
           keybindings too, so they must answer whatever the sidebar shows. */}
       {hasWorkspace && isHydrated && <ProjectDialogHost />}
+      {/* Above the grid, so its keys never reach the note being written (#17883). */}
+      {hasWorkspace && isHydrated && <WakeContinueDialog />}
+      {/* Outside the workspace gate: any window can show a question by its
+          reference, and this computer's answers needing attention, so a
+          notification's click opens them wherever it lands (#17232, #17235). */}
+      {isHydrated && <DecisionQuestionHost followsOpenRequests />}
+      {isHydrated && <DecisionsAttentionHost />}
+      {/* Every question on this computer, from any window, whatever project it shows (#17231). */}
+      {isHydrated && <DecisionsInboxHost />}
       <div
         {...(chromeInert ? { inert: true } : {})}
         className="flex-1 flex flex-col overflow-hidden"
@@ -1228,28 +1201,6 @@ export function AppLayout({
               </div>
             </ErrorBoundary>
           </>,
-          document.body
-        )}
-      {layout.portalOpen &&
-        createPortal(
-          <ErrorBoundary variant="section" componentName="PortalDock">
-            {/* inert mirrors the toolbar / main-content wrappers: when the
-                ThemeBrowser overlay is open, the Portal's React chrome (tabs,
-                toolbar, resize handle) must not be interactive. The native
-                WebContentsView is already hidden via PortalVisibilityController. */}
-            <div
-              {...(chromeInert ? { inert: true } : {})}
-              className={cn(
-                "fixed right-0 bottom-0 z-[var(--z-portal)] border-l border-border-default",
-                OVERLAY_SHEET_SHADOW_CLASS
-              )}
-              style={{ top: OVERLAY_TOP_OFFSET }}
-            >
-              <Suspense fallback={null}>
-                <LazyPortalDock />
-              </Suspense>
-            </div>
-          </ErrorBoundary>,
           document.body
         )}
       {window.electron?.demo && (

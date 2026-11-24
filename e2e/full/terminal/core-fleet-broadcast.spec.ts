@@ -38,6 +38,7 @@ interface ActionResult<T = unknown> {
 }
 
 let ctx: AppContext;
+const editorUpdateErrors: string[] = [];
 let fixtureDir: string;
 let fakeBinDir = "";
 let fixtureCleanup: (() => void) | undefined;
@@ -650,14 +651,24 @@ test.describe("Core: Fleet terminal broadcast", () => {
       },
     });
     ctx.window = await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Fleet Broadcast");
+    ctx.window.on("console", (message) => {
+      if (/update listener:.*(?:#185|Maximum update depth)/i.test(message.text())) {
+        editorUpdateErrors.push(message.text());
+      }
+    });
   });
 
   test.beforeEach(async () => {
+    editorUpdateErrors.length = 0;
     await resetFleetGroup();
   });
 
   test.afterEach(async () => {
     if (ctx?.app) await clearAllFaults(ctx.app);
+    expect(
+      editorUpdateErrors,
+      "CodeMirror document updates must settle without React loops"
+    ).toEqual([]);
   });
 
   test.afterAll(async () => {

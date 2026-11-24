@@ -13,7 +13,8 @@ const LazyDecisionsAttentionDialog = lazy(() =>
  * The view's needs-attention list, mounted by the view itself rather than by
  * what opens it: a pane's chip and a Canopy run's notice both go once their
  * last answer is dealt with, and the list has to outlive them. Nothing loads
- * until the list is first opened.
+ * until the list is first opened. Opened only for a stopped delivery the
+ * inbox can't list (#18048); a notification's click opens the inbox.
  */
 export function DecisionsAttentionHost() {
   const isOpen = useDecisionsAttentionStore((state) => state.isOpen);

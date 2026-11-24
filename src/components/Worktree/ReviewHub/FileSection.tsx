@@ -1,10 +1,11 @@
 import type React from "react";
-import { useCallback, useEffect, useMemo } from "react";
-import type { Dispatch, Ref, RefObject, SetStateAction } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef } from "react";
+import type { ComponentPropsWithoutRef, Dispatch, Ref, RefObject, SetStateAction } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { GitStatus, StagingFileEntry } from "@shared/types";
 import { ChevronDown, ChevronUp, Minus, Plus, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -68,6 +69,13 @@ interface FileSectionProps {
     e: React.MouseEvent
   ) => void;
   onBulkAction: () => void;
+  /**
+   * The bulk button is unmounting while it holds focus. Called mid-commit,
+   * before the node leaves the DOM, so it may only record: the hub hands focus
+   * on once the commit has landed, and that has to be the hub because the
+   * same commit can remove this whole section.
+   */
+  onBulkActionFocusOrphaned?: (section: FileStageRowSection, button: HTMLButtonElement) => void;
   viewedFiles: ReadonlySet<string>;
   onViewedChange: (viewedKey: string, viewed: boolean) => void;
   sectionRef?: Ref<HTMLDivElement>;
@@ -144,7 +152,7 @@ interface SectionRowContext {
     status: GitStatus,
     e: React.MouseEvent
   ) => void;
-  onViewedChange: (viewedKey: string, viewed: boolean) => void;
+  onViewedChange: (filePath: string, viewed: boolean) => void;
   renderRowMenu: (
     file: StagingFileEntry,
     section: FileStageRowSection,
@@ -168,7 +176,6 @@ function computeSectionRowKey(_index: number, file: StagingFileEntry, ctx: Secti
  */
 function renderSectionRow(index: number, file: StagingFileEntry, ctx: SectionRowContext) {
   const rowIndex = ctx.indexOffset + index;
-  const viewedKey = `${ctx.section}:${file.path}`;
   return (
     <FileStageRow
       id={`review-hub-row-${rowIndex}`}
@@ -183,8 +190,8 @@ function renderSectionRow(index: number, file: StagingFileEntry, ctx: SectionRow
       onRowClick={ctx.onRowClick}
       density={ctx.density}
       virtualized={ctx.virtualized}
-      viewed={ctx.viewedFiles.has(viewedKey)}
-      onViewedChange={(v) => ctx.onViewedChange(viewedKey, v)}
+      viewed={ctx.viewedFiles.has(workingTreeViewedKey(file.path))}
+      onViewedChange={ctx.onViewedChange}
       renderRowMenu={ctx.renderRowMenu}
     />
   );
@@ -207,6 +214,29 @@ function renderVirtualizedRow(index: number, file: StagingFileEntry, ctx: Sectio
   );
 }
 
+interface BulkActionButtonProps extends ComponentPropsWithoutRef<typeof Button> {
+  onFocusOrphaned: (button: HTMLButtonElement) => void;
+}
+
+/**
+ * The bulk button, as its own component so its unmount is observable: React
+ * runs a deleted component's layout cleanup before it removes the host node, so
+ * a button that held focus is still `activeElement` here. Afterwards there is
+ * only `<body>`, which says nothing about where focus was.
+ */
+function BulkActionButton({ onFocusOrphaned, ...buttonProps }: BulkActionButtonProps) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const reportFocusOrphaned = useEffectEvent(onFocusOrphaned);
+  useLayoutEffect(() => {
+    const node = buttonRef.current;
+    if (!node) return;
+    return () => {
+      if (node.ownerDocument.activeElement === node) reportFocusOrphaned(node);
+    };
+  }, []);
+  return <Button {...buttonProps} ref={buttonRef} />;
+}
+
 export function FileSection({
   isStaged,
   files,
@@ -224,6 +254,7 @@ export function FileSection({
   onToggle,
   onRowClick,
   onBulkAction,
+  onBulkActionFocusOrphaned,
   viewedFiles,
   onViewedChange,
   sectionRef,
@@ -299,6 +330,13 @@ export function FileSection({
   // list looked like a frame earlier.
   const windowed = virtualized && scrollParent !== null;
 
+  // One function for every row: a closure per row is a new prop each render,
+  // which re-renders every memoized row on each cursor step.
+  const handleRowViewedChange = useCallback(
+    (filePath: string, viewed: boolean) => onViewedChange(workingTreeViewedKey(filePath), viewed),
+    [onViewedChange]
+  );
+
   const rowContext: SectionRowContext = useMemo(
     () => ({
       section,
@@ -313,7 +351,7 @@ export function FileSection({
       viewedFiles,
       onToggle,
       onRowClick,
-      onViewedChange,
+      onViewedChange: handleRowViewedChange,
       renderRowMenu,
     }),
     [
@@ -329,7 +367,7 @@ export function FileSection({
       viewedFiles,
       onToggle,
       onRowClick,
-      onViewedChange,
+      handleRowViewedChange,
       renderRowMenu,
     ]
   );
@@ -361,6 +399,11 @@ export function FileSection({
   // rows for one frame, to unmount them on the next, is exactly the cost this
   // change exists to remove.
   const awaitingScrollParent = virtualized && scrollParent === null;
+
+  const handleBulkFocusOrphaned = useCallback(
+    (button: HTMLButtonElement) => onBulkActionFocusOrphaned?.(section, button),
+    [onBulkActionFocusOrphaned, section]
+  );
 
   return (
     <div
@@ -516,7 +559,8 @@ export function FileSection({
               </DropdownMenuContent>
             </DropdownMenu>
             {shownCount > 0 && (
-              <Button
+              <BulkActionButton
+                onFocusOrphaned={handleBulkFocusOrphaned}
                 variant="ghost"
                 size="xs"
                 onClick={onBulkAction}
@@ -529,12 +573,12 @@ export function FileSection({
                 // justify-start so the glyph keeps the same x in both stacked
                 // sections; the ghost button has no chrome at rest, so the
                 // reserved trailing space is invisible.
-                className="shrink-0 min-w-[9rem] justify-start"
+                className="shrink-0 min-w-[9rem] justify-start tabular-nums"
                 data-testid={bulkActionTestId}
               >
                 <BulkActionIcon aria-hidden="true" />
                 {bulkLabel}
-              </Button>
+              </BulkActionButton>
             )}
           </div>
         </div>
@@ -580,8 +624,8 @@ export function FileSection({
                 onToggle={onToggle}
                 onRowClick={onRowClick}
                 density={view.density}
-                viewed={viewedFiles.has(`${section}:${file.path}`)}
-                onViewedChange={(v) => onViewedChange(`${section}:${file.path}`, v)}
+                viewed={viewedFiles.has(workingTreeViewedKey(file.path))}
+                onViewedChange={handleRowViewedChange}
                 renderRowMenu={renderRowMenu}
               />
             ))}

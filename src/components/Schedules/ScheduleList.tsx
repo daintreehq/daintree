@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { useSkeletonFloor, useSkeletonGate } from "@/hooks/useDeferredLoading";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -23,13 +24,8 @@ import { lastRunWords } from "./lastRunWords";
 import { RunGlyph } from "./RunGlyph";
 import { scheduleAgentName } from "./scheduleAgent";
 import { SCHEDULE_STARTERS, type ScheduleStarter } from "./scheduleStarters";
-import {
-  cadenceWords,
-  formatNextRunRelative,
-  formatRunInstant,
-  nextRunAt,
-  scheduleWorktreeLabel,
-} from "./scheduleWords";
+import { formatNextRunRelative, formatRunInstant } from "./runTime";
+import { cadenceWords, nextRunAt, scheduleWorktreeLabel } from "./scheduleWords";
 
 /** The controls a row offers, each findable by schedule for handing focus back to it. */
 export type ScheduleRowAction = "run" | "history" | "edit" | "delete";
@@ -48,6 +44,8 @@ interface ScheduleListProps {
   switches?: ReactNode;
   /** Worktree labels by id, for schedules that don't run in the main checkout. */
   worktreeLabels: ReadonlyMap<string, string>;
+  /** The project's worktree ids once they are known, null until then; a label's absence only means missing from a known list. */
+  worktreeIds: ReadonlySet<string> | null;
   /** Schedules whose switch is being saved; the switch holds still until main answers. */
   pendingEnabled: ReadonlySet<string>;
   enabledError: string | null;
@@ -304,6 +302,7 @@ export function ScheduleList({
   now,
   switches,
   worktreeLabels,
+  worktreeIds,
   pendingEnabled,
   enabledError,
   pendingRunNow,
@@ -322,8 +321,11 @@ export function ScheduleList({
   onDelete,
   onRetry,
 }: ScheduleListProps) {
+  // A read inside the gate shows nothing, rather than an empty group; a skeleton
+  // that does show stays up its floor, so it never blinks out as the rows land.
+  const showSkeleton = useSkeletonFloor(useSkeletonGate(state.status === "loading"));
   const schedules = state.snapshot?.schedules ?? [];
-  const listed = state.snapshot !== null && schedules.length > 0;
+  const listed = !showSkeleton && state.snapshot !== null && schedules.length > 0;
   const schedulesOn = state.snapshot?.switches.schedulesOn ?? false;
 
   return (
@@ -377,7 +379,13 @@ export function ScheduleList({
             severity="error"
             title="Couldn't read run history, so Last run may be out of date"
             action={
-              <Button variant="outline" size="sm" onClick={onRetryLastRuns}>
+              // `loading` keeps the button focusable while it blocks a second retry.
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={onRetryLastRuns}
+                loading={lastRuns.retrying ?? false}
+              >
                 <RefreshCw />
                 Retry
               </Button>
@@ -407,11 +415,11 @@ export function ScheduleList({
           </Callout>
         )}
 
-        {state.status === "loading" ? (
+        {showSkeleton ? (
           <SettingsGroup>
             <Skeleton label="Loading schedules" className="space-y-2 p-3">
-              <SkeletonBone className="h-12 w-full" />
-              <SkeletonBone className="h-12 w-full" />
+              <SkeletonBone immediate className="h-12 w-full" />
+              <SkeletonBone immediate className="h-12 w-full" />
             </Skeleton>
           </SettingsGroup>
         ) : state.snapshot === null ? null : schedules.length === 0 ? (
@@ -463,7 +471,7 @@ export function ScheduleList({
                 schedule={schedule}
                 now={now}
                 schedulesOn={schedulesOn}
-                worktreeLabel={scheduleWorktreeLabel(schedule.launch, worktreeLabels)}
+                worktreeLabel={scheduleWorktreeLabel(schedule.launch, worktreeLabels, worktreeIds)}
                 enabledPending={pendingEnabled.has(schedule.id)}
                 runNowPending={pendingRunNow.has(schedule.id)}
                 lastRun={lastRuns.byScheduleId.get(schedule.id)}

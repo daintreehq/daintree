@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
-import { render, act } from "@testing-library/react";
+import { render, act, screen } from "@testing-library/react";
+import { useState } from "react";
+import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
-import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { ESCAPE_BACKSTOP_DIALOG_ATTR, ESCAPE_TOOLTIP_LAYER_ATTR } from "@/lib/dialogEscapeBackstop";
 import { APP_MODAL_SELECTOR } from "@/lib/appModal";
 import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import { claimWaitingSend } from "@/services/voiceDraftSend";
+import { CODE_VIEWER_OWNER_ATTR } from "@/lib/codeViewerKeys";
 import type { PaletteId } from "@/store/paletteStore";
 
 function parseComboLite(combo: string) {
@@ -22,7 +25,11 @@ function parseComboLite(combo: string) {
 }
 
 const mocks = vi.hoisted(() => ({
+  noteVoiceShortcutKeydown: vi.fn(),
   panelState: { focusedId: null as string | null },
+  undoCloseTakesKey: vi.fn<(target: Element, inTerminal: boolean, textUndoKey: boolean) => boolean>(
+    () => true
+  ),
   keybindingService: {
     resolveKeybinding: vi.fn(),
     getPendingChord: vi.fn<() => string | null>(() => null),
@@ -32,6 +39,7 @@ const mocks = vi.hoisted(() => ({
     // By default every action fires on just its effective combo; tests that
     // need a second binding (Windows' Ctrl+F4) set their own.
     getTriggerCombos: vi.fn<(actionId: string) => string[]>(() => []),
+    getEffectiveCombos: vi.fn<(actionId: string) => string[]>(() => []),
     getChordCompletions: vi.fn<
       () => Array<{ actionId: string; secondKey: string; description: string }>
     >(() => []),
@@ -95,6 +103,11 @@ vi.mock("@/services/ActionService", () => ({
   actionService: mocks.actionService,
 }));
 
+vi.mock("@/services/voiceRecordingRuntime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/voiceRecordingRuntime")>()),
+  noteVoiceShortcutKeydown: mocks.noteVoiceShortcutKeydown,
+}));
+
 vi.mock("../../store", () => ({
   usePanelStore: { getState: () => ({ focusedId: mocks.panelState.focusedId }) },
   usePaletteStore: {
@@ -104,6 +117,11 @@ vi.mock("../../store", () => ({
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
+}));
+
+vi.mock("@/services/terminal/undoCloseKey", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/terminal/undoCloseKey")>()),
+  undoCloseTakesKey: mocks.undoCloseTakesKey,
 }));
 
 // The when-context builder reads real Zustand stores; the hook only needs the
@@ -119,8 +137,14 @@ const { useAnnouncerStore } = await import("@/store/accessibilityAnnouncerStore"
 function makePaletteState(activePaletteId: PaletteId | null) {
   return {
     activePaletteId,
+    openRequestId: 0,
+    promptHistoryHosts: 0,
+    quickSwitcherScope: null,
     openPalette: vi.fn(),
+    openQuickSwitcher: vi.fn(),
+    setQuickSwitcherScope: vi.fn(),
     closePalette: vi.fn(),
+    registerPromptHistoryHost: vi.fn(() => () => {}),
   };
 }
 
@@ -1909,6 +1933,31 @@ describe("useGlobalKeybindings — row-menu stand-down", () => {
     const host = mount(`<div role="menu"><div id="item" role="menuitem"></div></div>`);
     expect(pressMenuKey(host.querySelector<HTMLElement>("#item")!).defaultPrevented).toBe(false);
   });
+
+  it("skips the menu ancestor walks for keys that are not menu keys", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+    const host = mount(`<div data-row-menu=""><div id="row"></div></div>`);
+    const row = host.querySelector<HTMLElement>("#row")!;
+    const closest = vi.spyOn(row, "closest");
+    try {
+      act(() => {
+        row.dispatchEvent(new KeyboardEvent("keydown", { key: "a", bubbles: true }));
+      });
+      const selectors = closest.mock.calls.map(([selector]) => selector);
+      expect(selectors).not.toContain("[data-row-menu]");
+      expect(selectors).not.toContain('[role="menu"]');
+
+      closest.mockClear();
+      pressMenuKey(row);
+      expect(closest.mock.calls.map(([selector]) => selector)).toContain("[data-row-menu]");
+    } finally {
+      closest.mockRestore();
+    }
+  });
 });
 
 describe("useGlobalKeybindings — panel menu keys follow the action's bindings", () => {
@@ -2342,5 +2391,673 @@ describe("useGlobalKeybindings — per-keystroke document scans", () => {
     } finally {
       querySelector.mockRestore();
     }
+  });
+});
+
+describe("useGlobalKeybindings — layers open inside the plugin manager (#16942)", () => {
+  let manager: HTMLElement;
+
+  beforeEach(() => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+    manager = document.createElement("div");
+    manager.setAttribute("data-plugin-manager-open", "");
+    document.body.appendChild(manager);
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  function pressEscapeOn(target: HTMLElement) {
+    const reached = vi.fn();
+    document.addEventListener("keydown", reached);
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    try {
+      act(() => {
+        target.dispatchEvent(event);
+      });
+    } finally {
+      document.removeEventListener("keydown", reached);
+    }
+    return { event, reachedDocument: reached.mock.calls.length > 0 };
+  }
+
+  function portalledLayer(role: "listbox" | "menu" | "dialog"): HTMLButtonElement {
+    const layer = document.createElement("div");
+    layer.setAttribute("role", role);
+    layer.setAttribute("data-state", "open");
+    const button = document.createElement("button");
+    layer.appendChild(button);
+    document.body.appendChild(layer);
+    return button;
+  }
+
+  it("lets an open select close itself instead of popping the manager off the stack", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    render(<Host />);
+
+    const { event, reachedDocument } = pressEscapeOn(portalledLayer("listbox"));
+
+    expect(closeManager).not.toHaveBeenCalled();
+    expect(reachedDocument).toBe(true);
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+  });
+
+  it("lets a drawer inside the manager take Escape from a control inside it", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const drawer = document.createElement("div");
+    drawer.setAttribute("data-drawer-panel", "right");
+    drawer.setAttribute("data-state", "open");
+    drawer.setAttribute("role", "complementary");
+    const button = document.createElement("button");
+    drawer.appendChild(button);
+    manager.appendChild(drawer);
+    render(<Host />);
+
+    const { reachedDocument } = pressEscapeOn(button);
+
+    expect(closeManager).not.toHaveBeenCalled();
+    expect(reachedDocument).toBe(true);
+  });
+
+  it("still closes the manager when its open modal drawer doesn't hold focus", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const drawer = document.createElement("div");
+    drawer.setAttribute("data-drawer-panel", "right");
+    drawer.setAttribute("data-state", "open");
+    drawer.setAttribute("role", "dialog");
+    manager.appendChild(drawer);
+    const outside = document.createElement("button");
+    manager.appendChild(outside);
+    render(<Host />);
+
+    const { event } = pressEscapeOn(outside);
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  /** A control in the manager whose keyboard-opened tooltip is showing. */
+  function controlWithTooltip(escapeClosable: boolean): HTMLButtonElement {
+    const tooltip = document.createElement("div");
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.setAttribute("data-state", "instant-open");
+    if (escapeClosable) tooltip.setAttribute(ESCAPE_TOOLTIP_LAYER_ATTR, "");
+    document.body.appendChild(tooltip);
+    const control = document.createElement("button");
+    manager.appendChild(control);
+    return control;
+  }
+
+  it("forwards Escape past the manager while a closable tooltip is open", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    render(<Host />);
+
+    const { reachedDocument } = pressEscapeOn(controlWithTooltip(true));
+
+    expect(closeManager).not.toHaveBeenCalled();
+    expect(reachedDocument).toBe(true);
+  });
+
+  it("closes the manager over a pinned tooltip that Escape cannot dismiss", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    render(<Host />);
+
+    pressEscapeOn(controlWithTooltip(false));
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a layer left open behind the manager in the inert workspace", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const workspace = document.createElement("div");
+    workspace.setAttribute("inert", "");
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("data-state", "open");
+    workspace.appendChild(menu);
+    document.body.appendChild(workspace);
+    const control = document.createElement("button");
+    manager.appendChild(control);
+    render(<Host />);
+
+    pressEscapeOn(control);
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves Escape to the stack when the manager isn't open", () => {
+    manager.removeAttribute("data-plugin-manager-open");
+    const closeTop = vi.fn();
+    registerEscape(closeTop);
+    render(<Host />);
+
+    pressEscapeOn(portalledLayer("listbox"));
+
+    expect(closeTop).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a palette opened over the manager keep Escape", () => {
+    vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState("action"));
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const closePalette = vi.fn();
+    registerEscape(closePalette);
+    render(<Host />);
+
+    pressEscapeOn(portalledLayer("listbox"));
+
+    expect(closePalette).toHaveBeenCalledTimes(1);
+    expect(closeManager).not.toHaveBeenCalled();
+  });
+
+  it("closes a real popover open in the manager first, and the manager on the next Escape", () => {
+    const closeManager = vi.fn();
+    registerEscape(closeManager);
+    const onOpenChange = vi.fn();
+    function OpenPopover() {
+      const [open, setOpen] = useState(true);
+      return (
+        <PopoverPrimitive.Root
+          open={open}
+          onOpenChange={(next) => {
+            onOpenChange(next);
+            setOpen(next);
+          }}
+        >
+          <PopoverPrimitive.Anchor />
+          <PopoverPrimitive.Portal>
+            <PopoverPrimitive.Content>
+              <button type="button">Inside popover</button>
+            </PopoverPrimitive.Content>
+          </PopoverPrimitive.Portal>
+        </PopoverPrimitive.Root>
+      );
+    }
+    const control = document.createElement("button");
+    manager.appendChild(control);
+    render(
+      <>
+        <Host />
+        <OpenPopover />
+      </>
+    );
+
+    pressEscapeOn(screen.getByRole("button", { name: "Inside popover" }));
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(closeManager).not.toHaveBeenCalled();
+
+    pressEscapeOn(control);
+
+    expect(closeManager).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useGlobalKeybindings — Mod+L inside a code viewer", () => {
+  const originalNavigator = globalThis.navigator;
+  let viewer: HTMLElement;
+  let inside: HTMLElement;
+
+  function setNavigatorPlatform(platform: string) {
+    Object.defineProperty(globalThis, "navigator", {
+      value: { platform },
+      configurable: true,
+      writable: true,
+    });
+  }
+
+  function press(target: HTMLElement, init: KeyboardEventInit): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "l",
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  beforeEach(() => {
+    viewer = document.createElement("div");
+    viewer.setAttribute(CODE_VIEWER_OWNER_ATTR, "");
+    inside = document.createElement("div");
+    inside.tabIndex = 0;
+    viewer.appendChild(inside);
+    document.body.appendChild(viewer);
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "help.togglePanel" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  });
+
+  afterEach(() => {
+    viewer.remove();
+    mocks.keybindingService.resolveKeybinding.mockReset();
+    Object.defineProperty(globalThis, "navigator", {
+      value: originalNavigator,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it.each([
+    ["MacIntel", { metaKey: true }],
+    ["Win32", { ctrlKey: true }],
+  ])("leaves the platform's primary+L to the viewer on %s", (platform, modifier) => {
+    setNavigatorPlatform(platform);
+    render(<Host />);
+
+    const event = press(inside, modifier);
+
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("still resolves the same key from outside a viewer", () => {
+    setNavigatorPlatform("MacIntel");
+    render(<Host />);
+
+    const event = press(document.body, { metaKey: true });
+
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("holds back only the viewer's own key, not other shortcuts typed inside it", () => {
+    setNavigatorPlatform("MacIntel");
+    render(<Host />);
+
+    press(inside, { metaKey: true, shiftKey: true });
+    press(inside, { metaKey: true, key: "j" });
+    press(inside, { ctrlKey: true });
+
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(3);
+  });
+
+  it("lets a chord in progress complete inside the viewer", () => {
+    setNavigatorPlatform("MacIntel");
+    mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
+    render(<Host />);
+
+    press(inside, { metaKey: true });
+
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useGlobalKeybindings — a voice key's press for the voice service (#17031)", () => {
+  function pressBoundTo(actionId: string) {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "d",
+          code: "KeyD",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+  }
+
+  it.each(["voiceInput.toggle", "voiceInput.toggleAssistant", "voiceInput.rewriteSelection"])(
+    "hands %s's press over before dispatching it, so a hold can end on release",
+    (actionId) => {
+      pressBoundTo(actionId);
+
+      expect(mocks.noteVoiceShortcutKeydown).toHaveBeenCalledTimes(1);
+      expect(mocks.noteVoiceShortcutKeydown.mock.calls[0]![0]).toMatchObject({ code: "KeyD" });
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        actionId,
+        undefined,
+        expect.anything()
+      );
+      expect(mocks.noteVoiceShortcutKeydown.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.actionService.dispatch.mock.invocationCallOrder[0]!
+      );
+    }
+  );
+
+  it.each(["voiceInput.stopAndSend", "terminal.close"])(
+    "hands no press over for %s, which starts no recording",
+    (actionId) => {
+      pressBoundTo(actionId);
+
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        actionId,
+        undefined,
+        expect.anything()
+      );
+      expect(mocks.noteVoiceShortcutKeydown).not.toHaveBeenCalled();
+    }
+  );
+});
+
+describe("useGlobalKeybindings — Cmd+Z between text undo and reopening a panel", () => {
+  // The platform's text-undo key: Cmd+Z on the Mac, Ctrl+Z elsewhere.
+  const mac = /Mac/.test(navigator.platform);
+
+  function pressCmdZ(target: HTMLElement = document.body, repeat = false): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "z",
+      code: "KeyZ",
+      metaKey: mac,
+      ctrlKey: !mac,
+      repeat,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  beforeEach(() => {
+    mocks.undoCloseTakesKey.mockReturnValue(true);
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "panel.undoClose" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  });
+
+  it("reopens the last close when nothing newer holds the key", () => {
+    render(<Host />);
+    const event = pressCmdZ();
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith("panel.undoClose", undefined, {
+      source: "keybinding",
+    });
+  });
+
+  it("leaves the key untouched for the field's own undo or the Edit menu", () => {
+    mocks.undoCloseTakesKey.mockReturnValue(false);
+    render(<Host />);
+    const field = document.createElement("textarea");
+    document.body.appendChild(field);
+
+    const event = pressCmdZ(field);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    expect(mocks.undoCloseTakesKey).toHaveBeenCalledWith(field, false, true);
+    field.remove();
+  });
+
+  function mountTerminal(): { xterm: HTMLElement; helper: HTMLTextAreaElement } {
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const helper = document.createElement("textarea");
+    xterm.appendChild(helper);
+    document.body.appendChild(xterm);
+    return { xterm, helper };
+  }
+
+  it("asks with the terminal flag from inside a terminal on the Mac", () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+    act(() => {
+      helper.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "z",
+          code: "KeyZ",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+
+    expect(mocks.undoCloseTakesKey).toHaveBeenCalledWith(helper, true, true);
+    xterm.remove();
+    platform.mockRestore();
+  });
+
+  it("leaves Ctrl+Z in a terminal to the shell off the Mac", () => {
+    const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+    const event = new KeyboardEvent("keydown", {
+      key: "z",
+      code: "KeyZ",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      helper.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.undoCloseTakesKey).not.toHaveBeenCalled();
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    xterm.remove();
+    platform.mockRestore();
+  });
+
+  it("reopens once while the key is held, swallowing its repeats", () => {
+    render(<Host />);
+    pressCmdZ();
+    const repeat = pressCmdZ(document.body, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells a binding moved off Cmd+Z that it isn't text undo", () => {
+    render(<Host />);
+    act(() => {
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "u",
+          code: "KeyU",
+          metaKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+
+    expect(mocks.undoCloseTakesKey).toHaveBeenCalledWith(document.body, false, false);
+  });
+
+  it("leaves repeats alone when the press went to text undo", () => {
+    mocks.undoCloseTakesKey.mockReturnValue(false);
+    render(<Host />);
+    pressCmdZ();
+    const repeat = pressCmdZ(document.body, true);
+
+    expect(repeat.defaultPrevented).toBe(false);
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
+});
+
+// A scoped binding on a bare key (the diff viewer's `n`) is a letter anywhere
+// text goes: the scope says where the key is live, never that it outranks typing.
+describe("useGlobalKeybindings — bare scoped keys", () => {
+  function press(target: HTMLElement, key: string): boolean {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  }
+
+  beforeEach(() => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "diff.nextChange" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+  });
+
+  it.each([
+    ["an input", "<input />"],
+    ["a textarea", "<textarea></textarea>"],
+    ["an editable region", '<div contenteditable="true"></div>'],
+    // Not a text field itself, so only the terminal guard keeps it out.
+    ["a terminal", '<div class="xterm"><div tabindex="0" data-target></div></div>'],
+  ])("leaves the key to %s", (_where, html) => {
+    render(<Host />);
+    const host = document.createElement("div");
+    host.innerHTML = html;
+    document.body.appendChild(host);
+    try {
+      const target = host.querySelector<HTMLElement>(
+        "input, textarea, [contenteditable], [data-target]"
+      )!;
+      // jsdom leaves `isContentEditable` unimplemented.
+      if (target.hasAttribute("contenteditable")) {
+        Object.defineProperty(target, "isContentEditable", { value: true });
+      }
+      expect(press(target, "n")).toBe(false);
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    } finally {
+      host.remove();
+    }
+  });
+
+  it("runs the action from anything else and consumes the key", () => {
+    render(<Host />);
+    const button = document.createElement("button");
+    const downstream = vi.fn();
+    button.addEventListener("keydown", downstream);
+    document.body.appendChild(button);
+    try {
+      expect(press(button, "n")).toBe(true);
+      expect(downstream).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        "diff.nextChange",
+        undefined,
+        expect.anything()
+      );
+    } finally {
+      button.remove();
+    }
+  });
+});
+
+// Held down, xterm would send each repeat of Ctrl+Shift+Alt+C as Alt+Ctrl+C: an
+// interrupt the user never typed (#18132).
+describe("useGlobalKeybindings — Copy clean text held in a terminal", () => {
+  function pressInTerminal(helper: HTMLElement, repeat: boolean): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", {
+      key: "C",
+      code: "KeyC",
+      ctrlKey: true,
+      shiftKey: true,
+      altKey: true,
+      repeat,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      helper.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  function mountTerminal(): { xterm: HTMLElement; helper: HTMLTextAreaElement } {
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    const helper = document.createElement("textarea");
+    xterm.appendChild(helper);
+    document.body.appendChild(xterm);
+    return { xterm, helper };
+  }
+
+  it("copies once and keeps the key's repeats from the terminal", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.copyClean" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+    const reachedTerminal = vi.fn();
+    helper.addEventListener("keydown", reachedTerminal);
+
+    pressInTerminal(helper, false);
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    expect(reachedTerminal).not.toHaveBeenCalled();
+    expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith("terminal.copyClean", undefined, {
+      source: "keybinding",
+    });
+    xterm.remove();
+  });
+
+  it("keeps swallowing the repeats through a modifier pressed again and a trip out of the window", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.copyClean" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+
+    pressInTerminal(helper, false);
+    act(() => {
+      helper.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Shift",
+          code: "ShiftLeft",
+          ctrlKey: true,
+          shiftKey: true,
+          altKey: true,
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+      window.dispatchEvent(new Event("blur"));
+    });
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(true);
+    xterm.remove();
+  });
+
+  it("leaves the repeats of other bindings alone", () => {
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "terminal.new" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const { xterm, helper } = mountTerminal();
+
+    pressInTerminal(helper, false);
+    const repeat = pressInTerminal(helper, true);
+
+    expect(repeat.defaultPrevented).toBe(false);
+    xterm.remove();
   });
 });

@@ -48,14 +48,15 @@ export function FleetHostComposer(): ReactElement {
 
   const submit = async () => {
     const submitted = draft;
-    const text = submitted.trim();
-    if (text.length === 0 || sendingRef.current) return;
+    // Trim only decides emptiness: the recipient gets the text as typed, so a
+    // pasted code sample keeps its first-line indent and trailing newline.
+    if (submitted.trim().length === 0 || sendingRef.current) return;
     sendingRef.current = true;
     setSending(true);
     try {
       // Cleared only once an agent took it, and only what was sent: a send that
       // reached nobody keeps the draft, and a next message typed meanwhile stays.
-      if (await sendDraftToFleet(text)) {
+      if (await sendDraftToFleet(submitted)) {
         setDraft((current) => (current === submitted ? "" : current));
         // The field may be gone by now, and with it the effect that mirrors it.
         if (keptDraft === submitted) keptDraft = "";
@@ -86,7 +87,15 @@ export function FleetHostComposer(): ReactElement {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+            // An IME's Enter confirms a candidate and its Escape dismisses the
+            // list, so neither sends or clears. Chromium also reports keyCode 229
+            // for the keydown that commits. Escape stays off the ribbon, whose bare
+            // Escape exits the fleet, but the IME still gets the key.
+            if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+              if (e.key === "Escape") e.stopPropagation();
+              return;
+            }
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               void submit();
               return;

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } fr
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { Compartment } from "@codemirror/state";
-import type { AutocompleteItem } from "../AutocompleteMenu";
+import { stepAutocompleteIndex, type AutocompleteItem } from "../AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
 import { currentContextReferenceProvidersEffects } from "../inputEditorExtensions/contextReferenceChip";
 import { currentDiffNotesChipEffects } from "../inputEditorExtensions/notesChip";
@@ -45,6 +45,8 @@ interface LatestRefShape {
   uploadSurface?: string;
   /** ⌘↩ sends as Enter does, by this route (`HybridInputBarProps.modEnterSend`). */
   modEnterSend?: () => ComposerSendRoute;
+  /** The action of the note at the menu's foot, while one shows. */
+  autocompleteNoteAction?: () => void;
 }
 
 interface UseEditorKeymapParams {
@@ -53,7 +55,8 @@ interface UseEditorKeymapParams {
   isComposingRef: React.RefObject<boolean>;
   handledEnterRef: React.MutableRefObject<boolean>;
   editableCompartmentRef: React.RefObject<Compartment>;
-  historyPaletteOpenRef: React.RefObject<(() => void) | null>;
+  /** ⌘R: open prompt history for this composer, handing history to it first if need be. */
+  requestHistorySearch: () => void;
   applyAutocompleteSelection: (mode: "enter" | "complete", index?: number) => boolean;
   handleHistoryNavigation: (direction: "up" | "down") => boolean;
   sendFromEditor: (route?: ComposerSendRoute) => void;
@@ -76,7 +79,7 @@ interface UseEditorKeymapParams {
 interface KeymapHandlers {
   onEnter: (route?: ComposerSendRoute) => boolean;
   onModEnter: () => boolean;
-  onEscape: () => boolean;
+  onEscape: (event?: KeyboardEvent) => boolean;
   onArrowUp: () => boolean;
   onArrowDown: () => boolean;
   onArrowLeft: () => boolean;
@@ -87,6 +90,7 @@ interface KeymapHandlers {
   onPopStash: () => boolean;
   onExpand: () => boolean;
   onHistorySearch: () => boolean;
+  onAutocompleteNote: () => boolean;
 }
 
 export function useEditorKeymap({
@@ -95,7 +99,7 @@ export function useEditorKeymap({
   isComposingRef,
   handledEnterRef,
   editableCompartmentRef,
-  historyPaletteOpenRef,
+  requestHistorySearch,
   applyAutocompleteSelection,
   handleHistoryNavigation,
   sendFromEditor,
@@ -132,7 +136,7 @@ export function useEditorKeymap({
       const enterItem = latest.isAutocompleteOpen
         ? latest.autocompleteItems[latest.selectedIndex]
         : undefined;
-      if (enterItem && !latest.staleItemKeys.has(enterItem.key)) {
+      if (enterItem && enterItem.disabled !== true && !latest.staleItemKeys.has(enterItem.key)) {
         handledEnterRef.current = true;
         setTimeout(() => {
           handledEnterRef.current = false;
@@ -187,7 +191,7 @@ export function useEditorKeymap({
       if (!route) return false;
       return handlersRef.current?.onEnter(route) ?? false;
     },
-    onEscape: () => {
+    onEscape: (event) => {
       const latest = latestRef.current;
       if (!latest) return false;
       if (isComposingRef.current) return false;
@@ -196,6 +200,10 @@ export function useEditorKeymap({
 
       if (latest.isAutocompleteOpen) {
         setActiveCompletionContext(null);
+        // Spent on the menu, a layer of the composer's own: a dialog the
+        // composer sits in (the Expanded Editor's, Canopy's) closes on any
+        // Escape that reaches it, prevented or not.
+        event?.stopPropagation();
         return true;
       }
       // A `#` menu still waiting on its rows is dismissed before it can show,
@@ -226,12 +234,8 @@ export function useEditorKeymap({
 
       const resultsCount = latest.autocompleteItems.length;
       if (latest.isAutocompleteOpen && resultsCount > 0) {
-        setSelectedIndex((prev) => {
-          if (resultsCount === 0) return 0;
-          // From no selection, up wraps to the last row as it does from the first.
-          if (prev < 0) return resultsCount - 1;
-          return (prev - 1 + resultsCount) % resultsCount;
-        });
+        const items = latest.autocompleteItems;
+        setSelectedIndex((prev) => stepAutocompleteIndex(items, prev, -1));
         return true;
       }
 
@@ -272,10 +276,8 @@ export function useEditorKeymap({
 
       const resultsCount = latest.autocompleteItems.length;
       if (latest.isAutocompleteOpen && resultsCount > 0) {
-        setSelectedIndex((prev) => {
-          if (resultsCount === 0) return 0;
-          return (prev + 1) % resultsCount;
-        });
+        const items = latest.autocompleteItems;
+        setSelectedIndex((prev) => stepAutocompleteIndex(items, prev, 1));
         return true;
       }
 
@@ -331,7 +333,7 @@ export function useEditorKeymap({
       if (tabItem) {
         // Swallow Tab while the selected item is stale — inserting an outdated
         // match is worse than a no-op, and letting Tab through would move focus.
-        if (latest.staleItemKeys.has(tabItem.key)) return true;
+        if (tabItem.disabled === true || latest.staleItemKeys.has(tabItem.key)) return true;
         applyAutocompleteSelection("complete", tabIndex);
         return true;
       }
@@ -402,7 +404,14 @@ export function useEditorKeymap({
       return true;
     },
     onHistorySearch: () => {
-      historyPaletteOpenRef.current?.();
+      requestHistorySearch();
+      return true;
+    },
+    onAutocompleteNote: () => {
+      const latest = latestRef.current;
+      if (!latest || isComposingRef.current) return false;
+      if (!latest.isAutocompleteOpen || !latest.autocompleteNoteAction) return false;
+      latest.autocompleteNoteAction();
       return true;
     },
   });

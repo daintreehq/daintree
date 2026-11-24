@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginSearchResultTarget } from "../../../../shared/types/plugin.js";
-import { SEARCH_RESULT_ARGS_MAX_BYTES } from "../../../../shared/config/pluginSearchProviders.js";
+import {
+  FILE_SEARCH_KEYWORD,
+  FILE_SEARCH_KEYWORD_HOLDER,
+  SEARCH_RESULT_ARGS_MAX_BYTES,
+} from "../../../../shared/config/pluginSearchProviders.js";
 
 const { projectOf } = vi.hoisted(() => ({ projectOf: new Map<string, string | null>() }));
 
@@ -90,7 +94,9 @@ function coordinator(overrides: Partial<PluginSearchDeps> = {}) {
   return new PluginSearchCoordinator({
     activatePlugin,
     recordDiagnostic: (pluginId, message) => diagnostics.push({ pluginId, message }),
-    hiddenProviderKeys: () => hidden,
+    // A fresh copy per read, as the store gives: a check that kept an earlier
+    // read would otherwise still see later changes.
+    hiddenProviderKeys: () => new Set(hidden),
     ...overrides,
   });
 }
@@ -148,6 +154,48 @@ describe("search provider registry", () => {
     expect(listed.find((p) => p.pluginId === "other.notes")?.keywordTakenBy).toBe("Acme Notes");
   });
 
+  it("gives a keyword to the earliest shown provider and names it to every later one", () => {
+    registerSearchProviders("acme.notes", [provider()]);
+    registerSearchProviders("other.notes", [
+      provider({ pluginId: "other.notes", pluginName: "Other Notes" }),
+    ]);
+    registerSearchProviders("third.notes", [
+      provider({ pluginId: "third.notes", pluginName: "Third Notes" }),
+    ]);
+    const takenBy = () =>
+      listSearchProviders("p1", hidden).map((p) => [p.pluginId, p.keywordTakenBy ?? null]);
+
+    hidden.add("acme.notes.notes");
+    expect(takenBy()).toEqual([
+      // Switched off and registered first: showing it takes the keyword back.
+      ["acme.notes", null],
+      ["other.notes", null],
+      ["third.notes", "Other Notes"],
+    ]);
+
+    // A switched-off later provider still names who would refuse it.
+    hidden.add("third.notes.notes");
+    expect(takenBy()).toEqual([
+      ["acme.notes", null],
+      ["other.notes", null],
+      ["third.notes", "Other Notes"],
+    ]);
+
+    hidden.add("other.notes.notes");
+    expect(takenBy()).toEqual([
+      ["acme.notes", null],
+      ["other.notes", null],
+      ["third.notes", null],
+    ]);
+
+    hidden.clear();
+    expect(takenBy()).toEqual([
+      ["acme.notes", null],
+      ["other.notes", "Acme Notes"],
+      ["third.notes", "Acme Notes"],
+    ]);
+  });
+
   it("lists only what the project can see, with the user's choice", () => {
     projectOf.set("project__p1__acme.wiki", "p1");
     registerSearchProviders("acme.notes", [provider()]);
@@ -184,6 +232,41 @@ describe("search provider registry", () => {
         expect(second).toHaveBeenCalledTimes(1);
         expect(first).not.toHaveBeenCalled();
       });
+  });
+});
+
+describe("the built-in file search keyword", () => {
+  it("is held by Daintree: a provider claiming it is listed as refused and never asked", async () => {
+    registerSearchProviders("acme.files", [
+      provider({ pluginId: "acme.files", keyword: FILE_SEARCH_KEYWORD, blend: true }),
+    ]);
+    const impl = vi.fn(() => [{ id: "f1", label: "x" }]);
+    bindSearchProviderImpl("acme.files.notes", impl);
+
+    const listed = listSearchProviders("p1", new Set());
+    expect(listed.map((p) => p.keywordTakenBy)).toEqual([FILE_SEARCH_KEYWORD_HOLDER]);
+
+    for (const mode of ["scoped", "blended"] as const) {
+      const result = await coordinator().query(endpoint(), "p1", {
+        providerKey: "acme.files.notes",
+        query: "x",
+        mode,
+      });
+      expect(result).toEqual({ status: "unavailable" });
+    }
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it("never starts an unbound plugin for it", async () => {
+    registerSearchProviders("acme.files", [
+      provider({ pluginId: "acme.files", keyword: FILE_SEARCH_KEYWORD }),
+    ]);
+    await coordinator().query(endpoint(), "p1", {
+      providerKey: "acme.files.notes",
+      query: "x",
+      mode: "scoped",
+    });
+    expect(activatePlugin).not.toHaveBeenCalled();
   });
 });
 
@@ -271,6 +354,95 @@ describe("PluginSearchCoordinator", () => {
       expect(result).toEqual({ status: "unavailable" });
     }
   });
+
+  it("hands a switched-off owner's keyword to the next provider, and gives it back when shown", async () => {
+    registerSearchProviders("acme.notes", [provider()]);
+    registerSearchProviders("other.notes", [
+      provider({ pluginId: "other.notes", pluginName: "Other Notes" }),
+    ]);
+    for (const key of ["acme.notes.notes", "other.notes.notes"]) {
+      bindSearchProviderImpl(key, () => [{ id: "n1", label: key }]);
+    }
+    const search = coordinator();
+    const ask = (providerKey: string) =>
+      search.query(endpoint(), "p1", { providerKey, query: "x", mode: "scoped" });
+
+    const answeredBy = async (providerKey: string) => {
+      const result = await ask(providerKey);
+      return result.status === "ok" ? result.results.map((row) => row.label) : result.status;
+    };
+
+    hidden.add("acme.notes.notes");
+    expect(await answeredBy("other.notes.notes")).toEqual(["other.notes.notes"]);
+    expect(await answeredBy("acme.notes.notes")).toBe("unavailable");
+
+    hidden.delete("acme.notes.notes");
+    expect(await answeredBy("acme.notes.notes")).toEqual(["acme.notes.notes"]);
+    expect(await answeredBy("other.notes.notes")).toBe("unavailable");
+  });
+
+  it("decides a keyword per project, so hiding one project's instance leaves another's", async () => {
+    projectOf.set("project__p1__acme.wiki", "p1");
+    projectOf.set("project__p2__acme.wiki", "p2");
+    registerSearchProviders("project__p1__acme.wiki", [
+      provider({ pluginId: "project__p1__acme.wiki", pluginName: "Wiki" }),
+    ]);
+    registerSearchProviders("project__p2__acme.wiki", [
+      provider({ pluginId: "project__p2__acme.wiki", pluginName: "Wiki" }),
+    ]);
+    registerSearchProviders("other.notes", [
+      provider({ pluginId: "other.notes", pluginName: "Other Notes" }),
+    ]);
+    for (const key of [
+      "project__p1__acme.wiki.notes",
+      "project__p2__acme.wiki.notes",
+      "other.notes.notes",
+    ]) {
+      bindSearchProviderImpl(key, () => [{ id: "n1", label: key }]);
+    }
+    hidden.add("project__p1__acme.wiki.notes");
+    const search = coordinator();
+    const status = async (projectId: string, providerKey: string) =>
+      (await search.query(endpoint(), projectId, { providerKey, query: "x", mode: "scoped" }))
+        .status;
+    const takenBy = (projectId: string) =>
+      listSearchProviders(projectId, hidden).map((p) => [p.key, p.keywordTakenBy ?? null]);
+
+    expect(takenBy("p1")).toEqual([
+      ["project__p1__acme.wiki.notes", null],
+      ["other.notes.notes", null],
+    ]);
+    expect(await status("p1", "other.notes.notes")).toBe("ok");
+
+    expect(takenBy("p2")).toEqual([
+      ["project__p2__acme.wiki.notes", null],
+      ["other.notes.notes", "Wiki"],
+    ]);
+    expect(await status("p2", "project__p2__acme.wiki.notes")).toBe("ok");
+    expect(await status("p2", "other.notes.notes")).toBe("unavailable");
+  });
+
+  it.each(["scoped", "blended"] as const)(
+    "drops a stand-in's %s answer when the provider it stood in for is shown again",
+    async (mode) => {
+      registerSearchProviders("acme.notes", [provider()]);
+      registerSearchProviders("other.notes", [provider({ pluginId: "other.notes" })]);
+      hidden.add("acme.notes.notes");
+      const answer = deferred<{ id: string; label: string }[]>();
+      const impl = vi.fn(() => answer.promise);
+      bindSearchProviderImpl("other.notes.notes", impl);
+      const result = coordinator().query(endpoint(), "p1", {
+        providerKey: "other.notes.notes",
+        query: "x",
+        mode,
+      });
+      // The stand-in was asked, so the refusal below is the re-check's.
+      await vi.waitFor(() => expect(impl).toHaveBeenCalledTimes(1));
+      hidden.delete("acme.notes.notes");
+      answer.resolve([{ id: "n1", label: "Groceries" }]);
+      expect(await result).toEqual({ status: "unavailable" });
+    }
+  );
 
   it("drops a provider that misses its deadline and records it once per window", async () => {
     vi.useFakeTimers();

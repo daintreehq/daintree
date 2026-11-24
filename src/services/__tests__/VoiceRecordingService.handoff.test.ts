@@ -45,8 +45,12 @@ vi.mock("@/store/terminalInputStore", () => {
 });
 
 vi.mock("@/store/fleetArmingStore", () => {
-  const getState = () => ({ armedIds: new Set<string>() });
-  return { useFleetArmingStore: Object.assign(getState, { getState }) };
+  const getState = () => ({ armedIds: new Set<string>(), crossHostTargets: [] });
+  return {
+    useFleetArmingStore: Object.assign(getState, { getState }),
+    selectFleetMemberCount: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) =>
+      s.armedIds.size + s.crossHostTargets.length,
+  };
 });
 
 vi.mock("@/store/panelStore", () => {
@@ -180,6 +184,7 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
     onRevealRequested: vi.fn(() => () => {}),
     onLiveLevel: vi.fn(() => () => {}),
     onPauseRequested: vi.fn(() => () => {}),
+    onSessionVocabulary: vi.fn(() => () => {}),
     publishDetails: vi.fn().mockResolvedValue(undefined),
     setPausedLive: vi.fn().mockResolvedValue(true),
     getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),

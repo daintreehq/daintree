@@ -15,6 +15,7 @@ const openPanelDialogMock = vi.hoisted(() => vi.fn<(options: unknown) => Promise
 const primePreviewCapabilityMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
 const readMock = vi.hoisted(() => vi.fn());
 const fileEditorDefaultMock = vi.hoisted(() => vi.fn<(filePath: string) => unknown>());
+const fileViewerClaimMock = vi.hoisted(() => vi.fn<(filePath: string) => boolean | null>());
 
 vi.mock("@/clients", () => ({
   systemClient: systemClientMock,
@@ -32,6 +33,7 @@ vi.mock("@/components/FileViewer/filePreviewKinds", () => ({
 }));
 vi.mock("@/registry/fileEditorDefaults", () => ({
   currentFileEditorDefault: fileEditorDefaultMock,
+  currentFileViewerClaim: fileViewerClaimMock,
 }));
 
 import { registerFileActions } from "../fileActions";
@@ -67,6 +69,7 @@ beforeEach(() => {
   openPanelDialogMock.mockReset().mockResolvedValue("file-panel-1");
   primePreviewCapabilityMock.mockReset().mockResolvedValue(null);
   fileEditorDefaultMock.mockReset().mockReturnValue(null);
+  fileViewerClaimMock.mockReset().mockReturnValue(false);
   // `mockReset`, not `clearAllMocks` alone: the latter drains call records but
   // NOT queued `...Once` implementations, so a test that aborts before consuming
   // its rejection would hand it to the next one.
@@ -252,6 +255,16 @@ describe("fileActions adversarial", () => {
   it("file.view clamps a rendered request on a non-renderable file to source", async () => {
     const run = setupActions();
     await run("file.view", { path: "/a/styles.css", viewMode: "rendered" });
+
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fileViewMode: "source" })
+    );
+  });
+
+  it("file.view clamps a rendered CSV even when a plugin viewer claims it: the dialog offers none", async () => {
+    fileViewerClaimMock.mockReturnValue(true);
+    const run = setupActions();
+    await run("file.view", { path: "/a/users.csv", viewMode: "rendered" });
 
     expect(openPanelDialogMock).toHaveBeenCalledWith(
       expect.objectContaining({ fileViewMode: "source" })
@@ -608,6 +621,33 @@ describe("file.openPanel", () => {
     await run("file.openPanel", { path: "src/index.css", viewMode: "rendered" });
 
     expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "source" }));
+  });
+
+  // A plugin viewer fills Rendered for a type the host can't render (#17336).
+  it("keeps a rendered request on a type a plugin viewer claims", async () => {
+    fileViewerClaimMock.mockReturnValue(true);
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "fixtures/users.csv", viewMode: "rendered" });
+
+    expect(fileViewerClaimMock).toHaveBeenCalledWith("/repo/fixtures/users.csv");
+    expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "rendered" }));
+  });
+
+  it("keeps a rendered request while the plugin snapshot hasn't landed, for the pane to settle", async () => {
+    fileViewerClaimMock.mockReturnValue(null);
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "fixtures/users.csv", viewMode: "rendered" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: "rendered" }));
+  });
+
+  it("leaves a new panel's mode unset when none is asked for", async () => {
+    fileViewerClaimMock.mockReturnValue(true);
+    const run = setupOpenPanel();
+    await run("file.openPanel", { path: "fixtures/users.csv" });
+
+    expect(addPanelSpy).toHaveBeenCalledWith(expect.objectContaining({ fileViewMode: undefined }));
+    expect(fileViewerClaimMock).not.toHaveBeenCalled();
   });
 
   it("passes rendered through for markdown files", async () => {

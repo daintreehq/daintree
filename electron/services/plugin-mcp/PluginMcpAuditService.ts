@@ -4,18 +4,14 @@ import type {
   PluginMcpAuditRecord,
   PluginMcpAuditResult,
 } from "../../../shared/types/ipc/pluginMcpAudit.js";
-import {
-  PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS,
-  PLUGIN_MCP_AUDIT_MAX_RECORDS,
-  PLUGIN_MCP_AUDIT_MIN_RECORDS,
-  PLUGIN_MCP_AUDIT_SCHEMA_VERSION,
-} from "../../../shared/types/ipc/pluginMcpAudit.js";
+import { PLUGIN_MCP_AUDIT_SCHEMA_VERSION } from "../../../shared/types/ipc/pluginMcpAudit.js";
 import type {
   PluginMcpConsentDecision,
   PluginMcpConsentReason,
   PluginMcpDangerTier,
 } from "../../../shared/types/pluginMcpConsent.js";
 import { sha256Hex, stableArgsSha256 } from "../../utils/pluginMcpHash.js";
+import { normalizeAuditRingMaxRecords } from "../persistence/auditRingRetention.js";
 
 const FLUSH_DEBOUNCE_MS = 2000;
 
@@ -135,11 +131,7 @@ export class PluginMcpAuditService {
   }
 
   normalizeMaxRecords(value: unknown): number {
-    const n = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : NaN;
-    if (!Number.isFinite(n)) return PLUGIN_MCP_AUDIT_DEFAULT_MAX_RECORDS;
-    if (n < PLUGIN_MCP_AUDIT_MIN_RECORDS) return PLUGIN_MCP_AUDIT_MIN_RECORDS;
-    if (n > PLUGIN_MCP_AUDIT_MAX_RECORDS) return PLUGIN_MCP_AUDIT_MAX_RECORDS;
-    return n;
+    return normalizeAuditRingMaxRecords("pluginMcpAuditLog", value);
   }
 
   private enqueueAndTrim(record: PluginMcpAuditRecord, cap: number): void {

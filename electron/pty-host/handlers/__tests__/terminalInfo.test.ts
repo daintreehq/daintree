@@ -33,6 +33,7 @@ function createCtx(overrides: Partial<HostContext> = {}): HostContext {
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
     fallbackEligibleProjects: new Set(),
+    frozenViewProjects: new Set(),
     windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     visualBuffers: [],
@@ -101,6 +102,17 @@ describe("mapTerminalInfo", () => {
     expect(mapTerminalInfo(makeTerminal(), ctx).isAssistantTerminal).toBeUndefined();
   });
 
+  // #17926: main's lease gate reads it here once a preserved exit has dropped its own record.
+  it("reports a terminal placed in no project back to main", () => {
+    const ctx = createCtx();
+    for (const isExited of [false, true]) {
+      expect(
+        mapTerminalInfo(makeTerminal({ projectId: undefined, unplaced: true, isExited }), ctx)
+      ).toMatchObject({ unplaced: true });
+    }
+    expect(mapTerminalInfo(makeTerminal(), ctx).unplaced).toBeUndefined();
+  });
+
   it("reports a scheduled run's ids back to main, which stamps them on the session record", () => {
     // #15977: main's kill, shutdown and project-close captures read the run only
     // through this mapper.
@@ -118,6 +130,15 @@ describe("mapTerminalInfo", () => {
       mapTerminalInfo(makeTerminal({ claudeConfigDir: "/accounts/work" }), ctx).claudeConfigDir
     ).toBe("/accounts/work");
     expect(mapTerminalInfo(makeTerminal(), ctx).claudeConfigDir).toBeUndefined();
+  });
+
+  it("forwards the Codex home the launch env named, so main can tell which account an agent is on", () => {
+    // #17318: the sidebar's usage readout reads quota only for homes an agent runs in.
+    const ctx = createCtx();
+    expect(
+      mapTerminalInfo(makeTerminal({ codexHome: "/accounts/codex-work" }), ctx).codexHome
+    ).toBe("/accounts/codex-work");
+    expect(mapTerminalInfo(makeTerminal(), ctx).codexHome).toBeUndefined();
   });
 
   it("reports a terminal whose agent a graceful shutdown is quitting as closing, though it still has a PTY", () => {
@@ -309,6 +330,41 @@ describe("mapTerminalInfo", () => {
     expect(
       mapTerminalInfo(makeTerminal({ id: "paused" }), ctx).outputObservedSince
     ).toBeUndefined();
+  });
+
+  it("answers the Codex limit only when asked, judged on paused reads as unobserved (#17906)", () => {
+    const stamp = { stamp: { seq: 3, run: "r1", observedAt: 4_000 } };
+    const unobserved = { reset: { status: "unknown", reason: "not-observed" } };
+    const answerCodexLimit = vi.fn((_id: string, _query: unknown, since: number | null) =>
+      since === null ? unobserved : stamp
+    );
+    const ctx = createCtx({
+      ptyManager: {
+        isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
+        getActivityTier: vi.fn(() => "active" as const),
+        hasPendingSubmission: vi.fn(() => false),
+        analysisObservedSince: vi.fn(() => 4_200),
+        answerCodexLimit,
+      } as unknown as HostContext["ptyManager"],
+      getPauseCoordinator: vi.fn((id: string) => ({
+        isReadPaused: id === "paused",
+      })) as unknown as HostContext["getPauseCoordinator"],
+    });
+    expect(mapTerminalInfo(makeTerminal(), ctx).codexLimit).toBeUndefined();
+    expect(answerCodexLimit).not.toHaveBeenCalled();
+
+    expect(mapTerminalInfo(makeTerminal({ id: "live" }), ctx, undefined, {}).codexLimit).toEqual(
+      stamp
+    );
+    expect(answerCodexLimit).toHaveBeenLastCalledWith("live", {}, 4_200);
+    const query = { seq: 3, run: "r1", evidence: null };
+    mapTerminalInfo(makeTerminal({ id: "live" }), ctx, undefined, query);
+    expect(answerCodexLimit).toHaveBeenLastCalledWith("live", query, 4_200);
+    expect(
+      mapTerminalInfo(makeTerminal({ id: "paused" }), ctx, undefined, query).codexLimit
+    ).toEqual(unobserved);
+    expect(answerCodexLimit).toHaveBeenLastCalledWith("paused", query, null);
   });
 
   it("emits exactly the field set the host response type declares", () => {

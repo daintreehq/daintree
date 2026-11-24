@@ -13,6 +13,9 @@ import {
 } from "./hostProjectPickerRequests";
 import { HostSetupRecipeConfirm } from "./HostSetupRecipeConfirm";
 import { runPendingHostSetup } from "./pendingHostSetup";
+import { usePendingPlacementResume } from "@/components/Hosts/usePendingPlacementResume";
+import { CloudPlacementSetup } from "@/components/Hosts/CloudPlacementSetup";
+import { hasArmedCloudSetup, subscribeCloudSetup } from "@/components/Hosts/cloudWorktreePlacement";
 import {
   completeHostSwitchRequest,
   currentHostSwitchRequest,
@@ -46,6 +49,14 @@ export function HostSwitchDialogHost() {
 
   useEffect(() => registerHostSwitchDialogHost(), []);
   useEffect(() => registerHostProjectPickerHost(), []);
+  // After the registration above: a placement ready on mount finds a dialog host.
+  usePendingPlacementResume();
+  // A new machine this view asked for opens its setup once it runs.
+  const cloudSetupArmed = useSyncExternalStore(
+    subscribeCloudSetup,
+    hasArmedCloudSetup,
+    () => false
+  );
 
   // A new window opened onto a host with nothing to show there offers that
   // host's project list. Asked on mount, since a send before this view
@@ -107,6 +118,7 @@ export function HostSwitchDialogHost() {
   return (
     <>
       <HostSwitcherPalette />
+      {cloudSetupArmed && <CloudPlacementSetup />}
       {request && (
         <HostSwitchDialog
           key={request.id}

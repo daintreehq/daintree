@@ -14,6 +14,7 @@ import { EventEmitter } from "events";
 import { resolve as pathResolve } from "path";
 import { CHANNELS } from "../ipc/channels.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { BrokerError } from "./rpc/RequestResponseBroker.js";
 import { type ProcessEntry, sendToEntryWindows } from "./workspace-client/types.js";
 import {
   WorkspaceHostPool,
@@ -23,6 +24,10 @@ import {
 import type { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 import { hasPendingScheduledLaunch } from "./scheduledRuns/scheduledRunAdmission.js";
+import {
+  holdHostForMergedWorktreeRemoval,
+  isHostHeldForMergedWorktreeRemoval,
+} from "./mergedWorktreeCleanup/removalHolds.js";
 import { isCheckoutPendingPath } from "./projectClone/checkoutGate.js";
 import { AppError } from "../utils/errorTypes.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
@@ -35,6 +40,8 @@ import type {
   WorkspaceHostGovernanceSnapshot,
   WorkspaceFetchResult,
   WorkspaceHostEvent,
+  UnattendedRemovalGuard,
+  UnattendedRemovalOutcome,
 } from "../../shared/types/workspace-host.js";
 import type { WorktreeCreateResult, WorktreeSetupState } from "../../shared/types/worktree.js";
 import type {
@@ -47,6 +54,11 @@ import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
 import type { GitDiffSide } from "../../shared/types/git.js";
 import type { GitFileDiffResult } from "../../shared/types/ipc/git.js";
 import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
+import type {
+  IdlePauseCheck,
+  IdlePausePreparation,
+  IdlePauseRunOutcome,
+} from "../../shared/types/idlePause.js";
 import type { HostLoadKind } from "./ProjectSwitchStatusTiming.js";
 import type { CopyTreeOperationOwner, CopyTreeOwnerPredicate } from "./copyTreeOperationOwner.js";
 
@@ -113,6 +125,16 @@ function dedupeSnapshotsById(states: WorktreeSnapshot[]): WorktreeSnapshot[] {
 const FETCH_WORKTREE_TIMEOUT_MS = 5 * 60_000;
 
 /**
+ * `git worktree remove` deletes the whole checkout, `node_modules` and all,
+ * so it gets the same ceiling a view's delete over its port has.
+ */
+const MERGED_WORKTREE_REMOVAL_TIMEOUT_MS = 20 * 60_000;
+/** Reads config and approvals from disk, behind whatever the host is doing. */
+const IDLE_PAUSE_CHECK_TIMEOUT_MS = 30_000;
+/** A manual pause's own budget: its commands are bounded host-side by the environment's timeout. */
+const IDLE_PAUSE_RUN_TIMEOUT_MS = 15 * 60_000;
+
+/**
  * A host's worktree snapshot read plus its own "is there a repository here"
  * verdict. `gitBacked: null` is "not classified" — never read it as `false`
  * (#11650). Main-process shape; the renderer sees `WorktreeListResult`.
@@ -163,7 +185,8 @@ export class WorkspaceClient extends EventEmitter {
       // A run's new worktree sets up in the host while its launch waits to spawn
       // (#16369), with no window at all when an OS job started Daintree, and
       // setup status goes with the host.
-      isHostBusy: hasPendingScheduledLaunch,
+      isHostBusy: (projectId) =>
+        hasPendingScheduledLaunch(projectId) || isHostHeldForMergedWorktreeRemoval(projectId),
     });
 
     this.copyTree = new WorkspaceCopyTreeClient({
@@ -834,6 +857,44 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   /**
+   * The current worktree's id for the host serving `windowId`, read as a
+   * single id rather than by cloning every snapshot across the port to find
+   * the one marked `isCurrent`. `null` when no host serves the window, the
+   * host never became ready, or no worktree is current.
+   */
+  getActiveWorktreeIdForWindowAsync(windowId: number): Promise<string | null> {
+    if (this.isDisposed) return Promise.resolve(null);
+    const entry = this.pool.resolveEntryForWindow(windowId);
+    return entry ? this._readActiveWorktreeIdWhenReady(entry) : Promise.resolve(null);
+  }
+
+  /**
+   * {@link getActiveWorktreeIdForWindowAsync} for one project's host, with the
+   * same `expectedProjectId` guard as {@link getAllStatesForProjectAsync}: a
+   * mismatch answers `null`, never another project's worktree.
+   */
+  getActiveWorktreeIdForProjectAsync(
+    projectPath: string,
+    expectedProjectId: string
+  ): Promise<string | null> {
+    if (this.isDisposed) return Promise.resolve(null);
+    const entry = this.pool.entries.get(this.pool.normalizeProjectPath(projectPath));
+    if (entry === undefined || entry.projectId !== expectedProjectId) return Promise.resolve(null);
+    return this._readActiveWorktreeIdWhenReady(entry);
+  }
+
+  /** Readiness-gated like the state reads, so a mid-populate map never answers. */
+  private async _readActiveWorktreeIdWhenReady(entry: ProcessEntry): Promise<string | null> {
+    if (!(await this._awaitHostReady(entry))) return null;
+    const requestId = entry.host.generateRequestId();
+    const result = await entry.host.sendWithResponse<{ worktreeId: string | null }>({
+      type: "get-active-worktree-id",
+      requestId,
+    });
+    return result.worktreeId ?? null;
+  }
+
+  /**
    * Shared coalescing for the result-shaped reads, mirroring the array-shaped
    * methods: a resolved entry lingers for the short overlap window so a burst
    * of equivalent calls shares one host round trip, a rejected one is evicted
@@ -1132,6 +1193,128 @@ export class WorkspaceClient extends EventEmitter {
       Extract<WorkspaceHostEvent, { type: "delete-preview-result" }>
     >({ type: "get-delete-preview", requestId, worktreeId });
     return { changes, risk, teardown };
+  }
+
+  /**
+   * Main's merged-worktree rule (#17321) removing one of a project's worktrees
+   * under the unattended guard, through that project's own host, started here
+   * when no window has started it. Project-scoped like {@link getDeletePreview}
+   * so a refusal never falls through to another project's host. `confirm` runs
+   * once the host is ready, right before the request goes, so a start that
+   * took a while can't carry a stale decision; false sends nothing. Never
+   * rejects: it says whether the request went, and what came back.
+   */
+  async removeMergedWorktree(
+    projectPath: string,
+    expectedProjectId: string,
+    worktreeId: string,
+    guard: UnattendedRemovalGuard,
+    confirm: () => Promise<boolean>
+  ): Promise<UnattendedRemovalOutcome> {
+    // Held before the prewarm: a host started for this has no window holding
+    // it, and the pool would otherwise reclaim it mid-removal.
+    const release = holdHostForMergedWorktreeRemoval(expectedProjectId);
+    try {
+      let entry;
+      try {
+        const normalized = this.pool.normalizeProjectPath(projectPath);
+        if (!this.pool.entries.has(normalized)) this.pool.prewarmProject(projectPath);
+        entry = this.pool.entries.get(normalized);
+        if (entry === undefined || entry.projectId !== expectedProjectId) {
+          throw new Error("The project's workspace host isn't running");
+        }
+        await entry.currentReadyPromise;
+        if (this.pool.entries.get(normalized) !== entry) {
+          throw new Error("The project's workspace host restarted");
+        }
+        if (!(await confirm())) return { outcome: "declined" };
+        if (this.pool.entries.get(normalized) !== entry) {
+          throw new Error("The project's workspace host restarted");
+        }
+      } catch (error) {
+        return { outcome: "not-sent", error: formatErrorMessage(error, "not sent") };
+      }
+      try {
+        const requestId = entry.host.generateRequestId();
+        await entry.host.sendWithResponse(
+          { type: "remove-merged-worktree", requestId, worktreeId, guard },
+          MERGED_WORKTREE_REMOVAL_TIMEOUT_MS
+        );
+        return { outcome: "removed" };
+      } catch (error) {
+        // The broker's own errors mean no answer came, and a failure after git
+        // started may have removed the checkout anyway: neither says what
+        // happened. Anything else is the host refusing before git ran.
+        const indeterminate =
+          error instanceof BrokerError ||
+          (error as { gitStarted?: unknown } | null)?.gitStarted === true;
+        return {
+          outcome: indeterminate ? "lost" : "refused",
+          error: formatErrorMessage(error, "removal failed"),
+        };
+      }
+    } finally {
+      release();
+    }
+  }
+
+  /**
+   * Asks the workspace host that has this worktree whether an idle pause of
+   * it may run (#17925). Only a host already running: one started for this
+   * would hold no box status to check the pause against, and would refuse.
+   */
+  async prepareIdlePause(worktreeId: string): Promise<IdlePausePreparation> {
+    const worktreePath = pathResolve(worktreeId);
+    const projectPath = this.pool.entries.has(worktreePath)
+      ? worktreePath
+      : this.pool.worktreePathToProject.get(worktreePath);
+    const entry = projectPath === undefined ? undefined : this.pool.entries.get(projectPath);
+    if (!entry || !entry.host.isReady()) {
+      return { ok: false, reason: "No running workspace host has the worktree" };
+    }
+    const current = () => this.pool.entries.get(projectPath!) === entry && entry.host.isReady();
+    let check: IdlePauseCheck | undefined;
+    try {
+      ({ check } = await entry.host.sendWithResponse<{ check?: IdlePauseCheck }>(
+        { type: "idle-pause-check", requestId: entry.host.generateRequestId(), worktreeId },
+        IDLE_PAUSE_CHECK_TIMEOUT_MS
+      ));
+    } catch (error) {
+      return { ok: false, reason: formatErrorMessage(error, "The check went unanswered") };
+    }
+    if (!check) return { ok: false, reason: "The workspace host sent no answer" };
+    if (!check.ok) return check;
+    if (!current()) return { ok: false, reason: "The project's workspace host restarted" };
+    const guard = check.guard;
+    return {
+      ok: true,
+      guard,
+      run: () => {
+        if (!current()) {
+          return Promise.resolve({ ran: false, reason: "The project's workspace host restarted" });
+        }
+        return entry.host
+          .sendWithResponse<{ outcome?: IdlePauseRunOutcome }>(
+            {
+              type: "idle-pause-run",
+              requestId: entry.host.generateRequestId(),
+              worktreeId,
+              guard,
+            },
+            IDLE_PAUSE_RUN_TIMEOUT_MS
+          )
+          .then(
+            ({ outcome }): IdlePauseRunOutcome =>
+              outcome ?? { ran: true, success: false, error: "The workspace host sent no answer" },
+            // Posted, so it may have started: told as a failure, never tried again.
+            (error: unknown): IdlePauseRunOutcome => ({
+              ran: true,
+              success: false,
+              error: `No answer came back, so the pause may not have run (${formatErrorMessage(error, "no answer")})`,
+            })
+          );
+      },
+    };
   }
 
   async getMonitorAsync(worktreeId: string): Promise<WorktreeSnapshot | null> {

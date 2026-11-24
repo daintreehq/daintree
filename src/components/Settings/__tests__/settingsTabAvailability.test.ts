@@ -38,7 +38,30 @@ describe("Project settings → Schedules", () => {
     expect(SETTINGS_SEARCH_INDEX.some((entry) => entry.tab === "project:schedules")).toBe(true);
     expect(searchable.some((entry) => entry.tab === "project:schedules")).toBe(false);
     expect(searchable.length).toBe(
-      SETTINGS_SEARCH_INDEX.filter((entry) => entry.tab !== "project:schedules").length
+      SETTINGS_SEARCH_INDEX.filter(
+        (entry) => entry.tab !== "project:schedules" && entry.id !== "decisions-agents"
+      ).length
+    );
+  });
+});
+
+describe("Decisions → Agents in search (#18057)", () => {
+  it("is found in a local window, whose agents it switches", () => {
+    expect(availableSearchEntries(SETTINGS_SEARCH_INDEX).map((entry) => entry.id)).toContain(
+      "decisions-agents"
+    );
+  });
+
+  it("is left out of a remote window, which doesn't draw it, while the rest of Decisions stays", () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio" };
+    _resetHostPlatformForTests();
+
+    const decisionsIds = (entries: readonly { tab: string; id: string }[]) =>
+      entries.filter((entry) => entry.tab === "decisions").map((entry) => entry.id);
+    const all = decisionsIds(SETTINGS_SEARCH_INDEX);
+    expect(all).toContain("decisions-agents");
+    expect(decisionsIds(availableSearchEntries(SETTINGS_SEARCH_INDEX))).toEqual(
+      all.filter((id) => id !== "decisions-agents")
     );
   });
 });

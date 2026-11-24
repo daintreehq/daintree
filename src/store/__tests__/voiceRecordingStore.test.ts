@@ -715,14 +715,20 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
     expect(titles).toEqual(["Mine", "Sib"]); // sibling target not clobbered
   });
 
-  it("stops writing unchanged recent targets once a sustained session settles (#13601)", async () => {
+  it("stops writing unchanged recent targets once a sustained session settles (#13601, #17055)", async () => {
     const backing = installLocalStorage({});
     let writes = 0;
+    let reads = 0;
     const storage = globalThis.localStorage;
     const setItem = storage.setItem.bind(storage);
+    const getItem = storage.getItem.bind(storage);
     storage.setItem = (key: string, value: string) => {
       writes += 1;
       setItem(key, value);
+    };
+    storage.getItem = (key: string) => {
+      reads += 1;
+      return getItem(key);
     };
     const { useVoiceRecordingStore: store } = await import("../voiceRecordingStore");
     vi.advanceTimersByTime(400);
@@ -750,25 +756,37 @@ describe("voiceRecordingStore cross-view write merge (#11351)", () => {
     expect(readTargets(backing)).toEqual(persisted);
 
     const settled = writes;
+    const settledReads = reads;
+    const stringify = vi.spyOn(JSON, "stringify");
     for (let frame = 0; frame < 600; frame += 1) {
       store.getState().setAudioLevel((frame % 10) / 10);
       vi.advanceTimersByTime(500);
     }
+    expect(stringify).not.toHaveBeenCalled();
+    stringify.mockRestore();
     expect(writes).toBe(settled);
+    expect(reads).toBe(settledReads);
 
-    // A sibling's target still lands through the next transient flush.
+    // Transient sets carry no write at all, so a sibling's target is left alone
+    // on disk rather than rewritten or clobbered.
     writeDisk(backing, [
       ...readTargets(backing),
       { panelTitle: "Sib", worktreeId: "wt-sib", lastUsedAt: 9000 },
     ]);
     store.getState().setAudioLevel(0.25);
     vi.advanceTimersByTime(400);
-    expect(writes).toBeGreaterThan(settled);
+    expect(writes).toBe(settled);
+
+    // The next real change merges against the sibling's target, not over it.
+    store
+      .getState()
+      .recordRecentTarget({ panelId: "p2", panelTitle: "Next", worktreeId: "wt-next" });
+    vi.advanceTimersByTime(400);
     expect(
       readTargets(backing)
         .map((t) => t.panelTitle)
         .sort()
-    ).toEqual(["Mine", "Sib"]);
+    ).toEqual(["Mine", "Next", "Sib"]);
     expect(backing.get(`${STORAGE_KEY}.__bak`)).toBe(backing.get(STORAGE_KEY));
   });
 

@@ -298,6 +298,8 @@ export function RecipeEditor({
   // Where focus goes once an add or remove has rendered.
   const pendingFocusIdRef = useRef<string | null>(null);
   const initialStateRef = useRef<string>("");
+  // Set by Discard until the confirm's exit closes the editor.
+  const discardOnConfirmCloseRef = useRef(false);
   const nameMissing = nameAttempted && !recipeName.trim();
 
   useEffect(() => {
@@ -323,6 +325,12 @@ export function RecipeEditor({
   useEffect(() => {
     if (error) errorRef.current?.scrollIntoView({ block: "nearest" });
   }, [error]);
+
+  // A discard still waiting on the confirm's exit belongs to the draft it was
+  // asked of: a close or any new draft in the meantime supersedes it.
+  useEffect(() => {
+    discardOnConfirmCloseRef.current = false;
+  }, [isOpen, recipe, initialTerminals, worktreeId, defaultScope]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -412,10 +420,25 @@ export function RecipeEditor({
     if (onBeforeClose()) onClose();
   }, [onBeforeClose, onClose]);
 
+  // Discard closes the confirm first and the editor only once the confirm has
+  // handed focus back into it. Closed together, the confirm's restore lands on
+  // an editor control just as it unmounts, and focus falls out of the dialog
+  // that opened the editor (Settings, #16906).
   const handleDiscard = useCallback(() => {
+    discardOnConfirmCloseRef.current = true;
     closeConfirm();
+  }, [closeConfirm]);
+  // A confirm reopened during that exit (Escape on the editor) is a new
+  // question; cancelling it keeps the editor.
+  const handleKeepEditing = useCallback(() => {
+    discardOnConfirmCloseRef.current = false;
+    closeConfirm();
+  }, [closeConfirm]);
+  const handleConfirmCloseComplete = useCallback(() => {
+    if (!discardOnConfirmCloseRef.current) return;
+    discardOnConfirmCloseRef.current = false;
     onClose();
-  }, [closeConfirm, onClose]);
+  }, [onClose]);
 
   const handleAddTerminal = () => {
     if (terminals.length >= MAX_TERMINALS_PER_RECIPE) {
@@ -1115,7 +1138,7 @@ export function RecipeEditor({
 
       <ConfirmDialog
         isOpen={isConfirmOpen}
-        onClose={closeConfirm}
+        onClose={handleKeepEditing}
         variant="destructive"
         zIndex="nested"
         title={
@@ -1124,6 +1147,7 @@ export function RecipeEditor({
         description="Your edits to this recipe won't be saved"
         confirmLabel="Discard changes"
         onConfirm={handleDiscard}
+        onCloseComplete={handleConfirmCloseComplete}
       />
     </>
   );

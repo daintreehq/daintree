@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __resetBuiltinRendererRegistryForTests,
   getBuiltinView,
+  preloadBuiltinView,
   registerBuiltinView,
   unregisterBuiltinView,
   useBuiltinPanelView,
@@ -239,6 +240,50 @@ describe("builtinRendererRegistry", () => {
       await waitFor(() => {
         expect(result.current).toBe(resolved);
       });
+    });
+  });
+
+  describe("preloadBuiltinView", () => {
+    it("warms an enabled plugin's deferred view", () => {
+      const preload = vi.fn().mockResolvedValue(undefined);
+      registerBuiltinView("github.statsDropdown", StubComponent, { pluginId: GITHUB, preload });
+      seedKnownPlugins(GITHUB);
+      preloadBuiltinView("github.statsDropdown");
+      expect(preload).toHaveBeenCalledTimes(1);
+    });
+
+    it("fetches nothing for a plugin that is disabled or not yet known", () => {
+      const preload = vi.fn().mockResolvedValue(undefined);
+      registerBuiltinView("github.statsDropdown", StubComponent, { pluginId: GITHUB, preload });
+      preloadBuiltinView("github.statsDropdown");
+      seedKnownPlugins(GITHUB);
+      usePluginRuntimeStore.setState({ disabledPluginIds: new Set([GITHUB]) });
+      preloadBuiltinView("github.statsDropdown");
+      expect(preload).not.toHaveBeenCalled();
+    });
+
+    it("is a quiet no-op for an eager view and for an empty slot ref", () => {
+      registerBuiltinView("github.providerIcon", StubComponent);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      preloadBuiltinView("github.providerIcon");
+      // The documented "no slot" sentinel: a provider with no stats dropdown.
+      preloadBuiltinView("");
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("swallows a failed load, leaving it to the render that needs the view", async () => {
+      const preload = vi.fn().mockRejectedValue(new Error("chunk 404"));
+      registerBuiltinView("github.statsDropdown", StubComponent, { preload });
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      try {
+        preloadBuiltinView("github.statsDropdown");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(preload).toHaveBeenCalledTimes(1);
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
     });
   });
 

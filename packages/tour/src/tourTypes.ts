@@ -10,7 +10,15 @@ export interface TourChapter {
   /** The chapter's one or two sentence synopsis. The player shows captions instead. */
   summary: string;
   narration: string;
+  /**
+   * The client platforms the chapter plays on, for a feature one of them lacks.
+   * Omitted means every platform. A skipped chapter is still voiced.
+   */
+  platforms?: readonly TourPlatform[];
 }
+
+/** A client platform, as Node's `process.platform` names it. */
+export type TourPlatform = "darwin" | "linux" | "win32";
 
 export interface TourCaption {
   start: number;

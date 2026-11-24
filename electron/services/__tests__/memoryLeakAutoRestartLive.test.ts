@@ -10,7 +10,9 @@ const thawMock = vi.hoisted(() => ({
   release: () => {},
   unfreezeWebContents: vi.fn(),
 }));
+// Every view counts as frozen, so each delivery takes the thaw path under test.
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
+  isWebContentsFrozen: () => true,
   unfreezeWebContents: thawMock.unfreezeWebContents,
 }));
 
@@ -28,8 +30,11 @@ const viewlessMock = vi.hoisted(() => ({
     async (
       _projectId: string,
       _terminalId: string,
-      _isCurrent: () => boolean,
-      _beforeChange?: () => void
+      _guards: {
+        isCurrent?: () => boolean;
+        stillWanted?: () => boolean;
+        beforeChange?: () => void;
+      }
     ) => "restarted"
   ),
 }));
@@ -96,15 +101,16 @@ describe("memory-leak auto-restart run by the host itself (#15918)", () => {
     expect(leasesMock.noteSessionChange).not.toHaveBeenCalled();
 
     const isCurrent = () => true;
-    await expect(serviceMock.deps!.restartOnHost("proj-1", "t1", isCurrent)).resolves.toBe(
-      "restarted"
-    );
-    const [projectId, , passedCurrent, beforeChange] =
-      viewlessMock.restartTerminalWithoutViewLive.mock.calls[0]!;
+    const stillWanted = () => true;
+    await expect(
+      serviceMock.deps!.restartOnHost("proj-1", "t1", { isCurrent, stillWanted })
+    ).resolves.toBe("restarted");
+    const [projectId, , guards] = viewlessMock.restartTerminalWithoutViewLive.mock.calls[0]!;
     expect(projectId).toBe("proj-1");
-    expect(passedCurrent).toBe(isCurrent);
+    expect(guards.isCurrent).toBe(isCurrent);
+    expect(guards.stillWanted).toBe(stillWanted);
     expect(leasesMock.noteSessionChange).not.toHaveBeenCalled();
-    beforeChange?.();
+    guards.beforeChange?.();
     expect(leasesMock.noteSessionChange).toHaveBeenCalledWith("proj-1", null);
   });
 });

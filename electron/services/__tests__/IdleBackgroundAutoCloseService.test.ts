@@ -24,6 +24,9 @@ const projectStoreMock = vi.hoisted(() => ({
     lastOpened: Date.now() - 30 * 60 * 1000,
   })),
   updateProjectStatus: vi.fn(),
+  projectSettingsFilePath: vi.fn<(id: string) => string | null>(
+    (id) => `/userData/projects/${id}/settings.json`
+  ),
 }));
 
 const ptyClientMock = vi.hoisted(() => ({
@@ -70,9 +73,13 @@ const gitSafetyMock = vi.hoisted(() => ({
 vi.mock("../../utils/gitSleepSafety.js", () => gitSafetyMock);
 
 const resourceProbeMock = vi.hoisted(() => ({
-  probeResourceConfig: vi.fn<(root: string, paths: readonly string[]) => Promise<string>>(
-    async () => "none"
-  ),
+  probeResourceConfig: vi.fn<
+    (
+      root: string,
+      paths: readonly string[],
+      options?: { projectSettingsPath?: string | null }
+    ) => Promise<string>
+  >(async () => "none"),
 }));
 vi.mock("../../utils/resourceConfigProbe.js", () => resourceProbeMock);
 
@@ -323,6 +330,7 @@ function makePvm(
     getOutgoingBridgeProjectId: () => outgoingId,
     isMcpDispatchProtected: (projectId: string) => mcpDispatchFor.has(projectId),
     isDictationHeld: (projectId: string) => dictationFor.has(projectId),
+    isBulkWorktreeRunHeld: () => false,
   } as unknown as ProjectViewManager;
 }
 
@@ -1038,6 +1046,18 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
     });
 
+    // Thirty minutes on the wall clock, twenty of them with the lid shut.
+    it("doesn't count time the machine spent asleep toward a zero-terminal project's threshold", async () => {
+      enable();
+      projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1")]);
+      sleptMs.value = 20 * 60 * 1000;
+      const service = makeService();
+      await runCheck(service);
+
+      expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
     it("skips already-closed and missing projects", async () => {
       enable();
       projectStoreMock.getAllProjects.mockReturnValue([
@@ -1131,6 +1151,7 @@ describe("IdleBackgroundAutoCloseService", () => {
         getOutgoingBridgeProjectId: () => null,
         isMcpDispatchProtected: () => false,
         isDictationHeld: () => false,
+        isBulkWorktreeRunHeld: () => false,
       } as unknown as ProjectViewManager;
       const service = makeService();
       // A healthy PVM marks active-1 as foreground; the throwing one must not
@@ -1407,6 +1428,37 @@ describe("IdleBackgroundAutoCloseService", () => {
         await sweep;
 
         expectSurvived();
+      });
+
+      // The awake clock keeps running through a kill that stalls: a visit after
+      // the sweep began is still a visit when the re-check finally reads it.
+      it("survives a visit during a kill that outlasts the threshold", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        try {
+          enable();
+          // Pinned, so only the visit can hold the project once the clock moves on.
+          const opened = { lastOpened: Date.now() - THIRTY_MIN_MS };
+          projectStoreMock.getAllProjects.mockReturnValue([makeIdleProject("proj-1", opened)]);
+          projectStoreMock.getProjectById.mockImplementation((id) => makeIdleProject(id, opened));
+          const kill = deferred<Array<{ id: string }>>();
+          ptyClientMock.gracefulKillByProject.mockReturnValueOnce(kill.promise);
+          const clock = makeClock();
+          const service = makeActivatableService(clock);
+
+          const sweep = runCheck(service);
+          await vi.waitFor(() =>
+            expect(ptyClientMock.gracefulKillByProject).toHaveBeenCalledTimes(1)
+          );
+          vi.setSystemTime(Date.now() + 1000);
+          leftScreen(clock, "proj-1");
+          vi.setSystemTime(Date.now() + THIRTY_MIN_MS);
+          kill.resolve([]);
+          await sweep;
+
+          expectSurvived();
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("survives when only a window reports it active after the kill", async () => {
@@ -1990,6 +2042,18 @@ describe("IdleBackgroundAutoCloseService", () => {
       expect(ptyClientMock.gracefulKillByProject).not.toHaveBeenCalled();
       expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
       expect(skipLog()).toEqual({ [reason]: ["proj-1"] });
+    });
+
+    it("probes the resource environments saved in Project settings", async () => {
+      enableShells();
+      const service = setUpIdleShellProject();
+      await runCheck(service);
+
+      expect(resourceProbeMock.probeResourceConfig).toHaveBeenCalledWith(
+        "/projects/proj-1",
+        expect.any(Array),
+        { projectSettingsPath: "/userData/projects/proj-1/settings.json" }
+      );
     });
 
     it("won't kill a terminal it never vetted", async () => {

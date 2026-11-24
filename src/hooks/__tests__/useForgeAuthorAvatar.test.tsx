@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveAuthorAvatar = vi.fn();
 const resolvedProvider = vi.hoisted(() => ({
   entry: null as unknown,
   providerId: null as string | null,
+  askedFor: [] as Array<string | null | undefined>,
 }));
 
 vi.mock("@/clients", () => ({
@@ -20,13 +21,18 @@ vi.mock("@/store/projectStore", () => ({
 }));
 
 vi.mock("@/hooks/useResolvedForgeProvider", () => ({
-  useResolvedForgeProvider: () => ({
-    entry: resolvedProvider.entry,
-    providerId: resolvedProvider.providerId,
-    resolvedVia: null,
-    loading: false,
-    refresh: vi.fn(),
-  }),
+  useResolvedForgeProvider: (projectId: string | null | undefined) => {
+    resolvedProvider.askedFor.push(projectId);
+    return projectId
+      ? {
+          entry: resolvedProvider.entry,
+          providerId: resolvedProvider.providerId,
+          resolvedVia: null,
+          loading: false,
+          refresh: vi.fn(),
+        }
+      : { entry: null, providerId: null, resolvedVia: null, loading: false, refresh: vi.fn() };
+  },
 }));
 
 import { useForgeAuthorAvatar } from "../useForgeAuthorAvatar";
@@ -40,6 +46,7 @@ function setProviderResolved(resolved: boolean) {
 
 beforeEach(() => {
   resolveAuthorAvatar.mockReset();
+  resolvedProvider.askedFor = [];
   setProviderResolved(true);
 });
 
@@ -111,5 +118,41 @@ describe("useForgeAuthorAvatar", () => {
     resolveFirst("https://avatars.example/first");
     await Promise.resolve();
     expect(result.current).toBe("https://avatars.example/second");
+  });
+
+  describe("enabled: false (#17072)", () => {
+    it("asks for neither the avatar nor the project's provider", () => {
+      resolveAuthorAvatar.mockResolvedValue("https://avatars.example/u/1");
+      const { result } = renderHook(() =>
+        useForgeAuthorAvatar({ email: "dev@example.com", cwd: "/repo/wt", enabled: false })
+      );
+      expect(result.current).toBeUndefined();
+      expect(resolveAuthorAvatar).not.toHaveBeenCalled();
+      expect(resolvedProvider.askedFor.every((id) => id === null)).toBe(true);
+    });
+
+    it("fetches once enabled, and drops a lookup still out when disabled again", async () => {
+      let release: (url: string) => void = () => {};
+      resolveAuthorAvatar.mockImplementationOnce(
+        () =>
+          new Promise<string>((res) => {
+            release = res;
+          })
+      );
+      const { result, rerender } = renderHook(
+        ({ enabled }) =>
+          useForgeAuthorAvatar({ email: "dev@example.com", cwd: "/repo/wt", enabled }),
+        { initialProps: { enabled: false } }
+      );
+      rerender({ enabled: true });
+      await waitFor(() => expect(resolveAuthorAvatar).toHaveBeenCalledTimes(1));
+      expect(resolvedProvider.askedFor.at(-1)).toBe("project-1");
+
+      rerender({ enabled: false });
+      await act(async () => {
+        release("https://avatars.example/late");
+      });
+      expect(result.current).toBeUndefined();
+    });
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mergeDiffNotesPersistedWrite,
   selectDiffNotes,
@@ -104,6 +104,33 @@ describe("diffNotesStore", () => {
     expect(Object.keys(partialize(useDiffNotesStore.getState()) as object)).toEqual(["notes"]);
     setEditing(note.id, false);
     expect(useDiffNotesStore.getState().editingIds[note.id]).toBeUndefined();
+  });
+
+  it("doesn't touch storage for editor open/close once the notes have settled (#17055)", () => {
+    const note = add();
+    const { setEditing } = useDiffNotesStore.getState();
+    // The merge needs up to two repeats of a new snapshot to prove its fixed point.
+    setEditing(note.id, true);
+    setEditing(note.id, false);
+
+    const stringify = vi.spyOn(JSON, "stringify");
+    const getItem = vi.spyOn(Storage.prototype, "getItem");
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    try {
+      for (let i = 0; i < 5; i += 1) {
+        setEditing(note.id, true);
+        setEditing(note.id, false);
+      }
+      expect(stringify).not.toHaveBeenCalled();
+      expect(getItem).not.toHaveBeenCalled();
+      expect(setItem).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+
+    useDiffNotesStore.getState().saveNote(note, "Rename it");
+    const stored = JSON.parse(localStorage.getItem("daintree-diff-notes")!);
+    expect(stored.state.notes[note.id].body).toBe("Rename it");
   });
 
   it("doesn't let a stale view's send erase a sibling's newer revision", () => {

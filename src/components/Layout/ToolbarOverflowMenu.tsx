@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import { CircleDot, Ellipsis, GitCommit, GitPullRequest, TriangleAlert } from "lucide-react";
@@ -12,6 +12,8 @@ import {
 import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "./toolbarMenuStrings";
 import { toolbarIconButtonClass } from "./toolbarItemClasses";
 import { PluginOverflowItem, type PluginTrayGroup } from "./PluginTrayButton";
+import { LinksLauncherOverflowItems } from "./LinksLauncher";
+import { openLinksLauncherFromOverflow, useLinksLauncherStore } from "@/store/linksLauncherStore";
 import {
   PluginToolbarPopover,
   closePluginToolbarPopoverIfHidden,
@@ -53,10 +55,12 @@ import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { useUIStore } from "@/store/uiStore";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { pluralize } from "@/lib/pluralize";
 import { cn } from "@/lib/utils";
 import { formatCountExact } from "@/lib/formatCount";
+import { decisionsObservations } from "./decisionsToolbarSignal";
 
 export type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
@@ -72,6 +76,7 @@ export const OVERFLOW_KEYBINDING_BY_ID: Partial<Record<string, string>> = {
   "copy-tree": "worktree.copyTree",
   "notification-center": "notifications.toggle",
   canopy: "canopy.toggle",
+  "decisions-inbox": "decisions.openInbox",
   "command-palette": "action.palette.open",
   "resume-sessions": "terminal.resumeSessions",
   "dev-server": "devServer.start",
@@ -93,6 +98,10 @@ export interface OverflowMenuProps {
   notificationUnreadCount: number;
   /** Asks Canopy reads as urgent, said when its button is folded in here. */
   canopyUrgentCount: number;
+  /** Questions waiting on the person, said when the Decisions inbox button is folded in here. */
+  decisionsWaitingCount?: number;
+  /** Deliveries stopped on the person's answers, marked when the inbox button is folded in here. */
+  decisionsStoppedCount?: number;
   /** Extra classes for the trigger button: the left one's clearance in its row. */
   triggerClassName?: string;
   /** Problems' watcher observation ("File watching degraded"), or null. */
@@ -159,6 +168,8 @@ export function OverflowMenu({
   errorCount,
   notificationUnreadCount,
   canopyUrgentCount,
+  decisionsWaitingCount = 0,
+  decisionsStoppedCount = 0,
   watcherStatus = null,
   triggerClassName,
   agentObservations,
@@ -210,6 +221,7 @@ export function OverflowMenu({
       // Dropped on reopen: a menu reopened inside its exit animation never ran
       // the close hook that spends it.
       takeDeferredPopover(popoverOrigin);
+      useLinksLauncherStore.getState().takeDeferredFromOverflow(side);
       setRepoStats(forgeStatsRef.current?.stats ?? null);
       // Same reason PluginTrayButton refreshes on open: a dev-attached plugin
       // registers its buttons without broadcasting provenance, so its display
@@ -235,13 +247,6 @@ export function OverflowMenu({
     if (!isEmpty) return;
     closePluginToolbarPopoverIfHidden((opening) => opening.origin === popoverOrigin);
   }, [isEmpty, popoverOrigin]);
-  // Set in onPointerDownOutside, read in onCloseAutoFocus. Suppresses focus
-  // restoration for pointer dismissals so the ellipsis button doesn't keep its
-  // accent focus-visible ring; keyboard close (Escape/Enter) still gets default
-  // focus return for WAI-ARIA. Local to this component so react-compiler doesn't
-  // flag mutating a ref passed in as a prop.
-  const overflowMenuPointerCloseRef = useRef(false);
-
   // Keep the accessible name stable and terse: a comma-enumerated list of
   // the hidden buttons re-announces the full set on every focus pass and goes
   // stale as resize-driven overflow changes. The count is always a count of
@@ -256,9 +261,16 @@ export function OverflowMenu({
   const diagnosticsOpen = useDiagnosticsStore((s) => s.isOpen);
   const notificationCenterOpen = useUIStore((s) => s.notificationCenterOpen);
   const canopyOpen = useCanopyStore((s) => s.isOpen);
+  const decisionsInboxOpen = useDecisionsInboxStore((s) => s.isOpen);
+  // `alsoWarning`: a second observation the button marks in its glyph's bottom
+  // corner, under the waiting count (the inbox's stopped deliveries).
   const signalMark = (
     id: AnyToolbarButtonId
-  ): { pip: "error" | "warning" | "waiting" | "unread"; spoken: string } | null => {
+  ): {
+    pip: "error" | "warning" | "waiting" | "unread";
+    spoken: string;
+    alsoWarning?: boolean;
+  } | null => {
     if (id === "problems" && !diagnosticsOpen) {
       if (errorCount > 0) {
         const errors = pluralize(errorCount, "error");
@@ -272,18 +284,33 @@ export function OverflowMenu({
     if (id === "canopy" && canopyUrgentCount > 0 && !canopyOpen) {
       return { pip: "waiting", spoken: `${canopyUrgentCount} urgent` };
     }
+    if (id === "decisions-inbox" && !decisionsInboxOpen) {
+      const spoken = decisionsObservations(decisionsWaitingCount, decisionsStoppedCount).join(", ");
+      if (decisionsWaitingCount > 0) {
+        return { pip: "waiting", spoken, alsoWarning: decisionsStoppedCount > 0 };
+      }
+      if (decisionsStoppedCount > 0) return { pip: "warning", spoken };
+    }
     if (id === "notification-center" && notificationUnreadCount > 0 && !notificationCenterOpen) {
       return { pip: "unread", spoken: `${notificationUnreadCount} unread` };
     }
     return null;
   };
+  // A stopped delivery is a persistent warning (#18045): when a louder folded
+  // mark takes the trigger's one corner, it keeps the bottom one, as it does on
+  // the button itself.
+  const decisionsWarningMasked =
+    overflowIds.includes("decisions-inbox") &&
+    decisionsStoppedCount > 0 &&
+    !decisionsInboxOpen &&
+    (severity === "critical" || severity === "waiting");
   // The trigger's own words: counts only. The watcher's wording already
   // arrives with the side's observations, so it is never said twice.
   const observations: string[] = [];
   if (overflowIds.includes("problems") && errorCount > 0 && !diagnosticsOpen) {
     observations.push(pluralize(errorCount, "error"));
   }
-  for (const id of ["notification-center", "canopy"] as const) {
+  for (const id of ["notification-center", "canopy", "decisions-inbox"] as const) {
     if (!overflowIds.includes(id)) continue;
     const mark = signalMark(id);
     if (mark) observations.push(mark.spoken);
@@ -308,6 +335,9 @@ export function OverflowMenu({
     if (id === "notification-center" && notificationUnreadCount > 0 && !notificationCenterOpen)
       return notificationUnreadCount;
     if (id === "canopy" && canopyUrgentCount > 0 && !canopyOpen) return canopyUrgentCount;
+    if (id === "decisions-inbox" && decisionsWaitingCount > 0 && !decisionsInboxOpen) {
+      return decisionsWaitingCount;
+    }
     return null;
   };
 
@@ -417,6 +447,11 @@ export function OverflowMenu({
           </DropdownMenuItem>
         </DropdownMenuGroup>,
       ];
+    }
+    if (id === "links-launcher") {
+      // A popover off the `…` button would have to wait for this menu to
+      // close and hand it focus; the links are menu rows themselves instead.
+      return [<LinksLauncherOverflowItems key="links-launcher" side={side} />];
     }
     if (id === "plugin-tray") {
       // The tray's own dropdown can't be opened from here, and an
@@ -569,6 +604,8 @@ export function OverflowMenu({
               <Icon className="h-3.5 w-3.5" />
             </BrandMark>
             {renderPip(mark, "absolute -top-0.5 -right-0.5")}
+            {mark.alsoWarning &&
+              renderPip({ pip: "warning", spoken: "" }, "absolute -bottom-0.5 -right-0.5")}
           </span>
         ) : (
           <BrandMark brandColor={brandColor}>
@@ -621,6 +658,8 @@ export function OverflowMenu({
         disabled={disabled}
         onClick={() => overflowActions[id]?.()}
         keybinding={keybindingById[id]}
+        // The inbox takes focus; the closing menu mustn't take it back to `…`.
+        focusHandoff={id === "decisions-inbox"}
       >
         {rowContent}
       </DropdownMenuItem>,
@@ -667,6 +706,14 @@ export function OverflowMenu({
                       data-visible={severity !== null && !open}
                       className="toolbar-pip toolbar-overflow-badge toolbar-badge pointer-events-none"
                     />
+                    <span
+                      aria-hidden="true"
+                      data-testid="toolbar-overflow-decisions-warning"
+                      data-visible={decisionsWarningMasked && !open}
+                      data-badge-color="warning"
+                      data-pip-corner="bottom"
+                      className="toolbar-pip toolbar-badge bg-status-warning pointer-events-none"
+                    />
                   </span>
                 </Button>
               </PopoverAnchor>
@@ -677,16 +724,19 @@ export function OverflowMenu({
         <DropdownMenuContent
           align={side === "left" ? "start" : "end"}
           sideOffset={4}
-          onPointerDownOutside={() => {
-            overflowMenuPointerCloseRef.current = true;
-          }}
           onCloseAutoFocus={(e) => {
+            if (useLinksLauncherStore.getState().takeDeferredFromOverflow(side)) {
+              // The launcher takes focus into itself, and gives it back to this
+              // button when it closes.
+              e.preventDefault();
+              openLinksLauncherFromOverflow(side);
+              return;
+            }
             const pendingPopover = takeDeferredPopover(popoverOrigin);
             if (pendingPopover !== null) {
               // The popover takes focus into itself; returning it to the button
               // first would only flash a ring on the way.
               e.preventDefault();
-              overflowMenuPointerCloseRef.current = false;
               if (!isEmpty) {
                 openPopover(pendingPopover, popoverOrigin);
                 return;
@@ -696,11 +746,6 @@ export function OverflowMenu({
               // row's command is back on the toolbar.
               const target = pluginCommandFocusTarget(pendingPopover);
               if (target !== null) focusToolbarControl(target);
-              return;
-            }
-            if (overflowMenuPointerCloseRef.current) {
-              e.preventDefault();
-              overflowMenuPointerCloseRef.current = false;
             }
           }}
         >

@@ -6,7 +6,7 @@ import {
   RefreshCw,
   type LucideIcon,
 } from "lucide-react";
-import type { PR, PRMergeMethod, PRMergeStatus } from "@shared/types/forge";
+import type { ForgePullRequestTerm, PR, PRMergeMethod, PRMergeStatus } from "@shared/types/forge";
 import { GitMerge } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -15,6 +15,7 @@ import { useDohertyGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { cn } from "@/lib/utils";
 import { forgeClient } from "@/clients/forgeClient";
+import { pullRequestWords, type PullRequestWords } from "./prWords";
 import {
   AUTO_MERGE_OFF_DETAIL,
   AUTO_MERGE_OFF_REASON,
@@ -64,6 +65,8 @@ const TONE_CLASS: Record<Tone, string> = {
 interface PrMergeControlProps {
   worktreePath: string;
   prNumber: number;
+  /** What the forge calls a pull request; omitted reads as "pull-request". */
+  prTerm?: ForgePullRequestTerm;
   /** Bumped by the popover's Refresh so both reads restart together. */
   reloadKey: number;
   onRequest: (request: PrMergeRequest) => void;
@@ -85,11 +88,13 @@ interface PrMergeControlProps {
 export function PrMergeControl({
   worktreePath,
   prNumber,
+  prTerm,
   reloadKey,
   onRequest,
   onOpenExternal,
   onStatusChange,
 }: PrMergeControlProps) {
+  const words = pullRequestWords(prTerm);
   const [state, setState] = useState<ControlState>({ kind: "loading" });
   const [method, setMethod] = useState<PRMergeMethod | null>(null);
   const [retryKey, setRetryKey] = useState(0);
@@ -165,7 +170,7 @@ export function PrMergeControl({
   // just after the gate doesn't flash them for a frame.
   const loading = state.kind === "loading";
   const holdSkeleton = useSkeletonFloor(useDohertyGate(loading));
-  const status = state.kind === "ready" ? rowStatus(state.model, state.forgeName) : null;
+  const status = state.kind === "ready" ? rowStatus(state.model, state.forgeName, words) : null;
   const statusText =
     loading || holdSkeleton
       ? "Reading merge options"
@@ -226,7 +231,7 @@ export function PrMergeControl({
             tone: "error",
             title: "Couldn't check whether it can merge",
             // Neither read landed, so which forge this is isn't known here.
-            detail: "The forge didn't answer when the pull request was read",
+            detail: `The forge didn't answer when the ${words.noun} was read`,
           }}
         />
         <div className={ACTION_ROW_CLASS}>{retryButton}</div>
@@ -275,7 +280,7 @@ export function PrMergeControl({
               <ExternalLink aria-hidden="true" />
               {model.kind === "unavailable" && model.reason === "unsupported" && forgeName
                 ? `Open on ${forgeName}`
-                : "Open pull request"}
+                : `Open ${words.noun}`}
             </Button>
           )}
         </div>
@@ -455,7 +460,11 @@ function waitingTitle(mergeStatus: PRMergeStatus | null, baseRef: string, forge:
  * What the row says about the PR, from the model and the forge's name. With
  * no name the copy stays forge-neutral rather than guessing one.
  */
-function rowStatus(model: PrMergeControlModel, forgeName: string | null): RowStatus | null {
+function rowStatus(
+  model: PrMergeControlModel,
+  forgeName: string | null,
+  words: PullRequestWords
+): RowStatus | null {
   const forge = forgeName ?? "The forge";
   const onForge = forgeName ? ` on ${forgeName}` : "";
   switch (model.kind) {
@@ -481,7 +490,7 @@ function rowStatus(model: PrMergeControlModel, forgeName: string | null): RowSta
           return {
             Icon: GitPullRequestDraft,
             tone: "neutral",
-            title: "Draft pull request",
+            title: `Draft ${words.noun}`,
             detail: `Mark it ready for review${onForge} to merge it`,
           };
         case "conflicts":
@@ -496,7 +505,7 @@ function rowStatus(model: PrMergeControlModel, forgeName: string | null): RowSta
             Icon: SEVERITY_GLYPH.error,
             tone: "error",
             title: "Couldn't read merge settings",
-            detail: "They decide what this pull request can do here",
+            detail: `They decide what this ${words.noun} can do here`,
             retry: true,
           };
         case "unreported":

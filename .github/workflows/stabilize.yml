@@ -232,6 +232,11 @@ jobs:
 
       - name: Check (typecheck + lint + format)
         run: npm run check
+        env:
+          # Match PR CI: concurrent native compilers can stall a 16 GB runner.
+          TYPECHECK_CONCURRENCY: "1"
+          TYPECHECK_TIMEOUT_MINUTES: "6"
+          TYPECHECK_MIN_AVAILABLE_MB: "1024"
 
   test:
     needs: matrix-setup

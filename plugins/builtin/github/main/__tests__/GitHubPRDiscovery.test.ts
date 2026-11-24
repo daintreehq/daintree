@@ -41,6 +41,8 @@ function createStorage() {
   };
 }
 
+const REPO = { host: "github.com", owner: "o", repo: "r" };
+
 describe("probeRepoPRListChange", () => {
   beforeEach(() => {
     repoPRListETagCache.clear();
@@ -56,7 +58,7 @@ describe("probeRepoPRListChange", () => {
     repoPRListETagCache.set("o/r", 'W/"cached"');
     const mock = setFetch(() => new Response(null, { status: 304, headers: RATE_LIMIT_HEADERS }));
 
-    const result = await probeRepoPRListChange("o", "r", "ghp_token");
+    const result = await probeRepoPRListChange(REPO, "ghp_token");
 
     expect(result).toBe("unchanged");
     const [url, init] = mock.mock.calls[0] as [string, RequestInit];
@@ -75,7 +77,7 @@ describe("probeRepoPRListChange", () => {
         })
     );
 
-    const result = await probeRepoPRListChange("o", "r", "ghp_token");
+    const result = await probeRepoPRListChange(REPO, "ghp_token");
 
     expect(result).toBe("unknown");
     expect(repoPRListETagCache.get("o/r")).toBe('W/"seed"');
@@ -91,7 +93,7 @@ describe("probeRepoPRListChange", () => {
         })
     );
 
-    const result = await probeRepoPRListChange("o", "r", "ghp_token");
+    const result = await probeRepoPRListChange(REPO, "ghp_token");
 
     expect(result).toBe("changed");
     expect(repoPRListETagCache.get("o/r")).toBe('W/"new"');
@@ -104,7 +106,7 @@ describe("probeRepoPRListChange", () => {
         new Response("[]", { status: 200, headers: { ...RATE_LIMIT_HEADERS, etag: 'W/"same"' } })
     );
 
-    const result = await probeRepoPRListChange("o", "r", "ghp_token");
+    const result = await probeRepoPRListChange(REPO, "ghp_token");
 
     expect(result).toBe("unknown");
     expect(repoPRListETagCache.get("o/r")).toBe('W/"same"');
@@ -115,7 +117,7 @@ describe("probeRepoPRListChange", () => {
       () => new Response("[]", { status: 200, headers: { ...RATE_LIMIT_HEADERS, etag: 'W/"x"' } })
     );
 
-    await probeRepoPRListChange("o", "r", "ghp_token");
+    await probeRepoPRListChange(REPO, "ghp_token");
 
     const [, init] = mock.mock.calls[0] as [string, RequestInit];
     expect((init.headers as Record<string, string>)["If-None-Match"]).toBeUndefined();
@@ -125,7 +127,7 @@ describe("probeRepoPRListChange", () => {
     repoPRListETagCache.set("o/r", 'W/"old"');
     setFetch(() => new Response("[]", { status: 200, headers: RATE_LIMIT_HEADERS }));
 
-    const result = await probeRepoPRListChange("o", "r", "ghp_token");
+    const result = await probeRepoPRListChange(REPO, "ghp_token");
 
     expect(result).toBe("unknown");
     expect(repoPRListETagCache.get("o/r")).toBeUndefined();
@@ -141,7 +143,7 @@ describe("probeRepoPRListChange", () => {
         })
     );
 
-    const probe = probeRepoPRListChange("o", "r", "ghp_token");
+    const probe = probeRepoPRListChange(REPO, "ghp_token");
     await vi.waitFor(() => expect(resolveFetch).not.toBeNull());
 
     // Concurrent invalidation bumps the version between request start and response.
@@ -158,7 +160,7 @@ describe("probeRepoPRListChange", () => {
   it("returns 'unknown' when the fetch rejects", async () => {
     setFetch(() => Promise.reject(new Error("ECONNREFUSED")));
 
-    expect(await probeRepoPRListChange("o", "r", "ghp_token")).toBe("unknown");
+    expect(await probeRepoPRListChange(REPO, "ghp_token")).toBe("unknown");
   });
 });
 
@@ -200,7 +202,7 @@ describe("probeOpenPRList", () => {
     openPRListETagCache.set("o/r", 'W/"cached"');
     const mock = setFetch(() => new Response(null, { status: 304, headers: RATE_LIMIT_HEADERS }));
 
-    const result = await probeOpenPRList("o", "r", "ghp_token", [tracked(1)]);
+    const result = await probeOpenPRList(REPO, "ghp_token", [tracked(1)]);
 
     expect(result).toEqual({ kind: "unchanged" });
     const [url, init] = mock.mock.calls[0] as [string, RequestInit];
@@ -220,7 +222,7 @@ describe("probeOpenPRList", () => {
         })
     );
 
-    const result = await probeOpenPRList("o", "r", "ghp_token", [tracked(1)]);
+    const result = await probeOpenPRList(REPO, "ghp_token", [tracked(1)]);
 
     expect(result).toEqual({ kind: "unchanged" });
     // Caller is in sync → baseline advances so the next tick can 304.
@@ -237,7 +239,7 @@ describe("probeOpenPRList", () => {
         })
     );
 
-    const result = await probeOpenPRList("o", "r", "ghp_token", [tracked(1)]);
+    const result = await probeOpenPRList(REPO, "ghp_token", [tracked(1)]);
 
     expect(result).toEqual({
       kind: "changed",
@@ -264,7 +266,7 @@ describe("probeOpenPRList", () => {
         })
     );
 
-    const result = await probeOpenPRList("o", "r", "ghp_token", [tracked(1)]);
+    const result = await probeOpenPRList(REPO, "ghp_token", [tracked(1)]);
 
     expect(result).toEqual({
       kind: "changed",
@@ -281,7 +283,7 @@ describe("probeOpenPRList", () => {
         })
     );
 
-    const result = await probeOpenPRList("o", "r", "ghp_token", [tracked(1, { state: "merged" })]);
+    const result = await probeOpenPRList(REPO, "ghp_token", [tracked(1, { state: "merged" })]);
 
     expect(result).toEqual({ kind: "unchanged" });
     expect(openPRListETagCache.get("o/r")).toBe('W/"x"');
@@ -296,7 +298,7 @@ describe("probeOpenPRList", () => {
         })
     );
 
-    const result = await probeOpenPRList("o", "r", "ghp_token", [tracked(1, { state: "closed" })]);
+    const result = await probeOpenPRList(REPO, "ghp_token", [tracked(1, { state: "closed" })]);
 
     expect(result).toEqual({
       kind: "changed",
@@ -326,7 +328,7 @@ describe("probeOpenPRList", () => {
     );
     const mock = setFetch(() => new Response(openPRBody([{ number: 1 }]), { status: 200 }));
 
-    const result = await probeOpenPRList("o", "r", "ghp_token", [tracked(1)]);
+    const result = await probeOpenPRList(REPO, "ghp_token", [tracked(1)]);
 
     expect(result).toEqual({ kind: "fallback" });
     expect(mock).not.toHaveBeenCalled();
@@ -335,7 +337,7 @@ describe("probeOpenPRList", () => {
   it("falls back on a non-200/304 status", async () => {
     setFetch(() => new Response("nope", { status: 500, headers: RATE_LIMIT_HEADERS }));
 
-    const result = await probeOpenPRList("o", "r", "ghp_token", [tracked(1)]);
+    const result = await probeOpenPRList(REPO, "ghp_token", [tracked(1)]);
 
     expect(result).toEqual({ kind: "fallback" });
   });
@@ -349,7 +351,7 @@ describe("probeOpenPRList", () => {
         })
     );
 
-    const result = await probeOpenPRList("o", "r", "ghp_token", [tracked(1)]);
+    const result = await probeOpenPRList(REPO, "ghp_token", [tracked(1)]);
 
     expect(result).toEqual({ kind: "fallback" });
   });
@@ -364,7 +366,7 @@ describe("probeOpenPRList", () => {
         })
     );
 
-    const probe = probeOpenPRList("o", "r", "ghp_token", [tracked(1, { headSha: "sha1" })]);
+    const probe = probeOpenPRList(REPO, "ghp_token", [tracked(1, { headSha: "sha1" })]);
     await vi.waitFor(() => expect(resolveFetch).not.toBeNull());
 
     clearPRCaches();
@@ -383,7 +385,7 @@ describe("probeOpenPRList", () => {
   it("falls back when the fetch rejects", async () => {
     setFetch(() => Promise.reject(new Error("ECONNREFUSED")));
 
-    expect(await probeOpenPRList("o", "r", "ghp_token", [tracked(1)])).toEqual({
+    expect(await probeOpenPRList(REPO, "ghp_token", [tracked(1)])).toEqual({
       kind: "fallback",
     });
   });
@@ -399,7 +401,7 @@ describe("probeOpenPRList", () => {
 
     // A freshly-detected PR has null head.sha/updated_at markers — they can
     // never match a real REST field, so the first revalidation must re-fetch.
-    const result = await probeOpenPRList("o", "r", "ghp_token", [
+    const result = await probeOpenPRList(REPO, "ghp_token", [
       tracked(1, { headSha: null, updatedAt: null }),
     ]);
 
@@ -425,19 +427,19 @@ describe("probeOpenPRList", () => {
     });
 
     // Cycle 1: caller still on the old sha → changed, old ETag preserved.
-    const c1 = await probeOpenPRList("o", "r", "ghp_token", [tracked(1, { headSha: "sha1" })]);
+    const c1 = await probeOpenPRList(REPO, "ghp_token", [tracked(1, { headSha: "sha1" })]);
     expect(c1.kind).toBe("changed");
     expect(openPRListETagCache.get("o/r")).toBe('W/"E0"');
 
     // Cycle 2: caller consumed the change (sha2) → clean diff commits the ETag.
-    const c2 = await probeOpenPRList("o", "r", "ghp_token", [
+    const c2 = await probeOpenPRList(REPO, "ghp_token", [
       tracked(1, { headSha: "sha2", updatedAt: "2024-02-02T00:00:00Z" }),
     ]);
     expect(c2).toEqual({ kind: "unchanged" });
     expect(openPRListETagCache.get("o/r")).toBe('W/"E1"');
 
     // Cycle 3: the committed ETag now drives a zero-cost 304.
-    const c3 = await probeOpenPRList("o", "r", "ghp_token", [
+    const c3 = await probeOpenPRList(REPO, "ghp_token", [
       tracked(1, { headSha: "sha2", updatedAt: "2024-02-02T00:00:00Z" }),
     ]);
     expect(c3).toEqual({ kind: "unchanged" });
@@ -451,9 +453,11 @@ describe("batchCheckLinkedPRs repo-level probe gate", () => {
     _resetGithubFetchSemaphoreForTests();
     GitHubAuth.initializeStorage(createStorage());
     GitHubAuth.setToken("ghp_validtoken012345678901234567890123456789");
-    vi.mocked(getRepoContext).mockResolvedValue({ owner: "o", repo: "r" } as Awaited<
-      ReturnType<typeof getRepoContext>
-    >);
+    vi.mocked(getRepoContext).mockResolvedValue({
+      host: "github.com",
+      owner: "o",
+      repo: "r",
+    } as Awaited<ReturnType<typeof getRepoContext>>);
   });
 
   afterEach(() => {

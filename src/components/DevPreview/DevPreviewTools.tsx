@@ -5,13 +5,16 @@ import {
   useEffect,
   useState,
   type ComponentType,
+  type RefObject,
 } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { registerEscapeFallback } from "@/lib/escapeStack";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { DevPreviewToolDrawerChrome } from "./DevPreviewToolDrawerChrome";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import {
+  peekDevPreviewToolSession,
   publishDevPreviewToolContext,
   retainDevPreviewToolVisibility,
   useDevPreviewToolSessionHandle,
@@ -33,6 +36,17 @@ export interface DevPreviewToolHostProps {
   worktreeId: string | undefined;
   url: string;
   isWebviewReady: boolean;
+  /**
+   * The tools this panel hosts. A dev preview hosts every built-in tool; a
+   * browser panel only the ones that make sense on a page someone else's
+   * server is serving.
+   */
+  tools?: readonly DevPreviewToolDefinition[];
+  /**
+   * Whether the page lets a toggle be offered at all. False hides every toggle
+   * that is off; one that is on stays, so the user can always switch it off.
+   */
+  pageQualifies?: boolean;
 }
 
 /**
@@ -74,9 +88,12 @@ function useToolContext({
   };
 }
 
-function useActiveTool(panelId: string): DevPreviewToolDefinition | undefined {
+function useActiveTool(
+  panelId: string,
+  tools: readonly DevPreviewToolDefinition[] = BUILT_IN_DEV_PREVIEW_TOOLS
+): DevPreviewToolDefinition | undefined {
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[panelId]);
-  return activeId ? BUILT_IN_DEV_PREVIEW_TOOLS.find((tool) => tool.id === activeId) : undefined;
+  return activeId ? tools.find((tool) => tool.id === activeId) : undefined;
 }
 
 /** One tool in one preview: what its toggle and its surfaces are tagged with. */
@@ -141,6 +158,82 @@ function focusVisible(element: Element | null | undefined): boolean {
 }
 
 /**
+ * Where keys are typed or a page has them: Escape there is the field's or the
+ * page's, never the preview's chrome.
+ */
+function ownsEscape(target: Element): boolean {
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  return (
+    target.closest(
+      'input, textarea, select, webview, iframe, [role="textbox"], [role="searchbox"], [role="combobox"]'
+    ) !== null
+  );
+}
+
+/**
+ * After a tool let go of what it held, the control focus was on can go with
+ * it — a drawer that empties, a strip button that only a selection shows.
+ * Focus that was in the tool stays in the tool, on its first control.
+ */
+function keepFocusInTool(tag: string, from: Element): void {
+  if (
+    from
+      .closest("[data-dev-preview-tool-surface]")
+      ?.getAttribute("data-dev-preview-tool-surface") !== tag
+  ) {
+    return;
+  }
+  const keyboard = focusVisible(from);
+  requestAnimationFrame(() => {
+    if (document.activeElement !== document.body) return;
+    const landing = document.querySelector(`[data-dev-preview-tool-surface="${tag}"] button`);
+    if (!(landing instanceof HTMLElement)) return;
+    armTooltipFocusSuppression();
+    landing.focus(keyboard ? undefined : { preventScroll: true, focusVisible: false });
+  });
+}
+
+/**
+ * Escape from the preview's own chrome while a tool is on peels one layer —
+ * the find bar, then what the tool holds, then the tool — once every menu,
+ * dialog and field has had its turn. A page's Escape never reaches the host's
+ * DOM; the tool hears that one from its page.
+ */
+export function useDevPreviewToolEscape(
+  panelId: string,
+  paneRef: RefObject<HTMLElement | null>,
+  /** Closes the preview's find bar; null while it is shut. */
+  closeFind: (() => void) | null
+): void {
+  const activeId = useDevPreviewToolStore((s) => s.activeByPanel[panelId]);
+  const setActive = useDevPreviewToolStore((s) => s.setActive);
+  useEffect(() => {
+    if (!activeId) return;
+    return registerEscapeFallback((event) => {
+      const pane = paneRef.current;
+      const target = event?.target;
+      if (!pane || !(target instanceof Element) || !pane.contains(target)) return false;
+      if (ownsEscape(target)) return false;
+      // A held key peels one layer, not all of them, and its repeats are still
+      // this chrome's: an older fallback (dictation) must not take them.
+      if (event?.repeat) return true;
+      if (closeFind) {
+        closeFind();
+        return true;
+      }
+      const tag = surfaceTag(panelId, activeId);
+      if (peekDevPreviewToolSession(panelId)?.handleEscape?.() === true) {
+        keepFocusInTool(tag, target);
+        return true;
+      }
+      returnFocusToToggle(tag);
+      setActive(panelId, null);
+      return true;
+    });
+  }, [panelId, paneRef, closeFind, activeId, setActive]);
+}
+
+/**
  * Whether the tool applies to this preview, re-asked as the preview moves. The
  * answer is remembered with the worktree it was about, so a preview switching
  * worktrees never shows a button the old answer earned.
@@ -182,17 +275,20 @@ function DevPreviewToolButton({
   tool,
   context,
   active,
+  pageQualifies,
   onToggle,
 }: {
   tool: DevPreviewToolDefinition;
   context: DevPreviewToolContext;
   active: boolean;
+  pageQualifies: boolean;
   onToggle: () => void;
 }) {
   const applies = useToolApplies(tool, context, active);
-  // An active tool stays reachable whatever the predicate says or hasn't said
-  // yet: the one control that switches it off must not vanish under the user.
-  if (!active && !applies) return null;
+  // An active tool stays reachable whatever the predicate or the page says, or
+  // hasn't said yet: the one control that switches it off must not vanish
+  // under the user.
+  if (!active && (!applies || !pageQualifies)) return null;
   return (
     // `contents` so the toggle keeps sitting in the toolbar's own flex row.
     <span className="contents" data-dev-preview-tool-toggle={surfaceTag(context.panelId, tool.id)}>
@@ -206,14 +302,17 @@ export function DevPreviewToolButtons(props: DevPreviewToolHostProps) {
   const context = useToolContext(props);
   const activeId = useDevPreviewToolStore((s) => s.activeByPanel[props.panelId]);
   const toggle = useDevPreviewToolStore((s) => s.toggle);
+  const tools = props.tools ?? BUILT_IN_DEV_PREVIEW_TOOLS;
+  const pageQualifies = props.pageQualifies ?? true;
   return (
     <>
-      {BUILT_IN_DEV_PREVIEW_TOOLS.map((tool) => (
+      {tools.map((tool) => (
         <ErrorBoundary key={tool.id} variant="component" componentName={`${tool.label} button`}>
           <DevPreviewToolButton
             tool={tool}
             context={context}
             active={activeId === tool.id}
+            pageQualifies={pageQualifies}
             onToggle={() => toggle(props.panelId, tool.id)}
           />
         </ErrorBoundary>
@@ -295,7 +394,7 @@ function ready(
 
 /** The active tool's strip under the browser toolbar. */
 export function DevPreviewToolToolbar(props: DevPreviewToolHostProps) {
-  const tool = useActiveTool(props.panelId);
+  const tool = useActiveTool(props.panelId, props.tools);
   const context = useToolContext(props);
   const handle = useDevPreviewToolSessionHandle(props.panelId, tool?.id);
   const Surface = tool?.Toolbar;
@@ -313,7 +412,7 @@ export function DevPreviewToolToolbar(props: DevPreviewToolHostProps) {
 
 /** The active tool's drawer beside the page, inside the host's drawer chrome. */
 export function DevPreviewToolDrawer(props: DevPreviewToolHostProps) {
-  const tool = useActiveTool(props.panelId);
+  const tool = useActiveTool(props.panelId, props.tools);
   const context = useToolContext(props);
   const handle = useDevPreviewToolSessionHandle(props.panelId, tool?.id);
   const Surface = tool?.Drawer;

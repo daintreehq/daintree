@@ -12,6 +12,7 @@
  */
 
 import type { HostLogEvent } from "./host-log.js";
+import type { IdlePauseCheck, IdlePauseGuard, IdlePauseRunOutcome } from "./idlePause.js";
 import type {
   BranchInfo,
   CreateWorktreeOptions,
@@ -170,6 +171,14 @@ export interface WorktreeSnapshot {
   timestamp?: number;
   /** Current or last completed lifecycle script status */
   lifecycleStatus?: WorktreeLifecycleStatus;
+
+  /**
+   * The last setup run that finished (succeeded, failed or timed out), with its
+   * output. `lifecycleStatus` is one slot every later phase takes over — an
+   * environment's status check every poll — so this is where a finished
+   * setup's output stays readable. Held in memory by the monitor.
+   */
+  setupRun?: WorktreeLifecycleStatus;
 
   /**
    * How far post-create initialization has got. Absent for a worktree this host
@@ -376,7 +385,7 @@ export interface WorktreeSnapshot {
   /** POSIX path inside the WSL distro (mirrors `Worktree.wslPosixPath`). */
   wslPosixPath?: string;
 
-  /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING). Absent when no blocking operation is in progress. */
+  /** Current in-progress git operation (REBASING, MERGING, CHERRY_PICKING, REVERTING, APPLYING_MAILBOX). Absent when no blocking operation is in progress. */
   repoState?: RepoState;
 
   /** Whether this worktree is in detached HEAD state. Mirrors the Worktree field. */
@@ -400,6 +409,8 @@ export interface WorktreeTick {
   workingTreeChangedAt?: number;
   workingTreeChangedDirs?: readonly string[] | null;
   pathMembershipChangedAt?: number;
+  lastFetchedAt?: number | null;
+  isFetchInFlight?: boolean;
 }
 
 /** Monitor configuration for polling intervals */
@@ -576,6 +587,9 @@ export type WorkspaceHostRequest =
   // Worktree queries
   | { type: "get-all-states"; requestId: string }
   | { type: "get-monitor"; requestId: string; worktreeId: string }
+  // Just the current worktree's id, for callers that would otherwise read every
+  // snapshot to find one flag.
+  | { type: "get-active-worktree-id"; requestId: string }
   // Worktree operations
   | { type: "set-active"; requestId: string; worktreeId: string; silent?: boolean }
   | {
@@ -606,6 +620,29 @@ export type WorkspaceHostRequest =
       force?: boolean;
       deleteBranch?: boolean;
     }
+  /**
+   * Main's merged-worktree rule (#17321) removing a worktree no one is there
+   * to confirm. Answered with `delete-worktree-result`. Never forces or
+   * deletes the branch; the host re-checks the guard right before git runs.
+   */
+  | {
+      type: "remove-merged-worktree";
+      requestId: string;
+      worktreeId: string;
+      guard: UnattendedRemovalGuard;
+    }
+  /**
+   * Main asking whether an idle pause of the worktree may run, before it
+   * claims the worktree's host's idle time (#17925). Answered with
+   * `idle-pause-result` carrying `check`.
+   */
+  | { type: "idle-pause-check"; requestId: string; worktreeId: string }
+  /**
+   * The pause itself, sent once the host granted the claim: a manual pause
+   * that is refused if anything `guard` was checked against has changed.
+   * Answered with `idle-pause-result` carrying `outcome`.
+   */
+  | { type: "idle-pause-run"; requestId: string; worktreeId: string; guard: IdlePauseGuard }
   /**
    * What deleting the worktree would discard and run, read fresh, for a
    * delete main puts to the person itself with no view open (#13501): the
@@ -767,6 +804,11 @@ export type WorkspaceHostRequest =
       forceRefresh?: boolean;
     }
   | { type: "invalidate-pulse-cache"; worktreeId: string }
+  // Worktree ports. The attach carries the port in its transfer list, named by
+  // the broker's token; the detach names it back, because the transfer left
+  // main a handle that can no longer close it (#17037).
+  | { type: "attach-worktree-port"; portId: number }
+  | { type: "detach-worktree-port"; portId: number }
   // Forge RPC response (main → workspace-host). Correlated to a prior
   // `forge:rpc` event by `forgeRequestId`. Carries either a successful return
   // value or an error message. See `ForgeRpcMethod` for the supported methods.
@@ -960,6 +1002,7 @@ export type WorkspaceHostEvent =
       gitBacked?: boolean | null;
     }
   | { type: "monitor"; requestId: string; state: WorktreeSnapshot | null }
+  | { type: "active-worktree-id"; requestId: string; worktreeId: string | null }
   /**
    * Each part null when the worktree's monitor no longer exists, and
    * `unreadable` when that read failed, which a preview must say rather than
@@ -1003,7 +1046,17 @@ export type WorkspaceHostEvent =
       startCommit?: string;
       error?: string;
     }
-  | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }
+  | {
+      type: "delete-worktree-result";
+      requestId: string;
+      success: boolean;
+      error?: string;
+      /**
+       * An unattended removal (#17321) failed after git was asked to remove
+       * the checkout, so it may be gone anyway.
+       */
+      gitStarted?: true;
+    }
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
   /**
@@ -1268,6 +1321,12 @@ export type WorkspaceHostEvent =
       requestId: string;
       hasConfig: boolean;
     }
+  | {
+      type: "idle-pause-result";
+      requestId: string;
+      check?: IdlePauseCheck;
+      outcome?: IdlePauseRunOutcome;
+    }
   // Forge RPC request (workspace-host → main). Forge provider impls live in
   // main (registered by `PluginService` on plugin activate); the workspace-host
   // dispatches calls here and awaits the matching `forge:rpc-result` request
@@ -1326,3 +1385,31 @@ export interface WorkspaceClientConfig {
    */
   maxWarmEntries?: number;
 }
+
+/**
+ * What an unattended removal (#17321) was judged against: the branch the
+ * merged PR came from and the commit it merged. The host refuses unless the
+ * checkout still matches both and holds nothing uncommitted.
+ */
+export interface UnattendedRemovalGuard {
+  expectedBranch: string;
+  expectedHead: string;
+  /**
+   * Epoch ms after which the host refuses to start git: main stops waiting
+   * for an answer and later settles the removal from the disk, so a request
+   * that stalled past this can't remove a checkout main has given up on.
+   */
+  notAfter: number;
+}
+
+/**
+ * How an unattended removal (#17321) ended, as main can tell it: `declined`
+ * when the last check before the request said no, `not-sent` when it failed
+ * before the request went, `refused` when the host said no before git ran,
+ * and `lost` when the removal may or may not have happened (no answer came
+ * back, or git failed partway).
+ */
+export type UnattendedRemovalOutcome =
+  | { outcome: "removed" }
+  | { outcome: "declined" }
+  | { outcome: "not-sent" | "refused" | "lost"; error: string };

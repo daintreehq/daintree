@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import { ProjectResourceBadge } from "@/components/Project/ProjectResourceBadge";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
+import { useAgentUsageTrackingStore } from "@/store/agentUsageTrackingStore";
+import { SidebarAgentUsage } from "./SidebarAgentUsage";
 
 /**
  * The sidebar's footer row: one ambient readout of what Daintree is doing.
@@ -19,9 +21,23 @@ import { useKeepAwakeStore } from "@/store/keepAwakeStore";
  * the mark would have read idle through a whole session on battery. The badge
  * reads agent activity directly instead; the hold is passed only so the popover
  * can explain itself.
+ *
+ * Agent usage sits in its own foldable "Usage" section right above it
+ * (#17318): a dense row per agent with a reading, and no section otherwise.
+ * Beside the readout in a 200px row it would cut both down to a few
+ * characters. With tracking off (#17981) the section isn't mounted at all, so
+ * its demand for readings goes with it.
  */
 export function SidebarStatusBar({ trailing }: { trailing?: ReactNode } = {}) {
   const holdingWakeLock = useKeepAwakeStore((state) => state.visible);
+  const tracking = useAgentUsageTrackingStore((state) => state.enabled);
+  const revision = useAgentUsageTrackingStore((state) => state.revision);
 
-  return <ProjectResourceBadge holdingWakeLock={holdingWakeLock} trailing={trailing} />;
+  return (
+    <>
+      {/* Keyed by revision: an off and on that land in one render still follow afresh. */}
+      {tracking === true && <SidebarAgentUsage key={revision} />}
+      <ProjectResourceBadge holdingWakeLock={holdingWakeLock} trailing={trailing} />
+    </>
+  );
 }

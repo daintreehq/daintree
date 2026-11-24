@@ -118,10 +118,20 @@ const ROW_CLASS = cn(
 /**
  * One fixed-width cell per counted column, the same columns on every row, so
  * a count sits in the same place whichever host it belongs to. Each holds a
- * glyph and two digits.
+ * glyph and as many digits as the column's widest count, plus the room before
+ * the next column that a single digit leaves, so a two-digit count never runs
+ * into the number beside it. Cells grow to the left, so the counts still end
+ * on the row's right edge.
  */
-const CELL_CLASS =
-  "flex w-7 shrink-0 items-center justify-end gap-0.5 tabular-nums @[15rem]/hosts:w-7.5";
+const CELL_BASE_CLASS = "flex shrink-0 items-center justify-end gap-0.5 tabular-nums";
+
+/** Widths by digit count: the glyph, its gap, the digits, and a gutter of about 5px (7px past 15rem). */
+const CELL_WIDTH_CLASS: Record<number, string> = {
+  1: "w-7 @[15rem]/hosts:w-7.5",
+  2: "w-9 @[15rem]/hosts:w-9.5",
+  3: "w-11 @[15rem]/hosts:w-11.5",
+};
+const MAX_CELL_DIGITS = 3;
 
 /** Rows the section's own arrow keys move between, header included. */
 const NAV_SELECTOR = "[data-project-hosts-nav]";
@@ -173,7 +183,20 @@ function RowTooltip({ tooltip, children }: { tooltip: HostTooltip; children: Rea
 
 type Counts = Readonly<Record<RowBand, number>>;
 
+/** The most digits any row draws in each band's column. */
+type ColumnDigits = Readonly<Record<RowBand, number>>;
+
 const NO_COUNTS: Counts = { asking: 0, quiet: 0, review: 0, running: 0 };
+
+function columnDigits(rows: Iterable<Counts>): ColumnDigits {
+  const digits: Record<RowBand, number> = { asking: 1, quiet: 1, review: 1, running: 1 };
+  for (const counts of rows) {
+    for (const band of ROW_BANDS) {
+      digits[band] = Math.max(digits[band], String(counts[band]).length);
+    }
+  }
+  return digits;
+}
 
 function addCounts(a: Counts, b: Counts): Counts {
   return {
@@ -190,18 +213,21 @@ function addCounts(a: Counts, b: Counts): Counts {
  * row's first count are left out, so its name runs across them, and below
  * 15rem the empty cells between two counts go too, so names keep their tails.
  * The empty cells after a row's last count stay: they are what keep that
- * count in its column. A summary of other rows (the fold) draws its numbers
+ * count in its column. A column is as wide as its widest count on any row,
+ * the fold included. A summary of other rows (the fold) draws its numbers
  * in secondary ink, so it never reads as one more host.
  */
 function CountCells({
   counts,
   askingBand,
   columns,
+  digits,
   summary = false,
 }: {
   counts: Counts;
   askingBand: "blocked" | "needs-you";
   columns: readonly RowBand[];
+  digits: ColumnDigits;
   summary?: boolean;
 }) {
   const first = columns.findIndex((band) => counts[band] > 0);
@@ -217,12 +243,18 @@ function CountCells({
       {columns.slice(Math.max(first, 0)).map((band, i) => {
         const n = counts[band];
         const gap = n === 0 && Math.max(first, 0) + i < last;
+        const width = Math.min(digits[band], MAX_CELL_DIGITS);
         return (
           <span
             key={band}
             data-count-cell={band}
+            data-digits={width}
             data-band={n > 0 ? band : undefined}
-            className={cn(CELL_CLASS, gap && "@max-[15rem]/hosts:hidden")}
+            className={cn(
+              CELL_BASE_CLASS,
+              CELL_WIDTH_CLASS[width],
+              gap && "@max-[15rem]/hosts:hidden"
+            )}
           >
             {n > 0 && (
               <>
@@ -340,12 +372,13 @@ interface HostRowProps {
   host: ProjectHost;
   summary: HostProjectSummary | null;
   columns: readonly RowBand[];
+  digits: ColumnDigits;
   newWindowKey: string;
   onOpen: (host: ProjectHost, event: MouseEvent) => void;
 }
 
 /** One host: its mark, its name, and its counts or the phrase standing in for them. */
-function HostRow({ host, summary, columns, newWindowKey: key, onOpen }: HostRowProps) {
+function HostRow({ host, summary, columns, digits, newWindowKey: key, onOpen }: HostRowProps) {
   const status = hostRowStatus(host, summary);
   // A lookup or a read still out says so only once it is slow enough to notice.
   const showChecking = useDeferredLoading(status.kind === "checking", UI_INLINE_LOADING_GATE_MS);
@@ -395,7 +428,12 @@ function HostRow({ host, summary, columns, newWindowKey: key, onOpen }: HostRowP
             />
           </span>
           {status.kind === "counts" && summary ? (
-            <CountCells counts={summary.counts} askingBand={summary.askingBand} columns={columns} />
+            <CountCells
+              counts={summary.counts}
+              askingBand={summary.askingBand}
+              columns={columns}
+              digits={digits}
+            />
           ) : status.kind === "away" ? (
             // No words: "Not connected" on every offline row was a wall of noise
             // beside the hosts that are live. A plainly offline host is its
@@ -546,6 +584,11 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
     }
   }
   const foldedCounted = ROW_BANDS.some((band) => foldedCounts[band] > 0);
+  // The fold sums its hosts, so it can need a digit that none of them does.
+  const digits = columnDigits([
+    ...[...summaries.values()].map((s) => s.counts),
+    ...(foldedCounted && !allShown ? [foldedCounts] : []),
+  ]);
   const key = newWindowKey();
 
   const openHost = (host: ProjectHost, e: MouseEvent) => {
@@ -573,6 +616,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
       host={host}
       summary={summaries.get(host.hostId) ?? null}
       columns={columns}
+      digits={digits}
       newWindowKey={key}
       onOpen={openHost}
     />
@@ -684,6 +728,7 @@ export function ProjectHostsGroup({ projectId }: ProjectHostsGroupProps) {
                         counts={foldedCounts}
                         askingBand={foldedBlocked ? "blocked" : "needs-you"}
                         columns={columns}
+                        digits={digits}
                         summary
                       />
                     </>

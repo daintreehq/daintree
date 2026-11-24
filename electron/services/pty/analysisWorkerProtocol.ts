@@ -44,7 +44,13 @@ export interface AnalysisChunkFlags {
   agentState?: AgentState;
 }
 
-export type AnalysisRequestOp = "serialize" | "serialize-persistence" | "final-snapshot";
+/**
+ * `serialize-screen` is the visible screen alone, read once every byte the
+ * worker holds has parsed (#17984). Host-internal: no view or plugin read asks
+ * for it.
+ */
+export type AnalysisRequestOp =
+  "serialize" | "serialize-screen" | "serialize-persistence" | "final-snapshot";
 
 export type HostToWorkerMessage =
   | ({ type: "create" } & AnalysisCreateSpec)

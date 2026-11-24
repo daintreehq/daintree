@@ -20,10 +20,21 @@ export const COMPOSER_CONTROL_TEXT_CLASS =
 /**
  * The `❯` marker sits at the head of the line being typed, so it is what says
  * which composer is the selected one: `--ib-marker` steps up on the selected
- * composer and stays at the control ink everywhere else. It is a glyph, not a
- * control, so it takes no hover or focus recipe.
+ * composer and stays at the control ink everywhere else. It takes no focus
+ * recipe: it is never in the Tab order.
  */
 export const COMPOSER_MARKER_TEXT_CLASS = "text-[var(--ib-marker)]";
+
+/**
+ * Hover for the `❯` where a click on it opens prompt history: the ink steps up
+ * to the shell's foreground and a wash, the controls' own hover tint, is drawn
+ * by a pseudo-element just outside the glyph. Nothing here sizes the marker, so
+ * it keeps the glyph's width and the draft beside it keeps every pixel. The
+ * selected composer's marker can already sit at the foreground ink, so the wash
+ * is what says it is clickable there.
+ */
+export const COMPOSER_MARKER_HOVER_CLASS =
+  "relative cursor-pointer transition-colors hover:text-[var(--ib-fg)] before:pointer-events-none before:absolute before:-inset-x-1 before:inset-y-0.5 before:rounded-sm hover:before:bg-[color-mix(in_oklab,var(--ib-fg)_8%,transparent)]";
 
 export const COMPOSER_CONTROL_HOVER_BG_CLASS =
   "hover:bg-[color-mix(in_oklab,var(--ib-fg)_8%,transparent)]";

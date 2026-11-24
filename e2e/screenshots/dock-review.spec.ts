@@ -65,7 +65,6 @@ const SWEEP_THEMES =
         (id) => THEME_FILTER.length === 0 || THEME_FILTER.includes(id)
       );
 const FOCUS_BRANCH = "feature/settlement-export";
-const ADD_TAB = '[aria-label="Duplicate panel as new tab"]';
 
 interface Rect {
   x: number;
@@ -410,9 +409,14 @@ test("dock — every item kind, its popovers, densities, overflow, theme sweep",
     await step("13-tab-group", async () => {
       await closeDockPopovers();
       const group = await newShell();
-      const pane = page.locator(`[data-panel-id="${group}"]`).first();
-      await pane.locator("[data-pane-chrome]").first().hover();
-      await pane.locator(ADD_TAB).first().click({ force: true });
+      // The header's duplicate-as-tab button is display:none below a 640px
+      // header, which a crowded grid reaches, so dispatch its click directly.
+      await page
+        .locator(`[data-panel-id="${group}"]`)
+        .first()
+        .locator('[aria-label="Duplicate panel as new tab"]')
+        .first()
+        .dispatchEvent("click");
       await expect
         .poll(
           () =>
@@ -540,6 +544,15 @@ test("dock — every item kind, its popovers, densities, overflow, theme sweep",
         await parkPointer(page);
         await settle(page, 1200);
         await strip(slug);
+        // One light theme with a preview open: the preview's shadow is clipped
+        // at its bottom edge, and only a light canvas would show that cut.
+        if (themeId === "bondi") {
+          await popover("31-theme-bondi-preview", async () => {
+            await chip(ids.agy!).click();
+            return page.locator('[aria-label^="Preview:"]').last();
+          });
+          await closeDockPopovers();
+        }
       } catch (error) {
         failures.set(slug, String(error).slice(0, 300));
       }

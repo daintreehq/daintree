@@ -40,7 +40,7 @@ import {
   closeAllParcelWatcherSubscriptions,
   getParcelWatcherLifecycleStats,
 } from "./utils/parcelWatcherBackend.js";
-import { fanoutEventToWorktreePorts } from "./workspace-host/worktreePortFanout.js";
+import { WorktreePortRegistry } from "./workspace-host/worktreePortRegistry.js";
 import { PERF_MARKS } from "../shared/perf/marks.js";
 import { markHostPerformance } from "./utils/hostPerformance.js";
 import {
@@ -72,7 +72,7 @@ void prewarmWindowsExecutables(["git"]);
 const port = process.parentPort as unknown as MessagePort;
 
 // Worktree-specific ports with request/response correlation (Phase 1)
-const worktreePorts: MessagePort[] = [];
+const worktreePorts = new WorktreePortRegistry<MessagePort>();
 
 // Event types delivered directly to renderers via MessagePort
 const DIRECT_RENDERER_EVENTS = new Set([
@@ -113,7 +113,7 @@ const DIRECT_RENDERER_EVENTS = new Set([
 ]);
 
 function sendToWorktreePorts(event: WorkspaceHostEvent): void {
-  fanoutEventToWorktreePorts(worktreePorts, event);
+  worktreePorts.fanout(event);
 }
 
 async function handleWorktreePortRequest(
@@ -270,6 +270,22 @@ async function handleWorktreePortRequest(
         break;
       }
 
+      case "get-idle-pause": {
+        const policy = await workspaceService.getIdlePausePolicy(msg.payload.worktreeId);
+        result = { policy };
+        break;
+      }
+
+      case "set-idle-pause": {
+        await workspaceService.setIdlePause(
+          msg.payload.worktreeId,
+          msg.payload.enabled,
+          msg.payload.fingerprint
+        );
+        result = { ok: true };
+        break;
+      }
+
       case "switch-worktree-environment": {
         const requestId = `port-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         await workspaceService.switchWorktreeEnvironment(
@@ -283,7 +299,8 @@ async function handleWorktreePortRequest(
 
       case "has-resource-config": {
         const hasConfig = await workspaceService.hasResourceConfig(msg.payload.rootPath);
-        result = { hasConfig };
+        const environmentKeys = await workspaceService.resourceEnvironmentKeys();
+        result = { hasConfig, environmentKeys };
         break;
       }
 
@@ -340,9 +357,9 @@ async function handleWorktreePortRequest(
   }
 }
 
-function attachWorktreePort(newPort: MessagePort): void {
+function attachWorktreePort(newPort: MessagePort, portId: number): void {
   newPort.start();
-  worktreePorts.push(newPort);
+  worktreePorts.add(newPort, portId);
   workspaceService.resetEmitGate();
 
   newPort.on("message", (rawMsg: any) => {
@@ -370,15 +387,23 @@ function attachWorktreePort(newPort: MessagePort): void {
     });
   });
 
-  newPort.on("close", () => {
-    const idx = worktreePorts.indexOf(newPort);
-    if (idx >= 0) worktreePorts.splice(idx, 1);
-  });
+  newPort.on("close", () => worktreePorts.forget(newPort));
 
   // `logInfo`, not `console.log`: production esbuild marks `console.log` pure,
   // so this line never existed in a packaged build — the one place it was
   // needed to tell a brokered port from a missing one (#11922).
-  logInfo("[WorkspaceHost] Worktree port attached", { activePorts: worktreePorts.length });
+  logInfo("[WorkspaceHost] Worktree port attached", {
+    portId,
+    activePorts: worktreePorts.ports.length,
+  });
+}
+
+function detachWorktreePort(portId: number): void {
+  if (!worktreePorts.detach(portId)) return;
+  logInfo("[WorkspaceHost] Worktree port detached", {
+    portId,
+    activePorts: worktreePorts.ports.length,
+  });
 }
 
 // Global error handlers to prevent silent crashes
@@ -453,7 +478,7 @@ function sendEvent(event: WorkspaceHostEvent): boolean {
 
   // Direct delivery to renderer(s) via MessagePort (bypasses main-process relay)
   if (DIRECT_RENDERER_EVENTS.has((event as { type: string }).type)) {
-    if (worktreePorts.length > 0) {
+    if (worktreePorts.ports.length > 0) {
       sendToWorktreePorts(event);
     }
   }
@@ -521,7 +546,18 @@ port.on("message", async (rawMsg: any) => {
   // Handle MessagePort transfers (worktree-specific port with request/response correlation)
   const transferredPorts = rawMsg?.ports || [];
   if (msg?.type === "attach-worktree-port" && transferredPorts.length > 0) {
-    attachWorktreePort(transferredPorts[0] as MessagePort);
+    const transferred = transferredPorts[0] as MessagePort;
+    if (typeof msg.portId === "number") {
+      attachWorktreePort(transferred, msg.portId);
+    } else {
+      // A port main cannot name is one it could never retire.
+      transferred.close();
+      console.warn("[WorkspaceHost] Refused a worktree port without an id");
+    }
+    return;
+  }
+  if (msg?.type === "detach-worktree-port") {
+    if (typeof msg.portId === "number") detachWorktreePort(msg.portId);
     return;
   }
 
@@ -599,6 +635,10 @@ port.on("message", async (rawMsg: any) => {
         workspaceService.getMonitor(request.requestId, request.worktreeId);
         break;
 
+      case "get-active-worktree-id":
+        workspaceService.getActiveWorktreeId(request.requestId);
+        break;
+
       case "get-delete-preview": {
         const unreadable = () => "unreadable" as const;
         const [changes, risk, teardown] = await Promise.all([
@@ -665,6 +705,35 @@ port.on("message", async (rawMsg: any) => {
           request.worktreeId,
           request.force,
           request.deleteBranch
+        );
+        break;
+
+      case "idle-pause-check": {
+        const check = await workspaceService.checkIdlePause(request.worktreeId);
+        sendEvent({ type: "idle-pause-result", requestId: request.requestId, check });
+        break;
+      }
+
+      case "idle-pause-run": {
+        // The executor reports on its own requestId, which no broker entry owns.
+        const outcome = await workspaceService.runIdlePause(
+          `${request.requestId}-pause`,
+          request.worktreeId,
+          request.guard
+        );
+        sendEvent({ type: "idle-pause-result", requestId: request.requestId, outcome });
+        break;
+      }
+
+      case "remove-merged-worktree":
+        await workspaceService.deleteWorktree(
+          request.requestId,
+          request.worktreeId,
+          false,
+          false,
+          undefined,
+          false,
+          { unattended: request.guard }
         );
         break;
 

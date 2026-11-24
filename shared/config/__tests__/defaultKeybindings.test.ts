@@ -126,19 +126,47 @@ describe("buildDefaultKeybindings", () => {
   });
 
   it("keeps Windows in core order with replacements in place and additions after", () => {
-    // Remote Hosts appends Switch host to the core list everywhere but Windows.
-    const core = mac.filter((b) => b.actionId !== "host.switch");
+    const core = mac;
     const changed = windows
       .slice(0, core.length)
       .filter((b, i) => b !== core[i])
       .map((b) => b.actionId);
     expect(changed).toEqual([
+      "terminal.copyClean",
       "fleet.accept",
       "canopy.toggle",
       "voiceInput.toggle",
       "voiceInput.stopAndSend",
     ]);
     expect(windows.length).toBeGreaterThan(core.length);
+  });
+
+  // Ctrl+Alt is AltGr on Windows, where AltGr+C types ć or č (#18132).
+  it("binds Copy clean text on macOS and Linux, and leaves the row unbound on Windows", () => {
+    expect(globalCombo(mac, "terminal.copyClean")).toEqual(["Cmd+Shift+Alt+C"]);
+    expect(globalCombo(linux, "terminal.copyClean").map(foldCmd)).toEqual(["Ctrl+Shift+Alt+C"]);
+    // Kept as a row, so Settings can still bind it there.
+    expect(globalCombo(windows, "terminal.copyClean")).toEqual([""]);
+  });
+
+  it("keeps Copy clean text clear of every other default and the terminal's own copy key", () => {
+    // Modifier order, Cmd-vs-Ctrl spelling and letter case can't hide a collision.
+    const step = (combo: string) => {
+      const parts = foldCmd(combo).split("+");
+      const key = parts.pop()!.toLowerCase();
+      return [...parts.sort(), key].join("+");
+    };
+    for (const table of [mac, linux]) {
+      const [copyClean] = table.filter((b) => b.actionId === "terminal.copyClean");
+      const mine = step(copyClean!.combo);
+      const collisions = table.filter((b) => {
+        if (b === copyClean || !b.combo) return false;
+        const [first] = b.combo.split(" ");
+        return step(first!) === mine;
+      });
+      expect(collisions.map((b) => b.actionId)).toEqual([]);
+      expect(mine).not.toBe(step("Ctrl+Shift+C"));
+    }
   });
 
   it("leaves Ctrl+Y to text fields off the Mac, where it is Redo", () => {
@@ -163,8 +191,14 @@ describe("buildDefaultKeybindings", () => {
     }
   });
 
-  it("keeps Switch host clear of every other global default where it exists", () => {
-    for (const table of [mac, linux]) {
+  it("binds Switch host to Ctrl+Alt+U on Windows and Linux", () => {
+    for (const table of [windows, linux]) {
+      expect(globalCombo(table, "host.switch").map(foldCmd)).toEqual(["Ctrl+Alt+U"]);
+    }
+  });
+
+  it("keeps Switch host clear of every other global default on every platform", () => {
+    for (const table of [mac, windows, linux]) {
       const [hostSwitch] = table.filter((b) => b.actionId === "host.switch");
       expect(hostSwitch).toBeDefined();
       const collisions = table.filter(

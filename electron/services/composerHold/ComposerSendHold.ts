@@ -108,7 +108,8 @@ interface Entry {
 }
 
 /**
- * Sends a pane's composer held while its agent works (#16379), one per pane.
+ * Sends a pane's composer held while the pane has no line to take them
+ * (#16379, #16872), one per pane.
  * Each rides the pane's own notice line as a lane wake, so one writer types
  * into that prompt, and goes only when the pane waits at its own prompt: never
  * mid-turn, at a question or at an approval. Any input that could reach the

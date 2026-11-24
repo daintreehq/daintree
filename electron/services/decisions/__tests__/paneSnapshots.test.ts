@@ -143,7 +143,9 @@ function setup(options: { allowed?: boolean; rows?: QuestionRow[]; meta?: string
     getPtyClient: () => pane.client,
     watchPanes,
     store: {
-      listQuestions: vi.fn(async () => rows),
+      listQuestions: vi.fn(async (filter?: { status?: QuestionRow["local_status"][] }) =>
+        filter?.status ? rows.filter((r) => filter.status!.includes(r.local_status)) : rows
+      ),
       getQuestion: vi.fn(async (id: string) => rows.find((r) => r.question_id === id) ?? null),
       getMeta: vi.fn(async (key: string) => meta.get(key) ?? null),
       setMeta: vi.fn(async (key: string, value: string) => {
@@ -348,6 +350,35 @@ describe("PaneSnapshots", () => {
 
       expect(published(bridge)).toEqual([
         expect.objectContaining({ agentState: "exited", terminal: [], waitingReason: null }),
+      ]);
+      expect(env.pane.reads).toBe(0);
+    });
+
+    it("publishes exited, without the screen, once another agent shows in the same live pane", async () => {
+      const env = setup();
+      env.pane.record.detectedAgentId = "codex";
+      env.pane.screen = "the other agent's screen";
+      const bridge = fakeBridge();
+      env.snapshots.attach(bridge);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(published(bridge)).toEqual([
+        expect.objectContaining({ agentState: "exited", terminal: [] }),
+      ]);
+      expect(env.pane.reads).toBe(0);
+    });
+
+    it("publishes exited, without the screen, once the agent that asked exited to its shell", async () => {
+      const env = setup();
+      env.pane.record.agentState = "exited";
+      env.pane.record.detectedAgentId = undefined;
+      env.pane.screen = "$ ls";
+      const bridge = fakeBridge();
+      env.snapshots.attach(bridge);
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(published(bridge)).toEqual([
+        expect.objectContaining({ agentState: "exited", terminal: [] }),
       ]);
       expect(env.pane.reads).toBe(0);
     });
@@ -969,5 +1000,17 @@ describe("PaneSnapshots", () => {
     });
 
     expect(published(bridge).map((p) => p.questionId)).toEqual(["q-open", "q-queued"]);
+  });
+
+  it("watches no pane while the only open questions are another machine's or history", async () => {
+    const env = await attached({
+      rows: [
+        row("q-elsewhere", { origin: origin({ host_id: "host_other" }) }),
+        row("q-history", { history_only: true }),
+      ],
+    });
+
+    expect(env.watchPanes).not.toHaveBeenCalled();
+    expect(env.bridge.publishSnapshot).not.toHaveBeenCalled();
   });
 });

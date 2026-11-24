@@ -89,7 +89,7 @@ export function enqueueFlowStatusUpdate(
  */
 export function enqueueHeldDurationUpdate(terminalId: string, heldDurationMs: number): void {
   // Non-null patches do not clobber a pending null for the same terminal —
-  // a `null` from a fresh tick (terminal no longer in the gauge) wins
+  // a `null` from a fresh tick (terminal cleared from the gauge) wins
   // because the host has already stopped emitting it. Without this guard
   // a stale non-null entry from a previous tick could resurrect a value
   // for a terminal that's already resumed.
@@ -128,12 +128,18 @@ export function flushPanelStatusBuffer(): void {
   heldDurationBuffer.clear();
 
   usePanelStore.setState((state) => {
-    const nextById = { ...state.panelsById };
-    let changed = false;
+    // Allocated on the first effective change so a redundant report never
+    // pays for a copy that scales with the whole grid.
+    let nextById: typeof state.panelsById | null = null;
+    const current = (id: string) => (nextById ?? state.panelsById)[id];
+    const write = (id: string, panel: NonNullable<ReturnType<typeof current>>) => {
+      nextById ??= { ...state.panelsById };
+      nextById[id] = panel;
+    };
 
     if (activity) {
       for (const [id, patch] of activity) {
-        const terminal = nextById[id];
+        const terminal = current(id);
         if (!terminal || !isPtyPanel(terminal)) continue;
         if (
           terminal.activityHeadline === patch.headline &&
@@ -143,20 +149,19 @@ export function flushPanelStatusBuffer(): void {
         ) {
           continue;
         }
-        nextById[id] = {
+        write(id, {
           ...terminal,
           activityHeadline: patch.headline,
           activityStatus: patch.status,
           activityType: patch.type,
           lastCommand: patch.lastCommand,
-        };
-        changed = true;
+        });
       }
     }
 
     if (flow) {
       for (const [id, patch] of flow) {
-        const terminal = nextById[id];
+        const terminal = current(id);
         if (!terminal || !isPtyPanel(terminal)) continue;
 
         // A late flow event for a terminal that has already exited must not
@@ -181,33 +186,33 @@ export function flushPanelStatusBuffer(): void {
           terminal.runtimeStatus
         );
 
-        nextById[id] = {
+        write(id, {
           ...terminal,
           flowStatus: patch.status,
           flowStatusTimestamp: patch.timestamp,
           runtimeStatus,
-        };
-        changed = true;
+        });
       }
     }
 
     if (held) {
       for (const [id, patch] of held) {
-        const terminal = nextById[id];
+        const terminal = current(id);
         if (!terminal || !isPtyPanel(terminal)) continue;
-        if (terminal.heldDurationMs === patch.heldDurationMs) continue;
-        nextById[id] = {
+        // A clear for a panel that holds no duration (a gauge clear after
+        // `pause-end` already cleared it) changes nothing, so it writes nothing.
+        if (terminal.heldDurationMs === (patch.heldDurationMs ?? undefined)) continue;
+        write(id, {
           ...terminal,
           // `null` clears the field via destructuring-rest; a number sets it.
           ...(patch.heldDurationMs === null
             ? { heldDurationMs: undefined }
             : { heldDurationMs: patch.heldDurationMs }),
-        };
-        changed = true;
+        });
       }
     }
 
-    if (!changed) return state;
+    if (!nextById) return state;
     return { panelsById: nextById };
   });
 }
@@ -234,4 +239,22 @@ export function cancelPanelStatusBuffer(): void {
 export function cancelTerminalFlowState(terminalId: string): void {
   flowStatusBuffer.delete(terminalId);
   heldDurationBuffer.delete(terminalId);
+}
+
+/**
+ * Forget every held duration, buffered or committed, at a gap in the host's
+ * events: the gauge that named a hold as over may be among those missed
+ * (#17575). Samples after the gap set them again, for holds still running.
+ */
+export function dropAllHeldDurations(): void {
+  heldDurationBuffer.clear();
+  usePanelStore.setState((state) => {
+    let nextById: typeof state.panelsById | null = null;
+    for (const [id, panel] of Object.entries(state.panelsById)) {
+      if (!panel || !isPtyPanel(panel) || panel.heldDurationMs === undefined) continue;
+      nextById ??= { ...state.panelsById };
+      nextById[id] = { ...panel, heldDurationMs: undefined };
+    }
+    return nextById ? { panelsById: nextById } : state;
+  });
 }

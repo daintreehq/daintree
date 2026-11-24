@@ -7,25 +7,19 @@ import {
   useRef,
   useSyncExternalStore,
 } from "react";
-import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
-import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import {
   subscribeToPanelKindRegistry,
   getPanelKindRegistrySnapshot,
 } from "@shared/config/panelKindRegistry";
-import { isDockPanel, isPtyPanel, type DockPanelData } from "@shared/types/panel";
+import { isDockPanel, type DockPanelData } from "@shared/types/panel";
 import { useHelpPanelStore, selectSlotTerminalIds } from "@/store/helpPanelStore";
-import { DockedPanel } from "@/components/Terminal/DockedPanel";
+import { DockPanelPortalEntry } from "./DockPanelPortalEntry";
 import { noteVisiblePanesChanged } from "@/services/terminal/visiblePaneTerminals";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { logError } from "@/utils/logger";
-import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
-import {
-  DragHandleProvider,
-  type DragHandleContextValue,
-} from "@/components/DragDrop/DragHandleContext";
+import type { DragHandleContextValue } from "@/components/DragDrop/DragHandleContext";
 import { DockPanelContext, type DockPanelContextValue } from "./dockPanelPortalContext";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 
@@ -102,9 +96,11 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
   // All lanes (#12108) — a background assistant is still rendered by HelpPanel
   // and must not be mirrored into the offscreen dock container too.
   const helpTerminalIdList = useHelpPanelStore(useShallow(selectSlotTerminalIds));
-  const dockTerminals = usePanelStore(
+  // Ids only: a record here would repaint every parked body whenever any docked
+  // agent streams (#17053). Each `DockPanelPortalEntry` reads its own panel.
+  const dockPanelIds = usePanelStore(
     useShallow((s) => {
-      const result: DockPanelData[] = [];
+      const result: string[] = [];
       for (const id of s.panelIds) {
         const t = s.panelsById[id];
         if (
@@ -116,7 +112,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
           // Show terminals that match active worktree OR have no worktree (global terminals)
           (t.worktreeId == null || t.worktreeId === activeWorktreeId)
         ) {
-          result.push(t);
+          result.push(t.id);
         }
       }
       return result;
@@ -141,12 +137,12 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
   useEffect(() => {
     if (!activeDockTerminalId) return;
-    if (dockTerminals.some((terminal) => terminal.id === activeDockTerminalId)) return;
+    if (dockPanelIds.includes(activeDockTerminalId)) return;
     // Harden against transient states where the panel exists in the canonical
-    // store but hasn't yet landed in the filtered dockTerminals view (#7278).
+    // store but hasn't yet landed in the filtered dockPanelIds view (#7278).
     if (usePanelStore.getState().panelsById[activeDockTerminalId]) return;
     closeDockTerminal(activeDockTerminalId);
-  }, [activeDockTerminalId, dockTerminals, closeDockTerminal]);
+  }, [activeDockTerminalId, dockPanelIds, closeDockTerminal]);
 
   // Handler for adding a new tab to a single panel (creates a tab group)
   const handleAddTabForPanel = useCallback(
@@ -214,20 +210,20 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     if (!offscreenContainerRef.current) return;
 
     const container = offscreenContainerRef.current;
-    const currentIds = new Set(dockTerminals.map((t) => t.id));
+    const currentIds = new Set(dockPanelIds);
     let changed = false;
 
     // Create wrappers for new terminals
-    for (const terminal of dockTerminals) {
-      if (!wrappersRef.current.has(terminal.id)) {
+    for (const id of dockPanelIds) {
+      if (!wrappersRef.current.has(id)) {
         const wrapper = document.createElement("div");
-        wrapper.setAttribute("data-dock-panel-wrapper", terminal.id);
+        wrapper.setAttribute("data-dock-panel-wrapper", id);
         wrapper.style.width = "100%";
         wrapper.style.height = "100%";
         wrapper.style.display = "flex";
         wrapper.style.flexDirection = "column";
         container.appendChild(wrapper);
-        wrappersRef.current.set(terminal.id, wrapper);
+        wrappersRef.current.set(id, wrapper);
         changed = true;
       }
     }
@@ -245,7 +241,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
     if (changed) {
       setWrappers(new Map(wrappersRef.current));
     }
-  }, [dockTerminals]);
+  }, [dockPanelIds]);
 
   // Relocate a panel's stable wrapper into the popover container (or back to the
   // offscreen parking container when destination is null). Uses moveBefore so
@@ -330,6 +326,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
       <div
         ref={offscreenContainerRef}
         className="dock-panel-offscreen-container"
+        data-panel-parking=""
         style={
           {
             contentVisibility: "hidden",
@@ -348,19 +345,14 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
       {/* Render each panel into its stable wrapper. The wrapper is always the
           portal container — its DOM position changes (offscreen ↔ popover) via
           moveBefore, but its identity never does, so React never remounts. */}
-      {dockTerminals.map((terminal) => {
-        const wrapper = wrappers.get(terminal.id);
+      {dockPanelIds.map((id) => {
+        const wrapper = wrappers.get(id);
 
         // Skip until the wrapper exists (created in the layout effect; renders
         // on the next update once setWrappers commits).
         if (!wrapper) {
           return null;
         }
-
-        // Only provide onAddTab for single panels (not in an explicit group)
-        // Multi-panel groups handle tabs via DockedTabGroup
-        const existingGroup = getPanelGroup(terminal.id);
-        const isSinglePanel = !existingGroup || existingGroup.panelIds.length <= 1;
 
         // Re-provide the dock sortable's drag handle across the portal boundary
         // (#10990) so this panel's PanelHeader becomes a drag handle, matching
@@ -370,54 +362,22 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
         // offscreen header becomes a stray drag/tab target. The provider is
         // ALWAYS present (empty value when inactive) so its element type never
         // toggles — the xterm-hosting DockedPanel subtree is never remounted.
-        const bridgedDragHandle =
-          terminal.id === activeDockTerminalId
-            ? (dragHandles.get(terminal.id) ?? EMPTY_DRAG_HANDLE)
-            : EMPTY_DRAG_HANDLE;
+        const isActive = id === activeDockTerminalId;
+        const bridgedDragHandle = isActive
+          ? (dragHandles.get(id) ?? EMPTY_DRAG_HANDLE)
+          : EMPTY_DRAG_HANDLE;
 
-        // Wrap the portaled panel body in DockPopoverChildProvider so any
-        // Radix overlay opened from inside the docked panel (e.g.
-        // TerminalContextMenu via ContentPanel, panel header dropdowns,
-        // tooltips on action buttons) inherits the context. Without this,
-        // those overlays would not be stamped with data-dock-popover-child
-        // and the dock popover would dismiss when the user clicks a menu
-        // item — see #8161.
-        const content = (
-          <DockPopoverChildProvider>
-            <DragHandleProvider value={bridgedDragHandle}>
-              <div
-                data-dock-panel-id={terminal.id}
-                className="dock-panel-slot"
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  display: "flex",
-                  flexDirection: "column",
-                }}
-              >
-                <DockedPanel
-                  terminal={terminal}
-                  onPopoverClose={() => handlePopoverClose(terminal.id)}
-                  onAddTab={
-                    // Dock tab groups are PTY-only (ContentDock resolves groups
-                    // through isPtyPanel), so only PTY panels get the add-tab
-                    // affordance. A duplicable non-PTY kind like browser would
-                    // otherwise spawn a dock group the dock can't render as one.
-                    isSinglePanel && isPtyPanel(terminal) && canDuplicatePanelKind(terminal.kind)
-                      ? () => handleAddTabForPanel(terminal)
-                      : undefined
-                  }
-                  showRestoreControl={isSinglePanel}
-                />
-              </div>
-            </DragHandleProvider>
-          </DockPopoverChildProvider>
+        return (
+          <DockPanelPortalEntry
+            key={id}
+            panelId={id}
+            wrapper={wrapper}
+            isActive={isActive}
+            dragHandle={bridgedDragHandle}
+            onPopoverClose={handlePopoverClose}
+            onAddTab={handleAddTabForPanel}
+          />
         );
-
-        // Portal into the stable wrapper. Because the wrapper identity never
-        // changes, React keeps the same fiber across open/close — the wrapper is
-        // simply relocated in the DOM by moveToDestination.
-        return createPortal(content, wrapper, `dock-panel-${terminal.id}`);
       })}
     </DockPanelContext.Provider>
   );

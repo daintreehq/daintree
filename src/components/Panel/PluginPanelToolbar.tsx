@@ -206,7 +206,10 @@ function PluginPanelToolbarItem({ panelId, button, state, running }: PluginPanel
       onClick={handleClick}
       onPointerDown={(event) => event.stopPropagation()}
       data-plugin-action={button.actionId}
+      // The header is a clipped 32px strip: an outset ring loses its top and
+      // bottom edges, so it rings inside like the header's own controls.
       className={cn(
+        "focus-visible:-outline-offset-2",
         Icon ? "shrink-0 [&_svg]:size-3.5" : "min-w-0 max-w-[160px] shrink",
         disabled && !busy && ARIA_DISABLED_CLASSES
       )}

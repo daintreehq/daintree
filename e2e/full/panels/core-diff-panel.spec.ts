@@ -24,7 +24,8 @@ import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 
 const TEXT_FILE = "notes.txt";
 const MD_FILE = "docs/plan.md";
-const PNG_FILE = "assets/logo.png";
+// Sorts after `docs/`: the stepper walks the sidebar's folder order.
+const PNG_FILE = "media/logo.png";
 
 const TEXT_BEFORE = "alpha\nbravo\ncharlie\ndelta\necho\n";
 const TEXT_AFTER = "alpha\nbravo\ncharlie revised\ndelta\necho\nfoxtrot added\n";
@@ -130,7 +131,7 @@ test.describe.serial("Core: diff panel", () => {
     // would have git compare CRLF checkouts against the LF text written here.
     git(["config", "core.autocrlf", "false"]);
     mkdirSync(path.join(repoDir, "docs"), { recursive: true });
-    mkdirSync(path.join(repoDir, "assets"), { recursive: true });
+    mkdirSync(path.join(repoDir, "media"), { recursive: true });
     writeFileSync(path.join(repoDir, TEXT_FILE), TEXT_BEFORE);
     writeFileSync(path.join(repoDir, MD_FILE), MD_BEFORE);
     writeFileSync(path.join(repoDir, PNG_FILE), PNG_HEAD);

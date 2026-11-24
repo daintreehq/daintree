@@ -9,9 +9,11 @@ import { logError } from "@/utils/logger";
 import { isMac } from "@/lib/platform";
 import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { nestedLayerOwnsEscape } from "@/lib/pluginManagerEscape";
 import { isInPaneDialog } from "@/lib/paneDialog";
 import { hasAppModal } from "@/lib/appModal";
 import { isTerminalReservedKey } from "@/services/terminalReservedKeys";
+import { codeViewerOwnsKey } from "@/lib/codeViewerKeys";
 import { CLOSE_OWNER_ATTR, requestOwnedClose } from "@/lib/closeRequest";
 import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
 import { buildKeybindingWhenContext } from "@/services/keybindingWhenContext";
@@ -21,7 +23,17 @@ import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import { resolveInteractiveActionId } from "@/services/actions/resolveInteractiveActionId";
 import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import { hasWaitingStopAndSend } from "@/services/voiceDraftSend";
+import { isVoiceStartAction, noteVoiceShortcutKeydown } from "@/services/voiceRecordingRuntime";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import {
+  UNDO_CLOSE_ACTION_ID,
+  isTextUndoKey,
+  noteUndoCloseKeyPress,
+  undoCloseTakesKey,
+} from "@/services/terminal/undoCloseKey";
+
+const COPY_CLEAN_ACTION_ID = "terminal.copyClean";
+const MODIFIER_KEY_NAMES = new Set(["Meta", "Control", "Alt", "AltGraph", "Shift"]);
 
 // The keys a surface that owns its own dictation (Canopy's reply) still lets
 // through: stopping it, and stopping it with a send.
@@ -78,9 +90,26 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       matchesTriggerCombo(e, "nav.focusRegion.next") ||
       matchesTriggerCombo(e, "nav.focusRegion.prev");
 
+    // The physical key whose press reopened a panel or copied clean text, while
+    // it is held.
+    let heldRepeatSwallowCode: string | null = null;
+
     const handler = (e: KeyboardEvent) => {
-      // Skip repeat events
-      if (e.repeat) return;
+      // Skip repeat events. Held down, the undo-close key reopens once: its
+      // repeats are swallowed too, or each would reach the field or the Edit
+      // menu's Undo behind the panel it reopened. Copy clean text's likewise:
+      // xterm would send each one as Alt+Ctrl+C, an interrupt.
+      if (e.repeat) {
+        if (heldRepeatSwallowCode !== null && e.code === heldRepeatSwallowCode) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      // A modifier pressed again while the key is still down (Shift let go and
+      // retaken) is no new press of it; nor is leaving the window, which is
+      // why a blur leaves this alone. Only a repeat of the same key reads it.
+      if (!MODIFIER_KEY_NAMES.has(e.key)) heldRepeatSwallowCode = null;
 
       // A shortcut recorder owns every key, including the one it is recording.
       if (keybindingService.isCapturingShortcut()) return;
@@ -165,8 +194,11 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       const isMenuKey =
         e.key === "ContextMenu" ||
         (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey);
+      // Gated on isMenuKey: every keystroke passes through here, and these are
+      // ancestor walks up to <html>.
       const ownsMenuKey =
-        target.closest("[data-row-menu]") !== null || target.closest('[role="menu"]') !== null;
+        isMenuKey &&
+        (target.closest("[data-row-menu]") !== null || target.closest('[role="menu"]') !== null);
       // A full stand-down, not just a skip of the branch below: these combos
       // are `terminal.contextMenu`'s own default bindings, so general
       // resolution further down would consume them all the same.
@@ -279,6 +311,11 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // stop propagation before the visible modal gets a chance to close.
       if (e.key === "Escape" && hasDialogBackstop) return;
 
+      // A popover, select or drawer open inside the plugin manager closes on
+      // its own Escape, which runs after this capture handler. Popping the
+      // stack here would take the manager down underneath it.
+      if (isEscape && activePaletteId === null && nestedLayerOwnsEscape(e)) return;
+
       if (
         e.key === "Escape" &&
         hasHandlers() &&
@@ -374,6 +411,11 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         return;
       }
 
+      // A code viewer's go to line shares its combo with the Assistant toggle.
+      if (!pendingChord && codeViewerOwnsKey(e, target)) {
+        return;
+      }
+
       // Use resolveKeybinding for proper chord and priority resolution
       const result = keybindingService.resolveKeybinding(e);
 
@@ -392,9 +434,23 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         return;
       }
 
+      // Cmd+Z reopens a closed panel only where it isn't text undo (#17107);
+      // otherwise it goes on untouched to the field or the Edit menu.
+      if (
+        result.match?.actionId === UNDO_CLOSE_ACTION_ID &&
+        !undoCloseTakesKey(target, isInTerminal, isTextUndoKey(e))
+      ) {
+        return;
+      }
+
       if (result.shouldConsume) {
         e.preventDefault();
         e.stopPropagation();
+        if (result.match?.actionId === COPY_CLEAN_ACTION_ID) heldRepeatSwallowCode = e.code;
+        if (result.match?.actionId === UNDO_CLOSE_ACTION_ID) {
+          heldRepeatSwallowCode = e.code;
+          noteUndoCloseKeyPress(isTextUndoKey(e));
+        }
 
         if (result.match) {
           // Cmd+W resolves to terminal.close, but where it actually lands
@@ -446,6 +502,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
           // redirects runs its interactive sibling here too (git.commit →
           // Review Hub) instead of failing its own validation.
           const dispatchId = resolveInteractiveActionId(result.match.actionId);
+          // Before the dispatch awaits anything, so a hold is on record for the
+          // start even while the voice service is still loading.
+          if (isVoiceStartAction(dispatchId)) noteVoiceShortcutKeydown(e);
           void actionService
             .dispatch(dispatchId, undefined, {
               source: "keybinding",
@@ -467,7 +526,9 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       }
     };
 
-    const handleBlur = () => keybindingService.clearPendingChord();
+    const handleBlur = () => {
+      keybindingService.clearPendingChord();
+    };
     const handleVisibilityChange = () => {
       if (document.hidden) keybindingService.clearPendingChord();
     };
@@ -489,14 +550,16 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
   }, [enabled]);
 }
 
-const subscribeToPendingChord = (callback: () => void) => keybindingService.subscribe(callback);
+const subscribeToPendingChord = (callback: () => void) =>
+  keybindingService.subscribeChord(callback);
 const getPendingChordSnapshot = () => keybindingService.getPendingChord();
 
 export function usePendingChord(): string | null {
   return useSyncExternalStore(subscribeToPendingChord, getPendingChordSnapshot);
 }
 
-const subscribeToLastInvalidKey = (callback: () => void) => keybindingService.subscribe(callback);
+const subscribeToLastInvalidKey = (callback: () => void) =>
+  keybindingService.subscribeChord(callback);
 const getLastInvalidKeySnapshot = () => keybindingService.getLastInvalidKey();
 
 export function useLastInvalidKey(): string | null {

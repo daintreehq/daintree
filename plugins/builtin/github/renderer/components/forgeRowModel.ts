@@ -1,5 +1,6 @@
 import type { Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
+import { worktreeIssueIsGitHub } from "@shared/utils/worktreeIssueProjection";
 
 /**
  * What the BACKGROUND of a forge row does — a click beside the title, and the
@@ -43,6 +44,9 @@ export function buildWorktreeIndex(
 ): Map<number, Worktree> {
   const index = new Map<number, Worktree>();
   for (const wt of worktrees) {
+    // An issue number is only this list's when GitHub owns it: another tracker's
+    // `ENG-42` carries `issueNumber: 42` and is not GitHub #42.
+    if (type === "issue" && !worktreeIssueIsGitHub(wt)) continue;
     const number = type === "issue" ? wt.issueNumber : wt.prNumber;
     if (number === undefined || number === null) continue;
     const existing = index.get(number);

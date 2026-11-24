@@ -129,6 +129,47 @@ describe("detectRepoOperationState", () => {
     });
   });
 
+  it("reports a git am session, without progress, when rebase-apply holds its applying marker", async () => {
+    accessMock.mockImplementation((p: string) => {
+      if (p === path.join(gitDir, "rebase-apply")) return Promise.resolve();
+      if (p === path.join(gitDir, "rebase-apply", "applying")) return Promise.resolve();
+      return Promise.reject(new Error("ENOENT"));
+    });
+    // An am session keeps next/last too, but they count patches, not commits
+    // a rebase is replaying.
+    readFileMock.mockImplementation((p: string) => {
+      if (p === path.join(gitDir, "rebase-apply", "next")) return Promise.resolve("1\n");
+      if (p === path.join(gitDir, "rebase-apply", "last")) return Promise.resolve("3\n");
+      return Promise.reject(new Error("ENOENT"));
+    });
+    const result = await detectRepoOperationState(gitDir, true);
+    expect(result).toEqual({
+      state: "APPLYING_MAILBOX",
+      rebaseStep: null,
+      rebaseTotalSteps: null,
+      rebaseSequence: null,
+    });
+  });
+
+  it("keeps an apply-backend rebase marked by rebasing as REBASING", async () => {
+    accessMock.mockImplementation((p: string) => {
+      if (p === path.join(gitDir, "rebase-apply")) return Promise.resolve();
+      if (p === path.join(gitDir, "rebase-apply", "rebasing")) return Promise.resolve();
+      return Promise.reject(new Error("ENOENT"));
+    });
+    const result = await detectRepoOperationState(gitDir, false);
+    expect(result.state).toBe("REBASING");
+  });
+
+  it("does not look for the am marker when only rebase-merge exists", async () => {
+    accessMock.mockImplementation((p: string) => {
+      if (p === path.join(gitDir, "rebase-merge")) return Promise.resolve();
+      return Promise.reject(new Error("ENOENT"));
+    });
+    await detectRepoOperationState(gitDir, false);
+    expect(accessMock).not.toHaveBeenCalledWith(path.join(gitDir, "rebase-apply", "applying"));
+  });
+
   it("rebasing takes precedence over merging when both sentinels exist", async () => {
     accessMock.mockImplementation((p: string) => {
       if (p === path.join(gitDir, "rebase-merge") || p === path.join(gitDir, "MERGE_HEAD"))

@@ -64,7 +64,7 @@ export function useCanopyInboxUndo({
     return {
       land: (
         restoreOnce: () => void,
-        shown?: { title: string; message: string } | { line: string }
+        shown?: { title: string; message: string; partial?: boolean } | { line: string }
       ) => {
         // Z and the toast's Undo take back the same one action, once: the
         // second of them finds it done.
@@ -98,7 +98,7 @@ export function useCanopyInboxUndo({
         }
         const toast = shown;
         notify({
-          type: "success",
+          type: toast.partial ? "warning" : "success",
           transient: true,
           title: toast.title,
           message: toast.message,
@@ -119,6 +119,15 @@ export function useCanopyInboxUndo({
         if (undoRef.current === undo) undoRef.current = null;
       },
     };
+  }, [clearLine]);
+  /**
+   * Gives Z up for an action it can't take back (a park, snooze or wake):
+   * that action is now the newest, so Z must not reach past it to an older
+   * one. An action still waiting on main keeps no claim on Z either.
+   */
+  const clearUndo = useCallback(() => {
+    undoRef.current = null;
+    clearLine();
   }, [clearLine]);
   // Z takes the newest action back from anywhere in the panel: a row, the
   // folded Archived bar, or Refresh once the last row archived away — never
@@ -167,5 +176,5 @@ export function useCanopyInboxUndo({
     [api]
   );
 
-  return { reserveUndo, undoReads, undoLine: line };
+  return { reserveUndo, clearUndo, undoReads, undoLine: line };
 }

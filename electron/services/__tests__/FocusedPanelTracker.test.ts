@@ -43,20 +43,6 @@ describe("FocusedPanelTracker", () => {
     expect(kindOf(tracker)).toBe("browser");
   });
 
-  it("lets Portal focus override the view's panel until it blurs", () => {
-    const tracker = new FocusedPanelTracker();
-    tracker.setFocusedWindow(W1);
-    tracker.report(10, W1, "p1", { kind: "terminal", worktreeId: "w" });
-
-    tracker.setPortalFocused(W1, true);
-    expect(tracker.getCurrent()).toEqual({
-      panel: { kind: "portal", agent: false, worktreeId: null },
-      workspaceId: null,
-    });
-    tracker.setPortalFocused(W1, false);
-    expect(kindOf(tracker)).toBe("terminal");
-  });
-
   it("follows the view holding native focus, not the newest report", () => {
     let focused = 11;
     const tracker = new FocusedPanelTracker({ isFocused: (id) => id === focused });
@@ -102,13 +88,15 @@ describe("FocusedPanelTracker", () => {
     expect(tracker.getCurrent().workspaceId).toBe("p1");
   });
 
-  it("never attributes Portal focus to a project, even from the dock's chrome", () => {
+  it("reads a retired portal report as no focused panel", () => {
     const tracker = new FocusedPanelTracker();
     tracker.setFocusedWindow(W1);
-    tracker.report(10, W1, "p1", { kind: "portal" });
+    tracker.report(10, W1, "p1", { kind: "terminal" });
+    expect(kindOf(tracker)).toBe("terminal");
+    tracker.report(10, W1, "p1", { kind: "portal", agent: true, worktreeId: "w" });
 
-    expect(tracker.getCurrent()).toEqual({
-      panel: { kind: "portal", agent: false, worktreeId: null },
+    expect(tracker.getCurrent()).toStrictEqual({
+      panel: { kind: null, agent: false, worktreeId: null },
       workspaceId: null,
     });
   });
@@ -121,7 +109,6 @@ describe("FocusedPanelTracker", () => {
     expect(kindOf(tracker)).toBeNull();
 
     tracker.report(10, W1, "p1", { kind: "file" });
-    tracker.setPortalFocused(W1, true);
     tracker.removeWindow(W1);
     tracker.setFocusedWindow(W1);
     expect(kindOf(tracker)).toBeNull();
@@ -176,12 +163,49 @@ describe("FocusedPanelTracker", () => {
       expect(kindOf(tracker)).toBe("diff");
     });
 
-    it("treats this machine's Portal gaining focus as its newest activity", () => {
+    it("reads an older remote screen's portal report as no focused panel", () => {
       const tracker = new FocusedPanelTracker();
-      tracker.setFocusedWindow(W1);
       tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
-      tracker.setPortalFocused(W1, true);
-      expect(kindOf(tracker)).toBe("portal");
+      tracker.setFocusedWindow(W1);
+      tracker.report(10, W1, "p1", { kind: "diff" });
+      expect(kindOf(tracker)).toBe("diff");
+
+      tracker.reportRemote(-1, "pa", { kind: "portal", worktreeId: "w" }, true);
+      expect(tracker.getCurrent()).toStrictEqual({
+        panel: { kind: null, agent: false, worktreeId: null },
+        workspaceId: null,
+      });
+
+      tracker.removeRemote(-1);
+      expect(kindOf(tracker)).toBe("diff");
+    });
+
+    it("treats a portal report after no panel as the same report, so newer local focus stands", () => {
+      const tracker = new FocusedPanelTracker();
+      tracker.reportRemote(-1, "pa", { kind: null }, true);
+      tracker.setFocusedWindow(W1);
+      tracker.report(10, W1, "p1", { kind: "diff" });
+      const listener = vi.fn();
+      tracker.subscribe(listener);
+
+      tracker.reportRemote(-1, "pa", { kind: "portal", agent: true, worktreeId: "w" }, true);
+
+      expect(kindOf(tracker)).toBe("diff");
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("falls back to a focused remote screen once the newer local window closes", () => {
+      const tracker = new FocusedPanelTracker();
+      tracker.reportRemote(-1, "pa", { kind: "terminal" }, true);
+      tracker.setFocusedWindow(W1);
+      tracker.report(10, W1, "p1", { kind: "diff" });
+      tracker.report(20, W2, "p2", { kind: "browser" });
+      expect(kindOf(tracker)).toBe("diff");
+
+      tracker.removeWindow(W2);
+      expect(kindOf(tracker)).toBe("diff");
+      tracker.removeWindow(W1);
+      expect(kindOf(tracker)).toBe("terminal");
     });
   });
 });

@@ -8,7 +8,7 @@ Two sets are absent by construction. Actions on the plugin-dispatch deny list ar
 
 `danger` is the host's own classification, not advice. A `confirm` action cannot run from `host.dispatch`: plugins have no confirmation path, so the dispatch resolves `{ ok: false }` with a `CONFIRMATION_REQUIRED` error and no dialog is shown to the user. Call `host.actions.canDispatch(id)` first: it resolves `"ok"` for a `safe` action, `"confirm"` for one the dispatch would refuse, and `"restricted"` for an unknown or unavailable id.
 
-`canDispatch` sees only the id, and some `safe` actions are refused for particular arguments. `terminal.new` with `command` or `cwd` is raised to `confirm` for a plugin and refused; without either it opens a plain terminal. `agent.launch` with non-empty `agentLaunchFlags`, `env` or `systemPrompt`, any `presetId`, or a `prompt` or `model` starting with `-` is raised to `confirm` for a plugin and refused, since those choose how the agent runs rather than give it a task; with a prompt, a `cwd` or a model name it launches as usual. The one exception is a `presetId` naming one of the person's presets with none of the others, from a plugin that declares `agent:launch-preset`: the first launch on each preset asks the person, showing what the preset and its fallbacks turn on, and the grant ends when any of them changes or the person revokes it in the plugin's Permissions. A denied or unanswered prompt rejects `dispatch` with a `PERMISSION_REQUIRED:` error rather than resolving `{ ok: false }`, and in Host mode the prompt can't be shown, so the launch is refused. `presetId: null` stays refused. `worktree.createWithRecipe` and `workflow.startWorkOnIssue` fail when the arguments carry a `recipeId`, so a plugin cannot start a recipe's terminals through them (and `recipe.run` is `confirm`). `file.showItemInFolder` fails when `allowOutsideRoots` is set. `session.bookmark.promote`, `session.bookmark.rename` and `session.bookmark.delete` fail when the dispatch has no project in scope, and when the session does not belong to that project. Each of these resolves `{ ok: false }` with an error rather than running.
+`canDispatch` sees only the id, and some `safe` actions are refused for particular arguments. `terminal.new` with `command` or `cwd` is raised to `confirm` for a plugin and refused; without either it opens a plain terminal. `agent.launch` with non-empty `agentLaunchFlags`, `env` or `systemPrompt`, any `presetId`, or a `prompt` or `model` starting with `-` is raised to `confirm` for a plugin and refused, since those choose how the agent runs rather than give it a task; with a prompt, a `cwd` or a model name it launches as usual. The one exception is a `presetId` naming one of the person's presets with none of the others, from a plugin that declares `agent:launch-preset`: the first launch on each preset asks the person, showing what the preset and its fallbacks turn on, and the grant ends when any of them changes or the person revokes it in the plugin's Permissions. A denied or unanswered prompt rejects `dispatch` with a `PERMISSION_REQUIRED:` error rather than resolving `{ ok: false }`, and in Host mode the prompt can't be shown, so the launch is refused. `presetId: null` stays refused. `help.newSessionWithAgent` and `help.replaceGlobalAssistant` with a `prompt` starting with `-` are refused the same way, since the agent reads that hand-off as its first turn. `help.replaceGlobalAssistant` never replaces anything itself: it asks the person and resolves `{ outcome: "awaiting-confirmation" }` at once, and the global assistant is replaced only if they approve, so the dispatch never learns their answer. It replaces only the global assistant session that coordinates, and with a `terminalId` (the global session menu's dispatch carries one) it resolves `{ outcome: "unavailable" }` without asking unless that is the coordinating session's terminal, so a hand-off read from the other session never takes its place. `worktree.createWithRecipe` and `workflow.startWorkOnIssue` fail when the arguments carry a `recipeId`, so a plugin cannot start a recipe's terminals through them (and `recipe.run` is `confirm`). `file.showItemInFolder` fails when `allowOutsideRoots` is set. `session.bookmark.promote`, `session.bookmark.rename` and `session.bookmark.delete` fail when the dispatch has no project in scope, and when the session does not belong to that project. Each of these resolves `{ ok: false }` with an error rather than running.
 
 An argument shown as `name?` is optional. Argument names come from each action's schema; the schema is the authority on their types and bounds.
 
@@ -39,6 +39,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `agent.kimi` | Launch Kimi Code | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agent.kiro` | Launch Kiro | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agent.launch` | Launch agent | safe | `agentId`, `accountId?`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `notify?`, `presetId?`, `prompt?`, `removeOnExit?`, `replyLines?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `waitForReply?`, `waitSeconds?`, `worktreeId?` |
+| `agent.listAccounts` | List agent accounts | safe | `agentId`, `worktreeId?` |
 | `agent.listAvailable` | List available agents | safe | — |
 | `agent.listModels` | List agent models | safe | `agentId?` |
 | `agent.listPresets` | List agent presets | safe | `agentId`, `projectId?` |
@@ -120,13 +121,12 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `devPreview.promoteToPortal` | Open in portal | safe | `panelId?`, `projectId?` |
 | `devPreview.reinstallAndRestart` | Reinstall and restart | confirm | `panelId?`, `projectId?` |
 | `devPreview.reloadPreview` | Reload preview | safe | `panelId?`, `projectId?` |
 | `devPreview.restart` | Restart dev server | safe | `panelId?`, `projectId?` |
 | `devPreview.restartAndClearCache` | Restart and clear cache | confirm | `panelId?`, `projectId?` |
 | `devPreview.stop` | Stop dev server | safe | — |
-| `devPreview.toggleElementPicker` | Toggle Element Picker | safe | `panelId?` |
+| `devPreview.toggleElementPicker` | Toggle element picker | safe | `panelId?` |
 | `devPreview.toggleTool` | Toggle dev preview tool | safe | `toolId`, `panelId?` |
 | `devServer.start` | Open dev preview | safe | `activateDockOnCreate?`, `location?` |
 
@@ -216,6 +216,11 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `diff.nextChange` | Next hunk | safe | `panelId?` |
+| `diff.nextFile` | Next file in diff | safe | `panelId?` |
+| `diff.previousChange` | Previous hunk | safe | `panelId?` |
+| `diff.previousFile` | Previous file in diff | safe | `panelId?` |
+| `diff.toggleViewed` | Toggle viewed | safe | `panelId?` |
 | `git.abortRepositoryOperation` | Abort Git operation | confirm | `cwd?`, `operation?`, `worktreeId?`, `worktreePath?` |
 | `git.commit` | Commit | safe | `message`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.continueRepositoryOperation` | Continue Git operation | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
@@ -234,8 +239,10 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `git.retryAuthFetch` | Retry suspended fetches | safe | — |
 | `git.stageAll` | Stage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.stageFile` | Stage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.stageHunk` | Stage hunk | safe | `filePath`, `hunks`, `worktreeId?`, `worktreePath?` |
 | `git.unstageAll` | Unstage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.unstageFile` | Unstage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.unstageHunk` | Unstage hunk | safe | `filePath`, `hunks`, `worktreeId?`, `worktreePath?` |
 
 ## help
 
@@ -244,8 +251,9 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `help.displayImage` | Display documentation image | safe | `url`, `altText?`, `caption?` |
 | `help.gettingStarted.show` | Getting started | safe | — |
 | `help.launchAgent` | Launch Daintree Assistant | safe | `agentId?`, `greeting?`, `slot?`, `vacantOnly?` |
-| `help.newSessionWithAgent` | New assistant session with agent | safe | `agentId` |
+| `help.newSessionWithAgent` | New assistant session with agent | safe | `agentId`, `prompt?` |
 | `help.openCommandsFolder` | Open assistant commands folder | safe | — |
+| `help.replaceGlobalAssistant` | Replace global assistant | safe | `agentId`, `prompt`, `terminalId?` |
 | `help.resumePastSession` | Resume past assistant session | safe | `agentId`, `sessionId`, `slot?` |
 | `help.shortcuts` | Keyboard shortcuts | safe | — |
 | `help.shortcutsAlt` | Keyboard shortcuts (Alt) | safe | — |
@@ -285,9 +293,12 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `action.palette.open` | Open command palette | safe | — |
+| `decisions.openInbox` | Open Decisions inbox | safe | — |
+| `decisions.openNextQuestion` | Open next Decisions question | safe | — |
 | `find.inFocusedPanel` | Find in focused panel | safe | — |
 | `nav.focusRegion.next` | Focus next region | safe | — |
 | `nav.focusRegion.prev` | Focus previous region | safe | — |
+| `nav.quickOpenFile` | Open file by name | safe | — |
 | `nav.quickSwitcher` | Quick switcher | safe | — |
 | `nav.showGrid` | Show grid | safe | — |
 | `nav.showProjectHome` | Show project home | safe | — |
@@ -312,7 +323,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `panel.openPluginPanel` | Open plugin panel | safe | `kind`, `initialArgs?`, `presentation?`, `reuseExisting?`, `size?`, `toggle?`, `worktreeId?` |
 | `panel.palette` | Panel palette | safe | — |
 | `panel.toggleDiagnostics` | Toggle diagnostics | safe | — |
-| `panel.togglePortal` | Toggle portal | safe | — |
 
 ## plugins
 
@@ -321,42 +331,6 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `plugin.diagnostics` | Read plugin diagnostics | safe | `pluginId`, `logLimit?` |
 | `plugin.openSettings` | Open plugin settings | safe | `pluginId`, `key?`, `page?`, `scope?`, `section?` |
 | `plugin.validate` | Validate plugin manifest | safe | `path` |
-
-## portal
-
-| Action | Title | Danger | Arguments |
-| --- | --- | --- | --- |
-| `portal.activateTab` | Activate portal tab | safe | `tabId` |
-| `portal.closeAllTabs` | Close all portal tabs | safe | `confirmed?` |
-| `portal.closeOthers` | Close other portal tabs | safe | `confirmed?`, `tabId?` |
-| `portal.closeTab` | Close portal tab | safe | `tabId?` |
-| `portal.closeToRight` | Close tabs to the right | safe | `confirmed?`, `tabId?` |
-| `portal.copyTabUrl` | Copy portal tab URL | safe | `tabId?` |
-| `portal.copyUrl` | Copy portal URL | safe | `tabId?` |
-| `portal.duplicateTab` | Duplicate portal tab | safe | `tabId?` |
-| `portal.goBack` | Portal back | safe | `tabId?` |
-| `portal.goForward` | Portal forward | safe | `tabId?` |
-| `portal.links.add` | Add portal link | safe | `title`, `url`, `alwaysEnabled?`, `icon?` |
-| `portal.links.remove` | Remove portal link | confirm | `id` |
-| `portal.links.reorder` | Reorder portal links | safe | `fromIndex`, `toIndex` |
-| `portal.links.toggle` | Toggle portal link | safe | `id` |
-| `portal.links.update` | Update portal link | safe | `id`, `updates` |
-| `portal.listTabs` | List portal tabs | safe | — |
-| `portal.newTab` | New portal tab | safe | — |
-| `portal.nextTab` | Next portal tab | safe | — |
-| `portal.openExternal` | Open portal URL externally | safe | `tabId?` |
-| `portal.openLaunchpad` | Open portal launchpad | safe | — |
-| `portal.openTabExternal` | Open portal tab externally | safe | `tabId?` |
-| `portal.openUrl` | Open URL in portal | safe | `url`, `background?`, `title?` |
-| `portal.prevTab` | Previous portal tab | safe | — |
-| `portal.reload` | Reload portal | safe | `tabId?` |
-| `portal.reloadTab` | Reload portal tab | safe | `tabId?` |
-| `portal.resetWidth` | Reset portal width | safe | — |
-| `portal.setDefaultNewTab` | Set default new tab | safe | `url` |
-| `portal.tabs.reorder` | Reorder portal tabs | safe | `fromIndex`, `toIndex` |
-| `portal.toggle` | Toggle portal | safe | — |
-| `portal.toggleDevDashboard` | Toggle dev server dashboard | safe | — |
-| `portal.width.set` | Set portal width | safe | `width` |
 
 ## preferences
 
@@ -377,7 +351,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `canopy.openWindow` | Open Canopy window | safe | — |
 | `canopy.toggle` | Open Canopy | safe | — |
 | `pilot.openProject` | View this project's agents | safe | — |
-| `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
+| `pilot.openRun` | Open run | safe | `runId`, `workspaceId?`, `worktreeId?` |
 | `pilot.toggle` | View all agents | safe | — |
 | `project.add` | Open project | safe | `destination?`, `path?` |
 | `project.archive` | Archive project | safe | `projectId?` |
@@ -403,6 +377,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.settings.open` | Open project settings | safe | — |
 | `project.silenceNotificationKind` | Silence notification kind | safe | `kind`, `projectId?` |
 | `project.sleep` | Sleep project | confirm | `projectId?` |
+| `project.sleepAll` | Sleep all projects | confirm | — |
 | `project.sleepIdle` | Sleep idle projects | confirm | — |
 | `project.switch` | Switch project | safe | `projectId` |
 | `project.switcherPalette` | Open project switcher | safe | — |
@@ -554,6 +529,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
 | `terminal.rename` | Rename panel | safe | `name?`, `terminalId?` |
 | `terminal.reopenLast` | Reopen last closed panel | safe | — |
+| `terminal.resetModes` | Reset terminal modes | confirm | `confirmed?`, `terminalId?` |
 | `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
 | `terminal.restartAll` | Restart all terminals | confirm | `confirmed?` |
 | `terminal.restartOnAccount` | Restart agent on account | confirm | `accountId`, `confirmed?`, `keepConversation?`, `terminalId?` |
@@ -582,6 +558,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `links.open` | Open links | safe | — |
 | `ui.refresh` | Reload application | safe | — |
 | `ui.sidebar.resetWidth` | Reset sidebar width | safe | — |
 | `window.close` | Close window | safe | — |
@@ -673,7 +650,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.resource.provision` | Provision resource | safe | `worktreeId?` |
 | `worktree.resource.resume` | Resume resource | safe | `worktreeId?` |
 | `worktree.resource.status` | Check resource status | safe | `worktreeId?` |
-| `worktree.resource.teardown` | Teardown resource | confirm | `worktreeId?` |
+| `worktree.resource.teardown` | Tear down resource | confirm | `worktreeId?` |
 | `worktree.restartService` | Restart workspace service | confirm | — |
 | `worktree.retryProjectLoad` | Retry loading worktrees | safe | — |
 | `worktree.reveal` | Reveal worktree | safe | `worktreeId?` |

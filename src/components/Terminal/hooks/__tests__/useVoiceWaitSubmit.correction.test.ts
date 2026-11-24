@@ -181,6 +181,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
           onRevealRequested: vi.fn(() => () => {}),
           onLiveLevel: vi.fn(() => () => {}),
           onPauseRequested: vi.fn(() => () => {}),
+          onSessionVocabulary: vi.fn(() => () => {}),
           publishDetails: vi.fn().mockResolvedValue(undefined),
           setPausedLive: vi.fn().mockResolvedValue(true),
           getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),

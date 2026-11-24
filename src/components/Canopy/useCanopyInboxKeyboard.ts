@@ -1,4 +1,5 @@
 import type { KeyboardEvent, RefObject } from "react";
+import { listStepOf } from "@/lib/listStepChord";
 import { isMac } from "@/lib/platform";
 import { useCanopyStore } from "@/store/canopyStore";
 import {
@@ -10,23 +11,6 @@ import {
 import type { CanopyItem } from "./canopyModel";
 import type { CanopyAssistantItem } from "./canopyAssistants";
 import { stepEntry, type CanopyInboxEntry } from "./canopyInboxProjection";
-
-/**
- * ⌘↑/⌘↓ on macOS, Alt+↑/↓ elsewhere (Slack's channel switch): the agent above
- * or below, from anywhere in the panel. Ctrl+↑/↓ is not used off the Mac
- * because terminals send it to the program as its own key.
- */
-function agentStepOf(event: KeyboardEvent<HTMLElement>): -1 | 1 | null {
-  if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return null;
-  // An input method's own keys: switching agents would unmount what it is composing in.
-  if (event.nativeEvent.isComposing || event.keyCode === 229) return null;
-  if (event.shiftKey) return null;
-  const chord = isMac()
-    ? event.metaKey && !event.ctrlKey && !event.altKey
-    : event.altKey && !event.ctrlKey && !event.metaKey;
-  if (!chord) return null;
-  return event.key === "ArrowUp" ? -1 : 1;
-}
 
 /** ⌘A on macOS, Ctrl+A elsewhere, and nothing more held. */
 function isSelectAll(event: KeyboardEvent<HTMLElement>): boolean {
@@ -72,6 +56,7 @@ export function useCanopyInboxKeyboard({
   onSelectAll,
   onPastEnd,
   sectionStop,
+  retryStop,
 }: {
   /** What the keyboard walks: the list, then the archived runs once shown. */
   visible: CanopyItem[];
@@ -105,6 +90,11 @@ export function useCanopyInboxKeyboard({
    * false when there is no shut bar to stop on, and the walk goes on as rows.
    */
   sectionStop?: { before: number; focus: () => boolean };
+  /**
+   * The Retry under the search for the terminals it couldn't search: plain Tab
+   * from the search goes there first. False when there is none.
+   */
+  retryStop?: () => boolean;
 }) {
   const focusEntryNow = (entry: CanopyInboxEntry) =>
     entry.role === "worker" ? focusCardNow(entry.item.runId) : focusAssistantNow(entry.item.id);
@@ -193,7 +183,7 @@ export function useCanopyInboxKeyboard({
   // the user can work down the list — reply, next, reply — without leaving the
   // keyboard where it is. The keyboard lands in the same place on the next run.
   const onAgentStepKeyDownCapture = (event: KeyboardEvent<HTMLElement>) => {
-    const step = agentStepOf(event);
+    const step = listStepOf(event);
     if (step === null || visible.length === 0) return;
     // Renaming: ⌘↑/↓ move the caret in the name, not to another agent.
     if (event.target instanceof Element && event.target.closest("[data-canopy-rename]")) return;
@@ -335,6 +325,12 @@ export function useCanopyInboxKeyboard({
       return;
     }
     const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+    if (plain && event.key === "Tab" && retryStop?.()) {
+      event.preventDefault();
+      // The dialog's own Tab wrap must not take the keyboard on from the search.
+      event.stopPropagation();
+      return;
+    }
     if (plain && searchAssistant !== null) {
       const target = searchAssistant;
       if (event.key === "Tab" || (event.key === "ArrowDown" && listed.length === 0)) {

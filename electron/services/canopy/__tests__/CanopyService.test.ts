@@ -520,6 +520,26 @@ describe("CanopyService", () => {
     );
   });
 
+  it("wakes no view for the reader's status while no panel shows it, and tells an open one", async () => {
+    let model = "Light";
+    const h = await makeHarness({ readerName: () => model, closed: true });
+    const quiet = () => new Promise((resolve) => setTimeout(resolve, 60));
+    h.service.trashChanged();
+    await quiet();
+    const sent = h.snapshots.length;
+
+    model = "Heavy";
+    h.service.trashChanged();
+    await quiet();
+    expect(h.snapshots).toHaveLength(sent);
+
+    h.service.setActive(true);
+    await quiet();
+    model = "Heavier";
+    h.service.trashChanged();
+    await vi.waitFor(() => expect(h.snapshots.at(-1)?.reader?.model).toBe("Heavier"));
+  });
+
   it("says nothing of the reader until Canopy is turned on", async () => {
     const h = await makeHarness({
       readerName: () => "Light",

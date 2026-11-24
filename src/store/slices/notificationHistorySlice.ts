@@ -66,6 +66,13 @@ type AddEntryInput = Omit<
   NotificationHistoryEntry,
   "id" | "timestamp" | "seenAsToast" | "summarized" | "countable" | "archivedAt"
 > & {
+  /**
+   * The entry's id, for an event every project view hears at once (a host
+   * broadcast): each view files it under the same id, so their writes merge
+   * into one row. An id this view already holds changes nothing. Defaults to a
+   * fresh UUID.
+   */
+  id?: string;
   seenAsToast?: boolean;
   countable?: boolean;
   /**
@@ -128,6 +135,38 @@ function clearSnoozeIfThreadGone(
   return next;
 }
 
+/**
+ * Drops the snooze of every thread a prune took an active row from and left
+ * with none. The Snoozed tab is built from the snooze keys but lists only
+ * surviving active rows, so a key outliving its thread is an empty tab. Only
+ * threads the prune touched are swept: a removed archived row never stood
+ * behind a snooze, and a snooze with nothing pruned behind it (one set before
+ * the thread's first row) is left as it is.
+ */
+function clearSnoozesOfPrunedThreads(
+  snoozedThreads: Record<string, number>,
+  before: Iterable<NotificationHistoryEntry>,
+  after: NotificationHistoryEntry[]
+): Record<string, number> {
+  if (Object.keys(snoozedThreads).length === 0) return snoozedThreads;
+  const kept = new Set(after.map((e) => e.id));
+  let pruned: Set<string> | undefined;
+  for (const e of before) {
+    const id = e.correlationId;
+    if (!id || e.archivedAt !== null || snoozedThreads[id] === undefined || kept.has(e.id))
+      continue;
+    (pruned ??= new Set()).add(id);
+  }
+  if (pruned === undefined) return snoozedThreads;
+  let next = snoozedThreads;
+  for (const id of pruned) {
+    if (after.some((e) => e.correlationId === id && e.archivedAt === null)) continue;
+    if (next === snoozedThreads) next = { ...snoozedThreads };
+    delete next[id];
+  }
+  return next;
+}
+
 function computeUnreadCount(
   entries: NotificationHistoryEntry[],
   snoozedThreads: Record<string, number>,
@@ -152,13 +191,15 @@ function isPastRetention(entry: NotificationHistoryEntry, now: number): boolean 
  * Drop expired entries (read older than 7d, archived older than 30d), then
  * enforce the 200-entry safety ceiling. Age pruning runs before the cap so
  * unread entries survive a burst storm even when they're older than the
- * read-retention cutoff. Returns a new array; never mutates the input.
+ * read-retention cutoff. Ids in `keep` are spared the age pruning. Returns a
+ * new array; never mutates the input.
  */
 export function pruneNotificationEntries(
   entries: NotificationHistoryEntry[],
-  now: number
+  now: number,
+  keep?: ReadonlySet<string>
 ): NotificationHistoryEntry[] {
-  const filtered = entries.filter((e) => !isPastRetention(e, now));
+  const filtered = entries.filter((e) => keep?.has(e.id) === true || !isPastRetention(e, now));
   if (filtered.length <= MAX_ENTRIES) return filtered;
   return filtered.slice(0, MAX_ENTRIES);
 }
@@ -356,8 +397,10 @@ function mergeEntryFields(
  *
  *   - added by this writer (absent from its baseline) → its entry is written,
  *     unless the disk already holds that id: an entry imported under its
- *     source's id (#15983) can be filed by two views, and the disk's copy
- *     keeps any read or archive a sibling gave it.
+ *     source's id (#15983) or a host broadcast every view hears (#17191) can be
+ *     filed by several views, and the disk's copy keeps any read or archive a
+ *     sibling gave it. A copy this writer showed as a toast is read either way:
+ *     a hidden view's unread copy landing first doesn't undo what the user saw.
  *   - held by the writer and the disk → merged field by field.
  *   - known to the writer but gone from disk → stays gone, even if the writer
  *     edited it since: a sibling dismissed, cleared or pruned it, and a stale
@@ -365,7 +408,8 @@ function mergeEntryFields(
  *   - in the writer's baseline but not its memory → the writer removed it.
  *   - on disk and never known to the writer → a sibling's addition, kept.
  *
- * Snoozes merge per thread through `mergeRecordByWriterDelta`. The result is
+ * Snoozes merge per thread through `mergeRecordByWriterDelta`, and a snooze
+ * whose thread is left with no active row is dropped. The result is
  * sorted newest first and held to the 200-entry cap. Age retention stays with
  * hydration and the store's own prunes, and never removes a row this writer
  * still holds: an old unread row marked read is expired in memory, and its Undo
@@ -391,7 +435,14 @@ function mergeNotificationHistoryPersistedWrite({
     const before = base.entries.get(id);
     const current = disk.entries.get(id);
     if (before === undefined) {
-      merged.push(current !== undefined ? mergeEntryFields(entry, entry, current) : entry);
+      if (current === undefined) {
+        merged.push(entry);
+        continue;
+      }
+      const settled = mergeEntryFields(entry, entry, current);
+      merged.push(
+        entry.seenAsToast && !settled.seenAsToast ? { ...settled, seenAsToast: true } : settled
+      );
       continue;
     }
     if (current !== undefined) merged.push(mergeEntryFields(before, entry, current));
@@ -401,20 +452,92 @@ function mergeNotificationHistoryPersistedWrite({
   }
   merged.sort((a, b) => b.timestamp - a.timestamp);
 
+  const capped =
+    merged.length > MAX_ENTRIES
+      ? merged
+          .filter((e) => inc.entries.has(e.id) || !isPastRetention(e, now))
+          .slice(0, MAX_ENTRIES)
+      : merged;
+  // A writer that no longer holds an active row of a thread dropped its snooze
+  // by pruning or dismissing, not by unsnoozing: a row a sibling added there
+  // since still needs the snooze the sibling's disk copy carries.
+  const writerThreads = new Set<string>();
+  for (const e of inc.entries.values()) {
+    if (e.correlationId && e.archivedAt === null) writerThreads.add(e.correlationId);
+  }
+  let snoozedThreads = mergeRecordByWriterDelta(
+    base.snoozedThreads,
+    inc.snoozedThreads,
+    disk.snoozedThreads
+  );
+  for (const [id, until] of Object.entries(disk.snoozedThreads)) {
+    if (snoozedThreads[id] !== undefined || writerThreads.has(id)) continue;
+    if (!capped.some((e) => e.correlationId === id && e.archivedAt === null)) continue;
+    snoozedThreads = { ...snoozedThreads, [id]: until };
+  }
   const state: PersistedNotificationHistoryShape = {
-    entries:
-      merged.length > MAX_ENTRIES
-        ? merged
-            .filter((e) => inc.entries.has(e.id) || !isPastRetention(e, now))
-            .slice(0, MAX_ENTRIES)
-        : merged,
-    snoozedThreads: mergeRecordByWriterDelta(
-      base.snoozedThreads,
-      inc.snoozedThreads,
-      disk.snoozedThreads
-    ),
+    entries: capped,
+    // Swept against the rows this write takes off disk: a thread that ends up
+    // with none keeps no snooze, and a stale baseline row that disk already
+    // lost says nothing about it.
+    snoozedThreads: clearSnoozesOfPrunedThreads(snoozedThreads, disk.entries.values(), capped),
   };
   return { version: incoming.version, state };
+}
+
+/**
+ * Hydration's entries, keeping each one this view holds unchanged as the very
+ * object it holds, and the list itself when nothing moved, so a rehydrate that
+ * brings nothing new re-renders nothing. The session-only `summarized` flag,
+ * which storage never carries back, stays with the rows this view holds, or
+ * the next re-entry summary would repeat them.
+ */
+function keepHeldEntries(
+  hydrated: NotificationHistoryEntry[],
+  held: NotificationHistoryEntry[]
+): NotificationHistoryEntry[] {
+  if (held.length === 0) return hydrated;
+  const byId = new Map(held.map((e) => [e.id, e]));
+  let unchanged = hydrated.length === held.length;
+  const entries = hydrated.map((entry, index) => {
+    const mine = byId.get(entry.id);
+    let kept = entry;
+    if (mine !== undefined) {
+      if (JSON.stringify(storedForm(mine)) === JSON.stringify(entry)) kept = mine;
+      else if (mine.summarized) kept = { ...entry, summarized: true };
+    }
+    if (kept !== held[index]) unchanged = false;
+    return kept;
+  });
+  return unchanged ? held : entries;
+}
+
+/**
+ * A held entry as hydration would build it, field for field and in the same
+ * order, without the coercions hydration applies: a held value hydration would
+ * have dropped or reset then reads as different from what storage gave back.
+ */
+function storedForm(entry: NotificationHistoryEntry): NotificationHistoryEntry {
+  return {
+    id: entry.id,
+    type: entry.type,
+    title: entry.title,
+    message: entry.message,
+    timestamp: entry.timestamp,
+    correlationId: entry.correlationId,
+    seenAsToast: entry.seenAsToast,
+    summarized: false,
+    countable: entry.countable,
+    archivedAt: entry.archivedAt,
+    supersedeKey: entry.supersedeKey,
+    context: entry.context,
+    actions: entry.actions,
+  };
+}
+
+function sameRecord(a: Record<string, number>, b: Record<string, number>): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => b[key] === a[key]);
 }
 
 interface NotificationHistoryState {
@@ -511,9 +634,9 @@ interface NotificationHistoryState {
    */
   clearSnooze: (correlationId: string) => void;
   /**
-   * Drop every snooze whose expiry has passed. Called on a `setTimeout`
-   * registered by `useSnoozeExpiryTimer`. No-op when nothing has expired so
-   * the persist write doesn't fire on every tick.
+   * Drop every snooze whose expiry has passed. Called by the view-lifetime
+   * `useNotificationSnoozeExpiry` at each expiry and on wake, and when the
+   * inbox opens. Writes nothing when nothing has expired.
    */
   clearExpiredSnoozes: (now?: number) => void;
 }
@@ -563,7 +686,15 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
       evictedToInboxCount: 0,
       snoozedThreads: {},
       addEntry: (entry) => {
-        const { supersedes, ...rest } = entry;
+        const { supersedes, id: requestedId, ...rest } = entry;
+        const held =
+          requestedId === undefined ? undefined : get().entries.find((e) => e.id === requestedId);
+        if (requestedId !== undefined && held !== undefined) {
+          // Filed already, here or by a sibling whose write this view took up.
+          // A copy shown here as a toast is read, as the write merge settles it.
+          if (rest.seenAsToast === true && !held.seenAsToast) get().markIdsRead([requestedId]);
+          return requestedId;
+        }
         const seenAsToast = rest.seenAsToast ?? false;
         const countable = rest.countable ?? true;
         const newEntry: NotificationHistoryEntry = {
@@ -572,7 +703,7 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           summarized: false,
           countable,
           archivedAt: null,
-          id: crypto.randomUUID(),
+          id: requestedId ?? crypto.randomUUID(),
           timestamp: Date.now(),
         };
         set((state) => {
@@ -600,11 +731,11 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           const candidate = [newEntry, ...sourceEntries];
           const updated = pruneNotificationEntries(candidate, now);
           // A superseded entry is archived like any other: a thread it leaves
-          // empty mustn't keep its snooze.
-          const snoozedThreads = clearSnoozeIfThreadGone(
-            state.snoozedThreads,
-            updated,
-            archived?.correlationId
+          // empty mustn't keep its snooze, nor one the 200-entry cap emptied.
+          const snoozedThreads = clearSnoozesOfPrunedThreads(
+            clearSnoozeIfThreadGone(state.snoozedThreads, updated, archived?.correlationId),
+            candidate,
+            updated
           );
           return {
             entries: updated,
@@ -612,6 +743,10 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
             unreadCount: computeUnreadCount(updated, snoozedThreads, now),
           };
         });
+        // Every view files a broadcast row, frozen ones too (their IPC runs,
+        // their timers wait for the thaw). A copy written on thaw would bring
+        // back a row the user dismissed meanwhile, so it's written now.
+        if (requestedId !== undefined) flushNotificationHistory();
         return newEntry.id;
       },
       importEntries: (incoming) => {
@@ -632,9 +767,15 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
         const now = Date.now();
         const candidate = [...added, ...state.entries].sort((a, b) => b.timestamp - a.timestamp);
         const updated = pruneNotificationEntries(candidate, now);
+        const snoozedThreads = clearSnoozesOfPrunedThreads(
+          state.snoozedThreads,
+          candidate,
+          updated
+        );
         set({
           entries: updated,
-          unreadCount: computeUnreadCount(updated, state.snoozedThreads, now),
+          snoozedThreads,
+          unreadCount: computeUnreadCount(updated, snoozedThreads, now),
         });
       },
       updateEntryMessage: (id, message) => {
@@ -807,9 +948,15 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
         set((state) => {
           const filtered = pruneNotificationEntries(state.entries, now);
           if (filtered.length === state.entries.length) return state;
+          const snoozedThreads = clearSnoozesOfPrunedThreads(
+            state.snoozedThreads,
+            state.entries,
+            filtered
+          );
           return {
             entries: filtered,
-            unreadCount: computeUnreadCount(filtered, state.snoozedThreads, now),
+            snoozedThreads,
+            unreadCount: computeUnreadCount(filtered, snoozedThreads, now),
           };
         }),
       snoozeThread: (correlationId, snoozedUntil) => {
@@ -835,7 +982,10 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
           };
         });
       },
-      clearExpiredSnoozes: (now = Date.now()) =>
+      clearExpiredSnoozes: (now = Date.now()) => {
+        // Persist queues a storage write on every `set`, even one that returns
+        // the same state, and this runs on each window focus.
+        if (!Object.values(get().snoozedThreads).some((until) => until <= now)) return;
         set((state) => {
           let mutated = false;
           const next: Record<string, number> = {};
@@ -851,7 +1001,8 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
             snoozedThreads: next,
             unreadCount: computeUnreadCount(state.entries, next, now),
           };
-        }),
+        });
+      },
     }),
     {
       name: NOTIFICATION_HISTORY_STORAGE_KEY,
@@ -888,18 +1039,54 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>()(
         const sanitized = rawEntries
           .map((raw) => sanitizePersistedEntry(raw, now))
           .filter((e): e is NotificationHistoryEntry => e !== null);
-        const pruned = pruneNotificationEntries(sanitized, now);
-        const snoozedThreads = sanitizeSnoozedThreads(p?.snoozedThreads, now);
+        // A rehydrate mid-session spares the rows this view holds from age
+        // retention, as its writes do: an old row just marked read still has
+        // an Undo to answer, and the store's own prune retires it later.
+        const pruned = pruneNotificationEntries(
+          sanitized,
+          now,
+          new Set(current.entries.map((e) => e.id))
+        );
+        const snoozedThreads = clearSnoozesOfPrunedThreads(
+          sanitizeSnoozedThreads(p?.snoozedThreads, now),
+          sanitized,
+          pruned
+        );
+        const entries = keepHeldEntries(pruned, current.entries);
         return {
           ...current,
-          entries: pruned,
-          snoozedThreads,
-          unreadCount: computeUnreadCount(pruned, snoozedThreads, now),
+          entries,
+          snoozedThreads: sameRecord(current.snoozedThreads, snoozedThreads)
+            ? current.snoozedThreads
+            : snoozedThreads,
+          unreadCount: computeUnreadCount(entries, snoozedThreads, now),
         };
       },
     }
   )
 );
+
+/**
+ * Takes up what sibling project views wrote to the shared inbox: their reads,
+ * archives, dismissals, snoozes and new rows. A write of this view's own still
+ * in its debounce lands first, through the same merge.
+ */
+export function syncNotificationHistoryFromStorage(): void {
+  void useNotificationHistoryStore.persist.rehydrate();
+}
+
+// A persist store hydrates once per view, so a cached view kept the badge and
+// rows it loaded until it reloaded. Views share the storage partition, so a
+// sibling's write arrives as a `storage` event; a view frozen while it landed
+// catches up when it's activated again, before its reveal and on it.
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("storage", (event) => {
+    if (event.key !== NOTIFICATION_HISTORY_STORAGE_KEY) return;
+    syncNotificationHistoryFromStorage();
+  });
+  window.electron?.app?.onViewWarmActivated?.(() => syncNotificationHistoryFromStorage());
+  window.electron?.app?.onViewRevealed?.(() => syncNotificationHistoryFromStorage());
+}
 
 registerPersistedStore({
   storeId: "notificationHistoryStore",

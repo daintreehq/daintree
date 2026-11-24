@@ -136,7 +136,7 @@ export function setupWebviewCSP(): void {
     // Browser panels load arbitrary remote sites — overlaying our CSP would
     // intersect with theirs and break most of the web. Sandbox, deny-all
     // permissions, and navigation guards remain in place.
-    if (partitionType === "unknown" || partitionType === "portal" || partitionType === "browser") {
+    if (partitionType === "unknown" || partitionType === "browser") {
       return;
     }
 
@@ -181,7 +181,7 @@ export function setupWebviewCSP(): void {
   // Configure static partitions:
   // - persist:daintree: trusted Daintree renderer shell (strict app CSP)
   // Browser hosts arbitrary remote sites (skipped by classifyPartition guard above
-  // to avoid intersecting with site CSPs), portal/unknown are excluded, and
+  // to avoid intersecting with site CSPs), unknown is excluded, and
   // dev-preview partitions are wired dynamically via will-attach-webview below.
   applyCSP("persist:daintree");
 
@@ -500,8 +500,25 @@ export function setupWebviewCSP(): void {
 
         if (shortcut !== "close") {
           event.preventDefault();
+          sendToWebContents(embedder, CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
+          return;
         }
-        sendToWebContents(embedder, CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
+
+        // An open find bar owns Escape: the page, and an Element Picker holding
+        // a selection in it, never see the one that closes the bar, so each
+        // Escape peels one layer. Otherwise the page keeps it. A composing
+        // Escape stays the IME's either way.
+        const findOwnsEscape =
+          embedder !== null && !input.isComposing && dialogService.isFindOpen(embedder.id, panelId);
+        const sent = sendToWebContents(embedder, CHANNELS.WEBVIEW_FIND_SHORTCUT, {
+          panelId,
+          shortcut,
+        });
+        if (findOwnsEscape && sent) {
+          event.preventDefault();
+          // The bar is closing; an Escape that beats the view's word on it is the page's.
+          dialogService.setFindOpen(embedder.id, panelId, false);
+        }
       });
     }
   });

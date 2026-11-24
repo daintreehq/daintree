@@ -129,3 +129,60 @@ export function findPreviewMatches(
   const fuzzy = fuzzyRanges?.filter(([s, e]) => e - s >= 2);
   return fuzzy?.length ? [...fuzzy] : undefined;
 }
+
+/**
+ * Where the search's fuzzy ranges over the one-line preview sit in the raw
+ * prompt, for the full-text pane. `toPromptPreview` drops fence lines and
+ * collapses whitespace, so this replays that walk keeping each kept character's
+ * offset in the prompt. Linear in the prompt, and it gives up (no marks) rather
+ * than guess if its replay does not reproduce the preview it was handed.
+ */
+export function mapPreviewRangesToPrompt(
+  prompt: string,
+  preview: string,
+  ranges: readonly MatchRange[] | undefined
+): MatchRange[] | undefined {
+  if (!ranges?.length) return undefined;
+
+  const segments: { start: number; text: string }[] = [];
+  let lineStart = 0;
+  for (const line of prompt.split(/\r?\n/)) {
+    if (line.trim() !== "") segments.push({ start: lineStart, text: line });
+    lineStart = prompt.indexOf("\n", lineStart + line.length) + 1 || prompt.length;
+  }
+  const kept = segments.filter((segment) => !FENCE_LINE.test(segment.text));
+  const walk = kept.length > 0 ? kept : [{ start: 0, text: prompt }];
+
+  let text = "";
+  const offsets: number[] = [];
+  let gap = -1;
+  let previousEnd = 0;
+  for (const { start, text: line } of walk) {
+    // The break between two lines stands for the first character after the one before.
+    if (text && gap < 0) gap = previousEnd;
+    previousEnd = start + line.length;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]!;
+      if (/\s/.test(ch)) {
+        if (text && gap < 0) gap = start + i;
+        continue;
+      }
+      if (gap >= 0) {
+        text += " ";
+        offsets.push(gap);
+        gap = -1;
+      }
+      text += ch;
+      offsets.push(start + i);
+    }
+  }
+  if (text !== preview) return undefined;
+
+  const found: MatchRange[] = [];
+  for (const [s, e] of ranges) {
+    const from = offsets[s];
+    const to = offsets[Math.min(e, offsets.length - 1)];
+    if (from !== undefined && to !== undefined) found.push([from, to]);
+  }
+  return found.length ? found : undefined;
+}

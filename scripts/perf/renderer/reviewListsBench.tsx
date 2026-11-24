@@ -279,6 +279,8 @@ export async function measureDiffShelf(fileCount: number): Promise<ReviewListSam
           currentIndex={currentIndex}
           worktreePath=""
           worktreeId={null}
+          filter=""
+          onFilterChange={noop}
           onSelect={noop}
         />
       </VirtuosoMockContext.Provider>

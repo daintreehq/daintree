@@ -21,7 +21,7 @@ const availabilityMock = vi.hoisted(() => ({
   isHelpTerminal: vi.fn<(id: string) => boolean>(() => false),
 }));
 
-vi.mock("../../ipc/utils.js", () => ({ typedBroadcast: broadcastMock }));
+vi.mock("../../ipc/utils.js", () => ({ typedBroadcastLatestWins: broadcastMock }));
 vi.mock("../events.js", () => ({ events: eventEmitter }));
 vi.mock("../AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => availabilityMock,
@@ -33,7 +33,7 @@ import {
   notifyCanopyRefinementsChanged,
   setCanopyRefinementSource,
 } from "../canopy/canopyRefinementSource.js";
-import { setAnswerAttention } from "../runAnswerAttentionSource.js";
+import { setDecisionAttention } from "../runAnswerAttentionSource.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
 import { bandForRun } from "../../../shared/utils/fleetBands.js";
 import { computeProjectAgentCounts } from "../projectAgentCounts.js";
@@ -897,8 +897,15 @@ describe("FleetSnapshotService", () => {
 
   it("decorates a run with Canopy's refinement for its incarnation, and re-publishes when it changes", async () => {
     const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
-    let refinement: { kind: "asked"; quote: string; readAt: number; seen: boolean } | undefined =
-      undefined;
+    let refinement:
+      | {
+          kind: "asked";
+          ask: "approval" | "question";
+          quote: string;
+          readAt: number;
+          seen: boolean;
+        }
+      | undefined = undefined;
     const source = vi.fn((_id: string, _spawnedAt: number) => refinement);
     setCanopyRefinementSource(source);
     const service = new FleetSnapshotService(client as never);
@@ -912,6 +919,7 @@ describe("FleetSnapshotService", () => {
 
       refinement = {
         kind: "asked",
+        ask: "question",
         quote: "Want me to update the tests too?",
         readAt: NOW,
         seen: false,
@@ -921,7 +929,8 @@ describe("FleetSnapshotService", () => {
       expect(broadcastMock.mock.calls.length).toBe(published + 1);
       expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
 
-      // The same reading told again is no fleet change.
+      // The same reading told again is no fleet change, even as a new object.
+      refinement = { ...refinement };
       notifyCanopyRefinementsChanged();
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 1);
@@ -931,6 +940,14 @@ describe("FleetSnapshotService", () => {
       notifyCanopyRefinementsChanged();
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 2);
+      expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
+
+      // So is a reading of the same words as the other kind of ask: a plugin
+      // sorting approvals from questions must hear it.
+      refinement = { ...refinement, ask: "approval" };
+      notifyCanopyRefinementsChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 3);
       expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
 
       // Canopy going away takes every refinement with it.
@@ -943,7 +960,7 @@ describe("FleetSnapshotService", () => {
     }
   });
 
-  it("decorates a run with Decisions' answers needing attention, and re-publishes when they change", async () => {
+  it("decorates a run with Decisions' answers needing attention and open questions, and re-publishes when they change", async () => {
     const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
     const service = new FleetSnapshotService(client as never);
     try {
@@ -951,24 +968,108 @@ describe("FleetSnapshotService", () => {
       service.refresh();
       await vi.runOnlyPendingTimersAsync();
       expect(lastSnapshot().runs[0].answerAttention).toBeUndefined();
+      expect(lastSnapshot().runs[0].questionAttention).toBeUndefined();
       const published = broadcastMock.mock.calls.length;
 
-      setAnswerAttention(new Map([["t1", 2]]));
+      setDecisionAttention(new Map([["t1", { answers: 2, questions: 0 }]]));
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 1);
       expect(lastSnapshot().runs[0].answerAttention).toBe(2);
+      // A zero count rides nowhere.
+      expect("questionAttention" in lastSnapshot().runs[0]).toBe(false);
 
       // The same counts told again are no fleet change.
-      setAnswerAttention(new Map([["t1", 2]]));
+      setDecisionAttention(new Map([["t1", { answers: 2, questions: 0 }]]));
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 1);
 
+      // A question opening is one, and so is another on the same run.
+      setDecisionAttention(new Map([["t1", { answers: 2, questions: 1 }]]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 2);
+      expect(lastSnapshot().runs[0].questionAttention).toBe(1);
+      setDecisionAttention(new Map([["t1", { answers: 2, questions: 2 }]]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 3);
+      expect(lastSnapshot().runs[0].questionAttention).toBe(2);
+      setDecisionAttention(new Map([["t1", { answers: 2, questions: 1 }]]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 4);
+      expect(lastSnapshot().runs[0].questionAttention).toBe(1);
+
       // Decisions stopping takes every count with it.
-      setAnswerAttention(new Map());
+      setDecisionAttention(new Map());
       await vi.advanceTimersByTimeAsync(250);
       expect(lastSnapshot().runs[0].answerAttention).toBeUndefined();
+      expect(lastSnapshot().runs[0].questionAttention).toBeUndefined();
     } finally {
-      setAnswerAttention(new Map());
+      setDecisionAttention(new Map());
+      service.stop();
+    }
+  });
+
+  it("carries Decisions' counts as they stand into a fleet that degrades on its next read", async () => {
+    const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
+    const service = new FleetSnapshotService(client as never);
+    try {
+      setDecisionAttention(new Map([["t1", { answers: 0, questions: 1 }]]));
+      service.start();
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().runs[0].questionAttention).toBe(1);
+
+      // Cleared while the fleet is healthy, which only schedules a read, and that read fails.
+      client.setFleet([], true);
+      setDecisionAttention(new Map());
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot()).toMatchObject({ degraded: true });
+      expect(lastSnapshot().runs[0].runId).toBe("t1");
+      expect(lastSnapshot().runs[0].questionAttention).toBeUndefined();
+    } finally {
+      setDecisionAttention(new Map());
+      service.stop();
+    }
+  });
+
+  it("carries a park made while healthy into the degraded rows beside a fresh Decisions count", async () => {
+    const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
+    const parks = new Map<string, { parkedAt: number }>();
+    const attention = { getAll: () => parks, getActiveSnoozes: () => new Map() };
+    const service = new FleetSnapshotService(client as never, attention as never);
+    try {
+      service.start();
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().runs[0].park).toBeUndefined();
+
+      // Parked, and a question opens, before the read that would have shown it fails.
+      parks.set("t1", { parkedAt: NOW });
+      client.setFleet([], true);
+      setDecisionAttention(new Map([["t1", { answers: 0, questions: 1 }]]));
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot()).toMatchObject({ degraded: true });
+      expect(lastSnapshot().runs[0]).toMatchObject({
+        park: { parkedAt: NOW },
+        questionAttention: 1,
+      });
+      expect(bandForRun(lastSnapshot().runs[0])).toBe("parked");
+
+      // Unparked while reads keep failing: the next failed read carries it, and
+      // one with nothing moved publishes nothing.
+      parks.delete("t1");
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot()).toMatchObject({ degraded: true });
+      expect(lastSnapshot().runs[0].park).toBeUndefined();
+      expect(bandForRun(lastSnapshot().runs[0])).toBe("needs-you");
+      const published = broadcastMock.mock.calls.length;
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(broadcastMock.mock.calls.length).toBe(published);
+    } finally {
+      setDecisionAttention(new Map());
       service.stop();
     }
   });

@@ -142,6 +142,28 @@ describe("useAutocompleteApply", () => {
     }
   });
 
+  it("never applies a disabled row, by key, index or click", () => {
+    const disabledRow = { ...capability, disabled: true };
+    const {
+      applyAutocompleteSelection,
+      handleAutocompleteSelect,
+      applyEditorValue,
+      onExecute,
+      setActiveCompletionContext,
+      view,
+    } = setup("$plug", disabledRow, dollarContext);
+    try {
+      expect(applyAutocompleteSelection("enter")).toBe(false);
+      expect(applyAutocompleteSelection("complete", 0)).toBe(false);
+      handleAutocompleteSelect(disabledRow);
+      expect(applyEditorValue).not.toHaveBeenCalled();
+      expect(onExecute).not.toHaveBeenCalled();
+      expect(setActiveCompletionContext).not.toHaveBeenCalled();
+    } finally {
+      view.destroy();
+    }
+  });
+
   it("a $ capability inserts (not executes) on Enter and closes the menu", () => {
     const {
       applyAutocompleteSelection,

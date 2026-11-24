@@ -1111,6 +1111,15 @@ export class PluginDevWorkerMainBridge {
           providerId: target.providerId,
           worktree: target.worktree,
         });
+      } else if (target.kind === "cloud-provider-method") {
+        sent = this.workerHost.send({
+          type: "invoke",
+          requestId,
+          kind: "cloud-provider-method",
+          providerId: target.providerId,
+          method: target.method,
+          args: target.args,
+        });
       } else {
         sent = this.workerHost.send({
           type: "invoke",

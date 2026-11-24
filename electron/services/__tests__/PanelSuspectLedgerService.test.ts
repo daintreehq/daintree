@@ -90,14 +90,63 @@ describe("PanelSuspectLedgerService", () => {
     };
   }
 
-  it("starts empty on a fresh install", () => {
+  it("starts empty on a fresh install without writing a ledger", () => {
     const ledger = new PanelSuspectLedgerService();
     ledger.initialize(null);
 
     expect(ledger.getQuarantinedPanelIds().size).toBe(0);
     expect(ledger.getQuarantinedPanels()).toEqual([]);
-    expect(fs.existsSync(ledgerPath)).toBe(true);
-    expect(readLedgerFile().panels).toEqual({});
+    expect(utilsMock.resilientAtomicWriteFileSync).not.toHaveBeenCalled();
+    expect(fs.existsSync(ledgerPath)).toBe(false);
+  });
+
+  it("does not rewrite an unchanged ledger on a clean boot", () => {
+    const ledger1 = new PanelSuspectLedgerService();
+    ledger1.initialize(pendingCrash([suspectPanel("p1")]));
+    const before = fs.readFileSync(ledgerPath, "utf8");
+    utilsMock.resilientAtomicWriteFileSync.mockClear();
+
+    __resetPanelSuspectLedgerForTesting();
+    const ledger2 = new PanelSuspectLedgerService();
+    ledger2.initialize(null);
+
+    expect(utilsMock.resilientAtomicWriteFileSync).not.toHaveBeenCalled();
+    expect(fs.readFileSync(ledgerPath, "utf8")).toBe(before);
+    expect(ledger2.getQuarantinedPanels().length).toBe(0);
+  });
+
+  it("does not write when a pending crash touches no tracked or suspect panel", () => {
+    const ledger = new PanelSuspectLedgerService();
+    ledger.initialize(pendingCrash([stablePanel("p1")]));
+
+    expect(utilsMock.resilientAtomicWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it("writes once when a boot both folds a crash and decays a record", () => {
+    const ledger1 = new PanelSuspectLedgerService();
+    ledger1.initialize(pendingCrash([suspectPanel("old")]));
+    vi.advanceTimersByTime(PANEL_DECAY_TTL_MS + 1);
+    utilsMock.resilientAtomicWriteFileSync.mockClear();
+
+    __resetPanelSuspectLedgerForTesting();
+    const ledger2 = new PanelSuspectLedgerService();
+    ledger2.initialize(pendingCrash([suspectPanel("new")]));
+
+    expect(utilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledTimes(1);
+    expect(Object.keys(readLedgerFile().panels)).toEqual(["new"]);
+  });
+
+  it("lists userData once for both boot sweeps", () => {
+    const readdirSpy = vi.spyOn(fs, "readdirSync");
+    try {
+      const ledger = new PanelSuspectLedgerService();
+      ledger.initialize(null);
+
+      const userDataReads = readdirSpy.mock.calls.filter(([dir]) => dir === tmpDir);
+      expect(userDataReads).toHaveLength(1);
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it("increments consecutive suspect count for each suspect crash", () => {
@@ -184,10 +233,14 @@ describe("PanelSuspectLedgerService", () => {
     // Jump past the TTL.
     vi.advanceTimersByTime(PANEL_DECAY_TTL_MS + 1);
 
+    utilsMock.resilientAtomicWriteFileSync.mockClear();
     __resetPanelSuspectLedgerForTesting();
     const ledger3 = new PanelSuspectLedgerService();
     ledger3.initialize(null);
     expect(ledger3.getQuarantinedPanelIds().has("p1")).toBe(false);
+    // Decay on a clean boot is a real change, so it is persisted.
+    expect(utilsMock.resilientAtomicWriteFileSync).toHaveBeenCalledTimes(1);
+    expect(readLedgerFile().panels).toEqual({});
   });
 
   it("clearQuarantinedPanel removes the record and persists", () => {
@@ -235,6 +288,9 @@ describe("PanelSuspectLedgerService", () => {
     );
     expect(fs.existsSync(ledger.getQuarantinedLedgerPath()!)).toBe(true);
     expect(ledger.getQuarantinedPanelIds().size).toBe(0);
+    // A fresh ledger is written in its place, so a failed quarantine rename
+    // can't leave the corrupt file to be re-read on every boot.
+    expect(readLedgerFile()).toEqual({ version: 1, panels: {} });
   });
 
   it("quarantines a ledger file with invalid structure", () => {
@@ -273,6 +329,8 @@ describe("PanelSuspectLedgerService", () => {
     expect(ledger.getQuarantinedPanelIds().has("good")).toBe(true);
     expect(ledger.getQuarantinedPanelIds().has("bad")).toBe(false);
     expect(ledger.getQuarantinedLedgerPath()).toBeNull();
+    // The cleaned ledger is persisted so the malformed entry doesn't linger.
+    expect(Object.keys(readLedgerFile().panels)).toEqual(["good"]);
   });
 
   it("initialize is idempotent — a second call is a no-op", () => {
@@ -305,7 +363,8 @@ describe("PanelSuspectLedgerService", () => {
   it("ignores panels with empty ids", () => {
     const ledger = new PanelSuspectLedgerService();
     ledger.initialize(pendingCrash([suspectPanel("", { title: "ghost" })]));
-    expect(Object.keys(readLedgerFile().panels)).toEqual([]);
+    expect(ledger.getQuarantinedPanels()).toEqual([]);
+    expect(utilsMock.resilientAtomicWriteFileSync).not.toHaveBeenCalled();
   });
 
   it("sweeps stale .tmp files older than the orphan TTL", () => {
@@ -316,10 +375,14 @@ describe("PanelSuspectLedgerService", () => {
     fs.writeFileSync(orphanPath, "partial", "utf8");
     expect(fs.existsSync(orphanPath)).toBe(true);
 
+    const freshPath = path.join(tmpDir, `panel-suspect-ledger.json.${Date.now() - 1000}-def.tmp`);
+    fs.writeFileSync(freshPath, "in-flight", "utf8");
+
     const ledger = new PanelSuspectLedgerService();
     ledger.initialize(null);
 
     expect(fs.existsSync(orphanPath)).toBe(false);
+    expect(fs.existsSync(freshPath)).toBe(true);
   });
 
   it("prunes corrupted siblings beyond the retention count", () => {

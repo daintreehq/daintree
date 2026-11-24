@@ -1,8 +1,12 @@
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { MODEL_ADAPTERS } from "./decisionModelCopy";
 
 interface DecisionsModelConsentDialogProps {
   isOpen: boolean;
+  /** The agreed turn on is being saved: the dialog stays, locked, until main answers. */
+  saving?: boolean;
   onCancel: () => void;
   onAccept: () => void;
 }
@@ -19,9 +23,11 @@ const DESTINATIONS = Object.values(MODEL_ADAPTERS)
  */
 export function DecisionsModelConsentDialog({
   isOpen,
+  saving = false,
   onCancel,
   onAccept,
 }: DecisionsModelConsentDialogProps) {
+  const showSpinner = useDeferredLoading(saving, UI_DOHERTY_THRESHOLD);
   return (
     <ConfirmDialog
       isOpen={isOpen}
@@ -33,6 +39,8 @@ export function DecisionsModelConsentDialog({
       confirmLabel="Turn on learning"
       cancelLabel="Cancel"
       onConfirm={onAccept}
+      isConfirmLoading={showSpinner}
+      isBusy={saving}
     >
       <ul className="space-y-2 text-xs text-text-secondary select-text">
         <li>
@@ -57,8 +65,8 @@ export function DecisionsModelConsentDialog({
         <li>
           <span className="font-medium text-text-primary">Answers only once you allow it.</span> It
           answers in your place only after you&apos;ve seen its evaluation and chosen the confidence
-          it answers from, and only questions that allow a proxy answer. Its answers are labelled as
-          a proxy&apos;s.
+          it answers from, and only questions that allow it. Its answers are labelled as the
+          decision model&apos;s.
         </li>
         <li>Turning learning off keeps what it learned. Clear history deletes it.</li>
       </ul>

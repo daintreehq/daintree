@@ -101,7 +101,9 @@ const THREE_DOT_ALLOWED = new Set([
   "shared/config/voiceCorrectionClaude.ts",
 ]);
 
-const IN_APP_BROWSER_FILES = /^src\/components\/(Browser|Portal|DevPreview)\//;
+// Any casing, and the link/page rows of a native page menu.
+const AMBIGUOUS_BROWSER = /\bopen (?:link |page )?in browser\b/i;
+const IN_APP_BROWSER_FILES = /^src\/components\/(Browser|DevPreview)\//;
 const IN_APP_BROWSER_MENUS = new Set(["src/components/Terminal/TerminalContextMenu.tsx"]);
 
 describe("wording", () => {
@@ -126,7 +128,7 @@ describe("wording", () => {
       ) {
         ellipses.push(`${r}:${lineOf(source, n)}`);
       }
-      if (text !== null && inBrowserSurface && /\bOpen in browser\b/.test(text)) {
+      if (text !== null && inBrowserSurface && AMBIGUOUS_BROWSER.test(text)) {
         ambiguousBrowser.push(`${r}:${lineOf(source, n)}`);
       }
 
@@ -240,6 +242,20 @@ describe("wording detectors", () => {
     "leaves %j alone",
     (text) => {
       expect(THREE_DOT_ELLIPSIS.test(text)).toBe(false);
+    }
+  );
+
+  it.each(["Open in browser", "Open Link in Browser", "Open page in browser"])(
+    "flags %j as an ambiguous browser escape",
+    (text) => {
+      expect(AMBIGUOUS_BROWSER.test(text)).toBe(true);
+    }
+  );
+
+  it.each(["Open in external browser", "Open link in external browser", "Opened in browser"])(
+    "leaves %j alone",
+    (text) => {
+      expect(AMBIGUOUS_BROWSER.test(text)).toBe(false);
     }
   );
 

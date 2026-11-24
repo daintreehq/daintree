@@ -40,6 +40,7 @@ const POPOVER_FILES = [
   "src/components/Worktree/ReviewHub/PrChecksPopover.tsx",
   "src/components/Layout/LocalCommitsDropdown.tsx",
   "src/components/Worktree/WorktreeFilterPopover.tsx",
+  "src/components/Worktree/WorktreeFilterPopoverContent.tsx",
   "src/components/Project/ProjectIdentityEditor.tsx",
   "src/components/Fleet/FleetPickerContent.tsx",
   "src/components/EventInspector/EventFilters.tsx",

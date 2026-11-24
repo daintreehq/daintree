@@ -3,7 +3,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { Activity } from "react";
+import type { ReactNode, Ref } from "react";
 import type { StagingStatus } from "@shared/types";
 import type { WorktreeState } from "@shared/types";
 
@@ -145,7 +146,10 @@ vi.mock("@/hooks/useSendToAgentPalette", () => ({
 }));
 
 vi.mock("@/components/ui/button", () => ({
+  // Forwards `ref` like the real forwardRef Button: the bulk-action focus
+  // handoff reads its own button node.
   Button: ({
+    ref,
     children,
     onClick,
     disabled,
@@ -153,6 +157,7 @@ vi.mock("@/components/ui/button", () => ({
     "aria-label": ariaLabel,
     "data-testid": testId,
   }: {
+    ref?: Ref<HTMLButtonElement>;
     children: ReactNode;
     onClick?: () => void;
     disabled?: boolean;
@@ -164,6 +169,7 @@ vi.mock("@/components/ui/button", () => ({
     "data-testid"?: string;
   }) => (
     <button
+      ref={ref}
       type="button"
       onClick={onClick}
       disabled={disabled}
@@ -308,6 +314,7 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   pushDestination: { remote: "origin", branch: "feature/test" },
   pullSource: { remote: "origin", branch: "feature/test" },
   repoState: "DIRTY",
+  repoOperationId: null,
   rebaseStep: null,
   rebaseTotalSteps: null,
   rebaseSequence: null,
@@ -893,6 +900,30 @@ describe("ReviewHub", () => {
       expect(unstageFileMock).not.toHaveBeenCalled();
     });
 
+    it("steps focus through the compared files with the arrow keys (#16895)", async () => {
+      HTMLElement.prototype.scrollIntoView = vi.fn();
+      compareWorktreesMock.mockResolvedValue({
+        branch1: "main",
+        branch2: "feature/test",
+        files: [
+          { status: "M", path: "src/component.tsx" },
+          { status: "A", path: "src/new-file.ts" },
+        ],
+      });
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+      act(() => fireEvent.click(screen.getByRole("radio", { name: /vs main/i })));
+      await waitFor(() => screen.getByText("new-file.ts"));
+
+      const first = screen.getByRole("button", { name: /component\.tsx/ });
+      const second = screen.getByRole("button", { name: /new-file\.ts/ });
+      first.focus();
+      act(() => void fireEvent.keyDown(first, { key: "ArrowDown" }));
+      expect(document.activeElement).toBe(second);
+      act(() => void fireEvent.keyDown(second, { key: "Home" }));
+      expect(document.activeElement).toBe(first);
+    });
+
     it("resets to working-tree mode when closed and reopened", async () => {
       const { rerender } = render(
         <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
@@ -990,6 +1021,461 @@ describe("ReviewHub", () => {
     });
   });
 
+  /**
+   * #17284: a bulk button unmounts the moment its section has nothing left to
+   * act on. Activating it from the keyboard must not strand focus on <body>.
+   */
+  describe("bulk action focus handoff", () => {
+    const entry = (path: string) => ({
+      path,
+      status: "modified" as const,
+      insertions: null,
+      deletions: null,
+    });
+
+    async function renderWith(initial: StagingStatus) {
+      getStagingStatusMock.mockResolvedValue(initial);
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await screen.findByTestId("review-hub-file-section-unstaged");
+      await act(async () => {});
+    }
+
+    /**
+     * jsdom never turns Enter or Space on a button into a click, so the click
+     * is dispatched where the browser would put it — Enter on keydown, Space on
+     * keyup — after checking nothing prevented the key's default.
+     */
+    async function activateFromKeyboard(
+      testId: string,
+      next: StagingStatus,
+      key: "Enter" | " " = "Enter"
+    ) {
+      const button = await screen.findByTestId(testId);
+      act(() => button.focus());
+      expect(document.activeElement).toBe(button);
+      getStagingStatusMock.mockResolvedValue(next);
+      expect(fireEvent.keyDown(button, { key })).toBe(true);
+      if (key === "Enter") fireEvent.click(button);
+      fireEvent.keyUp(button, { key });
+      if (key === " ") fireEvent.click(button);
+      await waitFor(() => expect(screen.queryByTestId(testId)).toBeNull());
+      await act(async () => {});
+    }
+
+    it.each([
+      ["Enter", "Enter"],
+      ["Space", " "],
+    ] as const)(
+      "hands focus to the commit message when Stage all empties Changes (%s)",
+      async (_name, key) => {
+        await renderWith(
+          makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] })
+        );
+
+        await activateFromKeyboard(
+          "review-hub-stage-section-button",
+          makeStatus({ staged: [entry("src/a.ts"), entry("src/b.ts")], unstaged: [] }),
+          key
+        );
+
+        expect(stageAllMock).toHaveBeenCalledWith(WORKTREE_PATH);
+        expect(document.activeElement).toBe(screen.getByLabelText("Commit message"));
+      }
+    );
+
+    it("hands focus to the file list when Stage all empties Changes and the composer is disabled", async () => {
+      await renderWith(
+        makeStatus({
+          staged: [entry("src/a.ts")],
+          unstaged: [entry("src/b.ts")],
+          isDetachedHead: true,
+        })
+      );
+
+      await activateFromKeyboard(
+        "review-hub-stage-section-button",
+        makeStatus({
+          staged: [entry("src/a.ts"), entry("src/b.ts")],
+          unstaged: [],
+          isDetachedHead: true,
+        })
+      );
+
+      expect((screen.getByLabelText("Commit message") as HTMLTextAreaElement).disabled).toBe(true);
+      expect(document.activeElement).toBe(screen.getByRole("listbox", { name: "Changed files" }));
+    });
+
+    it.each([
+      ["Enter", "Enter"],
+      ["Space", " "],
+    ] as const)(
+      "hands focus to the file list when Unstage all empties Staged (%s)",
+      async (_name, key) => {
+        await renderWith(
+          makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] })
+        );
+
+        await activateFromKeyboard(
+          "review-hub-unstage-section-button",
+          makeStatus({ staged: [], unstaged: [entry("src/a.ts"), entry("src/b.ts")] }),
+          key
+        );
+
+        expect(unstageAllMock).toHaveBeenCalledWith(WORKTREE_PATH);
+        expect(document.activeElement).toBe(screen.getByRole("listbox", { name: "Changed files" }));
+      }
+    );
+
+    it("hands focus on when Stage shown narrows Changes to zero rows", async () => {
+      await renderWith(
+        makeStatus({
+          staged: [entry("src/a.ts")],
+          unstaged: [entry("src/legacy.ts"), entry("src/app.ts")],
+        })
+      );
+      const filters = screen.getAllByPlaceholderText("Filter…");
+      fireEvent.change(filters[1]!, { target: { value: "legacy" } });
+      await screen.findByText("Stage shown (1)");
+
+      await activateFromKeyboard(
+        "review-hub-stage-section-button",
+        makeStatus({
+          staged: [entry("src/a.ts"), entry("src/legacy.ts")],
+          unstaged: [entry("src/app.ts")],
+        })
+      );
+
+      expect(stageFilesMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/legacy.ts"]);
+      expect(document.activeElement).toBe(screen.getByLabelText("Commit message"));
+    });
+
+    it("hands focus on when Unstage shown narrows Staged to zero rows", async () => {
+      await renderWith(
+        makeStatus({
+          staged: [entry("src/legacy.ts"), entry("src/a.ts")],
+          unstaged: [entry("src/b.ts")],
+        })
+      );
+      const filters = screen.getAllByPlaceholderText("Filter…");
+      fireEvent.change(filters[0]!, { target: { value: "legacy" } });
+      await screen.findByText("Unstage shown (1)");
+
+      await activateFromKeyboard(
+        "review-hub-unstage-section-button",
+        makeStatus({
+          staged: [entry("src/a.ts")],
+          unstaged: [entry("src/b.ts"), entry("src/legacy.ts")],
+        })
+      );
+
+      expect(unstageFilesMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/legacy.ts"]);
+      expect(document.activeElement).toBe(screen.getByRole("listbox", { name: "Changed files" }));
+    });
+
+    it("hands focus on when Unstage selection empties Staged", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      fireEvent.click(screen.getByTestId("file-stage-row-src/a.ts"), { metaKey: true });
+      await screen.findByText("Unstage selection (1)");
+
+      await activateFromKeyboard(
+        "review-hub-unstage-section-button",
+        makeStatus({ staged: [], unstaged: [entry("src/a.ts"), entry("src/b.ts")] })
+      );
+
+      expect(unstageFilesMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/a.ts"]);
+      expect(document.activeElement).toBe(screen.getByRole("listbox", { name: "Changed files" }));
+    });
+
+    it("leaves focus on the bulk button when its section still has rows", async () => {
+      await renderWith(
+        makeStatus({
+          staged: [entry("src/a.ts")],
+          unstaged: [entry("src/b.ts"), entry("src/c.ts")],
+        })
+      );
+      fireEvent.click(screen.getByTestId("file-stage-row-src/b.ts"), { metaKey: true });
+      await screen.findByText("Stage selection (1)");
+      const button = screen.getByTestId("review-hub-stage-section-button");
+      act(() => button.focus());
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [entry("src/a.ts"), entry("src/b.ts")],
+          unstaged: [entry("src/c.ts")],
+        })
+      );
+
+      fireEvent.click(button);
+      await screen.findByText("Stage all (1)");
+      await act(async () => {});
+
+      expect(screen.getByTestId("review-hub-stage-section-button")).toBe(button);
+      expect(document.activeElement).toBe(button);
+    });
+
+    it("hands focus on when a background refresh empties the section under a focused bulk button", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      const button = screen.getByTestId("review-hub-stage-section-button");
+      act(() => button.focus());
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [entry("src/a.ts"), entry("src/b.ts")], unstaged: [] })
+      );
+
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+      await waitFor(() =>
+        expect(screen.queryByTestId("review-hub-stage-section-button")).toBeNull()
+      );
+      await act(async () => {});
+
+      expect(document.activeElement).toBe(screen.getByLabelText("Commit message"));
+    });
+
+    it("keeps focus where the user moved it while the stage was still running", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      let finishStage!: () => void;
+      stageAllMock.mockReturnValue(
+        new Promise<void>((resolve) => {
+          finishStage = resolve;
+        })
+      );
+      const button = screen.getByTestId("review-hub-stage-section-button");
+      act(() => button.focus());
+      fireEvent.click(button);
+      await waitFor(() => expect(stageAllMock).toHaveBeenCalledWith(WORKTREE_PATH));
+
+      const stagedFilter = screen.getByLabelText("Filter staged files");
+      act(() => stagedFilter.focus());
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [entry("src/a.ts"), entry("src/b.ts")], unstaged: [] })
+      );
+      await act(async () => finishStage());
+      await waitFor(() =>
+        expect(screen.queryByTestId("review-hub-stage-section-button")).toBeNull()
+      );
+      await act(async () => {});
+
+      expect(document.activeElement).toBe(stagedFilter);
+    });
+
+    /** A background refresh that stages `src/b.ts` out of Changes. */
+    async function refreshToAllStaged() {
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [entry("src/a.ts"), entry("src/b.ts")], unstaged: [] })
+      );
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+      await waitFor(() =>
+        expect(screen.queryByTestId("review-hub-stage-section-button")).toBeNull()
+      );
+      await act(async () => {});
+    }
+
+    it("leaves focus alone when the section empties while something else holds it", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      const stagedFilter = screen.getByLabelText("Filter staged files");
+      act(() => stagedFilter.focus());
+
+      await refreshToAllStaged();
+
+      expect(document.activeElement).toBe(stagedFilter);
+    });
+
+    it("leaves focus on <body> when the button it removes never held it", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      act(() => {
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+      });
+      expect(document.activeElement).toBe(document.body);
+
+      await refreshToAllStaged();
+
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("keeps focus that something else took while the button was being removed", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      const button = screen.getByTestId("review-hub-stage-section-button");
+      const stagedFilter = screen.getByLabelText("Filter staged files");
+      act(() => button.focus());
+      // The button's unmount has already been recorded by the time React
+      // detaches the node; focus moving here stands in for any other component
+      // taking it later in the same commit.
+      const parent = button.parentElement!;
+      const removeChild = parent.removeChild.bind(parent);
+      parent.removeChild = <T extends Node>(child: T): T => {
+        const removed: Node = child;
+        if (removed === button) stagedFilter.focus();
+        return removeChild(child);
+      };
+      try {
+        await refreshToAllStaged();
+      } finally {
+        Reflect.deleteProperty(parent, "removeChild");
+      }
+
+      expect(button.isConnected).toBe(false);
+      expect(document.activeElement).toBe(stagedFilter);
+    });
+
+    it("hands focus on when Stage selection empties Changes", async () => {
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] }));
+      fireEvent.click(screen.getByTestId("file-stage-row-src/b.ts"), { metaKey: true });
+      await screen.findByText("Stage selection (1)");
+
+      await activateFromKeyboard(
+        "review-hub-stage-section-button",
+        makeStatus({ staged: [entry("src/a.ts"), entry("src/b.ts")], unstaged: [] })
+      );
+
+      expect(stageFilesMock).toHaveBeenCalledWith(WORKTREE_PATH, ["src/b.ts"]);
+      expect(document.activeElement).toBe(screen.getByLabelText("Commit message"));
+    });
+
+    it("hands focus to Refresh when staging leaves a clean tree", async () => {
+      // Staged and unstaged edits that cancel out: staging the second makes the
+      // index match HEAD, so the list and the composer go in the same commit.
+      await renderWith(makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/a.ts")] }));
+
+      await activateFromKeyboard(
+        "review-hub-stage-section-button",
+        makeStatus({ staged: [], unstaged: [] })
+      );
+
+      expect(screen.queryByRole("listbox", { name: "Changed files" })).toBeNull();
+      expect(screen.queryByLabelText("Commit message")).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Refresh" }));
+    });
+
+    it.each([
+      ["Enter", "Enter"],
+      ["Space", " "],
+    ] as const)(
+      "lands the list cursor on its own file, not its old index, after Unstage all (%s)",
+      async (_name, key) => {
+        await renderWith(
+          makeStatus({
+            staged: [entry("src/x.ts"), entry("src/y.ts"), entry("src/z.ts")],
+            unstaged: [entry("src/a.ts")],
+          })
+        );
+        const list = screen.getByRole("listbox", { name: "Changed files" });
+        act(() => list.focus());
+        for (let i = 0; i < 3; i++) fireEvent.keyDown(list, { key: "ArrowDown" });
+        await waitFor(() =>
+          expect(list.getAttribute("aria-activedescendant")).toBe("review-hub-row-3")
+        );
+        expect(document.getElementById("review-hub-row-3")?.dataset.testid).toBe(
+          "file-stage-row-src/a.ts"
+        );
+
+        const scrolled: Element[] = [];
+        const originalScroll = HTMLElement.prototype.scrollIntoView;
+        HTMLElement.prototype.scrollIntoView = function (this: HTMLElement) {
+          scrolled.push(this);
+        };
+        try {
+          // A live cursor is what lets a row key act on the list, so the
+          // bulk button's own Enter/Space must still reach it as a click.
+          await activateFromKeyboard(
+            "review-hub-unstage-section-button",
+            makeStatus({
+              staged: [],
+              unstaged: [
+                entry("src/a.ts"),
+                entry("src/x.ts"),
+                entry("src/y.ts"),
+                entry("src/z.ts"),
+              ],
+            }),
+            key
+          );
+        } finally {
+          HTMLElement.prototype.scrollIntoView = originalScroll;
+        }
+
+        expect(unstageAllMock).toHaveBeenCalledWith(WORKTREE_PATH);
+        expect(stageFileMock).not.toHaveBeenCalled();
+        expect(unstageFileMock).not.toHaveBeenCalled();
+        expect(document.activeElement).toBe(list);
+        await waitFor(() =>
+          expect(list.getAttribute("aria-activedescendant")).toBe("review-hub-row-0")
+        );
+        const cursorRow = document.getElementById("review-hub-row-0")!;
+        expect(cursorRow.dataset.testid).toBe("file-stage-row-src/a.ts");
+        // Row 3 is now z.ts: the position a.ts held before the unstage.
+        expect(scrolled).toContain(cursorRow);
+        expect(scrolled).not.toContain(document.getElementById("review-hub-row-3"));
+      }
+    );
+
+    it("does not hand focus on when an Activity hide unmounts the button's effects", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] })
+      );
+      const hub = (mode: "visible" | "hidden") => (
+        <Activity mode={mode}>
+          <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        </Activity>
+      );
+      const { rerender } = render(hub("visible"));
+      const button = await screen.findByTestId("review-hub-stage-section-button");
+      await act(async () => {});
+      act(() => button.focus());
+
+      rerender(hub("hidden"));
+      // jsdom won't blur an element in a hidden subtree; a focused node that
+      // leaves the document is what drops focus to <body> there.
+      const elsewhere = document.body.appendChild(document.createElement("input"));
+      act(() => elsewhere.focus());
+      act(() => elsewhere.remove());
+      expect(document.activeElement).toBe(document.body);
+      rerender(hub("visible"));
+      await act(async () => {});
+
+      expect(button.isConnected).toBe(true);
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("does not hand focus on when a stage finishing while the hub is hidden removes the button", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ staged: [entry("src/a.ts")], unstaged: [entry("src/b.ts")] })
+      );
+      const hub = (mode: "visible" | "hidden") => (
+        <Activity mode={mode}>
+          <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        </Activity>
+      );
+      const { rerender } = render(hub("visible"));
+      const button = await screen.findByTestId("review-hub-stage-section-button");
+      await act(async () => {});
+      let finishStage!: () => void;
+      stageAllMock.mockReturnValue(
+        new Promise<void>((resolve) => {
+          finishStage = resolve;
+        })
+      );
+      act(() => button.focus());
+      fireEvent.click(button);
+      await waitFor(() => expect(stageAllMock).toHaveBeenCalledWith(WORKTREE_PATH));
+
+      rerender(hub("hidden"));
+      getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], unstaged: [] }));
+      await act(async () => finishStage());
+      rerender(hub("visible"));
+      await waitFor(() =>
+        expect(screen.queryByTestId("review-hub-stage-section-button")).toBeNull()
+      );
+      await act(async () => {});
+
+      expect(button.isConnected).toBe(false);
+      expect(document.activeElement).toBe(document.body);
+    });
+  });
+
   describe("section toolbar", () => {
     const multiFileStatus = (): StagingStatus => ({
       staged: [
@@ -1010,6 +1496,7 @@ describe("ReviewHub", () => {
       pushDestination: { remote: "origin", branch: "feature/test" },
       pullSource: { remote: "origin", branch: "feature/test" },
       repoState: "DIRTY",
+      repoOperationId: null,
       rebaseStep: null,
       rebaseTotalSteps: null,
       rebaseSequence: null,
@@ -1903,12 +2390,12 @@ describe("ReviewHub", () => {
       ).toBeNull();
     });
 
-    it("renders the badge but disables click when decoration.url is absent", async () => {
+    it("renders a static badge, not a button, when decoration.url is absent", async () => {
       // The provider shipped the badge + tooltip + color but the deep-link
       // capability is missing (e.g. a future non-GitHub provider that
       // hasn't implemented `buildPRFileUrl` yet). The badge stays visible
-      // as an indicator; the click target is disabled so a tooltip-only
-      // row doesn't 404.
+      // as an indicator, with no interactive element for a tooltip-only
+      // row to 404 from.
       getDecorationsMock.mockResolvedValueOnce({
         "src/component.tsx": {
           badge: "3",
@@ -1919,10 +2406,9 @@ describe("ReviewHub", () => {
 
       await switchToBaseBranchWithPR();
 
-      const badge = await screen.findByRole("button", {
-        name: /3 unresolved review comments/i,
-      });
-      expect(badge.hasAttribute("disabled")).toBe(true);
+      const badge = await screen.findByTestId("base-branch-file-row-badge");
+      expect(badge.textContent).toContain("3 unresolved review comments");
+      expect(screen.queryByRole("button", { name: /3 unresolved review comments/i })).toBeNull();
 
       fireEvent.click(badge);
       // Click must NOT route through the legacy prUrl-shape fallback

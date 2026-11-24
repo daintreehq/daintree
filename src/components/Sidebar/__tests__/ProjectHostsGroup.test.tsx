@@ -249,6 +249,103 @@ describe("ProjectHostsGroup", () => {
     expect(cells("local")).toEqual(["running"]);
   });
 
+  describe("count column widths", () => {
+    const many = <T,>(make: (id: string) => T, n: number, tag: string): T[] =>
+      Array.from({ length: n }, (_, i) => make(`${tag}${i}`));
+
+    function hostsWith(runs: Record<string, HostWorktreeEntry["runs"]>) {
+      hostList.hosts = Object.keys(runs).map((id) => host(id));
+      presence = Object.keys(runs).map((id) => has(id, `${id}-p`));
+      for (const [id, list] of Object.entries(runs))
+        lists[id] = [worktree(`${id}-p`, "develop", list)];
+    }
+
+    const cellsOf = (row: HTMLElement) => [
+      ...row.querySelectorAll<HTMLElement>("[data-count-cell]"),
+    ];
+    const digitsOf = (row: HTMLElement) =>
+      cellsOf(row).map((cell) => `${cell.dataset.countCell}:${cell.dataset.digits}`);
+    const cell = (row: HTMLElement, band: string) =>
+      row.querySelector<HTMLElement>(`[data-count-cell="${band}"]`)!;
+
+    it("gives a column room for its widest count on every row, so two digits never touch the next column", async () => {
+      hostsWith({
+        h1: [...many(waiting, 10, "a"), ...many(working, 20, "w")],
+        h2: [...many(waiting, 3, "b"), ...many(working, 4, "x")],
+      });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("h1"), "running")).toBe("20"));
+      // Ten is the first two-digit count; every row's cell for a column is as wide as the widest.
+      for (const id of ["h1", "h2", "local"]) {
+        expect(digitsOf(rowFor(id)).filter((entry) => entry.startsWith("running"))).toEqual([
+          "running:2",
+        ]);
+      }
+      expect(digitsOf(rowFor("h1"))).toEqual(["asking:2", "running:2"]);
+      expect(digitsOf(rowFor("h2"))).toEqual(["asking:2", "running:2"]);
+      for (const band of ["asking", "running"]) {
+        expect(cell(rowFor("h2"), band).className).toBe(cell(rowFor("h1"), band).className);
+      }
+      for (const band of ["asking", "running"]) {
+        const tokens = cell(rowFor("h1"), band).classList;
+        expect(tokens.contains("w-9")).toBe(true);
+        expect(tokens.contains("@[15rem]/hosts:w-9.5")).toBe(true);
+      }
+      const running = cell(rowFor("h1"), "running").classList;
+      // Cells grow leftward, so the counts still end on the row's right edge.
+      expect(running.contains("justify-end")).toBe(true);
+      expect(cell(rowFor("local"), "running").className).toBe(
+        cell(rowFor("h1"), "running").className
+      );
+    });
+
+    it("sizes each column on its own, leaving a single-digit column at the narrow width", async () => {
+      hostsWith({ h1: [waiting("a"), ...many(working, 20, "w")] });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("h1"), "running")).toBe("20"));
+      expect(digitsOf(rowFor("h1"))).toEqual(["asking:1", "running:2"]);
+      const asking = cell(rowFor("h1"), "asking").classList;
+      expect(asking.contains("w-7")).toBe(true);
+      expect(asking.contains("@[15rem]/hosts:w-7.5")).toBe(true);
+      expect(asking.contains("w-9")).toBe(false);
+    });
+
+    it("widens for three digits and stops there", async () => {
+      hostsWith({ h1: [...many(waiting, 100, "a"), ...many(working, 1000, "w")] });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      await waitFor(() => expect(count(rowFor("h1"), "running")).toBe("1000"));
+      expect(digitsOf(rowFor("h1"))).toEqual(["asking:3", "running:3"]);
+      const classes = cell(rowFor("h1"), "running").classList;
+      expect(classes.contains("w-11")).toBe(true);
+      expect(classes.contains("@[15rem]/hosts:w-11.5")).toBe(true);
+    });
+
+    it("widens a column for the fold row's sum when no single host needs it", async () => {
+      hostsWith({
+        h1: [waiting("1")],
+        h2: many(working, 5, "b"),
+        h3: many(working, 5, "c"),
+        h4: many(working, 5, "d"),
+        h5: many(working, 6, "e"),
+        h6: many(working, 6, "f"),
+      });
+      render(<ProjectHostsGroup projectId={PROJECT} />);
+      const more = await screen.findByTestId("project-hosts-more-row");
+      await waitFor(() => expect(count(more, "running")).toBe("12"));
+      expect(digitsOf(more)).toEqual(["running:2"]);
+      expect(digitsOf(rowFor("h2"))).toEqual(["running:2"]);
+      expect(cell(rowFor("h2"), "running").className).toBe(cell(more, "running").className);
+      for (const row of [rowFor("h2"), more]) {
+        expect(cell(row, "running").classList.contains("w-9")).toBe(true);
+      }
+
+      // Once the fold opens its sum is gone, and so is the width it asked for.
+      fireEvent.click(more);
+      expect(digitsOf(rowFor("h2"))).toEqual(["running:1"]);
+      expect(cell(rowFor("h2"), "running").classList.contains("w-7")).toBe(true);
+    });
+  });
+
   it("reads a host from before agents were listed by its worktrees' top bands", async () => {
     const { runs: _runs, ...old } = worktree("remote-p", "feature/c", [waiting("t1")]);
     lists.linux = [old];

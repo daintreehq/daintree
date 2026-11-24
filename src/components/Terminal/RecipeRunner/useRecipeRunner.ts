@@ -15,7 +15,7 @@ import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { recipeContextFromWorktree, type RecipeContext } from "@/utils/recipeVariables";
 import { missingRecipeVariables } from "@/utils/recipeAgentStep";
-import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import { isRecipeChangedSinceShownError, recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { getAgentConfig } from "@/config/agents";
 import { recipePanelStepName } from "@/components/Terminal/utils/recipeUtils";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
@@ -25,7 +25,6 @@ import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/pane
 import {
   buildRecipeSections,
   rankSearchResults,
-  nextDuplicateName,
   type RecipeSections,
   type RankedRecipe,
 } from "./recipeRunnerUtils";
@@ -46,10 +45,38 @@ export interface UseRecipeRunnerOptions {
   defaultCwd: string | undefined;
 }
 
+type RanRecipe = NonNullable<RecipeRunOptions["expectedRecipe"]>;
+
 export interface SpawnFailureSummary {
+  /** The id the run was started with, which may be a row a team recipe shadows. */
+  recipeId: string;
+  /** The recipe that actually ran: its failure indices only mean anything against these steps. */
+  ranRecipe: RanRecipe;
   recipeName: string;
   totalCount: number;
   failures: Array<RecipeSpawnFailure & { displayName: string }>;
+}
+
+function isRecipeThatRan(recipe: TerminalRecipe | undefined, ran: RanRecipe): boolean {
+  return (
+    recipe !== undefined &&
+    recipe.id === ran.id &&
+    recipeApprovalDigest(recipe.terminals) === ran.terminalsDigest
+  );
+}
+
+/** A confirmed run the store refused because the recipe changed under the dialog (#17447). */
+export interface ChangedRecipeRefusal {
+  /** The row that was run; review resolves it to whatever that row launches now. */
+  recipeId: string;
+  /** As the confirm named it. */
+  recipeName: string;
+  /**
+   * What the row resolves to now: a recipe the editor can open, a plugin's
+   * recipe (its plugin owns the content, so there is no editor to offer), or
+   * nothing, once it is deleted or its plugin unloaded.
+   */
+  current: "editable" | "plugin" | "missing";
 }
 
 export interface UseRecipeRunnerResult {
@@ -65,6 +92,12 @@ export interface UseRecipeRunnerResult {
   focusedItemId: string | undefined;
   suggestions: RunCommand[];
   spawnFailureSummary: SpawnFailureSummary | null;
+  /**
+   * False once the recipe behind the failure banner was edited, reordered,
+   * shadowed or deleted: its failed indices would now name other steps.
+   */
+  canRetryFailed: boolean;
+  changedRecipe: ChangedRecipeRefusal | null;
   /** A plugin recipe's own variables the last run launched empty: no plugin supplied them. */
   unresolvedVars: string[];
   isRetryingFailed: boolean;
@@ -74,7 +107,11 @@ export interface UseRecipeRunnerResult {
   handlePin: (recipeId: string) => void;
   handleUnpin: (recipeId: string) => void;
   handleDelete: (recipeId: string) => void;
+  /** The recipe the delete confirm is open for; null once it closes. */
   pendingDeleteId: string | null;
+  /** The recipe the delete confirm last asked about, kept through its exit. */
+  deleteTarget: { id: string; name: string } | null;
+  isDeleting: boolean;
   deleteError: string | null;
   confirmDelete: () => void;
   cancelDelete: () => void;
@@ -84,6 +121,8 @@ export interface UseRecipeRunnerResult {
   handleRetryFailed: () => void;
   dismissSpawnFailures: () => void;
   dismissUnresolvedVars: () => void;
+  reviewChangedRecipe: () => void;
+  dismissChangedRecipe: () => void;
   handleKeyDown: (e: React.KeyboardEvent) => void;
   getFlatRecipes: () => TerminalRecipe[];
 }
@@ -112,7 +151,7 @@ export function useRecipeRunner({
   const allRecipes = useRecipeStore((s) => s.recipes);
   const runRecipeWithResults = useRecipeStore((s) => s.runRecipeWithResults);
   const updateRecipe = useRecipeStore((s) => s.updateRecipe);
-  const createRecipe = useRecipeStore((s) => s.createRecipe);
+  const duplicateRecipe = useRecipeStore((s) => s.duplicateRecipe);
   const getRecipeById = useRecipeStore((s) => s.getRecipeById);
 
   const allDetectedRunners = useProjectSettingsStore((s) => s.allDetectedRunners);
@@ -122,14 +161,34 @@ export function useRecipeRunner({
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [spawnFailureSummary, setSpawnFailureSummary] = useState<SpawnFailureSummary | null>(null);
   const [unresolvedVars, setUnresolvedVars] = useState<string[]>([]);
+  const [changedRecipeRun, setChangedRecipeRun] = useState<{
+    recipeId: string;
+    recipeName: string;
+  } | null>(null);
   const [isRetryingFailed, setIsRetryingFailed] = useState(false);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  // Kept after the confirm closes, so its title still names the recipe through
+  // the exit: by then a deleted recipe has already left the store.
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const pendingDeleteId = isDeleteOpen ? (deleteTarget?.id ?? null) : null;
+
+  // Subscribed rather than read through `getRecipeById` at render: an edit,
+  // reload or new shadowing team recipe has to withdraw Retry on its own.
+  const retryRecipeId = spawnFailureSummary?.recipeId;
+  const retryRecipe = useRecipeStore((s) =>
+    retryRecipeId === undefined ? undefined : s.getRecipeById(retryRecipeId)
+  );
+  const canRetryFailed =
+    spawnFailureSummary !== null && isRecipeThatRan(retryRecipe, spawnFailureSummary.ranRecipe);
 
   const isRunningRef = useRef(false);
   const isSpawningSuggestionRef = useRef(false);
   const isConfirmingDeleteRef = useRef(false);
-  const lastRunRecipeIdRef = useRef<string | null>(null);
+  // Bumped by every delete request and worktree switch: a delete that settles
+  // after either has no confirm left to answer.
+  const deleteRequestRef = useRef(0);
   // The run waiting on the missing-variables confirm, so a worktree switch or
   // unmount can withdraw a question about a target that's no longer here.
   const pendingConfirmRef = useRef<AbortController | null>(null);
@@ -201,12 +260,12 @@ export function useRecipeRunner({
   useEffect(() => {
     setSpawnFailureSummary(null);
     setUnresolvedVars([]);
+    setChangedRecipeRun(null);
     // Drop any in-flight delete confirmation — a pending recipe id belongs to
     // the previous worktree's filtered list; confirming it after the switch
     // would delete a recipe out of its original context.
-    setPendingDeleteId(null);
-    setDeleteError(null);
-    lastRunRecipeIdRef.current = null;
+    deleteRequestRef.current += 1;
+    setIsDeleteOpen(false);
     runGenerationRef.current += 1;
     return () => pendingConfirmRef.current?.abort();
   }, [activeWorktreeId]);
@@ -250,10 +309,16 @@ export function useRecipeRunner({
   );
 
   const summarizeFailures = useCallback(
-    (recipe: TerminalRecipe, results: RecipeSpawnResults): SpawnFailureSummary | null => {
+    (
+      recipeId: string,
+      recipe: TerminalRecipe,
+      results: RecipeSpawnResults
+    ): SpawnFailureSummary | null => {
       if (results.failed.length === 0) return null;
       if (allDeclined(results)) return null;
       return {
+        recipeId,
+        ranRecipe: { id: recipe.id, terminalsDigest: recipeApprovalDigest(recipe.terminals) },
         recipeName: recipe.name,
         totalCount: results.spawned.length + results.failed.length,
         failures: results.failed.map((f) => ({
@@ -266,6 +331,23 @@ export function useRecipeRunner({
     },
     []
   );
+
+  // Resolved from the subscribed list rather than `getRecipeById`, so the
+  // banner follows the store: a recipe deleted after the refusal loses its
+  // Review action instead of opening a blank draft.
+  const changedRecipe = useMemo((): ChangedRecipeRefusal | null => {
+    if (!changedRecipeRun) return null;
+    const row = allRecipes.find((r) => r.id === changedRecipeRun.recipeId);
+    // The store resolves through `inRepoRecipes`, which never holds a plugin's.
+    const winner = row?.shadowedBy
+      ? allRecipes.find((w) => w.name === row.name && isInRepoRecipeId(w) && !isPluginRecipe(w))
+      : undefined;
+    const resolved = winner ?? row;
+    return {
+      ...changedRecipeRun,
+      current: !resolved ? "missing" : isPluginRecipe(resolved) ? "plugin" : "editable",
+    };
+  }, [changedRecipeRun, allRecipes]);
 
   // Holds a run whose prompts would send built-in variables blank until the
   // user decides (#15022). With nothing missing, `proceed` runs synchronously,
@@ -324,10 +406,10 @@ export function useRecipeRunner({
         // the user's current intent and the old retry button must not target a
         // recipe that's no longer relevant. Backing out of the confirm keeps it.
         setSpawnFailureSummary(null);
+        setChangedRecipeRun(null);
         // A plugin's own variables only get values when the plugin runs the
         // recipe, so started from here they launch empty without asking.
         setUnresolvedVars(missing.plugin);
-        lastRunRecipeIdRef.current = recipeId;
 
         void (async () => {
           try {
@@ -339,9 +421,21 @@ export function useRecipeRunner({
               { spawnedBy: "recipe", ...(expectedRecipe && { expectedRecipe }) }
             );
             if (runGenerationRef.current === runId) {
-              setSpawnFailureSummary(summarizeFailures(recipe, results));
+              // `recipe` is what the store ran: its lookup happens in this same
+              // tick, and a confirm in between pins it through `expectedRecipe`.
+              setSpawnFailureSummary(summarizeFailures(recipeId, recipe, results));
             }
           } catch (error) {
+            // The confirm approved one recipe and the store now holds another,
+            // or none, so it refused before starting anything: say so, since
+            // the panes the user just agreed to never appear.
+            if (isRecipeChangedSinceShownError(error)) {
+              if (runGenerationRef.current === runId) {
+                setUnresolvedVars([]);
+                setChangedRecipeRun({ recipeId, recipeName: recipe.name });
+              }
+              return;
+            }
             // The store throws synchronously when the recipe was deleted between
             // the local lookup and the store call. Don't let this become an
             // unhandled rejection (Electron 41 crashes utility processes on
@@ -365,14 +459,16 @@ export function useRecipeRunner({
   );
 
   const handleRetryFailed = useCallback(() => {
-    const recipeId = lastRunRecipeIdRef.current;
     const summary = spawnFailureSummary;
-    if (!recipeId || !summary || summary.failures.length === 0) return;
+    if (!summary || summary.failures.length === 0) return;
     if (!defaultCwd) return;
     if (isRunningRef.current) return;
 
+    const { recipeId, ranRecipe } = summary;
     const recipe = getRecipeById(recipeId);
-    if (!recipe) return;
+    // The failures are indices into the steps that ran. After a reorder,
+    // removal or replacement the same index names a different step (#17446).
+    if (!recipe || !isRecipeThatRan(recipe, ranRecipe)) return;
 
     const indices = summary.failures.map((f) => f.index);
     const cwd = defaultCwd;
@@ -383,7 +479,7 @@ export function useRecipeRunner({
     const runId = ++runGenerationRef.current;
 
     // A retry is another launch: the worktree may have lost a value since.
-    gateOnMissingVariables(recipe, missing.builtIn, (expectedRecipe) => {
+    gateOnMissingVariables(recipe, missing.builtIn, () => {
       setIsRetryingFailed(true);
       void (async () => {
         try {
@@ -392,11 +488,9 @@ export function useRecipeRunner({
             cwd,
             activeWorktreeId ?? undefined,
             context,
-            {
-              spawnedBy: "recipe",
-              terminalIndices: indices,
-              ...(expectedRecipe && { expectedRecipe }),
-            }
+            // Pinned even without a confirm: the store refuses the run if an edit
+            // lands between this check and its own lookup.
+            { spawnedBy: "recipe", terminalIndices: indices, expectedRecipe: ranRecipe }
           );
           if (runGenerationRef.current !== runId) return;
           // Declining the confirm opened nothing, so the outstanding failures
@@ -408,8 +502,7 @@ export function useRecipeRunner({
             // Carry forward the original total so the banner copy stays anchored
             // to the original run ("Started X of Y") rather than the retry subset.
             setSpawnFailureSummary({
-              recipeName: recipe.name,
-              totalCount: summary.totalCount,
+              ...summary,
               failures: results.failed.map((f) => ({
                 ...f,
                 displayName: recipe.terminals[f.index]
@@ -455,9 +548,23 @@ export function useRecipeRunner({
     [activeWorktreeId]
   );
 
+  // The banner stays while the editor is open, so closing it hands focus back
+  // to Review; the next run clears it. The editor opens a blank draft for an
+  // id it can't find, and a plugin's recipe isn't the canvas's to edit.
+  const reviewChangedRecipe = useCallback(() => {
+    if (changedRecipe?.current !== "editable") return;
+    handleEdit(changedRecipe.recipeId);
+  }, [changedRecipe, handleEdit]);
+
+  const dismissChangedRecipe = useCallback(() => {
+    setChangedRecipeRun(null);
+  }, []);
+
   const handleDuplicate = useCallback(
     (recipeId: string) => {
-      const recipe = getRecipeById(recipeId);
+      // The row's own recipe, not `getRecipeById`'s: a row badged as overridden
+      // by a team recipe copies itself, not the team recipe (#17200).
+      const recipe = allRecipes.find((r) => r.id === recipeId);
       if (!recipe) return;
       // A plugin's panel steps and variables only work in its own recipe (#13797).
       if (recipeUsesPluginOnlyFeatures(recipe)) {
@@ -471,44 +578,64 @@ export function useRecipeRunner({
         });
         return;
       }
-      // Pick a name that doesn't collide with any existing recipe name —
-      // otherwise duplicating a recipe twice produces two same-named copies
-      // that slug to the same on-disk filename and overwrite each other.
-      const existingNames = new Set(allRecipes.map((r) => r.name));
-      const copyName = nextDuplicateName(recipe.name, existingNames);
-      void createRecipe(
-        recipe.projectId,
-        copyName,
-        recipe.worktreeId,
-        recipe.terminals,
-        false,
-        recipe.autoAssign
-      );
+      // The store picks a name no existing recipe has — otherwise duplicating a
+      // recipe twice produces two same-named copies that slug to the same
+      // on-disk filename and overwrite each other — and the copy's tier.
+      const duplicate = () => {
+        duplicateRecipe(recipe.id).catch((err: unknown) => {
+          logError("Failed to duplicate recipe", err);
+          notify({
+            type: "error",
+            title: "Couldn't duplicate recipe",
+            message: `The copy couldn't be saved: ${formatErrorMessage(err, "unknown error")}`,
+            priority: "high",
+            action: { label: "Retry", onClick: duplicate },
+            context: { eventKind: "uiFeedback" },
+          });
+        });
+      };
+      duplicate();
     },
-    [getRecipeById, createRecipe, allRecipes]
+    [allRecipes, duplicateRecipe]
   );
 
-  const handlePin = useCallback(
-    (recipeId: string) => {
-      void updateRecipe(recipeId, { showInEmptyState: true });
+  // The store rolls the row back when the write rejects, so without a toast the
+  // recipe just jumps back to where it was with no explanation.
+  const setPinned = useCallback(
+    (recipeId: string, pinned: boolean) => {
+      const name = allRecipes.find((r) => r.id === recipeId)?.name ?? "this recipe";
+      updateRecipe(recipeId, { showInEmptyState: pinned }).catch((err: unknown) => {
+        logError("Failed to update recipe pin", err);
+        notify({
+          type: "error",
+          title: "Couldn't update recipe pin",
+          message: `The pin change for “${name}” couldn't be saved: ${formatErrorMessage(err, "unknown error")}`,
+          // The click did nothing else, so it stays a toast rather than inbox-only.
+          priority: "high",
+          action: { label: "Retry", onClick: () => setPinned(recipeId, pinned) },
+          context: { eventKind: "uiFeedback" },
+        });
+      });
     },
-    [updateRecipe]
+    [allRecipes, updateRecipe]
   );
 
-  const handleUnpin = useCallback(
-    (recipeId: string) => {
-      void updateRecipe(recipeId, { showInEmptyState: false });
-    },
-    [updateRecipe]
-  );
+  const handlePin = useCallback((recipeId: string) => setPinned(recipeId, true), [setPinned]);
+
+  const handleUnpin = useCallback((recipeId: string) => setPinned(recipeId, false), [setPinned]);
 
   // Route deletes through the `recipe.delete` action (danger:"confirm") behind
   // a ConfirmDialog rendered in RecipeRunner.tsx, matching RecipeManager and
   // RecipesTab — never call the store's deleteRecipe directly (Tier D1 gate).
-  const handleDelete = useCallback((recipeId: string) => {
-    setDeleteError(null);
-    setPendingDeleteId(recipeId);
-  }, []);
+  const handleDelete = useCallback(
+    (recipeId: string) => {
+      deleteRequestRef.current += 1;
+      setDeleteError(null);
+      setDeleteTarget({ id: recipeId, name: getRecipeById(recipeId)?.name ?? "recipe" });
+      setIsDeleteOpen(true);
+    },
+    [getRecipeById]
+  );
 
   const confirmDelete = useCallback(() => {
     const recipeId = pendingDeleteId;
@@ -518,6 +645,8 @@ export function useRecipeRunner({
     // "already gone" error.
     if (isConfirmingDeleteRef.current) return;
     isConfirmingDeleteRef.current = true;
+    setIsDeleting(true);
+    const request = deleteRequestRef.current;
     void (async () => {
       setDeleteError(null);
       try {
@@ -526,8 +655,9 @@ export function useRecipeRunner({
           { recipeId },
           { source: "user", confirmed: true }
         );
+        if (request !== deleteRequestRef.current) return;
         if (result.ok) {
-          setPendingDeleteId(null);
+          setIsDeleteOpen(false);
         } else {
           // Keep the dialog open with retry copy rather than closing on a silent
           // failure (the action surface is the user's only recovery path here).
@@ -536,19 +666,23 @@ export function useRecipeRunner({
         }
       } finally {
         isConfirmingDeleteRef.current = false;
+        setIsDeleting(false);
       }
     })();
   }, [pendingDeleteId]);
 
+  // The error stays with the closing confirm, like its title; the next request
+  // clears it.
   const cancelDelete = useCallback(() => {
-    setPendingDeleteId(null);
-    setDeleteError(null);
+    if (isConfirmingDeleteRef.current) return;
+    setIsDeleteOpen(false);
   }, []);
 
   const handleCreate = useCallback(() => {
+    // A folder without git has no worktree; the draft is then project-wide.
     void actionService.dispatch(
       "recipe.editor.open",
-      { worktreeId: activeWorktreeId },
+      activeWorktreeId ? { worktreeId: activeWorktreeId } : {},
       { source: "user" }
     );
   }, [activeWorktreeId]);
@@ -595,6 +729,8 @@ export function useRecipeRunner({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Confirming an IME candidate sends Enter (or 229) to the input, not the list.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       const next = keyBelongsToField(e) ? null : stepListboxCursor(e.key, focusedIndex, totalItems);
       if (next !== null) {
         e.preventDefault();
@@ -639,6 +775,8 @@ export function useRecipeRunner({
     focusedItemId,
     suggestions,
     spawnFailureSummary,
+    canRetryFailed,
+    changedRecipe,
     unresolvedVars,
     isRetryingFailed,
     handleRun,
@@ -648,6 +786,8 @@ export function useRecipeRunner({
     handleUnpin,
     handleDelete,
     pendingDeleteId,
+    deleteTarget,
+    isDeleting,
     deleteError,
     confirmDelete,
     cancelDelete,
@@ -657,6 +797,8 @@ export function useRecipeRunner({
     handleRetryFailed,
     dismissSpawnFailures,
     dismissUnresolvedVars,
+    reviewChangedRecipe,
+    dismissChangedRecipe,
     handleKeyDown,
     getFlatRecipes,
   };

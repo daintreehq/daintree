@@ -80,6 +80,9 @@ vi.mock("@/components/ui/tooltip", () => ({
 const mockPaneId = "test-pane-id";
 
 const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+const navigatorWriteText = vi
+  .fn<(text: string) => Promise<void>>()
+  .mockRejectedValue(new Error("NotAllowedError"));
 
 let nextId = 1;
 
@@ -135,8 +138,14 @@ beforeEach(() => {
   nextId = 1;
   viewport.shows = null;
   useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
+  // The guest webview may hold focus, which rejects navigator.clipboard, so
+  // the panel copies through the main-process clipboard.
+  Object.defineProperty(window, "electron", {
+    value: { clipboard: { writeText } },
+    configurable: true,
+  });
   Object.defineProperty(navigator, "clipboard", {
-    value: { writeText },
+    value: { writeText: navigatorWriteText },
     configurable: true,
   });
 });
@@ -237,6 +246,17 @@ describe("per-row copy", () => {
     await waitFor(() => expect(button.hasAttribute("data-copied")).toBe(true));
   });
 
+  it("copies through the main-process clipboard, never the renderer's", async () => {
+    seedConsoleRow({ summaryText: "focus" });
+    renderPanel();
+
+    const button = screen.getByRole("button", { name: "Copy console message" });
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button.hasAttribute("data-copied")).toBe(true));
+    expect(navigatorWriteText).not.toHaveBeenCalled();
+  });
+
   it("does not show the copied check when the clipboard write fails", async () => {
     writeText.mockRejectedValueOnce(new Error("denied"));
     seedConsoleRow({ summaryText: "rejected" });
@@ -257,6 +277,35 @@ describe("toolbar copy visible", () => {
   it("is disabled when there are no visible messages", () => {
     renderPanel();
     expect(getCopyVisibleButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("keeps the disabled button inside a hoverable wrapper so its tooltip can open", () => {
+    renderPanel();
+    expect(getCopyVisibleButton().parentElement?.tagName).toBe("SPAN");
+    expect(screen.getByRole("button", { name: "Clear console" }).parentElement?.tagName).toBe(
+      "SPAN"
+    );
+  });
+
+  it("wraps Copy but not Clear when a filter hides every message", () => {
+    seedConsoleRow({ summaryText: "alpha event" });
+    renderPanel();
+    fireEvent.change(screen.getByLabelText("Filter console messages"), {
+      target: { value: "zzz-no-match" },
+    });
+    expect(getCopyVisibleButton().parentElement?.tagName).toBe("SPAN");
+    expect(screen.getByRole("button", { name: "Clear console" }).parentElement?.tagName).not.toBe(
+      "SPAN"
+    );
+  });
+
+  it("drops the wrapper once the buttons are enabled", () => {
+    seedConsoleRow({ summaryText: "one" });
+    renderPanel();
+    expect(getCopyVisibleButton().parentElement?.tagName).not.toBe("SPAN");
+    expect(screen.getByRole("button", { name: "Clear console" }).parentElement?.tagName).not.toBe(
+      "SPAN"
+    );
   });
 
   it("copies all visible messages in order", () => {
@@ -482,6 +531,8 @@ describe("stack traces", () => {
     fireEvent.click(stackToggle()!);
     const run = screen.getByRole("button", { name: /2 library frames/ });
     expect(run.getAttribute("aria-expanded")).toBe("false");
+    // A 24px target, like the stack toggle above it (WCAG 2.5.8).
+    expect(run.className).toContain("min-h-6");
     expect(screen.getByText("beginWork").closest("[hidden]")).toBeTruthy();
 
     fireEvent.click(run);

@@ -3,6 +3,7 @@ import { Check, Copy, ExternalLink, Globe, Info, RefreshCw, RotateCw, XCircle } 
 import { Button } from "@/components/ui/button";
 import { COPIED_LABEL, COPY_FAILED_LABEL } from "@/components/ui/CopyButton";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { writeMainClipboard } from "@/lib/mainClipboard";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   PanePlaceholder,
@@ -143,8 +144,6 @@ export function BrowserLoadErrorOverlay({
     </PaneState>
   );
 }
-
-const writeMainClipboard = (text: string) => window.electron.clipboard.writeText(text);
 
 /**
  * Same notice as the dev preview's blocked-navigation banner: the host in the

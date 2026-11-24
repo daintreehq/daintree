@@ -29,6 +29,10 @@ export const REMOTE_HOSTS_METHOD_CHANNELS = {
   listPluginViewConsents: "remote-hosts:list-plugin-view-consents",
   resetPluginViewConsent: "remote-hosts:reset-plugin-view-consent",
   preparePluginView: "remote-hosts:prepare-plugin-view",
+  checkAgentForwarding: "remote-hosts:check-agent-forwarding",
+  startSshSignIn: "remote-hosts:start-ssh-sign-in",
+  answerSshSignIn: "remote-hosts:answer-ssh-sign-in",
+  cancelSshSignIn: "remote-hosts:cancel-ssh-sign-in",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof REMOTE_HOSTS_METHOD_CHANNELS;

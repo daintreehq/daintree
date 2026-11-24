@@ -659,7 +659,14 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               </Button>
             )}
             {onClose && (
-              <Button variant="outline" size="sm" onClick={handleChangeTheme}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleChangeTheme}
+                // Closing the theme browser lands back on this section; focus
+                // returns here, to the control that opened it.
+                data-settings-focus-target=""
+              >
                 Change theme…
               </Button>
             )}

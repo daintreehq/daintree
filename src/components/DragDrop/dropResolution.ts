@@ -3,6 +3,7 @@ import type { PanelKind } from "@shared/types/panel";
 import { panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
+import { parseWorktreeSortDragId } from "./SortableWorktreeCard";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -11,6 +12,8 @@ export interface OverDropData {
   sortable?: { containerId?: string; index?: number };
   type?: string;
   worktreeId?: string;
+  /** `"accordion"` on a sidebar session row, whose `worktreeId` names the card it sits in. */
+  origin?: string;
 }
 
 /** Minimal shape of a dnd-kit `ClientRect` — the fields the geometry math reads. */
@@ -230,6 +233,47 @@ export function isPanelDragMovableToWorktree(
 ): boolean {
   if (dragData?.terminal === undefined) return false;
   return dragData.origin !== "accordion" || dragData.worktreeId !== worktreeId;
+}
+
+/**
+ * The worktree whose sidebar card a drop landed on, or null. The card stacks two
+ * same-size droppables, its `worktree-drop-{id}` target inside the row's
+ * `worktree-sort-{id}` sortable, and `pointerWithin` can resolve either; the
+ * card lights up for both, so both must commit the move.
+ *
+ * An expanded card's session rows are smaller droppables inside it, so
+ * `pointerWithin` ranks a hovered row first. A row counts as its own worktree's
+ * card (#16920); otherwise a grid or dock panel dropped there fell through to a
+ * reorder at the row's index in that worktree's list. A deleted worktree's row
+ * names that worktree, which the move refuses.
+ */
+export function resolveCardDropWorktreeId(
+  overData: OverDropData | undefined,
+  overId: string | number
+): string | null {
+  if (overData?.type === "worktree" && overData.worktreeId) return overData.worktreeId;
+  if (overData?.origin === "accordion") return overData.worktreeId || null;
+  return parseWorktreeSortDragId(overId) || null;
+}
+
+/** The fields of dnd-kit's `over` a worktree card reads. */
+export interface WorktreeCardOver {
+  id: string | number;
+  data: { current?: OverDropData };
+}
+
+/**
+ * Whether the card lights up for the drag in hand: a panel drag it would take,
+ * over any droppable that {@link resolveCardDropWorktreeId} reads as this card,
+ * so the highlight holds across its expanded session rows (#16920).
+ */
+export function isPanelDragOverWorktreeCard(
+  dragData: WorktreeCardDragData | undefined,
+  over: WorktreeCardOver | null,
+  worktreeId: string
+): boolean {
+  if (!over || !isPanelDragMovableToWorktree(dragData, worktreeId)) return false;
+  return resolveCardDropWorktreeId(over.data.current, over.id) === worktreeId;
 }
 
 /** Minimal dnd-kit droppable shape the dock collision filter reads. */

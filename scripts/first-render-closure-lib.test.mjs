@@ -149,6 +149,48 @@ describe("computeFirstRenderPreloadFiles", () => {
     expect(files).not.toContain("vendor-react.js");
   });
 
+  it("preloads a seed that is itself an entry instead of subtracting its closure", () => {
+    // The project shell is emitted as an entry that index.html never
+    // references, so nothing auto-preloads it: subtracting its closure as
+    // "already preloaded" would leave the shell and its private chunks to load
+    // in a waterfall after the HTML entry runs.
+    const chunks = [
+      {
+        type: "chunk",
+        fileName: "entry.js",
+        isEntry: true,
+        facadeModuleId: "src/main.tsx",
+        imports: ["boot.js"],
+        dynamicImports: [],
+      },
+      { type: "chunk", fileName: "boot.js", imports: [], dynamicImports: [] },
+      {
+        type: "chunk",
+        fileName: "project-shell.js",
+        isEntry: true,
+        facadeModuleId: "src/projectWindow/projectShell.tsx",
+        imports: ["boot.js", "boot2.js"],
+        dynamicImports: ["app.js"],
+      },
+      { type: "chunk", fileName: "boot2.js", imports: [], dynamicImports: [] },
+      {
+        type: "chunk",
+        fileName: "app.js",
+        facadeModuleId: "src/App.tsx",
+        imports: ["boot2.js", "vendor-app.js"],
+        dynamicImports: [],
+      },
+      { type: "chunk", fileName: "vendor-app.js", imports: [], dynamicImports: [] },
+    ];
+    const { files, matchedSeedCount } = computeFirstRenderPreloadFiles(
+      chunks,
+      new Set(["src/projectWindow/projectShell.tsx", "src/App.tsx"]),
+      identity
+    );
+    expect(matchedSeedCount).toBe(2);
+    expect(files).toEqual(["app.js", "boot2.js", "project-shell.js", "vendor-app.js"]);
+  });
+
   it("never injects a chunk reachable only through a dynamic import (the domMax guard)", () => {
     const chunks = [
       {

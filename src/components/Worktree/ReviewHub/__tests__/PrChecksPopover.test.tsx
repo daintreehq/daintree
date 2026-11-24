@@ -109,6 +109,12 @@ function deferred<T>() {
 }
 
 describe("PrChecksPopover", () => {
+  it("holds a 24px hit box for the trigger without growing the header", () => {
+    renderPopover();
+    expect(trigger().className).toContain("min-h-6");
+    expect(trigger().className).toContain("-my-0.5");
+  });
+
   it("reads nothing until the disclosure is opened", async () => {
     renderPopover();
     fireEvent.pointerEnter(trigger());
@@ -379,6 +385,66 @@ describe("PrChecksPopover", () => {
     expect(document.activeElement).toBe(screen.getByTestId("pr-checks-reload"));
   });
 
+  it("spins the refresh glyph and ignores a second click while a read is in flight", async () => {
+    const first = deferred<{ checks: ForgeCheckRun[] }>();
+    getChecksMock.mockReturnValueOnce(first.promise);
+    renderPopover();
+    fireEvent.click(trigger());
+    await waitFor(() => expect(getChecksMock).toHaveBeenCalledTimes(1));
+
+    const reload = screen.getByTestId("pr-checks-reload");
+    expect(reload.getAttribute("aria-busy")).toBe("true");
+    expect(reload.getAttribute("aria-disabled")).toBeNull();
+    expect(reload.querySelector("[data-spinning]")).not.toBeNull();
+    fireEvent.click(reload);
+    expect(getChecksMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      first.resolve({ checks: [check()] });
+    });
+    await screen.findByTestId("pr-checks-list");
+    expect(screen.getByTestId("pr-checks-reload").getAttribute("aria-busy")).toBeNull();
+    expect(screen.getByTestId("pr-checks-reload").textContent).toBe("Refresh");
+  });
+
+  it("keeps the Retry label through the read a retry started", async () => {
+    getChecksMock.mockRejectedValueOnce(new Error("boom"));
+    renderPopover();
+    await openAndSettle();
+    await screen.findByTestId("pr-checks-error");
+
+    const pending = deferred<{ checks: ForgeCheckRun[] }>();
+    getChecksMock.mockReturnValueOnce(pending.promise);
+    fireEvent.click(screen.getByTestId("pr-checks-reload"));
+    expect(screen.getByTestId("pr-checks-reload").getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByTestId("pr-checks-reload").textContent).toBe("Retry");
+
+    await act(async () => {
+      pending.resolve({ checks: [check()] });
+    });
+    await screen.findByTestId("pr-checks-list");
+    expect(screen.getByTestId("pr-checks-reload").textContent).toBe("Refresh");
+  });
+
+  it("does not carry a pending Retry's label into a fresh opening", async () => {
+    getChecksMock.mockRejectedValueOnce(new Error("boom"));
+    renderPopover();
+    await openAndSettle();
+    await screen.findByTestId("pr-checks-error");
+
+    getChecksMock.mockReturnValueOnce(deferred<{ checks: ForgeCheckRun[] }>().promise);
+    fireEvent.click(screen.getByTestId("pr-checks-reload"));
+    expect(screen.getByTestId("pr-checks-reload").textContent).toBe("Retry");
+
+    fireEvent.click(trigger());
+    getChecksMock.mockReturnValueOnce(deferred<{ checks: ForgeCheckRun[] }>().promise);
+    fireEvent.click(trigger());
+    await waitFor(() => expect(getChecksMock).toHaveBeenCalledTimes(3));
+    const reload = screen.getByTestId("pr-checks-reload");
+    expect(reload.getAttribute("aria-busy")).toBe("true");
+    expect(reload.textContent).toBe("Refresh");
+  });
+
   it("replaces the previous snapshot on reload rather than merging into it", async () => {
     getChecksMock.mockResolvedValueOnce({ checks: [check({ name: "old" })] });
     renderPopover();
@@ -476,8 +542,10 @@ describe("PrChecksPopover", () => {
     fireEvent.click(trigger());
     await waitFor(() => expect(getChecksMock).toHaveBeenCalledTimes(1));
 
+    // Close and reopen: Refresh itself ignores clicks while a read is in flight.
+    fireEvent.click(trigger());
     getChecksMock.mockResolvedValue({ checks: [check({ name: "fresh" })] });
-    fireEvent.click(screen.getByTestId("pr-checks-reload"));
+    fireEvent.click(trigger());
     await screen.findByText("fresh");
 
     await act(async () => {
@@ -614,9 +682,10 @@ describe("PrChecksPopover", () => {
 
     const toggle = screen.getByTestId("pr-checks-settled-toggle");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(toggle.textContent).toContain("1 passed");
+    expect(toggle.textContent).toBe("1 passed");
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent).toBe("1 passed");
     expect(list.textContent).toContain("lint");
   });
 
@@ -925,6 +994,99 @@ describe("PrChecksPopover", () => {
         expect(error.textContent).toMatch(/The forge didn't answer/);
         expect(error.textContent).not.toMatch(/GitHub/);
       });
+    });
+  });
+
+  describe("named the way GitLab names a merge request (#17216)", () => {
+    const MR_URL = "https://gitlab.com/group/project/-/merge_requests/42";
+    const renderMR = () =>
+      renderPopover({
+        prUrl: MR_URL,
+        prTerm: "merge-request",
+        triggerDescription: "Merge request !42 open — CI failing",
+      });
+    // The popover's one polite region; a banner inside it is a status too.
+    const statusRegion = () =>
+      document.querySelector('[role="status"][aria-live="polite"]')?.textContent ?? "";
+
+    it("lists the jobs and hands the failing ones off as the merge request's", async () => {
+      getChecksMock.mockResolvedValue({
+        checks: [
+          check({ name: "rspec", conclusion: "failure", workflow: "test" }),
+          check({ name: "lint", conclusion: "success", workflow: "test" }),
+        ],
+      });
+      renderMR();
+
+      await openAndSettle();
+      const popover = screen.getByTestId("pr-checks-popover");
+      expect(popover.getAttribute("aria-label")).toBe("CI checks for merge request !42");
+      await waitFor(() => expect(popover.textContent).toContain("rspec"));
+      expandSettled();
+      expect(popover.textContent).toContain("lint");
+      fireEvent.click(await screen.findByTestId("pr-checks-send"));
+
+      const [{ text, sourceLabel }] = openSendToAgentMock.mock.calls[0]!;
+      expect(sourceLabel).toBe("MR !42");
+      expect(text).toContain("merge request 42");
+      expect(text).not.toMatch(/pull request/i);
+      const payload = JSON.parse(text.slice(text.indexOf("{\n"), text.lastIndexOf("}") + 1)) as {
+        checks: Array<{ name: string }>;
+      };
+      expect(payload.checks.map((entry) => entry.name)).toEqual(["rspec"]);
+    });
+
+    it("says the checks couldn't be read and links out to the merge request", async () => {
+      getChecksMock.mockRejectedValue(new Error("offline"));
+      renderMR();
+
+      await openAndSettle();
+      const banner = await screen.findByTestId("pr-checks-error");
+      expect(banner.textContent).toMatch(/open the merge request to see them there/);
+      const open = screen.getByTestId("pr-checks-open-pr");
+      expect(open.textContent).toBe("Open merge request");
+      fireEvent.click(open);
+      expect(onOpenExternal).toHaveBeenCalledWith(MR_URL);
+    });
+
+    it("says which merge request wasn't found", async () => {
+      getChecksMock.mockResolvedValue(null);
+      renderMR();
+
+      await openAndSettle();
+      const banner = await screen.findByTestId("pr-checks-missing");
+      expect(banner.textContent).toMatch(/^Merge request !42 wasn't found/);
+      await waitFor(() => expect(statusRegion()).toMatch(/^Merge request !42 wasn't found\./));
+    });
+
+    it("says no CI has reported on the merge request yet", async () => {
+      getChecksMock.mockResolvedValue({ checks: [] });
+      renderMR();
+
+      await openAndSettle();
+      await screen.findByTestId("pr-checks-empty");
+      await waitFor(() =>
+        expect(statusRegion()).toMatch(/No CI checks have reported on merge request !42 yet/)
+      );
+    });
+
+    it("calls a draft a draft merge request", async () => {
+      getChecksMock.mockResolvedValue({ checks: [check()] });
+      getPRMock.mockResolvedValue({
+        number: 42,
+        title: "Add feature",
+        url: MR_URL,
+        state: "open",
+        isDraft: true,
+        baseRef: "main",
+        rawData: {},
+      });
+      renderMR();
+
+      await openAndSettle();
+      const row = await screen.findByTestId("pr-merge-control");
+      expect(row.textContent).toMatch(/Draft merge request/);
+      expect(screen.getByTestId("pr-merge-open-pr").textContent).toBe("Open merge request");
     });
   });
 });

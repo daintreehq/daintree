@@ -14,17 +14,29 @@ vi.mock("../CodexAppServerClient.js", async () => {
   return { ...actual, runCodexAppServerSession: runSession };
 });
 
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CodexAppServerError } from "../CodexAppServerClient.js";
+import { canonicalCodexHomeKey } from "../CodexQuotaProfiles.js";
 import {
   normalizeCodexRateLimits,
+  readCodexHomeLimitEvidence,
   readCodexQuota,
+  readCodexQuotaForHomes,
   readCodexQuotaProfiles,
   refreshCodexQuota,
   refreshCodexQuotaProfiles,
   resetCodexQuotaCacheForTests,
+  toCodexLimitEvidence,
 } from "../CodexQuotaService.js";
 
 type Call = (method: string, params?: unknown) => Promise<unknown>;
@@ -234,6 +246,179 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     if (originalHome === undefined) delete process.env.CODEX_HOME;
     else process.env.CODEX_HOME = originalHome;
     rmSync(root, { recursive: true, force: true });
+  });
+
+  describe("readCodexQuotaForHomes (#17318)", () => {
+    async function homes(...dirs: string[]): Promise<Map<string, string>> {
+      return new Map(
+        await Promise.all(dirs.map(async (dir) => [await canonicalCodexHomeKey(dir), dir] as const))
+      );
+    }
+
+    it("asks only about the homes an agent runs in, labelled as Settings labels them", async () => {
+      const idle = path.join(root, "idle");
+      mkdirSync(idle);
+      presets(
+        { id: "second", name: "Second account", env: { CODEX_HOME: second } },
+        { id: "idle", name: "Idle", env: { CODEX_HOME: idle } }
+      );
+      respondPerHome((home) => (home === second ? 80 : 10));
+      const readings = await readCodexQuotaForHomes(await homes(second));
+      expect(readings).toHaveLength(1);
+      expect(readings[0]).toMatchObject({
+        homeKey: await canonicalCodexHomeKey(second),
+        isDefault: false,
+        presetNames: ["Second account"],
+      });
+      expect(used(readings[0]!.result)).toBe(80);
+      expect(runSession.mock.calls.map((call) => call[1])).toEqual([{ codexHome: second }]);
+    });
+
+    it("names a saved account's home by the account", async () => {
+      agentSettings.value = {
+        agents: { codex: { accounts: [{ id: "company", name: "Company", configDir: second }] } },
+      };
+      respondPerHome(() => 55);
+      const readings = await readCodexQuotaForHomes(await homes(second));
+      expect(readings).toMatchObject([{ accountNames: ["Company"], presetNames: [] }]);
+    });
+
+    it("reads a home no profile names the way the pane runs it, unlabelled", async () => {
+      const projectHome = path.join(root, "project-home");
+      mkdirSync(projectHome);
+      respondPerHome((home) => (home === projectHome ? 64 : 10));
+      const readings = await readCodexQuotaForHomes(await homes(projectHome));
+      expect(readings).toHaveLength(1);
+      expect(readings[0]).toMatchObject({ isDefault: false, accountNames: [], presetNames: [] });
+      expect(used(readings[0]!.result)).toBe(64);
+      expect(runSession.mock.calls.map((call) => call[1])).toEqual([{ codexHome: projectHome }]);
+    });
+
+    it("never starts Codex for a home that isn't there, or for no home at all", async () => {
+      respondPerHome(() => 10);
+      expect(await readCodexQuotaForHomes(new Map())).toEqual([]);
+      expect(await readCodexQuotaForHomes(await homes(path.join(root, "gone")))).toEqual([]);
+      expect(runSession).not.toHaveBeenCalled();
+    });
+
+    describe("a background read nobody wants by its turn (#17981)", () => {
+      /** Holds the queue on a read of the default home until `open` is called. */
+      function holdQueue() {
+        let open!: () => void;
+        const gate = new Promise<void>((resolve) => (open = resolve));
+        const asked: Array<string | undefined> = [];
+        runSession.mockImplementation(
+          async (
+            run: (call: Call) => Promise<unknown>,
+            options: { codexHome?: string; beforeSpawn?: () => void } = {}
+          ) => {
+            if (options.codexHome === realpathSync.native(defaultHome)) await gate;
+            // As the transport does once a slot is held: a throw here spawns nothing.
+            options.beforeSpawn?.();
+            asked.push(options.codexHome);
+            return run(async () => ({
+              rateLimits: { primary: { usedPercent: 33, windowDurationMins: 300 } },
+            }));
+          }
+        );
+        const held = readCodexHomeLimitEvidence(defaultHome);
+        return { open, held, asked };
+      }
+
+      const turn = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+      it("is dropped without starting Codex, and a later read of the home still asks", async () => {
+        const queue = holdQueue();
+        let wanted = true;
+        const background = readCodexQuotaForHomes(await homes(second), () => wanted);
+        await turn();
+        wanted = false;
+        queue.open();
+        await queue.held;
+        await expect(background).resolves.toEqual([]);
+        expect(queue.asked).toEqual([realpathSync.native(defaultHome)]);
+
+        // Nothing was cached for it, so the next caller asks rather than reading a drop.
+        const readings = await readCodexQuotaForHomes(await homes(second));
+        expect(readings).toHaveLength(1);
+        expect(queue.asked).toEqual([realpathSync.native(defaultHome), second]);
+      });
+
+      it("caches nothing for a read nobody wants whose slot never came", async () => {
+        let wanted = true;
+        runSession.mockImplementationOnce(async () => {
+          // Demand went while it waited for a transport slot, which then timed out.
+          wanted = false;
+          throw new CodexAppServerError("timeout", "Codex app-server timed out awaiting a slot");
+        });
+        await expect(readCodexQuotaForHomes(await homes(second), () => wanted)).resolves.toEqual(
+          []
+        );
+        respondPerHome(() => 21);
+        const readings = await readCodexQuotaForHomes(await homes(second));
+        expect(used(readings[0]!.result)).toBe(21);
+      });
+
+      it("still runs for a watch started again that joined a stopped watch's queued read", async () => {
+        const queue = holdQueue();
+        let stoppedWants = true;
+        const stopped = readCodexQuotaForHomes(await homes(second), () => stoppedWants);
+        await turn();
+        stoppedWants = false;
+        const restarted = readCodexQuotaForHomes(await homes(second), () => true);
+        await turn();
+        queue.open();
+        await queue.held;
+        const [old, fresh] = await Promise.all([stopped, restarted]);
+        expect(fresh).toHaveLength(1);
+        expect(old).toEqual(fresh);
+        expect(queue.asked.filter((home) => home === second)).toHaveLength(1);
+      });
+
+      it("is dropped when every background caller waiting on it has stopped wanting it", async () => {
+        const queue = holdQueue();
+        let wanted = true;
+        const first = readCodexQuotaForHomes(await homes(second), () => wanted);
+        await turn();
+        const again = readCodexQuotaForHomes(await homes(second), () => wanted);
+        await turn();
+        wanted = false;
+        queue.open();
+        await queue.held;
+        await expect(Promise.all([first, again])).resolves.toEqual([[], []]);
+        expect(queue.asked).toEqual([realpathSync.native(defaultHome)]);
+      });
+
+      it("runs a queued background read that's still wanted by its turn", async () => {
+        const queue = holdQueue();
+        const background = readCodexQuotaForHomes(await homes(second), () => true);
+        await turn();
+        queue.open();
+        await queue.held;
+        const readings = await background;
+        expect(readings).toHaveLength(1);
+        expect(used(readings[0]!.result)).toBe(33);
+        expect(queue.asked).toEqual([realpathSync.native(defaultHome), second]);
+      });
+
+      it("still runs once a caller that needs the answer has joined it", async () => {
+        const queue = holdQueue();
+        let wanted = true;
+        const background = readCodexQuotaForHomes(await homes(second), () => wanted);
+        await turn();
+        // Asked with no way to be dropped: it joins the queued read rather than queueing a second.
+        const explicit = readCodexQuotaForHomes(await homes(second));
+        await turn();
+        wanted = false;
+        queue.open();
+        await queue.held;
+        const [readings, needed] = await Promise.all([background, explicit]);
+        expect(readings).toHaveLength(1);
+        expect(used(readings[0]!.result)).toBe(33);
+        expect(needed).toEqual(readings);
+        expect(queue.asked.filter((home) => home === second)).toHaveLength(1);
+      });
+    });
   });
 
   it("reads only the default profile when no preset sets a home", async () => {
@@ -772,5 +957,172 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     );
     const profiles = await readCodexQuotaProfiles();
     expect(profiles.map((p) => p.result.status)).toEqual(["unavailable", "ok"]);
+  });
+});
+
+describe("toCodexLimitEvidence (#17906)", () => {
+  it("keeps every bucket of the per-limit map, a window with no duration included", () => {
+    const evidence = toCodexLimitEvidence(
+      {
+        rateLimits: { limitId: "codex", primary: FIVE_HOURS },
+        rateLimitsByLimitId: {
+          codex: { limitId: "codex", limitName: null, primary: FIVE_HOURS, secondary: WEEK },
+          codex_bengalfox: {
+            limitId: "codex_bengalfox",
+            limitName: "GPT-5.5-Codex",
+            primary: { usedPercent: 100, windowDurationMins: null, resetsAt: 1_700_000_100 },
+            secondary: null,
+          },
+          // No id inside the snapshot, and a spent window with no reset.
+          "gpt-reserve": {
+            limitName: "gpt-reserve",
+            primary: { usedPercent: 100, windowDurationMins: 300, resetsAt: null },
+          },
+        },
+      },
+      7,
+      9
+    );
+    expect(evidence).toEqual({
+      requestedAt: 7,
+      receivedAt: 9,
+      buckets: [
+        {
+          limitId: "codex",
+          limitName: null,
+          windows: [
+            { usedPercent: 42.4, resetsAt: 1_700_000_000_000 },
+            { usedPercent: 12, resetsAt: 1_700_500_000_000 },
+          ],
+          unreadable: false,
+        },
+        {
+          limitId: "codex_bengalfox",
+          limitName: "GPT-5.5-Codex",
+          windows: [{ usedPercent: 100, resetsAt: 1_700_000_100_000 }],
+          unreadable: false,
+        },
+        {
+          limitId: "gpt-reserve",
+          limitName: "gpt-reserve",
+          windows: [{ usedPercent: 100, resetsAt: null }],
+          unreadable: false,
+        },
+      ],
+    });
+  });
+
+  it("reads an older CLI's single snapshot, and marks a window it can't read", () => {
+    expect(
+      toCodexLimitEvidence(
+        { rateLimits: { primary: { usedPercent: "full" }, secondary: WEEK } },
+        1,
+        2
+      )
+    ).toEqual({
+      requestedAt: 1,
+      receivedAt: 2,
+      buckets: [
+        {
+          limitId: null,
+          limitName: null,
+          windows: [{ usedPercent: 12, resetsAt: 1_700_500_000_000 }],
+          unreadable: true,
+        },
+      ],
+    });
+    expect(toCodexLimitEvidence(null, 1, 2)).toBeNull();
+  });
+});
+
+describe("readCodexHomeLimitEvidence (#17906)", () => {
+  let root: string;
+  let home: string;
+
+  beforeEach(() => {
+    runSession.mockReset();
+    resetCodexQuotaCacheForTests();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    root = mkdtempSync(path.join(os.tmpdir(), "codex-limit-"));
+    home = path.join(root, "work");
+    mkdirSync(home);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("asks the pane's own home, stamped with when the request went out and came back", async () => {
+    runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) => {
+      // Queued behind other work: the request leaves later than the caller asked.
+      vi.setSystemTime(1_000_500);
+      return run(async () => {
+        vi.setSystemTime(1_002_000);
+        return { rateLimits: { primary: FIVE_HOURS } };
+      });
+    });
+    const evidence = await readCodexHomeLimitEvidence(home);
+    expect(runSession).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ codexHome: realpathSync.native(home) })
+    );
+    expect(evidence).toMatchObject({ requestedAt: 1_000_500, receivedAt: 1_002_000 });
+    expect(evidence?.buckets[0]?.windows).toEqual([
+      { usedPercent: 42.4, resetsAt: 1_700_000_000_000 },
+    ]);
+  });
+
+  it("asks anew every time, never taking or leaving a cached reading", async () => {
+    respondWith(() => ({ rateLimits: { primary: FIVE_HOURS } }));
+    const physicalHome = realpathSync.native(home);
+    const homes = new Map([[await canonicalCodexHomeKey(physicalHome), physicalHome]]);
+    await readCodexQuotaForHomes(homes);
+    await readCodexHomeLimitEvidence(home);
+    await readCodexHomeLimitEvidence(home);
+    expect(runSession).toHaveBeenCalledTimes(3);
+    // The usage read still serves its own cache, untouched by the two above.
+    await readCodexQuotaForHomes(homes);
+    expect(runSession).toHaveBeenCalledTimes(3);
+  });
+
+  it("asks the folder a link names, as it names it when asked", async () => {
+    const link = path.join(root, "current");
+    symlinkSync(home, link, "junction");
+    const asked: Array<string | undefined> = [];
+    runSession.mockImplementation(
+      async (run: (call: Call) => Promise<unknown>, options: { codexHome?: string } = {}) => {
+        asked.push(options.codexHome);
+        return run(async () => ({ rateLimits: { primary: FIVE_HOURS } }));
+      }
+    );
+    await readCodexHomeLimitEvidence(link);
+    expect(asked).toEqual([realpathSync.native(home)]);
+  });
+
+  it("keeps the evidence when the session dies during the account read", async () => {
+    runSession.mockImplementation(async (run: (call: Call) => Promise<unknown>) => {
+      void run(async (method) => {
+        if (method === "account/rateLimits/read") {
+          return { rateLimits: { primary: FIVE_HOURS }, accountId: "ws-1" };
+        }
+        return new Promise(() => {});
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      vi.setSystemTime(1_009_000);
+      throw new CodexAppServerError("timeout", "session deadline");
+    });
+    const evidence = await readCodexHomeLimitEvidence(home);
+    expect(evidence).toMatchObject({
+      requestedAt: 1_000_000,
+      receivedAt: 1_000_000,
+      buckets: [{ limitId: null, windows: [{ usedPercent: 42.4 }] }],
+    });
+  });
+
+  it("never asks about a home Codex hasn't made", async () => {
+    expect(await readCodexHomeLimitEvidence(path.join(root, "missing"))).toBeNull();
+    expect(runSession).not.toHaveBeenCalled();
   });
 });

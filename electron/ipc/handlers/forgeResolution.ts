@@ -20,6 +20,7 @@ import type {
   IssueTooltipData,
   Page,
   RepoRef,
+  ResolvedForgeProvider,
 } from "../../../shared/types/forge.js";
 import type { IssueLinkTarget } from "../../../shared/types/ipc/forge.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -171,6 +172,66 @@ export async function resolveEffectiveForgeRemote(
   });
   if (missingConfiguredRemote) throw new StaleForgeRemoteError(missingConfiguredRemote);
   return remote ? { name: remote.name, fetchUrl: remote.fetchUrl } : null;
+}
+
+/**
+ * The forge provider a project is set to use for each role, read from its
+ * settings, its selected remote and the global default. Activates nothing,
+ * unlike {@link resolveForCwd}, so a caller can ask which plugin a project
+ * would use before deciding whether to wake it.
+ *
+ * `remoteUrl` asks about one specific remote instead of the project's
+ * selection. A stale configured remote throws {@link StaleForgeRemoteError}
+ * unless an issues override can still answer for the issues role.
+ */
+export async function resolveProjectForgeProvider(
+  projectId: string,
+  remoteUrl?: string | null
+): Promise<ResolvedForgeProvider> {
+  const project = projectStore.getProjectById(projectId);
+  if (!project) return { entry: null, resolvedVia: null };
+
+  const settings = await projectStore.getProjectSettings(projectId).catch(() => null);
+  const forgeProviderOverride = settings?.forgeProviderOverride ?? null;
+  const issueProviderOverride = settings?.issueProviderOverride ?? null;
+
+  let effectiveRemoteUrl: string | null;
+  if (typeof remoteUrl === "string" && remoteUrl.length > 0) {
+    // An explicit URL means the caller is asking about one specific remote
+    // (the Settings routing panel probes each in turn) — the project's
+    // selection must not override that.
+    effectiveRemoteUrl = remoteUrl;
+  } else {
+    // No URL: answer for whichever remote the project actually routes through
+    // (#11408). An origin-only lookup here hid issues and PRs on every fork or
+    // mirror whose forge remote is named something else.
+    const gitService = gitServiceCache.getGitService(project.path);
+    try {
+      effectiveRemoteUrl = await resolveEffectiveRemoteUrl(
+        gitService,
+        project.path,
+        settings?.forgeRemote ?? settings?.githubRemote ?? null,
+        forgeProviderOverride
+      );
+    } catch (error) {
+      // A stale code remote leaves no code provider, but a bound issues
+      // provider has no remote to go stale (#13700) — still answer for it.
+      if (!issueProviderOverride) throw error;
+      return resolveForgeProvider({
+        remoteUrl: null,
+        forgeProviderOverride: null,
+        globalDefaultProviderId: null,
+        issueProviderOverride,
+      });
+    }
+  }
+
+  return resolveForgeProvider({
+    remoteUrl: effectiveRemoteUrl,
+    forgeProviderOverride,
+    globalDefaultProviderId: normalizeProviderId(store.get("forgeDefaultProviderId")),
+    issueProviderOverride,
+  });
 }
 
 /**

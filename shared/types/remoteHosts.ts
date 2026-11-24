@@ -1,5 +1,7 @@
+import type { AgentUsageReading } from "./ipc/agentUsage.js";
 import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
 import type { HostWakeSetup } from "./hostWake.js";
+import type { HostIdleObservation } from "./hostIdle.js";
 import type { FolderMaterializeProgress } from "./ipc/fileTransfer.js";
 
 /**
@@ -129,8 +131,9 @@ export function isBlockingMismatch(mismatch: HandshakeMismatch): boolean {
   return mismatch.kind === "protocol";
 }
 
-/** How a host was found. Discovery only proves reachability; `wsl` is a distro installed on this PC. */
-export type HostDiscoverySource = "tailscale" | "netbird" | "bonjour" | "manual" | "wsl";
+/** How a host was found. Discovery only proves reachability; `wsl` is a distro installed on this PC, `ssh-config` an alias the user's ssh config names. */
+export type HostDiscoverySource =
+  "tailscale" | "netbird" | "bonjour" | "ssh-config" | "manual" | "wsl";
 
 /**
  * How this client reaches a host. Each kind names the one command that gets a
@@ -148,6 +151,15 @@ export type HostConnection =
       kind: "wsl";
       /** The distro's name as `wsl.exe -l` lists it, e.g. `Ubuntu-24.04`. */
       distro: string;
+    }
+  | {
+      /**
+       * A machine a cloud provider runs, reached over ssh once it is running.
+       * Not an address: the binding names the provider's machine, and how to
+       * reach it is resolved afresh each time it starts (see shared/types/cloudHosts.ts).
+       */
+      kind: "cloud";
+      bindingId: string;
     };
 
 export type HostConnectionKind = HostConnection["kind"];
@@ -158,6 +170,17 @@ export function sshConnection(target: string): HostConnection {
 
 export function wslConnection(distro: string): HostConnection {
   return { kind: "wsl", distro };
+}
+
+export function cloudConnection(bindingId: string): HostConnection {
+  return { kind: "cloud", bindingId };
+}
+
+const CLOUD_BINDING_ID = /^cb_[a-z0-9]{8,32}$/;
+
+/** The binding id of a cloud connection: opaque, never an address. */
+export function isValidCloudBindingId(id: unknown): id is string {
+  return typeof id === "string" && CLOUD_BINDING_ID.test(id);
 }
 
 /**
@@ -178,6 +201,8 @@ export function formatHostConnection(connection: HostConnection): string {
       return connection.target;
     case "wsl":
       return `${connection.distro} (WSL)`;
+    case "cloud":
+      return "Cloud machine";
     default:
       // A kind this build doesn't know (a newer build's settings): name the kind.
       return (connection as { kind: string }).kind;
@@ -204,6 +229,7 @@ export function sameHostConnection(a: HostConnection, b: HostConnection): boolea
   // WSL looks distro names up without regard to case.
   if (a.kind === "wsl" && b.kind === "wsl")
     return a.distro.toLowerCase() === b.distro.toLowerCase();
+  if (a.kind === "cloud" && b.kind === "cloud") return a.bindingId === b.bindingId;
   return false;
 }
 
@@ -272,7 +298,7 @@ export function readStoredHostConnection(entry: {
   sshTarget?: unknown;
 }): HostConnection | null {
   const connection = entry.connection as
-    { kind?: unknown; target?: unknown; distro?: unknown } | null | undefined;
+    { kind?: unknown; target?: unknown; distro?: unknown; bindingId?: unknown } | null | undefined;
   if (connection && typeof connection === "object") {
     if (connection.kind === "ssh" && typeof connection.target === "string") {
       return sshConnection(connection.target);
@@ -280,9 +306,84 @@ export function readStoredHostConnection(entry: {
     if (connection.kind === "wsl" && typeof connection.distro === "string") {
       return wslConnection(connection.distro);
     }
+    const binding = (connection as { bindingId?: unknown }).bindingId;
+    if (connection.kind === "cloud" && typeof binding === "string") {
+      return cloudConnection(binding);
+    }
     return null;
   }
   return typeof entry.sshTarget === "string" ? sshConnection(entry.sshTarget) : null;
+}
+
+/** Longest a pending placement's label or failure is kept; the rest is cut. Ids and paths never are. */
+const MAX_PLACEMENT_TEXT = 500;
+
+/**
+ * A worktree waiting for a host's setup (install, Host mode, connect) to
+ * finish before it opens there (#17355). Kept on the host's record, so it
+ * survives a restart and goes when the host does; once the host is usable,
+ * the worktree's project view hands it to the host switch dialog.
+ */
+export interface PendingHostPlacement {
+  /** The local project the worktree belongs to. */
+  projectId: string;
+  /** The worktree's id in that project. */
+  worktreeId: string;
+  /** Where its branch is checked out: what the host switch places. */
+  worktreePath: string;
+  /** What the worktree is called where it shows: its branch or its name. */
+  label: string;
+  /** Epoch ms it was asked for; also tells one placement from the next on the same host. */
+  requestedAt: number;
+  /** Asked for by an agent or a plugin: the switch dialog asks before it moves the window. */
+  askFirst?: true;
+  /**
+   * The host's machine was created for this worktree (#17359): the placement
+   * holds until the window has opened there, and cancelling it offers to
+   * delete that machine.
+   */
+  createdMachine?: true;
+  /** The last setup step that failed, as it said; the placement stays pending through it. */
+  failure?: { message: string; at: number };
+}
+
+function placementText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, MAX_PLACEMENT_TEXT) : null;
+}
+
+/** An id or a path, exactly as given: changing one would name another worktree. */
+function placementIdentity(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+/** A stored or sent pending placement that still reads as one, or null. */
+export function readPendingPlacement(value: unknown): PendingHostPlacement | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const projectId = placementIdentity(raw.projectId);
+  const worktreeId = placementIdentity(raw.worktreeId);
+  const worktreePath = placementIdentity(raw.worktreePath);
+  const label = placementText(raw.label);
+  const requestedAt = raw.requestedAt;
+  if (!projectId || !worktreeId || !worktreePath || !label) return null;
+  if (typeof requestedAt !== "number" || !Number.isFinite(requestedAt)) return null;
+  const placement: PendingHostPlacement = {
+    projectId,
+    worktreeId,
+    worktreePath,
+    label,
+    requestedAt,
+  };
+  if (raw.askFirst === true) placement.askFirst = true;
+  if (raw.createdMachine === true) placement.createdMachine = true;
+  const failure = raw.failure as Record<string, unknown> | null | undefined;
+  const message = failure && typeof failure === "object" ? placementText(failure.message) : null;
+  if (message && typeof failure?.at === "number" && Number.isFinite(failure.at)) {
+    placement.failure = { message, at: failure.at };
+  }
+  return placement;
 }
 
 /** A host the user has added on this client. Device-owned; never synced. */
@@ -309,18 +410,48 @@ export interface HostDescriptor {
    */
   assistantControlEnabled: boolean;
   /**
+   * Whether new terminals in this host's projects reach this computer's
+   * ssh-agent while this Shell drives them (#17432). Off unless the person
+   * turned it on; turned off again when the host is pointed at another
+   * machine. Absent reads as off.
+   */
+  forwardSshAgent?: boolean;
+  /**
    * The worktree (by path) whose resource environment named this host, when
    * it was added for that worktree's box: removed with the worktree, or when
    * its resource is torn down. Absent for every host the user added.
    */
   ownerWorktreeId?: string;
   /**
+   * A worktree waiting for this host's setup to finish before it opens here;
+   * absent when none is. Dropped when the host is pointed at another target.
+   */
+  pendingPlacement?: PendingHostPlacement;
+  /**
    * How this machine can wake the host from the network (#16170), as the
    * person recorded it; absent when nothing is set up. Dropped with the
    * observations when the host is pointed at another target.
    */
   wake?: HostWakeSetup;
+  /**
+   * The last check of the host saw a Linux machine with no init system, where
+   * Daintree runs in the background once started and connecting starts it
+   * again; absent when it was seen otherwise or not yet. Dropped when the
+   * host is pointed at another target.
+   */
+  startsOnConnect?: true;
 }
+
+/**
+ * What a link that stopped retrying on its own was told, when trying again
+ * can't change it: ssh refused the login, WSL has no distribution by the
+ * host's saved name, or the connection can't be used from this machine as set
+ * up (`message` is the transport's own sentence, never raw output).
+ */
+export type HostConnectionBlocker =
+  | { kind: "ssh-access" }
+  | { kind: "wsl-distro-missing"; distro: string }
+  | { kind: "unusable"; message: string };
 
 export type HostConnectionState =
   | { status: "local" }
@@ -376,6 +507,8 @@ export type HostConnectionState =
        * still checked now and then, so the window comes back with it.
        */
       stoppedRetrying?: true;
+      /** What stopped the retries, other than Host mode being off; only with `stoppedRetrying`. */
+      blocker?: HostConnectionBlocker;
     }
   | { status: "version-mismatch"; mismatch: HandshakeMismatch; remote: HostHandshakeInfo }
   | { status: "driven-elsewhere"; driver: DriveLeaseHolder };
@@ -555,6 +688,18 @@ export interface HostMetricsSummary {
    * read failed.
    */
   forges?: HostForgeObservation[] | null;
+  /**
+   * When the Host last saw work and when its idle time ends, by its own
+   * clock. Absent from a host that doesn't report it, and from one not
+   * listening as a host.
+   */
+  idle?: HostIdleObservation;
+  /**
+   * The tightest usage window of each agent's accounts with an agent running
+   * on the Host now (#17318), at most one per agent, times by its own clock.
+   * Absent from a host that doesn't report it; empty when it has none.
+   */
+  agentUsage?: AgentUsageReading[];
 }
 
 /**

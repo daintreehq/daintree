@@ -80,6 +80,9 @@ vi.mock("../ProjectGroupSettingsRow", () => ({
   ),
 }));
 
+// The project's links have their own suite (#17091).
+vi.mock("../ProjectLinksSection", () => ({ ProjectLinksSection: () => null }));
+
 import { GeneralTab } from "../GeneralTab";
 
 function devRunner(): RunCommand {

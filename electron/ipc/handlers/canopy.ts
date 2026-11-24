@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { app, webContents, type BrowserWindow } from "electron";
+import { app, webContents, type BrowserWindow, type WebContents } from "electron";
 import type {
   CanopyLookPlace,
   CanopyMode,
@@ -28,6 +28,7 @@ import type {
   CanopyTrashOutcome,
   CanopyTrashTarget,
   CanopyUntrashOutcome,
+  CanopyWorktreeReading,
 } from "../../../shared/types/ipc/canopy.js";
 import {
   CANOPY_SEARCH_MAX_ALTERNATIVES,
@@ -63,10 +64,12 @@ import { attributeClose } from "../../services/pty/closeAttribution.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { readInputLines } from "../../services/canopy/canopyInputLines.js";
+import { readRunWorktrees } from "../../services/canopy/canopyWorktrees.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
 import { CanopyLocalReader, tryReaderModel } from "../../services/canopy/canopyLocalReader.js";
 import {
   CANOPY_MODEL,
+  CANOPY_SHIPPED_REVISION,
   CanopyModels,
   canopyModelName,
   removeDownloadedModels,
@@ -81,13 +84,15 @@ import {
   checkRateLimit,
   endpointPushTarget,
   getProjectPushTargets,
-  typedBroadcast,
+  typedBroadcastExcept,
+  typedSend,
   type ProjectPushTarget,
 } from "../utils.js";
 import type { IpcContext } from "../types.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { isProjectlessAppView } from "../../window/projectlessViews.js";
+import { isCachedViewWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { getIpcDispatcher } from "../dispatcher.js";
@@ -126,11 +131,12 @@ import {
 } from "../../services/assistants/liveAssistantSubject.js";
 import type { GlobalAssistantInputStamp } from "../../../shared/types/ipc/help.js";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
+import { GLOBAL_ASSISTANT_SLOT } from "../../../shared/config/globalAssistant.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
 import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
-import { getGitBranch } from "../../utils/gitUtils.js";
+import { readGitBranch } from "../../utils/gitUtils.js";
 import { events } from "../../services/events.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { getDefaultPanelTitle } from "../../../shared/config/panelKindRegistry.js";
@@ -189,12 +195,18 @@ let modelDirWas: string | null = null;
 
 /**
  * Where the app ships the reader model (#16415): its resources once packaged,
- * else where the build fetched it.
+ * else the folder the build fetched this build's revision into (#17818).
  */
 function bundledModelDir(): string {
   return app.isPackaged
     ? path.join(process.resourcesPath, "canopy-reader")
-    : path.join(app.getAppPath(), "electron", "resources", "canopy-reader");
+    : path.join(
+        app.getAppPath(),
+        "electron",
+        "resources",
+        "canopy-reader",
+        CANOPY_SHIPPED_REVISION
+      );
 }
 
 /**
@@ -214,6 +226,9 @@ function getModels(): CanopyModels {
     // the reader in use lets go of the copy that works.
     trial: (dir, signal) => tryReaderModel(dir, signal),
     build: app.getVersion(),
+    // A dev build fetches the model beside the running app (#17818); a test
+    // run's build has already fetched it, or failed.
+    awaitBundled: !app.isPackaged && !isE2EMode && !isSmokeTest,
   });
   return models;
 }
@@ -316,12 +331,40 @@ const watchedViews = new Map<number, () => void>();
 /** The window each of those views sits in, for its put-away events to find them. */
 const viewWindows = new Map<number, BrowserWindow>();
 const heardWindows = new WeakSet<BrowserWindow>();
+/** Those windows minimized or hidden since they were last shown: their panels are in front of no one. */
+const putAwayWindows = new WeakSet<BrowserWindow>();
 /** Canopy views of another Shell, which no broadcast reaches: told each snapshot by name. */
 const snapshotObservers = new Set<(snapshot: CanopySnapshot) => void>();
 
-/** Every view hears a snapshot: this machine's windows, its remote views, and its observers. */
+/** Whether a view can be seen: one whose window is put away can't, and a remote one has no window here. */
+function isViewShown(id: number): boolean {
+  const win = viewWindows.get(id);
+  return win === undefined || !putAwayWindows.has(win);
+}
+
+/** The views with the panel open that someone could be looking at. */
+function shownViews(): number[] {
+  return [...activeViews].filter(isViewShown);
+}
+
+/**
+ * A view with nothing on screen to show a snapshot on: a cached project view,
+ * frozen or not, which reads the current one when it is shown again, and a
+ * Canopy view whose window is put away, which is handed it when the window
+ * comes back. Not frozen on its own: a view is let out of the cache before its
+ * thaw is answered, and its reread can land in between.
+ */
+function snapshotCanWait(wc: WebContents): boolean {
+  return isCachedViewWebContents(wc.id) || !isViewShown(wc.id);
+}
+
+/** Every view that can show a snapshot hears it: this machine's windows, its remote views, and its observers. */
 function publishSnapshot(snapshot: CanopySnapshot): void {
-  typedBroadcast<"canopy:snapshot-updated">(CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot);
+  typedBroadcastExcept<"canopy:snapshot-updated">(
+    snapshotCanWait,
+    CHANNELS.CANOPY_SNAPSHOT_UPDATED,
+    snapshot
+  );
   for (const observer of [...snapshotObservers]) {
     try {
       observer(snapshot);
@@ -447,7 +490,7 @@ function subscribeInput(): void {
  * than an ask held back for a row they can't see.
  */
 export function canopyPanelsListing(runId: string): number[] {
-  return [...activeViews].filter((view) => viewShown.get(view)?.has(runId) ?? false);
+  return shownViews().filter((view) => viewShown.get(view)?.has(runId) ?? false);
 }
 
 /**
@@ -1394,25 +1437,30 @@ function requirePtyClient() {
  * them, since that lights the toolbar and pages for every project.
  */
 function reconciledScope(): string | null {
-  const scopes = new Set([...activeViews].map((id) => viewScopes.get(id) ?? null));
+  const scopes = new Set(shownViews().map((id) => viewScopes.get(id) ?? null));
   return scopes.size === 1 ? ([...scopes][0] ?? null) : null;
 }
 
-function syncActive(): void {
+/**
+ * Reads at a panel's pace while an open panel can be seen. `immediate` is for
+ * the last one put away with its window, which no reopen is about to follow.
+ */
+function syncActive(immediate = false): void {
   const canopy = getService();
+  const open = shownViews().length > 0;
   // History pruned, or a worktree deleted, while no panel looked: an opening
   // panel sees the closes as they stand now.
-  if (activeViews.size > 0) {
+  if (open) {
     closedTrash?.refresh();
     closedTrash?.recheckWorktrees();
   }
   // Opening, scope first, so the scan the opening starts reads the right runs;
   // closing, the close first, so a wider scope starts nothing while it settles.
-  if (activeViews.size > 0) {
+  if (open) {
     canopy.setScope(reconciledScope());
     canopy.setActive(true);
   } else {
-    canopy.setActive(false);
+    canopy.setActive(false, immediate);
     canopy.setScope(reconciledScope());
   }
 }
@@ -1427,7 +1475,7 @@ function forgetView(id: number): void {
   if (!activeViews.delete(id)) return;
   // Never builds a service: after cleanup there may be none, and none is wanted.
   // A view that went away will not bounce back, so no reopen grace either.
-  service?.setActive(activeViews.size > 0, true);
+  service?.setActive(shownViews().length > 0, true);
   service?.setScope(reconciledScope());
 }
 
@@ -1437,20 +1485,48 @@ function viewOf(ctx: IpcContext): ProjectPushTarget {
 }
 
 /**
- * A window put away lets go of the sizes its views hold. Heard once per window,
- * however many of its views open Canopy, and only once one has; the listeners
- * go with the window and find no views once Canopy is done with them.
+ * A window put away lets go of the sizes its views hold, and its open panels
+ * stop counting as open: with none left in sight, Canopy reads at the
+ * background pace and no snapshot goes to them. Shown again, its panels count
+ * once more and its view is handed the snapshot it missed. Heard once per
+ * window, however many of its views open Canopy, and only once one has; the
+ * listeners go with the window and find no views once Canopy is done with them.
  */
 function followWindow(viewId: number, win: BrowserWindow | null): void {
   if (!win) return;
   viewWindows.set(viewId, win);
   if (heardWindows.has(win)) return;
   heardWindows.add(win);
+  // Minimized before anything here listened: no event will say so. Not
+  // `isVisible()`, which macOS answers false for a window merely covered.
+  if (win.isMinimized()) putAwayWindows.add(win);
+  const holdsPanel = () => [...activeViews].some((id) => viewWindows.get(id) === win);
   const letGo = () => {
+    putAwayWindows.add(win);
     for (const [id, owner] of viewWindows) if (owner === win) releaseViewSizeHolds(id);
+    if (service && holdsPanel()) syncActive(true);
+  };
+  // `restore` and `show` can both come for one return: only the first does anything.
+  const comeBack = () => {
+    if (!putAwayWindows.delete(win)) return;
+    if (service && holdsPanel()) syncActive();
+    // Nothing to hand over before anything was started, with Canopy on: the view reads it itself.
+    const snapshot =
+      service?.getSnapshot() ?? (readCanopyMode() === "on" ? null : hiddenOrIdleSnapshot());
+    if (snapshot)
+      typedSend<"canopy:snapshot-updated">(win, CHANNELS.CANOPY_SNAPSHOT_UPDATED, snapshot);
+  };
+  // Windows brings a full-screen window back from the taskbar with
+  // `enter-full-screen` and no `restore`; focus covers any other return.
+  const comeBackIfShown = () => {
+    if (!win.isMinimized()) comeBack();
   };
   win.on("minimize", letGo);
   win.on("hide", letGo);
+  win.on("restore", comeBack);
+  win.on("show", comeBack);
+  win.on("enter-full-screen", comeBackIfShown);
+  win.on("focus", comeBackIfShown);
 }
 
 /**
@@ -1563,11 +1639,10 @@ function assertViewsThisMachine(ctx: IpcContext): void {
 
 /** Where main holds the assistants a person can view; read at the moment of use. */
 async function liveAssistantSources() {
-  const [{ helpSessionService }, { peekGlobalAssistantService }] = await Promise.all([
+  const [{ helpSessionService }, { peekGlobalAssistantServices }] = await Promise.all([
     import("../../services/HelpSessionService.js"),
     import("../../services/globalAssistant.js"),
   ]);
-  const global = peekGlobalAssistantService();
   return {
     hostId: LOCAL_HOST_ID,
     ptyClient: requirePtyClient(),
@@ -1576,14 +1651,12 @@ async function liveAssistantSources() {
     onSessionEnded: (
       listener: (event: { projectId: string; slot: number; sessionId: string }) => void
     ) => helpSessionService.addSessionEndedListener(listener),
-    global: global
-      ? {
-          getState: () => global.getState(),
-          onChange: (listener: () => void) => global.onChange(() => listener()),
-          inputOwnerWebContentsId: () => global.inputOwnerWebContentsId(),
-          canWrite: (attachmentId: string, epoch: number) => global.canWrite(attachmentId, epoch),
-        }
-      : null,
+    globals: peekGlobalAssistantServices().map((global) => ({
+      getState: () => global.getState(),
+      onChange: (listener: () => void) => global.onChange(() => listener()),
+      inputOwnerWebContentsId: () => global.inputOwnerWebContentsId(),
+      canWrite: (attachmentId: string, epoch: number) => global.canWrite(attachmentId, epoch),
+    })),
   };
 }
 
@@ -1610,9 +1683,13 @@ export async function resolveAssistantDestination(
   );
   if (!binding) return null;
   const { hostId, scope, terminalId, incarnation, lane } = binding.subject;
-  return scope.kind === "project" && lane !== undefined
-    ? { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation }
-    : { scope: "global", hostId, terminalId, incarnation };
+  if (scope.kind === "project" && lane !== undefined) {
+    return { scope: "project", hostId, projectId: scope.projectId, lane, terminalId, incarnation };
+  }
+  const { peekGlobalAssistantServiceForTerminal } =
+    await import("../../services/globalAssistant.js");
+  const slot = peekGlobalAssistantServiceForTerminal(terminalId)?.slot ?? GLOBAL_ASSISTANT_SLOT;
+  return { scope: "global", hostId, terminalId, incarnation, slot };
 }
 
 /**
@@ -1635,20 +1712,21 @@ export async function assistantLaneHolder(projectId: string, lane: number): Prom
   );
 }
 
-/** The view on this machine that has the global assistant's input, if any. */
-export async function globalAssistantInputOwner(): Promise<number | null> {
-  const { peekGlobalAssistantService } = await import("../../services/globalAssistant.js");
-  return peekGlobalAssistantService()?.inputOwnerWebContentsId() ?? null;
+/** The view on this machine that has the input of the global session on this terminal, if any. */
+export async function globalAssistantInputOwner(terminalId: string): Promise<number | null> {
+  const { peekGlobalAssistantServiceForTerminal } =
+    await import("../../services/globalAssistant.js");
+  return peekGlobalAssistantServiceForTerminal(terminalId)?.inputOwnerWebContentsId() ?? null;
 }
 
 /**
  * A card answer presses keys with no input ownership behind it, so it never
- * reaches the global assistant, whose input one window holds at a time (#14454).
+ * reaches a global assistant session, whose input one window holds at a time (#14454).
  */
 async function assertNotGlobalAssistant(runId: string): Promise<void> {
-  const { peekGlobalAssistantService } = await import("../../services/globalAssistant.js");
-  const state = peekGlobalAssistantService()?.getState();
-  if (state?.terminalId === runId) {
+  const { peekGlobalAssistantServiceForTerminal } =
+    await import("../../services/globalAssistant.js");
+  if (peekGlobalAssistantServiceForTerminal(runId) !== null) {
     throw new AppError({
       code: "PERMISSION",
       message: "card answers don't reach the global assistant",
@@ -2307,6 +2385,26 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /**
+     * What each run's worktree holds that exists only on this machine
+     * (#18151), so the panel's bulk trash can leave unpushed or uncommitted
+     * work unticked. Read here, where the worktree is: only the counts go
+     * back. Only runs the fleet holds in the same incarnation are read.
+     */
+    readWorktrees: op(
+      CANOPY_METHOD_CHANNELS.readWorktrees,
+      async (targets: CanopyRunTarget[]): Promise<CanopyWorktreeReading[]> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.readWorktrees, 10, 10_000);
+        assertRunTargets(targets);
+        const runs = getFleetSnapshotService()?.getLastBroadcast()?.runs ?? [];
+        return readRunWorktrees(
+          runs,
+          targets,
+          (workspaceId) => projectStore.getProjectById(workspaceId)?.path ?? null
+        );
+      }
+    ),
+
+    /**
      * Read one run again, its words included, for a reading the user thinks
      * is wrong: a screen that hasn't moved is otherwise never read again.
      */
@@ -2735,7 +2833,9 @@ export const canopyNamespace = defineIpcNamespace({
      * The branch a run's folder has checked out, for the panel to say where the
      * agent is. Read from the folder the fleet snapshot holds for the run, never
      * a path the view names; null for a detached HEAD, a folder outside git, or
-     * a run that has gone.
+     * a run that has gone. A read that failed (git timed out, couldn't start,
+     * or refused) rejects instead: it says nothing about the branch, and the
+     * panel keeps the one it last read rather than take it for branchless.
      */
     runBranch: op(
       CANOPY_METHOD_CHANNELS.runBranch,
@@ -2747,7 +2847,9 @@ export const canopyNamespace = defineIpcNamespace({
           ?.getLastBroadcast()
           ?.runs.find((entry) => entry.runId === runId && entry.spawnedAt === target.spawnedAt);
         if (!run?.cwd) return null;
-        return getGitBranch(run.cwd);
+        const reading = await readGitBranch(run.cwd);
+        if (reading.unreadable) throw new Error("Couldn't read the run's branch");
+        return reading.branch;
       }
     ),
 

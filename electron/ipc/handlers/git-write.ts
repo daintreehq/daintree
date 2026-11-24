@@ -23,15 +23,19 @@ import { readRemoteBranchTip } from "../../utils/remoteBranchTip.js";
 import type { GitPushPayload, PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
+  GitBaseIntegrationBlocker,
   GitBaseIntegrationCommitPreview,
   GitBaseIntegrationKind,
   GitCommitResult,
+  GitCommitReview,
   GitPushCommitPreview,
+  GitPullRebaseReview,
   GitPushReview,
   GitRebaseCommitPreview,
   GitRemoteCommitPreview,
   GitStatus,
   RebaseSequence,
+  RepoOperationPin,
   RepoState,
   StagingStatus,
 } from "../../../shared/types/git.js";
@@ -41,12 +45,19 @@ import {
   createHardenedGit,
   createAuthenticatedGit,
   createContinueGit,
+  createStrictExitGit,
 } from "../../utils/hardenedGit.js";
 import {
+  batchPathGroupsForArgv,
   getPerFileDiffStats,
   invalidateStagingDiffStatCache,
   resolveHeadOidFromGitDir,
 } from "../../utils/git.js";
+import { resolveGitDirFromFs } from "../../utils/gitUtils.js";
+import { parsePorcelainV1Z } from "../../services/git/fileMutation.js";
+import { withTimeout } from "../../utils/withTimeout.js";
+import { runExclusive } from "../../utils/keyedMutex.js";
+import { gitIndexWriteKey } from "../../utils/gitIndexWriteKey.js";
 import {
   resolveExistingBaseCompareTarget,
   type ExistingBaseCompareTarget,
@@ -54,15 +65,25 @@ import {
 import { store } from "../../store.js";
 import { getSoundService } from "../../services/getSoundService.js";
 import type * as SoundServiceModule from "../../services/SoundService.js";
-import { detectRepoOperationState, resolveGitDir } from "../../services/git/repoOperationState.js";
+import {
+  detectRepoOperationState,
+  readCurrentRepoOperationId,
+  readRepoOperationId,
+  resolveGitDir,
+} from "../../services/git/repoOperationState.js";
+import { RESOLVE_UNDO_ARGS, parseResolveUndoPaths } from "../../services/git/resolveUndo.js";
 import {
   parsePorcelainV2Conflicts,
   PORCELAIN_V2_CONFLICT_ARGS,
 } from "../../services/git/porcelainConflicts.js";
 import {
   STAGED_FILE_SIZE_CAP,
+  scanConflictMarkerText,
   scanStagedFilesForConflictMarkers,
 } from "../../services/git/conflictMarkerScan.js";
+import { EMPTY_TREE } from "../../services/git/reviewPoint/captureReviewPoint.js";
+import { isProjectIoError, projectIo } from "../../services/projectIoGate.js";
+import { readCommitStagedIdentity, readStagedSnapshot } from "../../services/git/stagedSnapshot.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 import { resolveExecutableForSpawn } from "../../utils/windowsExecutable.js";
 import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
@@ -320,6 +341,120 @@ function readPushReview(payload: GitPushPayload): GitPushReview | null {
   };
 }
 
+/**
+ * The branch and commit a pull-and-rebase payload pins, or `null` when it pins
+ * neither (#17188).
+ *
+ * Both or neither, for the reason push takes all four: a pin that kept the
+ * commit but lost the branch would pass a checkout of another branch sitting on
+ * the same commit, and rebase a branch nobody saw named.
+ */
+function readPullRebaseReview(payload: {
+  expectedBranch?: unknown;
+  expectedHeadOid?: unknown;
+}): GitPullRebaseReview | null {
+  const { expectedBranch: branch, expectedHeadOid: headOid } = payload;
+  if (branch === undefined && headOid === undefined) return null;
+  if (
+    typeof branch !== "string" ||
+    !branch ||
+    typeof headOid !== "string" ||
+    !FULL_OID_PATTERN.test(headOid)
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid pull and rebase review" });
+  }
+  return { branch, headOid: headOid.toLowerCase() };
+}
+
+function pullRebaseReviewStaleError(
+  cwd: string,
+  branchName: string,
+  detail: string
+): GitOperationError {
+  const message = `The branch changed since this pull and rebase was previewed: ${detail}. Nothing was rebased. Pull and rebase again to see what it would replay now.`;
+  return new GitOperationError(
+    "pull-rebase-review-stale",
+    encodeGitOperationErrorMessage("pull-rebase-review-stale", message, { branchName }),
+    { cwd, op: "pull-rebase", rawMessage: message, branchName }
+  );
+}
+
+/**
+ * The branch HEAD names, or `null` on a detached HEAD.
+ *
+ * Read through `symbolic-ref` rather than `rev-parse --abbrev-ref`, which
+ * answers `heads/topic` when a tag is also called `topic`. The preview names
+ * the branch `topic`, so comparing against the abbreviated spelling would
+ * refuse an unchanged worktree, and no fresh preview could ever repair it.
+ */
+async function readHeadBranch(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">
+): Promise<string | null> {
+  try {
+    const ref = (await git.raw(["symbolic-ref", "--quiet", "HEAD"])).trim();
+    return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** How the worktree's branch differs from the one previewed, or `null` when it doesn't. */
+function describeBranchSwitch(current: string | null, review: { branch: string }): string | null {
+  if (current === review.branch) return null;
+  return current === null
+    ? `this worktree is on a detached HEAD, not '${review.branch}'`
+    : `this worktree switched from '${review.branch}' to '${current}'`;
+}
+
+/**
+ * Refuse the pull if the worktree is on another branch than its confirm showed
+ * (#17188).
+ *
+ * The confirm listed the commits a rebase of THIS branch would replay, and an
+ * agent switching branches while it sat open makes that a different operation.
+ * Running it anyway is the "if X changed, use Y" substitution the
+ * destructive-action rules forbid. Checked before anything resolves the
+ * upstream, so a switch to a detached HEAD or an untracked branch is reported
+ * as the switch it is rather than as a missing upstream.
+ */
+function requirePreviewedBranch(
+  current: string | null,
+  review: GitPullRebaseReview,
+  cwd: string
+): void {
+  const detail = describeBranchSwitch(current, review);
+  if (detail) throw pullRebaseReviewStaleError(cwd, current ?? "HEAD", detail);
+}
+
+/**
+ * Refuse the pull if the worktree moved since its confirm was shown (#17188).
+ * Read last before the pull, so the comparison is against the freshest state
+ * this handler can see.
+ *
+ * The branch is read again alongside the commit, not trusted from the check
+ * at the start: a checkout of another branch on the SAME commit during the
+ * reads in between passes every commit comparison, and would pull this
+ * branch's upstream into a branch nobody previewed. Nothing here locks the
+ * worktree, so a process acting after this read can still move it.
+ */
+async function requirePreviewedHead(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  review: GitPullRebaseReview,
+  cwd: string
+): Promise<void> {
+  const current = await readHeadBranch(git);
+  requirePreviewedBranch(current, review, cwd);
+  const tip = await readOid(git, "HEAD");
+  if (tip?.toLowerCase() === review.headOid) return;
+  throw pullRebaseReviewStaleError(
+    cwd,
+    review.branch,
+    tip
+      ? `'${review.branch}' moved to a different commit`
+      : `'${review.branch}' no longer resolves to a commit`
+  );
+}
+
 function pushReviewStaleError(cwd: string, branchName: string, detail: string): GitOperationError {
   const message = `The branch changed since this push was reviewed: ${detail}. Nothing was pushed. Review the push again to see what it would publish now.`;
   return new GitOperationError(
@@ -408,6 +543,8 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
         cwd: string;
         branchName: string;
         limit?: number;
+        /** Also read what is staged on the previewed tip (Commit & push, #17563). */
+        includeStaged?: boolean;
       }): Promise<GitPushCommitPreview> => {
         checkRateLimit(CHANNELS.GIT_LIST_PUSH_COMMITS, 10, 10_000);
         validateCwd(payload?.cwd);
@@ -444,6 +581,22 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               encodeGitOperationErrorMessage("pathspec-invalid", message, { branchName }),
               { cwd: payload.cwd, op: "list-push-commits", rawMessage: message, branchName }
             );
+          }
+          // Against the same tip the rows are, and before any network read, so
+          // the commit is held to the index as it stood when the confirm opened.
+          // The index is the worktree's, so it only describes a commit on this
+          // branch while the worktree has it checked out: diffed against
+          // another branch's tip it would list that branch's differences as
+          // staged.
+          let staged: GitPushCommitPreview["staged"];
+          if (payload.includeStaged === true) {
+            const switched = describeBranchSwitch(await readHeadBranch(git), {
+              branch: branchName,
+            });
+            if (switched) {
+              throw commitReviewStaleError(payload.cwd, branchName, switched, "list-push-commits");
+            }
+            staged = await readStagedSnapshot(payload.cwd, headOid);
           }
           const hasRemoteRef = await refExists(git, destination.remoteTrackingRef);
 
@@ -516,6 +669,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               message: commit.message,
               author: commit.author_name,
             })),
+            ...(staged ? { staged } : {}),
           };
         } catch (error) {
           if (error instanceof GitOperationError) throw error;
@@ -565,6 +719,13 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           );
 
           const localRef = `refs/heads/${branchName}`;
+          // Read FIRST and measured from, as the push preview does (#17188).
+          // This is the commit the pull is held to, so every row below has to
+          // describe it: read last, a commit landing mid-measurement would be
+          // pinned without ever having been shown. Unreadable, the rows still
+          // describe the branch, but there is nothing to approve them under.
+          const headOid = await readOid(git, localRef);
+          const tip = headOid ?? localRef;
 
           // Deliberately no `ls-remote` fallback, unlike the push preview.
           // `git pull --rebase` fetches before it replays, and a rebase onto a
@@ -585,6 +746,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               total: 0,
               behind: 0,
               incoming: [],
+              headOid,
             };
           }
 
@@ -605,14 +767,14 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
             "--no-merges",
             "--cherry-pick",
             "--right-only",
-            `${upstream.remoteTrackingRef}...${localRef}`,
+            `${upstream.remoteTrackingRef}...${tip}`,
           ];
           const log = await git.log([`--max-count=${limit}`, ...revArgs]);
           const total = await countCommitsInRange(git, revArgs);
           // Measured separately and in the other direction: an empty replay set
           // is produced both by a branch level with its upstream and by one
           // purely behind it, and only the second is moved by the rebase.
-          const incomingRange = `${localRef}..${upstream.remoteTrackingRef}`;
+          const incomingRange = `${tip}..${upstream.remoteTrackingRef}`;
           const behind = await countCommitsInRange(git, [incomingRange]);
           const incomingLog =
             behind > 0 ? await git.log([`--max-count=${limit}`, incomingRange]) : null;
@@ -620,6 +782,7 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
           return {
             upstream: { remote: upstream.remote, branch: upstream.branch },
             rangeBasis: "tracked",
+            headOid,
             total,
             behind,
             commits: log.all.map((commit) => ({
@@ -729,6 +892,31 @@ async function requireBaseTarget(
 }
 
 /**
+ * What `git status` holds that a base integration refuses to start over, or
+ * `null` when the tree is clean. The single predicate behind both the write's
+ * refusal and the preview's blocker, so the two cannot drift apart.
+ *
+ * `isClean()` can be true while unmerged paths stand, so the conflicted list is
+ * checked on its own rather than trusted to fold into it. Conflicts come first:
+ * "commit or stash" can't be followed until they are resolved. Every other
+ * entry is counted once, untracked included, rather than summing staged and
+ * unstaged rows that can both name one path.
+ */
+async function readTreeBlocker(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "status">
+): Promise<Extract<
+  GitBaseIntegrationBlocker,
+  { reason: "conflicts" | "uncommitted-changes" }
+> | null> {
+  const status = await git.status();
+  if (status.conflicted.length > 0) {
+    return { reason: "conflicts", count: status.conflicted.length };
+  }
+  if (status.isClean()) return null;
+  return { reason: "uncommitted-changes", count: status.files.length };
+}
+
+/**
  * Refuse to start on a tree that has anything in it.
  *
  * git would refuse most of this on its own, but not all of it and not legibly:
@@ -748,8 +936,7 @@ async function requireCleanTree(
   cwd: string,
   op: string
 ): Promise<void> {
-  const status = await git.status();
-  if (status.isClean() && status.conflicted.length === 0) return;
+  if ((await readTreeBlocker(git)) === null) return;
   const message =
     "This worktree has uncommitted changes. Commit or stash them before integrating the base branch.";
   throw new GitOperationError(
@@ -782,6 +969,37 @@ async function requireNoTrackedChanges(
 }
 
 /**
+ * The merge, rebase, cherry-pick, revert or `git am` halted in this worktree, or `null`
+ * when none is. Read from the git dir's sentinels, which is what the write
+ * refuses on and what the preview reports, so the two agree.
+ */
+async function readHaltedOperation(
+  git: Awaited<ReturnType<typeof createHardenedGit>>,
+  cwd: string
+): Promise<Extract<GitBaseIntegrationBlocker, { reason: "operation-in-progress" }> | null> {
+  const gitDir = await resolveGitDir(git, cwd);
+  const detected = await detectRepoOperationState(gitDir, false);
+  if (detected.state === "CLEAN" || detected.state === "DIRTY") return null;
+  return {
+    reason: "operation-in-progress",
+    operation: detected.state,
+    rebaseStep: detected.rebaseStep ?? null,
+    rebaseTotalSteps: detected.rebaseTotalSteps ?? null,
+  };
+}
+
+const HALTED_OPERATION_NAME: Record<
+  Extract<GitBaseIntegrationBlocker, { reason: "operation-in-progress" }>["operation"],
+  string
+> = {
+  MERGING: "merging",
+  REBASING: "rebasing",
+  CHERRY_PICKING: "cherry-picking",
+  REVERTING: "reverting",
+  APPLYING_MAILBOX: "applying patches with git am",
+};
+
+/**
  * Refuse to start a second operation on top of a halted one.
  *
  * Starting a rebase mid-rebase is refused by git anyway, but the message is
@@ -794,15 +1012,108 @@ async function requireNoOperationInProgress(
   cwd: string,
   op: string
 ): Promise<void> {
-  const gitDir = await resolveGitDir(git, cwd);
-  const { state } = await detectRepoOperationState(gitDir, false);
-  if (state === "CLEAN" || state === "DIRTY") return;
-  const message = `This worktree is already mid-operation (${state.toLowerCase().replace("_", "-")}). Continue or abort it before starting another.`;
+  const halted = await readHaltedOperation(git, cwd);
+  if (!halted) return;
+  const message = `This worktree is already mid-operation (${HALTED_OPERATION_NAME[halted.operation]}). Continue or abort it before starting another.`;
   throw new GitOperationError(
     "conflict-unresolved",
     encodeGitOperationErrorMessage("conflict-unresolved", message),
     { cwd, op, rawMessage: message }
   );
+}
+
+/** A base-integration preview whose branch or base tip no longer names a commit. */
+function basePreviewUnresolvedError(
+  message: string,
+  cwd: string,
+  branchName: string
+): GitOperationError {
+  return new GitOperationError(
+    "pathspec-invalid",
+    encodeGitOperationErrorMessage("pathspec-invalid", message, { branchName }),
+    { cwd, op: "list-base-integration-commits", rawMessage: message, branchName }
+  );
+}
+
+const OPERATION_NOUN: Record<RepoOperationPin["operation"], string> = {
+  MERGING: "merge",
+  REBASING: "rebase",
+  CHERRY_PICKING: "cherry-pick",
+  REVERTING: "revert",
+  APPLYING_MAILBOX: "patch apply",
+};
+
+function asHaltedOperation(state: RepoState): RepoOperationPin["operation"] | null {
+  return state === "CLEAN" || state === "DIRTY" ? null : state;
+}
+
+/**
+ * The pin an abort or continue arrived with, checked for shape. `undefined`
+ * only when none was sent; a malformed one is refused rather than read as
+ * none, which would quietly drop the check it was sent to make.
+ */
+function readRepoOperationPin(value: unknown): RepoOperationPin | undefined {
+  if (value === undefined) return undefined;
+  const pin = value as { operation?: unknown; operationId?: unknown } | null;
+  const operation = pin?.operation;
+  const operationId = pin?.operationId;
+  if (
+    typeof operation !== "string" ||
+    !Object.hasOwn(OPERATION_NOUN, operation) ||
+    !(operationId === null || (typeof operationId === "string" && operationId.length > 0))
+  ) {
+    throw new Error("Invalid repository operation pin");
+  }
+  return { operation: operation as RepoOperationPin["operation"], operationId };
+}
+
+/**
+ * Refuse an abort or continue unless the operation it was chosen for is the
+ * one in progress now (#17559).
+ *
+ * Without this the handler acted on whatever it found at execution time. A
+ * confirm left open while another client ended the merge and started another
+ * (or the same one again) would abort the new one, conflict work and all,
+ * under an approval given for the old. The kind is not enough: a same-kind
+ * replacement is exactly that case. So the pin carries the operation's
+ * identity, read from the status the user was shown, and the identity is read
+ * again here, as the last thing before git runs. Git's own `--abort` and
+ * `--continue` take no instance to check against, so a client acting after
+ * this read can still slip in; the window is this handler's, not the dialog's.
+ *
+ * A caller that sends no pin had nothing on screen to bind to (an agent
+ * dispatch) and keeps acting on what it finds.
+ */
+async function requireChosenRepoOperation(
+  gitDir: string,
+  state: RepoState,
+  pin: RepoOperationPin | undefined,
+  cwd: string,
+  op: "abort" | "continue"
+): Promise<void> {
+  if (pin === undefined) return;
+  const current = asHaltedOperation(state);
+  const currentId = current ? await readRepoOperationId(gitDir, current) : null;
+  if (current === pin.operation && pin.operationId !== null && currentId === pin.operationId) {
+    return;
+  }
+  const chosen = OPERATION_NOUN[pin.operation];
+  const detail =
+    current === null
+      ? `The ${chosen} you chose is no longer in progress`
+      : current !== pin.operation
+        ? `A ${OPERATION_NOUN[current]} is in progress now, not the ${chosen} you chose`
+        : pin.operationId === null || currentId === null
+          ? `Daintree couldn't confirm that the ${chosen} in progress is the one you chose`
+          : `The ${chosen} in progress was restarted or replaced after you chose it`;
+  const message = `${detail}. Nothing was ${op === "abort" ? "aborted" : "continued"}; check the worktree's current state and choose again.`;
+  // Plain prose: the preload encodes the transport prefix from the reason, so
+  // encoding it here as well would show the user the second copy.
+  throw new GitOperationError("repo-operation-changed", message, {
+    cwd,
+    op: `${op}-repository-operation`,
+    rawMessage: message,
+  });
 }
 
 /** Classify anything a base-integration read or write throws, once. */
@@ -818,6 +1129,96 @@ function asBaseIntegrationError(error: unknown, cwd: string, op: string): unknow
     cause: error instanceof Error ? error : undefined,
     rawMessage: errorMessage,
   });
+}
+
+/**
+ * The commit a Commit & push confirm reviewed, or `null` when the payload
+ * pins nothing (#17563).
+ *
+ * All three or none, for the reason push takes all four: a pin that kept the
+ * commit but lost the staged identity reads as "reviewed" while committing
+ * whatever the index holds by then.
+ */
+function readCommitReview(payload: {
+  expectedBranch?: unknown;
+  expectedHeadOid?: unknown;
+  expectedStagedIdentity?: unknown;
+}): GitCommitReview | null {
+  const {
+    expectedBranch: branch,
+    expectedHeadOid: headOid,
+    expectedStagedIdentity: stagedIdentity,
+  } = payload;
+  if (branch === undefined && headOid === undefined && stagedIdentity === undefined) return null;
+  if (
+    typeof branch !== "string" ||
+    !branch ||
+    typeof headOid !== "string" ||
+    !FULL_OID_PATTERN.test(headOid) ||
+    typeof stagedIdentity !== "string" ||
+    !/^[0-9a-f]{64}$/.test(stagedIdentity)
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid commit review" });
+  }
+  return { branch, headOid: headOid.toLowerCase(), stagedIdentity };
+}
+
+/**
+ * Plain prose, not pre-encoded like its siblings: the composer shows this
+ * sentence as is, and the reason and branch already cross to the renderer as
+ * fields the preload encodes once. Encoding here too left a second prefix in
+ * front of the sentence on screen.
+ */
+function commitReviewStaleError(
+  cwd: string,
+  branchName: string,
+  detail: string,
+  op = "commit"
+): GitOperationError {
+  const message =
+    op === "commit"
+      ? `This commit changed after it was reviewed: ${detail}. Nothing was committed or pushed. Commit and push again to review what is staged now.`
+      : `${detail}, so what is staged there can't be reviewed for '${branchName}'.`;
+  return new GitOperationError("commit-review-stale", message, {
+    cwd,
+    op,
+    rawMessage: message,
+    branchName,
+  });
+}
+
+/**
+ * Refuse the commit unless the worktree is still on the reviewed branch, at
+ * the reviewed commit, with exactly the reviewed changes staged (#17563).
+ *
+ * The confirm listed these staged files, and an agent can restage any of them
+ * while it sits open without changing a single name in the list. Committing
+ * whatever the index holds now is the "if X changed, use Y" substitution the
+ * destructive-action rules forbid. Read last before `git commit`; nothing locks
+ * the index in between, so the caller also checks what the commit contains.
+ */
+async function requireReviewedStage(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  review: GitCommitReview,
+  cwd: string
+): Promise<void> {
+  const current = await readHeadBranch(git);
+  const switched = describeBranchSwitch(current, review);
+  if (switched) throw commitReviewStaleError(cwd, current ?? "HEAD", switched);
+  const tip = await readOid(git, "HEAD");
+  if (tip?.toLowerCase() !== review.headOid) {
+    throw commitReviewStaleError(
+      cwd,
+      review.branch,
+      tip
+        ? `'${review.branch}' moved to a different commit`
+        : `'${review.branch}' no longer resolves to a commit`
+    );
+  }
+  const staged = await readStagedSnapshot(cwd, review.headOid);
+  if (staged.identity !== review.stagedIdentity) {
+    throw commitReviewStaleError(cwd, review.branch, "the staged changes are different");
+  }
 }
 
 /**
@@ -867,6 +1268,24 @@ async function readCommitted(
     return { oid, parentOids };
   } catch {
     return unread;
+  }
+}
+
+/**
+ * What a reviewed commit contains over its one parent, or `null` when it has
+ * no single parent to compare with or couldn't be read. A reviewed commit is
+ * always made on the reviewed tip, so anything else matches no review.
+ */
+async function readCommittedStagedIdentity(
+  cwd: string,
+  committed: Pick<GitCommitResult, "oid" | "parentOids">
+): Promise<string | null> {
+  const [parent, ...rest] = committed.parentOids;
+  if (!committed.oid || !parent || rest.length > 0) return null;
+  try {
+    return await readCommitStagedIdentity(cwd, parent, committed.oid);
+  } catch {
+    return null;
   }
 }
 
@@ -949,6 +1368,22 @@ async function requireUnmovedSince(
 const baseIntegratingCwds = new Set<string>();
 
 /**
+ * Refuse while this worktree already has a base integration running. The
+ * preview asks too: until git writes its first sentinel, a running integration
+ * leaves the tree looking clean and level, and the preview would measure an
+ * approval the write is certain to refuse.
+ */
+function requireNoBaseIntegrationRunning(cwd: string, op: string): void {
+  if (!baseIntegratingCwds.has(cwd)) return;
+  const message = "A base-branch integration is already running in this worktree.";
+  throw new GitOperationError(
+    "conflict-unresolved",
+    encodeGitOperationErrorMessage("conflict-unresolved", message),
+    { cwd, op, rawMessage: message }
+  );
+}
+
+/**
  * Run a base integration end to end: preflight, then exactly one git command.
  *
  * A halt is NOT an error to clean up. `git rebase` stopping on a conflict
@@ -972,14 +1407,7 @@ async function runBaseIntegration(
   const baseBranch = requireBaseBranch(payload?.baseBranch);
   const op = kind === "rebase-onto-base" ? "rebase-onto-base" : "merge-base";
 
-  if (baseIntegratingCwds.has(payload.cwd)) {
-    const message = "A base-branch integration is already running in this worktree.";
-    throw new GitOperationError(
-      "conflict-unresolved",
-      encodeGitOperationErrorMessage("conflict-unresolved", message),
-      { cwd: payload.cwd, op, rawMessage: message }
-    );
-  }
+  requireNoBaseIntegrationRunning(payload.cwd, op);
   // Claimed INSIDE the try, so the `finally` that releases it dominates every
   // path that could have claimed it. Adding before `createHardenedGit` left the
   // cwd marked forever if that factory rejected — a deleted worktree would then
@@ -987,6 +1415,9 @@ async function runBaseIntegration(
   baseIntegratingCwds.add(payload.cwd);
   try {
     const git = await createHardenedGit(payload.cwd);
+    // First, because a halted rebase detaches HEAD: checked after the branch,
+    // it was refused as "no branch checked out", which names the wrong fix.
+    await requireNoOperationInProgress(git, payload.cwd, op);
     const branch = await requireCheckedOutBranch(git);
     // THE invariant, enforced rather than assumed. Everything else in this file
     // arranges for the operation to read the base ref and write only this
@@ -1002,7 +1433,6 @@ async function runBaseIntegration(
         { cwd: payload.cwd, op, rawMessage: message, branchName: branch }
       );
     }
-    await requireNoOperationInProgress(git, payload.cwd, op);
     await requireCleanTree(git, payload.cwd, op);
     const target = await requireBaseTarget(git, baseBranch, payload.cwd);
     await requireUnmovedSince(git, payload, branch, target, op);
@@ -1105,12 +1535,63 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
           throw new Error("Invalid integration kind");
         }
         const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
+        requireNoBaseIntegrationRunning(payload.cwd, "list-base-integration-commits");
 
         const git = await createHardenedGit(payload.cwd);
         try {
+          // The write's own refusals, read in the order that names the right
+          // fix (#17189). Without them the confirm offered an approval the
+          // write was certain to refuse, and only said so in a toast after it
+          // had closed. A halted operation and a checked-out base stop the
+          // read: there is no meaningful range to measure from either.
+          const unmeasured = {
+            kind,
+            baseBranch,
+            compareRef: null,
+            remote: null,
+            headOid: null,
+            baseOid: null,
+            commits: [],
+            total: null,
+            behind: null,
+          };
+          // Before the branch: a halted rebase detaches HEAD, and reading the
+          // branch first fails as "no branch checked out".
+          const halted = await readHaltedOperation(git, payload.cwd);
+          if (halted) return { ...unmeasured, branch: null, blocker: halted };
+
           const branchName = await requireCheckedOutBranch(git);
+          if (branchName === baseBranch) {
+            return { ...unmeasured, branch: branchName, blocker: { reason: "base-checked-out" } };
+          }
+          // Measured anyway: what the operation WOULD do is worth seeing while
+          // deciding whether to commit first.
+          const treeBlocker = await readTreeBlocker(git);
+
           const target = await requireBaseTarget(git, baseBranch, payload.cwd);
-          const localRef = `refs/heads/${branchName}`;
+
+          // Read FIRST and measured from, as the push and pull-rebase previews
+          // do (#17188). These two are what the write is held to, so every row
+          // and count below has to describe them: read last, a commit landing
+          // mid-measurement on either side was pinned without ever having been
+          // listed (#17583). Unresolvable, there is nothing to approve the rows
+          // under, so the read fails rather than offering an unpinned approval.
+          const headOid = await readOid(git, `refs/heads/${branchName}`);
+          if (!headOid) {
+            throw basePreviewUnresolvedError(
+              `Branch '${branchName}' does not resolve to a commit, so there is nothing to preview.`,
+              payload.cwd,
+              branchName
+            );
+          }
+          const baseOid = await readOid(git, target.fullRef);
+          if (!baseOid) {
+            throw basePreviewUnresolvedError(
+              `Base ref '${target.compareRef}' does not resolve to a commit, so there is nothing to preview.`,
+              payload.cwd,
+              branchName
+            );
+          }
 
           // Rebase and merge describe OPPOSITE ranges, so each gets the range
           // git itself would use rather than one shared approximation.
@@ -1123,10 +1604,11 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
           //
           // Merge brings in `<local>..<base>` and KEEPS merges: a merge commit
           // on the base is genuinely one of the commits that arrives.
+          const incomingRange = `${headOid}..${baseOid}`;
           const revArgs =
             kind === "rebase-onto-base"
-              ? ["--no-merges", "--cherry-pick", "--right-only", `${target.fullRef}...${localRef}`]
-              : [`${localRef}..${target.fullRef}`];
+              ? ["--no-merges", "--cherry-pick", "--right-only", `${baseOid}...${headOid}`]
+              : [incomingRange];
 
           const log = await git.log([`--max-count=${limit}`, ...revArgs]);
           const total = await countCommitsInRange(git, revArgs);
@@ -1135,19 +1617,13 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
           // the base and by one purely behind it, and only the second is moved
           // by the operation; for a merge this IS the incoming count, and
           // restating it costs one cheap local rev-list.
-          const behind = await countCommitsInRange(git, [`${localRef}..${target.fullRef}`]);
-          // Read LAST, so they describe the repository at the end of the
-          // measurement rather than the start. The rows above are still a
-          // best-effort snapshot across several invocations, but these two are
-          // what the write is held to — so anything that moved mid-read shows
-          // up as a refusal on submit instead of an unnoticed substitution.
-          const headOid = await readOid(git, localRef);
-          const baseOid = await readOid(git, target.fullRef);
+          const behind = await countCommitsInRange(git, [incomingRange]);
 
           return {
             kind,
             branch: branchName,
             baseBranch,
+            blocker: treeBlocker,
             compareRef: target.compareRef,
             remote: target.remote,
             headOid,
@@ -1197,6 +1673,141 @@ const gitBaseIntegrationNamespace = defineIpcNamespace({
   },
 });
 
+const HEAD_FROM_FS_TIMEOUT_MS = 5_000;
+
+/**
+ * Whether HEAD names a commit, which decides how an unstage runs: a branch with
+ * no commit yet has nothing to reset to, so it unstages with `rm --cached`.
+ * Read from the git dir when it proves a commit; a miss there, or a read that
+ * stalls, is no proof of an unborn branch, so it then asks git.
+ */
+async function hasHeadCommit(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "revparse">,
+  cwd: string
+): Promise<boolean> {
+  const fromFs = await withTimeout(
+    resolveGitDirFromFs(cwd).then((gitDir) => (gitDir ? resolveHeadOidFromGitDir(gitDir) : null)),
+    HEAD_FROM_FS_TIMEOUT_MS,
+    "HEAD read timed out"
+  ).catch(() => null);
+  if (fromFs) return true;
+  try {
+    await git.revparse(["HEAD"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The paths a reset to HEAD has to name to unstage `paths`, one group for each:
+ * the path, plus the other half of any staged rename it names. Git resets only
+ * the paths it is given, so resetting a rename's destination alone leaves its
+ * source staged for deletion, and the next commit still deletes it.
+ *
+ * Pairs come from an unscoped status read, the one Review Hub lists rows from
+ * (`status.renames` decides what is a pair): a pathspec would hide the half it
+ * doesn't name. Only the index side matters, so a submodule's own working tree
+ * isn't scanned. A copy's source is a file of its own and is left alone. The
+ * read must answer before anything is reset; an empty answer from a git that
+ * died would quietly bring the half-unstage back.
+ */
+async function withStagedRenamePartners(cwd: string, paths: string[]): Promise<string[][]> {
+  const git = await createStrictExitGit(cwd);
+  const entries = parsePorcelainV1Z(
+    await git.raw([
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=no",
+      "--ignore-submodules=dirty",
+    ])
+  );
+  const partners = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.x !== "R" || !entry.origPath) continue;
+    partners.set(entry.path, entry.origPath);
+    partners.set(entry.origPath, entry.path);
+  }
+  // Each path lands in one group only, even when both halves were asked for.
+  const placed = new Set<string>();
+  const groups: string[][] = [];
+  for (const requested of paths) {
+    if (placed.has(requested)) continue;
+    const partner = partners.get(requested);
+    const group = partner === undefined || placed.has(partner) ? [requested] : [requested, partner];
+    for (const p of group) placed.add(p);
+    groups.push(group);
+  }
+  return groups;
+}
+
+type DiffGit = Pick<Awaited<ReturnType<typeof createHardenedGit>>, "diff" | "raw">;
+
+/**
+ * Whether HEAD is a branch with no commit yet. Strict where
+ * {@link hasHeadCommit} is lenient: a detached HEAD, a branch that names any
+ * object however unreadable, or a probe that fails is not unborn. `git` must
+ * reject every non-zero exit, or a listing from a git that died silently would
+ * read as "no such branch".
+ */
+async function isUnbornBranch(git: DiffGit): Promise<boolean> {
+  const ref = (await git.raw(["symbolic-ref", "--quiet", "HEAD"]).catch(() => "")).trim();
+  if (!ref.startsWith("refs/heads/")) return false;
+  // A pattern also matches refs under it (`main` matches `main/x`), so only an
+  // exact name counts. `for-each-ref` answers a missing ref with exit 0.
+  const listed = await git.raw(["for-each-ref", "--format=%(refname)", ref]).catch(() => null);
+  return listed !== null && !listed.split("\n").includes(ref);
+}
+
+const WORKING_DIFF_ARGS = ["--no-ext-diff", "--no-textconv"];
+
+/**
+ * The working tree against HEAD. A branch with no commit yet has no HEAD to
+ * name, so it diffs against the empty tree instead: every tracked path shows as
+ * a new file holding what is on disk now. Any other failure is HEAD's to report.
+ */
+async function diffWorkingTreeAgainstHead(git: DiffGit, cwd: string): Promise<string> {
+  try {
+    // `--` keeps a tracked file named HEAD from being read as the revision.
+    return await git.diff([...WORKING_DIFF_ARGS, "HEAD", "--"]);
+  } catch (error) {
+    const strict = await createStrictExitGit(cwd).catch(() => null);
+    if (!strict || !(await isUnbornBranch(strict))) throw error;
+    const format = (await strict.raw(["rev-parse", "--show-object-format"]).catch(() => "")).trim();
+    if (format !== "sha1" && format !== "sha256") throw error;
+    return strict.diff([...WORKING_DIFF_ARGS, EMPTY_TREE[format], "--"]);
+  }
+}
+
+/**
+ * Whether git itself reports HEAD as `branch` with no commit yet (#17588).
+ *
+ * A HEAD that fails to read is no proof of that, so this asks for git's own
+ * statement: porcelain v2 names the branch and says `(initial)` for its commit
+ * in one answer. Any failure, or a different branch, is a no.
+ */
+async function isReportedUnbornBranch(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  branch: string
+): Promise<boolean> {
+  try {
+    const out = await git.raw([
+      "status",
+      "--porcelain=v2",
+      "--branch",
+      "--untracked-files=no",
+      "--ignore-submodules=all",
+    ]);
+    const headers = out.split("\n").filter((line) => line.startsWith("# branch."));
+    return (
+      headers.includes("# branch.oid (initial)") && headers.includes(`# branch.head ${branch}`)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -1207,8 +1818,10 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid file path");
     }
 
-    const git = await createHardenedGit(payload.cwd);
-    await git.add(["--", payload.filePath]);
+    await runExclusive(gitIndexWriteKey(payload.cwd), async () => {
+      const git = await createHardenedGit(payload.cwd);
+      await git.add(["--", payload.filePath]);
+    });
     invalidateStagingDiffStatCache(payload.cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_STAGE_FILE, handleStageFile));
@@ -1220,20 +1833,19 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid file path");
     }
 
-    const git = await createHardenedGit(payload.cwd);
+    await runExclusive(gitIndexWriteKey(payload.cwd), async () => {
+      const git = await createHardenedGit(payload.cwd);
 
-    let hasHead = true;
-    try {
-      await git.revparse(["HEAD"]);
-    } catch {
-      hasHead = false;
-    }
-
-    if (hasHead) {
-      await git.reset(["HEAD", "--", payload.filePath]);
-    } else {
-      await git.raw(["rm", "--cached", "--", payload.filePath]);
-    }
+      if (await hasHeadCommit(git, payload.cwd)) {
+        await git.reset([
+          "HEAD",
+          "--",
+          ...(await withStagedRenamePartners(payload.cwd, [payload.filePath])).flat(),
+        ]);
+      } else {
+        await git.raw(["rm", "--cached", "--", payload.filePath]);
+      }
+    });
     invalidateStagingDiffStatCache(payload.cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_FILE, handleUnstageFile));
@@ -1243,21 +1855,72 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("filePaths must be a non-empty array");
     }
     for (const p of filePaths) {
-      if (typeof p !== "string" || !p) {
+      // A NUL would fail the spawn, possibly after earlier batches had landed.
+      if (typeof p !== "string" || !p || p.includes("\0")) {
         throw new Error("Invalid file path in filePaths");
       }
     }
     return filePaths as string[];
   };
 
+  /**
+   * One git write per batch of pathspecs, so a large selection never overflows
+   * the OS command line. Batches run in order and stop at the first failure.
+   * The batches before it have landed, so the error names how many paths git
+   * confirmed; "at least", because a failed `add` can still stage some of its
+   * own batch. A failure before any batch landed passes through unchanged.
+   *
+   * Index writes to one worktree run one at a time (`gitIndexWriteKey`): two
+   * interleaving their batches could leave an index that neither order of the
+   * two would, and a hunk stage must not see the index move between its read
+   * and its apply. Each
+   * picks its write command once its turn comes, from the repository as it is
+   * then.
+   */
+  const writeInBatches = (
+    cwd: string,
+    paths: string[],
+    verb: "Staged" | "Unstaged",
+    prepare: () => Promise<{
+      write: (batch: string[]) => Promise<unknown>;
+      /** What to write, each group kept in one batch; `paths` one at a time when absent. */
+      groups?: string[][];
+    }>
+  ): Promise<void> =>
+    runExclusive(gitIndexWriteKey(cwd), async () => {
+      const requested = new Set(paths);
+      let confirmed = 0;
+      try {
+        const { write, groups = paths.map((p) => [p]) } = await prepare();
+        for (const batch of batchPathGroupsForArgv(groups)) {
+          try {
+            await write(batch);
+          } catch (err) {
+            if (confirmed === 0) throw err;
+            const reason = formatErrorMessage(err, "Git failed without a message");
+            throw new Error(
+              `${verb} at least ${confirmed} of ${paths.length} files before Git stopped: ${reason}`,
+              { cause: err }
+            );
+          }
+          // Paths a group added beside a requested one aren't part of the count.
+          confirmed += batch.filter((p) => requested.has(p)).length;
+        }
+      } finally {
+        invalidateStagingDiffStatCache(cwd);
+      }
+    });
+
   const handleStageFiles = async (payload: { cwd: string; filePaths: string[] }): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_STAGE_FILES, 10, 10_000);
     validateCwd(payload?.cwd);
     const paths = validateFilePaths(payload?.filePaths);
 
-    const git = await createHardenedGit(payload.cwd);
-    await git.add(["--", ...paths]);
-    invalidateStagingDiffStatCache(payload.cwd);
+    await writeInBatches(payload.cwd, paths, "Staged", async () => {
+      // Strict exit: a batch only counts as confirmed when git exits 0.
+      const git = await createStrictExitGit(payload.cwd);
+      return { write: (batch) => git.add(["--", ...batch]) };
+    });
   };
   handlers.push(typedHandle(CHANNELS.GIT_STAGE_FILES, handleStageFiles));
 
@@ -1269,21 +1932,26 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(payload?.cwd);
     const paths = validateFilePaths(payload?.filePaths);
 
-    const git = await createHardenedGit(payload.cwd);
-
-    let hasHead = true;
-    try {
-      await git.revparse(["HEAD"]);
-    } catch {
-      hasHead = false;
-    }
-
-    if (hasHead) {
-      await git.reset(["HEAD", "--", ...paths]);
-    } else {
-      await git.raw(["rm", "--cached", "--", ...paths]);
-    }
-    invalidateStagingDiffStatCache(payload.cwd);
+    await writeInBatches(payload.cwd, paths, "Unstaged", async () => {
+      // The probe keeps the default client, where a probe that dies silently
+      // reads as a commit: `reset` then fails loudly on a truly unborn branch,
+      // where taking `rm --cached` on a born one would stage deletions.
+      const hasHead = await hasHeadCommit(await createHardenedGit(payload.cwd), payload.cwd);
+      const git = await createStrictExitGit(payload.cwd);
+      // Both forms replay cleanly over paths an earlier, partly failed run
+      // already unstaged: `reset` matches nothing silently, and `rm` is told to.
+      if (!hasHead) {
+        return {
+          write: (batch) => git.raw(["rm", "--cached", "--ignore-unmatch", "-q", "--", ...batch]),
+        };
+      }
+      // A staged rename's halves share a batch: a failure between them would
+      // leave the source staged for deletion, and a replay could no longer pair it.
+      return {
+        groups: await withStagedRenamePartners(payload.cwd, paths),
+        write: (batch) => git.reset(["HEAD", "--", ...batch]),
+      };
+    });
   };
   handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_FILES, handleUnstageFiles));
 
@@ -1291,8 +1959,10 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_STAGE_ALL, 10, 10_000);
     validateCwd(cwd);
 
-    const git = await createHardenedGit(cwd);
-    await git.add("-A");
+    await runExclusive(gitIndexWriteKey(cwd), async () => {
+      const git = await createHardenedGit(cwd);
+      await git.add("-A");
+    });
     invalidateStagingDiffStatCache(cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_STAGE_ALL, handleStageAll));
@@ -1301,20 +1971,15 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_UNSTAGE_ALL, 10, 10_000);
     validateCwd(cwd);
 
-    const git = await createHardenedGit(cwd);
+    await runExclusive(gitIndexWriteKey(cwd), async () => {
+      const git = await createHardenedGit(cwd);
 
-    let hasHead = true;
-    try {
-      await git.revparse(["HEAD"]);
-    } catch {
-      hasHead = false;
-    }
-
-    if (hasHead) {
-      await git.reset(["HEAD"]);
-    } else {
-      await git.raw(["rm", "--cached", "-r", "."]);
-    }
+      if (await hasHeadCommit(git, cwd)) {
+        await git.reset(["HEAD"]);
+      } else {
+        await git.raw(["rm", "--cached", "-r", "."]);
+      }
+    });
     invalidateStagingDiffStatCache(cwd);
   };
   handlers.push(typedHandle(CHANNELS.GIT_UNSTAGE_ALL, handleUnstageAll));
@@ -1322,24 +1987,36 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   const handleCommit = async (payload: {
     cwd: string;
     message: string;
+    expectedBranch?: string;
+    expectedHeadOid?: string;
+    expectedStagedIdentity?: string;
   }): Promise<GitCommitResult> => {
     checkRateLimit(CHANNELS.GIT_COMMIT, 5, 10_000);
     validateCwd(payload?.cwd);
     if (typeof payload.message !== "string" || !payload.message.trim()) {
       throw new Error("Commit message is required");
     }
+    const review = readCommitReview(payload);
 
     const git = await createHardenedGit(payload.cwd);
-    await scanStagedFilesForConflictMarkers(git);
+    await scanStagedFilesForConflictMarkers(git, payload.cwd);
+    if (review) await requireReviewedStage(git, review, payload.cwd);
     const result = await git.commit(payload.message.trim());
     if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
       playSoundFireAndForget("git-commit");
     }
     const hash = result.commit || "";
+    const committed = await readCommitted(git, hash);
     return {
       hash,
       summary: `${result.summary.changes} changed, ${result.summary.insertions} insertions(+), ${result.summary.deletions} deletions(-)`,
-      ...(await readCommitted(git, hash)),
+      ...committed,
+      // The index can still change between the check above and git reading it,
+      // so the caller is told what the commit really holds rather than trusting
+      // the check. The commit has landed either way; a failed read is `null`.
+      ...(review
+        ? { stagedIdentity: await readCommittedStagedIdentity(payload.cwd, committed) }
+        : {}),
     };
   };
   handlers.push(typedHandle(CHANNELS.GIT_COMMIT, handleCommit));
@@ -1524,15 +2201,25 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   };
   handlers.push(typedHandleWithContext(CHANNELS.GIT_PUSH, handlePush));
 
-  const handlePullRebase = async (payload: { cwd: string }): Promise<void> => {
+  const handlePullRebase = async (payload: {
+    cwd: string;
+    expectedBranch?: string;
+    expectedHeadOid?: string;
+  }): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_PULL_REBASE, 3, 10_000);
     validateCwd(payload?.cwd);
+    // Parsed before anything runs, so a malformed pin is refused rather than
+    // read as "no pin" and the pull run unchecked.
+    const review = readPullRebaseReview(payload);
 
     const git = await createAuthenticatedGit(payload.cwd);
 
     try {
-      const branch = await git.revparse(["--abbrev-ref", "HEAD"]);
-      const branchName = branch.trim();
+      // `HEAD` on a detached HEAD, as `rev-parse --abbrev-ref` spelled it, so
+      // the upstream lookup below fails closed in the same terms it always has.
+      const headBranch = await readHeadBranch(git);
+      const branchName = headBranch ?? "HEAD";
+      if (review) requirePreviewedBranch(headBranch, review, payload.cwd);
       // Pull from the branch's UPSTREAM, not a hardcoded origin (#11746) and not
       // its push target: in a triangular workflow a branch tracks
       // `origin/release/topic` while pushing to `fork/topic`, and `git pull`
@@ -1547,6 +2234,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       );
       await requireNoOperationInProgress(git, payload.cwd, "pull-rebase");
       await requireNoTrackedChanges(git, payload.cwd, "pull-rebase");
+      // Absent for a caller no confirm previewed (an agent dispatch), which
+      // keeps today's unpinned behaviour.
+      if (review) await requirePreviewedHead(git, review, payload.cwd);
       // The same pins the base rebase carries, for the same reason: each closes
       // a gap between what the confirm previewed and what git would do under a
       // user's config. `rebase.updateRefs` moves OTHER local branches pointing
@@ -1754,6 +2444,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     validateCwd(cwd);
 
     const git = await createHardenedGit(cwd);
+    // Read on both sides of the status: an operation replaced while it runs
+    // would otherwise hand back the old one's conflict counts with the new
+    // one's identity, and a confirm built from that would describe one
+    // operation while approving another.
+    const gitDir = await resolveGitDir(git, cwd).catch(() => null);
+    const operationIdBefore = gitDir ? await readCurrentRepoOperationId(gitDir) : null;
     const status = await git.status();
 
     const mapStatus = (s: string): GitStatus => {
@@ -1822,14 +2518,16 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     // sentinels below, read from the filesystem rather than spawned. The OID
     // is still sampled after the status spawn, as the rev-parse it replaces
     // was; any shape the filesystem read can't prove falls back to it.
-    const gitDir = await resolveGitDir(git, cwd).catch(() => null);
     let headOid = (gitDir ? await resolveHeadOidFromGitDir(gitDir) : null) ?? "";
     if (!headOid) {
       try {
-        headOid = (await git.revparse(["HEAD"])).trim();
+        const out = (await git.revparse(["HEAD"])).trim();
+        // On a branch with no commit, a tracked file named `HEAD` makes
+        // rev-parse echo the path back rather than fail.
+        headOid = FULL_OID_PATTERN.test(out) ? out : "";
       } catch {
-        // No HEAD (unborn branch / empty repo) — staged numstat would also
-        // throw; skip churn entirely below.
+        // No HEAD (unborn branch / empty repo): `git diff --cached` still
+        // works against the empty tree, so churn is read with an empty OID.
       }
     }
 
@@ -1872,6 +2570,9 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     }
 
     const hasRemote = remoteNames.length > 0;
+    // Only where HEAD could not be read: every branch with a commit skips it.
+    const isUnbornBranch =
+      !headOid && currentBranch !== null && (await isReportedUnbornBranch(git, currentBranch));
 
     // Best-effort: this is a general status read, so an unresolvable
     // destination degrades to `null` here rather than failing the whole status.
@@ -1880,9 +2581,11 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     let pushDestination: StagingStatus["pushDestination"] = null;
     let pullSource: StagingStatus["pullSource"] = null;
     if (hasRemote && currentBranch) {
-      const resolved = await resolveGitPushAndUpstream(git, currentBranch, remoteNames).catch(
-        () => null
-      );
+      // Shows the destination only, so whether a push would set tracking is
+      // never read.
+      const resolved = await resolveGitPushAndUpstream(git, currentBranch, remoteNames, {
+        skipTrackingSetup: true,
+      }).catch(() => null);
       const push = resolved?.push;
       const pull = resolved?.upstream;
       if (push?.status === "resolved") {
@@ -1922,18 +2625,43 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
         // Same fallback when the sentinel reads fail.
       }
     }
+    const halted = asHaltedOperation(repoState);
+    const operationIdAfter =
+      gitDir && halted && operationIdBefore !== null
+        ? await readRepoOperationId(gitDir, halted)
+        : null;
+    const repoOperationId = operationIdAfter === operationIdBefore ? operationIdAfter : null;
+
+    // Only a stopped operation puts cleanly merged paths in the index beside
+    // the resolved ones, so nothing else pays for the read. After the last
+    // conflict clears the sentinel still names the operation, so the read still
+    // runs then.
+    let resolveUndoPaths: string[] | undefined;
+    if (staged.length > 0 && repoState !== "CLEAN" && repoState !== "DIRTY") {
+      try {
+        // A git that died partway must not pass for a shorter list of resolutions.
+        const strictGit = await createStrictExitGit(cwd);
+        resolveUndoPaths =
+          parseResolveUndoPaths(await strictGit.raw(RESOLVE_UNDO_ARGS)) ?? undefined;
+      } catch {
+        // Left out, so the panel names the staged paths without claiming a split.
+      }
+    }
 
     return {
       staged,
       unstaged,
       conflicted,
       conflictedFiles,
+      ...(resolveUndoPaths ? { resolveUndoPaths } : {}),
       isDetachedHead,
       currentBranch,
       hasRemote,
       pushDestination,
       pullSource,
+      ...(isUnbornBranch ? { isUnbornBranch: true as const } : {}),
       repoState,
+      repoOperationId,
       rebaseStep,
       rebaseTotalSteps,
       rebaseSequence,
@@ -1941,13 +2669,15 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   };
   handlers.push(typedHandle(CHANNELS.GIT_GET_STAGING_STATUS, handleGetStagingStatus));
 
-  const handleAbortRepositoryOperation = async (cwd: string): Promise<void> => {
+  const handleAbortRepositoryOperation = async (cwd: string, expected?: unknown): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
+    const pin = readRepoOperationPin(expected);
 
     const git = await createHardenedGit(cwd);
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
+    await requireChosenRepoOperation(gitDir, state, pin, cwd, "abort");
 
     switch (state) {
       case "MERGING":
@@ -1962,17 +2692,27 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       case "REVERTING":
         await git.raw(["revert", "--abort"]);
         return;
+      case "APPLYING_MAILBOX":
+        // `git rebase --abort` refuses an am session outright; `git am --abort`
+        // also declines to rewind when HEAD moved since the stop, which is
+        // git's call to make, not ours.
+        await git.raw(["am", "--abort"]);
+        return;
       default:
-        throw new Error("No merge, rebase, cherry-pick, or revert operation is in progress");
+        throw new Error("No repository operation is in progress");
     }
   };
   handlers.push(
     typedHandle(CHANNELS.GIT_ABORT_REPOSITORY_OPERATION, handleAbortRepositoryOperation)
   );
 
-  const handleContinueRepositoryOperation = async (cwd: string): Promise<void> => {
+  const handleContinueRepositoryOperation = async (
+    cwd: string,
+    expected?: unknown
+  ): Promise<void> => {
     checkRateLimit(CHANNELS.GIT_CONTINUE_REPOSITORY_OPERATION, 5, 10_000);
     validateCwd(cwd);
+    const pin = readRepoOperationPin(expected);
 
     // The continue profile carries the hardened env plus editor suppression in
     // the one env it is built with: a later .env() would replace the hardening
@@ -1981,6 +2721,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     const git = await createContinueGit(cwd);
     const gitDir = await resolveGitDir(git, cwd);
     const { state } = await detectRepoOperationState(gitDir, false);
+    await requireChosenRepoOperation(gitDir, state, pin, cwd, "continue");
 
     switch (state) {
       case "MERGING":
@@ -1999,8 +2740,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       case "REVERTING":
         await git.raw(["revert", "--continue", "--no-edit"]);
         return;
+      case "APPLYING_MAILBOX":
+        // Commits the staged resolution with the patch's own message and
+        // author, so there is no message to edit.
+        await git.raw(["am", "--continue"]);
+        return;
       default:
-        throw new Error("No merge, rebase, cherry-pick, or revert operation is in progress");
+        throw new Error("No repository operation is in progress");
     }
   };
   handlers.push(
@@ -2025,13 +2771,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     let raw: string;
     switch (diffType) {
       case "unstaged":
-        raw = await git.diff(["--no-ext-diff", "--no-textconv"]);
+        raw = await git.diff([...WORKING_DIFF_ARGS]);
         break;
       case "staged":
-        raw = await git.diff(["--no-ext-diff", "--no-textconv", "--cached"]);
+        raw = await git.diff([...WORKING_DIFF_ARGS, "--cached"]);
         break;
       case "head":
-        raw = await git.diff(["--no-ext-diff", "--no-textconv", "HEAD"]);
+        raw = await diffWorkingTreeAgainstHead(git, payload.cwd);
         break;
     }
 
@@ -2081,46 +2827,41 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     }
     if (payload.filePaths.length === 0) return [];
 
-    // `g` flag is required for `matchAll`/`exec` iteration; the regex is local
-    // to this call so the shared `CONFLICT_MARKER_RE` (single-match, `/m`) is
-    // untouched. Counts only opening `<<<<<<<` markers — one per hunk.
-    const HUNK_OPEN_RE = /^<{7}/gm;
+    const skipped = (filePath: string): ConflictMarkerScanEntry => ({
+      path: filePath,
+      hunkCount: null,
+      hasMarkers: null,
+      firstMarkerLine: null,
+    });
 
     const scanOne = async (filePath: string): Promise<ConflictMarkerScanEntry> => {
       try {
         validateFilePathUnderCwd(payload.cwd, filePath);
         const absolute = path.resolve(payload.cwd, filePath);
-        const stat = await fs.promises.stat(absolute);
-        if (!stat.isFile() || stat.size > STAGED_FILE_SIZE_CAP) {
-          return { path: filePath, hunkCount: null, firstMarkerLine: null };
-        }
-        const content = await fs.promises.readFile(absolute, "utf8");
-        // BOM-strip so a marker on line 1 isn't shifted past the `^` anchor.
-        const probe = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
-        let hunkCount = 0;
-        let firstMarkerLine: number | null = null;
-        let match: RegExpExecArray | null;
-        HUNK_OPEN_RE.lastIndex = 0;
-        while ((match = HUNK_OPEN_RE.exec(probe)) !== null) {
-          hunkCount++;
-          if (firstMarkerLine === null) {
-            // Compute 1-based line number from byte offset within the probed string.
-            let line = 1;
-            for (let i = 0; i < match.index; i++) {
-              if (probe.charCodeAt(i) === 0x0a) line++;
-            }
-            firstMarkerLine = line;
-          }
-        }
-        return { path: filePath, hunkCount, firstMarkerLine };
-      } catch {
-        // Treat any per-file error as a degraded scan result — the UI hides
-        // the badge rather than blocking the worklist on a single bad path.
-        return { path: filePath, hunkCount: null, firstMarkerLine: null };
+        // Through the project I/O gate, so a worktree on a dead mount fails its
+        // own reads instead of holding Main's threadpool.
+        const stat = await projectIo.run(payload.cwd, () => fs.promises.stat(absolute));
+        if (!stat.isFile() || stat.size > STAGED_FILE_SIZE_CAP) return skipped(filePath);
+        const content = await projectIo.run(payload.cwd, () => fs.promises.readFile(absolute));
+        return { path: filePath, ...scanConflictMarkerText(content) };
+      } catch (error) {
+        // The gate refused or gave up on the read, so nobody looked: a skipped
+        // entry would read as a deletion conflict's missing file and stage it
+        // unasked, where a failed scan makes the renderer ask first.
+        if (isProjectIoError(error)) throw error;
+        // Treat any other per-file error as a degraded scan result — the UI
+        // hides the badge rather than blocking the worklist on a single bad path.
+        return skipped(filePath);
       }
     };
 
-    return Promise.all(payload.filePaths.map(scanOne));
+    // One file at a time: the gate runs one read per worktree anyway, so more
+    // in flight would only queue there, ahead of a later scan's files.
+    const results: ConflictMarkerScanEntry[] = [];
+    for (const filePath of payload.filePaths) {
+      results.push(await scanOne(filePath));
+    }
+    return results;
   };
   handlers.push(typedHandle(CHANNELS.GIT_SCAN_CONFLICT_MARKERS, handleScanConflictMarkers));
 
@@ -2128,16 +2869,56 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     checkRateLimit(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, 30, 10_000);
     validateCwd(payload?.cwd);
     validateFilePathUnderCwd(payload.cwd, payload?.filePath);
-    if (payload.side !== "ours" && payload.side !== "theirs") {
-      throw new Error("Invalid side: must be 'ours' or 'theirs'");
+    const { resolution, side } = payload;
+    if (resolution !== "checkout" && resolution !== "delete") {
+      throw new Error("Invalid resolution: must be 'checkout' or 'delete'");
+    }
+    const validSides: string[] =
+      resolution === "delete" ? ["ours", "theirs", "both"] : ["ours", "theirs"];
+    if (!validSides.includes(side)) {
+      throw new Error(`Invalid side: must be one of ${validSides.join(", ")}`);
     }
 
     const git = await createHardenedGit(payload.cwd);
-    const flag = payload.side === "ours" ? "--ours" : "--theirs";
+    // The renderer confirmed an overwrite or a deletion from a status read that
+    // may be stale. Check the stages it was based on, and refuse rather than run
+    // the other operation: stage 2 is ours, stage 3 is theirs.
+    const stages = new Set<string>();
+    let isSubmodule = false;
+    const unmerged = await git.raw(["ls-files", "--unmerged", "-z", "--", payload.filePath]);
+    for (const record of unmerged.split("\0")) {
+      const tab = record.indexOf("\t");
+      // A directory pathspec also matches its descendants.
+      if (tab === -1 || record.slice(tab + 1) !== payload.filePath) continue;
+      const [mode, , stage] = record.slice(0, tab).split(" ");
+      stages.add(stage ?? "");
+      if (mode === "160000") isSubmodule = true;
+    }
+    const sideStages = side === "both" ? ["2", "3"] : [side === "ours" ? "2" : "3"];
+    const expectPresent = resolution === "checkout";
+    if (stages.size === 0 || sideStages.some((stage) => stages.has(stage) !== expectPresent)) {
+      throw new Error(
+        `The conflict in ${payload.filePath} has changed since it was listed. Review it and choose again.`
+      );
+    }
+
+    if (resolution === "delete") {
+      // On a submodule `git rm` also removes its checkout and edits
+      // `.gitmodules`, more than a confirm that names one file covers.
+      if (isSubmodule) {
+        throw new Error(
+          `${payload.filePath} is a submodule. Resolve its deletion with git in a terminal.`
+        );
+      }
+      // `git rm` resolves the unmerged path as deleted and removes the file,
+      // whatever edits it carries.
+      await git.raw(["rm", "-q", "--", payload.filePath]);
+      return;
+    }
     // `checkout --ours/--theirs` leaves the file unstaged — the conflict markers
     // are still in the index. Follow with `git add` so the resolution lands in
     // the staged tree and the file falls off the conflicted list.
-    await git.raw(["checkout", flag, "--", payload.filePath]);
+    await git.raw(["checkout", side === "ours" ? "--ours" : "--theirs", "--", payload.filePath]);
     await git.add(["--", payload.filePath]);
   };
   handlers.push(typedHandle(CHANNELS.GIT_CHECKOUT_OURS_THEIRS, handleCheckoutOursTheirs));

@@ -19,16 +19,6 @@ const mocks = vi.hoisted(() => {
     }),
   };
 
-  const portal = {
-    create: vi.fn(),
-    show: vi.fn(),
-    hide: vi.fn(),
-    goBack: vi.fn(),
-    goForward: vi.fn(),
-    reload: vi.fn(),
-    closeTab: vi.fn(),
-  };
-
   const terminal = {
     getSerializedState: vi.fn(),
     getInfo: vi.fn(),
@@ -101,7 +91,6 @@ const mocks = vi.hoisted(() => {
 
   const windowMock = {
     electron: {
-      portal,
       terminal,
       notification,
     },
@@ -188,7 +177,6 @@ const mocks = vi.hoisted(() => {
     forgeClient,
     actionService,
     terminalInstanceService,
-    portal,
     terminal,
     notification,
     worktreeViewStore,
@@ -267,7 +255,6 @@ const { registerWorktreeActions } = await import("../definitions/worktreeActions
 const { usePanelStore } = await import("../../../store/panelStore");
 const { UnactionableTargetError } = await import("../unactionableTarget");
 const { useLayoutUndoStore } = await import("../../../store/layoutUndoStore");
-const { usePortalStore } = await import("../../../store/portalStore");
 const { useUIStore } = await import("../../../store/uiStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
 const { useWorktreeFilterStore } = await import("../../../store/worktreeFilterStore");
@@ -349,15 +336,6 @@ beforeEach(() => {
     maximizedId: null,
     activeDockTerminalId: null,
     commandQueue: [],
-  });
-
-  usePortalStore.setState({
-    isOpen: false,
-    activeTabId: null,
-    tabs: [],
-    createdTabs: new Set<string>(),
-    links: [],
-    defaultNewTabUrl: null,
   });
 
   useUIStore.setState({ overlayStack: [] });
@@ -1140,101 +1118,6 @@ describe("terminal action hardening", () => {
 });
 
 describe("panel action hardening", () => {
-  it("ignores activation requests for unknown portal tabs", async () => {
-    const actions = buildRegistry(registerPanelActions);
-    const activateTab = actions.get("portal.activateTab")!();
-
-    usePortalStore.setState({
-      isOpen: true,
-      activeTabId: "tab-1",
-      tabs: [{ id: "tab-1", title: "Docs", url: "https://example.com" }],
-      createdTabs: new Set<string>(["tab-1"]),
-    });
-
-    await activateTab.run({ tabId: "missing" }, {} as never);
-
-    expect(usePortalStore.getState().activeTabId).toBe("tab-1");
-    expect(mocks.portal.hide).not.toHaveBeenCalled();
-    expect(mocks.portal.show).not.toHaveBeenCalled();
-    expect(mocks.portal.create).not.toHaveBeenCalled();
-  });
-
-  it("removes background tabs again if portal creation fails", async () => {
-    const actions = buildRegistry(registerPanelActions);
-    const openUrl = actions.get("portal.openUrl")!();
-    mocks.portal.create.mockRejectedValueOnce(new Error("boom"));
-
-    await openUrl.run(
-      {
-        url: "https://example.com/background",
-        title: "Background",
-        background: true,
-      },
-      {} as never
-    );
-
-    expect(usePortalStore.getState().tabs).toEqual([]);
-    expect(usePortalStore.getState().createdTabs.size).toBe(0);
-  });
-
-  it("portal.openUrl is a no-op while an overlay claim is active", async () => {
-    const actions = buildRegistry(registerPanelActions);
-    const openUrl = actions.get("portal.openUrl")!();
-
-    useUIStore.setState({ overlayStack: ["theme-browser"] });
-    usePortalStore.setState({
-      isOpen: false,
-      activeTabId: null,
-      tabs: [],
-      createdTabs: new Set<string>(),
-    });
-
-    await openUrl.run({ url: "https://example.com/blocked", title: "Blocked" }, {} as never);
-
-    const state = usePortalStore.getState();
-    expect(state.isOpen).toBe(false);
-    expect(state.tabs).toEqual([]);
-    expect(mocks.portal.create).not.toHaveBeenCalled();
-    expect(mocks.portal.show).not.toHaveBeenCalled();
-  });
-
-  it("reuses the active blank tab when opening a foreground URL", async () => {
-    const actions = buildRegistry(registerPanelActions);
-    const openUrl = actions.get("portal.openUrl")!();
-
-    vi.mocked(document.getElementById).mockReturnValue({
-      getBoundingClientRect: () => ({
-        x: 10,
-        y: 20,
-        width: 300,
-        height: 400,
-      }),
-    } as never);
-
-    usePortalStore.setState({
-      isOpen: false,
-      activeTabId: "blank-1",
-      tabs: [{ id: "blank-1", title: "New Tab", url: null }],
-      createdTabs: new Set<string>(),
-    });
-
-    await openUrl.run({ url: "https://example.com/reused", title: "Reused" }, {} as never);
-
-    const state = usePortalStore.getState();
-    expect(state.tabs).toHaveLength(1);
-    expect(state.tabs[0]).toMatchObject({
-      id: "blank-1",
-      title: "Reused",
-      url: "https://example.com/reused",
-    });
-    expect(state.isOpen).toBe(true);
-    expect(mocks.portal.create).toHaveBeenCalledWith({
-      tabId: "blank-1",
-      url: "https://example.com/reused",
-    });
-    expect(mocks.portal.show).toHaveBeenCalled();
-  });
-
   it("throws for focus requests targeting trashed or missing panels", async () => {
     const activateTerminal = vi.fn();
     usePanelStore.setState({

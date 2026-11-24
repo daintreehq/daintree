@@ -68,6 +68,30 @@ interface CodexResolved extends AgentResolved {
   upgrades: Record<string, string>;
 }
 
+interface CodexCached extends CodexResolved {
+  fetchedAt: number;
+  /** The CLI copy and version this catalog came from, when both were known. */
+  identity: CodexIdentity | null;
+}
+
+interface CodexIdentity {
+  command: string;
+  version: string;
+}
+
+/** Bumped when the filtering that shapes the persisted list changes. */
+const CODEX_DISK_FORMAT = 1;
+
+const CodexDiskSchema = z.object({
+  format: z.literal(CODEX_DISK_FORMAT),
+  command: z.string().min(1),
+  version: z.string().min(1),
+  models: z.array(z.object({ id: z.string().min(1), name: z.string() })),
+  contextWindow: z.number().finite().positive().nullable(),
+  // Pairs rather than a record, so a `__proto__` slug survives parsing as a key.
+  upgrades: z.array(z.tuple([z.string().min(1), z.string().min(1)])),
+});
+
 interface AgyListed {
   models: AgentModelConfig[];
   fetchedAt: number;
@@ -116,6 +140,14 @@ interface CatalogDeps {
   execFileImpl?: typeof execFileAsync;
   /** Override for the codex command name (used by tests). Defaults to `"codex"`. */
   codexCommand?: string;
+  /** Override for the Codex catalog disk-cache path. Defaults to `userData/codex-models.json`. */
+  codexCachePath?: string;
+  /**
+   * The version the CLI at `command` reports now, or null when it can't be told.
+   * Keys the Codex catalog on disk: `--bundled` is baked into the binary, so a
+   * version already seen needs no probe.
+   */
+  getCliVersion?: (agentId: string, command: string) => Promise<string | null>;
   /** Override for the `agy models` disk-cache path. Defaults to `userData/antigravity-models.json`. */
   antigravityCachePath?: string;
   /**
@@ -139,6 +171,11 @@ const MAX_AGY_BUFFER = 256 * 1024;
 // An offline machine fails every probe; without a pause each catalog read
 // would spawn agy and wait on the network again.
 const AGY_RETRY_MS = 60_000;
+// A missing or too-old Codex fails the same way every time; without a pause
+// each catalog read would fork it and parse its output again.
+const CODEX_RETRY_MS = 5 * 60_000;
+/** The exit status clap, Codex's argument parser, gives an unknown subcommand. */
+const CLAP_USAGE_EXIT = 2;
 
 /**
  * Resolves agent model lists and context windows at runtime against the
@@ -165,8 +202,11 @@ const AGY_RETRY_MS = 60_000;
 export class AgentModelCatalogService {
   private inFlight: Promise<ParsedCatalog | null> | null = null;
   private memCache: CachedCatalog | null = null;
-  private codexCache: (CodexResolved & { fetchedAt: number }) | null = null;
+  private codexCache: CodexCached | null = null;
   private codexInFlight: Promise<CodexResolved | null> | null = null;
+  private codexRetryAt = 0;
+  /** A copy and version whose CLI answered without a usable catalog. */
+  private codexUnsupported: CodexIdentity | null = null;
   private agyCache: AgyListed | null = null;
   private agyInFlight: Promise<AgyListed | null> | null = null;
   private agyRetryAt = 0;
@@ -228,6 +268,8 @@ export class AgentModelCatalogService {
   clearCache(): void {
     this.memCache = null;
     this.codexCache = null;
+    this.codexRetryAt = 0;
+    this.codexUnsupported = null;
     this.agyCache = null;
     this.agyRetryAt = 0;
   }
@@ -640,26 +682,28 @@ export class AgentModelCatalogService {
     return resolveUserDataFile(this.deps.antigravityCachePath, "antigravity-models.json");
   }
 
+  /**
+   * The installed CLI's own catalog. Fresh for a day in memory; past that, a
+   * catalog kept on disk for the same copy and version answers without a probe,
+   * and a probe that fails pauses further probes for a while. Every failure
+   * keeps the last catalog this CLI gave: with no bundled list behind it,
+   * dropping it would empty the picker over one slow probe.
+   */
   private async getCodexCatalog(): Promise<CodexResolved | null> {
-    if (this.codexCache && Date.now() - this.codexCache.fetchedAt < TTL_MS) {
-      return this.fromCodexCache(this.codexCache);
+    if (this.codexCache && isWithinTtl(this.codexCache.fetchedAt)) {
+      return fromCodexCache(this.codexCache);
     }
-    // The fallback lives inside the shared promise so every caller joining a
-    // refresh gets the same answer as the one that started it.
-    const inFlight = (this.codexInFlight ??= this.fetchCodexCatalog()
+    // Bounded by the pause itself, so a clock set back can't stretch it.
+    const pause = this.codexRetryAt - Date.now();
+    if (pause > 0 && pause <= CODEX_RETRY_MS) {
+      return this.codexCache ? fromCodexCache(this.codexCache) : null;
+    }
+    // Everything up to the fallback lives in the shared promise, so every caller
+    // joining a refresh gets the same answer as the one that started it.
+    const inFlight = (this.codexInFlight ??= this.refreshCodexCatalog()
       .catch((err: unknown) => {
         console.warn("[AgentModelCatalogService] codex catalog failed", err);
-        return null;
-      })
-      .then((result) => {
-        if (result) {
-          this.codexCache = { ...result, fetchedAt: Date.now() };
-          return result;
-        }
-        // A failed refresh keeps the last catalog this CLI gave: with no
-        // bundled list behind it, dropping it would empty the picker over one
-        // slow probe.
-        return this.codexCache ? this.fromCodexCache(this.codexCache) : null;
+        return this.codexCache ? fromCodexCache(this.codexCache) : null;
       })
       .finally(() => {
         this.codexInFlight = null;
@@ -667,13 +711,107 @@ export class AgentModelCatalogService {
     return inFlight;
   }
 
-  private fromCodexCache(cache: CodexResolved): CodexResolved {
-    return { models: cache.models, contextWindow: cache.contextWindow, upgrades: cache.upgrades };
+  private async refreshCodexCatalog(): Promise<CodexResolved | null> {
+    const known = this.codexCache;
+    const fallback = known ? fromCodexCache(known) : null;
+    const command = await this.resolveCliCommand(
+      "codex",
+      this.deps.codexCommand ?? getEffectiveAgentConfig("codex")?.command ?? "codex"
+    );
+    // Nothing that could launch, so nothing to ask; reinstalling is picked up
+    // on the next read.
+    if (!command) return fallback;
+
+    const identity = await this.readCodexIdentity(command);
+    if (identity) {
+      const disk = await this.readCodexDisk(identity);
+      if (disk) {
+        this.codexCache = { ...disk, fetchedAt: Date.now(), identity };
+        this.codexRetryAt = 0;
+        return fromCodexCache(this.codexCache);
+      }
+      if (sameCodexIdentity(this.codexUnsupported, identity)) {
+        this.codexRetryAt = Date.now() + CODEX_RETRY_MS;
+        return fallback;
+      }
+    }
+
+    const probed = await this.fetchCodexCatalog(command);
+    if (probed === "unsupported" || probed === null) {
+      if (probed === "unsupported" && identity) this.codexUnsupported = identity;
+      this.codexRetryAt = Date.now() + CODEX_RETRY_MS;
+      return fallback;
+    }
+
+    this.codexCache = { ...probed, fetchedAt: Date.now(), identity };
+    this.codexRetryAt = 0;
+    this.codexUnsupported = null;
+    if (identity) {
+      void this.writeCodexDisk(identity, probed).catch((err) => {
+        console.warn("[AgentModelCatalogService] codex disk write failed", err);
+      });
+    }
+    return fromCodexCache(this.codexCache);
   }
 
-  private async fetchCodexCatalog(): Promise<CodexResolved | null> {
+  private async readCodexIdentity(command: string): Promise<CodexIdentity | null> {
+    if (!this.deps.getCliVersion) return null;
+    try {
+      const version = (await this.deps.getCliVersion("codex", command))?.trim();
+      return version ? { command, version } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async readCodexDisk(identity: CodexIdentity): Promise<CodexResolved | null> {
+    const cachePath = await this.resolveCodexCachePath();
+    if (!cachePath) return null;
+    try {
+      const parsed = CodexDiskSchema.safeParse(JSON.parse(await fs.readFile(cachePath, "utf-8")));
+      if (!parsed.success || !sameCodexIdentity(parsed.data, identity)) return null;
+      return {
+        models: parsed.data.models.map(({ id, name }) => ({
+          id,
+          name,
+          shortLabel: deriveShortLabel(name, id),
+        })),
+        contextWindow: parsed.data.contextWindow,
+        upgrades: Object.fromEntries(parsed.data.upgrades),
+      };
+    } catch (err: unknown) {
+      if (isNodeError(err) && err.code === "ENOENT") return null;
+      console.warn("[AgentModelCatalogService] codex disk read failed", err);
+      return null;
+    }
+  }
+
+  private async writeCodexDisk(identity: CodexIdentity, catalog: CodexResolved): Promise<void> {
+    const cachePath = await this.resolveCodexCachePath();
+    if (!cachePath) return;
+    await fs.mkdir(path.dirname(cachePath), { recursive: true });
+    const payload = {
+      format: CODEX_DISK_FORMAT,
+      command: identity.command,
+      version: identity.version,
+      models: catalog.models.map(({ id, name }) => ({ id, name })),
+      contextWindow: catalog.contextWindow,
+      upgrades: Object.entries(catalog.upgrades),
+    };
+    await fs.writeFile(cachePath, JSON.stringify(payload), "utf-8");
+  }
+
+  private resolveCodexCachePath(): Promise<string | null> {
+    return resolveUserDataFile(this.deps.codexCachePath, "codex-models.json");
+  }
+
+  /**
+   * The CLI's catalog, null when the probe couldn't run or finish, or
+   * `"unsupported"` when the CLI answered without one (an older Codex that has
+   * no `debug models --bundled`).
+   */
+  private async fetchCodexCatalog(command: string): Promise<CodexResolved | "unsupported" | null> {
     const exec = this.deps.execFileImpl ?? execFileAsync;
-    const command = this.deps.codexCommand ?? "codex";
     let stdout = "";
     try {
       // An npm-installed Codex is a `.cmd` shim on Windows (see windowsCliSpawn).
@@ -701,15 +839,17 @@ export class AgentModelCatalogService {
       // Older Codex CLIs may not support `debug models`; treat any failure
       // as a missing-source rather than escalating.
       console.warn("[AgentModelCatalogService] codex debug models --bundled failed", err);
-      return null;
+      // Exit 2 is clap rejecting the subcommand. Anything else, such as the npm
+      // launcher's exit 1 mid-reinstall, may pass and only earns the pause.
+      return (err as { code?: unknown } | null)?.code === CLAP_USAGE_EXIT ? "unsupported" : null;
     }
 
-    if (!stdout.trim()) return null;
+    if (!stdout.trim()) return "unsupported";
     let parsed: unknown;
     try {
       parsed = JSON.parse(stdout);
     } catch {
-      return null;
+      return "unsupported";
     }
     // Real Codex emits `{"models": [...]}`; older or hypothetical bare-array
     // shapes are still accepted so the catalog survives format changes.
@@ -718,7 +858,7 @@ export class AgentModelCatalogService {
       : Array.isArray((parsed as { models?: unknown } | null)?.models)
         ? (parsed as { models: unknown[] }).models
         : null;
-    if (!entries) return null;
+    if (!entries) return "unsupported";
 
     const CodexEntrySchema = z
       .object({
@@ -778,6 +918,14 @@ export class AgentModelCatalogService {
       upgrades: Object.fromEntries(upgrades),
     };
   }
+}
+
+function fromCodexCache(cache: CodexResolved): CodexResolved {
+  return { models: cache.models, contextWindow: cache.contextWindow, upgrades: cache.upgrades };
+}
+
+function sameCodexIdentity(a: CodexIdentity | null, b: CodexIdentity): boolean {
+  return a !== null && a.command === b.command && a.version === b.version;
 }
 
 function isFresh(cache: CachedCatalog): boolean {

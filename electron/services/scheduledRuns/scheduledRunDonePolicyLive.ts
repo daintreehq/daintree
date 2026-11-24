@@ -13,6 +13,7 @@ import {
 import type { ScheduledRunFinishRequest } from "../../../shared/types/ipc/schedules.js";
 import type { ScheduledRun } from "../../../shared/types/scheduledRuns.js";
 import { peekScheduledRunRecorder } from "./index.js";
+import { forgetContinuationPane } from "../codexLimitContinuation/forgetPane.js";
 import {
   ScheduledRunDonePolicy,
   type ArmedScheduledRun,
@@ -74,6 +75,8 @@ async function applyDonePolicy(
     return;
   }
   if (!(await closeRunTerminal(target, run))) return;
+  // The run's pane goes for good, and what was chosen for it (#17912).
+  forgetContinuationPane(target.terminalId);
   askViews(target, "remove");
   await forgetViewlessTerminal(projectStore, target.projectId, target.terminalId);
 }

@@ -1,4 +1,8 @@
-import type { PluginIpcContext } from "../../../shared/types/plugin.js";
+import {
+  CONTEXT_MENU_AVAILABILITY_CHANNEL,
+  CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS,
+  type PluginIpcContext,
+} from "../../../shared/types/plugin.js";
 import { PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS } from "../../../shared/config/pluginBudgets.js";
 
 export const PLUGIN_INVOKE_TIMEOUT = "PLUGIN_INVOKE_TIMEOUT";
@@ -31,17 +35,29 @@ const MAX_TIMER_MS = 2_147_483_647;
 
 /**
  * Normalize a registration's `timeoutMs`. Omitted means the default deadline;
- * `0` means none. Anything outside `0..MAX_TIMER_MS` is an
+ * `0` means none, except on the context-menu availability channel, which is
+ * never allowed past its own timeout. Anything outside `0..MAX_TIMER_MS` is an
  * authoring mistake and throws at registration rather than at first dispatch.
  */
 export function resolveInvokeTimeoutMs(pluginId: string, channel: string, raw: unknown): number {
-  if (raw === undefined) return PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS;
-  if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > MAX_TIMER_MS) {
-    throw new Error(
-      `Plugin "${pluginId}" registerHandler("${channel}"): timeoutMs must be a number from 0 to ${MAX_TIMER_MS} (0 disables the deadline), got ${String(raw)}`
-    );
+  if (raw !== undefined) {
+    if (typeof raw !== "number" || !Number.isFinite(raw) || raw < 0 || raw > MAX_TIMER_MS) {
+      throw new Error(
+        `Plugin "${pluginId}" registerHandler("${channel}"): timeoutMs must be a number from 0 to ${MAX_TIMER_MS} (0 disables the deadline), got ${String(raw)}`
+      );
+    }
   }
-  return raw;
+  const timeoutMs = raw ?? PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS;
+  // The host calls this channel on its own every time a menu shows an item that
+  // checks availability, and stops waiting after its timeout. An answer nobody
+  // reads must not pin an invoke (and the worker it keeps from idle disposal)
+  // for minutes, or forever with `0`.
+  if (channel === CONTEXT_MENU_AVAILABILITY_CHANNEL) {
+    return timeoutMs === 0
+      ? CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS
+      : Math.min(timeoutMs, CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS);
+  }
+  return timeoutMs;
 }
 
 /**

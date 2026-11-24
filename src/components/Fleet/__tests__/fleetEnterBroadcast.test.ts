@@ -189,6 +189,8 @@ describe("tryFleetBroadcastFromEditor — a11y announcements", () => {
       expect(useAnnouncerStore.getState().polite?.msg).toBe(
         "Broadcast cancelled — 5 sent, 7 terminals skipped"
       );
+      // The announcement is a cancelled run's feedback channel.
+      expect(window.electron.notification.playUiEvent).not.toHaveBeenCalled();
     } finally {
       useFleetBroadcastProgressStore.setState({ advance: origAdvance });
     }
@@ -277,7 +279,7 @@ describe("tryFleetBroadcastFromEditor — permanent failure auto-disarm (#8706)"
     tryFleetBroadcastFromEditor("perm", "hello", vi.fn());
     await flush();
     expect(useAnnouncerStore.getState().polite?.msg).toBe(
-      "Broadcast sent to 0 — 1 retryable, 1 unreachable"
+      "Broadcast not confirmed — 1 retryable, 1 unreachable"
     );
   });
 
@@ -337,6 +339,29 @@ describe("tryFleetBroadcastFromEditor — fires immediately without confirmation
     await flush();
     await flush();
     expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
+  });
+
+  it("plays the delivery sound only when a target took the draft", async () => {
+    arm(["a", "b", "c"]);
+    submitMock.mockImplementation(async (id) => {
+      if (id !== "a") throw new Error("ENOSPC: disk full");
+    });
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await flush();
+    await flush();
+    expect(window.electron.notification.playUiEvent).toHaveBeenCalledWith("context-injected");
+  });
+
+  it("plays no sound and does not flash when every target rejected", async () => {
+    submitMock.mockRejectedValue(new Error("ENOSPC: disk full"));
+    arm(["a", "b"]);
+    const before = useFleetArmingStore.getState().broadcastSignal;
+    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
+    await flush();
+    await flush();
+    expect(window.electron.notification.playUiEvent).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("Broadcast not confirmed — 2 failed");
   });
 
   it("returns false so the caller does its own submit when every armed pane is ineligible", async () => {
@@ -551,6 +576,20 @@ describe("tryFleetBroadcastFromEditor — locked panes (#14964)", () => {
     expect(submitMock).not.toHaveBeenCalled();
   });
 
+  it("sends the ribbon's text untouched and refuses whitespace-only input", async () => {
+    arm(["a", "b"]);
+
+    expect(await sendDraftToFleet("    indented()\n")).toBe(true);
+    expect(submitMock.mock.calls.map((call) => call[1])).toEqual([
+      "    indented()\n",
+      "    indented()\n",
+    ]);
+
+    submitMock.mockClear();
+    expect(await sendDraftToFleet(" \n\t ")).toBe(false);
+    expect(submitMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the failure dot of a pane locked while a large broadcast runs", async () => {
     const ids = Array.from({ length: 7 }, (_, i) => `p${i}`);
     arm(ids);
@@ -674,12 +713,170 @@ describe("tryFleetBroadcastFromEditor — per-target overrides and skips (#8691)
     expect(submitMock).toHaveBeenCalledWith("b", "reviewed");
   });
 
-  it("clears the overrides store in the finally block after broadcast", async () => {
-    arm(["a", "b"]);
+  describe("edits made for the next draft while a send is out (#17518)", () => {
+    /** Holds every submit until released: the oldest `count`, or the newest. */
+    function holdSubmits(): {
+      held: () => number;
+      release: (count: number) => void;
+      releaseNewest: (count: number) => void;
+    } {
+      const pending: Array<() => void> = [];
+      submitMock.mockImplementation(() => new Promise<void>((resolve) => pending.push(resolve)));
+      return {
+        held: () => pending.length,
+        release: (count) => {
+          for (const resolve of pending.splice(0, count)) resolve();
+        },
+        releaseNewest: (count) => {
+          for (const resolve of pending.splice(-count)) resolve();
+        },
+      };
+    }
+
+    async function settle(): Promise<void> {
+      for (let i = 0; i < 10; i += 1) await flush();
+    }
+
+    /** Sends the next draft with every submit landing at once, and returns who got what. */
+    async function sendNext(): Promise<Array<[string, string]>> {
+      submitMock.mockReset();
+      submitMock.mockResolvedValue(undefined);
+      tryFleetBroadcastFromEditor("a", "next", vi.fn());
+      await settle();
+      return submitMock.mock.calls.map(([id, text]) => [id, text]);
+    }
+
+    it("keeps a new edit to a recipient the send already rewrote", async () => {
+      arm(["a", "b"]);
+      const submits = holdSubmits();
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "for this send");
+      const delivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "hello", delivered);
+      await vi.waitFor(() => expect(submits.held()).toBe(2));
+
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "for the next send");
+      submits.release(2);
+      await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
+
+      expect(submitMock).toHaveBeenCalledWith("b", "for this send");
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({
+        b: "for the next send",
+      });
+      expect(await sendNext()).toContainEqual(["b", "for the next send"]);
+    });
+
+    it("keeps a recipient excluded while the send is out, and consumes the send's own edits", async () => {
+      arm(["a", "b", "c"]);
+      const submits = holdSubmits();
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "for this send");
+      const delivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "hello", delivered);
+      await vi.waitFor(() => expect(submits.held()).toBe(3));
+
+      useFleetTargetOverridesStore.getState().setSkipped("c", true);
+      submits.release(3);
+      await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
+
+      expect(submitMock).toHaveBeenCalledWith("c", "hello");
+      const state = useFleetTargetOverridesStore.getState();
+      expect([...state.skippedIds]).toEqual(["c"]);
+      expect(state.payloadOverrides).toEqual({});
+      expect(await sendNext()).toEqual([
+        ["a", "next"],
+        ["b", "next"],
+      ]);
+    });
+
+    it("keeps a recipient excluded again after being let back in while the send is out", async () => {
+      arm(["a", "b", "c"]);
+      const submits = holdSubmits();
+      useFleetTargetOverridesStore.getState().setSkipped("c", true);
+      const delivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "hello", delivered);
+      await vi.waitFor(() => expect(submits.held()).toBe(2));
+
+      useFleetTargetOverridesStore.getState().setSkipped("c", false);
+      useFleetTargetOverridesStore.getState().setSkipped("c", true);
+      submits.release(2);
+      await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
+
+      expect(submitMock).not.toHaveBeenCalledWith("c", "hello");
+      expect(useFleetTargetOverridesStore.getState().skippedIds.has("c")).toBe(true);
+      expect((await sendNext()).map(([id]) => id)).toEqual(["a", "b"]);
+    });
+
+    it("keeps an edit made after a newer send settled when the older one settles last", async () => {
+      arm(["a", "b"]);
+      const submits = holdSubmits();
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
+      tryFleetBroadcastFromEditor("a", "first", vi.fn());
+      await vi.waitFor(() => expect(submits.held()).toBe(2));
+      const newerDelivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "second", newerDelivered);
+      await vi.waitFor(() => expect(submits.held()).toBe(4));
+
+      // The newer send settles first and lets go of the edit both sends took.
+      submits.releaseNewest(2);
+      await vi.waitFor(() => expect(newerDelivered).toHaveBeenCalledTimes(1));
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
+
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
+      submits.release(2);
+      // The pre-empted send reports itself cancelled just before it consumes.
+      await vi.waitFor(() =>
+        expect(useAnnouncerStore.getState().polite?.msg).toMatch(/^Broadcast cancelled/)
+      );
+
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "shared" });
+    });
+
+    it("lets an older send settling first consume what it took while a newer one is out", async () => {
+      arm(["a", "b"]);
+      const submits = holdSubmits();
+      useFleetTargetOverridesStore.getState().setPayloadOverride("b", "shared");
+      tryFleetBroadcastFromEditor("a", "first", vi.fn());
+      await vi.waitFor(() => expect(submits.held()).toBe(2));
+      const newerDelivered = vi.fn();
+      tryFleetBroadcastFromEditor("a", "second", newerDelivered);
+      await vi.waitFor(() => expect(submits.held()).toBe(4));
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "shared" });
+
+      submits.release(2);
+      await vi.waitFor(() =>
+        expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({})
+      );
+      // The newer send already holds its own copy of the edit.
+      expect(submitMock.mock.calls.filter(([id]) => id === "b")).toEqual([
+        ["b", "shared"],
+        ["b", "shared"],
+      ]);
+      submits.release(2);
+      await vi.waitFor(() => expect(newerDelivered).toHaveBeenCalledTimes(1));
+    });
+  });
+
+  it("consumes the send's overrides and exclusions once it settles", async () => {
+    arm(["a", "b", "c"]);
+    const pending: Array<() => void> = [];
+    submitMock.mockImplementation(() => new Promise<void>((resolve) => pending.push(resolve)));
     useFleetTargetOverridesStore.getState().setPayloadOverride("b", "x");
-    tryFleetBroadcastFromEditor("a", "hello", vi.fn());
-    await flush();
-    await flush();
+    useFleetTargetOverridesStore.getState().setSkipped("c", true);
+    const delivered = vi.fn();
+    tryFleetBroadcastFromEditor("a", "hello", delivered);
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+
+    expect(submitMock).toHaveBeenCalledWith("b", "x");
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "x" });
+    expect([...useFleetTargetOverridesStore.getState().skippedIds]).toEqual(["c"]);
+
+    // One write landing doesn't settle the send.
+    pending.shift()!();
+    for (let i = 0; i < 10; i += 1) await flush();
+    expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({ b: "x" });
+    expect([...useFleetTargetOverridesStore.getState().skippedIds]).toEqual(["c"]);
+
+    for (const resolve of pending.splice(0)) resolve();
+    await vi.waitFor(() => expect(delivered).toHaveBeenCalledTimes(1));
     expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({});
     expect(useFleetTargetOverridesStore.getState().skippedIds.size).toBe(0);
   });
@@ -936,6 +1133,29 @@ describe("a send in progress when its fleet changes (#15560)", () => {
     );
     expect(submitMock).not.toHaveBeenCalled();
     expect(onSent).not.toHaveBeenCalled();
+  });
+
+  it("plays no sound and does not flash when every target stopped taking sends before dispatch", async () => {
+    const diffs = armHoldingDiffs(["a", "b"]);
+    const before = useFleetArmingStore.getState().broadcastSignal;
+    expect(tryFleetBroadcastFromEditor("a", "Review @diff", vi.fn())).toBe(true);
+    await vi.waitFor(() => expect(diffs.requested()).toBe(2));
+
+    usePanelStore.setState((state) => ({
+      panelsById: Object.fromEntries(
+        ["a", "b"].map((id) => [id, { ...state.panelsById[id]!, hasPty: false }])
+      ),
+    }));
+    diffs.release();
+
+    await vi.waitFor(() =>
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(
+        "Broadcast not sent — 2 terminals skipped"
+      )
+    );
+    expect(submitMock).not.toHaveBeenCalled();
+    expect(window.electron.notification.playUiEvent).not.toHaveBeenCalled();
+    expect(useFleetArmingStore.getState().broadcastSignal).toBe(before);
   });
 
   it("stops the batches still to go when the fleet's panes are trashed, as Cancel does", async () => {

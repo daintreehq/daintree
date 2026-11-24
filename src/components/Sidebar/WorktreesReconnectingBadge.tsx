@@ -52,7 +52,7 @@ export function WorktreesReconnectingBadge({ escalatedSince }: { escalatedSince:
 /** Under the header, where the sidebar is too narrow to hold it beside the title. */
 export function WorktreesReconnectingRow({ escalatedSince }: { escalatedSince: number | null }) {
   return (
-    <div aria-hidden="true" className="flex shrink-0 px-3 pb-2 @[16rem]/sidebar:hidden">
+    <div aria-hidden="true" className="flex shrink-0 px-4 pb-2 @[16rem]/sidebar:hidden">
       <ReconnectingMark escalatedSince={escalatedSince} />
     </div>
   );

@@ -100,6 +100,11 @@ vi.mock("../../../store.js", () => ({
 import { store } from "../../../store.js";
 import { registerVoiceDictionaryHandlers } from "../voiceDictionary.js";
 import { VOICE_DICTIONARY_METHOD_CHANNELS } from "../voiceDictionary.preload.js";
+import {
+  MAX_DICTIONARY_HEARD_AS,
+  MAX_DICTIONARY_IMPORT_TERMS,
+  MAX_DICTIONARY_TERM_LENGTH,
+} from "../../../../shared/utils/voiceDictionary.js";
 import { registerVoiceInputHandlers } from "../voiceInput.js";
 
 const sender = {
@@ -173,6 +178,96 @@ describe("voiceDictionary operations", () => {
     expect(storedTerms()).toEqual([]);
   });
 
+  describe("an imported paste", () => {
+    it("adds its terms in order in one write, extending a term already there", async () => {
+      disk.state.data.voiceInput = {
+        ...stored(),
+        dictionary: [{ term: "Zustand", heardAs: [], source: "manual", addedAt: 1 }],
+      };
+
+      const added = await op("importTerms", {
+        entries: [
+          { term: " Daintree " },
+          { term: "zustand", heardAs: ["zoo stand"] },
+          { term: "Vite", heardAs: ["veet"] },
+        ],
+      });
+
+      expect(added.dictionary).toEqual([
+        { term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 },
+        { term: "Daintree", heardAs: [], source: "imported", addedAt: NOW },
+        { term: "Vite", heardAs: ["veet"], source: "imported", addedAt: NOW },
+      ]);
+      expect(added.conflicts).toEqual([]);
+      expect(store.set).toHaveBeenCalledTimes(1);
+      expect(stored().dictionary).toEqual(added.dictionary);
+    });
+
+    it("leaves out a phrase a stored or earlier pasted term has, and reports each", async () => {
+      await op("add", { term: "Zustand", heardAs: ["zoo stand"] });
+
+      const added = await op("importTerms", {
+        entries: [
+          { term: "Zoostand", heardAs: ["Zoo Stand", "tail wind"] },
+          { term: "Tailwind", heardAs: ["tail wind", "tailwinds"] },
+        ],
+      });
+
+      expect(added.conflicts).toEqual([
+        { phrase: "Zoo Stand", owner: "Zustand" },
+        { phrase: "tail wind", owner: "Zoostand" },
+      ]);
+      expect(added.dictionary.map(({ term, heardAs }) => ({ term, heardAs }))).toEqual([
+        { term: "Zustand", heardAs: ["zoo stand"] },
+        { term: "Zoostand", heardAs: ["tail wind"] },
+        { term: "Tailwind", heardAs: ["tailwinds"] },
+      ]);
+    });
+
+    it("writes nothing when one term is refused, or when every term is already there", async () => {
+      vi.mocked(store.set).mockClear();
+      await expect(
+        op("importTerms", { entries: [{ term: "Daintree" }, { term: "   " }] })
+      ).rejects.toThrow();
+      expect(store.set).not.toHaveBeenCalled();
+      expect(storedTerms()).toEqual([]);
+
+      await op("add", { term: "Daintree" });
+      vi.mocked(store.set).mockClear();
+      const again = await op("importTerms", {
+        entries: [{ term: "daintree" }, { term: "DAINTREE" }],
+      });
+      expect(again.dictionary.map((entry) => entry.term)).toEqual(["Daintree"]);
+      expect(store.set).not.toHaveBeenCalled();
+    });
+
+    it("holds a paste to the import, heard-as and phrase length caps", async () => {
+      const terms = (count: number) => Array.from({ length: count }, (_, i) => ({ term: `t${i}` }));
+      const heard = (count: number) => Array.from({ length: count }, (_, i) => `heard ${i}`);
+      // Trimmed, this fits a phrase, so only the payload bound refuses it: a paste arrives trimmed.
+      const padded = `${"x".repeat(MAX_DICTIONARY_TERM_LENGTH)} `;
+      const refused = [
+        { entries: [] },
+        { entries: terms(MAX_DICTIONARY_IMPORT_TERMS + 1) },
+        { entries: [{ term: "Daintree", heardAs: heard(MAX_DICTIONARY_HEARD_AS + 1) }] },
+        { entries: [{ term: padded }] },
+        { entries: [{ term: "Daintree", heardAs: [padded] }] },
+      ];
+      for (const payload of refused) {
+        await expect(op("importTerms", payload)).rejects.toThrow();
+      }
+      expect(storedTerms()).toEqual([]);
+
+      const added = await op("importTerms", {
+        entries: [
+          ...terms(MAX_DICTIONARY_IMPORT_TERMS - 1),
+          { term: "x".repeat(MAX_DICTIONARY_TERM_LENGTH), heardAs: heard(MAX_DICTIONARY_HEARD_AS) },
+        ],
+      });
+      expect(storedTerms()).toHaveLength(MAX_DICTIONARY_IMPORT_TERMS);
+      expect(added.dictionary.at(-1)?.heardAs).toEqual(heard(MAX_DICTIONARY_HEARD_AS));
+    });
+  });
   it("removes and updates single entries without touching the rest", async () => {
     await op("add", { term: "Daintree" });
     await op("add", { term: "zustand" });
@@ -593,6 +688,35 @@ describe("project vocabulary operations", () => {
     }
     expect(projects.local.get("local")).toBe(daintree);
     expect(projects.repo.get("/repos/shared")).toBe(daintree);
+  });
+
+  it("holds a project term to the global dictionary's count of heard-as phrases", async () => {
+    const forms = (count: number) => Array.from({ length: count }, (_, i) => `form ${i}`);
+    for (const projectId of ["local", "shared"]) {
+      await expect(
+        projectOp("addToProject", {
+          projectId,
+          term: "Over",
+          heardAs: forms(MAX_DICTIONARY_HEARD_AS + 1),
+        })
+      ).rejects.toThrow();
+      await projectOp("addToProject", { projectId, term: "Daintree" });
+      await expect(
+        projectOp("updateInProject", {
+          projectId,
+          term: "Daintree",
+          changes: { heardAs: forms(MAX_DICTIONARY_HEARD_AS + 1) },
+        })
+      ).rejects.toThrow();
+      const updated = (await projectOp("updateInProject", {
+        projectId,
+        term: "Daintree",
+        changes: { heardAs: forms(MAX_DICTIONARY_HEARD_AS) },
+      })) as unknown as ProjectVoiceDictionaryChange;
+      expect(updated.dictionary).toEqual([
+        expect.objectContaining({ term: "Daintree", heardAs: forms(MAX_DICTIONARY_HEARD_AS) }),
+      ]);
+    }
   });
 
   it("refuses an unknown project and an over-length term, writing nothing", async () => {

@@ -42,3 +42,14 @@ export function worktreeIssueLinkTarget(link: IssueProvenance): IssueLinkTarget 
     ...(link.issueKey ? { issueKey: link.issueKey } : {}),
   };
 }
+
+/**
+ * Whether a worktree's linked issue is the built-in GitHub provider's (#16945).
+ * A link without provenance predates issues coming from other providers, so its
+ * number is the code forge's. One that carries an `issueProviderId` belongs to
+ * that provider alone: a Linear `ENG-42` (`issueNumber: 42`) is not GitHub #42.
+ */
+export function worktreeIssueIsGitHub(link: IssueProvenance): boolean {
+  if (!link.issueProviderId) return true;
+  return normalizeProviderId(link.issueProviderId) === BUILTIN_GITHUB_PROVIDER_ID;
+}

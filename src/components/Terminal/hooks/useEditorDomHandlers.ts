@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useState } from "react";
 import { EditorView as EditorViewFacet } from "@codemirror/view";
 import type { EditorView } from "@codemirror/view";
 import { hasFileDrag } from "@/lib/fileDragPayload";
@@ -6,11 +6,13 @@ import { hasAgentContextDrag } from "@/lib/agentContextDragPayload";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { agentAltChordKey, isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
 import { isComposerSendHeld } from "../uploads/pendingUploads";
+import type { AutocompleteItem } from "../AutocompleteMenu";
+import { useLatestGetter } from "@/hooks/useLatestGetter";
 
 interface LatestRefShape {
   disabled: boolean;
   isAutocompleteOpen: boolean;
-  autocompleteItems: { key: string }[];
+  autocompleteItems: AutocompleteItem[];
   staleItemKeys: ReadonlySet<string>;
   selectedIndex: number;
   value: string;
@@ -39,6 +41,148 @@ interface UseEditorDomHandlersParams {
   setActiveCompletionContext: (value: null) => void;
 }
 
+interface EditorDomHandlerDeps {
+  latestRef: UseEditorDomHandlersParams["latestRef"];
+  editorViewRef: UseEditorDomHandlersParams["editorViewRef"];
+  isComposingRef: UseEditorDomHandlersParams["isComposingRef"];
+  handledEnterRef: UseEditorDomHandlersParams["handledEnterRef"];
+  lastEnterKeydownNewlineRef: UseEditorDomHandlersParams["lastEnterKeydownNewlineRef"];
+  submitAfterCompositionRef: UseEditorDomHandlersParams["submitAfterCompositionRef"];
+  getApplyAutocompleteSelection: () => UseEditorDomHandlersParams["applyAutocompleteSelection"];
+  getSendFromEditor: () => UseEditorDomHandlersParams["sendFromEditor"];
+  rootRef: UseEditorDomHandlersParams["rootRef"];
+  setActiveCompletionContext: UseEditorDomHandlersParams["setActiveCompletionContext"];
+}
+
+// Module-level: these handlers read and write refs by design and only run from
+// CodeMirror events, never during render, but React Compiler cannot tell that
+// from render-time ref access when they are built inside the hook.
+function createEditorDomHandlers({
+  latestRef,
+  editorViewRef,
+  isComposingRef,
+  handledEnterRef,
+  lastEnterKeydownNewlineRef,
+  submitAfterCompositionRef,
+  getApplyAutocompleteSelection,
+  getSendFromEditor,
+  rootRef,
+  setActiveCompletionContext,
+}: EditorDomHandlerDeps) {
+  return EditorViewFacet.domEventHandlers({
+    drop: (event) => {
+      if (!event.dataTransfer) return false;
+      // CodeMirror reads a dropped file with a FileReader and dispatches its
+      // text, which lands alongside the `@file` chip `useDragDrop` inserts
+      // when the same drop reaches the wrapper (#11710). Claiming the event
+      // retires that branch — a true return only prevents the default, so
+      // the drop still bubbles and the chip path stays the sole producer.
+      // Drags carrying no file stay CodeMirror's: dropping text still
+      // inserts text, and moving a selection within the input still moves.
+      //
+      // An agent-context drag is claimed the same way, and for the same
+      // reason: it carries `text/plain` too, which CodeMirror would insert
+      // raw beside the block `useDragDrop` drafts — or, where the draft is
+      // refused, in place of it.
+      const types = event.dataTransfer.types;
+      return hasFileDrag(types) || hasAgentContextDrag(types);
+    },
+    beforeinput: (event) => {
+      const latest = latestRef.current;
+      if (!latest) return false;
+      if (latest.disabled) {
+        event.preventDefault();
+        return true;
+      }
+      const nativeEvent = event as InputEvent;
+      if (!isEnterLikeLineBreakInputEvent(nativeEvent)) return false;
+      if (handledEnterRef.current) {
+        handledEnterRef.current = false;
+        event.preventDefault();
+        return true;
+      }
+      if (lastEnterKeydownNewlineRef.current) return false;
+      const enterItem = latest.isAutocompleteOpen
+        ? latest.autocompleteItems[latest.selectedIndex]
+        : undefined;
+      if (enterItem && enterItem.disabled !== true && !latest.staleItemKeys.has(enterItem.key)) {
+        event.preventDefault();
+        getApplyAutocompleteSelection()("enter");
+        return true;
+      }
+      event.preventDefault();
+      if (nativeEvent.isComposing) {
+        submitAfterCompositionRef.current = true;
+        return true;
+      }
+      if (useTerminalInputStore.getState().isVoiceSubmitting(latest.voiceId)) {
+        event.preventDefault();
+        return true;
+      }
+      const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
+      // While dictating, the words can still be on their way into an empty
+      // doc; the send finishes the dictation, as the keymap's Enter does.
+      if (text.trim().length === 0 && !latest.isVoiceActiveForPanel) {
+        const held = latest.uploadSurface !== undefined && isComposerSendHeld(latest.uploadSurface);
+        if (!held && latest.onSendKey) latest.onSendKey("enter");
+        return true;
+      }
+      getSendFromEditor()();
+      return true;
+    },
+    compositionstart: () => {
+      isComposingRef.current = true;
+      submitAfterCompositionRef.current = false;
+      lastEnterKeydownNewlineRef.current = false;
+      return false;
+    },
+    compositionend: () => {
+      isComposingRef.current = false;
+      if (!submitAfterCompositionRef.current) return false;
+      submitAfterCompositionRef.current = false;
+      const latest = latestRef.current;
+      if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.voiceId)) {
+        return false;
+      }
+      setTimeout(() => getSendFromEditor()(), 0);
+      return false;
+    },
+    keydown: (event) => {
+      const isEnter =
+        event.key === "Enter" ||
+        event.key === "Return" ||
+        event.code === "Enter" ||
+        event.code === "NumpadEnter";
+      if (isEnter) lastEnterKeydownNewlineRef.current = event.shiftKey || event.altKey;
+      if (event.isComposing) {
+        if (isEnter && !event.shiftKey && !event.altKey) {
+          submitAfterCompositionRef.current = true;
+        }
+        return false;
+      }
+      // Matched by key code here rather than in the keymap: CodeMirror
+      // leaves every macOS Option chord to type its glyph.
+      const latest = latestRef.current;
+      if (!latest || isComposingRef.current) return false;
+      const chord = agentAltChordKey(event, latest.altChords);
+      if (chord === null || !latest.onSendKey || latest.disabled) return false;
+      latest.onSendKey(chord);
+      return true;
+    },
+    blur: (event) => {
+      const nextTarget = event.relatedTarget as HTMLElement | null;
+      const root = rootRef.current;
+      if (root && nextTarget && root.contains(nextTarget)) return false;
+      if (latestRef.current?.isExpanded) return false;
+      setActiveCompletionContext(null);
+      lastEnterKeydownNewlineRef.current = false;
+      handledEnterRef.current = false;
+      submitAfterCompositionRef.current = false;
+      return false;
+    },
+  });
+}
+
 export function useEditorDomHandlers({
   latestRef,
   editorViewRef,
@@ -51,133 +195,26 @@ export function useEditorDomHandlers({
   rootRef,
   setActiveCompletionContext,
 }: UseEditorDomHandlersParams) {
-  "use no memo";
-  const sendFromEditorRef = useRef(sendFromEditor);
-  useEffect(() => {
-    sendFromEditorRef.current = sendFromEditor;
-  }, [sendFromEditor]);
+  const getSendFromEditor = useLatestGetter(sendFromEditor);
+  const getApplyAutocompleteSelection = useLatestGetter(applyAutocompleteSelection);
 
-  const applyAutocompleteSelectionRef = useRef(applyAutocompleteSelection);
-  useEffect(() => {
-    applyAutocompleteSelectionRef.current = applyAutocompleteSelection;
-  }, [applyAutocompleteSelection]);
-
-  const domEventHandlers = useMemo(
-    () =>
-      EditorViewFacet.domEventHandlers({
-        drop: (event) => {
-          if (!event.dataTransfer) return false;
-          // CodeMirror reads a dropped file with a FileReader and dispatches its
-          // text, which lands alongside the `@file` chip `useDragDrop` inserts
-          // when the same drop reaches the wrapper (#11710). Claiming the event
-          // retires that branch — a true return only prevents the default, so
-          // the drop still bubbles and the chip path stays the sole producer.
-          // Drags carrying no file stay CodeMirror's: dropping text still
-          // inserts text, and moving a selection within the input still moves.
-          //
-          // An agent-context drag is claimed the same way, and for the same
-          // reason: it carries `text/plain` too, which CodeMirror would insert
-          // raw beside the block `useDragDrop` drafts — or, where the draft is
-          // refused, in place of it.
-          const types = event.dataTransfer.types;
-          return hasFileDrag(types) || hasAgentContextDrag(types);
-        },
-        beforeinput: (event) => {
-          const latest = latestRef.current;
-          if (!latest) return false;
-          if (latest.disabled) {
-            event.preventDefault();
-            return true;
-          }
-          const nativeEvent = event as InputEvent;
-          if (!isEnterLikeLineBreakInputEvent(nativeEvent)) return false;
-          if (handledEnterRef.current) {
-            handledEnterRef.current = false;
-            event.preventDefault();
-            return true;
-          }
-          if (lastEnterKeydownNewlineRef.current) return false;
-          const enterItem = latest.isAutocompleteOpen
-            ? latest.autocompleteItems[latest.selectedIndex]
-            : undefined;
-          if (enterItem && !latest.staleItemKeys.has(enterItem.key)) {
-            event.preventDefault();
-            applyAutocompleteSelectionRef.current("enter");
-            return true;
-          }
-          event.preventDefault();
-          if (nativeEvent.isComposing) {
-            submitAfterCompositionRef.current = true;
-            return true;
-          }
-          if (useTerminalInputStore.getState().isVoiceSubmitting(latest.voiceId)) {
-            event.preventDefault();
-            return true;
-          }
-          const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
-          // While dictating, the words can still be on their way into an empty
-          // doc; the send finishes the dictation, as the keymap's Enter does.
-          if (text.trim().length === 0 && !latest.isVoiceActiveForPanel) {
-            const held =
-              latest.uploadSurface !== undefined && isComposerSendHeld(latest.uploadSurface);
-            if (!held && latest.onSendKey) latest.onSendKey("enter");
-            return true;
-          }
-          sendFromEditorRef.current();
-          return true;
-        },
-        compositionstart: () => {
-          isComposingRef.current = true;
-          submitAfterCompositionRef.current = false;
-          lastEnterKeydownNewlineRef.current = false;
-          return false;
-        },
-        compositionend: () => {
-          isComposingRef.current = false;
-          if (!submitAfterCompositionRef.current) return false;
-          submitAfterCompositionRef.current = false;
-          const latest = latestRef.current;
-          if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.voiceId)) {
-            return false;
-          }
-          setTimeout(() => sendFromEditorRef.current(), 0);
-          return false;
-        },
-        keydown: (event) => {
-          const isEnter =
-            event.key === "Enter" ||
-            event.key === "Return" ||
-            event.code === "Enter" ||
-            event.code === "NumpadEnter";
-          if (isEnter) lastEnterKeydownNewlineRef.current = event.shiftKey || event.altKey;
-          if (event.isComposing) {
-            if (isEnter && !event.shiftKey && !event.altKey) {
-              submitAfterCompositionRef.current = true;
-            }
-            return false;
-          }
-          // Matched by key code here rather than in the keymap: CodeMirror
-          // leaves every macOS Option chord to type its glyph.
-          const latest = latestRef.current;
-          if (!latest || isComposingRef.current) return false;
-          const chord = agentAltChordKey(event, latest.altChords);
-          if (chord === null || !latest.onSendKey || latest.disabled) return false;
-          latest.onSendKey(chord);
-          return true;
-        },
-        blur: (event) => {
-          const nextTarget = event.relatedTarget as HTMLElement | null;
-          const root = rootRef.current;
-          if (root && nextTarget && root.contains(nextTarget)) return false;
-          if (latestRef.current?.isExpanded) return false;
-          setActiveCompletionContext(null);
-          lastEnterKeydownNewlineRef.current = false;
-          handledEnterRef.current = false;
-          submitAfterCompositionRef.current = false;
-          return false;
-        },
-      }),
-    []
+  // Built once, on the first render: `useEditorFactory` reads the extension while
+  // building the initial `EditorState` and never installs a replacement, so a
+  // rebuilt one would be handed to an editor that ignores it. Everything that
+  // changes reaches the handlers through `latestRef` or the getters.
+  const [domEventHandlers] = useState(() =>
+    createEditorDomHandlers({
+      latestRef,
+      editorViewRef,
+      isComposingRef,
+      handledEnterRef,
+      lastEnterKeydownNewlineRef,
+      submitAfterCompositionRef,
+      getApplyAutocompleteSelection,
+      getSendFromEditor,
+      rootRef,
+      setActiveCompletionContext,
+    })
   );
 
   return domEventHandlers;

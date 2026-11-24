@@ -128,25 +128,42 @@ describe("HybridInputBar layout contract", () => {
     expect(inner).not.toMatch(/\bw-(full|screen|\[|\d)/);
   });
 
-  it("draws the `❯` as a glyph as wide as itself, with nothing a control has", () => {
+  it("keeps the `❯` as wide as its glyph, clickable or not", () => {
     // #15309: the marker was a 24px button. It keeps the control height, so it
-    // sits centred on the draft's last row, but takes only the glyph's width
-    // and has no hover, focus or tooltip of its own.
+    // sits centred on the draft's last row, but takes only the glyph's width.
+    // #16873 made it open prompt history; it does that in the same box, so
+    // the draft beside it loses no width. Both renderings take the one box
+    // class, and the hover adds nothing that sizes it: its wash is a
+    // pseudo-element drawn outside the glyph.
     const text = declarations();
-    const at = text.indexOf("data-composer-marker");
-    expect(at, "the marker element").toBeGreaterThan(-1);
-    const element = text.slice(text.lastIndexOf("<", at), text.indexOf("</span>", at));
-    const classes = element.slice(element.indexOf("className"));
+    const markers = text.split("data-composer-marker").slice(1);
+    expect(markers, "the clickable and the inert marker").toHaveLength(2);
+    // Exactly the box class, plus only the hover on the clickable one: a
+    // utility added beside either would escape the checks on the constants.
+    const boxes = markers.map((marker) => /className=\{([^}]*)\}/.exec(marker)?.[1]);
+    expect(boxes.sort()).toEqual([
+      "COMPOSER_MARKER_CLASS",
+      "cn(COMPOSER_MARKER_CLASS, COMPOSER_MARKER_HOVER_CLASS)",
+    ]);
+    const box = /const COMPOSER_MARKER_CLASS = cn\(([\s\S]*?)\);/.exec(text)?.[1] ?? "";
+    expect(box).toMatch(/\bh-6\b/);
+    expect(box).toMatch(/\bshrink-0\b/);
+    expect(box).toMatch(/\bml-2\b/);
+    expect(box).not.toMatch(/(^|[\s"])(min-)?w-/);
+    expect(box).not.toMatch(/(^|[\s"])p[xlr]?-/);
+    expect(box).not.toMatch(/COMPOSER_CONTROL_/);
 
-    expect(element).toMatch(/aria-hidden="true"/);
-    expect(element).not.toMatch(/\b(onClick|tabIndex|role)=/);
-    expect(classes).toMatch(/\bh-6\b/);
-    expect(classes).toMatch(/\bshrink-0\b/);
-    expect(classes).not.toMatch(/(^|[\s"])(min-)?w-/);
-    expect(classes).not.toMatch(/\b(hover|focus-visible|group-hover):/);
-    expect(classes).not.toMatch(/COMPOSER_CONTROL_/);
-    const tooltips = text.match(/<Tooltip\b[\s\S]*?<\/Tooltip>/g) ?? [];
-    expect(tooltips.some((block) => block.includes("data-composer-marker"))).toBe(false);
+    const styles = fs.readFileSync(
+      path.join(path.dirname(BAR), "composerControlStyles.ts"),
+      "utf8"
+    );
+    const hover = /COMPOSER_MARKER_HOVER_CLASS =\s*"([^"]*)"/.exec(styles)?.[1] ?? "";
+    expect(hover, "the marker's hover class").not.toBe("");
+    // Every utility that could size the box: unprefixed or under `hover:`.
+    const sizing = hover
+      .split(/\s+/)
+      .filter((c) => /^(hover:)?((min-|max-)?w-|p[xlr]?-|m[xlr]?-|-m[xlr]?-)/.test(c));
+    expect(sizing).toEqual([]);
   });
 
   it("gives the canvas track a zero min-width so it can actually shrink", () => {
@@ -176,7 +193,9 @@ describe("HybridInputBar layout contract", () => {
  * and mic each dimmed themselves on top of the shell's own dim (to 30% and 24%
  * beside a control at 60%), and tooltips opened toward the pane edge while
  * others opened away from it. The `❯` is not one of them: it is a prompt
- * marker, not a control (#15309).
+ * marker that also opens prompt history on a click (#16873), kept at its
+ * glyph's width and out of the Tab order, so it takes none of their recipes
+ * (#15309).
  *
  * Source enforcement, like the layout contract above: the classes are where
  * every one of these defects lived.

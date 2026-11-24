@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import type { Issue, PR } from "@shared/types/forge";
+import type { Worktree } from "@shared/types/worktree";
 import {
+  collectGitHubIssueNumbers,
   planIssueWorktrees,
   planPRWorktrees,
   isTransientError,
@@ -54,6 +56,34 @@ describe("planIssueWorktrees", () => {
     const result = planIssueWorktrees([makeIssue({ number: 1 })], new Set([1]));
     expect(result[0]!.skipped).toBe(true);
     expect(result[0]!.skipReason).toBe("Has worktree");
+  });
+});
+
+describe("collectGitHubIssueNumbers", () => {
+  const wt = (overrides: Partial<Worktree>): Worktree => ({
+    id: "wt",
+    path: "/tmp/wt",
+    name: "wt",
+    isCurrent: false,
+    ...overrides,
+  });
+
+  it("counts legacy links without provenance and GitHub-provided links", () => {
+    const numbers = collectGitHubIssueNumbers([
+      wt({ issueNumber: 1 }),
+      wt({ issueNumber: 2, issueProviderId: "daintree.github.github" }),
+      wt({ issueNumber: 3, issueProviderId: "github" }),
+    ]);
+    expect([...numbers].sort()).toEqual([1, 2, 3]);
+  });
+
+  it("ignores another tracker's issue of the same number", () => {
+    const numbers = collectGitHubIssueNumbers([
+      wt({ issueNumber: 42, issueProviderId: "daintree.linear.linear", issueKey: "ENG-42" }),
+    ]);
+    expect(numbers.has(42)).toBe(false);
+    const result = planIssueWorktrees([makeIssue({ number: 42 })], numbers);
+    expect(result[0]!.skipped).toBe(false);
   });
 });
 

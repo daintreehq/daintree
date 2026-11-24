@@ -137,6 +137,7 @@ function stubElectron() {
       onRevealRequested: vi.fn(() => () => {}),
       onLiveLevel: vi.fn(() => () => {}),
       onPauseRequested: vi.fn(() => () => {}),
+      onSessionVocabulary: vi.fn(() => () => {}),
       publishDetails: vi.fn().mockResolvedValue(undefined),
       setPausedLive: vi.fn().mockResolvedValue(true),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
@@ -657,6 +658,8 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
       // The settings read initialize() started lands first.
       await service.refreshConfiguration();
       Reflect.set(service, "recordingMode", recordingMode);
+      // The keydown listener records presses only with dictation on here.
+      Reflect.set(service, "configured", true);
       const { keybindingService } = await import("@/services/KeybindingService");
       vi.mocked(keybindingService.getEffectiveCombos).mockImplementation((actionId: string) =>
         actionId === "voiceInput.toggle" ? ["Cmd+D"] : []

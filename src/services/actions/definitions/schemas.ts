@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AwaitedReplySchema } from "@shared/types/replyWait";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
+import { DANGEROUS_MODES } from "@shared/types/dangerousMode";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type TerminalLastMessageResult,
@@ -390,7 +391,7 @@ export const AgentPresetSchema = z.object({
   env: z.record(z.string(), z.string()).optional(),
   args: z.array(z.string()).optional(),
   dangerousEnabled: z.boolean().optional(),
-  dangerousMode: z.enum(["inherit", "on", "off"]).optional(),
+  dangerousMode: z.enum(DANGEROUS_MODES).optional(),
   customFlags: z.string().optional(),
   color: z.string().optional(),
   displayTitle: z.string().optional(),
@@ -406,7 +407,7 @@ export const AgentSettingsEntrySchema = z
     customFlags: z.string().optional(),
     dangerousArgs: z.string().optional(),
     dangerousEnabled: z.boolean().optional(),
-    dangerousMode: z.enum(["inherit", "on", "off"]).optional(),
+    dangerousMode: z.enum(DANGEROUS_MODES).optional(),
     presetId: z.string().optional(),
     customPresets: z.array(AgentPresetSchema).optional(),
   })
@@ -637,12 +638,6 @@ export const PersistedStoreInfoSchema = z.object({
   hasPersistedValue: z.boolean(),
   sizeBytes: z.number(),
   parseStatus: z.enum(["ok", "missing", "corrupt"]),
-});
-
-export const PortalTabSummarySchema = z.object({
-  id: z.string(),
-  url: z.string().nullable(),
-  title: z.string(),
 });
 
 export const RecipeSummarySchema = z.object({

@@ -80,6 +80,11 @@ export interface HostContext {
    */
   fallbackEligibleProjects: Set<string>;
   /**
+   * Projects whose every view may be CDP-frozen, pushed by Main (#17038).
+   * Read only while no window shows the project.
+   */
+  frozenViewProjects: Set<string>;
+  /**
    * Per-window UI-focused terminal id, pushed from the renderer's
    * `focusedId` (terminalFocusSlice). Read by each window's PortQueueManager
    * and PortBatcher to prioritize the focused terminal under backpressure and

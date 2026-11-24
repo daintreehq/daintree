@@ -67,6 +67,7 @@ vi.mock("../ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 vi.mock("../../../shared/config/panelKindRegistry.js", () => ({
+  getPanelKindConfig: vi.fn(() => undefined),
   registerPanelKind: vi.fn(),
   unregisterPluginPanelKinds: vi.fn(),
   onPanelKindRegistered: vi.fn(() => () => {}),
@@ -219,7 +220,7 @@ import {
   ProjectPresenceTracker,
   _setProjectPresenceTrackerForTests,
 } from "../ProjectPresenceTracker.js";
-import { registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
+import { getPanelKindConfig, registerPanelKind } from "../../../shared/config/panelKindRegistry.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { PLUGIN_BLOCKLIST_TTL_MS } from "../../../shared/config/pluginBlocklist.js";
 import {
@@ -684,6 +685,18 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
 
 describe("Worker governance (idle dispose + snapshots)", () => {
   const FUTURE = () => Date.now() + 31 * 60_000;
+  // Disposed after every test, so no service's idle sweep outlives it.
+  const services: PluginService[] = [];
+  const startService = (opts?: ConstructorParameters<typeof PluginService>[2]): PluginService => {
+    const service = new PluginService(tmpDir, undefined, opts);
+    services.push(service);
+    return service;
+  };
+
+  afterEach(() => {
+    for (const service of services.splice(0)) service.dispose();
+    vi.mocked(getPanelKindConfig).mockReset();
+  });
 
   async function writeWorkerPlugin(
     dirName: string,
@@ -708,7 +721,7 @@ describe("Worker governance (idle dispose + snapshots)", () => {
   it("disposes an idle prod user plugin worker and re-forks it on next use", async () => {
     const base = baseline();
     await writeWorkerPlugin("sleepy", "acme.sleepy");
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     await service.activatePlugin("acme.sleepy");
     expect(devWorkerMock.instances).toHaveLength(base.hosts + 1);
@@ -735,7 +748,7 @@ describe("Worker governance (idle dispose + snapshots)", () => {
   it("never disposes a recently-used worker", async () => {
     const base = baseline();
     await writeWorkerPlugin("busy", "acme.busy");
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     await service.activatePlugin("acme.busy");
 
@@ -745,26 +758,203 @@ describe("Worker governance (idle dispose + snapshots)", () => {
     expect(devWorkerMock.instances[base.hosts].dispose).not.toHaveBeenCalled();
   });
 
-  it("protects panel-contributing plugins — open panel state is invisible to main", async () => {
+  /** Resolve `acme.panelly`'s panel kind the way the live registry would. */
+  function ownPanelKind(): void {
+    vi.mocked(getPanelKindConfig).mockImplementation((kindId: string) =>
+      kindId === "acme.panelly.viewer"
+        ? ({ id: kindId, extensionId: "acme.panelly" } as ReturnType<typeof getPanelKindConfig>)
+        : undefined
+    );
+  }
+
+  async function startPanelPlugin(): Promise<{ service: PluginService; hostIndex: number }> {
     const base = baseline();
     await writeWorkerPlugin("panelly", "acme.panelly", {
       contributes: { panels: [{ id: "viewer", name: "Viewer", iconId: "eye", color: "#000" }] },
     });
-    const service = new PluginService(tmpDir);
+    ownPanelKind();
+    const service = startService();
     await service.initialize();
     await service.activatePlugin("acme.panelly");
+    return { service, hostIndex: base.hosts };
+  }
+
+  const panelEvent = (phase: string, panelId = "p1") => ({
+    panelId,
+    panelKindId: "acme.panelly.viewer",
+    pluginId: "acme.panelly",
+    phase,
+  });
+  /** Long past the idle window, on the service's own clock. */
+  const HOURS = 2 * 60 * 60_000;
+  const IDLE = 30 * 60_000;
+
+  it("retires a panel plugin none of whose panels is open, and reopens it (#17068)", async () => {
+    const { service, hostIndex } = await startPanelPlugin();
+    // Not vacuous: the plugin really contributes the panel kind.
+    expect(vi.mocked(registerPanelKind)).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "acme.panelly.viewer" })
+    );
 
     const result = service.disposeIdlePluginWorkers({ now: FUTURE() });
-    expect(result).toEqual({ disposed: [], skipped: 1 });
-    expect(devWorkerMock.instances[base.hosts].dispose).not.toHaveBeenCalled();
-    const snapshot = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.panelly");
-    expect(snapshot?.eligibility.dispose).toBe(false);
+    expect(result.disposed).toEqual(["acme.panelly"]);
+    expect(devWorkerMock.instances[hostIndex].dispose).toHaveBeenCalledTimes(1);
+
+    // Opening a panel activates through the view path, which forks a fresh worker.
+    await expect(service.activatePluginForView("acme.panelly.viewer")).resolves.toEqual({
+      ok: true,
+    });
+    expect(devWorkerMock.instances).toHaveLength(hostIndex + 2);
+  });
+
+  it("keeps the worker while any of its panels is open, in any live phase", async () => {
+    const { service, hostIndex } = await startPanelPlugin();
+
+    for (const phase of ["mounted", "hidden", "backgrounded", "trashed", "render-failed"]) {
+      const panelId = `p-${phase}`;
+      service.ingestPanelLifecycleEvents(1, [panelEvent(phase, panelId)]);
+      expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed, phase).toEqual([]);
+      service.ingestPanelLifecycleEvents(1, [panelEvent("removed", panelId)]);
+    }
+
+    service.ingestPanelLifecycleEvents(1, [panelEvent("mounted", "a"), panelEvent("hidden", "b")]);
+    const open = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.panelly");
+    expect(open?.eligibility.dispose).toBe(false);
+    expect(open?.detail?.openViews).toBe(2);
+    service.ingestPanelLifecycleEvents(1, [panelEvent("removed", "a")]);
+    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual([]);
+
+    service.ingestPanelLifecycleEvents(1, [panelEvent("removed", "b")]);
+    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual(["acme.panelly"]);
+    expect(devWorkerMock.instances[hostIndex].dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the idle window from the last panel closing, not from activation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { service } = await startPanelPlugin();
+      service.ingestPanelLifecycleEvents(1, [panelEvent("mounted")]);
+      vi.setSystemTime(Date.now() + HOURS);
+      service.ingestPanelLifecycleEvents(1, [panelEvent("removed")]);
+
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE - 1 }).disposed).toEqual([]);
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE }).disposed).toEqual([
+        "acme.panelly",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases a destroyed renderer's panels, running the idle window from then", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { service } = await startPanelPlugin();
+      let destroyed: (() => void) | undefined;
+      const sender = {
+        id: 41,
+        once: (_event: "destroyed", listener: () => void) => {
+          destroyed = listener;
+        },
+        removeListener: () => {},
+      };
+      service.ingestPanelLifecycleEvents(41, [panelEvent("hidden")], sender);
+      vi.setSystemTime(Date.now() + HOURS);
+      expect(service.disposeIdlePluginWorkers().disposed).toEqual([]);
+
+      destroyed?.();
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE - 1 }).disposed).toEqual([]);
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE }).disposed).toEqual([
+        "acme.panelly",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the worker while one of its views is mounted outside the grid", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const base = baseline();
+      await writeWorkerPlugin("sided", "acme.sided", {
+        contributes: {
+          views: [
+            { id: "board", componentPath: "dist/board.js", location: "sidebar", name: "Board" },
+          ],
+        },
+      });
+      const service = startService();
+      await service.initialize();
+      await service.activatePlugin("acme.sided");
+      let documentGone: (() => void) | undefined;
+      const watch = (forget: () => void) => {
+        documentGone = forget;
+        return () => {};
+      };
+
+      // A renderer's claim names a view; main decides whose it is.
+      service.ingestHostedViewConsumers(7, watch, ["plugin-view:acme.sided/board"]);
+      vi.setSystemTime(Date.now() + HOURS);
+      expect(service.disposeIdlePluginWorkers().disposed).toEqual([]);
+
+      documentGone?.();
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE - 1 }).disposed).toEqual([]);
+      expect(service.disposeIdlePluginWorkers({ now: Date.now() + IDLE }).disposed).toEqual([
+        "acme.sided",
+      ]);
+      expect(devWorkerMock.instances[base.hosts].dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records a fresh session's panel replay without redelivering it to the plugin", async () => {
+    const { service } = await startPanelPlugin();
+    const heard = vi.fn();
+    (
+      service as unknown as {
+        panelLifecycleBroker: { subscribe(id: string, cb: (e: unknown) => void): () => void };
+      }
+    ).panelLifecycleBroker.subscribe("acme.panelly", heard);
+
+    service.ingestPanelLifecycleEvents(9, [panelEvent("mounted")], undefined, { replay: true });
+    expect(heard).not.toHaveBeenCalled();
+    // Recorded all the same: the panel still holds the worker.
+    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual([]);
+
+    service.ingestPanelLifecycleEvents(9, [panelEvent("hidden")]);
+    expect(heard).toHaveBeenCalledWith(expect.objectContaining({ phase: "hidden" }));
+  });
+
+  it("counts a panel kind drawn outside the grid, as a project surface does, as its plugin's view", async () => {
+    const { service } = await startPanelPlugin();
+    const watch = () => () => {};
+
+    service.ingestHostedViewConsumers(7, watch, ["acme.panelly.viewer"]);
+    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual([]);
+
+    service.ingestHostedViewConsumers(7, watch, []);
+    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual(["acme.panelly"]);
+  });
+
+  it("still protects a plugin subscribed to host events once its views close", async () => {
+    const { service, hostIndex } = await startPanelPlugin();
+    // A live subscription made during activate() can't be re-hydrated from the
+    // manifest, so closing the plugin's last view must not strand it.
+    (
+      service as unknown as { pluginEventCleanups: Map<string, Array<() => void>> }
+    ).pluginEventCleanups.set("acme.panelly", [() => {}]);
+
+    service.ingestPanelLifecycleEvents(1, [panelEvent("mounted")]);
+    service.ingestPanelLifecycleEvents(1, [panelEvent("removed")]);
+    expect(service.disposeIdlePluginWorkers({ now: FUTURE() }).disposed).toEqual([]);
+    expect(devWorkerMock.instances[hostIndex].dispose).not.toHaveBeenCalled();
   });
 
   it("protects a worker with invokes in flight", async () => {
     const base = baseline();
     await writeWorkerPlugin("invoked", "acme.invoked");
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     await service.activatePlugin("acme.invoked");
 
@@ -781,7 +971,7 @@ describe("Worker governance (idle dispose + snapshots)", () => {
   it("protects a worker awaiting a host call (e.g. an open prompt)", async () => {
     const base = baseline();
     await writeWorkerPlugin("prompting", "acme.prompting");
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     await service.activatePlugin("acme.prompting");
 
@@ -819,7 +1009,7 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       }
 `
     );
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     await service.activatePlugin("acme.imperative");
 
@@ -833,7 +1023,7 @@ describe("Worker governance (idle dispose + snapshots)", () => {
   it("protects startup-activated background plugins", async () => {
     const base = baseline();
     await writeWorkerPlugin("bg", "acme.bg", { activationEvents: ["onStartupFinished"] });
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     await service.activatePlugin("acme.bg");
 
@@ -845,7 +1035,7 @@ describe("Worker governance (idle dispose + snapshots)", () => {
   it("disabling a plugin clears its worker state and reports it as disabled", async () => {
     const base = baseline();
     await writeWorkerPlugin("toggled", "acme.toggled");
-    const service = new PluginService(tmpDir);
+    const service = startService();
     await service.initialize();
     await service.activatePlugin("acme.toggled");
     expect(devWorkerMock.instances).toHaveLength(base.hosts + 1);
@@ -868,7 +1058,7 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       })),
       cachePath: path.join(tmpDir, "blocklist-cache.json"),
     });
-    const service = new PluginService(tmpDir, undefined, { blocklistService: blocklist });
+    const service = startService({ blocklistService: blocklist });
     await service.initialize();
 
     const snapshot = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.bad");
@@ -878,6 +1068,172 @@ describe("Worker governance (idle dispose + snapshots)", () => {
       eligibility: { trim: false, dispose: false, restart: false },
     });
     expect(snapshot?.detail?.reason).toBe("malware");
+  });
+  it("sweeps on its own every minute while a third-party worker is alive (#17068)", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      const base = baseline();
+      await writeWorkerPlugin("swept", "acme.swept");
+      const service = startService();
+      await service.initialize();
+      const idleTimers = vi.getTimerCount();
+
+      await service.activatePlugin("acme.swept");
+      expect(vi.getTimerCount()).toBe(idleTimers + 1);
+      const host = devWorkerMock.instances[base.hosts];
+
+      // A young worker survives its first ticks, and the sweep stays armed for it.
+      vi.advanceTimersByTime(60_000);
+      expect(host.dispose).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(idleTimers + 1);
+
+      // Neither a fork nor a profile change: time passing is enough.
+      vi.advanceTimersByTime(30 * 60_000);
+      expect(host.dispose).toHaveBeenCalledTimes(1);
+      // The last worker took the sweep with it.
+      expect(vi.getTimerCount()).toBe(idleTimers);
+
+      await service.activatePlugin("acme.swept");
+      expect(vi.getTimerCount()).toBe(idleTimers + 1);
+      service.dispose();
+      expect(vi.getTimerCount()).toBe(idleTimers);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  describe("a worker the supervisor gave up on (#17211)", () => {
+    /**
+     * Registers an imperative action, one of the registrations that otherwise
+     * keep a worker ineligible for idle disposal forever, and a panel handler
+     * that answers with the activation it was registered by. The module is
+     * imported once, so the counter survives across workers.
+     */
+    async function writeLoopingPlugin(dirName: string, name: string): Promise<void> {
+      const dir = path.join(tmpDir, dirName);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(
+        path.join(dir, "plugin.json"),
+        JSON.stringify({ name, version: "1.0.0", main: "main.mjs" })
+      );
+      await fs.writeFile(
+        path.join(dir, "main.mjs"),
+        `let activations = 0;
+        export function activate(host) {
+          const generation = ++activations;
+          host.registerHandler("probe", () => generation);
+          host.registerAction(
+            { id: "run", title: "Run", description: "", category: "Test", kind: "command", danger: "safe" },
+            () => "ran"
+          );
+        }
+`
+      );
+    }
+
+    /** The supervisor's verdict, delivered through the service's own health listener. */
+    function tripCrashLoop(hostIndex: number): void {
+      const calls = devWorkerMock.instances[hostIndex].on.mock.calls as unknown[][];
+      const onCrashLoop = calls.find(([event]) => event === "crash-loop")?.[1] as
+        ((code: number) => void) | undefined;
+      expect(onCrashLoop).toBeTypeOf("function");
+      onCrashLoop?.(139);
+    }
+
+    function workerStatus(service: PluginService, pluginId: string) {
+      return service.listPluginRuntimeStatuses().find((s) => s.pluginId === pluginId)?.worker;
+    }
+
+    it("releases the dead worker and its registrations, keeping the failure on screen", async () => {
+      const base = baseline();
+      await writeLoopingPlugin("looper", "acme.looper");
+      const service = startService();
+      await service.initialize();
+      await service.activatePlugin("acme.looper");
+      const flushed = vi.fn();
+      const eventCleanups = (
+        service as unknown as { pluginEventCleanups: Map<string, Array<() => void>> }
+      ).pluginEventCleanups;
+      eventCleanups.set("acme.looper", [flushed]);
+      expect(service.listPluginActions().map((a) => a.id)).toContain("acme.looper.run");
+
+      tripCrashLoop(base.hosts);
+
+      expect(devWorkerMock.instances[base.hosts].dispose).toHaveBeenCalledTimes(1);
+      expect(devWorkerMock.bridges[base.bridges].dispose).toHaveBeenCalledTimes(1);
+      expect(flushed).toHaveBeenCalledTimes(1);
+      expect(eventCleanups.has("acme.looper")).toBe(false);
+      expect(service.listPluginActions().map((a) => a.id)).not.toContain("acme.looper.run");
+      const snapshot = service.getWorkerGovernanceSnapshots().find((s) => s.id === "acme.looper");
+      expect(snapshot).toMatchObject({ alive: false });
+      // The teardown's own "stopped" must not replace the cause the banner shows.
+      expect(workerStatus(service, "acme.looper")).toMatchObject({
+        state: "failed",
+        reason: "crash-loop",
+      });
+    });
+
+    it("forks a fresh worker for the next lazy invocation instead of short-circuiting", async () => {
+      const base = baseline();
+      await writeLoopingPlugin("revived", "acme.revived");
+      const service = startService();
+      await service.initialize();
+      const ctx = { projectId: null, worktreeId: null, webContentsId: 0, pluginId: "acme.revived" };
+      // A panel's invoke, which activates the plugin on its own like a palette
+      // command or an MCP call does.
+      expect(await service.dispatchHandler("acme.revived", "probe", ctx, [])).toBe(1);
+      tripCrashLoop(base.hosts);
+      const failedGeneration = workerStatus(service, "acme.revived")?.generation;
+
+      expect(await service.dispatchHandler("acme.revived", "probe", ctx, [])).toBe(2);
+
+      expect(devWorkerMock.instances).toHaveLength(base.hosts + 2);
+      expect(service.listPluginActions().map((a) => a.id)).toContain("acme.revived.run");
+      const worker = workerStatus(service, "acme.revived");
+      expect(worker?.state).toBe("ready");
+      // Panels bound to the failed backend see a generation they are not on.
+      expect(worker?.generation).toBeGreaterThan(failedGeneration as number);
+    });
+
+    it("stops the idle sweep with the last worker it took down", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+      try {
+        const base = baseline();
+        await writeLoopingPlugin("swept-loop", "acme.swept-loop");
+        const service = startService();
+        await service.initialize();
+        const idleTimers = vi.getTimerCount();
+        await service.activatePlugin("acme.swept-loop");
+        expect(vi.getTimerCount()).toBe(idleTimers + 1);
+
+        tripCrashLoop(base.hosts);
+
+        expect(vi.getTimerCount()).toBe(idleTimers);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves a dev worker standing for the artifact watcher's edit-and-save recovery", async () => {
+      const base = baseline();
+      await writeLoopingPlugin("dev-loop", "acme.dev-loop");
+      const service = startService();
+      await service.initialize();
+      (service as unknown as { plugins: Map<string, { devMode?: boolean }> }).plugins.get(
+        "acme.dev-loop"
+      )!.devMode = true;
+      await service.activatePlugin("acme.dev-loop");
+
+      tripCrashLoop(base.hosts);
+
+      expect(devWorkerMock.instances[base.hosts].dispose).not.toHaveBeenCalled();
+      expect(workerStatus(service, "acme.dev-loop")).toMatchObject({
+        state: "failed",
+        reason: "crash-loop",
+      });
+      await service.activatePlugin("acme.dev-loop");
+      expect(devWorkerMock.instances).toHaveLength(base.hosts + 1);
+    });
   });
 });
 

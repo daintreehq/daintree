@@ -21,10 +21,13 @@ import { getCommitCount } from "../../utils/git.js";
 import { logWarn } from "../../utils/logger.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { sanitizeErrorMessage } from "../transportSafeError.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
   CheckRun,
   CIStatus,
+  Deployment,
+  DeploymentTarget,
   ForgeNumberReference,
   ForgeReferenceLookupResult,
   ForgeRepoCounts,
@@ -44,6 +47,7 @@ import type {
 import type {
   ForgeCheckRun,
   ForgeCIStatusSummary,
+  ForgeDeployment,
   ForgeFirstPageCachePayload,
   ForgeProjectHealthPayload,
   ForgeRepoCountsUpdatedPayload,
@@ -147,7 +151,9 @@ async function persistRepoStats(
  * tracker's number under this provider's pill. `clean` is false for anything
  * short of a fresh observation (a failure, or a stale, errored or disk-served
  * answer), and gates persisting and broadcasting the blend exactly as the code
- * snapshot's own freshness gates them.
+ * snapshot's own freshness gates them. `error` carries the issues provider's
+ * own failure, kept apart from the code forge's, so the issues pill can name
+ * the tracker whose credentials need attention.
  */
 async function readIssueOverrideCount(
   cwd: string,
@@ -160,14 +166,15 @@ async function readIssueOverrideCount(
       issuesUrl?: string;
       /** When the issues provider last read this count, not when it was served. */
       refreshedAt?: number;
+      error?: string;
     }
   | undefined
 > {
   let context: Awaited<ReturnType<typeof resolveIssueOverrideForCwd>>;
   try {
     context = await resolveIssueOverrideForCwd(cwd, mainWorktreePath);
-  } catch {
-    return { count: null, clean: false };
+  } catch (error) {
+    return { count: null, clean: false, error: formatErrorMessage(error, "Issues unavailable") };
   }
   if (!context) return undefined;
   const { impl, repoRef } = context;
@@ -186,6 +193,7 @@ async function readIssueOverrideCount(
         clean: !snapshot.counts.stale && !snapshot.counts.error && snapshot.source !== "disk",
         issuesUrl,
         ...(refreshedAt !== undefined ? { refreshedAt } : {}),
+        ...(snapshot.counts.error ? { error: snapshot.counts.error } : {}),
       };
     }
     // A page without a total can't be counted from its length — that's the
@@ -194,8 +202,13 @@ async function readIssueOverrideCount(
     return page.totalCount === undefined
       ? { count: null, clean: false, issuesUrl }
       : { count: page.totalCount, clean: true, issuesUrl, refreshedAt: Date.now() };
-  } catch {
-    return { count: null, clean: false, issuesUrl };
+  } catch (error) {
+    return {
+      count: null,
+      clean: false,
+      issuesUrl,
+      error: formatErrorMessage(error, "Issues unavailable"),
+    };
   }
 }
 
@@ -476,8 +489,8 @@ export function registerForgeDataHandlers(): () => void {
       const cwd = requireCwd(payload.cwd);
       // The viewer this answers for is the one "Assign to me" then assigns, so
       // it must be the issues provider's account, not the code forge's.
-      const { impl } = await resolveForCwd(cwd, "issues");
-      return impl.identity ? impl.identity.getCurrentUser() : null;
+      const { impl, repoRef } = await resolveForCwd(cwd, "issues");
+      return impl.identity ? impl.identity.getCurrentUser(repoRef) : null;
     })
   );
 
@@ -567,6 +580,13 @@ async function handleForgeGetRepoStats(payload: {
   const { count: commitCount, reliable: commitReliable } = await readCommitCount(cwd);
   const stats = buildForgeRepositoryStats(commitCount, snapshot.counts);
   if (snapshot.source) stats.countsSource = snapshot.source;
+  if (split) {
+    // A successful payload skips the error envelope's scrubbing, and a
+    // tracker's message can echo a setting back verbatim (a server URL with
+    // credentials in it), so it is scrubbed here.
+    if (overrideIssues.error) stats.issueError = sanitizeErrorMessage(overrideIssues.error);
+    stats.issueStale = !overrideIssues.clean;
+  }
   // A split blend's issue count belongs to another tracker, so no one key names
   // both counts' source.
   if (!split) stats.repoKey = repoKeyOf(repoRef);
@@ -1138,6 +1158,156 @@ async function handleForgeGetChecks(payload: {
   });
 }
 
+const DEPLOYMENT_STATES: ReadonlySet<string> = new Set([
+  "pending",
+  "in_progress",
+  "success",
+  "failure",
+  "inactive",
+  "unknown",
+]);
+
+/** A branch name past this is no branch anyone pushed; refusing it bounds the request. */
+const MAX_DEPLOYMENT_BRANCH_LENGTH = 1024;
+
+function requireDeploymentTarget(value: unknown): DeploymentTarget {
+  const target = value as { kind?: unknown; branch?: unknown; prNumber?: unknown } | null;
+  if (target && typeof target === "object") {
+    const { kind, branch, prNumber } = target;
+    if (
+      kind === "branch" &&
+      typeof branch === "string" &&
+      branch.trim() !== "" &&
+      branch.length <= MAX_DEPLOYMENT_BRANCH_LENGTH
+    ) {
+      return { kind, branch };
+    }
+    if (kind === "pullRequest") {
+      const number = requirePositiveInt(prNumber, "PR number");
+      if (number > MAX_REFERENCE_NUMBER) throw new Error("Invalid PR number");
+      return { kind, prNumber: number };
+    }
+  }
+  throw new Error("Invalid deployment target");
+}
+
+/**
+ * The deployment's address in the form the launcher may open, or `undefined`.
+ * Only a plain http(s) URL with a host and no embedded credentials survives:
+ * the provider is plugin-supplied, and this link goes to the system browser.
+ */
+function openableDeploymentUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+  if (!parsed.hostname || parsed.username !== "" || parsed.password !== "") return undefined;
+  return parsed.href;
+}
+
+/**
+ * Narrow a provider's deployment list to well-formed rows, throwing otherwise,
+ * as {@link requireValidChecks} does for checks. Strips `rawData` and any
+ * unnamed field. An unusable `url` drops only the link: the deployment and its
+ * state are still a fact worth showing. Sorted newest first here rather than
+ * trusted to the provider, since the renderer contract promises that order.
+ */
+function requireValidDeployments(value: unknown): ForgeDeployment[] {
+  const raw = (value as { deployments?: unknown } | null | undefined)?.deployments;
+  if (!Array.isArray(raw)) {
+    throw new Error("Forge provider returned a malformed deployment list");
+  }
+  // By index, not by iteration: a hole (or an iterator that skips one) reads as
+  // `undefined` and fails validation instead of silently dropping a row.
+  const rows: ForgeDeployment[] = Array.from({ length: raw.length }, (_, index) => {
+    const d = (Object.hasOwn(raw, index) ? raw[index] : undefined) as
+      Partial<Deployment> | null | undefined;
+    if (
+      !d ||
+      typeof d !== "object" ||
+      typeof d.id !== "string" ||
+      !d.id ||
+      typeof d.environment !== "string" ||
+      !d.environment.trim() ||
+      typeof d.state !== "string" ||
+      !DEPLOYMENT_STATES.has(d.state) ||
+      typeof d.createdAt !== "number" ||
+      !Number.isFinite(d.createdAt) ||
+      typeof d.updatedAt !== "number" ||
+      !Number.isFinite(d.updatedAt) ||
+      (d.commitSha !== undefined && typeof d.commitSha !== "string") ||
+      (d.ref !== undefined && typeof d.ref !== "string")
+    ) {
+      throw new Error("Forge provider returned a malformed deployment");
+    }
+    const url = openableDeploymentUrl(d.url);
+    return {
+      id: d.id,
+      environment: d.environment,
+      state: d.state,
+      ...(url ? { url } : {}),
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+      ...(d.commitSha ? { commitSha: d.commitSha } : {}),
+      ...(d.ref ? { ref: d.ref } : {}),
+    };
+  });
+  return rows.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** Single-flight for the deployment read, keyed like {@link checksSingleFlight}. */
+const deploymentsSingleFlight = createSingleFlight();
+
+/**
+ * Where a branch or pull request is deployed (#17248), from the provider's
+ * optional `deployments` capability. Called only when a consumer asks, so a
+ * project that never looks makes no request.
+ *
+ * A provider without the capability reports nothing: `{ deployments: [] }`,
+ * the same as a target with nothing deployed. `null` means the branch or PR
+ * doesn't exist on the forge. A provider failure still rejects, so a refused
+ * credential can't pass for "nothing deployed".
+ */
+async function handleForgeGetDeployments(payload: {
+  cwd: string;
+  target: DeploymentTarget;
+}): Promise<{ deployments: ForgeDeployment[] } | null> {
+  checkRateLimit(CHANNELS.FORGE_GET_DEPLOYMENTS, 10, 10_000);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid payload");
+  }
+  const cwd = requireCwd(payload.cwd);
+  const target = requireDeploymentTarget(payload.target);
+  const targetKey = JSON.stringify([
+    cwd,
+    target.kind,
+    target.kind === "branch" ? target.branch : target.prNumber,
+  ]);
+  return deploymentsSingleFlight(targetKey, async () => {
+    const { impl, repoRef, namespaceId } = await resolveForCwd(cwd);
+    const capability = impl.deployments;
+    if (!capability) return { deployments: [] };
+    return auditForgeCall(
+      {
+        providerId: namespaceId,
+        methodName: "getDeployments",
+        repoOwner: repoRef.owner,
+        repoName: repoRef.repo,
+        argsSummary: summarizeForgeArgs("getDeployments", target),
+      },
+      async () => {
+        const raw = await capability.getDeployments(repoRef, target);
+        return raw === null ? null : { deployments: requireValidDeployments(raw) };
+      },
+      (value) => (value === null ? "not-found" : "success")
+    );
+  });
+}
+
 /** The distinct numbers one reference lookup answers; a longer draft keeps its first ones. */
 const MAX_REFERENCE_NUMBERS = 50;
 /** GraphQL's `Int`: a bigger number names nothing and would fail the whole query. */
@@ -1311,7 +1481,7 @@ async function handleForgeResolveAuthorAvatar(payload: {
   const lookup = async (): Promise<string | null> => {
     checkRateLimit(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, 30, 60_000);
     try {
-      return (await avatars.resolveAuthorAvatar(email)) ?? null;
+      return (await avatars.resolveAuthorAvatar(email, repoRef)) ?? null;
     } catch {
       return null;
     }
@@ -1358,6 +1528,7 @@ export const forgeCapabilityDataNamespace = defineIpcNamespace({
     getPRTooltip: op(CHANNELS.FORGE_GET_PR_TOOLTIP, handleForgeGetPRTooltip),
     getCIStatus: op(CHANNELS.FORGE_GET_CI_STATUS, handleForgeGetCIStatus),
     getChecks: op(CHANNELS.FORGE_GET_CHECKS, handleForgeGetChecks),
+    getDeployments: op(CHANNELS.FORGE_GET_DEPLOYMENTS, handleForgeGetDeployments),
     getIssuesByNumbers: op(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, handleForgeGetIssuesByNumbers),
     getPRsByNumbers: op(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, handleForgeGetPRsByNumbers),
     getReferencesByNumbers: op(

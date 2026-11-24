@@ -134,7 +134,7 @@ type CommittedSchemeSources = Pick<
  * an imported theme since deleted, a plugin theme whose plugin is gone — shows
  * the global theme instead and comes back if its theme does.
  */
-function resolveProjectScheme(state: CommittedSchemeSources): AppColorScheme | null {
+export function resolveProjectScheme(state: CommittedSchemeSources): AppColorScheme | null {
   const id = state.projectSchemeId;
   if (!id) return null;
   const snapshot = state.projectSnapshotScheme;

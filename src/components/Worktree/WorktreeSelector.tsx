@@ -8,7 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { WorktreeSnapshot } from "@/types";
-import { worktreeOptionLabel } from "./crossWorktreeDiffUtils";
+import { comparableBranch, worktreeOptionLabel } from "./crossWorktreeDiffUtils";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { splitBranchType } from "./BranchLabel";
 
@@ -26,12 +26,13 @@ interface WorktreeSelectorProps {
  * on screen, so the words stay only in the accessible name.
  */
 function WorktreeOption({ wt }: { wt: WorktreeSnapshot }) {
-  if (!wt.branch) return <>{worktreeOptionLabel(wt)}</>;
-  const Glyph = wt.isMainWorktree ? Sprout : (splitBranchType(wt.branch).Icon ?? FolderGit2);
+  const branch = comparableBranch(wt);
+  if (!branch) return <>{worktreeOptionLabel(wt)}</>;
+  const Glyph = wt.isMainWorktree ? Sprout : (splitBranchType(branch).Icon ?? FolderGit2);
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       <Glyph className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-      <span className="truncate font-mono">{wt.branch}</span>
+      <span className="truncate font-mono">{branch}</span>
       {wt.isMainWorktree && <span className="sr-only"> (main worktree)</span>}
     </span>
   );
@@ -57,14 +58,18 @@ export function WorktreeSelector({
       <Select value={value} onValueChange={onChange}>
         <SelectTrigger id={triggerId} className="justify-start">
           {/* A chosen option brings its own glyph into the trigger. */}
-          {!worktrees.some((wt) => wt.id === selectedId && wt.branch) && (
+          {!worktrees.some((wt) => wt.id === selectedId && comparableBranch(wt)) && (
             <FolderGit2 aria-hidden="true" className="w-3.5 h-3.5 shrink-0 text-text-secondary" />
           )}
           <SelectValue placeholder="Choose a worktree…" className="flex-1" />
         </SelectTrigger>
         <SelectContent>
           {worktrees.map((wt) => (
-            <SelectItem key={wt.id} value={wt.id} disabled={wt.id === disabledId || !wt.branch}>
+            <SelectItem
+              key={wt.id}
+              value={wt.id}
+              disabled={wt.id === disabledId || !comparableBranch(wt)}
+            >
               <WorktreeOption wt={wt} />
             </SelectItem>
           ))}

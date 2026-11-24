@@ -105,9 +105,62 @@ export function findInRenderedText(
 ): FindResult {
   const pattern = buildFindPattern(query, matchCase);
   if (!pattern) return EMPTY_RESULT;
-  const { text, nodes, starts } = indexText(root);
+  return matchIndex(indexText(root), root.ownerDocument, pattern, limit);
+}
+
+/**
+ * `root`'s text index, kept for an open find so each edit to the query matches
+ * against it rather than walking the document again. Any change that can move
+ * text, visibility or a block boundary drops it, the next search rebuilds it,
+ * and `onChange` hears of it. `dispose()` lets go of the document's text nodes.
+ */
+export function createRenderedTextIndex(root: Element, onChange?: () => void) {
+  let index: TextIndex | null = null;
+  let disposed = false;
+  const observer = new MutationObserver(() => {
+    index = null;
+    onChange?.();
+  });
+  // Tags never change in place, so of `SKIP_SELECTOR` and `BLOCK_SELECTOR`
+  // only these attributes can move text in or out of the search.
+  observer.observe(root, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["hidden", "aria-hidden", "class"],
+  });
+  return {
+    root,
+    find(query: string, matchCase: boolean, limit = RENDERED_FIND_MATCH_LIMIT): FindResult {
+      const pattern = buildFindPattern(query, matchCase);
+      if (!pattern) return EMPTY_RESULT;
+      if (disposed) return matchIndex(indexText(root), root.ownerDocument, pattern, limit);
+      // Records not yet delivered are changes made earlier in this same task,
+      // such as a commit whose effect searches before the observer has run.
+      // Taking them here means `onChange` never hears of them: this search
+      // already reads the document as they left it.
+      if (observer.takeRecords().length > 0) index = null;
+      index ??= indexText(root);
+      return matchIndex(index, root.ownerDocument, pattern, limit);
+    },
+    dispose() {
+      disposed = true;
+      observer.disconnect();
+      index = null;
+    },
+  };
+}
+
+export type RenderedTextIndex = ReturnType<typeof createRenderedTextIndex>;
+
+function matchIndex(
+  { text, nodes, starts }: TextIndex,
+  doc: Document,
+  pattern: RegExp,
+  limit: number
+): FindResult {
   if (nodes.length === 0) return EMPTY_RESULT;
-  const doc = root.ownerDocument;
   const ranges: Range[] = [];
   let capped = false;
   for (const match of text.matchAll(pattern)) {
@@ -168,25 +221,67 @@ function forcedColors(): boolean {
  * One find bar's share of the two document-wide highlights. Several documents
  * can have a find open at once (a file panel beside the file browser), so each
  * adds and removes only its own ranges.
+ *
+ * Every write restyles the ranges a highlight holds, so stepping through the
+ * same matches (the same `ranges` array) moves only the two that trade places;
+ * new matches, or forced colours turning on or off, repaint them all.
  */
 export function createFindPainter() {
-  let painted: Range[] = [];
-  let paintedCurrent: Range | null = null;
+  let painted: readonly Range[] = [];
+  let paintedIndex = -1;
+  let paintedForced = false;
+  let paintedInto: { matches: Highlight; active: Highlight } | null = null;
+
+  // From the entries it painted into, not the registry's: those may have been
+  // replaced since, or the Highlight API withdrawn.
+  const unpaint = () => {
+    if (!paintedInto) return;
+    const previous = painted[paintedIndex];
+    if (!paintedForced) {
+      for (const range of painted) if (range !== previous) paintedInto.matches.delete(range);
+    }
+    if (previous) paintedInto.active.delete(previous);
+    painted = [];
+    paintedIndex = -1;
+    paintedInto = null;
+  };
+
   return {
-    paint(ranges: Range[], current: Range | null) {
+    /** `activeIndex` is the current match in `ranges`; -1 for none. */
+    paint(ranges: readonly Range[], activeIndex: number) {
       const matches = sharedHighlight(FIND_MATCH_HIGHLIGHT, 0);
       const active = sharedHighlight(FIND_CURRENT_HIGHLIGHT, 1);
       if (!matches || !active) return;
-      for (const range of painted) matches.delete(range);
-      if (paintedCurrent) active.delete(paintedCurrent);
-      painted = forcedColors() ? [] : ranges.filter((range) => range !== current);
-      for (const range of painted) matches.add(range);
-      paintedCurrent = current;
-      if (current) active.add(current);
+      const forced = forcedColors();
+      const current = ranges[activeIndex];
+      if (
+        ranges === painted &&
+        forced === paintedForced &&
+        matches === paintedInto?.matches &&
+        active === paintedInto.active
+      ) {
+        const previous = painted[paintedIndex];
+        if (current === previous) return;
+        if (previous) {
+          active.delete(previous);
+          if (!forced) matches.add(previous);
+        }
+        if (current) {
+          if (!forced) matches.delete(current);
+          active.add(current);
+        }
+      } else {
+        unpaint();
+        if (!forced) for (const range of ranges) if (range !== current) matches.add(range);
+        if (current) active.add(current);
+      }
+      painted = ranges;
+      paintedIndex = activeIndex;
+      paintedForced = forced;
+      paintedInto = { matches, active };
     },
-    clear() {
-      this.paint([], null);
-    },
+    /** Removes this painter's ranges; a painter that painted nothing touches nothing. */
+    clear: unpaint,
   };
 }
 
@@ -241,7 +336,7 @@ export function scrollRangeIntoView(range: Range, root: Element, topInset = 0): 
 }
 
 /** The scroller the document scrolls in: its nearest vertically scrolling ancestor. */
-function paneScroller(root: Element): Element | null {
+export function paneScroller(root: Element): Element | null {
   let element: Element | null = root;
   while (element && !isScrollable(element, "y")) element = element.parentElement;
   return element;

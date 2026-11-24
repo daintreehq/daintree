@@ -35,6 +35,26 @@ describe("readPluginManifestForLoad", () => {
     if (result.ok) expect(result.manifest.name).toBe("acme.ok");
   });
 
+  it("loads a manifest binding a key in the retired portal scope, scope untouched (#17245)", async () => {
+    const dir = await writeManifest("acme.retired", {
+      name: "acme.retired",
+      version: "1.0.0",
+      contributes: {
+        keybindings: [{ actionId: "nav.quickSwitcher", combo: "Cmd+Shift+7", scope: "portal" }],
+      },
+    });
+    const result = await readPluginManifestForLoad(dir, "acme.retired", {
+      isBuiltin: false,
+      origin: "user",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.contributes.keybindings).toEqual([
+        { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+7", scope: "portal" },
+      ]);
+    }
+  });
+
   it("refuses a missing or unparseable manifest with no refusal to surface", async () => {
     const missing = path.join(root, "absent");
     expect(

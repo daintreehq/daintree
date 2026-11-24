@@ -51,6 +51,8 @@ export interface BootstrapSourceParams {
   bindingName: string;
   channel: string;
   mode: SitePreviewMode;
+  /** The preview is out of sight: the picker starts with nothing running. */
+  paused: boolean;
   origins: GuestOriginPolicy;
   body: string;
 }
@@ -63,7 +65,8 @@ export interface BootstrapSourceParams {
  * why the host validates every envelope as untrusted.
  */
 export function buildBootstrapSource(params: BootstrapSourceParams): string {
-  const { sessionId, installId, documentEpoch, bindingName, channel, mode, origins, body } = params;
+  const { sessionId, installId, documentEpoch, bindingName, channel, mode, paused, origins, body } =
+    params;
   return `(() => {
   // The host checked the policy before creating the world, but a navigation
   // can commit between that check and this evaluate.
@@ -117,6 +120,8 @@ export function buildBootstrapSource(params: BootstrapSourceParams): string {
     channel: ${JSON.stringify(channel)},
     mode: ${JSON.stringify(mode)},
     setMode(next) { api.mode = next; },
+    paused: ${paused === true},
+    setPaused(next) { api.paused = next; },
     clearSelection() {},
     clearHover() {},
     setAvailability() {},
@@ -258,6 +263,10 @@ function bootstrapCall(installId: number, call: string): string {
 
 export function buildPickerModeSource(installId: number, mode: SitePreviewMode): string {
   return bootstrapCall(installId, `api.setMode(${JSON.stringify(mode)});`);
+}
+
+export function buildPickerPausedSource(installId: number, paused: boolean): string {
+  return bootstrapCall(installId, `api.setPaused(${paused === true});`);
 }
 
 export function buildPickerClearSelectionSource(installId: number): string {

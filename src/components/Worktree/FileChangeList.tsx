@@ -38,7 +38,9 @@ import {
   useFileRowMenuItems,
 } from "@/hooks/useFileRowMenuItems";
 import { useFileTreeDecorations } from "@/hooks/useFileTreeDecorations";
+import { useHasFileDecorationProvider } from "@/store/pluginRuntimeStore";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import {
@@ -48,6 +50,8 @@ import {
 } from "@/components/Plugin/FileDecorationBadge";
 import { useRovingRows, type UseRovingRowsResult } from "@/hooks/useRovingRows";
 import { LIST_ROW_HOVER_CLASS, ROW_MENU_TARGET_CLASS } from "@/components/ui/paletteRowStyles";
+
+const NO_DECORATION_PATHS: string[] = [];
 
 interface FileChangeListProps {
   changes: FileChangeDetail[];
@@ -354,11 +358,20 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
     // once for the whole list under a `worktree-files:<root>` scope — distinct from
     // the Review Hub's `worktree-diff:` scope so a PR-review provider's badges don't
     // leak onto the local change list. Keyed by the same `change.path` strings that
-    // were sent to the host, so `decorations[change.path]` resolves per row. The
-    // hook early-outs (stable empty map) when no plugin registers the scope, so this
-    // costs nothing on a zero-plugin file list.
-    const decorationPaths = useMemo(() => sortedChanges.map((c) => c.path), [sortedChanges]);
-    const decorations = useFileTreeDecorations(`worktree-files:${rootPath}`, decorationPaths);
+    // were sent to the host, so `decorations[change.path]` resolves per row. Asked
+    // only while some plugin declares a provider for the scope, so a zero-plugin
+    // file list builds no path set and sends no pull.
+    const decorationScope = `worktree-files:${rootPath}`;
+    const decorationsEnabled = useHasFileDecorationProvider(decorationScope);
+    const decorationPaths = useMemo(
+      () => (decorationsEnabled ? sortedChanges.map((c) => c.path) : NO_DECORATION_PATHS),
+      [decorationsEnabled, sortedChanges]
+    );
+    const decorations = useFileTreeDecorations(
+      decorationScope,
+      decorationPaths,
+      decorationsEnabled
+    );
 
     const visibleChanges = useMemo(
       () => sortedChanges.slice(0, maxVisible),
@@ -415,7 +428,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
             fileStatus: change.status,
             diffSource: "working-tree",
             changeSet: diffChangeSet,
-            viewedKey: `${change.status}:${change.relativePath}`,
+            viewedKey: workingTreeViewedKey(change.relativePath),
             title: basename(change.relativePath),
             ...(worktreeId && { worktreeId }),
           })

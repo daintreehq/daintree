@@ -144,7 +144,7 @@ describe("observeInputLine", () => {
   });
 
   it("reads every box as unknown for an agent that declares no rule", () => {
-    expect(inputSuggestionRuleFor("codex")).toBeUndefined();
+    expect(inputSuggestionRuleFor("gemini")).toBeUndefined();
     expect(inputSuggestionRuleFor(null)).toBeUndefined();
     expect(inputSuggestionRuleFor("toString")).toBeUndefined();
     const serialized = screen("❯ \x1b[2mopen the PR\x1b[22m");
@@ -152,6 +152,137 @@ describe("observeInputLine", () => {
       inputLine: { state: "unknown", text: "" },
       marked: serialized,
     });
+  });
+});
+
+const codex = inputSuggestionRuleFor("codex");
+
+const TINT = "\x1b[48;2;30;30;30m";
+const PAD = " \x1b[99X";
+const FOOTER = "\x1b[0m  ? for shortcuts";
+const GLYPH = "\x1b[1m›\x1b[22m";
+
+/** A Codex screen in the serializer's shape: a reply, then the composer's tinted band and its footer. */
+function band(box: string, tint = TINT): string {
+  return `• Done.\r\n${tint}${PAD}\r\n${GLYPH} ${box}\x1b[50X\r\n${PAD}\r\n${FOOTER}`;
+}
+
+describe("observeInputLine in a band", () => {
+  it.each([
+    ["a truecolour tint", TINT],
+    ["a colon-form tint", "\x1b[48:2::30:30:30m"],
+    ["a 256-colour tint", "\x1b[48;5;236m"],
+    ["a basic tint", "\x1b[44m"],
+  ])("reads the box in %s", (_, tint) => {
+    expect(observeInputLine(band("add a test", tint), codex).inputLine).toEqual({
+      state: "typed",
+      text: "add a test",
+    });
+    expect(
+      observeInputLine(band("\x1b[2mAsk Codex to do anything\x1b[22m", tint), codex).inputLine
+    ).toEqual({ state: "empty", text: "" });
+  });
+
+  it("reads a band whose blank rows are erases alone", () => {
+    const serialized = `• Done.\r\n${TINT}\x1b[100X\r\n${GLYPH} add a test\x1b[50X\r\n\x1b[100X\r\n${FOOTER}`;
+    expect(observeInputLine(serialized, codex).inputLine).toEqual({
+      state: "typed",
+      text: "add a test",
+    });
+  });
+
+  it("reads dim text that is not a placeholder as Codex's suggestion, and marks it", () => {
+    const { inputLine, marked } = observeInputLine(band("\x1b[2mopen the PR\x1b[22m"), codex);
+    expect(inputLine).toEqual({ state: "suggestion", text: "open the PR" });
+    expect(plain(marked)).toContain("› [suggested by Codex: open the PR]");
+  });
+
+  it("keeps blank rows inside the band in the box", () => {
+    const serialized = band(`first\x1b[50X\r\n${PAD}\r\n  third`);
+    expect(observeInputLine(serialized, codex).inputLine).toEqual({
+      state: "typed",
+      text: "first\n\nthird",
+    });
+  });
+
+  it.each([
+    [
+      "a band that runs off the bottom of the screen",
+      `• Done.\r\n${TINT}${PAD}\r\n${GLYPH} add a test\x1b[50X\r\n${PAD}`,
+    ],
+    [
+      "a band whose last row is not blank",
+      `• Done.\r\n${TINT}${PAD}\r\n${GLYPH} add a test\x1b[50X\r\n  more\x1b[50X\r\n${FOOTER}`,
+    ],
+    [
+      "a band whose first row is not blank",
+      `• Done.\r\n${TINT}  context\x1b[50X\r\n${GLYPH} add a test\x1b[50X\r\n${PAD}\r\n${FOOTER}`,
+    ],
+    [
+      "a band with an unindented row inside it",
+      `• Done.\r\n${TINT}${PAD}\r\n${GLYPH} add a test\x1b[50X\r\nmore\r\n${PAD}\r\n${FOOTER}`,
+    ],
+    ["an echo, its glyph drawn dim", band("add a test").replace(GLYPH, "\x1b[1;2m›\x1b[22;22m")],
+    [
+      "a prompt row in a highlight of its own",
+      band("add a test").replace("\x1b[1m›", "\x1b[48;2;99;168;248m›"),
+    ],
+    [
+      "a prompt row back on the default background",
+      band("add a test").replace("\x1b[1m›", "\x1b[49m›"),
+    ],
+    // Framed like the composer, but in the terminal's own background.
+    [
+      "a band in the default background",
+      `• Done.\r\n \r\n${GLYPH} add a test\r\n \r\n${TINT}  status`,
+    ],
+    // The serializer writes nothing for a row left in the default background,
+    // so the tint the row above carries in is no evidence it is painted.
+    [
+      "a prompt row under a row with nothing painted on it",
+      `${TINT}• Done.\r\n\r\n${GLYPH} add a test\x1b[50X\r\n${PAD}\r\n${FOOTER}`,
+    ],
+  ])("reads %s as no box at all", (_, serialized) => {
+    expect(observeInputLine(serialized, codex).inputLine).toEqual({ state: "unknown", text: "" });
+  });
+
+  it.each([
+    ["nothing at all", band("")],
+    ["only spaces", band("   ")],
+    // A cell in another background closes the band at the draft's row, so the
+    // blank row above it reads as the band's last.
+    [
+      "a draft cut off by a cell in another background",
+      `• Done.\r\n${TINT}${PAD}\r\n\x1b[1m›\x1b[99X\r\n\x1b[22m${PAD}\r\n  keep my draft\x1b[44m \x1b[49m\r\n${TINT}${PAD}\r\n${FOOTER}`,
+    ],
+  ])("reads a box showing %s, never its placeholder, as unknown", (_, serialized) => {
+    expect(observeInputLine(serialized, codex).inputLine).toEqual({ state: "unknown", text: "" });
+  });
+
+  it.each([
+    [
+      "no blank row closing it",
+      `${TINT}${PAD}\r\n${GLYPH} add a test\x1b[50X\r\n  more\x1b[50X\r\n${FOOTER}`,
+    ],
+    [
+      "a written row where its opening blank row belongs",
+      `${TINT}  redraw\x1b[50X\r\n${GLYPH} add a test\x1b[50X\r\n${PAD}\r\n${FOOTER}`,
+    ],
+  ])("never falls back to an older band when the lowest one has %s", (_, live) => {
+    const stale = `${TINT}${PAD}\r\n${GLYPH} \x1b[2mAsk Codex to do anything\x1b[22m\x1b[50X\r\n${PAD}\r\n\x1b[0m• Done.`;
+    expect(observeInputLine(`${stale}\r\n${live}`, codex).inputLine.state).toBe("unknown");
+    expect(observeInputLine(`${stale}\r\n${FOOTER}`, codex).inputLine.state).toBe("empty");
+  });
+
+  it("drops the placeholder for Canopy, and a suggestion wrapped across the band whole", () => {
+    const empty = band("\x1b[2mAsk Codex to do anything\x1b[22m");
+    expect(plain(dropInputSuggestion(empty, codex))).not.toContain("Ask Codex");
+    const wrapped = band(
+      `\x1b[2mopen the PR and\x1b[22m\x1b[50X\r\n  \x1b[2mtell me what is left\x1b[22m`
+    );
+    const dropped = plain(dropInputSuggestion(wrapped, codex));
+    expect(dropped).not.toContain("open the PR");
+    expect(dropped).not.toContain("tell me what is left");
   });
 });
 

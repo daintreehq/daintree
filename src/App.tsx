@@ -11,6 +11,7 @@ import {
   useWindowNotifications,
   useWatchedPanelNotifications,
   useMenuActions,
+  useUndoCloseMenuLabel,
   useErrors,
   useReEntrySummary,
   useOverlayClaim,
@@ -43,8 +44,10 @@ import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useScheduledRunLaunchBridge } from "./hooks/useScheduledRunLaunchBridge";
 import { useScheduledRunFinishBridge } from "./hooks/useScheduledRunFinishBridge";
 import { useTerminalWhenDoneBridge } from "./hooks/useTerminalWhenDoneBridge";
+import { useCodexLimitContinueBridge } from "./hooks/useCodexLimitContinueBridge";
 import { useHeldComposerSendBridge } from "./hooks/useHeldComposerSendBridge";
 import { useScheduledRunInboxBridge } from "./hooks/useScheduledRunInboxBridge";
+import { useMergedWorktreeReceiptBridge } from "./hooks/useMergedWorktreeReceiptBridge";
 import { usePluginPromptBridge } from "./hooks/usePluginPromptBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { notifyViewPainted } from "./utils/removeStartupSkeleton";
@@ -91,7 +94,8 @@ import { useE2EBridges } from "./hooks/app/useE2EBridges";
 import { useModalResetKeys } from "./hooks/app/useModalResetKeys";
 import { useAppBootstrap } from "./hooks/app/useAppBootstrap";
 import { useHostConnectionSync } from "./hooks/useHostConnection";
-import { usePaletteWiring } from "./hooks/app/usePaletteWiring";
+import { useProjectSwitcherPalette } from "./hooks/useProjectSwitcherPalette";
+import { useProjectMruSwitcher } from "./hooks/useProjectMruSwitcher";
 
 import {
   LazyModalHostLayer,
@@ -111,6 +115,7 @@ import {
   usePreferencesStore,
   usePluginManagerStore,
 } from "./store";
+import type { PaletteId } from "./store/paletteStore";
 import { useEmptyCanvasContent } from "./hooks/app/useEmptyCanvasContent";
 // Eager side-effect import: auto-discovers every built-in plugin renderer and
 // registers its builtin view slots at module-eval time, before first render.
@@ -120,7 +125,7 @@ import "@/registry/builtinPluginRenderers";
 import { useShallow } from "zustand/react/shallow";
 import { LazyMotion, MotionConfig } from "framer-motion";
 import { useMacroFocusStore } from "./store/macroFocusStore";
-import { voiceRecordingService } from "./services/VoiceRecordingService";
+import { startVoiceRecordingRuntime } from "./services/voiceRecordingRuntime";
 import { useRenderProfiler } from "./utils/renderProfiler";
 import { logError } from "./utils/logger";
 
@@ -135,6 +140,10 @@ import { ensureHydrationBootstrap } from "./utils/stateHydration/bootstrapGuard"
 // a bare void call would surface an unhandled rejection — the swallowed early
 // failure is retried by hydrateAppState's own await.
 void ensureHydrationBootstrap().catch(() => {});
+
+// Opens through the store rather than a palette hook: each palette's search
+// state lives in its own host, so the shell holds no hook that could open it.
+const openPalette = (id: PaletteId) => usePaletteStore.getState().openPalette(id);
 
 function AppInner() {
   useErrors();
@@ -171,6 +180,7 @@ function AppInner() {
   useScheduledRunLaunchBridge();
   useScheduledRunFinishBridge();
   useTerminalWhenDoneBridge();
+  useCodexLimitContinueBridge();
   useHeldComposerSendBridge();
   usePluginPromptBridge();
   const { homeDir } = useHomeDir();
@@ -184,32 +194,14 @@ function AppInner() {
     openWorktreeOverview,
     closeWorktreeOverview,
   } = useWorktreeOverview();
-  const {
-    worktrees,
-    isLoading,
-    panelPalette,
-    projectSwitcherPalette,
-    actionPalette,
-    quickSwitcher,
-    sendToAgentPalette,
-    worktreePalette,
-    quickCreatePalette,
-    isThemePaletteOpen,
-    isLogLevelPaletteOpen,
-    isResumeSessionsPaletteOpen,
-    isRecentDictationsPaletteOpen,
-    isProjectSwitcherModalOpen,
-    shouldMountQuickSwitcher,
-    shouldMountSendToAgentPalette,
-    shouldMountWorktreePalette,
-    shouldMountQuickCreatePalette,
-    shouldMountPanelPalette,
-    shouldMountThemePalette,
-    shouldMountResumeSessionsPalette,
-    shouldMountRecentDictationsPalette,
-    shouldMountLogLevelPalette,
-    shouldMountActionPalette,
-  } = usePaletteWiring({ isWorktreeOverviewOpen });
+  // The other palettes keep their search state in their own hosts
+  // (PaletteHosts.tsx), so typing in one never re-renders this shell. The
+  // project switcher stays here: the toolbar's dropdown and the modal share one
+  // controller.
+  const projectSwitcherPalette = useProjectSwitcherPalette();
+  const isProjectSwitcherModalOpen =
+    projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal";
+  useProjectMruSwitcher();
   const worktreeStore = useWorktreeStoreApi();
   const currentProject = useProjectStore((state) => state.currentProject);
   const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
@@ -306,7 +298,7 @@ function AppInner() {
     if (!wasOpen && isPluginManagerOpen) setIsSettingsOpen(false);
   }, [isPluginManagerOpen, setIsSettingsOpen]);
   // PluginManagerView claims the viewport only once its lazy chunk mounts, and
-  // Settings' claim can drop first, letting the Portal flash in the gap. Same
+  // Settings' claim can drop first, letting a native view flash in the gap. Same
   // handoff as the theme browser's presence claim in AppLayout.
   useOverlayClaim("plugin-manager-presence", isPluginManagerOpen);
 
@@ -329,6 +321,7 @@ function AppInner() {
     gettingStarted,
   } = useAppBootstrap();
   useScheduledRunInboxBridge(isStateLoaded);
+  useMergedWorktreeReceiptBridge(isStateLoaded);
 
   const { emptyContent, workspaceId } = useEmptyCanvasContent(gettingStarted);
 
@@ -371,14 +364,6 @@ function AppInner() {
     [launchAgent]
   );
 
-  const closeThemePalette = useCallback(() => {
-    usePaletteStore.getState().closePalette("theme");
-  }, []);
-
-  const closeLogLevelPalette = useCallback(() => {
-    usePaletteStore.getState().closePalette("log-level");
-  }, []);
-
   useAppEventListeners();
 
   const { handleErrorRetry, handleCancelRetry } = useErrorRetry();
@@ -413,15 +398,15 @@ function AppInner() {
     onToggleFocusMode: handleToggleFocusMode,
     onFocusRegionNext: () => useMacroFocusStore.getState().cycleNext(),
     onFocusRegionPrev: () => useMacroFocusStore.getState().cyclePrev(),
-    onOpenActionPalette: actionPalette.open,
-    onOpenQuickSwitcher: quickSwitcher.open,
-    onOpenWorktreePalette: worktreePalette.open,
-    onOpenQuickCreatePalette: quickCreatePalette.open,
+    onOpenActionPalette: () => openPalette("action"),
+    onOpenQuickSwitcher: (scope) => usePaletteStore.getState().openQuickSwitcher(scope),
+    onOpenWorktreePalette: () => openPalette("worktree"),
+    onOpenQuickCreatePalette: () => openPalette("quick-create"),
     onToggleWorktreeOverview: toggleWorktreeOverview,
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
-    onOpenPanelPalette: panelPalette.open,
-    onOpenResumeSessionsPalette: () => usePaletteStore.getState().openPalette("resume-sessions"),
+    onOpenPanelPalette: () => openPalette("panel"),
+    onOpenResumeSessionsPalette: () => openPalette("resume-sessions"),
     onOpenProjectSwitcherPalette: projectSwitcherPalette.toggle,
     onConfirmCloseActiveProject: (projectId: string) => {
       void projectSwitcherPalette.removeProject(projectId);
@@ -458,6 +443,7 @@ function AppInner() {
   useProjectPluginBridge();
 
   useMenuActions();
+  useUndoCloseMenuLabel();
 
   // Global keybinding handler - provides chord support and priority resolution
   // All keybindings dispatch through ActionService via this centralized handler
@@ -477,9 +463,7 @@ function AppInner() {
   // cancelled, and holds typing back until it lands.
   usePendingHostSwitchSync();
 
-  useEffect(() => {
-    voiceRecordingService.initialize();
-  }, []);
+  useEffect(() => startVoiceRecordingRuntime(), []);
 
   useFileDropGuard();
 
@@ -518,9 +502,10 @@ function AppInner() {
         {/* Diagnostics host stays reachable while the crash dialog is blocking
             the app — without this, the inline "Send diagnostics" action in
             CrashRecoveryDialog (recovery-failed banner) has nothing to render
-            the dialog into. */}
+            the dialog into. It opens over that dialog, so it takes the nested
+            tier, and it confirms a save itself: no Toaster is mounted yet. */}
         <Suspense fallback={null}>
-          <LazyDiagnosticsReviewDialogHost />
+          <LazyDiagnosticsReviewDialogHost zIndex="nested" confirmation="inline" />
         </Suspense>
       </div>
     );
@@ -613,38 +598,14 @@ function AppInner() {
 
             <Suspense fallback={null}>
               <LazyModalHostLayer
-                quickSwitcher={quickSwitcher}
-                shouldMountQuickSwitcher={shouldMountQuickSwitcher}
-                sendToAgentPalette={sendToAgentPalette}
-                shouldMountSendToAgentPalette={shouldMountSendToAgentPalette}
-                worktreePalette={worktreePalette}
-                shouldMountWorktreePalette={shouldMountWorktreePalette}
-                quickCreatePalette={quickCreatePalette}
-                shouldMountQuickCreatePalette={shouldMountQuickCreatePalette}
-                panelPalette={panelPalette}
-                shouldMountPanelPalette={shouldMountPanelPalette}
                 resumeSession={resumeSession}
                 handleLaunchAgent={handleLaunchAgent}
                 defaultTerminalCwd={defaultTerminalCwd}
                 activeWorktreeId={activeWorktreeId}
                 isProjectSwitcherModalOpen={isProjectSwitcherModalOpen}
                 projectSwitcherPalette={projectSwitcherPalette}
-                isThemePaletteOpen={isThemePaletteOpen}
-                shouldMountThemePalette={shouldMountThemePalette}
-                closeThemePalette={closeThemePalette}
-                isResumeSessionsPaletteOpen={isResumeSessionsPaletteOpen}
-                shouldMountResumeSessionsPalette={shouldMountResumeSessionsPalette}
-                isRecentDictationsPaletteOpen={isRecentDictationsPaletteOpen}
-                shouldMountRecentDictationsPalette={shouldMountRecentDictationsPalette}
-                isLogLevelPaletteOpen={isLogLevelPaletteOpen}
-                shouldMountLogLevelPalette={shouldMountLogLevelPalette}
-                closeLogLevelPalette={closeLogLevelPalette}
-                actionPalette={actionPalette}
-                shouldMountActionPalette={shouldMountActionPalette}
                 isWorktreeOverviewOpen={isWorktreeOverviewOpen}
                 closeWorktreeOverview={closeWorktreeOverview}
-                worktrees={worktrees}
-                isLoading={isLoading}
                 selectWorktree={selectWorktree}
                 availability={availability}
                 crossDiffDialog={crossDiffDialog}
@@ -711,7 +672,7 @@ function AppInner() {
 }
 
 // `AppInner` suspends on the module-scope `app:boot` promise via `use()`. The
-// Suspense boundary lives here rather than in `main.tsx` so the boot read has a
+// Suspense boundary lives here rather than in the project shell so the boot read has a
 // fallback if the IPC hasn't settled by first render. `fallback={null}` keeps
 // the cold-start `#startup-skeleton` (a sibling of `#root`) visible during the
 // flight — it's removed by `removeStartupSkeleton()` once hydration completes.

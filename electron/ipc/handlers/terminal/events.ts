@@ -5,6 +5,7 @@
 import { CHANNELS } from "../../channels.js";
 import {
   broadcastToProjectRenderers,
+  broadcastToLocalRenderersExcept,
   broadcastToProjectRenderersExcept,
   broadcastToRenderer,
   broadcastSlicedToProjectRenderers,
@@ -14,7 +15,7 @@ import { logInfo, logWarn } from "../../../utils/logger.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { forgetPluginToolsLaunch } from "../../../services/pluginAgentMcp/agentLaunchRecords.js";
-import { getMcpServerServiceRef } from "../../../window/serviceRefs.js";
+import { getMcpServerServiceRef, getRunAttentionServiceRef } from "../../../window/serviceRefs.js";
 import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import {
   acceptCapturedAgentSession,
@@ -40,6 +41,45 @@ import {
   settleSpawnConfirmation,
 } from "./spawnConfirmation.js";
 import type { HandlerDependencies } from "../../types.js";
+
+/**
+ * Hands each project view the pause-duration entries and clears for its own
+ * terminals, in one envelope: an older renderer reads each envelope as its
+ * project's whole snapshot. Held samples repeat every tick, so a frozen view
+ * may skip them; a tick that clears anything reaches frozen views too, since
+ * nothing says a clear twice.
+ */
+function relayPauseDurationGauge(
+  payload: TerminalReliabilityMetricPayload,
+  projectOf: (terminalId: string) => string | null
+): void {
+  const { perTerminalHeld, clearedTerminalIds, ...envelope } = payload;
+  const entries: Record<string, number | null> = {};
+  for (const entry of perTerminalHeld ?? []) entries[entry.terminalId] = entry.heldDurationMs;
+  for (const terminalId of clearedTerminalIds ?? []) entries[terminalId] = null;
+  broadcastSlicedToProjectRenderers(
+    CHANNELS.EVENTS_PUSH,
+    entries,
+    projectOf,
+    (slice) => {
+      const held: Array<{ terminalId: string; heldDurationMs: number }> = [];
+      const cleared: string[] = [];
+      for (const [terminalId, heldDurationMs] of Object.entries(slice)) {
+        if (heldDurationMs === null) cleared.push(terminalId);
+        else held.push({ terminalId, heldDurationMs });
+      }
+      return {
+        name: "terminal:reliability-metric",
+        payload: {
+          ...envelope,
+          perTerminalHeld: held,
+          ...(cleared.length > 0 ? { clearedTerminalIds: cleared } : {}),
+        },
+      };
+    },
+    { includeFrozenViews: (clearedTerminalIds?.length ?? 0) > 0, ownersOnly: true }
+  );
+}
 
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -88,8 +128,13 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     // the host actually wrote to, so no re-derivation can go stale here.
     const delivered = routing?.portDeliveredWebContentsIds;
     const exclude = delivered && delivered.length > 0 ? new Set(delivered) : null;
+    const projectId = ptyClient.getTerminalProjectId(id);
+    if (projectId === null && ptyClient.isUnplacedTerminal(id)) {
+      broadcastToLocalRenderersExcept(exclude, CHANNELS.TERMINAL_DATA, id, data, ...offsetArg);
+      return;
+    }
     broadcastToProjectRenderersExcept(
-      ptyClient.getTerminalProjectId(id),
+      projectId,
       exclude,
       CHANNELS.TERMINAL_DATA,
       id,
@@ -121,6 +166,9 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     // covers. Unloaded means nothing was ever handed over.
     getMcpServerServiceRef()?.handleTerminalExit(id);
     if (forRestart) return;
+    // After the restart check: a restart keeps the id alive, so runs parked on
+    // it still wait for it rather than resurfacing as if it had closed.
+    getRunAttentionServiceRef()?.handleTerminalExit(id);
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
       payload: preserveSession ? [id, exitCode, { preserveSession: true }] : [id, exitCode],
@@ -273,10 +321,11 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   });
   handlers.push(unsubArtifactDetected);
 
-  // Resource metrics (batched from pty-host). The batch covers every terminal
-  // in every project; each project view gets only its own terminals. Cached
-  // views still get their slice: their memory-leak detector watches their
-  // terminals in the background.
+  // Resource metrics (batched from pty-host). Each pty-host shard sends its own
+  // batch, covering only its terminals; each project view gets only its own
+  // terminals, and nothing when the batch has none. Cached views still get
+  // their slice: their memory-leak detector watches their terminals in the
+  // background.
   const handleResourceMetrics = (metrics: TerminalResourceBatchPayload, timestamp: number) => {
     broadcastSlicedToProjectRenderers(
       CHANNELS.TERMINAL_RESOURCE_METRICS,
@@ -305,9 +354,16 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Backpressure/suspend transitions. The only consumer is the owning pane's
   // stall watchdog, so it goes to that project's views like terminal:status.
+  // A pause-duration gauge is one shard's batch under the synthetic
+  // "resource-governor" id, so each of its entries goes to its own terminal's
+  // project instead (#17575).
   const unsubReliabilityMetric = events.on(
     "terminal:reliability-metric",
     (payload: TerminalReliabilityMetricPayload) => {
+      if (payload.metricType === "pause-duration-gauge") {
+        relayPauseDurationGauge(payload, (id) => ptyClient.getTerminalProjectId(id));
+        return;
+      }
       broadcastToProjectRenderers(
         ptyClient.getTerminalProjectId(payload.terminalId),
         CHANNELS.EVENTS_PUSH,

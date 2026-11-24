@@ -682,8 +682,8 @@ export default tseslint.config(
     rules: { "no-restricted-imports": "off" },
   },
 
-  // Allowlist — framer-motion document tab strips (grid, dock, portal,
-  // assistant): the shared sliding underline in ui/document-tab.tsx and the
+  // Allowlist — framer-motion document tab strips (grid, dock, assistant):
+  // the shared sliding underline in ui/document-tab.tsx and the
   // LayoutGroup each strip scopes it with. `m` and LayoutGroup only; the
   // animation features still arrive lazily via loadMotionFeatures().
   {
@@ -692,7 +692,6 @@ export default tseslint.config(
       "src/components/Panel/SortableTabButton.tsx",
       "src/components/Panel/TabButton.tsx",
       "src/components/ui/document-tab.tsx",
-      "src/components/Portal/PortalToolbar.tsx",
       "src/components/HelpPanel/HelpSessionTabs.tsx",
     ],
     rules: { "no-restricted-imports": "off" },
@@ -767,6 +766,8 @@ export default tseslint.config(
       "src/components/FileViewer/codeMirrorLanguages.ts",
       "src/components/FileViewer/editorSearchTheme.ts",
       "src/components/FileViewer/editorSearchPanel.ts",
+      "src/components/FileViewer/sourceLinks.ts",
+      "src/components/Markdown/markdownLinkTarget.ts",
       "src/components/Demo/DemoCursor.tsx",
     ],
     rules: { "no-restricted-imports": "off" },

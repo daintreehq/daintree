@@ -3,7 +3,9 @@ import { syncBuiltinESMExports } from "node:module";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -42,9 +44,22 @@ function content(tag: string, count = 400): string {
 type DiffResult = Extract<WorkspaceHostEvent, { type: "get-file-diff-result" }>;
 
 // Counts the `git diff` processes the service spawns, which is the cost the
-// cache exists to avoid. simple-git's ESM build binds `spawn` by name.
+// cache exists to avoid, and the `rev-parse` + `var` pair behind each
+// freshness probe. simple-git's ESM build binds `spawn` by name.
 let diffSpawns = 0;
+let probeSpawns = 0;
 const originalSpawn = childProcess.spawn;
+
+/**
+ * Runs once when the next git process whose argv includes `command` exits,
+ * before the service sees its output: a change landing between two of the
+ * service's own steps.
+ */
+let afterNext: { command: string; run: () => void } | null = null;
+
+// Git 2.42+ names the config files it reads in `git var -l`, which is what
+// lets a continuation reuse its probe instead of spawning one per window.
+const gitListsConfigFiles = /^GIT_CONFIG_GLOBAL=/m.test(git(os.tmpdir(), "var", "-l"));
 
 describe("getFileDiff paging over a real repo", () => {
   let tmp: string;
@@ -52,10 +67,33 @@ describe("getFileDiff paging over a real repo", () => {
   let service: WorkspaceService;
   let last: DiffResult | null;
 
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+
   beforeAll(async () => {
+    // The service's git reads the user's global config, which the hardened env
+    // can't redirect: point it at a home of the test's own, with no system file.
+    home = realpathSync(mkdtempSync(path.join(realpathSync(os.tmpdir()), "file-diff-home-")));
+    for (const key of ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "GIT_CONFIG_NOSYSTEM"]) {
+      savedEnv[key] = process.env[key];
+    }
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    process.env.XDG_CONFIG_HOME = path.join(home, ".config");
+    process.env.GIT_CONFIG_NOSYSTEM = "1";
     (childProcess as { spawn: typeof originalSpawn }).spawn = ((...args: unknown[]) => {
-      if (Array.isArray(args[1]) && args[1].includes("diff")) diffSpawns++;
-      return (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(...args);
+      const argv = Array.isArray(args[1]) ? (args[1] as string[]) : [];
+      if (argv.includes("diff")) diffSpawns++;
+      if (argv.includes("rev-parse") || argv.includes("var")) probeSpawns++;
+      const child = (originalSpawn as (...a: unknown[]) => ReturnType<typeof originalSpawn>)(
+        ...args
+      );
+      const hook = afterNext;
+      if (hook && argv.includes(hook.command)) {
+        afterNext = null;
+        child.once("exit", hook.run);
+      }
+      return child;
     }) as typeof originalSpawn;
     syncBuiltinESMExports();
     const { WorkspaceService } = await import("../WorkspaceService.js");
@@ -68,9 +106,16 @@ describe("getFileDiff paging over a real repo", () => {
     (childProcess as { spawn: typeof originalSpawn }).spawn = originalSpawn;
     syncBuiltinESMExports();
     service.dispose();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(home, { recursive: true, force: true });
   });
 
   beforeEach(() => {
+    afterNext = null;
+    rmSync(path.join(home, ".gitconfig"), { force: true });
     tmp = realpathSync(mkdtempSync(path.join(realpathSync(os.tmpdir()), "file-diff-cache-")));
     repo = path.join(tmp, "repo");
     git(tmp, "init", "-q", "-b", "main", repo);
@@ -104,18 +149,26 @@ describe("getFileDiff paging over a real repo", () => {
     return last as DiffResult;
   }
 
-  function expectedDiff(file: string, cwd = repo, ignoreWhitespace = false): string {
-    return git(
-      cwd,
-      "diff",
-      "HEAD",
-      "--no-ext-diff",
-      "--no-textconv",
-      "--no-color",
-      "--submodule=short",
-      ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
-      "--",
-      file
+  function expectedDiff(
+    file: string,
+    cwd = repo,
+    ignoreWhitespace = false,
+    env: NodeJS.ProcessEnv = GIT_ENV
+  ): string {
+    return execFileSync(
+      "git",
+      [
+        "diff",
+        "HEAD",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--submodule=short",
+        ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+        "--",
+        file,
+      ],
+      { cwd, env, encoding: "utf-8" }
     );
   }
 
@@ -173,19 +226,103 @@ describe("getFileDiff paging over a real repo", () => {
       pages++;
     }
     expect(pages).toBeGreaterThan(10);
-    // First window, then the cache fill.
+    // Both on the first window: the unpinned diff that turned out not to fit,
+    // then the one pinned to the freshness key that fills the cache.
     expect(diffSpawns - before).toBe(2);
   });
 
-  it("never caches from a first-window read", async () => {
+  it("fills the cache from a first window that does not fit", async () => {
     const set = vi.spyOn(FileDiffCache.prototype, "set");
     try {
       const result = await page("a.txt", 0);
       expect(result.truncated).toBe(true);
+      expect(set).toHaveBeenCalledTimes(1);
+      const before = diffSpawns;
+      await page("a.txt", result.nextOffset!);
+      expect(diffSpawns).toBe(before);
+    } finally {
+      set.mockRestore();
+    }
+  });
+
+  it("keeps a first read that fits one window free of freshness probes", async () => {
+    const set = vi.spyOn(FileDiffCache.prototype, "set");
+    const diffsBefore = diffSpawns;
+    const probesBefore = probeSpawns;
+    try {
+      const result = await page("a.txt", 0, { maxBytes: 1_000_000 });
+      expect(result.truncated).toBe(false);
+      expect(diffSpawns - diffsBefore).toBe(1);
+      expect(probeSpawns).toBe(probesBefore);
       expect(set).not.toHaveBeenCalled();
     } finally {
       set.mockRestore();
     }
+  });
+
+  it.skipIf(!gitListsConfigFiles)("probes freshness once for a whole paged read", async () => {
+    const before = probeSpawns;
+    let offset: number | null = 0;
+    let pages = 0;
+    while (offset !== null) {
+      offset = (await page("a.txt", offset)).nextOffset;
+      pages++;
+    }
+    expect(pages).toBeGreaterThan(10);
+    // From the first window's cache fill: `rev-parse` and `var -l`, then
+    // `var -l` again to confirm the config stood still while it was statted.
+    expect(probeSpawns - before).toBe(3);
+  });
+
+  it.skipIf(!gitListsConfigFiles)(
+    "never reuses a probe whose config moved between its two reads",
+    async () => {
+      const extra = path.join(tmp, "extra.gitconfig");
+      afterNext = { command: "var", run: () => git(repo, "config", "include.path", extra) };
+      const set = vi.spyOn(FileDiffCache.prototype, "set");
+      let first: DiffResult;
+      try {
+        first = await page("a.txt", 0);
+        // The two reads disagreed, so no key came out of that probe to cache under.
+        expect(set).not.toHaveBeenCalled();
+      } finally {
+        set.mockRestore();
+      }
+      expect(git(repo, "config", "include.path").trim()).toBe(extra);
+
+      // The include arrived after `var -l` answered: no window may lean on that
+      // answer, so each probes again, and an edit to the included file shows.
+      const before = probeSpawns;
+      const second = await page("a.txt", first.nextOffset!);
+      expect(probeSpawns - before).toBe(2);
+      writeFileSync(extra, "[diff]\n\tnoprefix = true\n");
+      await expectRestMatches("a.txt", second.nextOffset!, expectedDiff("a.txt"));
+    }
+  );
+
+  it("sends what the cache-filling pass found when the file changes between passes", async () => {
+    afterNext = {
+      command: "diff",
+      run: () => writeFileSync(path.join(repo, "a.txt"), content("old")),
+    };
+    const set = vi.spyOn(FileDiffCache.prototype, "set");
+    try {
+      const result = await page("a.txt", 0);
+      expect(result).toMatchObject({ diff: "NO_CHANGES", totalBytes: 0 });
+      expect(set).not.toHaveBeenCalled();
+    } finally {
+      set.mockRestore();
+    }
+  });
+
+  it("probes every window again once an include could pull in any file", async () => {
+    git(repo, "config", "include.path", path.join(tmp, "extra.gitconfig"));
+    const before = probeSpawns;
+    const first = await page("a.txt", 0);
+    const second = await page("a.txt", first.nextOffset!);
+    await page("a.txt", second.nextOffset!);
+    expect(probeSpawns - before).toBe(6);
+    await expectRestMatches("a.txt", 0, expectedDiff("a.txt"));
   });
 
   it("recomputes after the worktree file changes", async () => {
@@ -214,6 +351,84 @@ describe("getFileDiff paging over a real repo", () => {
       git(repo, "config", "diff.noprefix", "true")
     );
     await expectRestMatches("a.txt", offset, expectedDiff("a.txt"));
+  });
+
+  it.skipIf(!gitListsConfigFiles)(
+    "recomputes after a config file is rewritten and put back",
+    async () => {
+      // Same effective config, so the same hash: only the file's stats can tell
+      // that a diff computed in between may have read something else.
+      const { offset } = await continuationAfter("a.txt", () => {
+        git(repo, "config", "diff.noprefix", "true");
+        git(repo, "config", "--unset", "diff.noprefix");
+      });
+      await expectRestMatches("a.txt", offset, expectedDiff("a.txt"));
+    }
+  );
+
+  it.skipIf(!gitListsConfigFiles || process.platform === "win32")(
+    "reuses its probe through a symlinked cwd whose gitfile is relative",
+    async () => {
+      renameSync(path.join(repo, ".git"), path.join(tmp, "meta.git"));
+      writeFileSync(path.join(repo, ".git"), "gitdir: ../meta.git\n");
+      const alias = path.join(tmp, "alias");
+      symlinkSync(repo, alias);
+      const before = probeSpawns;
+      await expectRestMatches("a.txt", 0, expectedDiff("a.txt"), { cwd: alias });
+      expect(probeSpawns - before).toBe(3);
+    }
+  );
+
+  it("recomputes after a global config change", async () => {
+    const globalConfig = path.join(home, ".gitconfig");
+    const { offset } = await continuationAfter("a.txt", () =>
+      writeFileSync(globalConfig, "[diff]\n\tnoprefix = true\n")
+    );
+    const full = expectedDiff("a.txt", repo, false, {
+      ...GIT_ENV,
+      GIT_CONFIG_GLOBAL: globalConfig,
+    });
+    expect(full).not.toBe(expectedDiff("a.txt"));
+    await expectRestMatches("a.txt", offset, full);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "recomputes when the git dir a gitfile names is a symlink that is retargeted",
+    async () => {
+      const one = path.join(tmp, "one");
+      const two = path.join(tmp, "two");
+      git(repo, "worktree", "add", "-q", "-b", "one", one);
+      writeFileSync(path.join(repo, "a.txt"), content("moved"));
+      git(repo, "commit", "-q", "-am", "moved");
+      git(repo, "worktree", "add", "-q", "-b", "two", two);
+      const admin = (dir: string) => readFileSync(path.join(dir, ".git"), "utf-8").slice(8).trim();
+      const link = path.join(tmp, "current");
+      symlinkSync(admin(one), link);
+      writeFileSync(path.join(one, ".git"), `gitdir: ${link}\n`);
+      writeFileSync(path.join(one, "a.txt"), content("new"));
+      const adminTwo = admin(two);
+
+      await continuationAfter(
+        "a.txt",
+        () => {
+          rmSync(link);
+          symlinkSync(adminTwo, link);
+        },
+        { cwd: one }
+      );
+    }
+  );
+
+  it("recomputes after HEAD moves in a linked worktree", async () => {
+    const linked = path.join(tmp, "linked");
+    git(repo, "worktree", "add", "-q", "-b", "side", linked);
+    writeFileSync(path.join(linked, "a.txt"), content("new"));
+    const { result } = await continuationAfter(
+      "a.txt",
+      () => git(linked, "commit", "-q", "-am", "take it"),
+      { cwd: linked }
+    );
+    expect(result).toMatchObject({ diff: "NO_CHANGES", totalBytes: 0 });
   });
 
   it("recomputes after a .gitattributes change alters how git renders the diff", async () => {

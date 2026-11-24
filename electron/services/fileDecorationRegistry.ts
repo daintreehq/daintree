@@ -3,6 +3,7 @@ import type {
   FileDecorationProviderImpl,
   RegisteredFileDecorationProvider,
 } from "../../shared/types/forge.js";
+import { makeForgeProviderId } from "../../shared/utils/forgeProviderIds.js";
 
 export type { RegisteredFileDecorationProvider } from "../../shared/types/forge.js";
 
@@ -186,13 +187,54 @@ export function scopeMatchesPattern(scope: string, pattern: string): boolean {
 }
 
 /**
+ * Whether `contribution` serves a project whose code forge resolved to
+ * `codeForgeProviderId` (canonical `{pluginId}.{contributionId}`, `null` when
+ * none did). An ungated contribution serves every project; one that names a
+ * `forgeProvider` serves only projects using that provider of its own plugin.
+ */
+export function decorationServesForge(
+  pluginId: string,
+  contribution: FileDecorationContribution,
+  codeForgeProviderId: string | null
+): boolean {
+  if (contribution.forgeProvider === undefined) return true;
+  return codeForgeProviderId === makeForgeProviderId(pluginId, contribution.forgeProvider);
+}
+
+/**
+ * Whether any provider declared for `scope` is gated on a forge, so a caller
+ * resolves the project's forge (a git remote read) only when it decides
+ * something.
+ */
+export function hasForgeGatedFileDecorations(scope: string): boolean {
+  if (typeof scope !== "string" || scope.length === 0) return false;
+  for (const contributions of PLUGIN_FILE_DECORATION_PROVIDERS.values()) {
+    for (const contribution of contributions) {
+      if (
+        contribution.forgeProvider !== undefined &&
+        contribution.scopes.some((p) => scopeMatchesPattern(scope, p))
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Resolve the bound impls whose declared scopes match `scope`, in plugin
  * load order (stable per boot). Returns the contribution id and pluginId
  * alongside each impl so the IPC handler can attribute results. Descriptors
  * without a bound impl are skipped — the plugin's `activate()` may not have
  * run yet, or it unloaded; callers treat that as "no decorations".
+ *
+ * Forge-gated providers are filtered by {@link decorationServesForge}, so a
+ * caller that resolved no forge gets none of them.
  */
-export function getFileDecorationImpls(scope: string): Array<{
+export function getFileDecorationImpls(
+  scope: string,
+  codeForgeProviderId: string | null = null
+): Array<{
   pluginId: string;
   contributionId: string;
   impl: FileDecorationProviderImpl;
@@ -206,6 +248,7 @@ export function getFileDecorationImpls(scope: string): Array<{
   for (const [pluginId, contributions] of PLUGIN_FILE_DECORATION_PROVIDERS) {
     for (const contribution of contributions) {
       if (!contribution.scopes.some((p) => scopeMatchesPattern(scope, p))) continue;
+      if (!decorationServesForge(pluginId, contribution, codeForgeProviderId)) continue;
       const impl = PLUGIN_FILE_DECORATION_IMPLS.get(buildImplKey(pluginId, contribution.id));
       if (impl) {
         result.push({ pluginId, contributionId: contribution.id, impl });

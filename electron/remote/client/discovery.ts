@@ -18,12 +18,13 @@ import { listWslDistros, type WslDistroEntry } from "../../utils/wsl.js";
 
 /**
  * Finding machines to add: tailnet peers from `tailscale status --json`,
- * NetBird peers from `netbird status --json`, and hosts advertising `_daintree._tcp` (Host mode on) or `_ssh._tcp` (a Mac with
+ * NetBird peers from `netbird status --json`, hosts advertising `_daintree._tcp` (Host mode on) or `_ssh._tcp` (a Mac with
  * Remote Login, a Linux box running avahi's ssh service) on the LAN (dns-sd on
- * macOS, avahi on Linux). Discovery only says a machine answered; whether Daintree runs there
+ * macOS, avahi on Linux), and the hosts the user's own `~/.ssh/config` names.
+ * Discovery only says a machine answered, or that the config names it; whether Daintree runs there
  * is learned by probing it. Every machine found is reached over ssh (a
- * tailnet or NetBird name, a LAN address). Every source is optional: a missing tool is an
- * empty list, never an error.
+ * tailnet or NetBird name, a LAN address, a config alias). Every source is optional: a missing tool
+ * or config is an empty list, never an error.
  */
 
 export const BONJOUR_SERVICE_TYPE = "_daintree._tcp";
@@ -52,7 +53,7 @@ export const NETBIRD_CANDIDATES = [
 export interface DiscoveryCandidate {
   name: string;
   sshTarget: string;
-  source: "tailscale" | "netbird" | "bonjour";
+  source: "tailscale" | "netbird" | "bonjour" | "ssh-config";
   platform: HostPlatform | null;
   online: boolean;
   netbirdStatus?: NetbirdPeerStatus;
@@ -218,7 +219,7 @@ function parseTxt(parts: string[]): Record<string, string> {
 /**
  * An advert's port is the ssh port (`transport=ssh` for Daintree's own), and a
  * target string can't carry one, so only port 22 (or none given) is offered.
- * Another port is reachable through an ~/.ssh/config alias entered by hand.
+ * Another port is reachable through an ~/.ssh/config alias, which discovery lists.
  */
 function isDefaultSshPort(port: string | number | undefined): boolean {
   if (port === undefined || port === "") return true;
@@ -311,6 +312,8 @@ export interface DiscoverDeps {
   localHostNames?: readonly string[];
   /** Whether this machine can resolve a name; the system resolver with a short deadline unless given. */
   resolves?: (name: string) => Promise<boolean>;
+  /** The aliases the user's own ssh config names, as written; none unless given. */
+  sshConfigAliases?: (signal?: AbortSignal) => Promise<readonly string[]>;
   signal?: AbortSignal;
 }
 
@@ -486,6 +489,10 @@ export const machineKey = sshMachineKey;
  * Mesh peers first (Tailscale, then NetBird: their names work from anywhere
  * on the mesh), then LAN hosts. One machine seen by both sources is merged only when a source
  * vouches for a shared name or address; otherwise both rows are shown.
+ * Then the ssh config's aliases, never resolved: ssh does that when the host
+ * is checked, as for a typed alias, since resolving one (`ssh -G`) runs any
+ * `Match exec` in the config. An alias is dropped only when a network row
+ * already offers that exact name, which ssh treats the same way.
  * Manual entry is the dialog's own field.
  */
 export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[]> {
@@ -495,14 +502,27 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
       : deps.platform === "linux"
         ? discoverBonjourLinux(deps)
         : Promise.resolve([]);
-  const [tailnet, netbird, lan, selfNames] = await Promise.all([
+  const [tailnet, netbird, lan, selfNames, configAliases] = await Promise.all([
     discoverTailscale(deps).catch(() => []),
     discoverNetbird(deps).catch(() => []),
     bonjour.catch(() => []),
     deps.localHostNames
       ? Promise.resolve(deps.localHostNames)
       : localMdnsNames(deps).catch(() => []),
+    deps.sshConfigAliases
+      ? deps.sshConfigAliases(deps.signal).catch((): readonly string[] => [])
+      : Promise.resolve<readonly string[]>([]),
   ]);
+  const fromConfig = configAliases
+    .filter((alias) => isValidSshTarget(alias))
+    .map((alias): DiscoveryCandidate => ({
+      name: alias,
+      sshTarget: alias,
+      source: "ssh-config",
+      platform: null,
+      // Nothing was seen answering; the check is what reaches it.
+      online: false,
+    }));
   const knownTargets = deps.knownConnections
     .map(sshTargetOf)
     .filter((target): target is string => target !== null);
@@ -510,11 +530,19 @@ export async function discoverHosts(deps: DiscoverDeps): Promise<DiscoveredHost[
   // This machine's own LAN adverts (Remote Login, Host mode) are never a host to add.
   const self = new Set(selfNames.map(machineKey));
   const seen = new Set<string>();
+  /** Every row's own target: what a config alias of the same name would have ssh dial. */
+  const offered = new Set<string>();
   const out: DiscoveredHost[] = [];
-  for (const candidate of [...tailnet, ...netbird, ...lan]) {
+  for (const candidate of [...tailnet, ...netbird, ...lan, ...fromConfig]) {
     if (candidate.source === "bonjour" && self.has(machineKey(candidate.sshTarget))) continue;
-    const keys = [candidate.sshTarget, ...(candidate.aliases ?? [])].map(machineKey);
-    if (keys.some((key) => seen.has(key))) continue;
+    const target = machineKey(candidate.sshTarget);
+    const keys = [target, ...(candidate.aliases ?? []).map(machineKey)];
+    // An alias is only a name ssh looks up in the config, so a network address
+    // it may point at is no evidence it's that network's row.
+    if (candidate.source === "ssh-config" ? offered.has(target) : keys.some((k) => seen.has(k))) {
+      continue;
+    }
+    offered.add(target);
     for (const key of keys) seen.add(key);
     out.push({
       // A name off the network is the network's to choose: shown as plain text,

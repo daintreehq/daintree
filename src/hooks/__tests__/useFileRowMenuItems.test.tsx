@@ -439,6 +439,20 @@ describe("useFileRowMenuItems — conditional items", () => {
     expect(labels(menu)).toContain("Open diff");
   });
 
+  it("drops Open file, and only that, where the surface already shows the file", async () => {
+    // `file.view` opens a dialog onto the file. From the file panel or the file
+    // browser's viewer that is the very content on screen, so the item is noise;
+    // Open in editor and Copy file contents ride the same gate and stay.
+    const menu = await openMenu({ options: { showOpenFile: false } });
+    const rendered = labels(menu);
+
+    expect(rendered).not.toContain("Open file");
+    expect(rendered).toContain("Open in editor");
+    expect(rendered).toContain("Open diff");
+    const copy = await openSubmenu(menu, "Copy");
+    expect(labels(copy)).toContain("Copy file contents");
+  });
+
   it("drops every open item for a directory but keeps the rest of the core", async () => {
     const menu = await openMenu({
       row: { isDirectory: true, relativePath: "src", name: "src", status: null },
@@ -556,8 +570,34 @@ describe("useFileRowMenuItems — Insert file reference refusal reasons", () => 
     expect(item.hasAttribute("aria-keyshortcuts")).toBe(false);
   });
 
-  it("shows the shortcut and no reason once a target resolves", async () => {
+  it("advertises no shortcut unless the surface binds one", async () => {
+    // Cmd+I belongs to the file browser tree's own key handler. On every other
+    // surface a hint would name a key that does nothing, so the default is quiet
+    // and the item stays a plain, working menu entry.
     const menu = await openMenu();
+    const item = within(menu).getByRole("menuitem", { name: /Insert file reference/ });
+
+    expect(item.getAttribute("data-disabled")).toBeNull();
+    expect(item.textContent).not.toContain("⌘I");
+    expect(item.hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
+  it("keeps the refusal reason when a surface opts in but nothing resolves", async () => {
+    insertRef.current = {
+      canInsert: false,
+      refusalReason: "no-eligible-agent",
+      insert: vi.fn(() => false),
+    };
+    const menu = await openMenu({ options: { insertFileReferenceShortcut: true } });
+    const item = within(menu).getByRole("menuitem", { name: /^Insert file reference/ });
+
+    expect(item.textContent).toContain("No agent available");
+    expect(item.textContent).not.toContain("⌘I");
+    expect(item.hasAttribute("aria-keyshortcuts")).toBe(false);
+  });
+
+  it("shows the shortcut and no reason once a target resolves", async () => {
+    const menu = await openMenu({ options: { insertFileReferenceShortcut: true } });
     const item = within(menu).getByRole("menuitem", { name: /Insert file reference/ });
 
     expect(item.getAttribute("data-disabled")).toBeNull();

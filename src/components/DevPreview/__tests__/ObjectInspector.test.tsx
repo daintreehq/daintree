@@ -6,9 +6,12 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import type {
   CdpGetPropertiesResult,
   CdpPropertyDescriptor,
+  SerializedConsoleRow,
 } from "@shared/types/ipc/webviewConsole";
+import { MAX_LIVE_OBJECT_ROWS } from "@shared/config/devPreviewConsole";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { ObjectInspector } from "../ObjectInspector";
+import { ObjectInspector, ObjectViewCacheContext, type ObjectViewCache } from "../ObjectInspector";
+import { useConsoleCaptureStore, flushConsoleCaptureBuffer } from "@/store/consoleCaptureStore";
 
 const getConsoleProperties =
   vi.fn<
@@ -146,5 +149,174 @@ describe("ObjectInspector property values", () => {
     fireEvent.click(marker(total)!);
     await act(async () => {});
     expect(getConsoleProperties).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ObjectInspector released values (#17067)", () => {
+  /** A console row as the panel renders it: focusable, reading its value from the store. */
+  function StoreRow() {
+    const arg = useConsoleCaptureStore((state) => state.messages.get("pane-1")?.[0]?.args[0]);
+    if (!arg) return null;
+    return (
+      <div tabIndex={0} data-console-row={3}>
+        <ObjectInspector arg={arg} webContentsId={7} paneId="pane-1" rowId={3} path="0" />
+      </div>
+    );
+  }
+
+  function renderRow() {
+    return render(
+      <TooltipProvider delayDuration={0}>
+        <StoreRow />
+      </TooltipProvider>
+    );
+  }
+
+  function row(id: number, objectId = `obj-${id}`): SerializedConsoleRow {
+    return {
+      id,
+      paneId: "pane-1",
+      level: "log",
+      cdpType: "log",
+      args: [{ type: "object", objectId, preview: "{a: 1}" }],
+      summaryText: "{a: 1}",
+      groupDepth: 0,
+      timestamp: 0,
+      navigationGeneration: 0,
+    };
+  }
+
+  function addRow(next: SerializedConsoleRow) {
+    useConsoleCaptureStore.getState().addStructuredMessage(next);
+    flushConsoleCaptureBuffer();
+  }
+
+  beforeEach(() => {
+    useConsoleCaptureStore.getState().removePane("pane-1");
+    addRow(row(3, "obj-1"));
+  });
+
+  afterEach(() => {
+    useConsoleCaptureStore.getState().removePane("pane-1");
+  });
+
+  it("stops offering the value, and keeps focus on its row, when main says it is gone", async () => {
+    getConsoleProperties.mockResolvedValue({ properties: [], released: true });
+    const { container } = renderRow();
+    const disclosure = screen.getByRole("button", { name: /\{a: 1\}/ });
+    disclosure.focus();
+
+    fireEvent.click(disclosure);
+
+    await waitFor(() => expect(screen.queryByRole("button")).toBeNull());
+    const [kept] = useConsoleCaptureStore.getState().getMessages("pane-1");
+    expect(kept!.args[0]).toMatchObject({ type: "object", objectId: "" });
+    expect(document.activeElement).toBe(container.querySelector("[data-console-row]"));
+  });
+
+  it("keeps an expanded value inspectable after it ages out of the live window", async () => {
+    getConsoleProperties.mockResolvedValue({ properties: [] });
+    renderRow();
+    fireEvent.click(screen.getByRole("button", { name: /\{a: 1\}/ }));
+    await waitFor(() => expect(getConsoleProperties).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      for (let id = 4; id < 4 + MAX_LIVE_OBJECT_ROWS + 1; id++) addRow(row(id));
+    });
+
+    expect(screen.getByRole("button", { name: /\{a: 1\}/ })).not.toBeNull();
+  });
+
+  it("hands focus to the row when a focused value ages out", async () => {
+    const { container } = renderRow();
+    screen.getByRole("button", { name: /\{a: 1\}/ }).focus();
+
+    await act(async () => {
+      for (let id = 4; id < 4 + MAX_LIVE_OBJECT_ROWS + 1; id++) addRow(row(id));
+    });
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(document.activeElement).toBe(container.querySelector("[data-console-row]"));
+  });
+
+  it("hands focus to the row when a focused nested value goes with its parent", async () => {
+    getConsoleProperties.mockResolvedValue({
+      properties: [
+        prop("child", { value: { type: "object", objectId: "child-obj", preview: "{b: 2}" } }),
+      ],
+    });
+    const { container } = renderRow();
+    fireEvent.click(screen.getByRole("button", { name: /\{a: 1\}/ }));
+    const child = await screen.findByRole("button", { name: /\{b: 2\}/ });
+    child.focus();
+
+    act(() => useConsoleCaptureStore.getState().releaseRowHandles("pane-1", 3));
+
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(document.activeElement).toBe(container.querySelector("[data-console-row]"));
+  });
+
+  it("shows a released value as its preview, with no control, and says why", async () => {
+    useConsoleCaptureStore.getState().releaseRowHandles("pane-1", 3);
+    renderRow();
+
+    expect(screen.queryByRole("button")).toBeNull();
+    const preview = screen.getByText("{a: 1}");
+    const reason = preview.querySelector(".sr-only")?.textContent ?? "";
+    expect(reason).not.toBe("");
+
+    fireEvent.pointerMove(preview, { pointerType: "mouse" });
+    expect((await screen.findByRole("tooltip")).textContent).toBeTruthy();
+    expect(getConsoleProperties).not.toHaveBeenCalled();
+  });
+});
+
+describe("ObjectInspector view cache keys (#17497)", () => {
+  const obj = (objectId: string) => ({
+    type: "object" as const,
+    objectId,
+    preview: `{${objectId}}`,
+  });
+
+  it("keeps a dotted property name apart from the same names nested", async () => {
+    const reads: Record<string, CdpPropertyDescriptor[]> = {
+      root: [prop("a.b", { value: obj("dotted") }), prop("a", { value: obj("outer") })],
+      dotted: [prop("x", { value: { type: "primitive", kind: "number", value: 1 } })],
+      outer: [prop("b", { value: obj("inner") })],
+      inner: [prop("y", { value: { type: "primitive", kind: "number", value: 2 } })],
+    };
+    getConsoleProperties.mockImplementation(async (_w, _p, _r, objectId) => ({
+      properties: reads[objectId] ?? [],
+    }));
+    const cache: ObjectViewCache = new Map();
+    const ui = (
+      <TooltipProvider delayDuration={0}>
+        <ObjectViewCacheContext value={cache}>
+          <ObjectInspector arg={obj("root")} webContentsId={7} paneId="pane-1" rowId={3} path="0" />
+        </ObjectViewCacheContext>
+      </TooltipProvider>
+    );
+    const { container, unmount } = render(ui);
+    const open = async (el: Element) => {
+      fireEvent.click(el);
+      await act(async () => {});
+    };
+    await open(screen.getByRole("button", { name: /\{root\}/ }));
+    await open(propertyRow(container, "a.b").querySelector("button")!);
+    await open(propertyRow(container, "a").querySelector("button")!);
+    await open(propertyRow(container, "b").querySelector("button")!);
+
+    const keys = Array.from(cache.keys());
+    expect(new Set(keys).size).toBe(4);
+    expect(cache.get('3:0."a.b"')?.properties?.[0]?.name).toBe("x");
+    expect(cache.get('3:0."a"."b"')?.properties?.[0]?.name).toBe("y");
+
+    // A remount (virtualized row scrolled back in) reads each branch from the cache.
+    unmount();
+    getConsoleProperties.mockClear();
+    const again = render(ui);
+    expect(again.container.textContent).toContain("x:");
+    expect(again.container.textContent).toContain("y:");
+    expect(getConsoleProperties).not.toHaveBeenCalled();
   });
 });

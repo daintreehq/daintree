@@ -1493,6 +1493,7 @@ describe("RemoteHostsClient", () => {
       link.linkState = {
         status: "unreachable",
         detail: "greg@studio-01: Permission denied (publickey).",
+        blocker: { kind: "ssh-access" },
       } as typeof link.linkState;
       await expect(
         client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
@@ -1506,6 +1507,26 @@ describe("RemoteHostsClient", () => {
       await expect(
         client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: true })
       ).rejects.toMatchObject({ code: "HOST_SSH_ACCESS_DENIED" });
+    });
+
+    it("names a missing WSL distribution, never ssh, when that stopped the retries", async () => {
+      manager.readiness = "stopped-retrying";
+      const link = manager.connect("studio-01");
+      link.linkState = {
+        status: "unreachable",
+        detail: "There is no distribution with the supplied name.",
+        blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+      } as typeof link.linkState;
+      const error = await client
+        .switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false })
+        .catch((e: unknown) => e);
+      expect(error).toMatchObject({
+        code: "HOST_CONNECTION_UNUSABLE",
+        userMessage:
+          "WSL couldn't find Ubuntu-24.04 for studio-01. Restore it under that name, then try again.",
+      });
+      expect((error as { userMessage: string }).userMessage).not.toMatch(/ssh/i);
+      expect(bindings.get(1)).toBe("local");
     });
 
     it("refuses when the host never answers, rather than moving the window blind", async () => {
@@ -2963,6 +2984,44 @@ describe("RemoteHostsClient", () => {
     );
   });
 
+  it("stops what nothing else would before the record goes, once the link is down, and removes it either way", async () => {
+    const seen: Array<{ listed: boolean; disconnects: number }> = [];
+    const removing = vi.fn(async () => {
+      seen.push({
+        listed: registry.get("studio-01") !== null,
+        disconnects: manager.disconnect.mock.calls.length,
+      });
+      throw new Error("ssh: connect to host studio.example port 22: Connection refused");
+    });
+    const removed = new RemoteHostsClient({
+      registry,
+      manager: manager as unknown as RemoteHostManager,
+      bindings,
+      router,
+      senders: { projectKeyFor: () => null, windowIdFor: () => null },
+      windows,
+      installRouter,
+      emit: () => {},
+      listViews: () => [],
+      onRemoving: removing,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(removed.forget({ hostId: "studio-01" })).resolves.toBeUndefined();
+    warn.mockRestore();
+    expect(removing).toHaveBeenCalledWith(expect.objectContaining({ id: "studio-01" }));
+    // Still listed (a cloud machine's access goes with the record), its link already closed.
+    expect(seen).toEqual([{ listed: true, disconnects: 1 }]);
+    expect(registry.list()).toEqual([]);
+
+    // A change of target lets the old machine go without stopping anything there.
+    registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
+    await removed.update({
+      hostId: "studio-02",
+      connection: { kind: "ssh", target: "s3.example" },
+    });
+    expect(removing).toHaveBeenCalledTimes(1);
+  });
+
   it("still removes the host when no replacement window could be opened", async () => {
     manager.last = { projectId: "proj-9", path: "/srv/proj-9", name: "proj-9" };
     await client.switchWindowHost(ctxFor(5, 1), { hostId: "studio-01", newWindow: false });
@@ -3251,6 +3310,34 @@ describe("RemoteHostsClient", () => {
       return { retarget, onRetarget };
     }
 
+    it("reads as retiring from its cleanup until the rebind settles, and only for that host (#17207)", async () => {
+      const seen: Array<{ at: string; retiring: boolean; other: boolean }> = [];
+      let retarget: RemoteHostsClient | null = null;
+      const note = (at: string) =>
+        seen.push({
+          at,
+          retiring: retarget!.isHostRetiring("studio-01"),
+          other: retarget!.isHostRetiring("studio-02"),
+        });
+      registry.add({ name: "studio-02", connection: { kind: "ssh", target: "s2.example" } });
+      retarget = retargetClient(vi.fn(async () => void note("cleanup"))).retarget;
+      // The port forwards' prune runs on this change: the host must still read as retiring then.
+      const off = registry.onChange(() => note("rebind"));
+      expect(retarget.isHostRetiring("studio-01")).toBe(false);
+
+      await retarget.update({
+        hostId: "studio-01",
+        connection: { kind: "ssh", target: "newbox.example" },
+      });
+      off();
+
+      expect(seen).toEqual([
+        { at: "cleanup", retiring: true, other: false },
+        { at: "rebind", retiring: true, other: false },
+      ]);
+      expect(retarget.isHostRetiring("studio-01")).toBe(false);
+    });
+
     it("brings its windows home and clears the old machine's state before rebinding, without dialling", async () => {
       const { retarget, onRetarget } = retargetClient(
         vi.fn(async () => {
@@ -3451,9 +3538,49 @@ describe("RemoteHostsClient", () => {
     const summary = { agentsObserved: { working: 2 } };
     registerRemoteService("hostMetrics", {
       latest: (hostId: string) => (hostId === "studio-01" ? summary : null),
+      // Came on no link, as this machine's own do: nothing to hold it back for.
+      cameOn: () => null,
     } as unknown as HostMetricsClient);
     try {
       expect(client.list()).toEqual([expect.objectContaining({ summary })]);
+    } finally {
+      _resetRemoteServicesForTest();
+    }
+  });
+
+  it("leaves out a summary from an earlier link after a reconnect, until one comes on the new link (#17921)", () => {
+    const linkA = { isOpen: false };
+    const linkB = { isOpen: true };
+    const fromA = { sampledAt: 1, idle: { stopsWhenIdle: true } };
+    const fromB = { sampledAt: 2, idle: {} };
+    const arrivedOn = new Map<object, object>([
+      [fromA, linkA],
+      [fromB, linkB],
+    ]);
+    let latest: object = fromA;
+    registerRemoteService("hostMetrics", {
+      latest: () => latest,
+      cameOn: (summary: object, session: object | null) =>
+        session !== null && arrivedOn.get(summary) === session,
+    } as unknown as HostMetricsClient);
+    const connection = manager.connect("studio-01") as ReturnType<typeof manager.connect> & {
+      currentSession?: object | null;
+    };
+    try {
+      // Back up on B before B has reported: A's "stops by itself" isn't about the host now.
+      connection.currentSession = linkB;
+      expect(client.list()).toEqual([
+        expect.objectContaining({
+          connection: expect.objectContaining({ status: "connected" }),
+          summary: null,
+        }),
+      ]);
+      // Between links, with A closed and B not yet attached, it's no current host's either.
+      connection.currentSession = null;
+      expect(client.list()[0]!.summary).toBeNull();
+      connection.currentSession = linkB;
+      latest = fromB;
+      expect(client.list()[0]!.summary).toBe(fromB);
     } finally {
       _resetRemoteServicesForTest();
     }

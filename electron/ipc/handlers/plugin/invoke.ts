@@ -1,5 +1,5 @@
 import { CHANNELS } from "../../channels.js";
-import { stableArgsSha256 } from "../../../utils/pluginMcpHash.js";
+import { safeArgsHash } from "../../../services/plugin/pluginAuditArgsHash.js";
 import { isAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isPluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
@@ -118,24 +118,16 @@ export async function runPluginInvoke(
     // failure. Errors that never reach a handler — schema/permission/
     // no-handler — aren't marked, so the IPC boundary still owns them.
     if (!isAuditedHandlerFailure(err)) {
-      // `stableArgsSha256` content-discriminates without persisting any
-      // arg bytes — two structurally identical failed invokes hash the
-      // same, but distinct args produce distinct hashes. (A summary-based
-      // hash via `summarizeMcpArgs` collapses arrays to a constant, which
-      // would defeat forensic grouping.)
+      // The hash content-discriminates without persisting any arg bytes —
+      // two structurally identical failed invokes hash the same, but
+      // distinct args produce distinct hashes. (A summary-based hash via
+      // `summarizeMcpArgs` collapses arrays to a constant, which would
+      // defeat forensic grouping.)
       //
       // Oversize args are recorded unhashed (`""`, the schema's "never
       // validated" value); the error message carries the limit and the
       // size measured.
-      let argsHash = "";
-      if (argsWithinLimit) {
-        try {
-          argsHash = stableArgsSha256(args);
-        } catch {
-          // Hashing is best-effort — a serialization throw here must not
-          // mask the original handler error.
-        }
-      }
+      const argsHash = argsWithinLimit ? safeArgsHash(args) : "";
       // An ownership rejection (#10462) is a denied invocation, not a
       // handler failure — record it as "restricted" so it groups with the
       // untrusted-sender rejection above rather than with genuine dispatch

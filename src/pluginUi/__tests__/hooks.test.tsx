@@ -191,6 +191,28 @@ describe("useSelection", () => {
     expect(result.current.selected).toEqual(["a", "b", "d"]);
   });
 
+  it("publishes Select All in row order, skipping disabled rows, for large lists", () => {
+    const ids = Array.from({ length: 10_000 }, (_, i) => `file-${i}`);
+    const onSelectedChange = vi.fn<(ids: string[]) => void>();
+    const { result } = renderHook(() =>
+      useSelection({ ids, isDisabled: (id: string) => id === "file-3", onSelectedChange })
+    );
+    act(() => result.current.selectAll());
+    const published = onSelectedChange.mock.calls[0]?.[0] ?? [];
+    expect(published).toHaveLength(9_999);
+    expect(published.includes("file-3")).toBe(false);
+    expect(published.slice(0, 4)).toEqual(["file-0", "file-1", "file-2", "file-4"]);
+    act(() => result.current.selectAll());
+    expect(onSelectedChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps numeric ids in row order when publishing", () => {
+    const onSelectedChange = vi.fn();
+    const { result } = renderHook(() => useSelection<number>({ ids: [3, 1, 2], onSelectedChange }));
+    act(() => result.current.select([2, 3]));
+    expect(onSelectedChange).toHaveBeenLastCalledWith([3, 2]);
+  });
+
   it("reports every change in row order and follows a controlled value", () => {
     const onSelectedChange = vi.fn();
     const { result, rerender } = setup({ selected: ["b"], onSelectedChange });

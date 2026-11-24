@@ -495,6 +495,102 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
+      "List an agent's saved accounts: the ids a launch's accountId takes. With worktreeId, also which account a launch there uses when it names no account or preset, and why.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          agentId: "claude",
+          worktreeId: "wt-1",
+        },
+        description: "Find Claude's account ids and the one a launch in wt-1 signs in as",
+      },
+    ],
+    id: "agent.listAccounts",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        agentId: {
+          type: "string",
+          minLength: 1,
+          description: "Agent id from the agent listing.",
+        },
+        worktreeId: {
+          description:
+            "Also say which account a launch in this worktree uses when it names no account or preset.",
+          type: "string",
+          minLength: 1,
+        },
+      },
+      required: ["agentId"],
+    },
+    kind: "query",
+    name: "agent.listAccounts",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        accounts: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: {
+                type: "string",
+              },
+              name: {
+                type: "string",
+              },
+              isDefault: {
+                type: "boolean",
+                description: "The agent's Default account in Settings.",
+              },
+            },
+            required: ["id", "name", "isDefault"],
+            additionalProperties: false,
+          },
+        },
+        worktreeLaunch: {
+          type: "object",
+          properties: {
+            accountId: {
+              description: "null: no saved account; the preset's env may still name a folder.",
+              type: ["string", "null"],
+            },
+            source: {
+              type: "string",
+              enum: ["worktree", "preset", "agentDefault", "cliDefault"],
+            },
+            presetId: {
+              description: "The preset whose pin chose it.",
+              type: "string",
+            },
+            missing: {
+              description: "No such account: a launch is refused.",
+              type: "boolean",
+              const: true,
+            },
+            presetsComplete: {
+              type: "boolean",
+              description: "false: a preset is loading; with no accountId, ask again.",
+            },
+          },
+          required: ["presetsComplete"],
+          additionalProperties: false,
+        },
+      },
+      required: ["accounts"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "List agent accounts",
+  },
+  {
+    band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
       "List every registered agent (built-in, user-defined, plugin) from the authoritative registry, launchable or not. Use before launching, and read each entry's launchability rather than assuming it. Launchability appears once each CLI's live probe finishes; the result says while that is incomplete.",
     enabled: true,
     id: "agent.listAvailable",
@@ -1407,6 +1503,28 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             additionalProperties: false,
           },
         },
+        worktree: {
+          description:
+            "Agent you didn't launch: its worktree when asked. unpushedCommits: on no remote at last fetch (null: none yet); changedEntries: changed or untracked paths.",
+          type: "object",
+          properties: {
+            kind: {
+              type: "string",
+              enum: ["not-applicable", "unreadable", "observed"],
+            },
+            unpushedCommits: {
+              type: ["number", "null"],
+            },
+            changedEntries: {
+              type: "number",
+            },
+            hiddenFromStatus: {
+              type: "number",
+            },
+          },
+          required: ["kind"],
+          additionalProperties: false,
+        },
       },
       required: ["closedIds"],
       additionalProperties: false,
@@ -1610,6 +1728,21 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               waitingReason: {
                 type: "string",
+              },
+              updateInstalled: {
+                type: "object",
+                properties: {
+                  observedAt: {
+                    type: "number",
+                  },
+                  namesRestart: {
+                    type: "boolean",
+                  },
+                },
+                required: ["observedAt", "namesRestart"],
+                additionalProperties: false,
+                description:
+                  'Claude Code showed "Update installed" this run: when, and if its text named /restart.',
               },
               lastTransitionAt: {
                 type: "number",
@@ -2458,6 +2591,70 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     },
     requiresArgs: true,
     title: "Read owned agent's last message",
+  },
+  {
+    band: "destructive-local",
+    category: "terminal",
+    danger: "confirm",
+    dangerRationale:
+      "Interrupts the agent and respawns it on another account, in a new conversation unless asked to keep it. Scrollback is lost.",
+    description:
+      "Move a panel this session launched (not a handed one) to another account of its agent once the user confirms. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
+    enabled: true,
+    id: "terminal.restartOnAccountOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description: "Panel `id` this session got when launching it. Required.",
+        },
+        accountId: {
+          anyOf: [
+            {
+              type: "string",
+              minLength: 1,
+            },
+            {
+              type: "null",
+            },
+          ],
+          description: "An account of the panel's agent; null is no saved account.",
+        },
+        keepConversation: {
+          description: "Keep the conversation by id.",
+          type: "boolean",
+        },
+      },
+      required: ["terminalId", "accountId"],
+    },
+    keywords: ["account", "login", "rate limit", "owned"],
+    kind: "command",
+    name: "terminal.restartOnAccountOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          description: "The panel, respawned in place.",
+        },
+        agentAccountId: {
+          description: "Account it now runs on; null is no saved account.",
+          type: ["string", "null"],
+        },
+        agentSessionIdCleared: {
+          type: "boolean",
+          description: "false: asked to reopen it; true: re-send the brief.",
+        },
+      },
+      required: ["terminalId", "agentAccountId", "agentSessionIdCleared"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Move owned agent to another account",
   },
   {
     band: "destructive-local",

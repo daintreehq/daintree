@@ -18,7 +18,11 @@ const { useGlobalAssistantActivity } = await import("../useGlobalAssistantActivi
 
 function viewOf(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
   return {
+    slot: 0,
     phase: "running",
+    pinnedAgentId: null,
+    coordinating: false,
+    occupied: true,
     generation: 1,
     agentId: "claude",
     terminalId: "g1",

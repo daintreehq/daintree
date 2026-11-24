@@ -26,8 +26,16 @@ import { hasWaitingStopAndSend } from "@/services/voiceDraftSend";
  * their manifest name (`acme.beads.needsYou`), this view's project facts and
  * its presentation levels — and the focus and UI keys below are added on top.
  */
-export function buildKeybindingWhenContext(event: KeyboardEvent): WhenClauseContext {
-  const target = event.target instanceof Element ? event.target : null;
+export function buildKeybindingWhenContext(
+  event: KeyboardEvent,
+  targetOverride?: Element | null
+): WhenClauseContext {
+  const target =
+    targetOverride !== undefined
+      ? targetOverride
+      : event.target instanceof Element
+        ? event.target
+        : null;
   const paletteId = usePaletteStore.getState().activePaletteId;
   const { armedIds } = useFleetArmingStore.getState();
   const { panelsById } = usePanelStore.getState();

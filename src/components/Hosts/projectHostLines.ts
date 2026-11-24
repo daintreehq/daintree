@@ -52,6 +52,8 @@ export function hostRowStatus(
 }
 
 function lowerFirst(text: string): string {
+  // An acronym ("WSL couldn't find…") keeps its case.
+  if (/^[A-Z]{2}/.test(text)) return text;
   return text.charAt(0).toLowerCase() + text.slice(1);
 }
 

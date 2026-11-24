@@ -1,4 +1,3 @@
-import { useErrorTerminals } from "@/hooks/useTerminalSelectors";
 import { STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { StatusContainer, type StatusContainerConfig } from "./StatusContainer";
 
@@ -17,6 +16,5 @@ interface ErrorsContainerProps {
 }
 
 export function ErrorsContainer({ compact = false }: ErrorsContainerProps) {
-  const terminals = useErrorTerminals();
-  return <StatusContainer config={errorsConfig} terminals={terminals} compact={compact} />;
+  return <StatusContainer config={errorsConfig} compact={compact} />;
 }

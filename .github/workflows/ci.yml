@@ -1,15 +1,17 @@
 name: CI
 
+# Pull requests only. Nothing runs on a push to `develop` or `main`: the daily
+# stabilization run (.agents/skills/stabilize) checks the merged tree, the
+# whole unit suite included, and the release workflows check what ships.
+# warm-caches.yml keeps the caches these jobs restore fresh on `develop`.
 on:
-  push:
-    branches: [main, develop]
   pull_request:
     branches: [main, develop]
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       os:
-        description: "OS to run the static and lint jobs on (manual dispatch only — push/PR always runs ubuntu)"
+        description: "OS to run the static and lint jobs on (manual dispatch only — PRs always run ubuntu)"
         type: choice
         options:
           - ubuntu
@@ -34,14 +36,93 @@ env:
   # (already in the npm tarball) do the work.
   ONNXRUNTIME_NODE_INSTALL: "skip"
 
-# Every job starts at once and none waits on another, so the run takes as long
-# as its slowest job. `npm run check` is split between `static` and `lint`
-# because run back to back they were 17-20 minutes on one runner.
+# The org's runners are shared by every open PR (20 jobs at once, 5 on macOS),
+# so a PR only takes the jobs its diff needs. `changes` reads the diff; every
+# other job waits on it, then they all run at once. A draft runs nothing until
+# it is marked ready for review.
 jobs:
+  # What the diff touches. A manual dispatch has no PR base, so it runs
+  # everything, the whole unit suite included.
+  changes:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      base: ${{ steps.diff.outputs.base }}
+      code: ${{ steps.diff.outputs.code }}
+      packages: ${{ steps.diff.outputs.packages }}
+      catalog: ${{ steps.diff.outputs.catalog }}
+      workflow: ${{ steps.diff.outputs.workflow }}
+      github: ${{ steps.diff.outputs.github }}
+
+    steps:
+      # The checkout is the merge commit, so its first parent is exactly the
+      # base the pull request changes.
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Classify changed files
+        id: diff
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            {
+              echo "base="
+              echo "code=true"
+              echo "packages=true"
+              echo "catalog=false"
+              echo "workflow=true"
+              echo "github=true"
+            } >> "$GITHUB_OUTPUT"
+            echo "Manual dispatch: running every job and the whole unit suite."
+            exit 0
+          fi
+
+          base=$(git rev-parse HEAD^1)
+          changed="$RUNNER_TEMP/changed.txt"
+          # --no-renames lists a moved file under both paths, so moving one out
+          # of a gated area still counts against that area.
+          git diff --no-renames --name-only "$base" HEAD > "$changed"
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+
+          has() { grep -qE "$1" "$changed" && echo true || echo false; }
+
+          # Markdown is still formatted, so `static` runs for a docs-only diff;
+          # lint, tests and build have nothing to check there.
+          if grep -qvE '(\.md$|^docs/)' "$changed"; then code=true; else code=false; fi
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+
+          # The plugin packages build from their own sources and from the parts
+          # of the app they import or bundle: shared types and utils, plugin
+          # schemas, services and archive constants, the panel, the plugin UI kit
+          # and its components and styles, the sample project, and the build
+          # scripts. Their transitive imports reach further into src/; the daily
+          # stabilization run builds and smoke-tests the packages too. A README
+          # change alone doesn't need the smoke.
+          if grep -vE '\.md$' "$changed" | grep -qE '^(packages/|shared/|plugins/sample-project/|electron/(schemas|types|services/plugin)/|electron/services/PluginArchive|electron/utils/pluginArchiveConstants|src/(panel|pluginUi|services/plugin|styles|components/(ui|PluginKit))/|src/index\.css$|scripts/lib/|scripts/build-plugin-ui-browser\.mjs$|scripts/ci/(packages-consumer-smoke|check-api-surface)\.mjs$|package(-lock)?\.json$|tsconfig[^/]*\.json$|\.github/(workflows/ci\.yml$|actions/install/))'; then packages=true; else packages=false; fi
+          echo "packages=${packages}" >> "$GITHUB_OUTPUT"
+          echo "catalog=$(has '^plugins/catalog\.json$')" >> "$GITHUB_OUTPUT"
+          echo "workflow=$(has '^\.github/(workflows/ci\.yml$|actions/install/)')" >> "$GITHUB_OUTPUT"
+          echo "github=$(has '^\.github/')" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Changed files: $(wc -l < "$changed" | tr -d ' ')"
+            echo
+            echo "base \`${base}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_OUTPUT"
+
   # Typecheck, the codegen and drift guards, and formatting. Later steps run
   # even when an earlier one fails, so one push reports every problem.
   static:
-    # Push/PR runs ubuntu only. Manual dispatch can opt into windows or both
+    needs: changes
+    # PRs run ubuntu only. Manual dispatch can opt into windows or both
     # via `gh workflow run CI --ref <branch> -f os=windows` (or `os=both`).
     strategy:
       fail-fast: false
@@ -60,8 +141,20 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # One compiler at a time: on 4 cores three at once peaked at 17.6-19 GB
+      # summed RSS against the runner's 16 GB, and ran no faster than one at a
+      # time (41 s, 9.1 GB peak). Past that the VM swap-thrashes, stops
+      # answering, and the job is cancelled at 25 minutes with no log (#18000).
+      # The script's deadline and memory floor stop it with a report of every
+      # unfinished project while the runner can still write one; the step
+      # timeout is the backstop, leaving the guard and format steps their time.
       - name: Typecheck
+        timeout-minutes: 8
         run: npm run typecheck
+        env:
+          TYPECHECK_CONCURRENCY: "1"
+          TYPECHECK_TIMEOUT_MINUTES: "6"
+          TYPECHECK_MIN_AVAILABLE_MB: "1024"
 
       - name: Codegen and drift guards
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -88,6 +181,8 @@ jobs:
   # two threads peaked at 11.5 GB locally and four at 15.5 GB, against the
   # runner's 16 GB.
   lint:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -109,31 +204,27 @@ jobs:
         env:
           ESLINT_CONCURRENCY: "2"
 
-  # Unit suite, sharded across ubuntu runners. Ubuntu-only by design — Windows
-  # unit coverage runs in stabilize.yml.
+  # The unit tests the diff can reach, on one runner: Vitest's `--changed`
+  # follows the import graph from every changed file to the test files that
+  # import it, and runs the whole suite when a force-rerun trigger changes
+  # (any package.json, the Vitest or Vite config, the setup file and what it
+  # imports). A test that reads a file through `fs` rather than importing it
+  # isn't reached; the daily stabilization run covers the whole suite. Ubuntu
+  # only by design: Windows unit coverage runs in stabilize.yml.
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    # The matrix list cannot read env, so it stays a literal: keep it [1..SHARD_TOTAL].
-    env:
-      SHARD_TOTAL: 6
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+    # A force-rerun trigger means the whole suite on one runner, about 35 minutes.
+    timeout-minutes: 50
+    outputs:
+      host_scripts: ${{ steps.select.outputs.host_scripts }}
 
     steps:
-      # A denominator larger than the list skips whole partitions with every
-      # shard green (.lessons/10130.md); this turns any mismatch into a failure.
-      - name: Check shard list matches SHARD_TOTAL
-        run: |
-          if [ "${{ strategy.job-total }}" != "$SHARD_TOTAL" ] || [ "${{ matrix.shard }}" != "$(( ${{ strategy.job-index }} + 1 ))" ]; then
-            echo "::error::shard ${{ matrix.shard }} is job ${{ strategy.job-index }} of ${{ strategy.job-total }}, but the list must be exactly [1..$SHARD_TOTAL]"
-            exit 1
-          fi
-
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
 
       - name: Install dependencies
         uses: ./.github/actions/install
@@ -147,44 +238,62 @@ jobs:
       - name: Provision Electron binary
         run: node scripts/ci/verify-electron-install.mjs
 
-      # Vitest runs a shard's files longest-first using the durations it
-      # recorded on the previous run, so the slow files start early instead of
-      # setting the tail. Keyed per commit so the timings stay current; the
-      # shard count is in the key because it decides which files a shard holds.
+      # Vitest runs files longest-first using the durations it recorded on the
+      # previous run, so the slow files (the perf liveness guard spawns a child
+      # per scenario) start early instead of setting the tail.
       - name: Cache Vitest results
         uses: actions/cache@v5
         with:
           path: node_modules/.vite/vitest
-          key: vitest-results-${{ runner.os }}-${{ matrix.shard }}of${{ env.SHARD_TOTAL }}-${{ github.sha }}
+          key: vitest-results-${{ runner.os }}-${{ github.sha }}
           restore-keys: |
-            vitest-results-${{ runner.os }}-${{ matrix.shard }}of${{ env.SHARD_TOTAL }}-
+            vitest-results-${{ runner.os }}-
 
-      # The perf liveness guard runs in its own job below: it spawns a child per
-      # scenario and alone took ~380s, which made its shard the long pole.
-      - name: Test (vitest unit, shard ${{ matrix.shard }}/${{ env.SHARD_TOTAL }})
-        run: npx vitest run --shard=${{ matrix.shard }}/${{ env.SHARD_TOTAL }} --exclude scripts/perf/__tests__/scenarioLiveness.test.ts
+      - name: Select affected tests
+        id: select
+        shell: bash
+        env:
+          BASE: ${{ needs.changes.outputs.base }}
+        run: |
+          set -euo pipefail
+          # Vitest also counts modified and untracked files as changed, so a
+          # step that dirties the tree would widen the selection.
+          dirty=$(git status --porcelain)
+          if [ -n "$dirty" ]; then
+            echo "::warning::The working tree is not clean before test selection; these count as changed:"
+            echo "$dirty"
+          fi
+          selected="$RUNNER_TEMP/selected.txt"
+          npx vitest list --filesOnly ${BASE:+--changed "$BASE"} > "$selected"
+          count=$(grep -c . "$selected" || true)
+          total=$(npx vitest list --filesOnly | grep -c . || true)
+          if grep -q 'hostInstaller\.realShell\.test\.ts' "$selected"; then host=true; else host=false; fi
+          echo "host_scripts=${host}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Unit tests: ${count} of ${total} files"
+            echo
+            if [ -n "$BASE" ]; then echo "Affected by the diff against \`${BASE}\`."; else echo "Whole suite (manual dispatch)."; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Running ${count} of ${total} test files."
 
-  # Drives every perf scenario's run() once in a child process.
-  perf-liveness:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+      - name: Test (vitest, affected files)
+        env:
+          BASE: ${{ needs.changes.outputs.base }}
+        run: npx vitest run --passWithNoTests ${BASE:+--changed "$BASE"}
 
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Install dependencies
-        uses: ./.github/actions/install
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Test (perf scenario liveness)
-        run: npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts
+      # The workflow guards in scripts/ci read the YAML through fs, so no import
+      # graph leads from a workflow change to them.
+      - name: Test (workflow guards)
+        if: ${{ !cancelled() && needs.changes.outputs.base != '' && needs.changes.outputs.github == 'true' }}
+        run: npx vitest run scripts/ci
 
   # The host installer's swap and rollback scripts run on a Mac's /bin/sh and BSD
-  # tools as well as Linux's, and the shards above only see Linux's. Only this
-  # file needs a Mac, so the rest of the unit suite stays on Ubuntu.
+  # tools as well as Linux's, and the unit job only sees Linux's. Runs only when
+  # the diff reaches that test (the unit job reports it) or changes CI itself,
+  # since macOS runners are the scarcest.
   host-scripts-macos:
+    needs: [changes, test]
+    if: ${{ !cancelled() && (needs.test.outputs.host_scripts == 'true' || needs.changes.outputs.workflow == 'true') }}
     runs-on: macos-15
     timeout-minutes: 20
 
@@ -205,6 +314,8 @@ jobs:
   # release workflow runs the same script before publishing; this catches a
   # version or export mismatch while it is still a PR.
   packages:
+    needs: changes
+    if: needs.changes.outputs.packages == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -224,11 +335,10 @@ jobs:
         run: node scripts/ci/packages-consumer-smoke.mjs
 
   # Downloads every community catalog entry a pull request adds or changes and
-  # holds it to its listing (#16778). A pull request that leaves
-  # plugins/catalog.json alone stops after the diff. The checkout is the merge
-  # commit, so its first parent is exactly the base the pull request changes.
+  # holds it to its listing (#16778).
   plugin-catalog:
-    if: github.event_name == 'pull_request'
+    needs: changes
+    if: needs.changes.outputs.catalog == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -239,33 +349,19 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Find catalog changes
-        id: diff
-        shell: bash
-        run: |
-          set -euo pipefail
-          base=$(git rev-parse HEAD^1)
-          echo "base=${base}" >> "$GITHUB_OUTPUT"
-          if git diff --quiet "${base}" HEAD -- plugins/catalog.json; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "plugins/catalog.json is unchanged."
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Install dependencies
-        if: steps.diff.outputs.changed == 'true'
         uses: ./.github/actions/install
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Check added and changed entries
-        if: steps.diff.outputs.changed == 'true'
         env:
-          BASE_SHA: ${{ steps.diff.outputs.base }}
+          BASE_SHA: ${{ needs.changes.outputs.base }}
         run: npx tsx scripts/ci/check-plugin-catalog.ts --base "${BASE_SHA}"
 
   build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -325,6 +421,11 @@ jobs:
       - name: Check default-disabled plugins stay lazy
         run: npm run check:vanilla-plugin-bundles
 
+      # And for the Radix overlays (#17028): menus, popovers, tooltips and
+      # selects load on first gesture, so none may ride in a startup chunk.
+      - name: Check Radix overlays stay deferred
+        run: npm run check:radix-overlay-bundles
+
       # Performance/size budgets (renderer bundle, first-render chunk, import
       # counts, compiler perf) are intentionally NOT run in CI during pre-1.0
       # development — premature gating just churns thresholds and blocks rapid
@@ -345,10 +446,13 @@ jobs:
         timeout-minutes: 10
 
   # Gate job — use this as the sole required status check in branch protection.
-  # Insulates against matrix/job name changes breaking required checks.
+  # Insulates against matrix/job name changes breaking required checks. A job
+  # the diff didn't need is skipped and passes. A draft skips the gate too, and
+  # GitHub counts a skipped check as passing, so a draft's checks prove nothing:
+  # merge automation must leave drafts out (merge-prs does).
   ci-ok:
-    if: always()
-    needs: [static, lint, test, perf-liveness, host-scripts-macos, packages, plugin-catalog, build]
+    if: ${{ always() && needs.changes.result != 'skipped' }}
+    needs: [changes, static, lint, test, host-scripts-macos, packages, plugin-catalog, build]
     runs-on: ubuntu-latest
     timeout-minutes: 2
 

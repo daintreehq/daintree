@@ -1,4 +1,4 @@
-import { unfreezeWebContents } from "./webContentsLifecycle.js";
+import { isWebContentsFrozen, unfreezeWebContents } from "./webContentsLifecycle.js";
 
 /**
  * Thaw a routed target, then send — the fix for the stranded-dispatch half of
@@ -24,12 +24,20 @@ import { unfreezeWebContents } from "./webContentsLifecycle.js";
  *
  * The caller registers its pending entry and deadline before calling this, so
  * the deadline covers the CDP round trip.
+ *
+ * A view main never froze, or has thawed since, is sent to at once, inside this
+ * call: that is every view in use, and a thaw it doesn't need would put a
+ * debugger attach and two CDP round trips in front of each send (#17036).
  */
 export function thawThenSend(
   webContents: Electron.WebContents,
   isStillPending: () => boolean,
   send: () => void
 ): void {
+  if (!isWebContentsFrozen(webContents)) {
+    if (isStillPending() && !webContents.isDestroyed()) send();
+    return;
+  }
   void unfreezeWebContents(webContents)
     .catch(() => {
       // `unfreezeWebContents` already swallows the expected teardown/navigation

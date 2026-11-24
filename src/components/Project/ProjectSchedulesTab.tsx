@@ -87,6 +87,7 @@ function sessionRecordFor(run: ScheduledRun, schedule: Schedule): AgentSessionRe
     savedAt: run.settlement.state === "settled" ? run.settlement.settledAt : run.createdAt,
     agentLaunchFlags: resume.agentLaunchFlags,
     ...(resume.agentModelId ? { agentModelId: resume.agentModelId } : {}),
+    ...(resume.agentPresetId ? { agentPresetId: resume.agentPresetId } : {}),
     cwd: resume.cwd,
     scheduledRun: { scheduleId: run.scheduleId, runId: run.id },
   };
@@ -117,6 +118,10 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
   const request = useSchedulesViewStore((s) => s.request);
   const editing = useSchedulesViewStore((s) => s.editor !== null);
   const editorAnswer = useSchedulesViewStore((s) => s.editorAnswer);
+  const takeEditorAnswer = useSchedulesViewStore((s) => s.takeEditorAnswer);
+  // An answer from before this mount is already in the list it reads, and folded
+  // in first it could show rows changed or deleted since.
+  const [answerBeforeMount] = useState(() => useSchedulesViewStore.getState().editorAnswer);
   const markLanded = useSchedulesViewStore((s) => s.markLanded);
   const setShowing = useSchedulesViewStore((s) => s.setShowing);
   const openEditor = useSchedulesViewStore((s) => s.openEditor);
@@ -162,10 +167,13 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
   useEffect(() => () => setShowing(false), [setShowing]);
 
   const { state, retry, accept } = useProjectSchedules(active);
-  // The editor's save or delete answer, folded in so the list doesn't wait for the push.
+  // The editor's save or delete answer, folded in so the list doesn't wait for the
+  // push, then taken, so a later mount never folds it in over newer changes.
   useEffect(() => {
-    if (editorAnswer) accept(editorAnswer);
-  }, [editorAnswer, accept]);
+    if (!editorAnswer) return;
+    if (editorAnswer !== answerBeforeMount) accept(editorAnswer);
+    takeEditorAnswer(editorAnswer);
+  }, [editorAnswer, answerBeforeMount, accept, takeEditorAnswer]);
   // Each answer is shown against the snapshot it was asked about, so turning a
   // switch shows once main has written or removed the job, not before.
   const osJob = useScheduleOsJob(active, state.snapshot?.revision ?? null, state.snapshot);
@@ -201,13 +209,13 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
     )
   );
   const liveTerminalIds = useMemo(() => new Set(liveTerminalIdList), [liveTerminalIdList]);
-  const { preset: shownPreset, stopsAtPrompts: shownSettingsRead } = useScheduleLaunchOptions(
+  const { preset: shownPreset, presetStatus: shownPresetStatus } = useScheduleLaunchOptions(
     shown?.launch.agentId ?? "",
     shown?.launch.presetId ?? null
   );
-  // Claimed missing only once agent settings have been read, so a cold open never flashes it.
-  const presetMissing =
-    shown?.launch.presetId != null && shownSettingsRead !== null && shownPreset === undefined;
+  // Claimed missing only once every store that could hold it has been read, so
+  // a cold open or a project switch never flashes it.
+  const presetMissing = shown?.launch.presetId != null && shownPresetStatus === "missing";
   const resumeSession = useResumeAgentSession();
 
   useEffect(() => {
@@ -406,6 +414,7 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
             </ScheduleSwitches>
           }
           worktreeLabels={worktrees.labels}
+          worktreeIds={worktrees.ids}
           pendingEnabled={pendingEnabled}
           enabledError={enabledError}
           pendingRunNow={pendingRunNow}
@@ -449,7 +458,7 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
                 schedule={shown}
                 now={now}
                 schedulesOn={state.snapshot?.switches.schedulesOn ?? false}
-                worktreeLabel={scheduleWorktreeLabel(shown.launch, worktrees.labels)}
+                worktreeLabel={scheduleWorktreeLabel(shown.launch, worktrees.labels, worktrees.ids)}
                 presetName={shown.launch.presetId === null ? null : (shownPreset?.name ?? null)}
                 presetMissing={presetMissing}
                 runsState={runsState}

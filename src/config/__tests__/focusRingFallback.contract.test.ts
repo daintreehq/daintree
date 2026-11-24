@@ -491,11 +491,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Radix emoji-picker Viewport is a presentational container — focus lives on the inner search input",
   },
   {
-    file: "src/components/Portal/PortalDock.tsx",
-    fragment: "portal-dock outline-hidden",
-    reason: "Dock root container — focus is owned by inner panel children, not the dock itself",
-  },
-  {
     file: "src/components/Layout/TerminalDockRegion.tsx",
     fragment: "outline-hidden data-[macro-focus=true]:ring-2",
     reason: "Macro-focus region — focus indicator is delivered via data-[macro-focus=true] ring",

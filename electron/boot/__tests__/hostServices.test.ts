@@ -276,13 +276,13 @@ describe("adoptWindowHandlerDeps", () => {
   it("fills the window-scoped fields a windowless registration left empty", () => {
     const registered: HandlerDependencies = { isDemoMode: false };
     const mainWindow = {} as never;
-    const portalManager = {} as never;
+    const eventBuffer = {} as never;
     const ptyClient = {} as never;
 
-    adoptWindowHandlerDeps(registered, { mainWindow, portalManager, ptyClient });
+    adoptWindowHandlerDeps(registered, { mainWindow, eventBuffer, ptyClient });
 
     expect(registered.mainWindow).toBe(mainWindow);
-    expect(registered.portalManager).toBe(portalManager);
+    expect(registered.eventBuffer).toBe(eventBuffer);
     // Process-wide services are the registration's own, never the window's.
     expect(registered.ptyClient).toBeUndefined();
   });
@@ -297,22 +297,24 @@ describe("adoptWindowHandlerDeps", () => {
   });
 
   it("rebinds every window-scoped field once the adopted window is gone", () => {
-    const closedPortal = {} as never;
     const registered: HandlerDependencies = {
       mainWindow: { isDestroyed: () => true } as never,
-      portalManager: closedPortal,
+      projectSwitchService: {} as never,
+      projectViewManager: {} as never,
       eventBuffer: {} as never,
     };
     const next = {
       mainWindow: { isDestroyed: () => false } as never,
-      portalManager: {} as never,
+      projectSwitchService: {} as never,
+      projectViewManager: {} as never,
       eventBuffer: {} as never,
     };
 
     adoptWindowHandlerDeps(registered, next);
 
     expect(registered.mainWindow).toBe(next.mainWindow);
-    expect(registered.portalManager).toBe(next.portalManager);
+    expect(registered.projectSwitchService).toBe(next.projectSwitchService);
+    expect(registered.projectViewManager).toBe(next.projectViewManager);
     expect(registered.eventBuffer).toBe(next.eventBuffer);
   });
 });
@@ -322,7 +324,11 @@ describe("createWindowDepsAdopter", () => {
     let destroyed = false;
     const mainWindow = { isDestroyed: () => destroyed };
     return {
-      deps: { mainWindow, portalManager: {}, eventBuffer: {} } as unknown as HandlerDependencies,
+      deps: {
+        mainWindow,
+        projectSwitchService: {},
+        eventBuffer: {},
+      } as unknown as HandlerDependencies,
       close: () => {
         destroyed = true;
       },
@@ -337,13 +343,13 @@ describe("createWindowDepsAdopter", () => {
 
     adopter.attach(1, a.deps);
     adopter.attach(2, b.deps);
-    expect(registered.portalManager).toBe(a.deps.portalManager);
+    expect(registered.projectSwitchService).toBe(a.deps.projectSwitchService);
 
     a.close();
     adopter.detach(1);
 
     expect(registered.mainWindow).toBe(b.deps.mainWindow);
-    expect(registered.portalManager).toBe(b.deps.portalManager);
+    expect(registered.projectSwitchService).toBe(b.deps.projectSwitchService);
     expect(registered.eventBuffer).toBe(b.deps.eventBuffer);
   });
 
@@ -373,6 +379,6 @@ describe("createWindowDepsAdopter", () => {
     adopter.attach(3, c.deps);
 
     expect(registered.mainWindow).toBe(c.deps.mainWindow);
-    expect(registered.portalManager).toBe(c.deps.portalManager);
+    expect(registered.projectSwitchService).toBe(c.deps.projectSwitchService);
   });
 });

@@ -58,6 +58,7 @@ function LogEntryRow({ display, copyMeta, isExpanded, toggleExpanded }: LogEntry
   return (
     <LogEntry
       entry={display.entry}
+      members={display.members}
       count={display.count}
       copyMeta={copyMeta}
       isExpanded={isExpanded}
@@ -96,6 +97,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
   );
 
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const sourcesRef = useRef<string[]>([]);
   const [sources, setSources] = useState<string[]>([]);
   const [atBottom, setAtBottom] = useState(true);
@@ -139,10 +141,13 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
       }
 
       addLogs(entries);
-      const newSources = entries
-        .map((entry) => entry.source)
-        .filter((source): source is string => !!source && !sourcesRef.current.includes(source));
-      if (newSources.length > 0) {
+      const newSources = new Set<string>();
+      for (const entry of entries) {
+        if (entry.source && !sourcesRef.current.includes(entry.source)) {
+          newSources.add(entry.source);
+        }
+      }
+      if (newSources.size > 0) {
         sourcesRef.current = [...sourcesRef.current, ...newSources].sort();
         setSources(sourcesRef.current);
         onSourcesChange?.(sourcesRef.current);
@@ -176,7 +181,9 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
       setLogs(allLogs);
 
       const allSources = new Set([...existingSources, ...(readFailed ? sourcesRef.current : [])]);
-      for (const log of bufferedLogs) {
+      // The separate sources read can fail while the entries load fine, so the
+      // loaded entries are a source of truth for the picker too.
+      for (const log of allLogs) {
         if (log.source) allSources.add(log.source);
       }
       sourcesRef.current = Array.from(allSources).sort();
@@ -313,6 +320,11 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
     ? String(previousSessionEntry.context?.tail || "")
     : "";
   const previousSessionLines = previousSessionTail ? previousSessionTail.split("\n").length : 0;
+  const handleClearFilters = useCallback(() => {
+    clearFilters();
+    searchInputRef.current?.focus({ preventScroll: true });
+  }, [clearFilters]);
+
   const hasLiveLogs = logs.some((l) => l.id !== "previous-session-separator");
 
   return (
@@ -325,6 +337,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
         levelCounts={levelCounts}
         sourceCounts={sourceCounts}
         resetSignal={filtersResetCount}
+        searchInputRef={searchInputRef}
       />
 
       {previousSessionEntry && previousSessionTail && !filters?.search && (
@@ -390,7 +403,7 @@ export function LogsContent({ className, onSourcesChange }: LogsContentProps) {
                 scale="sidebar"
                 title="No logs match filters"
                 action={
-                  <Button variant="subtle" size="xs" onClick={clearFilters}>
+                  <Button variant="subtle" size="xs" onClick={handleClearFilters}>
                     Clear filters
                   </Button>
                 }

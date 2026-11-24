@@ -19,13 +19,19 @@ import {
 } from "./shared.js";
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
-import { ResourceOwnershipLedger } from "./resourceOwnership.js";
+import { ResourceOwnershipLedger, type OwnershipRecordObserver } from "./resourceOwnership.js";
 import { TerminalAdoptionLedger } from "./terminalAdoption.js";
 import { WorkerCreationHistory } from "./workerCreationHistory.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
 import { ToolListRouteWatch } from "./toolListRouteWatch.js";
 
 export interface SessionStoreOptions {
+  /**
+   * Told how creation records come and go (#16845), so what an Assistant's
+   * conversation launched can outlive the app. Optional so bare test fixtures
+   * keep the ledger in memory only.
+   */
+  ownershipObserver?: OwnershipRecordObserver;
   /**
    * The launch generation main tracks for a terminal, stamped on each creation
    * {@link SessionStore.workerCreations} notes. Optional so bare test fixtures
@@ -177,7 +183,7 @@ export class SessionStore {
    * the resources themselves. A per-pane bearer's records are held by its
    * principal and outlive the session (#12487).
    */
-  readonly resourceOwnership = new ResourceOwnershipLedger();
+  readonly resourceOwnership: ResourceOwnershipLedger;
   /**
    * Terminals the user handed to an orchestrating pane (#12490) — a second,
    * separately written source of authority the non-destructive `*Owned` tools
@@ -252,6 +258,7 @@ export class SessionStore {
     this.dropAbuseStateFn = options.dropAbuseState ?? (() => {});
     this.dropBearerStateFn = options.dropBearerState ?? (() => {});
     this.onTierDecayedFn = options.onTierDecayed ?? (() => {});
+    this.resourceOwnership = new ResourceOwnershipLedger(options.ownershipObserver);
     this.grantCache = new GrantCache({ emit: options.emitGrantLifecycle });
     this.workerCreations = new WorkerCreationHistory(options.launchGenerationOf);
   }
@@ -503,15 +510,26 @@ export class SessionStore {
   }
 
   /**
-   * Drop a help session's figure counter. Resolve the public help-session id
-   * from {@link sessionHelpIdMap} BEFORE that entry is deleted, since the
-   * counter is keyed by the public id, not the transport sessionId.
+   * Drop a help session's figure counter once its last transport goes.
+   * Resolve the public help-session id from {@link sessionHelpIdMap} BEFORE
+   * that entry is deleted, since the counter is keyed by the public id, not the
+   * transport sessionId. A sibling transport on the same help session (a
+   * `daintree call` from the Assistant's own pane, a reconnect overlapping the
+   * old one) is still numbering figures, so its count stays.
    */
   clearFigureCounter(sessionId: string): void {
     const helpSessionId = this.sessionHelpIdMap.get(sessionId);
-    if (helpSessionId !== undefined) {
-      this.figureCounters.delete(helpSessionId);
+    if (helpSessionId === undefined) return;
+    for (const [otherSessionId, otherHelpSessionId] of this.sessionHelpIdMap) {
+      if (
+        otherSessionId !== sessionId &&
+        otherHelpSessionId === helpSessionId &&
+        this.hasLiveTransport(otherSessionId)
+      ) {
+        return;
+      }
     }
+    this.figureCounters.delete(helpSessionId);
   }
 
   /**
@@ -965,6 +983,23 @@ export class SessionStore {
       transport.close().catch(() => {});
     }
     return true;
+  }
+
+  /**
+   * End every live session `credentialDigest` opened: what a rotated API key
+   * leaves behind (#17213). The ids are collected first because each revoke
+   * deletes its own credential row.
+   */
+  revokeSessionsByCredential(credentialDigest: string): number {
+    const sessionIds: string[] = [];
+    for (const [sessionId, digest] of this.sessionCredentialMap) {
+      if (digest === credentialDigest) sessionIds.push(sessionId);
+    }
+    let revoked = 0;
+    for (const sessionId of sessionIds) {
+      if (this.revokeSession(sessionId)) revoked += 1;
+    }
+    return revoked;
   }
 
   drain(): void {

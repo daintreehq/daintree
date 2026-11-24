@@ -884,6 +884,28 @@ describe("IssueSelector", () => {
       ]);
     });
 
+    it("offers the next page after an empty one, and holds the empty state until the last", async () => {
+      mockListIssues
+        .mockResolvedValueOnce({ items: [], hasMore: true, nextCursor: "page-2" })
+        .mockResolvedValueOnce({ items: pageOf(1, 1), hasMore: false, nextCursor: null });
+
+      render(<IssueSelector {...defaultProps} />);
+      fireEvent.click(screen.getByRole("combobox"));
+      const loadMore = await screen.findByRole("option", { name: "Load more" });
+      expect(screen.queryByText("No open issues")).toBeNull();
+
+      fireEvent.click(loadMore);
+      await waitFor(() => screen.getByRole("option", { name: /Issue 1/ }));
+
+      expect(mockListIssues).toHaveBeenLastCalledWith({
+        cwd: "/test/project",
+        state: "open",
+        search: undefined,
+        cursor: "page-2",
+      });
+      expect(screen.queryByRole("option", { name: "Load more" })).toBeNull();
+    });
+
     it("offers no Load more once the forge says the set is complete", async () => {
       mockListIssues.mockResolvedValue({ items: pageOf(1, 2), hasMore: false, nextCursor: null });
 

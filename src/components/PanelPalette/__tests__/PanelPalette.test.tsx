@@ -3,6 +3,7 @@ import { useState } from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { PanelPalette } from "../PanelPalette";
+import { LISTBOX_PAGE_SIZE } from "@/hooks/useListboxCursor";
 import type { PanelKindOption } from "@/hooks/usePanelPalette";
 
 // jsdom lacks ResizeObserver (used by the palette's scroll-shadow hook) and
@@ -322,5 +323,127 @@ describe("PanelPalette IME composition (#15066)", () => {
 
     fireEvent.keyDown(field, { key: "Enter" });
     expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("PanelPalette Tab, page keys and staged Escape", () => {
+  const many: PanelKindOption[] = Array.from({ length: 30 }, (_, i) => ({
+    id: `tool:${i}`,
+    name: `Tool ${i}`,
+    iconId: "terminal",
+    color: "#fff",
+    category: "tool" as const,
+  }));
+
+  function field() {
+    return document.querySelector<HTMLElement>('[role="combobox"]')!;
+  }
+
+  it("leaves Tab to native traversal instead of moving the selection", () => {
+    const onSelectNext = vi.fn();
+    const onSelectPrevious = vi.fn();
+    render(
+      <PanelPalette
+        {...baseProps}
+        query=""
+        results={resumeResults}
+        onSelectNext={onSelectNext}
+        onSelectPrevious={onSelectPrevious}
+      />
+    );
+
+    expect(fireEvent.keyDown(field(), { key: "Tab" })).toBe(true);
+    fireEvent.keyDown(field(), { key: "Tab", shiftKey: true });
+    expect(onSelectNext).not.toHaveBeenCalled();
+    expect(onSelectPrevious).not.toHaveBeenCalled();
+  });
+
+  it("pages the cursor, stopping at the ends and on live rows", () => {
+    const rows = [...many.slice(0, 29), { ...many[29]!, isStale: true }];
+    function Stateful() {
+      const [selectedIndex, setSelectedIndex] = useState(0);
+      return (
+        <PanelPalette
+          {...baseProps}
+          query="tool"
+          results={rows}
+          selectedIndex={selectedIndex}
+          onHoverIndex={setSelectedIndex}
+        />
+      );
+    }
+    render(<Stateful />);
+    const active = () => field().getAttribute("aria-activedescendant");
+
+    expect(fireEvent.keyDown(field(), { key: "PageDown" })).toBe(false);
+    const afterOnePage = active();
+    expect(afterOnePage).not.toBe(`panel-option-${rows[0]!.id}`);
+    expect(afterOnePage).not.toBe(`panel-option-${rows[1]!.id}`);
+
+    for (let i = 0; i < 10; i++) fireEvent.keyDown(field(), { key: "PageDown" });
+    expect(active()).toBe(`panel-option-${rows[28]!.id}`);
+
+    for (let i = 0; i < 10; i++) fireEvent.keyDown(field(), { key: "PageUp" });
+    expect(active()).toBe(`panel-option-${rows[0]!.id}`);
+
+    expect(fireEvent.keyDown(field(), { key: "PageDown", shiftKey: true })).toBe(true);
+    expect(active()).toBe(`panel-option-${rows[0]!.id}`);
+  });
+
+  it("clears a query on Escape from the results region before it closes", () => {
+    const onQueryChange = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <PanelPalette
+        {...baseProps}
+        query="cla"
+        results={resumeResults}
+        onQueryChange={onQueryChange}
+        onClose={onClose}
+      />
+    );
+
+    const region = screen.getByRole("group", { name: "Panel types" });
+    region.focus();
+    fireEvent.keyDown(region, { key: "Escape" });
+
+    expect(onQueryChange).toHaveBeenCalledWith("");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(field());
+  });
+
+  it("closes on Escape from an empty field, once", () => {
+    const onClose = vi.fn();
+    render(<PanelPalette {...baseProps} query="" results={resumeResults} onClose={onClose} />);
+
+    fireEvent.keyDown(field(), { key: "Escape" });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a page in live rows, stepping over removed ones in between", () => {
+    // Every third row is a removed worktree's session, so a page of live rows
+    // spans more than a page of indexes.
+    const rows = many.map((row, i) => (i % 3 === 2 ? { ...row, isStale: true } : row));
+    const live = rows.flatMap((row, i) => (row.isStale ? [] : [i]));
+    function Stateful() {
+      const [selectedIndex, setSelectedIndex] = useState(live[1]!);
+      return (
+        <PanelPalette
+          {...baseProps}
+          query="tool"
+          results={rows}
+          selectedIndex={selectedIndex}
+          onHoverIndex={setSelectedIndex}
+        />
+      );
+    }
+    render(<Stateful />);
+    const active = () => field().getAttribute("aria-activedescendant");
+
+    fireEvent.keyDown(field(), { key: "PageDown" });
+    expect(active()).toBe(`panel-option-${rows[live[1 + LISTBOX_PAGE_SIZE]!]!.id}`);
+    fireEvent.keyDown(field(), { key: "PageUp" });
+    expect(active()).toBe(`panel-option-${rows[live[1]!]!.id}`);
   });
 });

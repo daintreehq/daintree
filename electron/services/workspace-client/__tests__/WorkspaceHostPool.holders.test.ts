@@ -122,6 +122,32 @@ describe("WorkspaceHostPool holders", () => {
     expect(pool.getHostForProject(PROJECT)).toBe(replacement.host);
   });
 
+  it("evicts a backgrounded project's host without touching the window's current one (#17185)", async () => {
+    const other = path.resolve("/srv/other");
+    const relocated = path.resolve("/srv/pagesugar-moved");
+    const pool = new WorkspaceHostPool({ config: {}, emit: vi.fn() });
+    await pool.loadProject(PROJECT, LOCAL_WINDOW);
+    await pool.loadProject(other, LOCAL_WINDOW);
+    const backgrounded = pool.entries.get(PROJECT)!;
+    const current = pool.entries.get(other)!;
+    expect(backgrounded.refCount).toBe(0);
+
+    pool.evictProjectForRelocation(PROJECT);
+
+    expect(backgrounded.host.dispose).toHaveBeenCalled();
+    expect(pool.getHostForProject(PROJECT)).toBeUndefined();
+    expect(pool.getHostForWindow(LOCAL_WINDOW)).toBe(current.host);
+    expect(current.windowIds).toEqual(new Set([LOCAL_WINDOW]));
+    expect(current.host.dispose).not.toHaveBeenCalled();
+
+    // Switching back loads the relocated root, and the window moves its hold there.
+    await pool.loadProject(relocated, LOCAL_WINDOW);
+    expect(pool.getHostForWindow(LOCAL_WINDOW)).toBe(pool.getHostForProject(relocated));
+    expect(pool.isWindowAttached(LOCAL_WINDOW, relocated)).toBe(true);
+    expect(current.refCount).toBe(0);
+    expect(pool.getHostForProject(PROJECT)).toBeUndefined();
+  });
+
   it("tells whether a window holds a project's current host", async () => {
     const pool = new WorkspaceHostPool({ config: {}, emit: vi.fn() });
     await pool.loadProject(PROJECT, REMOTE_VIEW);

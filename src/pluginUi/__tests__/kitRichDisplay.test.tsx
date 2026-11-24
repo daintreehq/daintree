@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
-import { createElement, createRef, type ComponentType, type ReactNode } from "react";
+import { createElement, createRef, useState, type ComponentType, type ReactNode } from "react";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { VirtuosoMockContext } from "react-virtuoso";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { OPEN_ESCAPE_LAYER_SELECTOR } from "@/lib/dialogEscapeBackstop";
 
 const dispatch = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
@@ -340,6 +341,62 @@ describe("HoverCard", () => {
       fireEvent.focus(trigger);
     });
     expect(screen.queryAllByText("Linus Pauling")).toHaveLength(0);
+  });
+
+  // The dialog backstop and the plugin manager read whether a layer is taking
+  // Escape off this selector. A labelled card's role sits on a hidden child.
+  it("counts as a layer taking Escape while it can close", async () => {
+    mount(
+      createElement(kit.HoverCard, {
+        content: createElement("p", null, "Ada Lovelace"),
+        "aria-label": "Ada Lovelace",
+        children: createElement("button", { type: "button" }, "@ada"),
+      })
+    );
+    await act(async () => {
+      fireEvent.focus(screen.getByRole("button", { name: "@ada" }));
+    });
+    await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(document.querySelector(OPEN_ESCAPE_LAYER_SELECTOR)).not.toBeNull();
+  });
+
+  it("does not count as taking Escape when the plugin pins it open", async () => {
+    mount(
+      createElement(kit.HoverCard, {
+        open: true,
+        content: createElement("p", null, "Pinned"),
+        children: createElement("button", { type: "button" }, "Trigger"),
+      })
+    );
+    const card = await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(card.getAttribute("data-state")).toMatch(/-open$/);
+    expect(document.querySelector(OPEN_ESCAPE_LAYER_SELECTOR)).toBeNull();
+  });
+
+  it("counts a controlled card whose plugin handles the close, and closes it on Escape", async () => {
+    const onOpenChange = vi.fn();
+    function Owner() {
+      const [open, setOpen] = useState(true);
+      return createElement(kit.HoverCard, {
+        open,
+        onOpenChange: (next: boolean) => {
+          onOpenChange(next);
+          setOpen(next);
+        },
+        content: createElement("p", null, "Controlled"),
+        children: createElement("button", { type: "button" }, "Owner"),
+      });
+    }
+    mount(createElement(Owner));
+    await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(document.querySelector(OPEN_ESCAPE_LAYER_SELECTOR)).not.toBeNull();
+
+    await act(async () => {
+      fireEvent.keyDown(document, { key: "Escape" });
+    });
+
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    expect(screen.queryByText("Controlled")).toBeNull();
   });
 
   it("stays open when controlled, on the host's hover-card width", () => {
@@ -959,6 +1016,28 @@ describe("TableOfContents", () => {
         (h) => h.text
       )
     ).toEqual(["Quoted", "Listed", "a*b*c and https://x.dev"]);
+  });
+
+  it("never lists front matter keys as a heading (#17334)", () => {
+    const body = "\n# Release check\n\nText\n";
+    expect(markdownHeadings(`---\nname: release-check\ndescription: Checks\n---${body}`)).toEqual([
+      { text: "Release check", level: 1 },
+    ]);
+    expect(markdownHeadings(`+++ \r\n# Hidden\r\ntitle = "x"\r\n+++\t${body}`)).toEqual([
+      { text: "Release check", level: 1 },
+    ]);
+    expect(markdownHeadings(`\uFEFF---\nname: x\n---${body}`).map((h) => h.text)).toEqual([
+      "Release check",
+    ]);
+    expect(markdownHeadings("---\rname: x\r---\r# Title").map((h) => h.text)).toEqual(["Title"]);
+    // Not front matter: unclosed, not on the first line, or not exactly three markers.
+    expect(markdownHeadings("---\nname: x\n\n# Title").map((h) => h.text)).toEqual(["Title"]);
+    expect(markdownHeadings("\n---\nname: x\n---\n").map((h) => h.text)).toEqual(["name: x"]);
+    expect(markdownHeadings("----\nname: x\n----\n").map((h) => h.text)).toEqual(["name: x"]);
+    expect(markdownHeadings("---\n# Visible\n--- x\n\n# Title").map((h) => h.text)).toEqual([
+      "Visible",
+      "Title",
+    ]);
   });
 
   it("never matches one drawn heading twice", () => {

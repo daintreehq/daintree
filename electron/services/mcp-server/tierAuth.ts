@@ -179,8 +179,12 @@ export function shouldExposeTool(
   if (entry.id === PROJECT_RUN_COMMAND_TOOL) return mayRunProjectCommand(tier, session);
   if (ASSISTANT_CONTROL_TOOL_IDS.has(entry.id)) return mayControlAssistants(tier, session);
   return (
-    isTierPermitted(tier, entry.id, session.rendererOwnedOrigin === true) ||
-    isApprovalRequestable(tier, entry.id, session.paneApproval === true)
+    isTierPermitted(
+      tier,
+      entry.id,
+      session.rendererOwnedOrigin === true,
+      sessionReachesPluginActions(session)
+    ) || isApprovalRequestable(tier, entry.id, session.paneApproval === true)
   );
 }
 
@@ -256,13 +260,26 @@ export function isWithheldFromRelaySession(actionId: string): boolean {
  */
 export function isWithheldFromRelayDiscovery(
   actionId: string,
-  session: Pick<SessionSurfacePolicy, "relay" | "relayGlobal">
+  session: Pick<SessionSurfacePolicy, "relay" | "relayGlobal" | "relayPluginReach">
 ): boolean {
   if (session.relay !== true) return false;
   return (
     isWithheldFromRelaySession(actionId) ||
-    (session.relayGlobal === true && !globalAssistantMayRelay(actionId))
+    (session.relayGlobal === true &&
+      !globalAssistantMayRelay(actionId) &&
+      !(session.relayPluginReach === true && isPluginAssistantReachAction(actionId)))
   );
+}
+
+/**
+ * Whether a session reaches the plugin actions that opted into `assistantReach`
+ * (#16751): the project Assistant, by its renderer-owned origin, and this
+ * machine's global Assistant reaching the project through `host.call` (#18153).
+ */
+export function sessionReachesPluginActions(
+  session: Pick<SessionSurfacePolicy, "rendererOwnedOrigin" | "relayPluginReach">
+): boolean {
+  return session.rendererOwnedOrigin === true || session.relayPluginReach === true;
 }
 
 export interface SessionSurfacePolicy {
@@ -316,6 +333,13 @@ export interface SessionSurfacePolicy {
    * see {@link isWithheldFromRelayDiscovery}. Read as `=== true`.
    */
   relayGlobal?: boolean;
+  /**
+   * Whether that relayed assistant is THIS machine's global Assistant, calling
+   * in process rather than over a link (#18153). Only it, of every external
+   * origin, reaches the plugin actions that opted into `assistantReach`; see
+   * {@link sessionReachesPluginActions}. Read as `=== true`.
+   */
+  relayPluginReach?: boolean;
 }
 
 /**
@@ -424,15 +448,18 @@ export function isWithheldFromBoundSession(
  * its tier: an agent pane's bearer holds a ladder tier while its origin is
  * `external` (#12407). It defaults to `false`, so a caller that forgets to pass
  * it narrows the assistant's surface rather than widening anyone else's.
+ * `pluginReach` ({@link sessionReachesPluginActions}) follows it unless given,
+ * and decides only the opted-in plugin actions, never the built-in list.
  */
 export function getTierPermittedActionIds(
   tier: McpTier,
-  rendererOwnedOrigin = false
+  rendererOwnedOrigin = false,
+  pluginReach = rendererOwnedOrigin
 ): ReadonlySet<string> {
   const builtIn = rendererOwnedOrigin
     ? TIER_ALLOWLISTS[tier]
     : NON_RENDERER_OWNED_TIER_ALLOWLISTS[tier];
-  if (!reachesPluginActions(tier, rendererOwnedOrigin)) return builtIn;
+  if (!reachesPluginActions(tier, pluginReach)) return builtIn;
   const pluginIds = pluginAssistantReachActionIds();
   return pluginIds.length === 0 ? builtIn : new Set([...builtIn, ...pluginIds]);
 }
@@ -440,36 +467,37 @@ export function getTierPermittedActionIds(
 export function isTierPermitted(
   tier: McpTier,
   actionId: string,
-  rendererOwnedOrigin = false
+  rendererOwnedOrigin = false,
+  pluginReach = rendererOwnedOrigin
 ): boolean {
   const builtIn = rendererOwnedOrigin
     ? TIER_ALLOWLISTS[tier]
     : NON_RENDERER_OWNED_TIER_ALLOWLISTS[tier];
   return (
     builtIn.has(actionId) ||
-    (reachesPluginActions(tier, rendererOwnedOrigin) && isPluginAssistantReachAction(actionId))
+    (reachesPluginActions(tier, pluginReach) && isPluginAssistantReachAction(actionId))
   );
 }
 
 /**
  * Plugin actions that opted in with `assistantReach` (#16751) join the project
- * Assistant's surface at both in-app tiers, and nobody else's: an agent pane or
- * an api-key client is `external` by origin, and so is another machine's
- * assistant relaying through `host.call`. The global Assistant's gate refuses
- * everything outside its own tools before any tier is asked.
+ * Assistant's surface at both in-app tiers, and this machine's global
+ * Assistant's when it reaches the project through `host.call` (#18153), and
+ * nobody else's: an agent pane or an api-key client is `external` by origin,
+ * and so is another machine's assistant relaying through `host.call`.
  */
-function reachesPluginActions(tier: McpTier, rendererOwnedOrigin: boolean): boolean {
-  return rendererOwnedOrigin && (tier === "core" || tier === "full");
+function reachesPluginActions(tier: McpTier, pluginReach: boolean): boolean {
+  return pluginReach && (tier === "core" || tier === "full");
 }
 
 /**
- * The rung an opted-in plugin action is reachable from for this origin: `core`
- * for the project Assistant, null for everyone else. Kept apart from
- * `minimumPermittingTier`, which also decides what a grant may name, so a
- * grant never widens a plugin action's reach.
+ * The rung an opted-in plugin action is reachable from for a session that
+ * reaches them ({@link sessionReachesPluginActions}): `core`, and null for
+ * everyone else. Kept apart from `minimumPermittingTier`, which also decides
+ * what a grant may name, so a grant never widens a plugin action's reach.
  */
-export function pluginActionMinimumTier(id: string, rendererOwnedOrigin: boolean): "core" | null {
-  return rendererOwnedOrigin && isPluginAssistantReachAction(id) ? "core" : null;
+export function pluginActionMinimumTier(id: string, pluginReach: boolean): "core" | null {
+  return pluginReach && isPluginAssistantReachAction(id) ? "core" : null;
 }
 
 /**
@@ -481,9 +509,10 @@ export function pluginActionMinimumTier(id: string, rendererOwnedOrigin: boolean
 export function getReachableActionIds(
   tier: McpTier,
   rendererOwnedOrigin = false,
-  paneApproval = false
+  paneApproval = false,
+  pluginReach = rendererOwnedOrigin
 ): ReadonlySet<string> {
-  const permitted = getTierPermittedActionIds(tier, rendererOwnedOrigin);
+  const permitted = getTierPermittedActionIds(tier, rendererOwnedOrigin, pluginReach);
   if (!paneApproval || tier === "external") return permitted;
   return new Set([...permitted, ...PANE_APPROVAL_CEILING]);
 }
@@ -652,6 +681,11 @@ export interface TargetPolicySessionSnapshot {
    */
   relayGlobal?: boolean;
   /**
+   * Whether that relayed assistant is this machine's own global Assistant
+   * (#18153) — see {@link SessionSurfacePolicy.relayPluginReach}. Read as `=== true`.
+   */
+  relayPluginReach?: boolean;
+  /**
    * Whether the session is an agent pane (#12692) — see
    * {@link SessionSurfacePolicy.paneApproval}. Optional and read as `=== true`.
    */
@@ -810,7 +844,7 @@ export function buildTargetPolicy(
           ? "external"
           : null
         : (minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true) ??
-          pluginActionMinimumTier(id, snapshot.rendererOwnedOrigin === true));
+          pluginActionMinimumTier(id, sessionReachesPluginActions(snapshot)));
   // A ladder target with no permitting tier cannot be described honestly, and
   // cannot legitimately be granted either: both issuance paths refuse a tool
   // `minimumPermittingTier` does not place. Fail closed.
@@ -823,7 +857,12 @@ export function buildTargetPolicy(
   const tierPermitted =
     commandRunner ??
     assistantTool ??
-    isTierPermitted(snapshot.tier, id, snapshot.rendererOwnedOrigin);
+    isTierPermitted(
+      snapshot.tier,
+      id,
+      snapshot.rendererOwnedOrigin,
+      sessionReachesPluginActions(snapshot)
+    );
   const authorizedBy = tierPermitted
     ? "tier"
     : perToolGranted

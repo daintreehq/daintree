@@ -144,6 +144,31 @@ export class TerminalAdoptionLedger {
     if (changed) this.emitChange();
   }
 
+  /**
+   * Move everything `fromPrincipalId` was handed to `toPrincipalId`, now
+   * driven from `orchestratorPaneId` (#18143): a global assistant's
+   * coordination went to its other session, and the terminals the person
+   * handed it go with it. Each keeps the process, workspace and time it was
+   * handed with, so ending or taking it back works as before.
+   */
+  reassignPrincipal(
+    fromPrincipalId: string,
+    toPrincipalId: string,
+    to: { orchestratorPaneId: string }
+  ): void {
+    const from = principalOwnerKey(fromPrincipalId);
+    const owner = principalOwnerKey(toPrincipalId);
+    if (from === owner) return;
+    let changed = false;
+    for (const stored of this.byTerminal.values()) {
+      if (stored.owner !== from) continue;
+      stored.owner = owner;
+      stored.record = { ...stored.record, orchestratorPaneId: to.orchestratorPaneId };
+      changed = true;
+    }
+    if (changed) this.emitChange();
+  }
+
   list(): TerminalAdoptionRecord[] {
     return [...this.byTerminal.values()].map((stored) => stored.record);
   }

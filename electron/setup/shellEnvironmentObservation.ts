@@ -23,6 +23,7 @@ export interface ShellEnvironmentObservation {
 }
 
 let observation: ShellEnvironmentObservation | undefined;
+const listeners = new Set<() => void>();
 
 /** Keep the observed names out of a shell's full environment; everything else is dropped. */
 export function recordShellEnvironment(
@@ -35,6 +36,22 @@ export function recordShellEnvironment(
     if (value !== undefined) observed[name] = value;
   }
   observation = { shell, env: observed };
+  for (const listener of listeners) {
+    // A subscriber's failure never reaches the PATH refresh that recorded this.
+    try {
+      listener();
+    } catch (error) {
+      console.warn("[shellEnvironment] listener failed:", error);
+    }
+  }
+}
+
+/** Called after each new observation; returns the unsubscribe. */
+export function subscribeShellEnvironment(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function getShellEnvironmentObservation(): ShellEnvironmentObservation | undefined {

@@ -9,7 +9,7 @@ import {
   type VoiceSessionElsewhere,
   type VoiceTranscriptPhase,
 } from "@shared/types";
-import { createDebouncedSafeJSONStorage } from "./persistence/safeStorage";
+import { createDebouncedSafeJSONStorage, stableProjection } from "./persistence/safeStorage";
 import {
   mergeRecordByWriterDelta,
   type PersistWriteMergeContext,
@@ -88,6 +88,10 @@ export interface RecentDictationTarget {
 const MAX_RECENT_TARGETS = 3;
 
 type VoiceRecordingPersistedState = { recentTargets: RecentDictationTarget[] };
+
+const persistedRecentTargets = stableProjection((targets: RecentDictationTarget[]) =>
+  targets.map(({ panelId: _panelId, ...rest }) => rest)
+);
 
 function toRecentTargets(
   value: StorageValue<VoiceRecordingPersistedState> | null
@@ -974,10 +978,11 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
     }),
     {
       name: "daintree-voice-recording",
-      // Debounced storage: high-frequency setters (`setAudioLevel` at RAF rate,
-      // `setElapsedSeconds` per second) trigger persist writes regardless of
-      // whether the partialized output changed. Coalescing to a trailing-edge
-      // 300ms write avoids burning the localStorage write queue mid-session.
+      // Debounced storage, and a partialize that keeps `recentTargets` the same
+      // reference until the list changes: high-frequency setters
+      // (`setAudioLevel` at RAF rate, `setElapsedSeconds` per second) then
+      // leave the slice unchanged and the adapter skips them outright, while
+      // real list changes coalesce into one trailing-edge 300ms write.
       storage: createDebouncedSafeJSONStorage<VoiceRecordingPersistedState>(300, {
         mergeOnWrite: mergeVoiceRecordingPersistedWrite,
       }),
@@ -990,7 +995,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       // entry so a stale id cannot silently re-route dictation after restart —
       // panelIds are ephemeral. Lock state and session state are runtime-only.
       partialize: (state): VoiceRecordingPersistedState => ({
-        recentTargets: state.recentTargets.map(({ panelId: _panelId, ...rest }) => rest),
+        recentTargets: persistedRecentTargets(state.recentTargets),
       }),
     }
   )

@@ -48,7 +48,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onFocusRegionNext: () => callbacksRef.current.onFocusRegionNext(),
       onFocusRegionPrev: () => callbacksRef.current.onFocusRegionPrev(),
       onOpenActionPalette: () => callbacksRef.current.onOpenActionPalette(),
-      onOpenQuickSwitcher: () => callbacksRef.current.onOpenQuickSwitcher(),
+      onOpenQuickSwitcher: (scope) => callbacksRef.current.onOpenQuickSwitcher(scope),
       onOpenWorktreePalette: () => callbacksRef.current.onOpenWorktreePalette(),
       onOpenQuickCreatePalette: () => callbacksRef.current.onOpenQuickCreatePalette(),
       onToggleWorktreeOverview: () => callbacksRef.current.onToggleWorktreeOverview(),

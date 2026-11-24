@@ -47,6 +47,18 @@ interface RingDelta {
   deletes: string[];
 }
 
+// A plain object's or array's contents when it was serialized: `keys` is null
+// for an array, and each value is a primitive or a nested Shape.
+interface Shape {
+  keys: string[] | null;
+  values: unknown[];
+}
+
+interface SerializedRecord {
+  json: string;
+  shape: Shape;
+}
+
 /**
  * SQLite-backed ring buffer replacing the electron-store audit-logs JSON file.
  * Owners hand over their whole in-memory array on every flush; the store diffs
@@ -62,6 +74,10 @@ export class AuditRingStore {
   private stmts: RingStatements | null = null;
   private readStmt: Database.Statement | null = null;
   private readonly rings = new Map<AuditRingName, RingState>();
+  // Owners hand over the same record objects flush after flush, so a record
+  // whose contents still match what was serialized reuses that string instead
+  // of re-serializing the whole retained ring for a one-record change.
+  private readonly serialized = new WeakMap<object, SerializedRecord>();
 
   private db(): Database.Database | null {
     if (!this.sqlite) {
@@ -133,7 +149,13 @@ export class AuditRingStore {
   ): void {
     let target: RingTarget;
     try {
-      target = toTarget(records, maxRecords);
+      // A sync write is the durability backstop, so it serializes exactly as
+      // it always has and leaves the cache alone.
+      target = toTarget(
+        records,
+        maxRecords,
+        options?.sync ? (record) => JSON.stringify(record) : (record) => this.serialize(record)
+      );
     } catch (error) {
       console.warn(`[AuditRingStore] writeAll failed for "${ring}":`, error);
       return;
@@ -153,6 +175,33 @@ export class AuditRingStore {
     if (!state.inFlight) {
       this.dispatch(ring, state);
     }
+  }
+
+  /**
+   * Owners update retained records in place (pre-auth coalescing) and records
+   * can alias caller-owned objects, so identity alone cannot vouch for a
+   * cached string. The string is the JSON of a snapshot taken in a single
+   * read of the record, reused only while the record still reads exactly that
+   * snapshot; caching is best-effort, and anything the snapshot cannot vouch
+   * for takes the plain JSON.stringify path.
+   */
+  private serialize(record: unknown): string {
+    if (typeof record !== "object" || record === null) return JSON.stringify(record);
+    let shape: Shape | null;
+    try {
+      const cached = this.serialized.get(record);
+      if (cached && matchesShape(record, cached.shape)) return cached.json;
+      shape = shapeOf(record, 0);
+    } catch {
+      shape = null;
+    }
+    if (!shape) {
+      this.serialized.delete(record);
+      return JSON.stringify(record);
+    }
+    const json = JSON.stringify(materialize(shape));
+    this.serialized.set(record, { json, shape });
+    return json;
   }
 
   private dispatch(ring: AuditRingName, state: RingState): void {
@@ -246,7 +295,110 @@ function recordIdOf(record: unknown): string | null {
   return typeof id === "string" && id.length > 0 ? id : null;
 }
 
-function toTarget<T>(records: T[], maxRecords: number): RingTarget {
+// Deeper data is serialized every time; it also keeps a cyclic record from
+// recursing until the stack overflows before JSON.stringify reports it.
+const MAX_SHAPE_DEPTH = 16;
+
+// JSON.stringify reads only own enumerable keys and primitive values of
+// these; anything else (class instances such as Date, a toJSON hook anywhere,
+// null-prototype objects, functions) is never cached.
+function isPlainObject(value: object): value is Record<string, unknown> {
+  return (
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    !("toJSON" in value)
+  );
+}
+
+function isPlainArray(value: object): value is unknown[] {
+  return (
+    Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype && !("toJSON" in value)
+  );
+}
+
+const UNCACHEABLE = Symbol("uncacheable");
+
+function shapeOf(value: object, depth: number): Shape | null {
+  if (depth > MAX_SHAPE_DEPTH) return null;
+  if (isPlainArray(value)) {
+    const values = new Array<unknown>(value.length);
+    for (let i = 0; i < value.length; i++) {
+      const item = shapeValue(value[i], depth);
+      if (item === UNCACHEABLE) return null;
+      values[i] = item;
+    }
+    return { keys: null, values };
+  }
+  if (!isPlainObject(value)) return null;
+  const keys = Object.keys(value);
+  const values = new Array<unknown>(keys.length);
+  for (let i = 0; i < keys.length; i++) {
+    const item = shapeValue(value[keys[i]!], depth);
+    if (item === UNCACHEABLE) return null;
+    values[i] = item;
+  }
+  return { keys, values };
+}
+
+function shapeValue(value: unknown, depth: number): unknown {
+  switch (typeof value) {
+    case "string":
+    case "number":
+    case "boolean":
+    case "undefined":
+      return value;
+    case "object":
+      return value === null ? null : (shapeOf(value, depth + 1) ?? UNCACHEABLE);
+    default:
+      return UNCACHEABLE;
+  }
+}
+
+function matchesShape(value: object, shape: Shape): boolean {
+  const { keys, values } = shape;
+  if (keys === null) {
+    if (!isPlainArray(value) || value.length !== values.length) return false;
+    for (let i = 0; i < values.length; i++) {
+      if (!matchesValue(value[i], values[i])) return false;
+    }
+    return true;
+  }
+  if (!isPlainObject(value)) return false;
+  const liveKeys = Object.keys(value);
+  if (liveKeys.length !== keys.length) return false;
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i]!;
+    if (liveKeys[i] !== key || !matchesValue(value[key], values[i])) return false;
+  }
+  return true;
+}
+
+function matchesValue(value: unknown, expected: unknown): boolean {
+  if (typeof expected === "object" && expected !== null) {
+    return typeof value === "object" && value !== null && matchesShape(value, expected as Shape);
+  }
+  return value === expected;
+}
+
+// Plain data rebuilt from a snapshot. Null-prototype objects, so an own
+// "__proto__" key stays an own key.
+function materialize(shape: Shape): unknown {
+  const { keys, values } = shape;
+  if (keys === null) return values.map(materializeValue);
+  const out = Object.create(null) as Record<string, unknown>;
+  for (let i = 0; i < keys.length; i++) out[keys[i]!] = materializeValue(values[i]);
+  return out;
+}
+
+function materializeValue(value: unknown): unknown {
+  return typeof value === "object" && value !== null ? materialize(value as Shape) : value;
+}
+
+function toTarget<T>(
+  records: T[],
+  maxRecords: number,
+  serialize: (record: T) => string
+): RingTarget {
   // Trim here rather than relying on the SQL trim, so the rows written are
   // exactly the rows the acknowledged state records.
   const retained =
@@ -265,7 +417,7 @@ function toTarget<T>(records: T[], maxRecords: number): RingTarget {
       recordId = null;
       keyed = false;
     }
-    return { recordId, record: JSON.stringify(record) };
+    return { recordId, record: serialize(record) };
   });
   return { rows, maxRecords, keyed };
 }

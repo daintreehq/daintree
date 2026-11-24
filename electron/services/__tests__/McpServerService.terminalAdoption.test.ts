@@ -36,11 +36,17 @@ import { McpServerService, mcpServerService } from "../McpServerService.js";
 import {
   helpOwnershipPrincipal,
   principalOwnerKey,
+  relayConversationKey,
   relayOwnershipPrincipal,
 } from "../mcp-server/resourceOwnership.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { getMcpServerServiceRef, setPtyClientRef } from "../../window/serviceRefs.js";
 import { events } from "../events.js";
+import {
+  _resetAssistantPaneCreationsForTests,
+  attachAssistantPaneCreationPersistence,
+  isKeptAssistantPane,
+} from "../mcp-server/assistantPaneCreations.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { OrchestratorPaneIdentity } from "../McpPaneConfigService.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "../pty/PtyEventRouter.js";
@@ -172,6 +178,55 @@ describe("McpServerService terminal hand-over (#12490)", () => {
     service.revokeOwnershipPrincipal(ORCHESTRATOR.principalId);
 
     expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("lets no restart give a trashed pane back to the conversation that launched it (#16845)", () => {
+    _resetAssistantPaneCreationsForTests();
+    attachAssistantPaneCreationPersistence({
+      load: () => ({
+        "terminal-9": { scope: "help", conversationId: "c", projectId: "p", seenAt: Date.now() },
+      }),
+      save: () => {},
+    });
+    expect(isKeptAssistantPane("terminal-9")).toBe(true);
+
+    events.emit("terminal:trashed", { id: "terminal-9", expiresAt: Date.now() + 60_000 });
+
+    expect(isKeptAssistantPane("terminal-9")).toBe(false);
+    _resetAssistantPaneCreationsForTests();
+  });
+
+  it("ends what an earlier run kept for an id once it starts in another project (#16845)", () => {
+    const ownership = (
+      service as unknown as {
+        sessionStore: {
+          resourceOwnership: import("../mcp-server/resourceOwnership.js").ResourceOwnershipLedger;
+        };
+      }
+    ).sessionStore.resourceOwnership;
+    ownership.restoreIfUnclaimed(
+      "conversation\u0000help\u0000c",
+      { kind: "terminal", id: "kept-1" },
+      "proj-a"
+    );
+
+    events.emit("terminal:lifecycle", {
+      type: "spawned",
+      terminalId: "kept-1",
+      projectId: "proj-a",
+      kind: "agent",
+      timestamp: Date.now(),
+    });
+    expect(ownership.creatorOf("terminal", "kept-1")).toBeDefined();
+    events.emit("terminal:lifecycle", {
+      type: "spawned",
+      terminalId: "kept-1",
+      projectId: "proj-b",
+      kind: "agent",
+      timestamp: Date.now(),
+    });
+
+    expect(ownership.creatorOf("terminal", "kept-1")).toBeUndefined();
   });
 
   it("ends when the handed-over terminal is trashed", () => {
@@ -605,6 +660,29 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
     ownership.clearSession("relay-session");
   });
 
+  it("moves the coordinator's hand-overs to the session taking over, or back to the person (#18143)", () => {
+    adoptGlobal();
+    const NEXT = { sessionId: "help-global-2", terminalId: "terminal-global-2" };
+    const nextOwner = principalOwnerKey(relayOwnershipPrincipal("local", NEXT.sessionId));
+    const adoption = service._sessionStore.terminalAdoption;
+
+    service.handOverGlobalAssistantWork(GLOBAL.sessionId, NEXT);
+
+    expect(adoption.get(globalOwner, "terminal-1")).toBeUndefined();
+    expect(adoption.get(nextOwner, "terminal-1")).toMatchObject({
+      orchestratorPaneId: NEXT.terminalId,
+      recipient: "global-assistant",
+      launchGeneration: 3,
+    });
+    expect(service.listTerminalAdoptions()).toEqual([
+      expect.objectContaining({ terminalId: "terminal-1", orchestratorPaneId: NEXT.terminalId }),
+    ]);
+
+    // To a session that isn't running, nothing can drive it: the person has it back.
+    service.handOverGlobalAssistantWork(NEXT.sessionId, null);
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
   it("refuses with no assistant running, its own PTY, and an assistant's terminal", () => {
     expect(adoptGlobal({ global: null })).toMatchObject({ reason: "not-orchestrator" });
     terminals.set(GLOBAL.terminalId, null);
@@ -665,6 +743,31 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
     ownership.bindPrincipal("relay-session", relayOwnershipPrincipal("local", GLOBAL.sessionId));
     ownership.record(globalOwner, [{ kind: "terminal", id: "terminal-1" }]);
     expect(adoptGlobal()).toMatchObject({ reason: "launched-by-orchestrator" });
+    ownership.revokePrincipal(relayOwnershipPrincipal("local", GLOBAL.sessionId));
+    ownership.clearSession("relay-session");
+  });
+
+  // #17919: what its conversation launched before a resume is still its own,
+  // and the conversation forgotten, what it held is no one's.
+  it("refuses what its conversation launched before a resume as its own, until the lane forgets it", () => {
+    const ownership = service._sessionStore.resourceOwnership;
+    const before = relayOwnershipPrincipal("local", "help-before-resume");
+    ownership.bindPrincipal("relay-before", before);
+    ownership.attachConversation(before, relayConversationKey("local", "conv-g"));
+    ownership.record(principalOwnerKey(before), [{ kind: "terminal", id: "terminal-1" }]);
+    service.retireRelayPrincipal("local", "help-before-resume", true);
+    ownership.clearSession("relay-before");
+    expect(adoptGlobal()).toMatchObject({ reason: "launched-by-another" });
+
+    ownership.bindPrincipal("relay-session", relayOwnershipPrincipal("local", GLOBAL.sessionId));
+    ownership.attachConversation(
+      relayOwnershipPrincipal("local", GLOBAL.sessionId),
+      relayConversationKey("local", "conv-g")
+    );
+    expect(adoptGlobal()).toMatchObject({ reason: "launched-by-orchestrator" });
+
+    service.forgetAssistantConversation("conv-g");
+    expect(adoptGlobal()).toMatchObject({ status: "handed-over" });
     ownership.revokePrincipal(relayOwnershipPrincipal("local", GLOBAL.sessionId));
     ownership.clearSession("relay-session");
   });

@@ -9,9 +9,9 @@
  * Steps, and what each is evidence for:
  *
  *   merge        a merge stopped on four conflicts of three kinds (both modified,
- *                deleted by them, added by both) plus auto-merged files, which land
- *                in the Resolved group. Rest, row hover, Resolved expanded, one file
- *                marked resolved.
+ *                deleted by them, added by both) plus auto-merged files, which sit
+ *                in the Staged changes group until a conflict is resolved. Rest,
+ *                row hover, Staged changes expanded, one file marked resolved.
  *   keyboard     focus rings on a row action and on Abort.
  *   confirm      the Abort and Take-ours confirmations.
  *   allresolved  every conflict staged: the empty state and an enabled Continue.
@@ -328,7 +328,7 @@ test("conflict panel review — merge, rebase, resolved, confirm, themes", async
         await featureCard.click({ button: "right" });
         await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: T_MEDIUM });
         const reviewTrigger = page.getByRole("menuitem", { name: /^Review$/ }).first();
-        const reviewItem = page.getByRole("menuitem", { name: /^Review worktree$/ }).first();
+        const reviewItem = page.getByRole("menuitem", { name: /^Open Review Hub$/ }).first();
         await reviewTrigger.hover();
         if (!(await reviewItem.isVisible().catch(() => false))) await reviewTrigger.click();
         await reviewItem.click();
@@ -410,12 +410,12 @@ test("conflict panel review — merge, rebase, resolved, confirm, themes", async
         await row.hover();
         await snap(page, "12-merge-row-hover", PANEL);
         await page.mouse.move(2, 2);
-        const toggle = page.locator('[data-testid="conflict-resolved-toggle"]');
+        const toggle = page.locator('[data-testid="conflict-staged-toggle"]');
         await toggle.click();
-        await expectState(page, '[data-testid="conflict-resolved-list"]', {
-          label: "resolved expanded",
+        await expectState(page, '[data-testid="conflict-staged-list"]', {
+          label: "staged expanded",
         });
-        await snap(page, "13-merge-resolved-expanded", PANEL);
+        await snap(page, "13-merge-staged-expanded", PANEL);
         await page
           .locator(`${PANEL} [aria-label="Mark ${MERGE_FILES.store} as resolved"]`)
           .first()

@@ -1,321 +1,31 @@
-import { useCallback, useEffect, useId, useMemo, useState, useRef } from "react";
-import { Check, Filter, ChevronRight } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import { Callout } from "@/components/ui/Callout";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { SearchField, clearSearchBeforeDismiss } from "@/components/ui/SearchField";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { FilterChip } from "@/components/ui/FilterChip";
-import { useTruncationDetection } from "@/hooks/useTruncationDetection";
+import { clearSearchBeforeDismiss } from "@/components/ui/SearchField";
+import { lazyWithPreload, usePreloadedComponent } from "@/lib/lazyWithPreload";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import type { ChipCounts } from "@/lib/worktreeFilters";
-import {
-  ACTIVITY_OPTIONS,
-  DEV_SERVER_OPTIONS,
-  HAS_AGENT_LABEL,
-  ORDER_OPTIONS,
-  PR_ISSUE_OPTIONS,
-  SESSION_OPTIONS,
-  STATUS_OPTIONS,
-  TYPE_OPTIONS,
-} from "@/lib/worktreeFilterOptions";
-import { CountBadge } from "@/components/ui/badge";
+import type { WorktreeFilterPopoverContentProps } from "./WorktreeFilterPopoverContent";
 
-interface FilterSectionProps {
-  title: string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-  activeCount?: number;
-  onClear?: () => void;
-  /**
-   * Shown in the header while the section is closed — what the section is
-   * currently set to, so a collapsed section still answers its own question.
-   */
-  summary?: string;
-  /**
-   * Chip sections wrap their body in a `role="group"` labelled by the header,
-   * so a chip announces the facet it belongs to. The sort section's body is a
-   * radiogroup plus a checkbox, which carry their own semantics.
-   */
-  plainBody?: boolean;
-}
+const PreloadableFilterContent = lazyWithPreload(
+  () => import("./WorktreeFilterPopoverContent"),
+  (m) => m.WorktreeFilterPopoverContent
+);
 
-function FilterSection({
-  title,
-  children,
-  defaultOpen = false,
-  activeCount = 0,
-  onClear,
-  summary,
-  plainBody = false,
-}: FilterSectionProps) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-  const reactId = useId();
-  const contentId = `filter-section-content-${reactId}`;
-  const headerId = `filter-section-header-${reactId}`;
-  const hasActive = activeCount > 0;
-  const expandButtonRef = useRef<HTMLButtonElement>(null);
-  const { ref: summaryRef, isTruncated: isSummaryTruncated } = useTruncationDetection();
-
-  // `defaultOpen` is only an initial value, so a section that gains its first
-  // filter from outside the popover (the quick-state bar, a restored session)
-  // would stay shut over a filter the user cannot see. Open on the 0 -> n edge
-  // only, so this never fights a deliberate collapse.
-  const hadActive = useRef(hasActive);
-  useEffect(() => {
-    if (hasActive && !hadActive.current) setIsOpen(true);
-    hadActive.current = hasActive;
-  }, [hasActive]);
-
-  const showClear = onClear !== undefined && hasActive;
-
-  return (
-    <div className="flex flex-col border-b border-divider last:border-b-0">
-      {/* The toggle spans the whole row, edge to edge, so its hover fill and
-          focus ring match the dividers and there is no dead strip to miss.
-          Clear can't nest inside it, so it floats over the toggle in a slot
-          the toggle reserves just left of the chevron — the chevron column
-          stays put whether or not a section has anything to clear. The row
-          owns the hover so pointing at Clear doesn't drop the fill. */}
-      <div className="group/filter-header relative">
-        {/* A collapsed facet's summary is the answer to "what is filtering my
-            list", so when several values clip it, the toggle carries the full
-            list on hover and focus rather than making the user reopen it. */}
-        <TruncatedTooltip
-          content={summary}
-          side="right"
-          isTruncated={!isOpen && isSummaryTruncated}
-        >
-          <button
-            ref={expandButtonRef}
-            id={headerId}
-            type="button"
-            onClick={() => setIsOpen(!isOpen)}
-            aria-expanded={isOpen}
-            aria-controls={contentId}
-            className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left text-xs font-medium text-text-secondary transition-colors group-hover/filter-header:bg-overlay-soft group-hover/filter-header:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-          >
-            <span className="flex min-w-0 flex-1 items-center gap-1.5">
-              <span className="shrink-0">{title}</span>
-              {hasActive && (
-                <>
-                  <CountBadge aria-hidden="true">{activeCount}</CountBadge>
-                  <span className="sr-only">, {activeCount} active</span>
-                </>
-              )}
-              {!isOpen && summary && (
-                <span
-                  ref={summaryRef}
-                  className="min-w-0 truncate text-2xs font-normal text-text-secondary"
-                >
-                  {summary}
-                </span>
-              )}
-            </span>
-            {showClear && (
-              <span aria-hidden="true" className="invisible shrink-0 px-1 text-2xs">
-                Clear
-              </span>
-            )}
-            <ChevronRight
-              data-animated-chevron
-              className={cn(
-                "w-3.5 h-3.5 shrink-0 transition-transform duration-150 ease-out",
-                isOpen && "rotate-90"
-              )}
-              aria-hidden="true"
-            />
-          </button>
-        </TruncatedTooltip>
-        {showClear && (
-          <Button
-            variant="link"
-            onClick={(e) => {
-              e.stopPropagation();
-              // The Clear button hides itself once activeCount hits 0, so move
-              // focus to the adjacent expand toggle first to keep it off body.
-              expandButtonRef.current?.focus();
-              onClear();
-            }}
-            aria-label={`Clear ${title} filters`}
-            // Offset = the toggle's px-3 + the chevron's 3.5 + its gap-2, so
-            // this lands exactly on the slot the toggle reserved for it.
-            // Underlined rather than a bare colour step: at rest this sat at
-            // the same tone as the heading beside it, so nothing marked it as
-            // a control rather than a second label.
-            className="absolute inset-y-0 right-8.5 my-auto h-6 px-1 text-2xs focus-visible:-outline-offset-2"
-          >
-            Clear
-          </Button>
-        )}
-      </div>
-      {/* Animated reveal so the body honors what the rotating chevron
-       * promises — same grid-rows idiom as LocalCommitsDropdown. Content
-       * stays mounted; `inert` keeps collapsed chips out of tab order. */}
-      <div
-        aria-hidden={!isOpen}
-        inert={!isOpen}
-        data-animated-reveal
-        className={cn(
-          "grid transition-[grid-template-rows] duration-150 ease-out motion-reduce:transition-none",
-          isOpen ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-        )}
-      >
-        <div className="overflow-hidden">
-          {/* pt-2 keeps the first row clear of the header's hover fill; it
-              sits inside the clipped reveal, so a closed section gains
-              nothing. */}
-          <div id={contentId} className="px-3 pb-2.5 pt-2">
-            {plainBody ? (
-              children
-            ) : (
-              <div role="group" aria-labelledby={headerId} className="flex flex-wrap gap-1.5">
-                {children}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
+/** Loads the popover's body ahead of an open; a failure is left to the open to report. */
+export function preloadWorktreeFilterContent(): Promise<void> {
+  return PreloadableFilterContent.preload().then(
+    () => {},
+    () => {}
   );
 }
 
-interface ChipOption<T extends string> {
-  value: T;
-  label: string;
+function warmFilterContent(): void {
+  void preloadWorktreeFilterContent();
 }
-
-interface ChipGridProps<T extends string> {
-  options: readonly ChipOption<T>[];
-  isActive: (value: T) => boolean;
-  onToggle: (value: T) => void;
-  counts?: Record<T, number>;
-  /**
-   * Past this many options, values that match nothing are folded behind a
-   * "more" toggle. Branch type carries every recognised type and a real
-   * repository uses a handful of them, so the unfolded grid was rows of mostly
-   * dead options sitting between the user and every facet below it.
-   */
-  overflowAfter?: number;
-}
-
-function ChipGrid<T extends string>({
-  options,
-  isActive,
-  onToggle,
-  counts,
-  overflowAfter,
-}: ChipGridProps<T>) {
-  const [showAll, setShowAll] = useState(false);
-  // Anything the user has selected while this grid has been open stays in the
-  // grid after they deselect it. Otherwise deselecting a zero-count value with
-  // the keyboard folded it away in the same tick, the chip under focus
-  // unmounted, and the modeless popover left focus on the body. The popover's
-  // content unmounts on close, so this resets per opening.
-  //
-  // State adjusted during render, not a ref: this history IS render input, and
-  // refs may not be read or written during render (React Compiler enforces
-  // it). The documented "adjust state when props change" pattern — React
-  // re-runs the component before paint, so no underived frame is observable,
-  // and membership makes the update terminate.
-  const [seenSelected, setSeenSelected] = useState<ReadonlySet<T>>(() => new Set<T>());
-  const canFold =
-    counts !== undefined && overflowAfter !== undefined && options.length > overflowAfter;
-  if (canFold) {
-    const additions = options.filter((o) => isActive(o.value) && !seenSelected.has(o.value));
-    if (additions.length > 0) {
-      setSeenSelected(new Set([...seenSelected, ...additions.map((o) => o.value)]));
-    }
-  }
-
-  const { shown, hiddenCount, hiddenAllDead } = useMemo(() => {
-    if (!counts || overflowAfter === undefined || options.length <= overflowAfter) {
-      return { shown: options, hiddenCount: 0, hiddenAllDead: true };
-    }
-    const selected = options.filter((o) => isActive(o.value) || seenSelected.has(o.value));
-    const matching = options.filter((o) => !isActive(o.value) && counts[o.value] > 0);
-    // Nothing to show — fold nothing rather than render an empty facet.
-    if (selected.length + matching.length === 0) {
-      return { shown: options, hiddenCount: 0, hiddenAllDead: true };
-    }
-    // Selected values — and ones deselected during this opening — are never
-    // folded, whatever the cap: hiding a live filter is how a list ends up
-    // narrowed by something the user cannot see. The cap spends whatever room
-    // is left on values that would actually narrow it.
-    const room = Math.max(0, overflowAfter - selected.length);
-    const shownMatching = new Set(matching.slice(0, room));
-    const keep = new Set([...selected, ...shownMatching]);
-    return {
-      // Option order, so chips do not reorder as counts move.
-      shown: options.filter((o) => keep.has(o)),
-      hiddenCount: options.length - keep.size,
-      // Only claim "no matches" when that is true of everything folded away —
-      // past the cap some hidden values do match, and saying otherwise would
-      // tell the user there is nothing under there worth opening.
-      hiddenAllDead: matching.length - shownMatching.size === 0,
-    };
-  }, [options, counts, overflowAfter, isActive, seenSelected]);
-
-  const visible = showAll || hiddenCount === 0 ? options : shown;
-
-  return (
-    <>
-      {visible.map((option) => (
-        <FilterChip
-          key={option.value}
-          selected={isActive(option.value)}
-          onClick={() => onToggle(option.value)}
-          count={counts?.[option.value]}
-        >
-          {option.label}
-        </FilterChip>
-      ))}
-      {hiddenCount > 0 && (
-        <Button
-          variant="link"
-          onClick={() => setShowAll((v) => !v)}
-          aria-expanded={showAll}
-          className="self-center py-0.5 text-2xs"
-        >
-          {showAll
-            ? "Show fewer"
-            : hiddenAllDead
-              ? `${hiddenCount} more, none match`
-              : `${hiddenCount} more`}
-        </Button>
-      )}
-    </>
-  );
-}
-
-/**
- * What a collapsed facet is filtering by. The count badge alone said "one
- * filter here" without saying which, so answering it meant reopening the
- * section. Option order, not selection order, so it reads like the chips.
- */
-function selectedSummary<T extends string>(
-  options: readonly ChipOption<T>[],
-  selected: ReadonlySet<T>
-): string | undefined {
-  if (selected.size === 0) return undefined;
-  return options
-    .filter((option) => selected.has(option.value))
-    .map((option) => option.label)
-    .join(", ");
-}
-
-/** Both orientations, because the group reads as a vertical list of choices. */
-const SORT_ARROW_STEPS: Record<string, number | undefined> = {
-  ArrowDown: 1,
-  ArrowRight: 1,
-  ArrowUp: -1,
-  ArrowLeft: -1,
-};
-
-/** Branch type is the only facet long enough to need folding. */
-const BRANCH_TYPE_OVERFLOW_AFTER = 8;
 
 interface WorktreeFilterPopoverProps {
   hideSearchInput?: boolean;
@@ -331,6 +41,13 @@ interface WorktreeFilterPopoverProps {
   appearance?: "ghost" | "field";
 }
 
+/**
+ * The trigger, its count and the popover's content shell. The sections inside
+ * — every chip and sort control — are their own chunk, loaded on the trigger's
+ * first hover, focus or open (#17034). The content is one element across the
+ * load, so a dismissal while it loads works, and nothing swaps it out from
+ * under Radix's focus handling.
+ */
 export function WorktreeFilterPopover({
   hideSearchInput = false,
   chipCounts,
@@ -341,89 +58,32 @@ export function WorktreeFilterPopover({
   const [internalOpen, setInternalOpen] = useState(false);
   const isOpen = open ?? internalOpen;
   const setIsOpen = onOpenChange ?? setInternalOpen;
+
+  // A number per selector, so the trigger re-renders only when a count moves.
+  const facetFilterCount = useWorktreeFilterStore(
+    (state) =>
+      state.statusFilters.size +
+      state.typeFilters.size +
+      state.prIssueFilters.size +
+      state.sessionFilters.size +
+      (state.hasAgentFilter ? 1 : 0) +
+      state.activityFilters.size +
+      state.devServerFilters.size
+  );
+  const query = useWorktreeFilterStore((state) => state.query);
+  const setQuery = useWorktreeFilterStore((state) => state.setQuery);
+  const clearFacetFilters = useWorktreeFilterStore((state) => state.clearFacetFilters);
+  const clearAll = useWorktreeFilterStore((state) => state.clearAll);
+  const hasQuery = query.trim().length > 0;
+  // Beside an external search field the query is that field's filter, not this
+  // popover's, so it stays out of the count.
+  const filterCount = hideSearchInput ? facetFilterCount : facetFilterCount + (hasQuery ? 1 : 0);
+  const showBadge = filterCount > 0;
+  const isField = appearance === "field";
+
   const [localQuery, setLocalQuery] = useState("");
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const groupByTypeId = useId();
-
-  const {
-    query,
-    orderBy,
-    groupByType,
-    statusFilters,
-    typeFilters,
-    prIssueFilters,
-    sessionFilters,
-    hasAgentFilter,
-    activityFilters,
-    devServerFilters,
-    setQuery,
-    setOrderBy,
-    setGroupByType,
-    toggleStatusFilter,
-    toggleTypeFilter,
-    togglePrIssueFilter,
-    toggleSessionFilter,
-    setHasAgentFilter,
-    toggleActivityFilter,
-    toggleDevServerFilter,
-    clearStatusFilters,
-    clearTypeFilters,
-    clearPrIssueFilters,
-    clearSessionFilters,
-    clearActivityFilters,
-    clearDevServerFilters,
-    clearAll,
-  } = useWorktreeFilterStore(
-    useShallow((state) => ({
-      query: state.query,
-      orderBy: state.orderBy,
-      groupByType: state.groupByType,
-      statusFilters: state.statusFilters,
-      typeFilters: state.typeFilters,
-      prIssueFilters: state.prIssueFilters,
-      sessionFilters: state.sessionFilters,
-      hasAgentFilter: state.hasAgentFilter,
-      activityFilters: state.activityFilters,
-      devServerFilters: state.devServerFilters,
-      setQuery: state.setQuery,
-      setOrderBy: state.setOrderBy,
-      setGroupByType: state.setGroupByType,
-      toggleStatusFilter: state.toggleStatusFilter,
-      toggleTypeFilter: state.toggleTypeFilter,
-      togglePrIssueFilter: state.togglePrIssueFilter,
-      toggleSessionFilter: state.toggleSessionFilter,
-      setHasAgentFilter: state.setHasAgentFilter,
-      toggleActivityFilter: state.toggleActivityFilter,
-      toggleDevServerFilter: state.toggleDevServerFilter,
-      clearStatusFilters: state.clearStatusFilters,
-      clearTypeFilters: state.clearTypeFilters,
-      clearPrIssueFilters: state.clearPrIssueFilters,
-      clearSessionFilters: state.clearSessionFilters,
-      clearActivityFilters: state.clearActivityFilters,
-      clearDevServerFilters: state.clearDevServerFilters,
-      clearAll: state.clearAll,
-    }))
-  );
-
-  // Derived from the SUBSCRIBED snapshot, not from the store's imperative
-  // `getActiveFilterCount()` / `hasActiveFilters()` helpers. Those reread
-  // `_projectStore` live at call time, so the badge and the footer were reading
-  // the store at two different instants within one render and could disagree —
-  // which is how the "Clear all filters" footer went missing while the trigger
-  // was showing a count of 3. One snapshot, one number, three consumers.
-  const hasQuery = query.trim().length > 0;
-  const facetFilterCount =
-    statusFilters.size +
-    typeFilters.size +
-    prIssueFilters.size +
-    sessionFilters.size +
-    (hasAgentFilter ? 1 : 0) +
-    activityFilters.size +
-    devServerFilters.size;
-  const fullFilterCount = facetFilterCount + (hasQuery ? 1 : 0);
-  const filterCount = hideSearchInput ? facetFilterCount : fullFilterCount;
-  const showBadge = filterCount > 0;
 
   useEffect(() => {
     setLocalQuery(query);
@@ -460,68 +120,23 @@ export function WorktreeFilterPopover({
   }, [setQuery]);
 
   const handleClearAll = useCallback(() => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
     // The footer (and this button) unmount the moment the last filter clears,
     // so move focus onto the still-mounted popover content first — else
     // it drops to document.body inside the open popover (issue #10315).
     contentRef.current?.focus();
+    if (hideSearchInput) {
+      // The text belongs to the field beside the trigger, which has its own X
+      // and its own pending commit. Wiping it here, or cancelling that commit,
+      // would reach into a field this popover does not own.
+      clearFacetFilters();
+      return;
+    }
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+    }
     setLocalQuery("");
     clearAll();
-  }, [clearAll]);
-
-  // Sort options are a real radio group, so they take one tab stop and the
-  // arrows move (and select) within it — ARIA APG. Exposing `role="radio"`
-  // without this promised keyboard behaviour the component did not have.
-  // "Custom order" drops out while grouping is on, so the roving index has to
-  // track the VISIBLE list, not ORDER_OPTIONS.
-  const sortOptions = useMemo(
-    () => ORDER_OPTIONS.filter((option) => !(option.value === "manual" && groupByType)),
-    [groupByType]
-  );
-  const sortRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const checkedSortIndex = sortOptions.findIndex((option) => option.value === orderBy);
-  // Defence, not a live path: `setGroupByType` already moves the selection off
-  // "manual" when grouping turns on, so nothing reachable through the store
-  // leaves the group with no checked option. If that guard ever slips, this
-  // keeps the group tabbable instead of stranding it.
-  const tabbableSortIndex = checkedSortIndex >= 0 ? checkedSortIndex : 0;
-
-  const handleSortKeyDown = useCallback(
-    (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
-      // Home/End as well as the arrows, matching SegmentedRadioGroup — the
-      // app's other radio-group keyboard model.
-      const next =
-        event.key === "Home"
-          ? 0
-          : event.key === "End"
-            ? sortOptions.length - 1
-            : SORT_ARROW_STEPS[event.key] !== undefined
-              ? (index + SORT_ARROW_STEPS[event.key]! + sortOptions.length) % sortOptions.length
-              : -1;
-      if (next < 0) return;
-      event.preventDefault();
-      const option = sortOptions[next];
-      if (!option) return;
-      setOrderBy(option.value);
-      sortRefs.current[next]?.focus();
-    },
-    [sortOptions, setOrderBy]
-  );
-
-  const isField = appearance === "field";
-  const filtersActive = showBadge;
-  const hasAnyFilter = fullFilterCount > 0;
-
-  const sortSummary = useMemo(() => {
-    const label = ORDER_OPTIONS.find((option) => option.value === orderBy)?.label ?? "";
-    // A search ranks by relevance and uses the chosen order only to break ties,
-    // so naming the stored preference here described something that was not in
-    // charge of what the user was looking at.
-    if (hasQuery) return `Relevance, then ${label.toLowerCase()}`;
-    return groupByType ? `${label} · grouped` : label;
-  }, [orderBy, groupByType, hasQuery]);
+  }, [hideSearchInput, clearFacetFilters, clearAll]);
 
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
@@ -540,16 +155,12 @@ export function WorktreeFilterPopover({
                   filterCount > 0 ? "min-w-7 px-1.5" : "w-7 px-0"
                 )
               : "h-6 min-w-6 px-1.5",
-            // Active state is a neutral fill + count, never a saturated colour or a
-            // floating notification dot. A dot reads as "something new"; what matters
-            // here is "how many filters", so we surface the number instead.
-            filtersActive
-              ? isField
-                ? "bg-overlay-soft text-text-primary"
-                : "bg-tint/[0.08] text-text-primary"
-              : isField
-                ? "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
-                : "text-text-secondary hover:bg-tint/[0.06] hover:text-text-primary"
+            // A disclosure, not a toggle: active filters show as the count and
+            // primary ink, never a latched fill. Hover and open both lift one
+            // step up the neutral overlay ladder, whatever the count.
+            "hover:bg-overlay-hover hover:text-text-primary aria-expanded:bg-overlay-hover aria-expanded:text-text-primary",
+            showBadge ? "text-text-primary" : "text-text-secondary",
+            isField && "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))]"
           )}
           // The count is rendered as text inside the button, and `aria-label`
           // overrides contents when the accessible name is computed — so the
@@ -560,6 +171,8 @@ export function WorktreeFilterPopover({
               : "Filter and sort worktrees"
           }
           aria-haspopup="dialog"
+          onPointerEnter={warmFilterContent}
+          onFocus={warmFilterContent}
         >
           <Filter className="w-3.5 h-3.5 shrink-0" />
           {showBadge && (
@@ -577,193 +190,79 @@ export function WorktreeFilterPopover({
         data-testid="worktree-filter-popover"
         onEscapeKeyDown={(e) => clearSearchBeforeDismiss(e, searchInputRef.current, clearQuery)}
       >
-        {/* Search */}
-        {!hideSearchInput && (
-          <div className="shrink-0 border-b border-divider p-3">
-            <SearchField
-              size="compact"
-              inputRef={searchInputRef}
-              value={localQuery}
-              onChange={(e) => handleQueryChange(e.target.value)}
-              onClear={clearQuery}
-              placeholder="Search worktrees…"
-              aria-label="Search worktrees"
-            />
-          </div>
-        )}
-
-        {/* The one facet asked for often enough to sit outside the scroll
-            area and every disclosure: with many agents running, hiding the
-            worktrees that have none is the first cut people reach for. */}
-        <div className="shrink-0 border-b border-divider px-3 py-2">
-          <FilterChip
-            selected={hasAgentFilter}
-            onClick={() => setHasAgentFilter(!hasAgentFilter)}
-            count={chipCounts?.hasAgent}
-          >
-            {HAS_AGENT_LABEL}
-          </FilterChip>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          {/* Sort and grouping are one block, and they read as a peer of the
-              facets rather than a differently-styled preamble: same heading
-              treatment, same chevron column, same disclosure. Collapsed by
-              default with the current order in the header, so it answers its
-              own question without spending a quarter of the panel on four
-              radios the user set once. */}
-          <FilterSection title="Sort by" summary={sortSummary} plainBody>
-            {/* -mx-2 cancels the rows' own px-2, so the check column lines up
-                with the checkbox and chips while the hover fill keeps its
-                breathing room. */}
-            <div role="radiogroup" aria-label="Sort worktrees by" className="-mx-2 flex flex-col">
-              {sortOptions.map((option, index) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  ref={(el) => {
-                    sortRefs.current[index] = el;
-                  }}
-                  onClick={() => setOrderBy(option.value)}
-                  onKeyDown={(event) => handleSortKeyDown(event, index)}
-                  role="radio"
-                  aria-checked={orderBy === option.value}
-                  // One tab stop for the whole group, arrows move within it.
-                  tabIndex={index === tabbableSortIndex ? 0 : -1}
-                  className={cn(
-                    "flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1 text-xs",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                    // The leading check carries selection, as on every menu radio
-                    // row. A selected-row fill on top of it read the same as the
-                    // hover fill, so a pointer resting on another option showed
-                    // two identical rows.
-                    "hover:bg-overlay-soft",
-                    orderBy === option.value ? "text-text-primary" : "text-text-secondary"
-                  )}
-                >
-                  <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center">
-                    {orderBy === option.value && (
-                      <Check className="h-3.5 w-3.5" aria-hidden="true" />
-                    )}
-                  </span>
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <div className="mt-2 flex items-center gap-2 border-t border-divider pt-2">
-              <Checkbox
-                id={groupByTypeId}
-                size="sm"
-                checked={groupByType}
-                onCheckedChange={(checked) => setGroupByType(checked === true)}
-              />
-              <label htmlFor={groupByTypeId} className="cursor-pointer text-xs text-text-secondary">
-                Group by type
-              </label>
-            </div>
-          </FilterSection>
-
-          <FilterSection
-            title="Status"
-            defaultOpen
-            activeCount={statusFilters.size}
-            onClear={clearStatusFilters}
-            summary={selectedSummary(STATUS_OPTIONS, statusFilters)}
-          >
-            <ChipGrid
-              options={STATUS_OPTIONS}
-              isActive={(value) => statusFilters.has(value)}
-              onToggle={toggleStatusFilter}
-              counts={chipCounts?.status}
-            />
-          </FilterSection>
-
-          <FilterSection
-            title="Branch type"
-            defaultOpen
-            activeCount={typeFilters.size}
-            onClear={clearTypeFilters}
-            summary={selectedSummary(TYPE_OPTIONS, typeFilters)}
-          >
-            <ChipGrid
-              options={TYPE_OPTIONS}
-              isActive={(value) => typeFilters.has(value)}
-              onToggle={toggleTypeFilter}
-              counts={chipCounts?.branchType}
-              overflowAfter={BRANCH_TYPE_OVERFLOW_AFTER}
-            />
-          </FilterSection>
-
-          <FilterSection
-            title="Issues & PRs"
-            defaultOpen={prIssueFilters.size > 0}
-            activeCount={prIssueFilters.size}
-            onClear={clearPrIssueFilters}
-            summary={selectedSummary(PR_ISSUE_OPTIONS, prIssueFilters)}
-          >
-            <ChipGrid
-              options={PR_ISSUE_OPTIONS}
-              isActive={(value) => prIssueFilters.has(value)}
-              onToggle={togglePrIssueFilter}
-              counts={chipCounts?.prIssue}
-            />
-          </FilterSection>
-
-          <FilterSection
-            title="Terminals"
-            defaultOpen={sessionFilters.size > 0}
-            activeCount={sessionFilters.size}
-            onClear={clearSessionFilters}
-            summary={selectedSummary(SESSION_OPTIONS, sessionFilters)}
-          >
-            <ChipGrid
-              options={SESSION_OPTIONS}
-              isActive={(value) => sessionFilters.has(value)}
-              onToggle={toggleSessionFilter}
-              counts={chipCounts?.sessions}
-            />
-          </FilterSection>
-
-          <FilterSection
-            title="Activity"
-            defaultOpen={activityFilters.size > 0}
-            activeCount={activityFilters.size}
-            onClear={clearActivityFilters}
-            summary={selectedSummary(ACTIVITY_OPTIONS, activityFilters)}
-          >
-            <ChipGrid
-              options={ACTIVITY_OPTIONS}
-              isActive={(value) => activityFilters.has(value)}
-              onToggle={toggleActivityFilter}
-              counts={chipCounts?.activity}
-            />
-          </FilterSection>
-
-          <FilterSection
-            title="Dev server"
-            defaultOpen={devServerFilters.size > 0}
-            activeCount={devServerFilters.size}
-            onClear={clearDevServerFilters}
-            summary={selectedSummary(DEV_SERVER_OPTIONS, devServerFilters)}
-          >
-            <ChipGrid
-              options={DEV_SERVER_OPTIONS}
-              isActive={(value) => devServerFilters.has(value)}
-              onToggle={toggleDevServerFilter}
-              counts={chipCounts?.devServer}
-            />
-          </FilterSection>
-        </div>
-
-        {/* Clear All */}
-        {hasAnyFilter && (
-          <div className="shrink-0 border-t border-divider p-3">
-            <Button variant="subtle" size="xs" onClick={handleClearAll} className="w-full">
-              Clear all filters
-            </Button>
-          </div>
-        )}
+        <FilterContentLoader
+          contentRef={contentRef}
+          hideSearchInput={hideSearchInput}
+          chipCounts={chipCounts}
+          filterCount={filterCount}
+          localQuery={localQuery}
+          onQueryChange={handleQueryChange}
+          onClearQuery={clearQuery}
+          searchInputRef={searchInputRef}
+          onClearAll={handleClearAll}
+        />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** What a warm open focuses first: the search box, or the first chip without it. */
+const FIRST_CONTROL = 'input:not([disabled]), button:not([disabled]), [tabindex="0"]';
+
+interface FilterContentLoaderProps extends WorktreeFilterPopoverContentProps {
+  contentRef: React.RefObject<HTMLDivElement | null>;
+}
+
+function FilterContentLoader({ contentRef, ...props }: FilterContentLoaderProps) {
+  // Bumped by Retry: a fresh attempt mounts and issues the import again.
+  const [attempt, setAttempt] = useState(0);
+  return (
+    <FilterContentAttempt
+      key={attempt}
+      contentRef={contentRef}
+      {...props}
+      onRetry={() => {
+        // Retry unmounts with the failure it answers; park focus on the content
+        // rather than let it drop to the document.
+        contentRef.current?.focus();
+        setAttempt((n) => n + 1);
+      }}
+    />
+  );
+}
+
+function FilterContentAttempt({
+  contentRef,
+  onRetry,
+  ...props
+}: FilterContentLoaderProps & { onRetry: () => void }) {
+  // Decided as this attempt mounts: sections that land after the content opened
+  // find Radix's open focus parked on the content itself.
+  const [arrivedLate] = useState(() => !PreloadableFilterContent.isLoaded());
+  const load = usePreloadedComponent(PreloadableFilterContent);
+  const ready = load.status === "ready";
+  useLayoutEffect(() => {
+    if (!ready || !arrivedLate) return;
+    const content = contentRef.current;
+    if (!content || document.activeElement !== content) return;
+    content.querySelector<HTMLElement>(FIRST_CONTROL)?.focus({ preventScroll: true });
+  }, [ready, arrivedLate, contentRef]);
+
+  if (ready) return <PreloadableFilterContent {...props} />;
+  // A local chunk read, well inside the 400ms gate: the content's box, empty.
+  if (load.status === "loading") return <div aria-busy="true" className="h-24" />;
+  return (
+    <div className="p-3">
+      <Callout
+        severity="error"
+        size="compact"
+        title="Couldn't load filters"
+        action={
+          <Button variant="subtle" size="xs" onClick={onRetry}>
+            Retry
+          </Button>
+        }
+      />
+    </div>
   );
 }

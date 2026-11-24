@@ -125,9 +125,18 @@ function stripRemotePrefix(fullRef: string, remotes: readonly string[]): string 
  * — sending a write to a repository the user did not choose is not recoverable,
  * while a blocked button is a visible prompt to configure a remote.
  */
+export interface ResolvePushOptions {
+  /**
+   * Leave `establishesUpstream` unread. It costs a whole-config read, and a
+   * caller that only shows where a push goes never looks at it.
+   */
+  skipTrackingSetup?: boolean;
+}
+
 export async function resolveGitPushDestination(
   git: Pick<SimpleGit, "raw" | "getRemotes">,
-  branchName: string
+  branchName: string,
+  options: ResolvePushOptions = {}
 ): Promise<GitPushDestinationResolution> {
   if (!branchName || branchName === "HEAD") {
     return { status: "unresolved", reason: "not-configured" };
@@ -148,7 +157,7 @@ export async function resolveGitPushDestination(
   if (!record) {
     return { status: "unresolved", reason: "not-configured" };
   }
-  return resolvePushFromFields(git, branchName, remotes, record[1], record[2], record[3]);
+  return resolvePushFromFields(git, branchName, remotes, record[1], record[2], record[3], options);
 }
 
 const COMBINED_FIELD_COUNT = 5;
@@ -163,7 +172,8 @@ const COMBINED_FIELD_COUNT = 5;
 export async function resolveGitPushAndUpstream(
   git: Pick<SimpleGit, "raw" | "getRemotes">,
   branchName: string,
-  remoteNames: readonly string[]
+  remoteNames: readonly string[],
+  options: ResolvePushOptions = {}
 ): Promise<{ push: GitPushDestinationResolution; upstream: GitPushDestinationResolution }> {
   const notConfigured: GitPushDestinationResolution = {
     status: "unresolved",
@@ -188,14 +198,22 @@ export async function resolveGitPushAndUpstream(
   // read each side on its own, so one bad value can't sink the other.
   if (record.length !== COMBINED_FIELD_COUNT) {
     const [push, upstream] = await Promise.all([
-      resolveGitPushDestination(git, branchName),
+      resolveGitPushDestination(git, branchName, options),
       resolveGitUpstream(git, branchName),
     ]);
     return { push, upstream };
   }
 
   return {
-    push: await resolvePushFromFields(git, branchName, remotes, record[1], record[2], record[3]),
+    push: await resolvePushFromFields(
+      git,
+      branchName,
+      remotes,
+      record[1],
+      record[2],
+      record[3],
+      options
+    ),
     upstream: resolveUpstreamFromFields(remotes, record[4], record[3]),
   };
 }
@@ -223,7 +241,8 @@ async function resolvePushFromFields(
   remotes: readonly string[],
   remoteField: string | undefined,
   pushRefField: string | undefined,
-  upstreamRefField: string | undefined
+  upstreamRefField: string | undefined,
+  options: ResolvePushOptions
 ): Promise<GitPushDestinationResolution> {
   // Deliberately NOT trimmed: a remote named " origin" is a different remote
   // from "origin", and normalizing the whitespace away would silently redirect
@@ -275,7 +294,9 @@ async function resolvePushFromFields(
       // simply fails and the force-push CTA stays suppressed, which is the safe
       // direction.
       remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${remoteBranch}`,
-      ...(!upstreamRef && (await autoSetupRemoteApplies(git, branchName, remote))
+      ...(!upstreamRef &&
+      !options.skipTrackingSetup &&
+      (await autoSetupRemoteApplies(git, branchName, remote))
         ? { establishesUpstream: true }
         : {}),
     },

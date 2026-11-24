@@ -54,7 +54,7 @@ const timeFormat: Intl.DateTimeFormatOptions = { hour: "2-digit", minute: "2-dig
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** "14:05", "Tue 14:05" within the week, "Nov 10, 14:05" beyond it. */
-function formatResetClock(resetsAt: number, now: number): string {
+export function formatResetClock(resetsAt: number, now: number): string {
   const date = new Date(resetsAt);
   const time = date.toLocaleTimeString(undefined, timeFormat);
   if (date.toDateString() === new Date(now).toDateString()) return time;

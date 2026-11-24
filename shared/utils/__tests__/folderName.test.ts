@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { validateFolderName } from "../folderName.js";
+import { afterEach, describe, it, expect } from "vitest";
+import { folderNameLengthError, validateFolderName } from "../folderName.js";
 
 describe("validateFolderName", () => {
   describe("accepts valid names", () => {
@@ -130,5 +130,111 @@ describe("validateFolderName", () => {
     it("256 chars", () => {
       expect(validateFolderName("a".repeat(256))).toBe("Folder name is too long");
     });
+  });
+});
+
+describe("validateFolderName byte limits", () => {
+  const cjk = (count: number) => "あ".repeat(count);
+  const TOO_LONG = /^Folder name is too long.*255.*byte/i;
+
+  // `vi.unstubAllGlobals` would also drop the globals the setup file stubbed.
+  const processDescriptor = Object.getOwnPropertyDescriptor(globalThis, "process")!;
+  const setProcess = (value: unknown) =>
+    Object.defineProperty(globalThis, "process", {
+      value,
+      configurable: true,
+      writable: true,
+    });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "process", processDescriptor);
+  });
+
+  describe("on Linux", () => {
+    it("rejects 100 CJK characters, 300 bytes", () => {
+      expect(validateFolderName(cjk(100), { platform: "linux" })).toMatch(TOO_LONG);
+    });
+
+    it("accepts 85 CJK characters, exactly 255 bytes", () => {
+      expect(validateFolderName(cjk(85), { platform: "linux" })).toBeNull();
+    });
+
+    it("rejects 86 CJK characters, 258 bytes", () => {
+      expect(validateFolderName(cjk(86), { platform: "linux" })).toMatch(TOO_LONG);
+    });
+
+    it("rejects 255 bytes plus one", () => {
+      expect(validateFolderName(`${cjk(85)}a`, { platform: "linux" })).toMatch(TOO_LONG);
+    });
+
+    it("counts astral characters as four bytes", () => {
+      expect(validateFolderName("😀".repeat(63), { platform: "linux" })).toBeNull();
+      expect(validateFolderName("😀".repeat(64), { platform: "linux" })).toMatch(TOO_LONG);
+    });
+
+    it("counts the trimmed name, not the padding around it", () => {
+      expect(validateFolderName(`   ${cjk(85)}`, { platform: "linux" })).toBeNull();
+    });
+
+    it("keeps the plain message when the character count alone is over the limit", () => {
+      expect(validateFolderName("a".repeat(256), { platform: "linux" })).toBe(
+        "Folder name is too long"
+      );
+    });
+
+    it("still accepts multibyte names within the limit", () => {
+      expect(validateFolderName("日本語のプロジェクト", { platform: "linux" })).toBeNull();
+      expect(validateFolderName("café", { platform: "linux" })).toBeNull();
+    });
+  });
+
+  describe("on platforms that count characters", () => {
+    it.each(["darwin", "win32"])("accepts 100 CJK characters on %s", (platform) => {
+      expect(validateFolderName(cjk(100), { platform })).toBeNull();
+    });
+
+    it.each(["darwin", "win32"])("accepts 255 and rejects 256 UTF-16 units on %s", (platform) => {
+      expect(validateFolderName("a".repeat(255), { platform })).toBeNull();
+      expect(validateFolderName("a".repeat(256), { platform })).toBe("Folder name is too long");
+    });
+
+    it.each(["darwin", "win32"])("counts an astral character as two units on %s", (platform) => {
+      expect(validateFolderName("😀".repeat(127), { platform })).toBeNull();
+      expect(validateFolderName("😀".repeat(128), { platform })).toBe("Folder name is too long");
+    });
+  });
+
+  describe("without an explicit platform", () => {
+    it("follows this process's platform", () => {
+      setProcess({ platform: "linux" });
+      expect(validateFolderName(cjk(100))).toMatch(TOO_LONG);
+      setProcess({ platform: "darwin" });
+      expect(validateFolderName(cjk(100))).toBeNull();
+    });
+
+    it("lets an explicit platform win over this process's", () => {
+      setProcess({ platform: "linux" });
+      expect(validateFolderName(cjk(100), { platform: "darwin" })).toBeNull();
+    });
+
+    it("applies only the character limit to a platform it doesn't know", () => {
+      expect(validateFolderName(cjk(100), { platform: "freebsd" })).toBeNull();
+    });
+
+    it("applies only the character limit when no platform is known", () => {
+      setProcess(undefined);
+      expect(validateFolderName(cjk(100))).toBeNull();
+      expect(validateFolderName("a".repeat(256))).toBe("Folder name is too long");
+    });
+  });
+});
+
+describe("folderNameLengthError", () => {
+  it("measures the name as written, without trimming", () => {
+    expect(folderNameLengthError(` ${"a".repeat(255)}`, { platform: "darwin" })).toBe(
+      "Folder name is too long"
+    );
+    expect(folderNameLengthError("あ".repeat(86), { platform: "linux" })).toMatch(/255 bytes max/);
+    expect(folderNameLengthError("あ".repeat(85), { platform: "linux" })).toBeNull();
   });
 });

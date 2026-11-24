@@ -9,11 +9,14 @@ interface KeybindingProfileActionsProps {
 }
 
 export function KeybindingProfileActions({ onImportComplete }: KeybindingProfileActionsProps) {
-  const [isLoading, setIsLoading] = useState(false);
+  // The pressed button stays focusable while the system file dialog runs, so the
+  // keyboard is still on it when the dialog closes; native `disabled` would drop
+  // focus to the page. The other button is blocked outright.
+  const [busy, setBusy] = useState<"export" | "import" | null>(null);
 
   const handleExport = async () => {
-    if (isLoading) return;
-    setIsLoading(true);
+    if (busy) return;
+    setBusy("export");
     try {
       await window.electron.keybinding.exportProfile();
     } catch {
@@ -25,13 +28,13 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
           "Couldn't save the profile. The destination may be read-only. Try a different location.",
       });
     } finally {
-      setIsLoading(false);
+      setBusy(null);
     }
   };
 
   const handleImport = async () => {
-    if (isLoading) return;
-    setIsLoading(true);
+    if (busy) return;
+    setBusy("import");
     try {
       let result: KeybindingImportResult;
       try {
@@ -71,16 +74,30 @@ export function KeybindingProfileActions({ onImportComplete }: KeybindingProfile
         });
       }
     } finally {
-      setIsLoading(false);
+      setBusy(null);
     }
   };
 
   return (
     <div className="flex items-center gap-2">
-      <Button type="button" variant="outline" size="sm" onClick={handleExport} disabled={isLoading}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={handleExport}
+        loading={busy === "export"}
+        disabled={busy === "import"}
+      >
         Export
       </Button>
-      <Button type="button" variant="outline" size="sm" onClick={handleImport} disabled={isLoading}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={handleImport}
+        loading={busy === "import"}
+        disabled={busy === "export"}
+      >
         Import
       </Button>
     </div>

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 type Loader = ((hostId: string) => Promise<unknown>) | null;
 const setHostProjectsLoader = vi.hoisted(() => vi.fn<(loader: Loader) => void>());
-vi.mock("../hostProjects", () => ({ setHostProjectsLoader }));
+const forgetHostProjects = vi.hoisted(() => vi.fn<(hostId: string) => void>());
+vi.mock("../hostProjects", () => ({ setHostProjectsLoader, forgetHostProjects }));
 
 import { installHostProjectsLoader } from "../installHostProjectsLoader";
 
@@ -32,6 +33,31 @@ describe("installHostProjectsLoader", () => {
 
     uninstall();
     expect(setHostProjectsLoader).toHaveBeenLastCalledWith(null);
+  });
+
+  it("drops a forgotten host's lists until it is uninstalled", () => {
+    let listener: ((event: { type: string; hostId?: string }) => void) | null = null;
+    const off = vi.fn(() => {
+      listener = null;
+    });
+    setElectron({
+      remoteHosts: {
+        listHostProjects: vi.fn(async () => []),
+        onEvent: (callback: typeof listener) => {
+          listener = callback;
+          return off;
+        },
+      },
+    });
+
+    const uninstall = installHostProjectsLoader();
+    listener!({ type: "connection-changed", hostId: "studio-01" });
+    expect(forgetHostProjects).not.toHaveBeenCalled();
+    listener!({ type: "host-forgotten", hostId: "studio-01" });
+    expect(forgetHostProjects).toHaveBeenCalledWith("studio-01");
+
+    uninstall();
+    expect(off).toHaveBeenCalledTimes(1);
   });
 
   it("installs nothing when the bridge has no listing", () => {

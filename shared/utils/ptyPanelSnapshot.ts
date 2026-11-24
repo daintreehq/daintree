@@ -1,5 +1,6 @@
 import { sanitizeAgentEnv } from "./agentPresets.js";
 import { readSpawnProvenance } from "./scheduledRunProvenance.js";
+import { conversationStoreFor } from "./conversationStore.js";
 import { stripAssignedSessionIdArgs } from "../types/agentSettings.js";
 import type { PtyPanelData } from "../types/panel.js";
 import type { PanelSnapshot } from "../types/project.js";
@@ -38,9 +39,11 @@ export type PtySnapshotSource = Pick<
   | "isUsingFallback"
   | "fallbackChainIndex"
   | "conversationCwd"
+  | "conversationStore"
   | "restoreRecovery"
   | "restoreProvenance"
   | "lastAgentObservation"
+  | "stopObservation"
   | "launchedByPluginId"
   | "holdOnRestart"
   | "scratchpad"
@@ -69,6 +72,12 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
   const held = t.restoreRecovery !== undefined;
   // Only an exit the pane still shows (#15941). A session-preserving teardown
   // is restored with a new process, and an exit with no code was never seen.
+  // Only beside the conversation it holds: the pane's own, or the one a held
+  // pane offers to reopen (#17087).
+  const conversationStore = conversationStoreFor(
+    t.conversationStore,
+    held ? t.restoreRecovery?.sessionId : t.agentSessionId
+  );
   const shownExit =
     t.runtimeStatus === "exited" &&
     t.sessionPreservingExit !== true &&
@@ -96,11 +105,15 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
     ...(t.isUsingFallback && { isUsingFallback: true }),
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
     ...(t.conversationCwd && { conversationCwd: t.conversationCwd }),
+    ...(conversationStore && { conversationStore }),
     ...(held && { restoreRecovery: t.restoreRecovery }),
     // Both written for a held pane too: they describe the pane, and the last
     // state observed for it, never a process the hold would start.
     ...(t.restoreProvenance && { restoreProvenance: t.restoreProvenance }),
     ...(t.lastAgentObservation && { lastAgentObservation: t.lastAgentObservation }),
+    // Only while held: a pane that has run since has been stopped since, and
+    // Main records that stop itself (#17886).
+    ...(held && t.stopObservation && { stopObservation: t.stopObservation }),
     ...(t.launchedByPluginId && { launchedByPluginId: t.launchedByPluginId }),
     ...(t.holdOnRestart === true && { holdOnRestart: true as const }),
     // Written for a held pane too: the notes belong to the pane, not its process.

@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Component, type ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, render } from "@testing-library/react";
@@ -33,7 +36,29 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 
-vi.mock("@/hooks/useScopedSelectAll", () => ({ useScopedSelectAll: () => {} }));
+// The chord itself is the hook's business; what this view owes it is the
+// callback that puts every block in the DOM before the selection is made.
+const { selectAll } = vi.hoisted(() => ({
+  selectAll: { beforeSelect: undefined as (() => void) | undefined },
+}));
+vi.mock("@/hooks/useScopedSelectAll", () => ({
+  useScopedSelectAll: (_ref: unknown, _enabled: unknown, _scope: unknown, before?: () => void) => {
+    selectAll.beforeSelect = before;
+  },
+}));
+
+// Each ReactMarkdown render builds a processor, which runs the GFM attacher
+// once: counting attacher calls counts parses.
+const { gfmParses } = vi.hoisted(() => ({ gfmParses: { count: 0 } }));
+vi.mock("remark-gfm", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("remark-gfm")>();
+  return {
+    default: function countedRemarkGfm(this: unknown, ...args: unknown[]) {
+      gfmParses.count++;
+      return Reflect.apply(actual.default, this, args) as unknown;
+    },
+  };
+});
 
 vi.mock("@/components/ui/EmptyState", () => ({
   EmptyState: (props: { title: string; description?: string }) => (
@@ -165,8 +190,12 @@ describe("RenderedMarkdownDiff", () => {
     // The number the stepper shows is a count of things the reader accepts or
     // rejects. A substitution is one of those; reporting its two halves
     // separately claims twice as many changes as the document has.
-    const counts: number[] = [];
-    renderDiff(EDITED_DIFF, EDITED_SOURCE, { onChangeCount: (n: number) => counts.push(n) });
+    const counts: (number | null)[] = [];
+    renderDiff(EDITED_DIFF, EDITED_SOURCE, {
+      onChangeCount: (n: number | null) => {
+        counts.push(n);
+      },
+    });
 
     expect(counts.at(-1)).toBe(1);
   });
@@ -412,6 +441,47 @@ describe("RenderedMarkdownDiff", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
+  // Each block renders through its own pipeline, so a slugger would restart
+  // at every block and repeated headings would collide: no anchors here.
+  it("gives headings no ids and leaves same-document links inert (#17335)", () => {
+    const source = "- [Risks](#risks)\n\n## Risks\n\nText[^1].\n\n[^1]: Note.\n";
+    const diff = patch([
+      "@@ -0,0 +1,7 @@",
+      ...source
+        .trimEnd()
+        .split("\n")
+        .map((line) => `+${line}`),
+    ]);
+
+    const { container } = renderDiff(diff, source, { status: "added" });
+    // The view's own scroller, as a pane would be: jsdom has no layout, so it
+    // is a box that scrolls with every target well below its top.
+    container.style.overflowY = "auto";
+    Object.defineProperty(container, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(container, "scrollHeight", { configurable: true, value: 4000 });
+    container.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    for (const target of container.querySelectorAll("h2, [id]")) {
+      target.getBoundingClientRect = () => ({ top: 900 }) as DOMRect;
+    }
+    const before = document.activeElement;
+    const links = [
+      container.querySelector('a[href="#risks"]'),
+      container.querySelector("a[data-footnote-ref]"),
+      container.querySelector("a[data-footnote-backref]"),
+    ];
+    for (const link of links) {
+      if (!link) throw new Error("a same-document link the fixture promises is missing");
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      link.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(true);
+      expect(container.scrollTop).toBe(0);
+      expect(document.activeElement).toBe(before);
+    }
+
+    expect(container.querySelector("h2")?.id).toBe("");
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
   it("resolves a local image through the contained protocol URL", () => {
     const source = "![shot](./img/a.png)\n";
     const diff = patch(["@@ -0,0 +1,1 @@", "+![shot](./img/a.png)"]);
@@ -487,6 +557,100 @@ describe("RenderedMarkdownDiff", () => {
     expect(visibleText(container.querySelector("li .rendered-markdown-diff__inline--added"))).toBe(
       "leaps"
     );
+  });
+
+  it("marks a changed front matter value inside the metadata block, not a heading (#17334)", () => {
+    const source = [
+      "---",
+      "name: release-check",
+      "description: Checks the release branch before tagging",
+      "---",
+      "",
+      "# Release check",
+      "",
+    ].join("\n");
+    const diff = patch([
+      "@@ -1,6 +1,6 @@",
+      " ---",
+      " name: release-check",
+      "-description: Checks the release branch",
+      "+description: Checks the release branch before tagging",
+      " ---",
+      " ",
+      " # Release check",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(blockKinds(container)).toEqual(["removed", "added", "unchanged"]);
+    const added = container.querySelector(
+      ".rendered-markdown-diff__block--added [data-frontmatter]"
+    );
+    expect(visibleText(added)).toBe(
+      "name: release-check\ndescription: Checks the release branch before tagging"
+    );
+    expect(
+      [...(added?.querySelectorAll(".rendered-markdown-diff__inline--added") ?? [])].map(
+        visibleText
+      )
+    ).toEqual(["before tagging"]);
+    expect(container.querySelector("hr")).toBeNull();
+    expect([...container.querySelectorAll("h1, h2")].map((h) => h.textContent)).toEqual([
+      "Release check",
+    ]);
+  });
+
+  it("renders a later block that opens with a fence as the document does, not as front matter", () => {
+    const source = 'Body.\n\n+++\nname = "new"\n+++\n';
+    const diff = patch([
+      "@@ -1,5 +1,5 @@",
+      " Body.",
+      " ",
+      " +++",
+      '-name = "old"',
+      '+name = "new"',
+      " +++",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(container.querySelector("[data-frontmatter]")).toBeNull();
+    expect(
+      visibleText(container.querySelector(".rendered-markdown-diff__block--added p"))
+    ).toContain('name = "new"');
+  });
+
+  it("strikes a deleted front matter block whole, keeping its lines visible", () => {
+    const source = "# Release check\n";
+    const diff = patch([
+      "@@ -1,5 +1,1 @@",
+      "----",
+      "-name: release-check",
+      "----",
+      "-",
+      " # Release check",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+
+    const removed = container.querySelector(".rendered-markdown-diff__block--removed");
+    expect(removed?.getAttribute("data-whole")).toBe("true");
+    const metadata = removed?.querySelector("[data-frontmatter]");
+    expect(metadata?.textContent).toBe("name: release-check");
+
+    // jsdom applies no imported stylesheet, so the rule that strikes a deleted
+    // block's text goes in by hand to see that it reaches the metadata too.
+    const style = document.createElement("style");
+    style.textContent = readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "../RenderedMarkdownDiff.css"),
+      "utf8"
+    );
+    document.head.append(style);
+    try {
+      expect(metadata && getComputedStyle(metadata).textDecoration).toContain("line-through");
+    } finally {
+      style.remove();
+    }
   });
 
   it("keeps a footnote's text in the rendered output", () => {
@@ -731,7 +895,7 @@ describe("RenderedMarkdownDiff off the main thread", () => {
     // Its count is withdrawn, and nothing is reported for the attempt in flight.
     expect(onChangeCount.mock.calls).toEqual([
       [1, "attempt-1"],
-      [0, "attempt-1"],
+      [null, "attempt-1"],
     ]);
 
     await act(async () => builds[1]!.resolve(engineResult(builds[1])));
@@ -751,7 +915,7 @@ describe("RenderedMarkdownDiff off the main thread", () => {
 
     expect(onChangeCount.mock.calls).toEqual([
       [1, "attempt-3"],
-      [0, "attempt-3"],
+      [null, "attempt-3"],
     ]);
   });
 
@@ -780,5 +944,293 @@ describe("RenderedMarkdownDiff off the main thread", () => {
 
     expect(blockKinds(container)).toContain("removed");
     expect(visibleText(container)).toContain("Removed paragraph 400");
+  });
+});
+
+describe("RenderedMarkdownDiff staged mounting", () => {
+  let frames: Map<number, FrameRequestCallback>;
+  let nextFrame: number;
+
+  beforeEach(() => {
+    frames = new Map();
+    nextFrame = 1;
+    gfmParses.count = 0;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      const id = nextFrame++;
+      frames.set(id, callback);
+      return id;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
+    return () => vi.restoreAllMocks();
+  });
+
+  /** Run every queued frame, and the frames those schedule, until none is left. */
+  function drainFrames(limit = 1000) {
+    let ran = 0;
+    while (frames.size > 0) {
+      if (++ran > limit) throw new Error("frames never settled");
+      runOneFrame();
+    }
+    return ran;
+  }
+
+  function runOneFrame() {
+    const [id, callback] = frames.entries().next().value!;
+    frames.delete(id);
+    act(() => callback(performance.now()));
+  }
+
+  function pendingCount(container: HTMLElement): number {
+    return container.querySelectorAll(".rendered-markdown-diff__pending").length;
+  }
+
+  function addedDocument(count: number, label = "Added") {
+    const paragraphs = Array.from({ length: count }, (_, i) => `${label} paragraph ${i + 1}.`);
+    const lines = paragraphs.flatMap((line, i) => (i === 0 ? [line] : ["", line]));
+    const diff = patch([`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)]);
+    return { diff, newSource: lines.join("\n") + "\n" };
+  }
+
+  it("mounts a long document a slice at a time, with every change's frame in place", () => {
+    const { diff, newSource } = addedDocument(80);
+    const { container } = renderDiff(diff, newSource, { status: "added" });
+
+    const changes = container.querySelectorAll("[data-change-index]").length;
+    expect(changes).toBe(80);
+    const firstPending = pendingCount(container);
+    expect(firstPending).toBeGreaterThan(0);
+    expect(firstPending).toBeLessThan(changes);
+    // Frames stand in for every change from the first commit, so the stepper
+    // can land on any of them.
+    expect(container.querySelectorAll("[data-block-kind]").length).toBe(changes);
+    expect(gfmParses.count).toBe(changes - firstPending);
+
+    runOneFrame();
+    expect(pendingCount(container)).toBeLessThan(firstPending);
+
+    expect(drainFrames()).toBeGreaterThan(1);
+    expect(pendingCount(container)).toBe(0);
+    expect(visibleText(container)).toContain("Added paragraph 80.");
+  });
+
+  it("parses each block exactly once however many slices land around it", () => {
+    const { diff, newSource } = addedDocument(80);
+    renderDiff(diff, newSource, { status: "added" });
+    drainFrames();
+    expect(gfmParses.count).toBe(80);
+  });
+
+  it("renders a short document whole in its first commit", () => {
+    const { container } = renderDiff(EDITED_DIFF, EDITED_SOURCE);
+    expect(pendingCount(container)).toBe(0);
+    expect(frames.size).toBe(0);
+  });
+
+  it("stages the blocks a fold reveals, keeping both edges mounted and focus on the reveal", () => {
+    const { diff, newSource } = documentWithUnchangedRun(120);
+    const { container } = renderDiff(diff, newSource);
+    drainFrames();
+    expect(pendingCount(container)).toBe(0);
+    const edges = [...container.querySelectorAll('[data-block-kind="unchanged"] p')];
+    expect(edges).toHaveLength(4);
+    const parsedBefore = gfmParses.count;
+
+    act(() => {
+      container
+        .querySelector(".rendered-markdown-diff__fold")
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const unchanged = [...container.querySelectorAll('[data-block-kind="unchanged"]')];
+    expect(unchanged).toHaveLength(120);
+    expect(pendingCount(container)).toBeGreaterThan(0);
+    // The edge blocks are the same nodes, not placeholders and not re-parses.
+    expect(unchanged[0]!.querySelector("p")).toBe(edges[0]);
+    expect(unchanged[1]!.querySelector("p")).toBe(edges[1]);
+    expect(unchanged[118]!.querySelector("p")).toBe(edges[2]);
+    expect(unchanged[119]!.querySelector("p")).toBe(edges[3]);
+    expect(document.activeElement).toBe(unchanged[2]);
+
+    drainFrames();
+    expect(pendingCount(container)).toBe(0);
+    expect(document.activeElement).toBe(unchanged[2]);
+    expect(gfmParses.count - parsedBefore).toBe(116);
+    expect(visibleText(container)).toContain("Untouched paragraph 60.");
+  });
+
+  it("puts every block in the DOM before a Select All is made", () => {
+    const { diff, newSource } = addedDocument(80);
+    const { container } = renderDiff(diff, newSource, { status: "added" });
+    expect(pendingCount(container)).toBeGreaterThan(0);
+
+    let pendingAtSelection = -1;
+    act(() => {
+      selectAll.beforeSelect?.();
+      // The selection is made the moment the callback returns.
+      pendingAtSelection = pendingCount(container);
+    });
+
+    expect(pendingAtSelection).toBe(0);
+    expect(visibleText(container)).toContain("Added paragraph 80.");
+  });
+
+  it("starts a new document over rather than inheriting the last one's progress", () => {
+    const first = addedDocument(80);
+    const view = renderDiff(first.diff, first.newSource, { status: "added" });
+    drainFrames();
+    expect(pendingCount(view.container)).toBe(0);
+
+    // Same shape, so the old document's keys would all count as mounted.
+    const second = addedDocument(80, "Rewritten");
+    view.rerender(
+      <RenderedMarkdownDiff
+        diff={second.diff}
+        newSource={second.newSource}
+        status="added"
+        filePath={FILE}
+        rootPath={ROOT}
+        attemptKey="attempt-2"
+        requestKey="pane-1"
+      />
+    );
+    expect(pendingCount(view.container)).toBeGreaterThan(0);
+    drainFrames();
+    expect(pendingCount(view.container)).toBe(0);
+    expect(visibleText(view.container)).toContain("Rewritten paragraph 80.");
+  });
+
+  it("mounts what the reader scrolls or steps to ahead of the sweep", () => {
+    const observed: Element[] = [];
+    let notify: ((entries: Partial<IntersectionObserverEntry>[]) => void) | undefined;
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: (entries: Partial<IntersectionObserverEntry>[]) => void) {
+          notify = callback;
+        }
+        observe(element: Element) {
+          observed.push(element);
+        }
+        disconnect() {
+          observed.length = 0;
+        }
+        unobserve() {}
+        takeRecords() {
+          return [];
+        }
+      }
+    );
+    try {
+      const { diff, newSource } = addedDocument(80);
+      const { container } = renderDiff(diff, newSource, { status: "added" });
+      const target = container.querySelector<HTMLElement>('[data-change-index="70"]')!;
+      expect(observed).toContain(target);
+      expect(target.querySelector(".rendered-markdown-diff__pending")).not.toBe(null);
+
+      act(() => notify?.([{ target, isIntersecting: true }]));
+
+      expect(target.querySelector(".rendered-markdown-diff__pending")).toBe(null);
+      expect(visibleText(target)).toContain("Added paragraph 71.");
+      // Only what came into view jumped the queue.
+      const neighbour = container.querySelector('[data-change-index="69"]')!;
+      expect(neighbour.querySelector(".rendered-markdown-diff__pending")).not.toBe(null);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("stops staging when it unmounts", () => {
+    const { diff, newSource } = addedDocument(80);
+    const view = renderDiff(diff, newSource, { status: "added" });
+    expect(frames.size).toBe(1);
+    view.unmount();
+    expect(frames.size).toBe(0);
+  });
+});
+
+describe("RenderedMarkdownDiff GitHub alerts (#17333)", () => {
+  function alertsIn(container: HTMLElement, kind: "added" | "removed"): Element[] {
+    return [
+      ...container.querySelectorAll(`.rendered-markdown-diff__block--${kind} .markdown-alert`),
+    ];
+  }
+
+  it("draws an edited alert as an alert on both sides, keeping its word marks", () => {
+    const source = "> [!WARNING]\n> This migration drops the new table.\n";
+    const diff = patch([
+      "@@ -1,2 +1,2 @@",
+      " > [!WARNING]",
+      "-> This migration drops the old table.",
+      "+> This migration drops the new table.",
+    ]);
+
+    const { container } = renderDiff(diff, source);
+    const [removed] = alertsIn(container, "removed");
+    const [added] = alertsIn(container, "added");
+
+    expect(removed?.getAttribute("data-markdown-alert")).toBe("warning");
+    expect(added?.getAttribute("data-markdown-alert")).toBe("warning");
+    expect(visibleText(removed?.querySelector(".rendered-markdown-diff__inline--removed"))).toBe(
+      "old"
+    );
+    expect(visibleText(added?.querySelector(".rendered-markdown-diff__inline--added"))).toBe("new");
+    expect(container.textContent).not.toContain("[!WARNING]");
+  });
+
+  it("takes a changed marker out whole, leaving no empty mark behind", () => {
+    const source = "> [!WARNING]\n> Back up the database first.\n";
+    const diff = patch([
+      "@@ -1,2 +1,2 @@",
+      "-> [!NOTE]",
+      "+> [!WARNING]",
+      " > Back up the database first.",
+    ]);
+    // The engine marks inside the marker itself, so the marks reach the alert step.
+    const built = buildMarkdownDiff({ diff, newSource: source, status: "modified" });
+    const modified = built.ok
+      ? built.model.changes.find((change) => change.kind === "modified")
+      : undefined;
+    expect(modified?.kind).toBe("modified");
+    if (modified?.kind !== "modified") return;
+    expect(modified.inline.old.some((range) => range.start < "[!NOTE]".length)).toBe(true);
+    expect(modified.inline.new.some((range) => range.start < "[!WARNING]".length)).toBe(true);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(
+      alertsIn(container, "removed").map((box) => box.getAttribute("data-markdown-alert"))
+    ).toEqual(["note"]);
+    expect(
+      alertsIn(container, "added").map((box) => box.getAttribute("data-markdown-alert"))
+    ).toEqual(["warning"]);
+    expect(container.textContent).not.toContain("[!");
+    for (const mark of container.querySelectorAll(".rendered-markdown-diff__inline")) {
+      expect(visibleText(mark)).not.toBe("");
+    }
+  });
+
+  it("reads no further through authored strikethrough than the document does", () => {
+    const source = "> ~~[!NOTE]~~\n> Body changed.\n";
+    const diff = patch(["@@ -1,2 +1,2 @@", " > ~~[!NOTE]~~", "-> Body.", "+> Body changed."]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(container.querySelector(".markdown-alert")).toBeNull();
+    expect(visibleText(container.querySelector(".rendered-markdown-diff__block--added"))).toContain(
+      "[!NOTE]"
+    );
+  });
+
+  it("draws a whole added alert as an alert", () => {
+    const source = "# Guide\n\n> [!CAUTION]\n> Irreversible.\n";
+    const diff = patch(["@@ -1,1 +1,4 @@", " # Guide", "+", "+> [!CAUTION]", "+> Irreversible."]);
+
+    const { container } = renderDiff(diff, source);
+
+    expect(
+      alertsIn(container, "added").map((box) => box.getAttribute("data-markdown-alert"))
+    ).toEqual(["caution"]);
   });
 });

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalArgsHash } from "../../../services/mcp-server/sessionDedup.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
+import { ASSISTANT_GLOBAL_CLOSE_CONFIRMATION } from "../../../../shared/config/assistantConfirmationDelegation.js";
 import {
   HostCallRuntime,
   type ObservedHost,
@@ -17,6 +19,14 @@ const RUN_A: OpenRun = {
   slot: 0,
   sessionId: "a",
   terminalId: "t-a",
+  launchGeneration: 1,
+};
+
+const RUN_GLOBAL: OpenRun = {
+  projectId: GLOBAL_ASSISTANT_ID,
+  slot: 0,
+  sessionId: "g",
+  terminalId: "t-g",
   launchGeneration: 1,
 };
 
@@ -62,12 +72,27 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
   let skips: boolean | Error | ReadonlySet<string>;
   let skipReads: string[];
   let skipNotes: number;
+  // The hand-over this Shell's preference offers for a called id (#16752), and its writes.
+  let delegable: ReadonlySet<string>;
+  let delegationReads: Array<[string, string]>;
+  let commits: string[];
+  let reply: { delegate?: true };
+  // The tools a preset move may run unasked for, once the view finds it the next step (#17917).
+  let nextFallback: ReadonlySet<string> | Error;
 
   beforeEach(() => {
+    delegable = new Set();
+    delegationReads = [];
+    commits = [];
+    reply = {};
+    nextFallback = new Set();
     skips = false;
     skipReads = [];
     skipNotes = 0;
-    runs = new Map([["a", RUN_A]]);
+    runs = new Map([
+      ["a", RUN_A],
+      ["g", RUN_GLOBAL],
+    ]);
     control = new Set(["studio"]);
     asked = [];
     decision = "approved";
@@ -75,6 +100,7 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
     duringCall = undefined;
     const lanes = new Map<string, { projectId: string; slot: number }>([
       ["a", { projectId: "proj-1", slot: 0 }],
+      ["g", { projectId: GLOBAL_ASSISTANT_ID, slot: 0 }],
     ]);
     let ids = 0;
     runtime = new HostCallRuntime({
@@ -82,24 +108,49 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
       callerRun: (id) => runs.get(id) ?? null,
       client: () =>
         ({
-          relayCall: vi.fn(async (_hostId: string, payload: { callId: string }) => {
-            if (duringCall) {
-              answers.push((await duringCall(runtime, payload.callId)) as RelayApproveAnswer);
+          relayCall: vi.fn(
+            async (
+              _hostId: string,
+              payload: { callId: string },
+              _timeoutMs: number,
+              // As the link client does with a call already out: the cancel goes, and says so.
+              cancel?: { signal: AbortSignal; onCancel?: () => void }
+            ) => {
+              cancel?.signal.addEventListener("abort", () => cancel.onCancel?.(), { once: true });
+              if (duringCall) {
+                answers.push((await duringCall(runtime, payload.callId)) as RelayApproveAnswer);
+              }
+              return DONE;
             }
-            return DONE;
-          }),
+          ),
         }) as never,
       hosts: () => [HOST],
       inLocalView: () => true,
       controlEnabled: (hostId) => control.has(hostId),
       askApproval: async (question) => {
         asked.push(question);
-        return decision;
+        return decision === null ? null : { decision, ...reply };
+      },
+      prepareDelegation: (helpSessionId, calledActionId) => {
+        delegationReads.push([helpSessionId, calledActionId]);
+        if (!delegable.has(calledActionId)) return null;
+        return {
+          offer: { label: calledActionId, detail: "only this" },
+          approved: () => {},
+          commit: () => {
+            commits.push(calledActionId);
+            return true;
+          },
+        };
       },
       confirmationsSkipped: (helpSessionId, calledActionId) => {
         skipReads.push(helpSessionId);
         if (skips instanceof Error) throw skips;
         return typeof skips === "boolean" ? skips : skips.has(calledActionId);
+      },
+      checksNextFallback: (_helpSessionId, calledActionId) => {
+        if (nextFallback instanceof Error) throw nextFallback;
+        return nextFallback.has(calledActionId);
       },
       newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
     });
@@ -194,6 +245,199 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
     expect(answers[0]?.decision).toBe("approved");
   });
 
+  describe("the global Assistant closing a finished agent it didn't launch (#16750)", () => {
+    const closeCall = (
+      session = "g",
+      tool = "terminal.closeOwned",
+      args: Record<string, unknown> = { terminalId: "t-1" }
+    ) =>
+      runtime.call(
+        session,
+        { hostId: "studio", projectId: "proj-2", tool, args },
+        { tier: "full", noteSkipPreference: () => (skipNotes += 1) }
+      );
+    const closeAsk = (
+      callId: string,
+      closeClass: "handback" | "requires-person" = "handback",
+      overrides: Partial<RelayApprovePayload> = {}
+    ) =>
+      ask({
+        callId,
+        helpSessionId: "g",
+        actionId: "terminal.close",
+        args: { terminalId: "t-1" },
+        lines: ["Panel: Fix the flaky test (t-1)"],
+        closeClass,
+        ...overrides,
+      });
+
+    it("asks the person about one close, offering its own tick", async () => {
+      delegable = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+      reply = { delegate: true };
+      duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId));
+
+      await closeCall();
+
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).toMatchObject({ actionId: "terminal.close", args: { terminalId: "t-1" } });
+      expect(asked[0]?.delegation?.label).toBe(ASSISTANT_GLOBAL_CLOSE_CONFIRMATION);
+      expect(answers[0]?.decision).toBe("approved");
+      // The tick is the close's own, never the owned close as a whole.
+      expect(commits).toEqual([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+    });
+
+    it("answers for the person under their Never ask, or the close's own tick", async () => {
+      skips = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+      duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId));
+
+      await closeCall();
+
+      expect(asked).toEqual([]);
+      expect(answers[0]?.decision).toBe("skip-preference");
+      expect(skipNotes).toBe(1);
+    });
+
+    it("settles a batch on the same tick as one close, asked about whole", async () => {
+      skips = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+      const args = { terminalIds: ["t-1", "t-2"] };
+      duringCall = (r, callId) =>
+        r.receiveApproval(
+          "studio",
+          closeAsk(callId, "handback", {
+            actionId: "terminal.closeMany",
+            args,
+            argsHash: canonicalArgsHash("terminal.closeMany", args),
+          })
+        );
+
+      await closeCall("g", "terminal.closeMany", args);
+
+      expect(answers[0]?.decision).toBe("skip-preference");
+    });
+
+    it("refuses a batch ask about other panels than the call named", async () => {
+      skips = true;
+      const other = { terminalIds: ["t-1", "t-9"] };
+      duringCall = (r, callId) =>
+        r.receiveApproval(
+          "studio",
+          closeAsk(callId, "handback", {
+            actionId: "terminal.closeMany",
+            args: other,
+            argsHash: canonicalArgsHash("terminal.closeMany", other),
+          })
+        );
+
+      await closeCall("g", "terminal.closeMany", { terminalIds: ["t-1", "t-2"] });
+
+      expect(answers[0]?.decision).toBe("refused");
+    });
+
+    it("puts an agent stopped on an error to the person, past any skip and with no tick", async () => {
+      skips = true;
+      delegable = new Set([ASSISTANT_GLOBAL_CLOSE_CONFIRMATION]);
+      reply = { delegate: true };
+      duringCall = (r, callId) => r.receiveApproval("studio", closeAsk(callId, "requires-person"));
+
+      await closeCall();
+
+      expect(asked).toHaveLength(1);
+      expect(asked[0]).not.toHaveProperty("delegation");
+      expect(answers[0]?.decision).toBe("approved");
+      expect(commits).toEqual([]);
+      expect(skipNotes).toBe(0);
+      // Neither the preference nor the tick is read for it.
+      expect(skipReads).toEqual([]);
+      expect(delegationReads).toEqual([]);
+    });
+
+    it("refuses a close ask about a project assistant's call, or one that doesn't say how it read the stop", async () => {
+      skips = true;
+      const refusedFor = async (
+        session: string,
+        payload: (callId: string) => RelayApprovePayload
+      ) => {
+        duringCall = (r, callId) => r.receiveApproval("studio", payload(callId));
+        await closeCall(session);
+      };
+
+      await refusedFor("a", (callId) => closeAsk(callId, "handback", { helpSessionId: "a" }));
+      await refusedFor("g", (callId) => {
+        const { closeClass: _dropped, ...unclassed } = closeAsk(callId);
+        return unclassed;
+      });
+      // Classed asks about anything but a close are refused too.
+      duringCall = (r, callId) =>
+        r.receiveApproval("studio", { ...ask({ callId }), closeClass: "handback" });
+      await deleteCall();
+
+      expect(asked).toEqual([]);
+      expect(answers.map((answer) => answer.decision)).toEqual(["refused", "refused", "refused"]);
+    });
+  });
+
+  describe("the dialog's hand-over (#16752)", () => {
+    it("offers the tool the assistant called, and writes it beside the approval", async () => {
+      delegable = new Set(["worktree.deleteOwned"]);
+      reply = { delegate: true };
+      duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+
+      await deleteCall("worktree.deleteOwned");
+
+      expect(delegationReads).toEqual([["a", "worktree.deleteOwned"]]);
+      expect(asked[0]?.delegation).toEqual({ label: "worktree.deleteOwned", detail: "only this" });
+      expect(answers[0]).toEqual({
+        approvalId: ask().approvalId,
+        argsHash: ask().argsHash,
+        decision: "approved",
+      });
+      expect(commits).toEqual(["worktree.deleteOwned"]);
+    });
+
+    it("offers nothing for a plain delete, though the host asks about the same action", async () => {
+      delegable = new Set(["worktree.deleteOwned"]);
+      duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+
+      await deleteCall();
+
+      expect(delegationReads).toEqual([["a", "worktree.delete"]]);
+      expect(asked[0]).not.toHaveProperty("delegation");
+    });
+
+    it("writes nothing on an approval without the tick, or a decline with it", async () => {
+      delegable = new Set(["worktree.deleteOwned"]);
+      duringCall = (r, callId) => r.receiveApproval("studio", ask({ callId }));
+      await deleteCall("worktree.deleteOwned");
+
+      decision = "rejected";
+      reply = { delegate: true };
+      await deleteCall("worktree.deleteOwned");
+
+      expect(asked.map((question) => question.delegation?.label)).toEqual([
+        "worktree.deleteOwned",
+        "worktree.deleteOwned",
+      ]);
+      expect(answers.map((answer) => answer.decision)).toEqual(["approved", "rejected"]);
+      expect(commits).toEqual([]);
+    });
+
+    it("writes nothing when the host's control is switched off while the person decides", async () => {
+      delegable = new Set(["worktree.deleteOwned"]);
+      reply = { delegate: true };
+      duringCall = async (r, callId) => {
+        const answered = r.receiveApproval("studio", ask({ callId }));
+        control.delete("studio");
+        return answered;
+      };
+
+      await deleteCall("worktree.deleteOwned");
+
+      expect(asked[0]?.delegation).toBeDefined();
+      expect(answers[0]?.decision).toBe("refused");
+      expect(commits).toEqual([]);
+    });
+  });
+
   it("asks once per call: a second ask about the same call is refused", async () => {
     duringCall = async (r, callId) => {
       await r.receiveApproval("studio", ask({ callId }));
@@ -285,6 +529,86 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
 
     expect(asked).toHaveLength(1);
     expect(answers[0]?.decision).toBe("refused");
+  });
+
+  describe("a call its caller cancelled (#17985)", () => {
+    const cancellable = (signal: AbortSignal) =>
+      runtime.call(
+        "a",
+        {
+          hostId: "studio",
+          projectId: "proj-2",
+          tool: "worktree.delete",
+          args: { worktreeId: "/wt/feature" },
+        },
+        { tier: "full", signal }
+      );
+
+    it("asks nobody about a call already cancelled", async () => {
+      const controller = new AbortController();
+      duringCall = (r, callId) => {
+        controller.abort();
+        return r.receiveApproval("studio", ask({ callId }));
+      };
+
+      await cancellable(controller.signal);
+
+      expect(asked).toEqual([]);
+      expect(answers[0]?.decision).toBe("refused");
+    });
+
+    it("withdraws an approval the person gave after the call was cancelled", async () => {
+      const controller = new AbortController();
+      duringCall = async (r, callId) => {
+        const pending = r.receiveApproval("studio", ask({ callId }));
+        controller.abort();
+        return pending;
+      };
+
+      await cancellable(controller.signal);
+
+      expect(asked).toHaveLength(1);
+      expect(answers[0]?.decision).toBe("refused");
+    });
+
+    it("leaves the call's ask good when only a resend that never went out was cancelled", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      duringCall = async (r, callId) => {
+        // A resend of this very call, cancelled before it was sent.
+        await runtime.call(
+          "a",
+          {
+            hostId: "studio",
+            projectId: "proj-2",
+            tool: "worktree.delete",
+            args: { worktreeId: "/wt/feature" },
+            callId,
+          },
+          { tier: "full", signal: controller.signal }
+        );
+        return r.receiveApproval("studio", ask({ callId }));
+      };
+
+      await deleteCall();
+
+      expect(asked).toHaveLength(1);
+      expect(answers[0]?.decision).toBe("approved");
+    });
+
+    it("grants no skip for a call already cancelled under the person's own Never ask", async () => {
+      skips = true;
+      const controller = new AbortController();
+      duringCall = (r, callId) => {
+        controller.abort();
+        return r.receiveApproval("studio", ask({ callId }));
+      };
+
+      await cancellable(controller.signal);
+
+      expect(answers[0]?.decision).toBe("refused");
+      expect(skipReads).toEqual([]);
+    });
   });
 
   it("passes a decline or a missed dialog through, and refuses when no window could ask", async () => {
@@ -401,6 +725,47 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
         expect(verdicts).toEqual([false]);
       });
 
+      it("offers a hand-over only for the call out to that host, settled on the tool called (#16752)", async () => {
+        delegable = new Set(["worktree.deleteOwned"]);
+        const offers: Array<string | null> = [];
+        let held: ReturnType<HostCallRuntime["relayedDelegation"]> = null;
+        duringCall = async (r, callId) => {
+          for (const candidate of [
+            dispatch(callId, { helpSessionId: "b" }),
+            dispatch(callId, { projectId: "proj-9" }),
+            dispatch(callId, { args: { worktreeId: "/wt/feature", force: true } }),
+            dispatch("someone-elses-call"),
+          ]) {
+            offers.push(r.relayedDelegation("studio", candidate)?.offer.label ?? null);
+          }
+          offers.push(r.relayedDelegation("elsewhere", dispatch(callId))?.offer.label ?? null);
+          held = r.relayedDelegation("studio", dispatch(callId));
+          offers.push(held?.offer.label ?? null);
+          return { decision: "unused" };
+        };
+
+        await deleteCall("worktree.deleteOwned");
+
+        expect(offers).toEqual([null, null, null, null, null, "worktree.deleteOwned"]);
+        // The call has settled, so its offer can no longer write.
+        expect(held!.commit()).toBe(false);
+        expect(commits).toEqual([]);
+      });
+
+      it("writes a relayed dispatch's hand-over while its call is still out (#16752)", async () => {
+        delegable = new Set(["worktree.retireOwned"]);
+        let committed: boolean | undefined;
+        duringCall = async (r, callId) => {
+          committed = r.relayedDelegation("studio", dispatch(callId))?.commit();
+          return { decision: "unused" };
+        };
+
+        await deleteCall("worktree.retireOwned");
+
+        expect(committed).toBe(true);
+        expect(commits).toEqual(["worktree.retireOwned"]);
+      });
+
       it("skips once per call: a second dispatch of the same call asks", async () => {
         skips = true;
         during((r, callId) => {
@@ -412,6 +777,55 @@ describe("HostCallRuntime answering a host's approval ask (#13501)", () => {
 
         expect(verdicts).toEqual([true, false]);
         expect(skipNotes).toBe(1);
+      });
+
+      describe("a preset move offered as the pane's next own step (#17917)", () => {
+        const MOVE = "terminal.restartOnPresetOwned";
+        const moveArgs = { terminalId: "t-9", presetId: "p-1" };
+        const restart = (callId: string, args: Record<string, unknown> = moveArgs) =>
+          dispatch(callId, { actionId: "terminal.restartOnPreset", args });
+
+        it("offers the move once, spending the call's ask, and notes a skip only once it ran", async () => {
+          nextFallback = new Set([MOVE]);
+          const offers: Array<(() => void) | null> = [];
+          during((r, callId) => {
+            offers.push(r.offersNextFallback("studio", restart(callId)));
+            offers.push(r.offersNextFallback("studio", restart(callId)));
+            verdicts.push(r.skipsRelayedDispatch("studio", restart(callId)));
+            expect(skipNotes).toBe(0);
+            offers[0]?.();
+            offers[0]?.();
+          });
+
+          await deleteCall(MOVE, moveArgs);
+
+          expect(offers.map((ran) => ran !== null)).toEqual([true, false]);
+          expect(verdicts).toEqual([false]);
+          expect(skipNotes).toBe(1);
+        });
+
+        it("offers nothing without the tick, for other arguments, another host, or an unreadable preference", async () => {
+          const offered = (ran: (() => void) | null) => verdicts.push(ran !== null);
+          during((r, callId) => offered(r.offersNextFallback("studio", restart(callId))));
+          await deleteCall(MOVE, moveArgs);
+          expect(verdicts).toEqual([false]);
+
+          nextFallback = new Set([MOVE]);
+          during((r, callId) => {
+            offered(
+              r.offersNextFallback("studio", restart(callId, { ...moveArgs, presetId: "p-2" }))
+            );
+            offered(r.offersNextFallback("elsewhere", restart(callId)));
+            offered(r.offersNextFallback("studio", dispatch(callId)));
+          });
+          await deleteCall(MOVE, moveArgs);
+          expect(verdicts).toEqual([false, false, false]);
+
+          nextFallback = new Error("store unreadable");
+          during((r, callId) => offered(r.offersNextFallback("studio", restart(callId))));
+          await deleteCall(MOVE, moveArgs);
+          expect(verdicts).toEqual([false]);
+        });
       });
 
       it("rebuilds an owned tool's delegate from its id and the fields it forwards, nothing else", async () => {

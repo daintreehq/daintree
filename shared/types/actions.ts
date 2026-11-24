@@ -94,6 +94,9 @@ export interface ActionExample {
   description: string;
 }
 
+/** Which of the person's assistants made an agent dispatch, as main resolved it (#16751, #18153). */
+export type HostCallerOrigin = "assistant" | "global-assistant";
+
 export interface ActionContext {
   projectId?: string;
   projectName?: string;
@@ -234,6 +237,15 @@ export interface ActionContext {
    */
   hostApprovedPresetWrite?: string;
   /**
+   * Main offered this unconfirmed preset restart under the assistant's
+   * next-fallback tick (#17917). Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.ownFallbackStep} for that one action alone,
+   * stamped over whatever a `contextOverride` claimed, and never on any
+   * `argsSchema`. The run hops only to the pane's next own fallback step and
+   * otherwise refuses with nothing changed; it never switches.
+   */
+  hostOwnFallbackStep?: boolean;
+  /**
    * The caller shows this dispatch's failure itself, so an action that owns its
    * failure toast stays quiet (#16667). Set by `ActionService.dispatch` from
    * {@link ActionDispatchOptions.callerReportsFailure}, stamped over whatever a
@@ -248,13 +260,15 @@ export interface ActionContext {
   /**
    * `"assistant"` when the MCP session that dispatched this is the person's
    * Daintree Assistant (session origin `help`), as main resolved it from the
-   * session's bearer (#16751). Set by `ActionService.dispatch` from
+   * session's bearer (#16751), and `"global-assistant"` when it is the session
+   * main opened for this machine's global Assistant's `host.call` into the
+   * project (#18153). Set by `ActionService.dispatch` from
    * {@link ActionDispatchOptions.hostCallerOrigin} for `source: "agent"` only,
    * stamped over whatever a `contextOverride` claimed, and never on any
    * `argsSchema`. Provenance, not proof that a person asked. A plugin action
    * hands it to its handler as `origin`.
    */
-  hostCallerOrigin?: "assistant";
+  hostCallerOrigin?: HostCallerOrigin;
   /**
    * True only when a person answered the host's confirm dialog for THIS
    * dispatch (#16751). Narrower than {@link hostConfirmed}, which an automation
@@ -280,6 +294,15 @@ export interface ActionContext {
    * no deadline behind it.
    */
   dispatchDeadlineAt?: number;
+  /**
+   * The dispatch is main's own walk of `actions.list` (#17036), so the action
+   * pages at `ACTIONS_LIST_WALK_LIMIT` rather than the caller-facing limit.
+   * Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.actionsListWalk} for an agent dispatch only,
+   * stamped over whatever a `contextOverride` claimed, and left out of the
+   * launch-time snapshot like {@link dispatchDeadlineAt}.
+   */
+  actionsListWalk?: boolean;
   /**
    * The plugin behind a `"plugin"` dispatch, stamped by `ActionService.dispatch`
    * from {@link ActionDispatchOptions.callerPluginId} and absent for every other
@@ -438,6 +461,14 @@ export interface ActionDefinition<
    */
   palette?: PaletteBehavior;
   /**
+   * The action palette's subtitle for this row, in place of `description`.
+   * `description` is the MCP tool contract and is written for agents, so it
+   * often carries call guidance no person should read. When set, the palette
+   * shows and searches this instead; put the human synonyms it drops in
+   * `keywords`. One short sentence, no trailing period.
+   */
+  paletteDescription?: string;
+  /**
    * Declares that *every* exception escaping `run()` has already produced a
    * user-visible error notification. The action palette reads this (via
    * `ActionService.selfNotifiesOnExecutionError`) to suppress its generic
@@ -578,6 +609,8 @@ export interface ActionManifestEntry {
   paletteHidden?: boolean;
   /** `palette.mode === "redirect"` — dispatch this id instead when picked. */
   paletteRedirectTo?: ActionId;
+  /** {@link ActionDefinition.paletteDescription}: the palette row's subtitle. */
+  paletteDescription?: string;
   /** `palette.mode === "requireContext"` and `isReady(ctx)` was false at list() time. */
   paletteDisabled?: boolean;
   /** Reason shown on a `requireContext`-disabled palette row. */
@@ -734,6 +767,14 @@ export interface ActionDispatchOptions {
    * bridge.
    */
   hostApprovedPresetWrite?: string;
+  /**
+   * Main's offer of the assistant's next-fallback tick for an unconfirmed
+   * `terminal.restartOnPreset` (#17917) — NOT a client-supplied value. See
+   * {@link ActionContext.hostOwnFallbackStep}. Set only by the MCP renderer
+   * bridge; it lets that action past the confirmation gate into a run that can
+   * only take the pane's next own fallback step.
+   */
+  ownFallbackStep?: boolean;
   /** See {@link ActionContext.callerReportsFailure}. */
   callerReportsFailure?: boolean;
   /**
@@ -741,7 +782,7 @@ export interface ActionDispatchOptions {
    * value. See {@link ActionContext.hostCallerOrigin}. Set only by the MCP
    * renderer bridge, from the `sessionOrigin` main attached to the request.
    */
-  hostCallerOrigin?: "assistant";
+  hostCallerOrigin?: HostCallerOrigin;
   /**
    * A person answered the host confirm dialog for this dispatch — NOT a
    * client-supplied value. See {@link ActionContext.hostPersonApproved}. Set
@@ -754,6 +795,12 @@ export interface ActionDispatchOptions {
    * renderer bridge, from the deadline main sent or the run budget it granted.
    */
   dispatchDeadlineAt?: number;
+  /**
+   * Main's own `actions.list` walk (#17036) — NOT a client-supplied value. See
+   * {@link ActionContext.actionsListWalk}. Set only by the MCP renderer bridge,
+   * from the flag main put on its local dispatch request.
+   */
+  actionsListWalk?: boolean;
   /**
    * The plugin making a `source: "plugin"` dispatch — NOT a plugin-supplied
    * value. Set by the host from the plugin host's own closure (the

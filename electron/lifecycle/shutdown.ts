@@ -10,7 +10,18 @@ import { sealAndDrainCapturedSessionPersistence } from "../services/pty/agentSes
 import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import type { AssistantLaneSnapshot } from "../services/HelpSessionService.js";
 import { getLifecycleLedger } from "../services/pty/lifecycleLedger.js";
-import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
+import {
+  applyStopObservations,
+  hasStopReading,
+  stopObservationsFor,
+} from "../services/pty/stopObservation.js";
+import {
+  getActiveAgentCount,
+  getActiveAgents,
+  showQuitWarning,
+  type QuitDecision,
+} from "../utils/quitWarning.js";
+import { hasOpenWindows } from "./backgroundAgents.js";
 import {
   disposeAgentAvailabilityStore,
   getAgentAvailabilityStore,
@@ -77,6 +88,7 @@ import {
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
   CANOPY_READER_DRAIN_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
+  LOCAL_SPEECH_DRAIN_BUDGET_MS,
   POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
@@ -113,6 +125,16 @@ export interface ShutdownDeps {
    * Injected by main.ts, the only place allowed to load the remote modules.
    */
   stopRemoteHosts?: () => Promise<void>;
+  /**
+   * Closes every window and leaves the process running with its agents, for
+   * the quit warning's Keep Agents Running. Without it the choice isn't offered.
+   */
+  keepAgentsRunning?: () => void;
+  /**
+   * False where no dialog can be shown (a Host on headless Chromium). The quit
+   * warning then never asks, with or without a window.
+   */
+  canShowDialogs?: () => boolean;
 }
 
 // Remote Hosts stop before the graceful kill so no remote frontend is still
@@ -126,11 +148,12 @@ let isConfirmingQuit = false;
 
 /**
  * Off macOS, closing the last window quits the app, but by the time
- * `before-quit` runs that window is gone and the warning about working agents
- * has nowhere to show, so Alt+F4 or the caption's close button quit without
- * it. Called from that window's `close` when closing it would quit: when the
- * warning has something to say, the close becomes a quit, which asks while the
- * window is still up and leaves it open if the answer is no.
+ * `before-quit` runs that window is gone: the warning about working agents
+ * would show with nothing behind it, never offer to keep them running, and a
+ * Cancel would leave no window on screen. Called from that window's `close`
+ * when closing it would quit: when the warning has something to say, the
+ * close becomes a quit, which asks while the window is still up and leaves it
+ * open if the answer is no.
  */
 export function routeLastWindowCloseThroughQuit(): boolean {
   if (process.platform === "darwin" || isE2EMode || isSmokeTest) return false;
@@ -184,8 +207,9 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       return;
     }
 
-    const canShowDialog =
-      !isE2EMode && !isSignalShutdown() && deps.windowRegistry?.getPrimary()?.browserWindow != null;
+    // No window needs to be open: Cmd+Q from the Dock or menu bar with none
+    // open still ends every agent, so it asks without a parent.
+    const canShowDialog = !isE2EMode && !isSignalShutdown() && (deps.canShowDialogs?.() ?? true);
 
     // A signal never waits on an open confirmation, the quit warning's included:
     // it claims the shutdown now, and the warning's late answer finds it owned.
@@ -197,29 +221,44 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     if (canShowDialog) {
       event.preventDefault();
 
-      const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
+      const agents = getActiveAgents(getAgentAvailabilityStore());
       const attachedShells = getAttachedShells();
-      if (activeCount > 0 || attachedShells.length > 0) {
+      if (agents.activeAgents > 0 || attachedShells.length > 0) {
         isConfirmingQuit = true;
         setExitConfirmationPending(true);
-        let confirmed = false;
+        let decision: QuitDecision = "cancel";
+        const primaryWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? null;
+        // With no window to hang a sheet from, Electron shows the macOS alert
+        // with runModal, which holds Main's event loop until it is answered.
+        // The watchdog would take that for a hang and kill the process, and
+        // every agent with it, while the user reads the question.
+        const stalledWatchdog =
+          primaryWindow === null && process.platform === "darwin"
+            ? getMainProcessWatchdogClientRef()
+            : null;
+        stalledWatchdog?.pause();
         try {
-          const primaryWindow = deps.windowRegistry?.getPrimary()?.browserWindow ?? null;
-          confirmed = await showQuitWarning(
-            { activeAgents: activeCount, attachedShells },
+          decision = await showQuitWarning(
+            { ...agents, attachedShells },
             dialog.showMessageBox,
-            primaryWindow
+            primaryWindow,
+            { offerKeepRunning: deps.keepAgentsRunning !== undefined && hasOpenWindows() }
           );
         } catch (error) {
           console.error("[MAIN] Error showing quit warning:", error);
         } finally {
+          stalledWatchdog?.resume();
           isConfirmingQuit = false;
           setExitConfirmationPending(false);
         }
 
         // A signal claimed the shutdown while the warning was open, so its
         // answer no longer decides anything.
-        if (!confirmed || getActiveShutdown()) {
+        if (decision === "cancel" || getActiveShutdown()) {
+          return;
+        }
+        if (decision === "keep-running") {
+          deps.keepAgentsRunning?.();
           return;
         }
       }
@@ -400,6 +439,17 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     drainRateLimitQueues();
   } catch (err) {
     console.warn("[MAIN] Rate-limit queue drain at quit failed:", err);
+  }
+
+  // Before anything below ends a relay hold, a bearer or a session: none of that
+  // is a decision about what an Assistant launched, so the panes it kept for the
+  // next run stay kept (#16845). Guarded like the drain above.
+  try {
+    const { beginAssistantPaneCreationQuit } =
+      await import("../services/mcp-server/assistantPaneCreations.js");
+    beginAssistantPaneCreationQuit();
+  } catch (err) {
+    console.warn("[MAIN] Keeping Assistant pane creations at quit failed:", err);
   }
 
   if (deps.stopRemoteHosts) {
@@ -609,7 +659,21 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             r.agentSessionId &&
             !isAssistantTerminalRecord(terminalInfoById.get(r.id) ?? { id: r.id })
         );
-        if (captured.length === 0) continue;
+        // What each pane the quit stops was doing, read before the kill
+        // (#17886): every one of them goes with the app, reported back or not.
+        const stoppedIds = new Set([
+          ...[...terminalInfoById.values()]
+            .filter((t) => t.projectId === projectIds[i])
+            .map((t) => t.id),
+          ...results.map((r) => r.id),
+        ]);
+        const observations = stopObservationsFor(
+          [...stoppedIds].filter(
+            (id) => !isAssistantTerminalRecord(terminalInfoById.get(id) ?? { id })
+          ),
+          terminalInfoById
+        );
+        if (captured.length === 0 && !hasStopReading(observations)) continue;
 
         try {
           await projectStore.enqueueProjectStateUpdate(projectIds[i], (state) => {
@@ -620,7 +684,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
                 snapshot.agentSessionId = result.agentSessionId ?? undefined;
               }
             }
-            return state;
+            const observed = applyStopObservations(state.terminals, observations);
+            return captured.length > 0 || observed ? state : null;
           });
         } catch (error) {
           // Per-project so one failed write can't skip the remaining projects —
@@ -787,6 +852,15 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   // into a half-disposed WorkspaceClient during the await. Both wrap their
   // own failures so a single throw can't strand the rest of shutdown.
   const preDisposePromise = capturePersistencePromise.then(async () => {
+    // Before the workspace hosts go (#17321): no removal starts from here on,
+    // and one git is already running gets a moment to finish and record.
+    try {
+      const { disposeMergedWorktreeCleanupService } =
+        await import("../services/mergedWorktreeCleanup/mergedWorktreeCleanupLive.js");
+      await disposeMergedWorktreeCleanupService();
+    } catch (err) {
+      console.warn("[MAIN] Merged-worktree cleanup dispose failed:", err);
+    }
     const ccr = getCcrConfigService();
     if (ccr) {
       try {
@@ -1080,6 +1154,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         .catch((error) => {
           console.warn("[MAIN] Canopy reader drain at quit failed:", error);
         });
+      // The on-device speech process, when one ever started, stops the same
+      // way; a download under way is stopped and resumes next launch.
+      const localSpeechDrain = import("../services/voice/localSpeech.js")
+        .then(({ shutdownLocalSpeech }) => shutdownLocalSpeech(LOCAL_SPEECH_DRAIN_BUDGET_MS))
+        .catch((error) => {
+          console.warn("[MAIN] On-device speech drain at quit failed:", error);
+        });
       const cleanupErr = deps.getCleanupErrorHandlers();
       if (cleanupErr) {
         cleanupErr();
@@ -1144,6 +1225,16 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         console.warn("[MAIN] Plugin update check dispose failed:", error);
       }
 
+      // The usage readings' last change is written, and nothing after, before
+      // the database closes (#17610).
+      try {
+        const { sealClaudeUsageObservations } =
+          await import("../services/claude/ClaudeUsageObservations.js");
+        sealClaudeUsageObservations();
+      } catch (error) {
+        console.warn("[MAIN] Claude usage save at quit failed:", error);
+      }
+
       try {
         await getDatabaseMaintenanceService().dispose();
       } catch (error) {
@@ -1160,6 +1251,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       await vadDrain;
       currentPhase = "canopy-reader-drain";
       await readerDrain;
+      currentPhase = "local-speech-drain";
+      await localSpeechDrain;
     });
 
   const timeoutPromise = new Promise<never>((_, reject) => {

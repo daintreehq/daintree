@@ -202,6 +202,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
     VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
     VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
+    VOICE_INPUT_SESSION_VOCABULARY: "voice-input:session-vocabulary",
     VOICE_INPUT_STOP_REQUESTED: "voice-input:stop-requested",
   },
 }));
@@ -2791,46 +2792,57 @@ describe("validateOpenAIKey", () => {
 });
 
 describe("voiceInput — spoken commands outside English", () => {
-  it.each(["auto", "es"])(
-    "leaves 'new paragraph' literal when language is %s",
-    async (language) => {
-      vi.clearAllMocks();
-      shared.transcriptionEventCallback = null;
-      shared.drainResolve = null;
-      shared.useDeferredDrain = false;
-      const { store } = await import("../../../store.js");
-      vi.mocked(store.get).mockReturnValue({
-        enabled: true,
-        openaiApiKey: "sk-test",
-        correctionEnabled: false,
-        correctionModel: "gpt-6.1-terra",
-        dictionary: [],
-        correctionCustomInstructions: "",
-        language,
-        transcriptionModel: "gpt-live-transcribe",
-        paragraphingStrategy: "spoken-command",
-        resolveFileLinks: true,
-      });
+  async function dictateIn(language: string, text: string) {
+    vi.clearAllMocks();
+    shared.transcriptionEventCallback = null;
+    shared.drainResolve = null;
+    shared.useDeferredDrain = false;
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValue({
+      enabled: true,
+      openaiApiKey: "sk-test",
+      correctionEnabled: false,
+      correctionModel: "gpt-6.1-terra",
+      dictionary: [],
+      correctionCustomInstructions: "",
+      language,
+      transcriptionModel: "gpt-live-transcribe",
+      paragraphingStrategy: "spoken-command",
+      resolveFileLinks: true,
+    });
 
-      const win = buildMainWindow();
-      const cleanup = registerVoiceInputHandlers({
-        mainWindow: win as unknown as Electron.BrowserWindow,
-      } as Parameters<typeof registerVoiceInputHandlers>[0]);
-      try {
-        await (getHandler("voice-input:start") as SessionHandler)(fakeEvent, nextSessionId());
-        emitTranscriptionEvent({ type: "complete", text: "hello new paragraph" });
-
-        const completes = win.__sent.filter(
-          (m) => m.channel === "voice-input:transcription-complete"
-        );
-        expect(completes).toHaveLength(1);
-        expect(completes[0]?.payload).toMatchObject({ text: "hello new paragraph" });
-      } finally {
-        cleanup();
-        vi.mocked(store.get).mockReset();
-      }
+    const win = buildMainWindow();
+    const cleanup = registerVoiceInputHandlers({
+      mainWindow: win as unknown as Electron.BrowserWindow,
+    } as Parameters<typeof registerVoiceInputHandlers>[0]);
+    try {
+      await (getHandler("voice-input:start") as SessionHandler)(fakeEvent, nextSessionId());
+      emitTranscriptionEvent({ type: "complete", text, endOfSpeech: true });
+      return win.__sent
+        .filter(
+          (m) =>
+            m.channel === "voice-input:transcription-complete" ||
+            m.channel === "voice-input:paragraph-boundary"
+        )
+        .map((m) => ({ channel: m.channel, text: (m.payload as { text?: string }).text }));
+    } finally {
+      cleanup();
+      vi.mocked(store.get).mockReset();
     }
-  );
+  }
+
+  it.each(["es", "fr"])("leaves 'new paragraph' literal when language is %s", async (language) => {
+    expect(await dictateIn(language, "hello new paragraph")).toEqual([
+      { channel: "voice-input:transcription-complete", text: "hello new paragraph" },
+    ]);
+  });
+
+  it("reads English commands on Auto-detect, after a passage in another language", async () => {
+    expect(await dictateIn("auto", "Je corrige le test new paragraph")).toEqual([
+      { channel: "voice-input:transcription-complete", text: "Je corrige le test" },
+      { channel: "voice-input:paragraph-boundary", text: undefined },
+    ]);
+  });
 });
 
 describe("voiceInput — rewrite instructions", () => {

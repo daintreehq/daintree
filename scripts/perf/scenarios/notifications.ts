@@ -891,6 +891,11 @@ function readTitlePhase(fleet: PerfWindowFleet): { total: number; byWindow: stri
  * Independent restatement of `composeWindowTitle`. Calling the product's own
  * composer here would agree with the subject by construction.
  */
+/** A view's report of `count` waiting agent panes, by panel id, as its renderer sends it. */
+function waitingPanes(count: number): { waitingPanelIds: string[] } {
+  return { waitingPanelIds: Array.from({ length: count }, (_, i) => `terminal-${i}`) };
+}
+
 function expectedWindowTitle(projectName: string, waitingCount: number): string {
   return waitingCount > 0 ? `(${waitingCount}) ${projectName}` : projectName;
 }
@@ -1265,8 +1270,14 @@ export const notificationScenarios: PerfScenario[] = [
         modules.store.set("idleTerminalNotifiedAt", {});
 
         service.stop();
+        // The sweep skips a degraded read (#17222), so every shard answers here.
         service.setPtyClient({
-          getAllTerminalsAsync: async () => rows.current,
+          getAllTerminalsWithCompletenessAsync: async () => ({
+            terminals: rows.current,
+            degraded: false,
+            shardsTotal: 1,
+            shardsFailed: 0,
+          }),
         } as unknown as Parameters<typeof service.setPtyClient>[0]);
         service.setProjectViewManagersProvider(onScreenProvider(corpus.onScreenProjectIds));
         service.start();
@@ -1436,7 +1447,7 @@ export const notificationScenarios: PerfScenario[] = [
         // Phase 1: every renderer reports inside one debounce window.
         let start = performance.now();
         for (const [viewId, count] of counts) {
-          modules.notificationService.updateNotifications(viewId, { waitingCount: count });
+          modules.notificationService.updateNotifications(viewId, waitingPanes(count));
         }
         await clock.tick(400);
         applyMs += performance.now() - start;
@@ -1448,9 +1459,10 @@ export const notificationScenarios: PerfScenario[] = [
         const survivor = fleet.windows[0]!.viewWebContentsIds[0]!;
         start = performance.now();
         dead.destroy();
-        modules.notificationService.updateNotifications(survivor, {
-          waitingCount: counts.get(survivor) ?? 0,
-        });
+        modules.notificationService.updateNotifications(
+          survivor,
+          waitingPanes(counts.get(survivor) ?? 0)
+        );
         await clock.tick(400);
         applyMs += performance.now() - start;
         for (const viewId of dead.viewWebContentsIds) excluded.add(viewId);

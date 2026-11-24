@@ -3,7 +3,9 @@ import { Pause, Play, RotateCcw, Volume2, VolumeX } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { cn } from "@/lib/utils";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import type { TourPlayer } from "@daintreehq/tour";
 import { useTourPlayerState, useTourTime } from "@daintreehq/tour/react";
 import { pluralize } from "@/lib/pluralize";
@@ -46,7 +48,11 @@ function useCarryTrackFocus(
   }, [ref, track, receive]);
 }
 
-/** Another chapter's segment: a jump to the start of that chapter. */
+/**
+ * Another chapter's segment: a jump to the start of that chapter. Every segment
+ * mounts out of the tab order; the track's roving hook hands one of them the
+ * track's single stop, so a long tour doesn't cost one Tab press per chapter.
+ */
 function ChapterSegment({
   player,
   index,
@@ -68,6 +74,7 @@ function ChapterSegment({
         <button
           ref={ref}
           type="button"
+          tabIndex={-1}
           aria-label={`Chapter ${index + 1}: ${title}`}
           className="group flex h-6 min-w-0 flex-1 cursor-pointer items-center rounded-sm outline-hidden transition-[flex-grow] duration-150 ease-out focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           onClick={() => player.goTo(index, { autoplay: true })}
@@ -111,6 +118,9 @@ function CurrentSegment({
     const rect = event.currentTarget.getBoundingClientRect();
     if (rect.width <= 0) return;
     const fraction = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    // Already at the end: playing again just to seek back to it would restart
+    // the chapter and tear down the end card for nothing.
+    if (ended && fraction >= 1) return;
     if (ended) player.play();
     player.seek(fraction * duration);
   };
@@ -165,11 +175,15 @@ function TimeReadout({ player }: { player: TourPlayer }) {
 
 function IconButton({
   label,
+  tooltip,
   pressed,
   onClick,
   children,
 }: {
+  /** Stable accessible name: the toggle state is carried by `aria-pressed`. */
   label: string;
+  /** What a click does now; sighted users never see `aria-pressed`. */
+  tooltip: string;
   pressed?: boolean;
   onClick: () => void;
   children: React.ReactNode;
@@ -187,7 +201,7 @@ function IconButton({
           {children}
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
+      <TooltipContent side="top">{tooltip}</TooltipContent>
     </Tooltip>
   );
 }
@@ -211,6 +225,10 @@ export function TourControls({
   const playing = state.status === "playing";
   const ended = state.status === "ended";
   const chapter = chapters[state.chapterIndex]!;
+  // The other chapters' segments are one tab stop between them; the current
+  // chapter's slider is its own, and keeps its keys (the hook ignores it).
+  const trackRef = useRef<HTMLDivElement>(null);
+  const onTrackKeyDown = useToolbarRoving(trackRef);
   const carried = useRef(false);
   const [carryFocus] = useState<TrackFocus>(() => ({
     leave: () => {
@@ -225,7 +243,13 @@ export function TourControls({
 
   return (
     <div className="border-t border-border-subtle bg-surface-panel px-3 pb-2 pt-1">
-      <div className="flex items-center gap-1" role="group" aria-label="Chapters">
+      <div
+        ref={trackRef}
+        className="flex items-center gap-1"
+        role="group"
+        aria-label="Chapters"
+        onKeyDown={onTrackKeyDown}
+      >
         {chapters.map((c, i) => {
           return i !== state.chapterIndex ? (
             <ChapterSegment
@@ -250,6 +274,7 @@ export function TourControls({
       <div className="flex items-center gap-2">
         <IconButton
           label={ended ? "Replay" : "Play"}
+          tooltip={ended ? "Replay" : playing ? "Pause" : "Play"}
           pressed={ended ? undefined : playing}
           onClick={() => player.toggle()}
         >
@@ -265,11 +290,14 @@ export function TourControls({
         <span aria-hidden="true" className="text-xs">
           <FactSeparator />
         </span>
-        <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-          {chapter.title}
-        </h3>
+        <TruncatedTooltip content={chapter.title} side="top">
+          <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
+            {chapter.title}
+          </h3>
+        </TruncatedTooltip>
         <IconButton
           label="Mute narration"
+          tooltip={state.muted ? "Unmute narration" : "Mute narration"}
           pressed={state.muted}
           onClick={() => {
             player.setMuted(!state.muted);

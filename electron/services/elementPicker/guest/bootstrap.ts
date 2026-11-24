@@ -18,12 +18,17 @@ declare const api: BootstrapHostApi;
 const picker = createPicker({
   channel: api.channel,
   mode: api.mode,
+  paused: api.paused,
   post: (event) => api.post(event),
 });
 
 api.setMode = (mode: PickerMode) => {
   api.mode = mode;
   picker.setMode(mode);
+};
+api.setPaused = (paused: boolean) => {
+  api.paused = paused;
+  picker.setPaused(paused);
 };
 api.clearSelection = () => picker.clearSelection();
 api.clearHover = () => picker.clearHover();

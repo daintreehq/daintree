@@ -2,8 +2,9 @@ import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from
 import type { TerminalCheckResult } from "./checkResult.js";
 import type { TerminalHandback } from "./handback.js";
 import type { BrowserHistory } from "./browser.js";
-import type { GitStatus, DiffChangeSetEntry } from "./git.js";
+import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { ScheduledRunRef } from "./scheduledRunRef.js";
+import type { UpdateInstalledObservation } from "./ipc/agent.js";
 import {
   BUILT_IN_PANEL_KINDS,
   panelKindIsDockable,
@@ -419,6 +420,7 @@ export type PresetSwitchPriorLaunch = Pick<
   | "env"
   | "agentAccountId"
   | "conversationCwd"
+  | "conversationStore"
 > & { cwd: string };
 
 /** The launch fields of `panel` a preset switch replaces, in the shape "Back" restores. */
@@ -436,8 +438,22 @@ export function presetSwitchLaunchOf(panel: PtyPanelData): PresetSwitchPriorLaun
     env: panel.env,
     agentAccountId: panel.agentAccountId,
     conversationCwd: panel.conversationCwd,
+    conversationStore: panel.conversationStore,
     cwd: panel.cwd,
   };
+}
+
+/**
+ * The agent config folder that holds a conversation's transcript, kept once the
+ * pane launches on another one (#17087). An account switch moves the pane to
+ * another folder, but the CLI goes on writing the conversation where it began,
+ * so a relaunch reopens it from there by the transcript's path. Belongs to one
+ * conversation: it says nothing about any other session id.
+ */
+export interface ConversationStore {
+  sessionId: string;
+  /** The config folder (`CLAUDE_CONFIG_DIR`) the conversation was written under. */
+  configDir: string;
 }
 
 /**
@@ -798,6 +814,12 @@ export interface PtyPanelData extends BasePanelData {
    * classified leaves it unchanged.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905), owned by the host and only ever copied here. Not persisted, and
+   * cleared when the run ends or a restart re-stamps `startedAt`.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
@@ -929,6 +951,12 @@ export interface PtyPanelData extends BasePanelData {
    */
   conversationCwd?: string;
   /**
+   * Where the conversation in `agentSessionId` is stored, when a switch that
+   * kept it moved the pane onto another account's folder (#17087). Read only
+   * for that same session id. Persisted.
+   */
+  conversationStore?: ConversationStore;
+  /**
    * Restore held this pane instead of launching it (#12434): the pane exists,
    * with its title, placement and launch settings, but has no process until
    * the user picks a conversation or starts a new one. Persisted, so a restart
@@ -944,6 +972,15 @@ export interface PtyPanelData extends BasePanelData {
    * pane, not a process the hold would start.
    */
   lastAgentObservation?: TerminalAgentObservation;
+  /**
+   * What was observed of the agent when Main last stopped its process for a
+   * quit or Sleep (#17886): the reading just before the kill, or the working
+   * reading taken when the user asked for a Sleep that then waited for the
+   * agent to settle. Main writes it into the saved snapshot; the restore after
+   * it judges the continue-note offer by it. The live store keeps it only on a
+   * pane restore held, which has run nothing since. Persisted.
+   */
+  stopObservation?: TerminalAgentObservation;
   /**
    * The plugin whose `agent.launch` created this pane (#14017), taken from the
    * host-stamped dispatch context, never from arguments. Only that plugin may
@@ -1157,16 +1194,18 @@ export interface DiffPanelData extends BasePanelData {
    */
   changeSet?: DiffChangeSetEntry[];
   /**
-   * Cursor into `changeSet` for the open file. Runtime-only (never
-   * serialized), because it only means anything alongside the live set.
-   *
-   * (path, status) is not unique: partial staging puts the same path with the
-   * same status in both the staged and unstaged sections, and those entries
-   * differ only by `viewedKey`. Without this cursor the panel resolves to the
-   * first match, so selecting the unstaged copy highlights the staged row and
-   * marks the wrong file viewed.
+   * Cursor into `changeSet` for the open file, with `fileSide`. Runtime-only
+   * (never serialized), because it only means anything alongside the live set.
    */
   viewedKey?: string;
+  /**
+   * The open entry's `side`. Partial staging lists the same file in both the
+   * staged and unstaged sections with the same path, status and Viewed key
+   * (one mark per file), so only the side tells them apart. Without it the
+   * panel resolves to the first twin, and selecting the unstaged copy shows
+   * the staged diff. Runtime-only, like `viewedKey`.
+   */
+  fileSide?: GitDiffSide;
 }
 
 /**

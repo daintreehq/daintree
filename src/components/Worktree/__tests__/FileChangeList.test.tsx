@@ -103,15 +103,26 @@ const { decorationsRef, scopeRef, pathsRef } = vi.hoisted(() => ({
   scopeRef: { current: "" },
   pathsRef: { current: [] as string[] },
 }));
+const { enabledRef, hasProviderRef } = vi.hoisted(() => ({
+  enabledRef: { current: undefined as boolean | undefined },
+  hasProviderRef: { current: true },
+}));
 vi.mock("@/hooks/useFileTreeDecorations", () => ({
-  useFileTreeDecorations: (scope: string, paths: string[]) => {
+  useFileTreeDecorations: (scope: string, paths: string[], enabled?: boolean) => {
     scopeRef.current = scope;
     pathsRef.current = paths;
+    enabledRef.current = enabled;
     return decorationsRef.current;
   },
 }));
+vi.mock("@/store/pluginRuntimeStore", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/pluginRuntimeStore")>()),
+  useHasFileDecorationProvider: (scope: string) =>
+    hasProviderRef.current && scope.startsWith("worktree-files:"),
+}));
 
 import { FileChangeList, type FileChangeListHandle } from "../FileChangeList";
+import { workingTreeViewedKey } from "@/lib/diffViewedKey";
 
 const ROOT = "/repo";
 
@@ -587,6 +598,9 @@ describe("FileChangeList — diff panel ownership", () => {
     // The cursor has to be the set's own key for that row, not a re-derivation
     // the panel would have to guess at.
     expect(options.viewedKey).toBe(opened!.viewedKey);
+    // And the key the Review Hub's row for the same file marks (#16897), so a
+    // file checked off on either surface reads as reviewed on the other.
+    expect(opened!.viewedKey).toBe(workingTreeViewedKey(String(options.filePath)));
   });
 
   it("stops pushing its change set once another surface owns the dialog", async () => {
@@ -711,6 +725,8 @@ describe("FileChangeList — plugin file decorations", () => {
     decorationsRef.current = {};
     scopeRef.current = "";
     pathsRef.current = [];
+    enabledRef.current = undefined;
+    hasProviderRef.current = true;
   });
 
   afterEach(() => {
@@ -723,6 +739,16 @@ describe("FileChangeList — plugin file decorations", () => {
     );
     expect(scopeRef.current).toBe("worktree-files:/repo");
     expect(new Set(pathsRef.current)).toEqual(new Set(["/repo/src/a.ts", "/repo/src/b.ts"]));
+    expect(enabledRef.current).toBe(true);
+  });
+
+  it("asks for nothing while no plugin declares a provider for the scope", () => {
+    hasProviderRef.current = false;
+    render(
+      <FileChangeList changes={[file("/repo/src/a.ts"), file("/repo/src/b.ts")]} rootPath={ROOT} />
+    );
+    expect(enabledRef.current).toBe(false);
+    expect(pathsRef.current).toEqual([]);
   });
 
   it("renders a badge for a decorated path and nothing for an undecorated one", () => {

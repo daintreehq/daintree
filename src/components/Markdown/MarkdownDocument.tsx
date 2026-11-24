@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, type CSSProperties } from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { rehypeHeadingIds } from "./headingIds";
+import { rehypeMarkdownAlerts } from "./markdownAlerts";
 import { MarkdownImageCacheBust, useMarkdownRenderPolicy } from "./markdownRenderPolicy";
+import { MARKDOWN_REMARK_PLUGINS } from "./markdownRemarkPlugins";
 import { rehypeTableHeadings } from "./MarkdownTable";
+import { ANCHOR_TOP_GAP, followMarkdownFragment } from "./renderedMarkdownAnchors";
 import { useScopedSelectAll, type SelectAllScope } from "@/hooks/useScopedSelectAll";
 import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
@@ -35,8 +38,8 @@ export const MARKDOWN_FONT_SIZE_TOKEN = {
 /** `MarkdownDocument.css` reads this; declaring it here is what applies the rung. */
 type MarkdownFontStyle = CSSProperties & Record<"--markdown-font-size", string>;
 
-const REMARK_PLUGINS = [remarkGfm];
-const REHYPE_PLUGINS = [rehypeTableHeadings];
+// Alerts go last: see `rehypeMarkdownAlerts`.
+const REHYPE_PLUGINS = [rehypeHeadingIds, rehypeTableHeadings, rehypeMarkdownAlerts];
 
 export interface MarkdownDocumentProps {
   /** Markdown source text */
@@ -73,15 +76,24 @@ export interface MarkdownDocumentProps {
   selectAllScope?: SelectAllScope;
   /** Receives the document's root element, the text find in rendered mode searches. */
   documentRef?: (element: HTMLDivElement | null) => void;
+  /**
+   * How far below the top of the pane a same-document link's target lands.
+   * A host with chrome pinned over the top of the pane passes its depth.
+   */
+  anchorTopGap?: number;
 }
 
 /**
  * Read-only rendered view of a markdown document. Shared by the markdown
  * panel and the file viewer dialog. GFM (tables, task lists, strikethrough,
- * autolinks) is on; raw HTML embedded in the markdown is intentionally never
- * rendered — there is no rehype-raw in the pipeline and `skipHtml` drops the
- * raw nodes entirely. That is the safety boundary that lets this render
+ * autolinks) is on, and YAML or TOML front matter shows as its raw lines in a
+ * compact block above the body (`markdownRemarkPlugins`). Raw HTML embedded in
+ * the markdown is intentionally never rendered — there is no rehype-raw in the
+ * pipeline and `skipHtml` drops the raw nodes entirely. That is the safety boundary that lets this render
  * arbitrary repo files inside an Electron renderer without a sanitizer.
+ *
+ * Headings get GitHub's ids (`user-content-<slug>`), so a table of contents
+ * and footnote links scroll within this document.
  */
 export function MarkdownDocument({
   content,
@@ -93,6 +105,7 @@ export function MarkdownDocument({
   onRendered,
   selectAllScope = "surface",
   documentRef,
+  anchorTopGap = ANCHOR_TOP_GAP,
 }: MarkdownDocumentProps) {
   // Runs after the first commit, which is the point the host's height pin can
   // hand the box back to the document. Cold fence grammars land later and swap
@@ -116,7 +129,22 @@ export function MarkdownDocument({
     [documentRef]
   );
 
-  const { components, urlTransform } = useMarkdownRenderPolicy({ filePath, rootPath });
+  // Read at click time, so a host moving it (a find bar opening) doesn't hand
+  // the policy a new handler and re-parse the document.
+  const anchorTopGapRef = useRef(anchorTopGap);
+  useEffect(() => {
+    anchorTopGapRef.current = anchorTopGap;
+  }, [anchorTopGap]);
+  const followFragment = useCallback((href: string) => {
+    const root = rootRef.current;
+    if (root) followMarkdownFragment(root, href, anchorTopGapRef.current);
+  }, []);
+
+  const { components, urlTransform } = useMarkdownRenderPolicy({
+    filePath,
+    rootPath,
+    onFragmentLink: followFragment,
+  });
 
   // react-markdown re-parses the whole document on every render. Hosts re-render
   // this on each refresh tick with only `cacheBust` moving, which reaches the
@@ -125,7 +153,7 @@ export function MarkdownDocument({
   const rendered = useMemo(
     () => (
       <ReactMarkdown
-        remarkPlugins={REMARK_PLUGINS}
+        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
         rehypePlugins={REHYPE_PLUGINS}
         urlTransform={urlTransform}
         components={components}

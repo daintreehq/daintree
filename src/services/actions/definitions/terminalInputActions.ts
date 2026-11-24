@@ -1,26 +1,21 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import { defineAction } from "../defineAction";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
 import { openSendToAgentPalette } from "@/hooks/useSendToAgentPalette";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { cleanTerminalSelection } from "@/services/terminal/cleanTerminalCopy";
+import { copyCleanSelection } from "@/services/terminal/copyCleanSelection";
+import { noteCopyFlashKeyboard } from "@/lib/copyFlash";
+import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
 import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
-import { readTailSnapshot, tailCapturedOutput } from "@shared/utils/artifactParser";
-import { planChoice } from "@shared/utils/terminalChoice";
-import {
-  CHOOSE_SCREEN_LINES,
-  keySequence,
-  screenChangedField,
-  SEND_KEYS_GAP_MS,
-  SEND_KEYS_SCREEN_LINES,
-  SEND_KEYS_SETTLE_MS,
-  SendKeysArgsSchema,
-} from "@shared/utils/terminalKeys";
+import { SendKeysArgsSchema } from "@shared/utils/terminalKeys";
 import { isForegroundDispatch } from "./dispatchSource";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import {
@@ -29,7 +24,6 @@ import {
 } from "@/services/contextInjectionGuard";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
-import { getTerminalInputBlock, getTerminalInputBlockMessage } from "@/services/terminal/inputGate";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
 import {
   readResendReadiness,
@@ -39,6 +33,22 @@ import {
 import { notify } from "@/lib/notify";
 
 const NO_FOCUSED_PANEL = "No panel is focused";
+
+/**
+ * The panel whose terminal holds the keyboard, for a shortcut typed into one:
+ * a force-selection drag focuses a pane's xterm without making it the focused
+ * panel, and the Assistant's terminal belongs to no panel at all, so the store's
+ * `focusedId` would copy some other pane's selection. `null` for a terminal
+ * outside any panel; `undefined` when no terminal has the keyboard (a chord's
+ * HUD, the composer), which leaves the focused panel to answer.
+ */
+function keyboardTerminalId(): string | null | undefined {
+  const active = typeof document === "undefined" ? null : document.activeElement;
+  if (!active?.closest(".xterm")) return undefined;
+  const id = active.closest("[data-panel-id]")?.getAttribute("data-panel-id");
+  if (!id) return null;
+  return peekTerminalService()?.get(id)?.terminal?.element?.contains(active) ? id : null;
+}
 
 /**
  * What an interrupt request can honestly report (#12338).
@@ -120,6 +130,7 @@ export function registerTerminalInputActions(
     title: "Inject context",
     description:
       "Write the active worktree's prepared context into a terminal, to hand an agent a large codebase context. Name the target: focus can drift, and a mistarget types a large dump into the wrong terminal. Target an idle terminal.",
+    paletteDescription: "Write the active worktree's prepared context into the focused terminal",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -215,6 +226,50 @@ export function registerTerminalInputActions(
       }
     },
   }));
+
+  actions.set("terminal.copyClean", () =>
+    defineAction({
+      id: "terminal.copyClean",
+      title: "Copy clean text",
+      description: "Copy the terminal selection as clean text, without wrapping or padding",
+      category: "terminal",
+      kind: "command",
+      danger: "safe",
+      // Same reason as `terminal.copy` (#13155).
+      denyPluginDispatch: true,
+      scope: "renderer",
+      keywords: ["copy", "clean", "plain", "selection"],
+      // A copy is no command to replay, and an empty press would still take the slot.
+      nonRepeatable: true,
+      argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+      run: async (args, ctx) => {
+        const terminalId = args?.terminalId;
+        requireExplicitTerminalIdForAgentDispatch("terminal.copyClean", terminalId, ctx);
+        const state = usePanelStore.getState();
+        const typedInto = ctx.dispatchSource === "keybinding" ? keyboardTerminalId() : undefined;
+        if (!terminalId && typedInto === null) return;
+        const targetId = terminalId ?? typedInto ?? state.focusedId;
+        if (!targetId) return;
+        const managed = peekTerminalService()?.get(targetId);
+        if (!managed?.terminal) return;
+        // Before `copyCleanSelection`, which would also drop a reply-span copy still
+        // waiting on the host.
+        const selection = managed.terminal.getSelection();
+        if (!selection) return;
+        // The window's own keydown listener can run after this dispatch, which
+        // would anchor the flash to wherever the mouse last went down.
+        if (ctx.dispatchSource === "keybinding") noteCopyFlashKeyboard();
+        const panel = state.panelsById[targetId];
+        copyCleanSelection(
+          selection,
+          cleanTerminalSelection(managed.terminal, managed.commandLinksDisposable),
+          panel && isPtyPanel(panel) && getBuiltInRuntimeAgentId(panel) === "claude"
+            ? targetId
+            : null
+        );
+      },
+    })
+  );
 
   actions.set("terminal.paste", () => ({
     id: "terminal.paste",
@@ -376,83 +431,8 @@ export function registerTerminalInputActions(
     argsSchema: SendKeysArgsSchema,
     resultSchema: SendKeysResultSchema,
     run: async (args: z.infer<typeof SendKeysArgsSchema>) => {
-      const { terminalId, choose } = args;
-      const state = usePanelStore.getState();
-      const panel = Object.hasOwn(state.panelsById, terminalId)
-        ? state.panelsById[terminalId]
-        : undefined;
-      if (!panel || !isPtyPanel(panel)) {
-        throw new UnactionableTargetError(`No terminal ${terminalId} to press keys in.`);
-      }
-      if (panel.isInputLocked || peekTerminalService()?.get(terminalId)?.isInputLocked) {
-        throw new UnactionableTargetError(`Terminal ${terminalId} has its input locked.`);
-      }
-      let keys = args.keys;
-      if (choose !== undefined) {
-        const snapshot = await readTailSnapshot(
-          (options) => window.electron.terminal.getSerializedState(terminalId, options),
-          CHOOSE_SCREEN_LINES
-        );
-        const plan = planChoice(
-          snapshot === null
-            ? ""
-            : tailCapturedOutput(snapshot.data, CHOOSE_SCREEN_LINES, true).content,
-          choose
-        );
-        if (!plan.ok) throw new UnactionableTargetError(`${plan.reason} Nothing was pressed.`);
-        keys = plan.keys;
-      }
-      if (keys === undefined) {
-        throw new UnactionableTargetError("Pass `choose` or `keys`. Nothing was pressed.");
-      }
-      const readScreen = async (): Promise<string | null> => {
-        const snapshot = await readTailSnapshot(
-          (options) => window.electron.terminal.getSerializedState(terminalId, options),
-          SEND_KEYS_SCREEN_LINES
-        ).catch(() => null);
-        return snapshot === null
-          ? null
-          : tailCapturedOutput(snapshot.data, SEND_KEYS_SCREEN_LINES, true).content;
-      };
-      // Read the same window as after the keys, so the result can say whether
-      // they changed anything (#16209).
-      const before = await readScreen();
-      // One write per key, spaced out: a TUI reading a burst as one chunk can
-      // take an arrow and an Enter as a single unknown sequence. A key written
-      // while terminal input is blocked never leaves the renderer, so it is
-      // refused rather than reported pressed.
-      const pressed: string[] = [];
-      for (const [index, key] of keys.entries()) {
-        if (index > 0) await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_GAP_MS));
-        // The screen reads were async: a lock taken meanwhile still stops the keys.
-        const panelNow = usePanelStore.getState().panelsById[terminalId];
-        const locked =
-          (panelNow !== undefined && isPtyPanel(panelNow) && panelNow.isInputLocked) ||
-          peekTerminalService()?.get(terminalId)?.isInputLocked;
-        const blocked = getTerminalInputBlock();
-        if (locked || blocked) {
-          const why = blocked
-            ? `Terminal ${terminalId} takes no input right now (${getTerminalInputBlockMessage(blocked)}).`
-            : `Terminal ${terminalId} has its input locked.`;
-          throw new UnactionableTargetError(
-            pressed.length === 0
-              ? `${why} Nothing was pressed.`
-              : `${why} ${pressed.length} of ${keys.length} keys were sent (${pressed.join(", ")}); the rest weren't. Read the screen before pressing more, and never resend the whole sequence.`
-          );
-        }
-        terminalClient.write(terminalId, keySequence(key));
-        pressed.push(key);
-      }
-      // A wrong key on a dialog (Quit instead of Continue) shows up here, a
-      // call sooner than a separate read would find it.
-      await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_SETTLE_MS));
-      const screen = await readScreen();
-      return {
-        terminalId,
-        keys,
-        ...(screen ? { screen } : {}),
-        ...screenChangedField(before, screen),
-      };
+      const { runTerminalSendKeys } = await import("./terminalInputActions.impl");
+      return runTerminalSendKeys(args);
     },
   }));
 
@@ -557,6 +537,7 @@ export function registerTerminalInputActions(
     title: "Resend last message",
     description:
       "Send a panel's last message from its composer or a fleet broadcast again, with the same text and images, leaving the composer's draft as it is",
+    paletteDescription: "Resend the focused panel's last message with the same text and images",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -693,6 +674,7 @@ export function registerTerminalInputActions(
     title: "Disarm all",
     description:
       "Clear the fleet arming set entirely, so no terminal receives the user's broadcast input until something is armed again. This silently changes where the user's next broadcast lands, so prefer disarming individual terminals unless resetting is genuinely the intent.",
+    paletteDescription: "Disarm every terminal, so broadcast input reaches none until you arm one",
     category: "terminal",
     kind: "command",
     danger: "safe",

@@ -76,6 +76,10 @@ vi.mock("../../utils.js", async (importOriginal) => ({
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { registerTerminalConfigHandlers } from "../terminalConfig.js";
+import {
+  MemoryLeakAutoRestartService,
+  setActiveMemoryLeakAutoRestart,
+} from "../../../services/MemoryLeakAutoRestartService.js";
 
 type Handler = (event: unknown, ...args: unknown[]) => Promise<unknown>;
 
@@ -137,6 +141,7 @@ describe("terminalConfig handlers", () => {
 
     expect(typeof result.scrollbackLines).toBe("number");
     expect(result.performanceMode).toBe(false);
+    expect(result.osc52ClipboardEnabled).toBe(false);
     expect(result.fontSize).toBe(14);
   });
 
@@ -292,6 +297,31 @@ describe("terminalConfig handlers", () => {
       expect(ptyClient.setResourceMonitoring).toHaveBeenCalledWith(true);
     });
 
+    it("tells the memory-leak auto-restart of each policy write once it has landed (#17598)", async () => {
+      const landed: unknown[] = [];
+      const policyChanged = vi.fn(() =>
+        landed.push(structuredClone(storeState.data.terminalConfig))
+      );
+      setActiveMemoryLeakAutoRestart({ policyChanged } as unknown as MemoryLeakAutoRestartService);
+      try {
+        registerTerminalConfigHandlers({ ptyClient: { setResourceMonitoring: vi.fn() } } as never);
+
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING)({}, false);
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION)({}, false);
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART)({}, 4096);
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART)({}, 99);
+        await getHandler(CHANNELS.TERMINAL_CONFIG_SET_SCROLLBACK)({}, 5000);
+
+        expect(landed).toEqual([
+          expect.objectContaining({ resourceMonitoringEnabled: false }),
+          expect.objectContaining({ memoryLeakDetectionEnabled: false }),
+          expect.objectContaining({ memoryLeakAutoRestartThresholdMb: 4096 }),
+        ]);
+      } finally {
+        setActiveMemoryLeakAutoRestart(null);
+      }
+    });
+
     it("tells no one about a value the handler refused", async () => {
       registerTerminalConfigHandlers();
 
@@ -391,6 +421,21 @@ describe("terminalConfig handlers", () => {
       hybridInputEnabled: false,
       hybridInputAutoFocus: true,
     });
+  });
+
+  it("setOsc52ClipboardEnabled saves a boolean and throws on anything else", async () => {
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_OSC52_CLIPBOARD_ENABLED);
+
+    await handler({}, true);
+    expect(storeState.data.terminalConfig).toMatchObject({ osc52ClipboardEnabled: true });
+
+    // A save the Settings switch waits on, so a bad value must fail it.
+    await expect(handler({}, "false")).rejects.toThrow("osc52ClipboardEnabled");
+    expect(storeState.data.terminalConfig).toMatchObject({ osc52ClipboardEnabled: true });
+
+    await handler({}, false);
+    expect(storeState.data.terminalConfig).toMatchObject({ osc52ClipboardEnabled: false });
   });
 
   it("setScreenReaderMode accepts valid values and rejects invalid", async () => {

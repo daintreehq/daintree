@@ -1,7 +1,12 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { IPty } from "node-pty";
 
-type EmitData = (id: string, data: string | Uint8Array) => void;
+type EmitData = (
+  id: string,
+  data: string | Uint8Array,
+  streamEnd?: number,
+  encoded?: Uint8Array
+) => void;
 
 // What the mocked constructor emits synchronously, standing in for
 // TerminalProcess.replayPrelude and the data handoff's buffered-chunk flush.
@@ -114,6 +119,20 @@ describe("PtyManager.spawn — output emitted during TerminalProcess constructio
     lastEmitData!("t1", "fresh");
 
     expect(dataEvents).toEqual([["t1", "fresh"]]);
+  });
+
+  it("replays a chunk's encoded bytes with it once construction ends", () => {
+    const encoded = new TextEncoder().encode("prélude");
+    const replayed: unknown[][] = [];
+    manager.on("data", (...args: unknown[]) => replayed.push(args));
+    duringConstruction = () => lastEmitData!("t1", "prélude", 8, encoded);
+
+    manager.spawn("t1", spawnOptions);
+
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0][1]).toBe("prélude");
+    expect(replayed[0][3]).toBe(8);
+    expect(replayed[0][4]).toBe(encoded);
   });
 
   it("routes another terminal's output live while one is being constructed", () => {

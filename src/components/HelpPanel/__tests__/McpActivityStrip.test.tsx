@@ -46,9 +46,29 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { McpActivityStrip } from "../McpActivityStrip";
+import {
+  OverlayFocusRestoreContext,
+  type OverlayFocusRestore,
+} from "@/components/ui/overlay-focus-restore";
 import { groupCallsByTurn } from "../RecentCallsPopover";
 import type { McpToolActivityState } from "@/controllers/HelpSessionController";
 import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
+
+function makePolicy(expectHandoff: () => void): OverlayFocusRestore {
+  return {
+    setRestoreTarget: vi.fn(),
+    resetForOpen: vi.fn(),
+    deferToRadix: vi.fn(),
+    restoreIfStranded: vi.fn(),
+    expectHandoff,
+    onContentPointerDown: vi.fn(),
+    onContentPointerDownOutside: vi.fn(),
+    onContentInteractOutside: vi.fn(),
+    onContentKeyDown: vi.fn(),
+    onContentClick: vi.fn(),
+    onContentCloseAutoFocus: vi.fn(),
+  };
+}
 
 function makeRecord(overrides: Partial<McpAuditRecord> = {}): McpAuditRecord {
   return {
@@ -463,6 +483,25 @@ describe("McpActivityStrip", () => {
       { source: "user" }
     );
     expect(screen.queryByTestId("popover-content")).toBeNull();
+  });
+
+  it("hands focus to Settings before the audit log link closes the popover", async () => {
+    const calls: string[] = [];
+    dispatch.mockImplementationOnce(() => {
+      calls.push("dispatch");
+      return Promise.resolve();
+    });
+    render(
+      <OverlayFocusRestoreContext.Provider value={makePolicy(() => calls.push("handoff"))}>
+        <McpActivityStrip sessionId="session-a" activity={null} />
+      </OverlayFocusRestoreContext.Provider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: /recent tool calls/i }));
+    const link = await screen.findByRole("button", { name: /open full audit log/i });
+    expect(calls).toEqual([]);
+    fireEvent.click(link);
+
+    expect(calls).toEqual(["handoff", "dispatch"]);
   });
 
   it("keeps the rows it already read when a refresh fails", async () => {

@@ -55,6 +55,7 @@ import { useScreenReaderStore } from "@/store/screenReaderStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useCachedProjectViewsStore } from "@/store/cachedProjectViewsStore";
+import { useOsc52ClipboardStore } from "@/store/osc52ClipboardStore";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import {
   DEFAULT_AUTO_RESTART_THRESHOLD_MB,
@@ -127,6 +128,7 @@ describe("terminalConfigSync (#14699)", () => {
       enabled: false,
       autoRestartThresholdMb: DEFAULT_AUTO_RESTART_THRESHOLD_MB,
     });
+    useOsc52ClipboardStore.setState({ enabled: false });
   });
 
   afterEach(() => {
@@ -237,6 +239,23 @@ describe("terminalConfigSync (#14699)", () => {
 
     client.push(device({ fontSize: 18, resourceMonitoringEnabled: true }));
     expect(snapshot()).toMatchObject({ fontSize: 18, resourceMonitoring: false });
+  });
+
+  // This machine's clipboard: only its own device half can turn OSC 52 on,
+  // and anything but a saved `true` reads as off.
+  it("takes the OSC 52 switch from this machine's half alone", async () => {
+    boot({ osc52ClipboardEnabled: true });
+    dispose = initTerminalConfigSync();
+    await settle();
+    expect(useOsc52ClipboardStore.getState().enabled).toBe(true);
+
+    const malformed: Config = {};
+    Reflect.set(malformed, "osc52ClipboardEnabled", "yes");
+    client.push(device(malformed));
+    expect(useOsc52ClipboardStore.getState().enabled).toBe(false);
+
+    client.push(host({ osc52ClipboardEnabled: true }));
+    expect(useOsc52ClipboardStore.getState().enabled).toBe(false);
   });
 
   it("keeps a push that beat the boot payload, for that owner only", async () => {

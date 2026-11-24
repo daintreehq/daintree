@@ -105,6 +105,13 @@ vi.mock("../fileDecorationRegistry.js", () => ({
   scopeMatchesPattern: vi.fn((s: string, p: string) => s === p),
 }));
 
+// Pass-through spy: the real tracker still runs, and the retired-scope test can
+// see which binding expressions were tracked.
+vi.mock("../WhenClauseService.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../WhenClauseService.js")>();
+  return { ...actual, trackPluginExpression: vi.fn(actual.trackPluginExpression) };
+});
+
 // Mocked so MCP-server activation tests don't try to spawn real subprocesses
 // or exercise the execa dynamic-import. The supervisor's wiring is verified
 // here; PluginMcpSupervisor's own lifecycle is covered by its dedicated test.
@@ -224,6 +231,15 @@ import {
   unregisterPluginToolbarButtons,
 } from "../../../shared/config/toolbarButtonRegistry.js";
 import { registerPluginMenuItem, unregisterPluginMenuItems } from "../pluginMenuRegistry.js";
+import {
+  getPluginContextMenuItems,
+  unregisterPluginContextMenuItems,
+} from "../pluginContextMenuRegistry.js";
+import {
+  clearPluginKeybindingRegistry,
+  getPluginKeybindings,
+} from "../pluginKeybindingRegistry.js";
+import { trackPluginExpression } from "../WhenClauseService.js";
 import {
   registerForgeProviders,
   unregisterForgeProviderImpls,
@@ -598,6 +614,179 @@ describe("reserved contribution point warnings", () => {
     );
     expect(registerToolbarButton).not.toHaveBeenCalled();
     expect(registerPluginMenuItem).not.toHaveBeenCalled();
+  });
+
+  describe("keybindings in the retired portal scope (#17245)", () => {
+    beforeEach(() => clearPluginKeybindingRegistry());
+    afterEach(() => clearPluginKeybindingRegistry());
+
+    function retiredLogLines(service: PluginService, pluginId: string): string[] {
+      const lines =
+        service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === pluginId)?.logLines ??
+        [];
+      return lines
+        .filter((line) => line.level === "warn" && line.message.includes("retired"))
+        .map((line) => line.message);
+    }
+
+    it("loads the plugin, drops only the retired binding without remapping it, and logs it", async () => {
+      await writePlugin("retired-scope", {
+        name: "acme.retired-scope",
+        version: "1.0.0",
+        engines: { daintree: "^0.7.0" },
+        contributes: {
+          keybindings: [
+            {
+              actionId: "nav.quickSwitcher",
+              combo: "Cmd+Shift+8",
+              scope: "global",
+              when: "terminalFocused",
+            },
+            {
+              actionId: "nav.quickSwitcher",
+              combo: "Cmd+Shift+7",
+              scope: "portal",
+              when: "modalOpen",
+            },
+            { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+6" },
+          ],
+        },
+      });
+
+      const service = new PluginService(tmpDir, "0.7.5");
+      await service.initialize();
+
+      expect(service.listPlugins().map((p) => p.manifest.name)).toContain("acme.retired-scope");
+      const registered = getPluginKeybindings()
+        .filter((entry) => entry.pluginId === "acme.retired-scope")
+        .map((entry) => ({ combo: entry.item.combo, scope: entry.item.scope }));
+      expect(registered).toEqual([
+        { combo: "Cmd+Shift+8", scope: "global" },
+        { combo: "Cmd+Shift+6", scope: undefined },
+      ]);
+      const retired = retiredLogLines(service, "acme.retired-scope");
+      expect(retired).toHaveLength(1);
+      expect(retired[0]).toMatch(/^keybindings\[1\] \("Cmd\+Shift\+7"\) uses the retired "portal"/);
+      expect(trackPluginExpression).toHaveBeenCalledWith("acme.retired-scope", "terminalFocused");
+      expect(trackPluginExpression).not.toHaveBeenCalledWith("acme.retired-scope", "modalOpen");
+    });
+
+    it("loads a plugin naming a retired built-in action, dropping only that contribution (#17256)", async () => {
+      await writePlugin("retired-action", {
+        name: "acme.retired-action",
+        version: "1.0.0",
+        engines: { daintree: "^0.7.0" },
+        contributes: {
+          keybindings: [
+            { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+8" },
+            { actionId: "portal.closeTab", combo: "Cmd+Shift+7", scope: "global" },
+          ],
+          menuItems: [{ label: "Open chat", actionId: "portal.toggle", location: "view" }],
+          toolbarButtons: [
+            { id: "chat", label: "Chat", iconId: "globe", actionId: "portal.toggle" },
+            {
+              id: "more",
+              label: "More",
+              iconId: "globe",
+              actionId: "portal.openUrl",
+              menu: [{ actionId: "acme.retired-action.open", label: "Open" }],
+            },
+          ],
+          contextMenus: [{ actionId: "portal.copyUrl", location: "browser", label: "Copy URL" }],
+        },
+      });
+
+      const service = new PluginService(tmpDir, "0.7.5");
+      try {
+        await service.initialize();
+
+        expect(service.listPlugins().map((p) => p.manifest.name)).toContain("acme.retired-action");
+        const registered = getPluginKeybindings()
+          .filter((entry) => entry.pluginId === "acme.retired-action")
+          .map((entry) => entry.item.combo);
+        expect(registered).toEqual(["Cmd+Shift+8"]);
+        expect(registerPluginMenuItem).not.toHaveBeenCalled();
+        // The button with nothing but the retired action goes; the one with a
+        // menu keeps it, without the action.
+        expect(registerToolbarButton).toHaveBeenCalledTimes(1);
+        const button = vi.mocked(registerToolbarButton).mock.calls[0]![0];
+        expect(button.id).toBe("acme.retired-action.more");
+        expect(button.menu).toEqual([{ actionId: "acme.retired-action.open", label: "Open" }]);
+        expect(button).not.toHaveProperty("actionId");
+        expect(
+          getPluginContextMenuItems().filter((e) => e.pluginId === "acme.retired-action")
+        ).toEqual([]);
+        const lines =
+          service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "acme.retired-action")
+            ?.logLines ?? [];
+        expect(
+          lines
+            .filter((l) => l.level === "warn" && l.message.includes("no longer has"))
+            .map((l) => l.message.split(" ")[0])
+        ).toEqual([
+          "toolbarButtons[0]",
+          "toolbarButtons[1]",
+          "menuItems[0]",
+          "keybindings[1]",
+          "contextMenus[0]",
+        ]);
+      } finally {
+        unregisterPluginContextMenuItems("acme.retired-action");
+      }
+    });
+
+    it("registers a plugin's own command even when its id is spelled like a retired built-in", async () => {
+      await writePlugin("portal-links", {
+        name: "portal.links",
+        version: "1.0.0",
+        engines: { daintree: "^0.7.0" },
+        contributes: {
+          commands: [
+            {
+              id: "add",
+              title: "Add",
+              description: "Add a link",
+              category: "Links",
+              kind: "command",
+              danger: "safe",
+            },
+          ],
+          keybindings: [{ actionId: "portal.links.add", combo: "Cmd+Shift+5" }],
+        },
+      });
+
+      const service = new PluginService(tmpDir, "0.7.5");
+      await service.initialize();
+
+      expect(service.listPlugins().map((p) => p.manifest.name)).toContain("portal.links");
+      const own = getPluginKeybindings().filter((entry) => entry.pluginId === "portal.links");
+      expect(own.map((entry) => entry.item.actionId)).toEqual(["portal.links.add"]);
+      expect(service.listPluginActions()).toContainEqual(
+        expect.objectContaining({ pluginId: "portal.links", id: "portal.links.add" })
+      );
+      const lines =
+        service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "portal.links")
+          ?.logLines ?? [];
+      expect(lines.filter((l) => l.message.includes("no longer has"))).toEqual([]);
+    });
+
+    it("loads a plugin whose only binding is retired, registering nothing", async () => {
+      await writePlugin("retired-only", {
+        name: "acme.retired-only",
+        version: "1.0.0",
+        engines: { daintree: "^0.7.0" },
+        contributes: {
+          keybindings: [{ actionId: "nav.quickSwitcher", combo: "Cmd+Shift+7", scope: "portal" }],
+        },
+      });
+
+      const service = new PluginService(tmpDir, "0.7.5");
+      await service.initialize();
+
+      expect(service.listPlugins().map((p) => p.manifest.name)).toContain("acme.retired-only");
+      expect(getPluginKeybindings().filter((e) => e.pluginId === "acme.retired-only")).toEqual([]);
+      expect(retiredLogLines(service, "acme.retired-only")).toHaveLength(1);
+    });
   });
 
   it("does not warn when reserved arrays are explicitly present but empty", async () => {

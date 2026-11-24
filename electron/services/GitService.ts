@@ -662,7 +662,8 @@ export class GitService {
     filePath?: string,
     useMergeBase?: boolean,
     ignoreWhitespace?: boolean,
-    contextLines?: number
+    contextLines?: number,
+    oldPath?: string
   ): Promise<CrossWorktreeDiffResult | string> {
     // Validate before the equality fast-path so an invalid argv-shaped name
     // is rejected unconditionally — not silently accepted when both inputs
@@ -691,7 +692,10 @@ export class GitService {
     const range = useMergeBase ? `${ref1}...${ref2}` : `${ref1}..${ref2}`;
 
     if (filePath) {
-      // Return the unified diff for a specific file
+      // A rename or copy only pairs when both of its paths are in the
+      // pathspec; the new path alone diffs as a newly added file. A copy's
+      // source still exists, so its own patch is filtered out.
+      const paired = oldPath !== undefined && oldPath !== filePath;
       try {
         const diff = await runWithCappedStdout(this.rootPath, MAX_DIFF_PREVIEW_BYTES, (git) =>
           git.raw([
@@ -703,11 +707,16 @@ export class GitService {
             // would otherwise replace the patch with a commit summary or with the
             // submodule's own files (#12309).
             "--submodule=short",
+            // Full blob ids let the renderer tell whether a separate whole-file
+            // read of this file saw the same blobs as the patch.
+            "--full-index",
             ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
             ...(contextLines !== undefined ? [`--unified=${contextLines}`] : []),
+            ...(paired ? ["--diff-filter=RC"] : []),
             "--end-of-options",
             range,
             "--",
+            ...(paired ? [oldPath] : []),
             filePath,
           ])
         );
@@ -756,12 +765,13 @@ export class GitService {
           "--end-of-options",
           range,
         ]),
+        // Same rename detection as the listing, so a moved file's churn is
+        // the edit alone, keyed under its new path, not a full delete and add.
         git
           .raw([
             "diff",
             "--no-ext-diff",
             "--no-textconv",
-            "--no-renames",
             "--numstat",
             "-z",
             ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
@@ -787,25 +797,14 @@ export class GitService {
       for (const entry of parseNameStatusZ(nameStatusOutput)) {
         const status = entry.status[0] as CrossWorktreeFile["status"];
 
-        if (entry.oldPath !== undefined) {
-          const insStats = numstatByRelPath.get(entry.path);
-          const delStats = numstatByRelPath.get(entry.oldPath);
-          files.push({
-            status,
-            path: entry.path,
-            oldPath: entry.oldPath,
-            insertions: insStats?.insertions ?? null,
-            deletions: delStats?.deletions ?? null,
-          });
-        } else {
-          const stats = numstatByRelPath.get(entry.path);
-          files.push({
-            status,
-            path: entry.path,
-            insertions: stats?.insertions ?? null,
-            deletions: stats?.deletions ?? null,
-          });
-        }
+        const stats = numstatByRelPath.get(entry.path);
+        files.push({
+          status,
+          path: entry.path,
+          ...(entry.oldPath !== undefined && { oldPath: entry.oldPath }),
+          insertions: stats?.insertions ?? null,
+          deletions: stats?.deletions ?? null,
+        });
       }
 
       logDebug("Compared worktrees", { branch1, branch2, fileCount: files.length });

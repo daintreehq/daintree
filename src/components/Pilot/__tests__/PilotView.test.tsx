@@ -457,9 +457,25 @@ describe("PilotView", () => {
 
     screen.getByTestId("pilot-row").click();
 
+    // Strict: a run with no worktree sends no `worktreeId` key at all.
+    expect(dispatchMock.mock.calls.find(([id]) => id === "pilot.openRun")).toStrictEqual([
+      "pilot.openRun",
+      { runId: "t9", workspaceId: "p1" },
+    ]);
+  });
+
+  it("names the row's worktree when opening its run", () => {
+    // A run that exits while its project opens lands in this worktree instead of
+    // whichever one the project last showed.
+    seed([run({ runId: "t9", workspaceId: "p1", worktreeId: "/repo/wt/alpha" })]);
+    render(<PilotView />);
+
+    screen.getByTestId("pilot-row").click();
+
     expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
       runId: "t9",
       workspaceId: "p1",
+      worktreeId: "/repo/wt/alpha",
     });
   });
 
@@ -1823,6 +1839,53 @@ describe("PilotView", () => {
       expect(screen.getByTestId("pilot-park-hint").textContent).toContain("to edit park");
     });
 
+    it("wakes a snoozed row on Alt+Enter instead of opening the park editor", () => {
+      const unsnoozeRunMock = vi.fn().mockResolvedValue(true);
+      window.electron = {
+        fleet: { parkRun: parkRunMock, unparkRun: unparkRunMock, unsnoozeRun: unsnoozeRunMock },
+      } as unknown as typeof window.electron;
+      seed([
+        run({
+          runId: "snoozed-run",
+          agentState: "waiting",
+          waitingReason: "question",
+          title: "auth spike",
+          since: NOW - 60_000,
+          snooze: { snoozedAt: NOW - 30_000, snoozedUntil: NOW + 3_600_000 },
+        }),
+      ]);
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-park-hint").textContent).toContain("to wake now");
+      altEnter();
+
+      expect(unsnoozeRunMock).toHaveBeenCalledWith("snoozed-run");
+      expect(parkRunMock).not.toHaveBeenCalled();
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+
+      // A held chord wakes once and is otherwise consumed.
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), {
+        key: "Enter",
+        altKey: true,
+        repeat: true,
+      });
+      expect(unsnoozeRunMock).toHaveBeenCalledTimes(1);
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+    });
+
+    it("does not open the park editor on a held Alt+Enter", () => {
+      seed([run({ agentState: "waiting", waitingReason: "question", since: NOW - 60_000 })]);
+      render(<PilotView />);
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), {
+        key: "Enter",
+        altKey: true,
+        repeat: true,
+      });
+
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+    });
+
     it("shows the park note on the row itself", () => {
       seed([
         run({
@@ -2442,6 +2505,19 @@ describe("PilotView worktree scope", () => {
   });
 
   describe("drilling in", () => {
+    it("inks the drill chevron and worktree header tile with the icon-contrast token", () => {
+      seedSpread();
+      render(<PilotView />);
+      const chevron = screen.getByTestId("pilot-group-drill");
+      expect(chevron.getAttribute("class")).toContain("text-text-secondary");
+      expect(chevron.getAttribute("class")).not.toContain("text-text-muted");
+
+      fireEvent.click(drillHeader());
+      const tile = screen.getAllByTestId("pilot-worktree-header")[0]!.firstElementChild!;
+      expect(tile.getAttribute("class")).toContain("text-text-secondary");
+      expect(tile.getAttribute("class")).not.toContain("text-muted-foreground");
+    });
+
     it("regroups one project's runs by worktree when its header is clicked", () => {
       seedSpread();
       render(<PilotView />);
@@ -2909,6 +2985,7 @@ describe("PilotView worktree scope", () => {
       expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
         runId: "alpha-1",
         workspaceId: "p1",
+        worktreeId: "/repo/wt/alpha",
       });
     });
 

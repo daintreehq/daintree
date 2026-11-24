@@ -41,7 +41,15 @@ interface GitPushConfirmState {
    * `pendingConfirm` never returns to null between requests (#9918).
    */
   requestSeq: number;
-  requestConfirmation: (cwd: string) => Promise<GitPushConfirmResult>;
+  /**
+   * `yieldToPending` is for a review nothing asked for at that moment, such as
+   * the one a first commit raises once it lands (#17588): it declines at once
+   * rather than taking over a review that is already open.
+   */
+  requestConfirmation: (
+    cwd: string,
+    options?: { yieldToPending?: boolean }
+  ) => Promise<GitPushConfirmResult>;
   /** Approve with the review on screen, or decline with `null`. */
   resolveConfirmation: (review: GitPushReview | null) => void;
 }
@@ -50,8 +58,12 @@ export const useGitPushConfirmStore = create<GitPushConfirmState>()((set, get) =
   pendingConfirm: null,
   requestSeq: 0,
 
-  requestConfirmation: (cwd: string): Promise<GitPushConfirmResult> => {
+  requestConfirmation: (
+    cwd: string,
+    options?: { yieldToPending?: boolean }
+  ): Promise<GitPushConfirmResult> => {
     const existing = get().pendingConfirm;
+    if (existing && options?.yieldToPending) return Promise.resolve(DECLINED);
     if (existing) {
       existing.resolve(DECLINED);
     }
@@ -69,3 +81,13 @@ export const useGitPushConfirmStore = create<GitPushConfirmState>()((set, get) =
     }
   },
 }));
+
+/**
+ * Decline a push whose dialog failed to render (#17204), so the action
+ * awaiting it ends. A no-op unless request `requestSeq` is still pending.
+ */
+export function declineFailedGitPushConfirmation(requestSeq: number): void {
+  const state = useGitPushConfirmStore.getState();
+  if (state.pendingConfirm === null || state.requestSeq !== requestSeq) return;
+  state.resolveConfirmation(null);
+}

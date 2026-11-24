@@ -176,15 +176,6 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     const serializeAddon: SerializeAddonType = new SerializeAddon();
     headlessTerminal.loadAddon(serializeAddon);
 
-    // Structural-signal tier (#6668): hook the headless parser for DEC mode
-    // 2026 brackets so frame snapshots can drive the analyzer. Lifetime ties
-    // to the headless terminal — disposed alongside it in release().
-    // The callback resolves activityMonitor lazily so frame events fire even
-    // for plain terminals that are promoted to agents post-spawn.
-    this.synchronizedFrameDetector = new SynchronizedFrameDetector(headlessTerminal, (snapshot) => {
-      this.activityMonitor?.onSynchronizedFrame(snapshot);
-    });
-
     this.terminalInfo.headlessTerminal = headlessTerminal;
     this.terminalInfo.serializeAddon = serializeAddon;
     this.viewportSnapshotCache.attach(headlessTerminal);
@@ -256,6 +247,13 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     } else {
       this.noteAgentOutputActivity();
     }
+  }
+
+  // The scheduler queues every headless write per terminal, so the reset
+  // already parses behind each chunk fed before it.
+  feedModeReset(data: string): boolean {
+    this.feedPrelude(data);
+    return true;
   }
 
   feedPrelude(prelude: string): void {
@@ -382,10 +380,22 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
         onBootComplete: (timestamp) => this.deps.onBootComplete(timestamp),
       }
     );
-    this.activityMonitor.startPolling();
+    // Structural-signal tier (#6668): hook the mirror's parser for DEC mode
+    // 2026 brackets so frame snapshots can drive the analyzer. Only a monitor
+    // that reads those snapshots gets the detector; for any other it would arm
+    // a timer and copy the bottom rows on every frame for nothing (#17041).
+    const monitor = this.activityMonitor;
+    const headlessTerminal = this.terminalInfo.headlessTerminal;
+    if (monitor.consumesSynchronizedFrames && headlessTerminal) {
+      this.synchronizedFrameDetector = new SynchronizedFrameDetector(headlessTerminal, (snapshot) =>
+        monitor.onSynchronizedFrame(snapshot)
+      );
+    }
+    monitor.startPolling();
   }
 
   stopMonitor(): void {
+    this.disposeSynchronizedFrameDetector();
     if (this.activityMonitor) {
       this.activityMonitor.dispose();
       this.activityMonitor = null;
@@ -464,6 +474,23 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
         const snapshot = serializeTerminal(this.id, terminal);
         resolve(
           snapshot && { ...snapshot, continuation: { pendingEscapeTail: this.parserTail.tail } }
+        );
+      });
+    });
+  }
+
+  serializeScreen(): Promise<SerializedTerminalSnapshot | null> {
+    const terminal = this.terminalInfo;
+    const headless = terminal.headlessTerminal;
+    if (terminal.preservedSnapshot !== undefined || !headless || !terminal.serializeAddon) {
+      return Promise.resolve(null);
+    }
+    return new Promise((resolve) => {
+      headlessMirrorScheduler.flush(this.id, headless, () => {
+        resolve(
+          terminal.headlessTerminal === headless
+            ? serializeTerminalTail(this.id, terminal, 0)
+            : null
         );
       });
     });
@@ -551,6 +578,9 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     this.agentOutputTemperature.reset();
     this.agentOutputContentSnapshot = undefined;
     this.viewportSnapshotCache.detach();
+    // The owner normally stops the monitor first, but the parser hook must not
+    // outlive the mirror either way.
+    this.disposeSynchronizedFrameDetector();
     if (!terminal.headlessTerminal) {
       return;
     }
@@ -566,14 +596,6 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
       }
       this.headlessResponderDisposable = null;
     }
-    if (this.synchronizedFrameDetector) {
-      try {
-        this.synchronizedFrameDetector.dispose();
-      } catch {
-        // Ignore disposal errors
-      }
-      this.synchronizedFrameDetector = null;
-    }
     try {
       terminal.headlessTerminal.dispose();
     } catch {
@@ -581,6 +603,11 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     }
     terminal.headlessTerminal = undefined;
     terminal.serializeAddon = undefined;
+  }
+
+  private disposeSynchronizedFrameDetector(): void {
+    this.synchronizedFrameDetector?.dispose();
+    this.synchronizedFrameDetector = null;
   }
 
   private ensureHeadlessTerminal(): void {

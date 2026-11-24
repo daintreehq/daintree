@@ -33,12 +33,15 @@ const DROP_REASON: Record<ComposerHoldDropReason, string> = {
 /** What the pane was last seen waiting on, when it isn't its prompt. */
 const NOT_AT_PROMPT: Partial<Record<string, string>> = {
   question: "a question",
-  approval: "an approval",
+  approval: "a choice dialog",
   error: "an error",
 };
 
-/** Prompts that take typed text as their answer: Send now says so before it types. */
-const ANSWERED_BY_TEXT = new Set(["question", "approval"]);
+/** Prompts that take typed text as their answer: Send now names the one it types into. */
+const ANSWERED_BY_TEXT: Partial<Record<string, string>> = {
+  question: "question",
+  approval: "choice dialog",
+};
 
 /** The first line of what was sent, for the row: the whole text comes back on Edit. */
 function previewOf(text: string): string {
@@ -118,7 +121,7 @@ export interface HeldComposerSendRowProps {
 }
 
 /**
- * The pane composer's send held for its agent's next prompt (#16379), in the
+ * The pane composer's send held for its agent's next prompt (#16379, #16872), in the
  * composer's area: what it is waiting on, Send now to stop waiting (#16745),
  * Edit to take it back into the composer, and Withdraw. Once dropped it says
  * why and keeps the text to take back until dismissed.
@@ -182,7 +185,7 @@ export function HeldComposerSendRow({
   if (held !== undefined) {
     const sending = held.status === "sending";
     const answers =
-      waitingReason !== undefined && ANSWERED_BY_TEXT.has(waitingReason) ? waitingReason : null;
+      (waitingReason !== undefined ? ANSWERED_BY_TEXT[waitingReason] : undefined) ?? null;
     const status = sending
       ? "Sending the held message…"
       : waitingOn !== undefined

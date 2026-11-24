@@ -52,16 +52,20 @@ describe("ContentDock excludes trashed panels through a compiler-safe dataflow",
     // Assert both slice markers resolve. An unfound marker yields -1, which
     // silently widens the slice to most of the file and lets an unrelated
     // `trashedTerminals` read elsewhere in ContentDock satisfy the check.
-    const start = content.indexOf("const dockTerminalsRaw = usePanelStore(");
+    const start = content.indexOf("const dockItems = usePanelStore(");
     expect(start).toBeGreaterThanOrEqual(0);
     const end = content.indexOf("\n  );", start);
     expect(end).toBeGreaterThan(start);
 
-    // The selector delegates membership to `collectDockPanels`, which the
-    // keyboard chip move shares (#14972); the trash check must live there.
-    expect(content.slice(start, end)).toContain("collectDockPanels(state,");
+    // The selector delegates to `selectDockRenderDescriptors`, which builds on
+    // `collectDockPanels`, shared with the keyboard chip move (#14972); the
+    // trash check must live in the latter.
+    expect(content.slice(start, end)).toContain("selectDockRenderDescriptors(state,");
 
     const membership = await readFile(DOCK_MEMBERSHIP_PATH, "utf-8");
+    const descriptorsStart = membership.indexOf("export function selectDockRenderDescriptors(");
+    expect(descriptorsStart).toBeGreaterThanOrEqual(0);
+    expect(membership.slice(descriptorsStart)).toContain("collectDockPanels(state,");
     const helperStart = membership.indexOf("export function collectDockPanels(");
     expect(helperStart).toBeGreaterThanOrEqual(0);
     const helperEnd = membership.indexOf("\n}\n", helperStart);

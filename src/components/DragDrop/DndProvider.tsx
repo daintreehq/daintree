@@ -114,6 +114,7 @@ import {
   shouldCancelDrop,
   dragCarriesNonDockableIntoDock,
   dockCheckedGroupPanelIds,
+  resolveCardDropWorktreeId,
   type OverDropData,
 } from "./dropResolution";
 import { useDragRecovery } from "./useDragRecovery";
@@ -261,20 +262,6 @@ export function getDragLabel(data: unknown): string {
   // A group drag moves every tab in it, so the count is part of what's in hand.
   const groupSize = dragData?.groupId ? (dragData.groupPanelIds?.length ?? 0) : 0;
   return groupSize > 1 ? `${title} (${pluralize(groupSize, "tab")})` : title;
-}
-
-/**
- * The worktree whose sidebar card a drop landed on, or null. The card stacks two
- * same-size droppables, its `worktree-drop-{id}` target inside the row's
- * `worktree-sort-{id}` sortable, and `pointerWithin` can resolve either; the
- * card lights up for both, so both must commit the move. Exported for unit tests.
- */
-export function resolveCardDropWorktreeId(
-  overData: OverDropData | undefined,
-  overId: string
-): string | null {
-  if (overData?.type === "worktree" && overData.worktreeId) return overData.worktreeId;
-  return parseWorktreeSortDragId(overId) || null;
 }
 
 /**
@@ -960,14 +947,7 @@ export function DndProvider({ children }: DndProviderProps) {
       // Capture layout state before any mutations for undo support
       useLayoutUndoStore.getState().pushLayoutSnapshot();
 
-      const overData = over.data.current as
-        | {
-            container?: "grid" | "dock";
-            sortable?: { containerId?: string; index?: number };
-            type?: string;
-            worktreeId?: string;
-          }
-        | undefined;
+      const overData = over.data.current as OverDropData | undefined;
 
       // Handle accordion reordering
       const isAccordionDrag = isWorktreeDragData(activeData);
@@ -1037,7 +1017,7 @@ export function DndProvider({ children }: DndProviderProps) {
         const isAccordionTarget = parseAccordionDragId(overId) !== null;
         targetContainer =
           detectTargetContainer(
-            overData as OverDropData | undefined,
+            overData,
             dropContainer,
             overId,
             freshTerminalsById,

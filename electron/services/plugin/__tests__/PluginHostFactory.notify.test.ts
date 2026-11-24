@@ -712,3 +712,109 @@ describe("delivery order and paging (#13818)", () => {
     );
   });
 });
+
+describe("a notification for an assistant (#18154)", () => {
+  it("offers only a marked one with a project, under the id the plugin got, once it passed the person's gates", async () => {
+    const deps = makeDeps();
+    const publish = vi.fn();
+    deps.assistantNotifications = async () => ({ publish });
+    const { host } = createHost(deps, PLUGIN_ID, BOUND);
+
+    await host.notify({ title: "Run blocked", body: "Needs criteria", dedupeKey: "run-42" });
+    expect(publish).not.toHaveBeenCalled();
+
+    const { id } = await host.notify({
+      title: "Run blocked",
+      body: "Needs criteria",
+      severity: "warning",
+      delivery: "passive",
+      dedupeKey: "run-42",
+      audience: "assistant",
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith(
+      {
+        notificationId: id,
+        pluginId: PLUGIN_ID,
+        pluginName: "Acme",
+        projectId: PROJECT_A,
+        dedupeKey: "run-42",
+        severity: "warning",
+        createdAt: expect.any(Number),
+        title: "Run blocked",
+        body: "Needs criteria",
+      },
+      // The grant epoch it was raised at, so a later revocation still covers it.
+      expect.any(Number)
+    );
+    // The person's own row is unchanged by it.
+    expect(lastToast()).toMatchObject({ title: "Acme: Run blocked", priority: "low" });
+
+    const blocked = deps.pluginNotificationsBlocked as unknown as ReturnType<typeof vi.fn>;
+    blocked.mockResolvedValueOnce(true);
+    await host.notify({ title: "t", body: "b", audience: "assistant" });
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers nothing without a project, and a publisher that throws costs the person nothing", async () => {
+    const deps = makeDeps();
+    const publish = vi.fn(() => {
+      throw new Error("boom");
+    });
+    deps.assistantNotifications = async () => ({ publish });
+    const unbound = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+    await unbound.notify({ title: "t", body: "b", audience: "assistant" });
+    expect(publish).not.toHaveBeenCalled();
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bound = createHost(deps, PLUGIN_ID, BOUND).host;
+    await expect(
+      bound.notify({ title: "shown", body: "b", audience: "assistant" })
+    ).resolves.toEqual({ id: expect.any(String) });
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(lastToast()).toMatchObject({ title: "Acme: shown" });
+    warn.mockRestore();
+  });
+
+  it("publishes nothing for an instance replaced while the assistants' store loaded", async () => {
+    const deps = makeDeps();
+    const plugins = deps.plugins as Map<string, LoadedPlugin>;
+    const publish = vi.fn();
+    deps.assistantNotifications = async () => {
+      plugins.set(PLUGIN_ID, { ...plugins.get(PLUGIN_ID)! } as LoadedPlugin);
+      return { publish };
+    };
+    const { host } = createHost(deps, PLUGIN_ID, BOUND);
+    await host.notify({ title: "t", body: "b", audience: "assistant" });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("offers an app-wide plugin's one under the project of the worktree it points at", async () => {
+    const deps = makeDeps();
+    (deps.fetchWorktreeSnapshotsResult as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "ok",
+      projectId: "project-b",
+      snapshots: [{ id: "/repos/beta/feature" }],
+    });
+    const publish = vi.fn();
+    deps.assistantNotifications = async () => ({ publish });
+    const { host } = createHost(deps, PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING);
+    await host.notify({
+      title: "t",
+      body: "b",
+      audience: "assistant",
+      target: { worktreeId: "/repos/beta/feature" },
+    });
+    expect(publish).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "project-b", body: "b" }),
+      expect.any(Number)
+    );
+  });
+
+  it("refuses any other audience", async () => {
+    const { host } = createHost(makeDeps(), PLUGIN_ID, BOUND);
+    await expect(
+      host.notify({ title: "t", body: "b", audience: "everyone" as "assistant" })
+    ).rejects.toThrow(/audience/);
+  });
+});

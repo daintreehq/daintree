@@ -46,13 +46,22 @@ import {
   CLOSE_WINDOW_MENU_ITEM_ID,
   PROJECT_MENU_ITEM_IDS,
   hasOpenApplicationWindow,
+  refreshProjectMenuState,
   resolveProjectIdForApplicationMenu,
 } from "./projectMenuState.js";
 import {
   buildOpenWindowMenuItems,
+  isOpenWindowMenuItemId,
   isOpenWindowMenuStale,
   noteOpenWindowMenuInstalled,
+  refreshOpenWindowMenu,
 } from "./windowMenuState.js";
+import {
+  currentUndoMenuLabel,
+  handleUndoMenuClick,
+  refreshUndoMenuItem,
+  UNDO_MENU_ITEM_ID,
+} from "./undoMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { getUserMessage, isAppError, type AppError } from "./utils/errorTypes.js";
@@ -169,6 +178,67 @@ function helpMenuTours(projectId: string | null) {
 /** {@link hiddenMenuPluginsKey} of the menu currently installed. */
 let builtHiddenMenuPluginsKey = "";
 
+/** The menu this module last installed, and the {@link menuSignature} of its build. */
+let installedMenu: Electron.Menu | null = null;
+let installedMenuSignature = "";
+
+const objectTokens = new WeakMap<object, number>();
+let nextObjectToken = 1;
+
+/** A number standing for this object's identity, so a signature can tell two apart. */
+function objectToken(value: object | undefined): number {
+  if (!value) return 0;
+  let token = objectTokens.get(value);
+  if (token === undefined) {
+    token = nextObjectToken++;
+    objectTokens.set(value, token);
+  }
+  return token;
+}
+
+/** Whether the application menu is still the one this module last installed. */
+function isInstalledMenuCurrent(): boolean {
+  return installedMenu !== null && Menu.getApplicationMenu() === installedMenu;
+}
+
+/** Item fields kept current on the installed menu in place, so no rebuild is needed for them. */
+function liveMenuItemFields(id: string): readonly string[] | undefined {
+  if (
+    id === CLOSE_WINDOW_MENU_ITEM_ID ||
+    (PROJECT_MENU_ITEM_IDS as readonly string[]).includes(id)
+  ) {
+    return ["enabled"];
+  }
+  if (id === UNDO_MENU_ITEM_ID) return ["label"];
+  if (isOpenWindowMenuItemId(id)) return ["label", "checked", "visible"];
+  return undefined;
+}
+
+/**
+ * A build as a comparable string: the template without its in-place fields,
+ * plus what its click handlers act on that no item shows (the window and CLI
+ * service they fall back to, and each agent, plugin action, tour and recent
+ * project they open). Two builds with the same signature install the same menu.
+ */
+function menuSignature(
+  template: readonly Electron.MenuItemConstructorOptions[],
+  mainWindow: BrowserWindow,
+  cliAvailabilityService: CliAvailabilityService | undefined,
+  clickTargets: readonly string[]
+): string {
+  return JSON.stringify(
+    [objectToken(mainWindow), objectToken(cliAvailabilityService), clickTargets, template],
+    (_key, value: unknown) => {
+      if (typeof value !== "object" || value === null || !("id" in value)) return value;
+      const live = typeof value.id === "string" ? liveMenuItemFields(value.id) : undefined;
+      if (!live) return value;
+      const rest: Record<string, unknown> = { ...value };
+      for (const field of live) delete rest[field];
+      return rest;
+    }
+  );
+}
+
 /**
  * The project whose plugin choices the menu shows: the most recently focused
  * window's, not necessarily the window a caller rebuilt the menu for. Several
@@ -196,7 +266,8 @@ export function rebuildApplicationMenuIfStale(
   if (win.isDestroyed()) return;
   if (
     hiddenMenuPluginsKey(menuProjectIdFor(win)) === builtHiddenMenuPluginsKey &&
-    !isOpenWindowMenuStale()
+    !isOpenWindowMenuStale() &&
+    isInstalledMenuCurrent()
   ) {
     return;
   }
@@ -251,12 +322,14 @@ export function createApplicationMenu(
   };
 
   const availability = cliAvailabilityService?.getAvailability();
+  const clickTargets: string[] = [];
 
   const buildAgentMenuItems = (): Electron.MenuItemConstructorOptions[] => {
     const items: Electron.MenuItemConstructorOptions[] = [];
 
     Object.values(getEffectiveRegistry()).forEach((agent) => {
       if (isAgentInstalled(availability?.[agent.id])) {
+        const agentId = agent.id;
         // Agents the keybinding system owns (a default row or user override
         // exists for agent.<id>) take their accelerator from the effective
         // bindings — including "none" when cleared or chord-bound; the
@@ -277,10 +350,9 @@ export function createApplicationMenu(
               ? registryAccelerator
               : undefined,
           click: (_item, browserWindow) =>
-            sendAction("agent.launch", getTargetBrowserWindow(browserWindow), {
-              agentId: agent.id,
-            }),
+            sendAction("agent.launch", getTargetBrowserWindow(browserWindow), { agentId }),
         });
+        clickTargets.push(`agent:${agentId}`);
       }
     });
 
@@ -298,12 +370,14 @@ export function createApplicationMenu(
       if (item.location !== location) continue;
       if (!isPluginVisibleInProject(pluginId, menuProjectId)) continue;
       if (!evaluateWhen(item.when, {})) continue;
+      const actionId = item.actionId;
       items.push({
         label: item.label,
         accelerator: item.accelerator ? convertShortcutToAccelerator(item.accelerator) : undefined,
         click: (_item, browserWindow) =>
-          sendAction(item.actionId, getTargetBrowserWindow(browserWindow)),
+          sendAction(actionId, getTargetBrowserWindow(browserWindow)),
       });
+      clickTargets.push(`action:${actionId}`);
     }
     return items;
   };
@@ -316,11 +390,15 @@ export function createApplicationMenu(
   // Plugin tours sit beside the Daintree Tour, named "<plugin>: <tour>". Panel
   // tours are opened from their panel, not from Help.
   const pluginTourItems: Electron.MenuItemConstructorOptions[] = helpMenuTours(menuProjectId).map(
-    (tour) => ({
-      label: `${tour.pluginName}: ${tour.title}`,
-      click: (_item, browserWindow) =>
-        sendAction("help.tour.show", getTargetBrowserWindow(browserWindow), { tourId: tour.id }),
-    })
+    (tour) => {
+      const tourId = tour.id;
+      clickTargets.push(`tour:${tourId}`);
+      return {
+        label: `${tour.pluginName}: ${tour.title}`,
+        click: (_item, browserWindow) =>
+          sendAction("help.tour.show", getTargetBrowserWindow(browserWindow), { tourId }),
+      };
+    }
   );
 
   // Built BEFORE the gate is resolved: this reads getAllProjects(), which
@@ -329,7 +407,8 @@ export function createApplicationMenu(
   // the gate from pre-repair rows and install a template the repair contradicts.
   const recentProjectsMenu = buildRecentProjectsMenu(
     getTargetBrowserWindow,
-    cliAvailabilityService
+    cliAvailabilityService,
+    clickTargets
   );
 
   // Same resolver the live refresh uses, so the cold build and every later
@@ -469,13 +548,13 @@ export function createApplicationMenu(
       // path depends on the native Edit menu roles.
       submenu: [
         {
-          label: "Undo",
+          // Names the panel close the next Cmd+Z would reopen, and reopens it
+          // when chosen (#17108); the label follows focus in place.
+          id: UNDO_MENU_ITEM_ID,
+          label: currentUndoMenuLabel(),
           accelerator: "CommandOrControl+Z",
           registerAccelerator: false,
-          click: () => {
-            const focused = webContents.getFocusedWebContents();
-            if (focused && !focused.isDestroyed()) focused.undo();
-          },
+          click: (_item, _window, event) => handleUndoMenuClick(event),
         },
         {
           label: "Redo",
@@ -638,10 +717,9 @@ export function createApplicationMenu(
       label: "Terminal",
       submenu: [
         {
-          // Renderer-owned so scoped bindings win: the portal binds
-          // portal.newTab on the same Cmd+T at higher priority — without
-          // per-event suppression the native accelerator would fire
-          // terminal.duplicate regardless of portal focus.
+          // Renderer-owned so a scoped binding on the same key can win:
+          // without per-event suppression the native accelerator would fire
+          // terminal.duplicate whatever has focus.
           label: "Duplicate Panel",
           accelerator: rendererMenuAccelerator("terminal.duplicate"),
           click: (_item, browserWindow) =>
@@ -674,7 +752,9 @@ export function createApplicationMenu(
         { type: "separator" },
         {
           label: `Install ${PRODUCT_NAME} Command Line Tool`,
-          enabled: process.platform === "darwin" || process.platform === "linux",
+          // The Windows installer puts the command on PATH itself (#17931), so
+          // there is nothing for this item to do there.
+          visible: process.platform === "darwin" || process.platform === "linux",
           click: async (_item, browserWindow) => {
             const targetWin = getTargetBrowserWindow(browserWindow);
             try {
@@ -894,12 +974,27 @@ export function createApplicationMenu(
     });
   }
 
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
+  // Installing tears down and recreates every native item and dismisses an open
+  // menu, so a build identical to the installed one (CLI availability or the
+  // plugin catalog settling unchanged, a reload that changed nothing) stops here.
+  const signature = menuSignature(template, mainWindow, cliAvailabilityService, clickTargets);
+  const unchanged = signature === installedMenuSignature && isInstalledMenuCurrent();
+  if (!unchanged) {
+    const menu = Menu.buildFromTemplate(template);
+    Menu.setApplicationMenu(menu);
+    installedMenu = menu;
+    installedMenuSignature = signature;
+  }
   // Only once installed: a build that throws above leaves the old menu in
   // place, and the staleness checks must keep comparing against that one.
   builtHiddenMenuPluginsKey = menuPluginsKey;
   noteOpenWindowMenuInstalled();
+  if (unchanged) {
+    // The fields the signature leaves out, brought current as a rebuild would.
+    refreshProjectMenuState();
+    refreshOpenWindowMenu();
+    refreshUndoMenuItem();
+  }
 
   wireUpdateMenuState();
 }
@@ -922,7 +1017,8 @@ export function wireUpdateMenuState(): void {
 
 function buildRecentProjectsMenu(
   getTarget: (browserWindow: Electron.BaseWindow | undefined) => BrowserWindow | null,
-  cliAvailabilityService?: CliAvailabilityService
+  cliAvailabilityService: CliAvailabilityService | undefined,
+  clickTargets: string[]
 ): Electron.MenuItemConstructorOptions[] {
   const projects = projectStore.getAllProjects();
 
@@ -932,22 +1028,26 @@ function buildRecentProjectsMenu(
 
   const sortedProjects = [...projects].sort((a, b) => b.lastOpened - a.lastOpened);
 
-  const menuItems: Electron.MenuItemConstructorOptions[] = sortedProjects.map((project) => ({
-    label: `${project.emoji || "📁"} ${project.name} - ${project.path}`,
-    click: async (
-      _item: Electron.MenuItem,
-      browserWindow: Electron.BaseWindow | undefined,
-      event: Electron.KeyboardEvent | undefined
-    ) => {
-      const targetWindow = getTarget(browserWindow);
-      if (!targetWindow) return;
-      if (isNewWindowClick(event)) {
-        await openInNewWindow(project.path, targetWindow, cliAvailabilityService);
-        return;
-      }
-      await handleDirectoryOpen(project.path, targetWindow, cliAvailabilityService);
-    },
-  }));
+  const menuItems: Electron.MenuItemConstructorOptions[] = sortedProjects.map((project) => {
+    const projectPath = project.path;
+    clickTargets.push(`recent:${projectPath}`);
+    return {
+      label: `${project.emoji || "📁"} ${project.name} - ${projectPath}`,
+      click: async (
+        _item: Electron.MenuItem,
+        browserWindow: Electron.BaseWindow | undefined,
+        event: Electron.KeyboardEvent | undefined
+      ) => {
+        const targetWindow = getTarget(browserWindow);
+        if (!targetWindow) return;
+        if (isNewWindowClick(event)) {
+          await openInNewWindow(projectPath, targetWindow, cliAvailabilityService);
+          return;
+        }
+        await handleDirectoryOpen(projectPath, targetWindow, cliAvailabilityService);
+      },
+    };
+  });
 
   return menuItems;
 }

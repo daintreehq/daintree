@@ -152,24 +152,24 @@ describe("WorktreeStoreProvider — Viewed marks follow worktree polls (#14581)"
 
   it("lapses a mark once a poll shows its file changed, and keeps the rest", async () => {
     await seed(main(), feature({ entries: [{ path: "a.ts" }, { path: "b.ts" }] }));
-    mark("modified:a.ts");
-    mark("modified:b.ts");
+    mark("working-tree:a.ts");
+    mark("working-tree:b.ts");
 
     emitUpdate(feature({ entries: [{ path: "a.ts", mtimeMs: 200 }, { path: "b.ts" }] }));
 
-    expect(viewed("modified:a.ts")).toBe(false);
-    expect(viewed("modified:b.ts")).toBe(true);
+    expect(viewed("working-tree:a.ts")).toBe(false);
+    expect(viewed("working-tree:b.ts")).toBe(true);
   });
 
   it("lapses a mark when the agent's own commit takes the file out of the change list", async () => {
     await seed(main(), feature({ entries: [{ path: "a.ts" }] }));
-    mark("unstaged:a.ts");
+    mark("working-tree:a.ts");
 
     emitUpdate(feature({ entries: [], headOid: "head-2" }));
-    expect(viewed("unstaged:a.ts")).toBe(false);
+    expect(viewed("working-tree:a.ts")).toBe(false);
 
     emitUpdate(feature({ entries: [{ path: "a.ts" }], headOid: "head-2" }));
-    expect(viewed("unstaged:a.ts")).toBe(false);
+    expect(viewed("working-tree:a.ts")).toBe(false);
   });
 
   it("lapses a base-branch mark when only the main worktree's HEAD moves", async () => {

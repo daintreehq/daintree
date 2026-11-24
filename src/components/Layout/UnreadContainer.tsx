@@ -1,5 +1,5 @@
 import type { PtyPanelData } from "@shared/types/panel";
-import { useUnreadTerminals } from "@/hooks/useTerminalSelectors";
+import { UNREAD_FILTER_BANDS } from "@/lib/fleetAttention";
 import { usePluginAttentionUnreadRows } from "@/hooks/usePluginPanelAttentionRows";
 import { SESSION_COLORS, SESSION_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { AgentStatusContainer, type AgentStatusConfig } from "./AgentStatusContainer";
@@ -17,6 +17,7 @@ function compareUnread(a: PtyPanelData, b: PtyPanelData): number {
 
 const UNREAD_CONFIG: AgentStatusConfig = {
   kind: "unread",
+  bands: UNREAD_FILTER_BANDS,
   label: "Unread",
   Icon: SESSION_ICONS.unread,
   iconClassName: SESSION_COLORS.unread,
@@ -37,14 +38,6 @@ interface UnreadContainerProps {
  * a hand-back reads as seen once its pane has been in front of the user.
  */
 export function UnreadContainer({ compact = false }: UnreadContainerProps) {
-  const terminals = useUnreadTerminals();
   const pluginRows = usePluginAttentionUnreadRows();
-  return (
-    <AgentStatusContainer
-      terminals={terminals}
-      pluginRows={pluginRows}
-      config={UNREAD_CONFIG}
-      compact={compact}
-    />
-  );
+  return <AgentStatusContainer pluginRows={pluginRows} config={UNREAD_CONFIG} compact={compact} />;
 }

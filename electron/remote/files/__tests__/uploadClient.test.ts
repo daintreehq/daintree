@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,17 +11,21 @@ vi.mock("electron", () => ({
 }));
 
 import type { FileTransferEvent } from "../../../../shared/types/ipc/fileTransfer.js";
+import { BULK_CHUNK_BYTES } from "../../link/frames.js";
 import type { TransferSource } from "../../link/transfer.js";
 import type { UploadOptions } from "../ClientUploadTransport.js";
 import { createHostUploadClient } from "../uploadClient.js";
 
 let dir: string;
+/** Undone after each test, even one that timed out: held reads let go, spies restored. */
+const cleanups: Array<() => void> = [];
 
 beforeEach(async () => {
   dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "upc-")));
 });
 
 afterEach(async () => {
+  for (const undo of cleanups.splice(0).reverse()) undo();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -563,6 +568,75 @@ describe("a busy or dropped host", () => {
     expect(held.running()).not.toContain("op-queued");
   });
 
+  it("stops reading a file cancelled while it hashes, and the next upload takes its slot", async () => {
+    const { upload } = setup();
+    const uploads = createHostUploadClient({
+      transport: { upload },
+      hostForView: () => "studio-01",
+      hostLabel: (hostId) => hostId,
+      sendToView: () => {},
+      localLabel: "This Mac",
+      packDir: path.join(os.tmpdir(), "unused-folder-packs"),
+      maxConcurrentPerHost: 1,
+    });
+    const file = path.join(dir, "slow-drive.bin");
+    await fs.writeFile(file, Buffer.alloc(BULK_CHUNK_BYTES * 3, 7));
+    uploads.grantLocalSources(7, [file]);
+    // A slow drive: the first read only returns once the test lets it.
+    let reads = 0;
+    let closes = 0;
+    const order: string[] = [];
+    let finishFirstRead = () => {};
+    const firstReadHeld = new Promise<void>((resolve) => (finishFirstRead = resolve));
+    cleanups.push(() => finishFirstRead());
+    const realOpen = fs.open.bind(fs);
+    const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      if (args[0] !== file) return handle;
+      const read = handle.read.bind(handle) as (...readArgs: unknown[]) => Promise<unknown>;
+      const close = handle.close.bind(handle);
+      Object.assign(handle, {
+        read: async (...readArgs: unknown[]) => {
+          reads += 1;
+          const result = await read(...readArgs);
+          if (reads === 1) await firstReadHeld;
+          return result;
+        },
+        close: async () => {
+          closes += 1;
+          await close();
+          order.push("closed op-file");
+        },
+      });
+      return handle;
+    });
+    cleanups.push(() => open.mockRestore());
+    const send = upload.getMockImplementation()!;
+    upload.mockImplementation(async (...args) => {
+      order.push(`upload ${args[2].opId}`);
+      return send(...args);
+    });
+    const hashing = uploads.uploadLocalFile(7, {
+      hostId: "studio-01",
+      localPath: file,
+      destination: inbox,
+      opId: "op-file",
+    });
+    const queued = uploads.uploadBytes(7, bytesFor("op-next"));
+    await vi.waitFor(() => expect(reads).toBe(1));
+    expect(uploads.cancel("op-file", 7)).toBe(true);
+    finishFirstRead();
+
+    await expect(hashing).rejects.toMatchObject({ code: "CANCELLED" });
+    await expect(queued).resolves.toMatchObject({
+      hostPath: "/tmp/daintree-inbox/files/x/op-next.bin",
+    });
+    expect(reads).toBe(1);
+    expect(closes).toBe(1);
+    // The slot passes on only once the cancelled upload has let go of its file.
+    expect(order).toEqual(["closed op-file", "upload op-next"]);
+  });
+
   it("asks a busy host again under the same id until it takes the file", async () => {
     const { client, upload } = setup({ random: () => 0 });
     upload
@@ -689,5 +763,85 @@ describe("a busy or dropped host", () => {
     const calls = upload.mock.calls.length;
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(upload).toHaveBeenCalledTimes(calls);
+  });
+});
+
+describe("hashing an in-memory payload", () => {
+  /** Counts SHA-256 passes from here on. */
+  function countDigests() {
+    const spy = vi.spyOn(crypto, "createHash");
+    cleanups.push(() => spy.mockRestore());
+    return () => spy.mock.calls.filter(([algorithm]) => algorithm === "sha256").length;
+  }
+
+  /**
+   * Every attempt reads the whole source as the link would. The first is turned
+   * away busy and the second loses its answer, so the third is a reconcile.
+   */
+  function busyThenLost(upload: ReturnType<typeof setup>["upload"]) {
+    const sent: Array<{ advertised: string; bytes: Buffer }> = [];
+    const failures = ["RATE_LIMITED", "OUTCOME_UNKNOWN"];
+    upload.mockImplementation(async (_hostId, source, opts) => {
+      const chunks: Uint8Array[] = [];
+      for (let offset = 0; offset < source.size; offset += BULK_CHUNK_BYTES) {
+        chunks.push(await source.read(offset, Math.min(BULK_CHUNK_BYTES, source.size - offset)));
+      }
+      sent.push({ advertised: source.sha256, bytes: Buffer.concat(chunks) });
+      const code = failures[sent.length - 1];
+      if (code) throw Object.assign(new Error(code), { code });
+      return { hostPath: `/tmp/${opts.name}`, bytes: source.size, deduplicated: false };
+    });
+    return sent;
+  }
+
+  /** The caller's bytes and their digest, taken before the upload can touch them. */
+  function original(bytes: Uint8Array) {
+    return {
+      bytes: Buffer.from(bytes),
+      digest: crypto.createHash("sha256").update(bytes).digest("hex"),
+    };
+  }
+
+  const retrying = () => setup({ random: () => 0, whenReachable: async () => true });
+
+  it("hashes uploaded bytes once across a busy retry and a reconcile, and sends what it advertised", async () => {
+    const { client, upload } = retrying();
+    const payload = crypto.randomBytes(2 * BULK_CHUNK_BYTES + 3);
+    const expected = original(payload);
+    const sent = busyThenLost(upload);
+    const digests = countDigests();
+    await expect(
+      client.uploadBytes(7, {
+        hostId: "studio-01",
+        bytes: payload,
+        name: "big.bin",
+        mimeType: null,
+        destination: inbox,
+        opId: "op-big",
+      })
+    ).resolves.toMatchObject({ hostPath: "/tmp/big.bin" });
+    expect(digests()).toBe(1);
+    expect(sent).toHaveLength(3);
+    for (const attempt of sent) {
+      expect(attempt.advertised).toBe(expected.digest);
+      expect(attempt.bytes.equals(expected.bytes)).toBe(true);
+    }
+  });
+
+  it("hashes a pasted image once across a busy retry and a reconcile, and sends what it advertised", async () => {
+    const { client, upload } = retrying();
+    const png = crypto.randomBytes(BULK_CHUNK_BYTES + 7);
+    const expected = original(png);
+    const sent = busyThenLost(upload);
+    const digests = countDigests();
+    await expect(client.uploadClipboardImage(7, "studio-01", png, "op-paste")).resolves.toBe(
+      "/tmp/clipboard.png"
+    );
+    expect(digests()).toBe(1);
+    expect(sent).toHaveLength(3);
+    for (const attempt of sent) {
+      expect(attempt.advertised).toBe(expected.digest);
+      expect(attempt.bytes.equals(expected.bytes)).toBe(true);
+    }
   });
 });

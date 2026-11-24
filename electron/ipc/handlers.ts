@@ -20,7 +20,6 @@ import { registerGlobalEnvHandlers } from "./handlers/globalEnv.js";
 import { registerTerminalLayoutHandlers } from "./handlers/terminalLayout.js";
 import { registerProjectInRepoSettingsHandlers } from "./handlers/projectInRepoSettings.js";
 import { registerAppHandlers } from "./handlers/app.js";
-import { registerPortalHandlers } from "./handlers/portal.js";
 import { registerSessionRestoreHandlers } from "./handlers/sessionRestore.js";
 import { registerWindowOpeningHandlers } from "./handlers/windowOpening.js";
 import { registerKeepAwakeHandlers } from "./handlers/keepAwake.js";
@@ -36,9 +35,11 @@ import { registerKeybindingHandlers } from "./handlers/keybinding.js";
 import { registerWorktreeConfigHandlers } from "./handlers/worktreeConfig.js";
 import { registerConfigBundleHandlers } from "./handlers/configBundle.js";
 import { registerNotificationHandlers } from "./handlers/notifications.js";
+import { registerNotificationSoundsHandlers } from "./handlers/notificationSounds.js";
 import { registerMenuHandlers } from "./handlers/menu.js";
 import { registerFilesHandlers } from "./handlers/files.js";
 import { registerFileMutationHandlers } from "./handlers/fileMutation.js";
+import { registerGitHunkHandlers } from "./handlers/gitHunks.js";
 import { registerFileDocumentHandlers } from "./handlers/fileDocument.js";
 import { registerDiffMediaHandlers } from "./handlers/diffMedia.js";
 import { registerFileBrowserHandlers } from "./handlers/fileBrowser.js";
@@ -80,6 +81,8 @@ import { registerCanopyHandlers } from "./handlers/canopy.js";
 import { registerCanopyWindowHandlers } from "./handlers/canopyWindow.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerVoiceDictionaryHandlers } from "./handlers/voiceDictionary.js";
+import { registerProjectLinksHandlers } from "./handlers/projectLinks.js";
+import { registerMergedWorktreeCleanupHandlers } from "./handlers/mergedWorktreeCleanup.js";
 import { registerRecentDictationsHandlers } from "./handlers/recentDictations.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { registerHelpAssistantHandlers } from "./handlers/helpAssistant.js";
@@ -87,6 +90,7 @@ import { registerWebviewHandlers } from "./handlers/webview.js";
 import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.js";
 import { registerWebviewCaptureHandlers } from "./handlers/webviewCapture.js";
 import { registerRemoteHostsHandlers } from "./handlers/remoteHosts.js";
+import { registerCloudHostsHandlers } from "./handlers/cloudHosts.js";
 import { registerHostModeHandlers } from "./handlers/hostMode.js";
 import {
   registerDecisionsHandlers,
@@ -108,6 +112,7 @@ import { isEitherRemoteRoleSupported } from "../remote/buildGate.js";
 import { registerSitePreviewHandlers } from "./handlers/sitePreview.js";
 import { registerElementPickerHandlers } from "./handlers/elementPicker.js";
 import { registerWebviewEmulationHandlers } from "./handlers/webviewEmulation.js";
+import { registerWebviewFindHandlers } from "./handlers/webviewFind.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
 import { registerResourceProfileHandlers } from "./handlers/resourceProfile.js";
 import { registerWhySlowHandlers } from "./handlers/whySlow.js";
@@ -132,6 +137,7 @@ import { registerPluginProjectPresenceHandlers } from "./handlers/pluginProjectP
 import { registerConnectivityHandlers } from "./handlers/connectivity.js";
 import { registerAgentDefaultsHandlers } from "./handlers/agentDefaults.js";
 import { registerAgentToolbarPinsHandlers } from "./handlers/agentToolbarPins.js";
+import { registerAgentUsageHandlers } from "./handlers/agentUsage.js";
 import { registerUserPromptTemplatesHandlers } from "./handlers/userPromptTemplates.js";
 import { registerProjectCloneHandlers } from "./handlers/projectClone.js";
 import { registerAgentAccountsHandlers } from "./handlers/agentAccounts.js";
@@ -143,7 +149,9 @@ import { registerWorktreeTitlesHandlers } from "./handlers/worktreeTitles.js";
 import { registerReviewMarksHandlers } from "./handlers/reviewMarks.js";
 import { registerSchedulesHandlers } from "./handlers/schedules.js";
 import { registerTerminalWhenDoneHandlers } from "./handlers/terminalWhenDone.js";
+import { registerCodexLimitContinueHandlers } from "./handlers/codexLimitContinue.js";
 import { registerComposerHoldHandlers } from "./handlers/composerHold.js";
+import { registerBulkWorktreeRunsHandlers } from "./handlers/bulkWorktreeRuns.js";
 import { registerScratchHandlers } from "./handlers/scratch/index.js";
 import { events } from "../services/events.js";
 import {
@@ -192,6 +200,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerTerminalHandlers(deps));
     register(() => registerFilesHandlers());
     register(() => registerFileMutationHandlers());
+    register(() => registerGitHunkHandlers());
     register(() => registerFileDocumentHandlers());
     register(() => registerDiffMediaHandlers());
     register(() => registerFileBrowserHandlers(deps));
@@ -217,7 +226,6 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerProjectInRepoSettingsHandlers(deps));
     register(() => registerAppHandlers(deps));
     register(() => installCachedViewFlushListeners());
-    register(() => registerPortalHandlers(deps));
     register(() => registerMenuHandlers(deps));
     register(() => registerSessionRestoreHandlers(deps));
     register(() => registerWindowOpeningHandlers(deps));
@@ -234,6 +242,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWorktreeConfigHandlers(deps));
     register(() => registerConfigBundleHandlers(deps));
     register(() => registerNotificationHandlers(deps));
+    register(() => registerNotificationSoundsHandlers());
     register(() => registerCodexHandlers());
     register(() => registerClaudeHandlers());
     register(() => registerTerminalSessionFileHandlers());
@@ -272,6 +281,8 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerCanopyWindowHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerVoiceDictionaryHandlers());
+    register(() => registerProjectLinksHandlers());
+    register(() => registerMergedWorktreeCleanupHandlers());
     register(() => registerRecentDictationsHandlers());
     register(() => registerMcpServerHandlers());
     register(() => registerHelpAssistantHandlers());
@@ -281,6 +292,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerSitePreviewHandlers(deps));
     register(() => registerElementPickerHandlers());
     register(() => registerWebviewEmulationHandlers(deps));
+    register(() => registerWebviewFindHandlers(deps));
     register(() => registerDiagnosticsHandlers(deps));
     register(() => registerResourceProfileHandlers(deps));
     register(() => registerWhySlowHandlers(deps));
@@ -305,6 +317,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerConnectivityHandlers());
     register(() => registerAgentDefaultsHandlers());
     register(() => registerAgentToolbarPinsHandlers());
+    register(() => registerAgentUsageHandlers());
     register(() => registerUserPromptTemplatesHandlers());
     register(() => registerProjectCloneHandlers());
     register(() => registerAgentAccountsHandlers());
@@ -316,13 +329,16 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerReviewMarksHandlers(deps));
     register(() => registerSchedulesHandlers());
     register(() => registerTerminalWhenDoneHandlers());
+    register(() => registerCodexLimitContinueHandlers());
     register(() => registerComposerHoldHandlers());
+    register(() => registerBulkWorktreeRunsHandlers());
     register(() => registerDecisionsHandlers());
     register(() => registerScratchHandlers(deps));
 
     // Remote Hosts: macOS and Linux only. Windows builds register none of it.
     if (isEitherRemoteRoleSupported()) {
       register(() => registerRemoteHostsHandlers());
+      register(() => registerCloudHostsHandlers());
       register(() => registerHostModeHandlers());
       register(() => registerDeviceAnswerHandlers());
       register(() => registerDriveLeaseHandlers());

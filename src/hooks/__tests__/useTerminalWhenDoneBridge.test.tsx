@@ -218,4 +218,12 @@ describe("isTerminalPaneInUseHere", () => {
     store.drafts.set("terminal-1", "  \n");
     expect(isTerminalPaneInUseHere("terminal-1")).toBe(false);
   });
+
+  it("counts the pane's own isolated draft, never another host's for the same id", () => {
+    store.drafts.set("isolated-composer:host-b:terminal-1", "a reply to the other host");
+    expect(isTerminalPaneInUseHere("terminal-1")).toBe(false);
+
+    store.drafts.set("isolated-composer:terminal-1", "a reply here");
+    expect(isTerminalPaneInUseHere("terminal-1")).toBe(true);
+  });
 });

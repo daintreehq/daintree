@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  finalizeListeners,
+  findPortListeners,
+  parseLsofCwds,
   parseLsofListeners,
   parseProcNetTcp,
-  scanHostListeners,
   type ProcFs,
-} from "../listenerScan.js";
+} from "../../../utils/localPortListeners.js";
+import { finalizeListeners, scanHostListeners } from "../listenerScan.js";
 
 // `lsof -nP -iTCP -sTCP:LISTEN -F pcn` on macOS.
 const LSOF_SAMPLE = [
@@ -154,5 +155,181 @@ describe("scanHostListeners", () => {
         new Set()
       )
     ).toEqual([{ port: 80, pid: 7, processName: "nginx" }]);
+  });
+});
+
+describe("findPortListeners", () => {
+  /** An lsof that answers the port query and the cwd query, recording what it was asked. */
+  function lsofAnswering(listeners: string, cwds: string) {
+    const asked: string[][] = [];
+    return {
+      asked,
+      lsof: async (args: string[]) => {
+        asked.push(args);
+        return args.includes("cwd") ? cwds : listeners;
+      },
+    };
+  }
+
+  it("asks lsof about the one listening port, then where each process runs", async () => {
+    const fake = lsofAnswering(
+      // Two processes holding the two address families of one port.
+      ["p4242", "cnode", "n[::1]:5173", "p4300", "cnode", "n127.0.0.1:5173", ""].join("\n"),
+      ["p4242", "fcwd", "n/repo/wt-b", "p4300", "fcwd", "n/repo/wt-b/apps/site", ""].join("\n")
+    );
+    const listeners = await findPortListeners(5173, {
+      platform: "darwin",
+      lsof: fake.lsof,
+      excludePids: new Set(),
+    });
+    expect(listeners).toEqual([
+      { pid: 4242, cwd: "/repo/wt-b" },
+      { pid: 4300, cwd: "/repo/wt-b/apps/site" },
+    ]);
+    expect(fake.asked[0]).toEqual(expect.arrayContaining(["-iTCP:5173", "-sTCP:LISTEN"]));
+    expect(fake.asked[1]).toEqual(expect.arrayContaining(["cwd", "4242,4300"]));
+  });
+
+  it("keeps a listener whose directory can't be read, as unplaced", async () => {
+    const fake = lsofAnswering(["p4242", "n*:5173", ""].join("\n"), "");
+    expect(
+      await findPortListeners(5173, { platform: "darwin", lsof: fake.lsof, excludePids: new Set() })
+    ).toEqual([{ pid: 4242, cwd: null }]);
+  });
+
+  it("answers nothing listening without asking where anything runs", async () => {
+    const fake = lsofAnswering(LSOF_SAMPLE, "");
+    expect(
+      await findPortListeners(5432, { platform: "darwin", lsof: fake.lsof, excludePids: new Set() })
+    ).toEqual([]);
+    expect(fake.asked).toHaveLength(1);
+  });
+
+  it("can't say when this app itself holds the port", async () => {
+    const fake = lsofAnswering(LSOF_SAMPLE, "");
+    expect(
+      await findPortListeners(5173, {
+        platform: "darwin",
+        lsof: fake.lsof,
+        excludePids: new Set([4242]),
+      })
+    ).toBeNull();
+  });
+
+  function linuxFs(extra: { tcp?: string } = {}) {
+    const reads: string[] = [];
+    const procFs = fakeProc(
+      { "/proc/net/tcp": extra.tcp ?? PROC_TCP, "/proc/net/tcp6": PROC_TCP6 },
+      { "/proc": ["300", "400"], "/proc/300/fd": ["19"], "/proc/400/fd": ["5"] },
+      {
+        "/proc/300/fd/19": "socket:[666]",
+        "/proc/400/fd/5": "socket:[111]",
+        "/proc/300/cwd": "/repo/wt-a",
+      }
+    );
+    return {
+      reads,
+      procFs: {
+        ...procFs,
+        readdir: (path: string) => {
+          reads.push(path);
+          return procFs.readdir(path);
+        },
+      },
+    };
+  }
+
+  it("reads a Linux listener's owner from its socket, and where it runs", async () => {
+    const fs = linuxFs();
+    expect(
+      await findPortListeners(5173, {
+        platform: "linux",
+        uid: 1000,
+        procFs: fs.procFs,
+        excludePids: new Set(),
+      })
+    ).toEqual([{ pid: 300, cwd: "/repo/wt-a" }]);
+  });
+
+  it("reads no process on Linux for a port nothing listens on", async () => {
+    const fs = linuxFs();
+    expect(
+      await findPortListeners(9999, {
+        platform: "linux",
+        uid: 1000,
+        procFs: fs.procFs,
+        excludePids: new Set(),
+      })
+    ).toEqual([]);
+    expect(fs.reads).toEqual([]);
+  });
+
+  it("can't say when a socket on the port is another user's or its owner isn't readable", async () => {
+    // 631 is root's; 8080 is the user's, but no readable fd names it.
+    for (const port of [631, 8080]) {
+      expect(
+        await findPortListeners(port, {
+          platform: "linux",
+          uid: 1000,
+          procFs: linuxFs().procFs,
+          excludePids: new Set(),
+        }),
+        String(port)
+      ).toBeNull();
+    }
+  });
+
+  it("can't say when a socket table exists but can't be read, and goes on without an absent one", async () => {
+    const unreadable = linuxFs().procFs;
+    const withTable = (failure: string) => ({
+      ...unreadable,
+      readFile: (file: string) =>
+        file === "/proc/net/tcp"
+          ? Promise.reject(Object.assign(new Error(failure), { code: failure }))
+          : unreadable.readFile(file),
+    });
+    expect(
+      await findPortListeners(5173, {
+        platform: "linux",
+        uid: 1000,
+        procFs: withTable("EACCES"),
+        excludePids: new Set(),
+      })
+    ).toBeNull();
+    expect(
+      await findPortListeners(5173, {
+        platform: "linux",
+        uid: 1000,
+        procFs: withTable("ENOENT"),
+        excludePids: new Set(),
+      })
+    ).toEqual([{ pid: 300, cwd: "/repo/wt-a" }]);
+  });
+
+  it("can't say on a platform it has no scan for, after a failed scan, or for a bad port", async () => {
+    expect(await findPortListeners(5173, { platform: "win32" })).toBeNull();
+    expect(
+      await findPortListeners(5173, {
+        platform: "darwin",
+        lsof: () => Promise.reject(new Error("lsof timed out")),
+      })
+    ).toBeNull();
+    for (const port of [0, 70_000, 1.5]) {
+      expect(
+        await findPortListeners(port, { platform: "darwin", lsof: async () => "" })
+      ).toBeNull();
+    }
+  });
+});
+
+describe("parseLsofCwds", () => {
+  it("pairs each process with its directory", () => {
+    expect(parseLsofCwds("p1\nfcwd\nn/a\np2\nfcwd\nn/b c\n")).toEqual(
+      new Map([
+        [1, "/a"],
+        [2, "/b c"],
+      ])
+    );
+    expect(parseLsofCwds("p\nn/a\n")).toEqual(new Map());
   });
 });

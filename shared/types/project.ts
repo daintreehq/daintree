@@ -1,6 +1,7 @@
 import type { AgentId, AgentState } from "./agent.js";
 import type { BrowserHistory } from "./browser.js";
 import type {
+  ConversationStore,
   PanelKind,
   PanelLocation,
   PanelTitleMode,
@@ -26,6 +27,7 @@ import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
 import type { NotificationSettings, VoiceDictionaryEntry } from "./ipc/api.js";
 import type { TerminalWhenDone } from "./ipc/terminalWhenDone.js";
+import type { ProjectLink } from "./projectLinks.js";
 
 /**
  * Project lifecycle status:
@@ -423,6 +425,11 @@ export interface PanelSnapshot {
    */
   conversationCwd?: string;
   /**
+   * The config folder holding the conversation, once a switch that kept it
+   * moved the pane onto another account's (#17087). Untrusted on read.
+   */
+  conversationStore?: ConversationStore;
+  /**
    * The pane was held for recovery rather than launched (#12434), so the next
    * restore holds it again instead of starting a fresh conversation.
    */
@@ -431,6 +438,8 @@ export interface PanelSnapshot {
   restoreProvenance?: TerminalRestoreProvenance;
   /** The last agent state the host reported for the pane (#14017). Untrusted on read. */
   lastAgentObservation?: TerminalAgentObservation;
+  /** What was observed when Main last stopped the pane's process (#17886). Untrusted on read. */
+  stopObservation?: TerminalAgentObservation;
   /** The plugin whose `agent.launch` created the pane (#14017). */
   launchedByPluginId?: string;
   /** The launching plugin asked restore to hold the pane (#14017). */
@@ -981,6 +990,12 @@ export interface ProjectSettings {
    */
   voiceDictionary?: VoiceDictionaryEntry[];
   /**
+   * This project's own links, in order. Main owns every write
+   * (`project-links:change`); a settings save keeps what is stored rather
+   * than the copy it carries. Stored as `portalLinks` before #17243.
+   */
+  links?: ProjectLink[];
+  /**
    * Daintree MCP tool set exposed to agents launched in this project's worktrees.
    * - `off` (default): no MCP server injected
    * - `core`: orchestration — create worktrees, launch agents, prompt, read, wait on, move and close the terminals the agent's own session opened, and read issues and PRs
@@ -995,6 +1010,13 @@ export interface ProjectSettings {
    * force delete that would discard changes still asks for the typed name.
    */
   daintreeMcpSkipConfirmations?: boolean;
+  /**
+   * Remove this project's worktrees once their PR has merged (#17321): standing
+   * consent, given in Project Settings and nowhere else, to removals that lose
+   * nothing. Only `true` turns it on. Written through its own setter, so a
+   * whole-settings save keeps what is stored and no agent can change it.
+   */
+  removeMergedWorktrees?: boolean;
   /**
    * @deprecated Use `daintreeMcpTier` instead. Kept for one-cycle migration of existing project files.
    * `true` migrates to `core` on read; `false`/undefined migrates to `off`.
@@ -1046,8 +1068,10 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   defaultWorktreeMode: "local",
   browserAllowedHosts: "local",
   voiceDictionary: "shareable",
+  links: "local",
   daintreeMcpTier: "local",
   daintreeMcpSkipConfirmations: "local",
+  removeMergedWorktrees: "local",
   exposeDaintreeMcpToAgents: "local",
 } as const satisfies Record<keyof ProjectSettings, FieldShareability>;
 
@@ -1078,6 +1102,8 @@ export type ProjectSettingsAgentExposure = "exposed" | "internal";
  *   writes to block self-elevation; it should not be readable either) and
  *   `browserAllowedHosts`, which is the browser panel's approval list.
  * - Renderer-only UI state: dismissal flags, editor/viewer preferences, saved fleet scopes.
+ * - Fields with an agent surface of their own: `links`, read and changed through the
+ *   `project.links.*` actions, which hold the Assistant to the links it added.
  * - Deprecated aliases normalized away on read.
  *
  * Accepted residual exposure: `runCommands`, `devServerCommand` and `terminalSettings`
@@ -1121,8 +1147,10 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   defaultWorktreeMode: "exposed",
   browserAllowedHosts: "internal",
   voiceDictionary: "internal",
+  links: "internal",
   daintreeMcpTier: "internal",
   daintreeMcpSkipConfirmations: "internal",
+  removeMergedWorktrees: "internal",
   exposeDaintreeMcpToAgents: "internal",
 } as const satisfies Record<keyof ProjectSettings, ProjectSettingsAgentExposure>;
 

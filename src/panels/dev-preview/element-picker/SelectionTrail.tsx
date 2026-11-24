@@ -1,6 +1,7 @@
 import { ChevronRight, Ellipsis } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Badge } from "@/components/ui/badge";
@@ -206,7 +207,7 @@ export function SelectionTrail({
   selectionSite?: SourcePoint | null;
   /** The page cut the chain from the outside; components above the first were never reported. */
   truncated?: boolean;
-  /** `strip` sits in a 32px toolbar row, `drawer` in the identity's 20px trail row. */
+  /** `strip` sits in a 32px toolbar row, `drawer` in the identity's 24px trail row; both carry 24px targets. */
   density?: "strip" | "drawer";
   /** A kind beside the selection's own crumb — "Component" when one was picked. */
   currentBadge?: string;
@@ -314,7 +315,7 @@ export function SelectionTrail({
           </li>
         ))}
         <li className="flex shrink-0 items-center gap-1">
-          <span className={cn("inline-flex", strip ? "h-6 w-6" : "h-5 w-5")} />
+          <span className="inline-flex h-6 w-6" />
           <ChevronRight className="h-3 w-3" />
         </li>
       </ol>
@@ -324,7 +325,6 @@ export function SelectionTrail({
             <TrailOverflow
               folded={folded}
               truncated={truncated}
-              strip={strip}
               crumbs={crumbs}
               selectionSite={selectionSite}
               onSelect={onSelect}
@@ -362,7 +362,7 @@ export function SelectionTrail({
                       className={cn(
                         "min-w-0 cursor-default truncate rounded-[var(--radius-sm)] text-left font-medium text-text-primary",
                         CRUMB_FOCUS,
-                        strip ? "h-6 leading-6" : "h-5 leading-5"
+                        "h-6 leading-6"
                       )}
                     >
                       {crumb.label}
@@ -385,7 +385,7 @@ export function SelectionTrail({
                       CRUMB_PAD,
                       "min-w-0 truncate rounded-[var(--radius-sm)] text-left text-text-secondary",
                       CRUMB_FOCUS,
-                      strip ? "h-6 leading-6" : "h-5 leading-5",
+                      "h-6 leading-6",
                       can === "yes"
                         ? // A quiet chip: the step reads as pickable at rest,
                           // without the underline that made the trail a row of
@@ -428,7 +428,6 @@ const CRUMB_FOCUS =
 function TrailOverflow({
   folded,
   truncated,
-  strip,
   crumbs,
   selectionSite,
   onSelect,
@@ -436,7 +435,6 @@ function TrailOverflow({
 }: {
   folded: readonly TrailCrumb[];
   truncated: boolean;
-  strip: boolean;
   crumbs: readonly TrailCrumb[];
   selectionSite: SourcePoint | null;
   onSelect: ((crumb: TrailCrumb, fromMenu?: boolean) => void) | undefined;
@@ -444,7 +442,7 @@ function TrailOverflow({
 }) {
   const label =
     folded.length > 0
-      ? `${folded.length} more ${folded.length === 1 ? "component" : "components"}`
+      ? pluralize(folded.length, "more component", "more components")
       : "Earlier components weren't reported";
   return (
     <DropdownMenu>
@@ -454,10 +452,7 @@ function TrailOverflow({
             <button
               type="button"
               aria-label={label}
-              className={cn(
-                "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary data-[state=open]:bg-overlay-medium data-[state=open]:text-text-primary",
-                strip ? "h-6 w-6" : "h-5 w-5"
-              )}
+              className="inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-medium hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary data-[state=open]:bg-overlay-medium data-[state=open]:text-text-primary"
             >
               <Ellipsis className="h-3.5 w-3.5" aria-hidden="true" />
             </button>

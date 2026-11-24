@@ -11,6 +11,7 @@ import {
 import type {
   PanelMenuItemContribution,
   PanelReloadResult,
+  PanelViewProps,
   PluginFileDocument,
   PluginPanelToolbarItemState,
   PluginSettingsViewContext,
@@ -29,6 +30,7 @@ import {
   setViewUnsavedChanges,
 } from "@/services/plugin/pluginPanelLifecycle";
 import { registerPanelReloadHandler } from "@/services/plugin/pluginPanelReload";
+import { scopeFileDocumentToView } from "@/services/plugin/pluginFileDocumentViewScope";
 import { useAuthoredRunningActions } from "@/services/plugin/runningPluginActions";
 import { useApplicationNavigation } from "@/hooks/useApplicationNavigation";
 import { Package } from "lucide-react";
@@ -234,6 +236,24 @@ export interface PluginViewContentProps {
    * get `"panel"`; a host outside the grid passes its own kind.
    */
   hostContext?: PluginViewHostContext;
+}
+
+/**
+ * The loaded view, holding a file editor's document only while it is mounted
+ * (#17903). It sits inside the boundary, so every new attempt (a reload, Try
+ * again, a rebind) remounts it with the view, and the view it replaced can no
+ * longer write to the document its successor edits.
+ */
+function MountedView({
+  View,
+  fileDocument,
+  ...props
+}: PanelViewProps & { View: ComponentType<PanelViewProps> }) {
+  const [scope] = useState(() =>
+    fileDocument ? scopeFileDocumentToView(fileDocument, props.disposeSignal) : null
+  );
+  useEffect(() => scope?.retain(), [scope]);
+  return <View {...props} {...(scope ? { fileDocument: scope.document } : {})} />;
 }
 
 /**
@@ -746,7 +766,12 @@ export function makePluginViewContent(
     // the banner would unmount mid-restart, taking the button's own pending
     // state with it, and `contentInert` would lift and re-arm the dead
     // backend's stale controls for the whole round trip.
-    const presentation = presentWorkerStatus(worker, stalled, everReady || restarting);
+    const presentation = presentWorkerStatus(
+      worker,
+      stalled,
+      everReady || restarting,
+      settled === null || settled.attempt !== attempt
+    );
 
     const boundWorkerGeneration = usePluginViewRebind({
       builtinComponent,
@@ -1238,7 +1263,8 @@ export function makePluginViewContent(
                           they still name the plugin that owns them. */}
                     <PluginKitOwnerContext.Provider value={pluginId}>
                       <PluginKitViewHostContext.Provider value={kitViewHost}>
-                        <View
+                        <MountedView
+                          View={View}
                           panelId={panelId}
                           pluginId={pluginId}
                           disposeSignal={controller.signal}

@@ -131,10 +131,15 @@ function isSnoozeExpired(record: RunSnoozeRecord, now: number): boolean {
  * `completed` alone would be wrong: completion is pattern-detected and most
  * agents end a stint in `waiting`, never `completed`.
  *
- * A gate that is trashed releases its parks too ("gate-closed") — a park that
- * can no longer release must resurface, not hide its run forever. The parked
- * run's OWN trashing does not unpark it: trash is restorable, and restoring a
- * run should restore the intent recorded against it.
+ * A gate that is trashed, or whose process ends without trash (a direct kill,
+ * worktree deletion, project close or sleep, a natural exit), releases its
+ * parks too ("gate-closed") — a park that can no longer release must resurface,
+ * not hide its run forever. The transitions Daintree's own teardown provokes
+ * carry `terminalClosing` and never count as the gate coming free, so a busy
+ * gate's kill is reported as the close it is. An intentional restart is not a
+ * close: the park waits for the new process's next busy → ready edge. The
+ * parked run's OWN trashing or exit does not unpark it: trash is restorable,
+ * and restoring a run should restore the intent recorded against it.
  *
  * Every mutation commits in one order — apply, persist, then announce — and a
  * persistence failure rolls the memory state back and suppresses the events,
@@ -166,6 +171,11 @@ export class RunAttentionService {
         if (payload.trigger === "input") this.clearSnoozeOnInput(terminalId);
         if (!READY_STATES.has(payload.state)) return;
         if (!BUSY_STATES.has(payload.previousState)) return;
+        // A kill lands as busy → idle ahead of the PTY's exit, and a graceful
+        // quit can settle the agent first. Neither is the gate coming free: the
+        // exit that follows releases as gate-closed, and a restart keeps the
+        // park for the new process's own next edge.
+        if (payload.terminalClosing === true) return;
         this.releaseGatedOn(terminalId, "gate-ready", payload.timestamp);
       })
     );
@@ -191,6 +201,16 @@ export class RunAttentionService {
         this.releaseGatedOn(payload.id, "gate-closed");
       })
     );
+  }
+
+  /**
+   * A terminal's process ended for good. Called from Main's PTY exit path,
+   * which has already set an intentional restart's exit aside: the id lives on
+   * there, so the gate has not closed. Like a trash, this is not time-fenced —
+   * the exit is delivered once, for the current process only.
+   */
+  handleTerminalExit(terminalId: string): void {
+    this.releaseGatedOn(terminalId, "gate-closed");
   }
 
   getParkRecord(runId: string): RunParkRecord | undefined {
@@ -439,7 +459,7 @@ export class RunAttentionService {
     for (const [runId, record] of this.records) {
       if (record.gateRunId !== gateRunId) continue;
       // Time fence, gate-ready only: the edge must postdate the park. A trash
-      // is not fenced — it is delivered once, from the user's own present.
+      // or an exit is not fenced — each is delivered once, from the present.
       if (reason === "gate-ready") {
         if (typeof edgeTimestamp !== "number" || !Number.isFinite(edgeTimestamp)) continue;
         if (edgeTimestamp <= record.parkedAt) continue;

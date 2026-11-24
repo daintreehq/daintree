@@ -299,8 +299,24 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
       timeout: T_MEDIUM,
     });
 
-    // Close and reopen — it must start on the module step again, not the level step.
+    // Escape on the level step goes back to the module step rather than closing.
     await window.keyboard.press("Escape");
+    await expect(window.locator(SEL.logLevelPalette.step1Dialog)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await expect(window.locator(SEL.logLevelPalette.step2Dialog)).not.toBeVisible({
+      timeout: T_MEDIUM,
+    });
+
+    // Close from the level step and reopen — it must start on the module step
+    // again, not the level step. "Clear override" (the last level) closes the
+    // picker without leaving an override behind for later tests.
+    await window.locator(SEL.logLevelPalette.searchInput).press("Enter");
+    await expect(window.locator(SEL.logLevelPalette.step2Dialog)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await window.keyboard.press("End");
+    await window.keyboard.press("Enter");
     await expect(window.locator(SEL.logLevelPalette.step2Dialog)).not.toBeVisible({
       timeout: T_MEDIUM,
     });
@@ -347,7 +363,7 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     });
   });
 
-  test("typing ':' routes the action palette to the prompt-history prefix", async () => {
+  test("typing ':' keeps searching when no composer hosts prompt history", async () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
 
@@ -357,21 +373,9 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
 
     await actionInput.press(":");
 
-    // The `:` route hands off to the prompt-history palette, dismissing the
-    // action palette. The prompt-history palette itself renders inside an agent
-    // panel's input bar (CLI-gated), so assert the route fired via the handoff,
-    // then confirm the target too when it is available in this launch.
-    await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
-
-    const promptHistory = window.locator(SEL.palettePrefix.promptHistoryDialog);
-    if (await promptHistory.isVisible({ timeout: T_SHORT }).catch(() => false)) {
-      await expect(promptHistory).toBeVisible();
-    } else {
-      test.info().annotations.push({
-        type: "conditional-skip",
-        description: "Prompt-history palette requires an agent input bar (not present this launch)",
-      });
-    }
+    await expect(actionInput).toHaveValue(":");
+    await expect(actionInput).toBeFocused();
+    await expect(window.locator(SEL.palettePrefix.promptHistoryDialog)).toHaveCount(0);
   });
 
   test("quick switcher lists recent panels and restores focus on Escape", async () => {

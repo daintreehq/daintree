@@ -117,6 +117,10 @@ export const CORE_TIER_TOOLS = [
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  // Account ids are minted when an account is added, so `agent.launch`'s
+  // `accountId` was an argument an agent could only guess (#17079). Identity
+  // only: an account's folder holds its login and names the user's home.
+  "agent.listAccounts",
   // Model ids come from each CLI's own catalog and change with its releases, so
   // a model the user names ("use Sol") is resolved here rather than from a slug
   // the prompt would have to carry (#13437).
@@ -169,6 +173,12 @@ export const CORE_TIER_TOOLS = [
   // the user confirms (#14369). Owned for every origin: the unscoped
   // `terminal.restartOnPreset` is on no tier.
   "terminal.restartOnPresetOwned",
+  // The same move to another of its agent's accounts (#17079). Owned for every
+  // origin: the unscoped `terminal.restartOnAccount` is on no tier.
+  "terminal.restartOnAccountOwned",
+  // Applies a Claude Code update a pane this session launched installed, by
+  // typing `/restart` once at its empty prompt after the user approves (#17908).
+  "terminal.applyClaudeUpdateOwned",
   "terminal.moveToWorktree",
   // Brings a panel this session created into view (#12315).
   "terminal.revealOwned",
@@ -218,6 +228,15 @@ export const CORE_TIER_TOOLS = [
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
   "diagnostics.openReview",
+  // This project's own links (#17091): the staging, production and dashboard
+  // addresses the assistant knows from the repo. Adding one opens nothing and
+  // moves no view, and the assistant can change only the links it added.
+  // Reserved to the assistant below: worker panes read untrusted repo content
+  // with nobody watching.
+  "project.links.list",
+  "project.links.add",
+  "project.links.update",
+  "project.links.remove",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**
@@ -255,6 +274,10 @@ export const FULL_TIER_ADDONS = [
 
   // Resume spawns a pane; the record owns its launch directory (#11908).
   "agentSessionHistory.resume",
+  // Adding accounts makes credential folders and changes what later launches
+  // sign in as (#17079). Every call asks, with a row per account naming its
+  // folder for the person to untick, and no grant or Never ask stands in.
+  "agent.addAccount",
 
   "terminal.new",
   "terminal.inject",
@@ -366,6 +389,11 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.status",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
+  // A project's own links are the assistant's to keep (#17091).
+  "project.links.list",
+  "project.links.add",
+  "project.links.update",
+  "project.links.remove",
 ] as const satisfies readonly BuiltInActionId[];
 
 /**

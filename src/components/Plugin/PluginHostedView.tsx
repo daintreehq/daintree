@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import {
   getPanelKindRegistrySnapshot,
   subscribeToPanelKindRegistry,
@@ -30,6 +30,7 @@ import {
   PLUGIN_HOSTED_VIEW_BOX_CLASS,
   PLUGIN_HOSTED_VIEW_BOX_STYLE,
 } from "@/components/Plugin/pluginHostedViewBox";
+import { retainPluginViewConsumer } from "@/services/plugin/pluginViewConsumers";
 import { cn } from "@/lib/utils";
 
 /**
@@ -273,6 +274,10 @@ export function PluginHostedView({
         : undefined;
   const pluginId = source.from === "hosted" ? source.view.pluginId : source.config.extensionId;
   const displayName = source.from === "hosted" ? source.view.name : source.config.name;
+  // Main keeps the plugin's worker while this is mounted, loading or failed
+  // alike: retiring it would leave the view's pushes silently dead (#17068).
+  const consumerViewId = source.from === "hosted" ? source.view.id : source.config.id;
+  useEffect(() => retainPluginViewConsumer(consumerViewId), [consumerViewId]);
   const settingsScope = settingsContext?.scope;
   const settingsProjectId = settingsContext?.projectId ?? null;
   // One object per identity, so the callbacks below only change when it does.

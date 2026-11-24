@@ -4,6 +4,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
@@ -21,10 +22,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { BrandMark } from "@/components/icons";
+import { BrandMark, UserRoundCheck } from "@/components/icons";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
-import { resolveEffectiveAccountId, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import {
+  defaultLoginLabel,
+  resolveEffectiveAccountId,
+  sanitizeAgentAccounts,
+} from "@shared/utils/agentAccounts";
 import { resolveSettledSavedPreset } from "@shared/utils/agentPresets";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -76,6 +81,7 @@ import {
   Plug,
   Settings2,
   Sprout,
+  UserRound,
 } from "lucide-react";
 import { getWorktreeBranchLabel, getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
@@ -97,6 +103,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { UseAccountEverywhereDialog } from "./UseAccountEverywhereDialog";
 import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
 
 import { resolveEffectivePresetId } from "@shared/types";
@@ -167,6 +174,25 @@ interface WorktreeMenuItemsProps {
 // onSelect is the only dispatch site: it launches where the ref says and
 // resets it to grid. pointerDown/pointerUp still stopPropagation to keep
 // Radix from treating the icon press as the row's primary selection event.
+// Picking an account opens the confirm, which takes focus, so the menu's close
+// is a handoff rather than a pick whose focus comes back to the button. A
+// component of its own because only something under the ContextMenu root can
+// reach its focus policy.
+function EverywhereAccountRow({ onPick, children }: { onPick: () => void; children: ReactNode }) {
+  const focusRestore = useOverlayFocusRestore();
+  return (
+    <ContextMenuItem
+      onSelect={() => {
+        focusRestore?.expectHandoff();
+        onPick();
+      }}
+    >
+      <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+      {children}
+    </ContextMenuItem>
+  );
+}
+
 function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
   const { worktrees } = useWorktrees();
   const customTitles = useWorktreeFilterStore((state) => state.worktreeCustomTitles);
@@ -249,6 +275,58 @@ function WorktreeMenuItems({ agentType }: WorktreeMenuItemsProps) {
   );
 }
 
+// D on a highlighted row is the keyboard twin of a gutter click, mirroring the
+// plugin tray's P-to-pin: Enter and Space stay on launch, the menu stays open.
+// Modified presses pass through so app shortcuts still reach their handlers.
+function setDefaultOnKey(e: ReactKeyboardEvent, setDefault: () => void) {
+  if (e.key !== "d" && e.key !== "D") return;
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  e.preventDefault();
+  e.stopPropagation();
+  setDefault();
+}
+
+interface PresetLaunchRowProps {
+  onSetDefault: () => void;
+  onLaunch: () => void;
+  children: ReactNode;
+}
+
+// Each preset row carries two click zones. The left gutter (data-zone
+// "gutter") sets the worktree-scoped default without launching and keeps the
+// menu open; the rest of the row (the label) launches immediately with that
+// preset and closes the menu. onSelect is preventDefault'd so Radix never
+// auto-dismisses — the label zone owns closing — and the zones live inside a
+// single menuitem (no nested interactive element) so the row stays
+// ARIA-valid. Keyboard activation lands on the row itself, which launches;
+// D sets the default instead (setDefaultOnKey). See issue #10720.
+//
+// A launch hands focus to the panel it opens, so the close is a handoff rather
+// than a pick whose focus comes back to the chevron. A component of its own
+// because only something under the DropdownMenu root can reach its focus policy.
+function PresetLaunchRow({ onSetDefault, onLaunch, children }: PresetLaunchRowProps) {
+  const focusRestore = useOverlayFocusRestore();
+  return (
+    <DropdownMenuItem
+      className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
+      onSelect={(e) => e.preventDefault()}
+      onKeyDown={(e) => setDefaultOnKey(e, onSetDefault)}
+      onClick={(e) => {
+        // Element (not HTMLElement) so a click landing on the gutter's SVG
+        // icon — an SVGElement — still resolves; closest() lives on Element.
+        if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
+          onSetDefault();
+          return;
+        }
+        focusRestore?.expectHandoff();
+        onLaunch();
+      }}
+    >
+      {children}
+    </DropdownMenuItem>
+  );
+}
+
 export function AgentButton({
   type,
   availability,
@@ -293,14 +371,15 @@ export function AgentButton({
   const [accountSwitchRequest, setAccountSwitchRequest] = useState<AccountSwitchRequest | null>(
     null
   );
+  // "Use account everywhere" (#17893), new on every opening so each starts
+  // from its own account and boxes.
+  const [everywhereOpening, setEverywhereOpening] = useState<{
+    key: number;
+    account: { id: string | null; name: string };
+  } | null>(null);
   const panesLeftOnPreset = usePanesLeftOnPreset(type, presetNotice);
   const panesOnAccountNotice = useAccountSwitchPaneIds(accountNotice);
   const isRestoringFocusRef = useRef(false);
-  // Set in onPointerDownOutside, read in onCloseAutoFocus. Lets us
-  // preventDefault() the focus restoration only for pointer dismissals so the
-  // chevron doesn't keep its accent focus-visible ring; keyboard close
-  // (Escape/Enter) still gets default focus return for WAI-ARIA.
-  const wasPointerCloseRef = useRef(false);
 
   const handlePrimaryTooltipOpenChange = (open: boolean) => {
     if (open && isRestoringFocusRef.current) return;
@@ -378,6 +457,7 @@ export function AgentButton({
   // Accounts are a choice of their own beside the preset (#16040).
   const accounts = getAgentConfigFolderAccount(type) ? sanitizeAgentAccounts(entry.accounts) : [];
   const hasAccounts = accounts.length > 0;
+  const defaultLogin = defaultLoginLabel(entry.defaultLoginName);
   // Worktree-scoped pick wins over the agent-level default so switching
   // worktrees doesn't silently surface another worktree's selection.
   const savedPresetId = resolveEffectivePresetId(entry, activeWorktreeId);
@@ -589,7 +669,7 @@ export function AgentButton({
         if (switchNoticeGenerationRef.current !== generation || paneIds.length === 0) return;
         setAccountNotice({
           agentId: type,
-          account: { id: accountId, name: picked?.name ?? "Default login" },
+          account: { id: accountId, name: picked?.name ?? defaultLogin },
           paneIds,
         });
       })
@@ -601,17 +681,6 @@ export function AgentButton({
   // (#6358), and clearing that instead would take it from every other
   // worktree inheriting it (#15054). Settings owns the agent-level preset.
   const pickAgentDefault = () => persistWorktreePick(null);
-
-  // D on a highlighted row is the keyboard twin of a gutter click, mirroring the
-  // plugin tray's P-to-pin: Enter and Space stay on launch, the menu stays open.
-  // Modified presses pass through so app shortcuts still reach their handlers.
-  const setDefaultOnKey = (e: ReactKeyboardEvent, setDefault: () => void) => {
-    if (e.key !== "d" && e.key !== "D") return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setDefault();
-  };
 
   // Screen readers get the row's default state or the D instruction as part of
   // its name. Sighted keyboard users get the same instruction in the trailing
@@ -646,25 +715,14 @@ export function AgentButton({
 
   // Launch from a dropdown row's label zone. Unlike the primary button, the
   // row names an explicit preset, so we forward it directly rather than
-  // deferring to the launcher's resolveEffectivePresetId path. Set
-  // wasPointerCloseRef before closing so the controlled dismiss runs the same
-  // focus-restore suppression as a Radix pointer dismiss — otherwise the
-  // chevron tooltip reopens over the freshly-launched terminal (issue #5171).
+  // deferring to the launcher's resolveEffectivePresetId path. The row has
+  // already marked the close as a focus handoff (PresetLaunchRow).
   const launchWithPreset = (presetId: string | null) => {
-    wasPointerCloseRef.current = true;
     setDropdownOpen(false);
     dismissSwitchNotices();
     void actionService.dispatch("agent.launch", { agentId: type, presetId }, { source: "user" });
   };
 
-  // Each preset row carries two click zones. The left gutter (data-zone
-  // "gutter") sets the worktree-scoped default without launching and keeps the
-  // menu open; the rest of the row (the label) launches immediately with that
-  // preset and closes the menu. onSelect is preventDefault'd so Radix never
-  // auto-dismisses — the label zone owns closing — and the zones live inside a
-  // single menuitem (no nested interactive element) so the row stays
-  // ARIA-valid. Keyboard activation lands on the row itself, which launches;
-  // D sets the default instead (setDefaultOnKey). See issue #10720.
   const renderPresetRow = (preset: {
     id: string;
     name: string;
@@ -674,20 +732,10 @@ export function AgentButton({
     const isDefault = savedPresetId === preset.id;
     const presetColor = preset.color ?? getBrandColorHex(type);
     return (
-      <DropdownMenuItem
+      <PresetLaunchRow
         key={preset.id}
-        className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
-        onSelect={(e) => e.preventDefault()}
-        onKeyDown={(e) => setDefaultOnKey(e, () => persistWorktreePick(preset.id))}
-        onClick={(e) => {
-          // Element (not HTMLElement) so a click landing on the gutter's SVG
-          // icon — an SVGElement — still resolves; closest() lives on Element.
-          if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
-            persistWorktreePick(preset.id);
-            return;
-          }
-          launchWithPreset(preset.id);
-        }}
+        onSetDefault={() => persistWorktreePick(preset.id)}
+        onLaunch={() => launchWithPreset(preset.id)}
       >
         <RowControlTooltip
           label={isDefault ? "Current default" : "Set as default"}
@@ -727,7 +775,7 @@ export function AgentButton({
           {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
         </span>
         {renderDefaultHint(isDefault)}
-      </DropdownMenuItem>
+      </PresetLaunchRow>
     );
   };
 
@@ -746,108 +794,116 @@ export function AgentButton({
     </div>
   );
 
+  // Mounted in both branches: removing the agent's last account while the
+  // confirm is open swaps the branch, and the confirm then asks for another.
+  const everywhereDialog = everywhereOpening && (
+    <UseAccountEverywhereDialog
+      key={everywhereOpening.key}
+      agentId={type}
+      account={everywhereOpening.account}
+      onClose={() => setEverywhereOpening(null)}
+    />
+  );
+
   if (!hasPresets && !hasAccounts) {
     return (
-      <ContextMenu
-        onOpenChange={(open) => {
-          if (open) {
-            setPrimaryTooltipOpen(false);
-            setChevronTooltipOpen(false);
-          }
-        }}
-      >
-        <ContextMenuTrigger asChild>
-          {/* Real DOM element as the trigger child: ContextMenuTrigger's
-              asChild Slot binds onContextMenu + ref here. Wrapping <Tooltip>
-              directly drops both (Tooltip.Root is a non-DOM provider), so
-              right-click never opens the menu. Mirrors the presets branch. */}
-          <span className="inline-flex">
-            <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={handleClick}
-                    aria-disabled={isLoading || undefined}
-                    data-toolbar-item={dataToolbarItem}
-                    onPointerEnter={(e) => {
-                      clearFocusRestoreSuppression();
-                      hover.onPointerEnter(e);
-                    }}
-                    onPointerLeave={hover.onPointerLeave}
-                    onPointerDown={hover.onPointerDown}
-                    onFocus={hover.onFocus}
-                    onBlur={hover.onBlur}
-                    className={cn(
-                      "toolbar-agent-button text-text-primary relative",
-                      needsSetup && "opacity-50",
-                      "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                    )}
-                    aria-label={ariaLabel}
-                    aria-keyshortcuts={ariaShortcut}
-                  >
-                    {iconElement}
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipContent(tooltipLabel, tooltipShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </span>
-        </ContextMenuTrigger>
-        <ContextMenuContent
-          className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-          onPointerDownOutside={() => {
-            wasPointerCloseRef.current = true;
-          }}
-          onCloseAutoFocus={(e) => {
-            suppressTooltipsDuringFocusRestore();
-            if (wasPointerCloseRef.current) {
-              e.preventDefault();
-              wasPointerCloseRef.current = false;
+      <>
+        <ContextMenu
+          onOpenChange={(open) => {
+            if (open) {
+              setPrimaryTooltipOpen(false);
+              setChevronTooltipOpen(false);
             }
           }}
         >
-          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
-            {agentMenuMark}
-            Launch {config.name}
-          </ContextMenuActionItem>
-          <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type, location: "dock" }}>
-            <PanelBottom data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Launch {config.name} in dock
-          </ContextMenuActionItem>
-          {hasWorktrees && (
-            <ContextMenuSub>
-              <ContextMenuSubTrigger>
-                <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                Launch in worktree
-              </ContextMenuSubTrigger>
-              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
-                <WorktreeMenuItems agentType={type} />
-              </ContextMenuSubContent>
-            </ContextMenuSub>
-          )}
-          <ContextMenuSeparator />
-          <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
-          <ContextMenuActionItem
-            actionId="app.settings.openTab"
-            args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
+          <ContextMenuTrigger asChild>
+            {/* Real DOM element as the trigger child: ContextMenuTrigger's
+              asChild Slot binds onContextMenu + ref here. Wrapping <Tooltip>
+              directly drops both (Tooltip.Root is a non-DOM provider), so
+              right-click never opens the menu. Mirrors the presets branch. */}
+            <span className="inline-flex">
+              <Tooltip open={primaryTooltipOpen} onOpenChange={handlePrimaryTooltipOpenChange}>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={handleClick}
+                      aria-disabled={isLoading || undefined}
+                      data-toolbar-item={dataToolbarItem}
+                      onPointerEnter={(e) => {
+                        clearFocusRestoreSuppression();
+                        hover.onPointerEnter(e);
+                      }}
+                      onPointerLeave={hover.onPointerLeave}
+                      onPointerDown={hover.onPointerDown}
+                      onFocus={hover.onFocus}
+                      onBlur={hover.onBlur}
+                      className={cn(
+                        "toolbar-agent-button text-text-primary relative",
+                        needsSetup && "opacity-50",
+                        "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
+                      )}
+                      aria-label={ariaLabel}
+                      aria-keyshortcuts={ariaShortcut}
+                    >
+                      {iconElement}
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {createTooltipContent(tooltipLabel, tooltipShortcut)}
+                </TooltipContent>
+              </Tooltip>
+            </span>
+          </ContextMenuTrigger>
+          <ContextMenuContent
+            className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+            onCloseAutoFocus={suppressTooltipsDuringFocusRestore}
           >
-            <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            Manage {config.name} presets…
-          </ContextMenuActionItem>
-          <ContextMenuActionItem
-            actionId="app.settings.openTab"
-            args={{ tab: "agents", subtab: type }}
-          >
-            <Plug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            {config.name} settings…
-          </ContextMenuActionItem>
-          <AgentExternalLinkItems links={config.externalLinks} />
-        </ContextMenuContent>
-      </ContextMenu>
+            <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
+              {agentMenuMark}
+              Launch {config.name}
+            </ContextMenuActionItem>
+            <ContextMenuActionItem
+              actionId="agent.launch"
+              args={{ agentId: type, location: "dock" }}
+            >
+              <PanelBottom data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              Launch {config.name} in dock
+            </ContextMenuActionItem>
+            {hasWorktrees && (
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <FolderGit2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  Launch in worktree
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                  <WorktreeMenuItems agentType={type} />
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+            )}
+            <ContextMenuSeparator />
+            <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
+            <ContextMenuActionItem
+              actionId="app.settings.openTab"
+              args={{ tab: "agents", subtab: type, sectionId: "agents-presets" }}
+            >
+              <Settings2 data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              Manage {config.name} presets…
+            </ContextMenuActionItem>
+            <ContextMenuActionItem
+              actionId="app.settings.openTab"
+              args={{ tab: "agents", subtab: type }}
+            >
+              <Plug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              {config.name} settings…
+            </ContextMenuActionItem>
+            <AgentExternalLinkItems links={config.externalLinks} />
+          </ContextMenuContent>
+        </ContextMenu>
+        {everywhereDialog}
+      </>
     );
   }
 
@@ -963,30 +1019,11 @@ export function AgentButton({
                 align="start"
                 sideOffset={4}
                 className="min-w-[12rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
-                onPointerDownOutside={() => {
-                  wasPointerCloseRef.current = true;
-                }}
-                onCloseAutoFocus={(e) => {
-                  suppressTooltipsDuringFocusRestore();
-                  if (wasPointerCloseRef.current) {
-                    e.preventDefault();
-                    wasPointerCloseRef.current = false;
-                  }
-                }}
+                onCloseAutoFocus={suppressTooltipsDuringFocusRestore}
               >
-                <DropdownMenuItem
-                  className="group/preset-row items-stretch py-0 pr-2.5 pl-0"
-                  onSelect={(e) => e.preventDefault()}
-                  onKeyDown={(e) => setDefaultOnKey(e, pickAgentDefault)}
-                  onClick={(e) => {
-                    // Element (not HTMLElement) so a gutter SVG-icon click still
-                    // resolves; closest() lives on Element.
-                    if (e.target instanceof Element && e.target.closest('[data-zone="gutter"]')) {
-                      pickAgentDefault();
-                      return;
-                    }
-                    launchWithPreset(null);
-                  }}
+                <PresetLaunchRow
+                  onSetDefault={pickAgentDefault}
+                  onLaunch={() => launchWithPreset(null)}
                 >
                   <RowControlTooltip
                     label={!savedPresetId ? "Current default" : "Set as default"}
@@ -1026,7 +1063,7 @@ export function AgentButton({
                     Agent default
                   </span>
                   {renderDefaultHint(!savedPresetId)}
-                </DropdownMenuItem>
+                </PresetLaunchRow>
                 {ccrPresetGroup.length > 0 && (
                   <>
                     {hasMultiplePresetGroups && <DropdownMenuSeparator />}
@@ -1071,7 +1108,7 @@ export function AgentButton({
                         value={DEFAULT_LOGIN_VALUE}
                         onSelect={(event) => event.preventDefault()}
                       >
-                        <AccountChoiceText name="Default login" headroom={defaultLoginHeadroom} />
+                        <AccountChoiceText name={defaultLogin} headroom={defaultLoginHeadroom} />
                       </DropdownMenuRadioItem>
                       {accounts.map((account) => (
                         <DropdownMenuRadioItem
@@ -1153,16 +1190,7 @@ export function AgentButton({
         </ContextMenuTrigger>
         <ContextMenuContent
           className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-          onPointerDownOutside={() => {
-            wasPointerCloseRef.current = true;
-          }}
-          onCloseAutoFocus={(e) => {
-            suppressTooltipsDuringFocusRestore();
-            if (wasPointerCloseRef.current) {
-              e.preventDefault();
-              wasPointerCloseRef.current = false;
-            }
-          }}
+          onCloseAutoFocus={suppressTooltipsDuringFocusRestore}
         >
           <ContextMenuActionItem actionId="agent.launch" args={{ agentId: type }}>
             {agentMenuMark}
@@ -1224,6 +1252,62 @@ export function AgentButton({
               </ContextMenuSubContent>
             </ContextMenuSub>
           )}
+          {hasAccounts && (
+            // Moves the agent's running terminals, in every worktree, and only
+            // those the confirm leaves checked (#17089). Unlike a pick in the
+            // launcher, it leaves the account new launches use alone.
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Move terminals to account
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                <ContextMenuActionItem
+                  actionId={`agent.moveTerminalsToAccount.${type}`}
+                  args={{ accountId: null }}
+                >
+                  <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  {defaultLogin}
+                </ContextMenuActionItem>
+                {accounts.map((account) => (
+                  <ContextMenuActionItem
+                    key={account.id}
+                    actionId={`agent.moveTerminalsToAccount.${type}`}
+                    args={{ accountId: account.id }}
+                  >
+                    <UserRound data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                    {account.name}
+                  </ContextMenuActionItem>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
+          {hasAccounts && (
+            // The account new launches use, in every project (#17893): the
+            // default, and the worktree picks and preset pins the confirm
+            // leaves checked. Running terminals move only through the offer after.
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <UserRoundCheck data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Use account everywhere
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+                {[{ id: null, name: defaultLogin }, ...accounts].map((account) => (
+                  <EverywhereAccountRow
+                    key={account.id ?? DEFAULT_LOGIN_VALUE}
+                    onPick={() =>
+                      setEverywhereOpening((current) => ({
+                        key: (current?.key ?? 0) + 1,
+                        account: { id: account.id, name: account.name },
+                      }))
+                    }
+                  >
+                    {account.name}
+                  </EverywhereAccountRow>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
           <ContextMenuSeparator />
           <ToolbarContextMenuItems buttonId={type} side="left" onUnpin={handleUnpinFromToolbar} />
           <ContextMenuActionItem
@@ -1251,6 +1335,7 @@ export function AgentButton({
         request={accountSwitchRequest}
         onClose={() => setAccountSwitchRequest(null)}
       />
+      {everywhereDialog}
     </>
   );
 }

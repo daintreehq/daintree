@@ -7,6 +7,7 @@ import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import {
   dropInputSuggestion,
   inputSuggestionRuleFor,
+  observeInputLine,
 } from "../../../shared/utils/terminalInputLine.js";
 import type { PluginTerminalScreenResult } from "../../../shared/types/plugin.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
@@ -45,9 +46,11 @@ export async function readPluginTerminalScreen(
    * box, by the agent's own rule when it declares one; see
    * `dropInputSuggestion`. `withCols`: also say how wide the terminal is,
    * which Canopy needs to put rows the agent wrapped back together. Plugins
-   * never ask for it.
+   * never ask for either. `withInputLine`: also say what the input box holds,
+   * read off the whole screen, which `host.terminals.readScreen` always asks
+   * for and the internal readers never need.
    */
-  options: { dropGhostInput?: boolean; withCols?: boolean } = {}
+  options: { dropGhostInput?: boolean; withCols?: boolean; withInputLine?: boolean } = {}
 ): Promise<PluginTerminalScreenResult & { cols?: number }> {
   if (!ptyClient) return { status: "unavailable" };
   // A tracked owner that is some other project settles it with no RPC at all.
@@ -82,13 +85,10 @@ export async function readPluginTerminalScreen(
   if (after.isExited === true) return { status: "exited" };
   if (!snapshot) return { status: "unavailable" };
   const screen = activeScreenData(snapshot.data);
+  const rule = () => inputSuggestionRuleFor(after.detectedAgentId ?? after.launchAgentId);
+  const inputLine = options.withInputLine ? observeInputLine(screen, rule()).inputLine : undefined;
   const tail = tailCapturedOutput(
-    options.dropGhostInput
-      ? dropInputSuggestion(
-          screen,
-          inputSuggestionRuleFor(after.detectedAgentId ?? after.launchAgentId)
-        )
-      : screen,
+    options.dropGhostInput ? dropInputSuggestion(screen, rule()) : screen,
     lines,
     true
   );
@@ -101,6 +101,7 @@ export async function readPluginTerminalScreen(
     text: clipped.text,
     lineCount: clipped.text.length === 0 ? 0 : clipped.text.split("\n").length,
     truncated: tail.truncated || clipped.clipped,
+    ...(inputLine ? { inputLine } : {}),
     ...(options.withCols && snapshot.cols > 0 ? { cols: snapshot.cols } : {}),
   };
 }

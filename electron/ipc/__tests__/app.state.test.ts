@@ -192,6 +192,10 @@ vi.mock("../../services/plugin/pluginLaunchStore.js", () => ({
   admitRestoredPluginLaunchesFromStore: vi.fn(),
 }));
 
+vi.mock("../../services/mcp-server/assistantPaneCreationStore.js", () => ({
+  admitRestoredAssistantPanesFromStore: vi.fn(async () => {}),
+}));
+
 vi.mock("../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn(() => null),
   getAppWebContents: vi.fn(() => null),
@@ -216,6 +220,7 @@ import { releaseReloadNotice } from "../../window/rendererReloadNotice.js";
 import { CHANNELS } from "../channels.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
 import { admitRestoredPluginLaunchesFromStore } from "../../services/plugin/pluginLaunchStore.js";
+import { admitRestoredAssistantPanesFromStore } from "../../services/mcp-server/assistantPaneCreationStore.js";
 import {
   captureProjectLayoutSeed,
   getProjectLayoutSeed,
@@ -2112,6 +2117,84 @@ describe("app:boot handler", () => {
       await invokeBoot();
       await vi.dynamicImportSettled();
       expect(admitRestoredPluginLaunchesFromStore).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Assistant pane records an earlier run kept (#16845)", () => {
+    const SAVED = [
+      {
+        id: "claude-7f3a",
+        kind: "terminal",
+        title: "A",
+        location: "grid",
+        cwd: "/tmp",
+        spawnedBy: "assistant",
+      },
+      { id: "shell", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+      {
+        id: "codex-1b2c",
+        kind: "terminal",
+        title: "C",
+        location: "grid",
+        cwd: "/tmp",
+        spawnedBy: "mcp",
+      },
+    ];
+    const KEPT = {
+      "claude-7f3a": { scope: "help", conversationId: "c", projectId: "p1", seenAt: Date.now() },
+    };
+
+    async function seedProject(kept: unknown): Promise<void> {
+      const storeModule = await import("../../store.js");
+      vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+        if (key === "assistantPaneCreations") return kept;
+        return defaultStoreGet(key);
+      });
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+        id: "p1",
+        name: "P",
+        path: "/p",
+      } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+      legacyOwnerRef.current = "p1";
+      vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+        appState: { terminals: SAVED },
+      } as never);
+    }
+
+    it("hands over the panes the hydrate restores, with the workspace they restore in", async () => {
+      await seedProject(KEPT);
+      await invokeBoot();
+      await vi.waitFor(() =>
+        expect(admitRestoredAssistantPanesFromStore).toHaveBeenCalledWith("p1", [
+          { id: "claude-7f3a", spawnedBy: "assistant" },
+          { id: "shell", spawnedBy: undefined },
+          { id: "codex-1b2c", spawnedBy: "mcp" },
+        ])
+      );
+    });
+
+    it("waits for the hydrate that follows a pending crash's choice", async () => {
+      await seedProject(KEPT);
+      crashService.getPendingCrash.mockReturnValue({
+        logPath: "/fake.json",
+        entry: { id: "c", timestamp: 0, appVersion: "1", platform: "x", osVersion: "y", arch: "z" },
+        hasBackup: false,
+        panels: [],
+      });
+      await invokeBoot();
+      await vi.dynamicImportSettled();
+      expect(admitRestoredAssistantPanesFromStore).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["no run kept a record", {}],
+      ["the records are missing", undefined],
+      ["the records are malformed", "claude-7f3a"],
+    ])("loads nothing when %s", async (_label, kept) => {
+      await seedProject(kept);
+      await invokeBoot();
+      await vi.dynamicImportSettled();
+      expect(admitRestoredAssistantPanesFromStore).not.toHaveBeenCalled();
     });
   });
 });

@@ -12,6 +12,7 @@ import {
 } from "../dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../select";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../tooltip";
 import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
@@ -26,10 +27,6 @@ import { publishScrollbarGutter } from "@/lib/scrollbarGutter";
 
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
-}));
-
-vi.mock("@/store/portalStore", () => ({
-  usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
 
 vi.mock("@/hooks/useOverlayState", () => ({
@@ -187,6 +184,22 @@ describe("AppDialog focus trapping", () => {
 
     const firstButton = buttons[0];
     expect(document.activeElement).toBe(firstButton);
+  });
+
+  it("leaves focus on the last element when what has focus already took the Tab", async () => {
+    renderDialog();
+    await act(() => vi.runAllTimersAsync());
+
+    const buttons = screen.getAllByRole("button");
+    const lastButton = buttons[buttons.length - 1]!;
+    lastButton.focus();
+    lastButton.addEventListener("keydown", (e) => e.preventDefault());
+
+    lastButton.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true })
+    );
+
+    expect(document.activeElement).toBe(lastButton);
   });
 
   it("wraps focus from the last visible element when hidden tabbables follow it", async () => {
@@ -682,6 +695,64 @@ describe("AppDialog focus trapping", () => {
       document.body.removeChild(successor);
       document.body.removeChild(trigger);
       document.body.removeChild(root);
+    });
+
+    it("leaves focus alone on a close that opts out, handing over the restore it skipped", async () => {
+      const { root, trigger } = setupTriggerAndRoot();
+      const destination = document.createElement("button");
+      const elsewhere = document.createElement("button");
+      document.body.append(destination, elsewhere);
+      let skippedRestore: (() => void) | undefined;
+      // Where the close's own step takes the user instead.
+      const onCloseComplete = vi.fn((restore?: () => void) => {
+        skippedRestore = restore;
+        destination.focus();
+      });
+      const dialog = (isOpen: boolean, restoreFocusOnClose: boolean) => (
+        <>
+          <Dispatcher />
+          <AppDialog
+            isOpen={isOpen}
+            onClose={() => {}}
+            restoreFocusOnClose={restoreFocusOnClose}
+            onCloseComplete={onCloseComplete}
+          >
+            <AppDialog.Body>
+              <button type="button">Inner</button>
+            </AppDialog.Body>
+          </AppDialog>
+        </>
+      );
+      try {
+        const { rerender } = render(dialog(true, false));
+        await act(() => vi.runAllTimersAsync());
+        const triggerFocused = vi.fn();
+        trigger.addEventListener("focus", triggerFocused);
+
+        rerender(dialog(false, false));
+
+        expect(triggerFocused).not.toHaveBeenCalled();
+        expect(document.activeElement).toBe(destination);
+        expect(onCloseComplete).toHaveBeenCalledTimes(1);
+        // A hand-off that falls through can still put focus back.
+        act(() => skippedRestore?.());
+        expect(document.activeElement).toBe(trigger);
+
+        // Wherever the next opening starts from is where its close returns.
+        elsewhere.focus();
+        rerender(dialog(true, true));
+        await act(() => vi.runAllTimersAsync());
+        onCloseComplete.mockImplementation(() => {});
+        rerender(dialog(false, true));
+
+        expect(document.activeElement).toBe(elsewhere);
+        expect(onCloseComplete).toHaveBeenLastCalledWith();
+      } finally {
+        destination.remove();
+        elsewhere.remove();
+        trigger.remove();
+        root.remove();
+      }
     });
 
     it("falls through to #root when the connected target cannot take focus", async () => {
@@ -1517,6 +1588,91 @@ describe("AppDialog Escape yielded by the layer underneath", () => {
     pressEscape();
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("AppDialog Escape over an open tooltip", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+    mockPrevOpen = false;
+    _resetForTests();
+    _resetBackstopForTests();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+    _resetBackstopForTests();
+  });
+
+  function pressEscape(): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    act(() => {
+      (document.activeElement ?? document.body).dispatchEvent(event);
+    });
+    return event;
+  }
+
+  // A row caption showing while the row has focus (TruncatedTooltip in a
+  // Settings tab): Radix dismisses it on Escape, and the dialog must not close
+  // on the same keypress.
+  it("dismisses only the tooltip, then closes on the next Escape", async () => {
+    const onClose = vi.fn();
+    render(
+      <AppDialog isOpen onClose={onClose}>
+        <Tooltip defaultOpen autoDismiss={false} dismissOnDialogTransition={false}>
+          <TooltipTrigger asChild>
+            <button type="button">Row</button>
+          </TooltipTrigger>
+          <TooltipContent>Full row text</TooltipContent>
+        </Tooltip>
+      </AppDialog>
+    );
+    const tooltip = await screen.findByRole("tooltip", { hidden: true });
+    expect(tooltip.getAttribute("data-state")).toMatch(/-open$/);
+    screen.getByText("Row").focus();
+
+    pressEscape();
+
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("tooltip", { hidden: true })).toBeNull());
+
+    pressEscape();
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // The terminal find bar's invalid-regex hint pins `open` with no handler and
+  // survives the dialog transition. Radix's dismiss reaches nobody, so counting
+  // it as the layer taking Escape would leave the dialog unclosable.
+  it("closes over a pinned tooltip that Escape cannot dismiss", async () => {
+    const onClose = vi.fn();
+    const ui = (isOpen: boolean) => (
+      <>
+        <Tooltip open>
+          <TooltipTrigger asChild>
+            <span>Find in terminal</span>
+          </TooltipTrigger>
+          <TooltipContent>Invalid regular expression</TooltipContent>
+        </Tooltip>
+        <AppDialog isOpen={isOpen} onClose={onClose}>
+          <button type="button">Confirm</button>
+        </AppDialog>
+      </>
+    );
+    const { rerender } = render(ui(false));
+    await screen.findByRole("tooltip", { hidden: true });
+    rerender(ui(true));
+    screen.getByText("Confirm").focus();
+
+    const event = pressEscape();
+
+    // Radix's layer for the hint took the keypress and its dismiss went nowhere.
+    expect(event.defaultPrevented).toBe(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("tooltip", { hidden: true }).getAttribute("data-state")).toMatch(
+      /-open$/
+    );
   });
 });
 

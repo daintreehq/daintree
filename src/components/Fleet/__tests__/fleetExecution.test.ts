@@ -671,6 +671,58 @@ describe("executeFleetBroadcast — context tokens (#14953)", () => {
     expect(sentBy().get("a")).not.toContain("@diff");
   });
 
+  it("reads each working directory's diff once, however many agents and tokens name it (#17480)", async () => {
+    seedPanels([
+      makeAgent("a", { cwd: "/wt/a" }),
+      makeAgent("b", { cwd: "/wt/a" }),
+      makeAgent("c", { cwd: "/wt/a" }),
+      makeAgent("d", { cwd: "/wt/d", worktreeId: "wt-2" }),
+    ]);
+    await executeFleetBroadcast("Review @diff then @diff again", ["a", "b", "c", "d"], {
+      c: "Only @diff here",
+    });
+    expect(getWorkingDiff.mock.calls).toEqual([
+      ["/wt/a", "unstaged"],
+      ["/wt/d", "unstaged"],
+    ]);
+    const sent = sentBy();
+    expect(sent.get("a")).toBe(sent.get("b"));
+    expect(sent.get("a")!.split("diff unstaged in /wt/a")).toHaveLength(3);
+    expect(sent.get("c")).toContain("diff unstaged in /wt/a");
+    expect(sent.get("d")).toContain("diff unstaged in /wt/d");
+    expect(sent.get("d")).not.toContain("/wt/a");
+  });
+
+  it("reads each diff type on its own, and hands every agent the same failure (#17480)", async () => {
+    getWorkingDiff.mockImplementation(async (cwd: string, type: string) => {
+      if (type === "staged") throw new Error("rate limited");
+      return `diff ${type} in ${cwd}`;
+    });
+    seedPanels([makeAgent("a", { cwd: "/wt/a" }), makeAgent("b", { cwd: "/wt/a" })]);
+    await executeFleetBroadcast("@diff:staged @diff:head @diff:staged", ["a", "b"]);
+    expect(getWorkingDiff.mock.calls).toEqual([
+      ["/wt/a", "staged"],
+      ["/wt/a", "head"],
+    ]);
+    expect([...sentBy().keys()].sort()).toEqual(["a", "b"]);
+    for (const payload of sentBy().values()) {
+      expect(payload.split("[Error fetching diff: rate limited]")).toHaveLength(3);
+      expect(payload).toContain("diff head in /wt/a");
+    }
+  });
+
+  it("reads the diff again for the next broadcast (#17480)", async () => {
+    getWorkingDiff.mockResolvedValueOnce("+ first").mockResolvedValueOnce("+ second");
+    seedPanels([makeAgent("a", { cwd: "/wt/a" })]);
+    await executeFleetBroadcast("Review @diff", ["a"]);
+    await executeFleetBroadcast("Review @diff", ["a"]);
+    expect(getWorkingDiff).toHaveBeenCalledTimes(2);
+    const sent = submitMock.mock.calls.map(([, payload]) => payload as string);
+    expect(sent).toHaveLength(2);
+    expect(sent[0]).toContain("+ first");
+    expect(sent[1]).toContain("+ second");
+  });
+
   it("takes @terminal and @selection from each agent's own screen", async () => {
     seedPanels([makeAgent("a"), makeAgent("b")]);
     screens.output.set("a", "output of a");

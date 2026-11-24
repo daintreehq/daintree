@@ -13,6 +13,7 @@ import type {
   AddPanelOptions,
 } from "@/types";
 import type { PanelInstance, PanelWorktreeMoveNotice } from "@shared/types/panel";
+import type { UpdateInstalledObservation } from "@shared/types/ipc/agent";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 
 export type { AddPanelOptions };
@@ -70,9 +71,24 @@ export interface PresetRespawnOptions {
   keepConversation?: boolean;
 }
 
+export interface OwnFallbackStepOptions extends PresetRespawnOptions {
+  /** When the call asking for the move gave up (#17917): nothing starts after it. */
+  deadlineAt?: number;
+}
+
 export interface PresetRespawnResult {
   success: boolean;
   error?: string;
+  /**
+   * The move wasn't the pane's next own fallback step (#17917), and nothing
+   * was changed: the caller asks the person instead.
+   */
+  needsConfirmation?: boolean;
+  /**
+   * An assistant's hop that claimed the pane and then failed (#17917): the
+   * tick authorized it, and the old process may already have been ended.
+   */
+  admitted?: boolean;
   /** The conversation the relaunch asked the CLI to reopen, when it kept one. */
   resumedSessionId?: string;
 }
@@ -199,6 +215,11 @@ export interface PanelRegistrySlice {
    * alike, so the pane never names the wrong session beside that state.
    */
   setAgentIncarnation: (id: string, agentIncarnation: number) => void;
+  /**
+   * Copy the host's update-installed observation for a terminal (#17905);
+   * undefined clears it. Written by the live listener and by resync alike.
+   */
+  setUpdateInstalled: (id: string, updateInstalled: UpdateInstalledObservation | undefined) => void;
   updateActivity: (
     id: string,
     headline: string,
@@ -344,6 +365,17 @@ export interface PanelRegistrySlice {
     options?: PresetRespawnOptions
   ) => Promise<PresetRespawnResult>;
   /**
+   * Hop a pane to `presetId` as a usage-limit hop would, keeping its root and
+   * advancing its index, only when that is the next step of the chain on one
+   * of the person's own presets it walks (#17917). Any other move changes
+   * nothing and reports `needsConfirmation`.
+   */
+  restartTerminalOnOwnFallbackStep: (
+    id: string,
+    presetId: string,
+    options?: OwnFallbackStepOptions
+  ) => Promise<PresetRespawnResult>;
+  /**
    * Respawn an agent pane in place on another account (#16040), keeping its
    * preset, model and flags. A new conversation by default: a session stored
    * in one account's folder usually can't be found from another's.
@@ -387,7 +419,15 @@ export interface PanelRegistrySlice {
     id: string,
     position: { url: string; scrollY: number } | undefined
   ) => void;
-  setFilePanelPath: (id: string, filePath: string) => void;
+  /**
+   * Swap a file panel's file; `viewMode`, when given, is written with it in one
+   * update, and `null` leaves the new file's mode unset for the pane to decide.
+   */
+  setFilePanelPath: (
+    id: string,
+    filePath: string,
+    viewMode?: import("@shared/types/panel.js").FileViewMode | null
+  ) => void;
   setFileViewMode: (id: string, viewMode: import("@shared/types/panel.js").FileViewMode) => void;
   /** Pin the editor a file panel's Edit mode opens with, as an "Edit with…" answer. */
   setFileEditorChoice: (id: string, choice: string) => void;
@@ -428,7 +468,8 @@ export interface PanelRegistrySlice {
     id: string,
     filePath: string,
     fileStatus: import("@shared/types/git.js").GitStatus,
-    viewedKey?: string
+    viewedKey?: string,
+    fileSide?: import("@shared/types/git.js").GitDiffSide
   ) => void;
   setDiffPanelChangeSet: (
     id: string,

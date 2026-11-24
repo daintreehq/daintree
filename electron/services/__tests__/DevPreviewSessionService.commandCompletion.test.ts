@@ -45,6 +45,10 @@ class RealPtyClient {
   spawn(id: string, options: PtyHostSpawnOptions): void {
     this.spawns.push({ id, options });
     const shell = options.shell ?? process.env.SHELL ?? "/bin/sh";
+    const shellConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), "dev-preview-shell-"));
+    tempDirs.push(shellConfigDir);
+    // A fresh zsh otherwise enters zsh-newuser-install instead of the command.
+    fs.writeFileSync(path.join(shellConfigDir, ".zshrc"), "");
     const proc = pty.spawn(shell, options.args ?? [], {
       name: "xterm-256color",
       cols: options.cols,
@@ -53,6 +57,7 @@ class RealPtyClient {
       env: {
         ...(process.env as Record<string, string>),
         ...(options.env ?? {}),
+        ZDOTDIR: shellConfigDir,
         TERM: "xterm-256color",
         NO_COLOR: "1",
       },

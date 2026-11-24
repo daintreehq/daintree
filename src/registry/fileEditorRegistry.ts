@@ -209,6 +209,8 @@ export interface PluginFileEditorCandidate {
   pluginId: string;
   /** The plugin's display name, the mode's label. */
   pluginName: string;
+  /** The plugin ships with Daintree. */
+  builtin: boolean;
   editor: HostedFileEditorDescriptor;
   /** The `location: "fileEditor"` view the editor mounts. */
   view: PluginHostedViewDescriptor;
@@ -263,6 +265,7 @@ export function pluginFileEditorCandidates(
         choiceId: fileEditorChoiceId(view.pluginId, editor.id),
         pluginId: view.pluginId,
         pluginName: options.displayNameOf(view.pluginId),
+        builtin: view.builtin === true,
         editor,
         view,
       });

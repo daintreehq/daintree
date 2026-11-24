@@ -6,7 +6,7 @@
 // store stands in for the real Zustand store; both UIs read from and write to
 // the same pins object, which is exactly the guarantee the split-brain fix
 // provides.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
 import type { AgentToolbarPins, CliAvailability } from "@shared/types";
 import type { ActionFrecencyEntry } from "@shared/types/actions";
@@ -399,7 +399,10 @@ vi.mock("@/components/Settings/SettingsSwitch", () => ({
 // launcher keeps its active row in view through it on every selection move.
 Element.prototype.scrollIntoView = vi.fn();
 
-import { DockLaunchButton } from "@/components/Layout/DockLaunchButton";
+import { DockLaunchButton, preloadDockLaunchPalette } from "@/components/Layout/DockLaunchButton";
+
+// The launcher's palette is its own chunk; loaded once so it renders with the trigger.
+beforeAll(() => preloadDockLaunchPalette());
 import { ToolbarSettingsTab } from "@/components/Settings/ToolbarSettingsTab";
 
 const AGENT_NAMES: Record<string, string> = {

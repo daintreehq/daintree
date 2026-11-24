@@ -7,10 +7,10 @@ import type {
   VoiceSessionEvent,
   VoiceTranscriptionService,
 } from "../../services/VoiceTranscriptionService.js";
-import {
+import type {
   VoiceCorrectionService,
-  type VoiceCorrectionRequest,
-  type VoiceCorrectionSettings,
+  VoiceCorrectionRequest,
+  VoiceCorrectionSettings,
 } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
@@ -19,6 +19,7 @@ import type {
   VoiceDictionaryEntry,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
+  VoiceSessionVocabulary,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
 import {
@@ -30,6 +31,7 @@ import {
   type VoiceSessionSnapshot,
   type VoiceRewriteOutcome,
   type LastDictationTerms,
+  type LocalSpeechModelStatus,
   type VoiceKeytermSource,
   type VoiceSentTerm,
   type VoiceSessionEndReason,
@@ -51,15 +53,21 @@ import {
   type UtteranceRelease,
 } from "../../services/voiceUtteranceCommands.js";
 import {
-  correctionInstructionsFor,
   isVoiceCleanupModel,
   isVoiceCleanupProvider,
   VOICE_CLEANUP_AI_MODEL,
   VOICE_CLEANUP_MODELS_BY_PROVIDER,
-  type CorrectionWorktreeContext,
-} from "../../../shared/config/voiceCorrection.js";
-import { cleanupApiKey, hasCleanupKey } from "../../../shared/config/voiceProviders.js";
-import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
+} from "../../../shared/config/voiceCorrectionPolicy.js";
+import type { CorrectionWorktreeContext } from "../../../shared/config/voiceCorrection.js";
+import {
+  cleanupApiKey,
+  hasCleanupKey,
+  transcribesOnDevice,
+} from "../../../shared/config/voiceProviders.js";
+import {
+  normalizeVoiceLanguage,
+  spokenCommandsAvailable,
+} from "../../../shared/config/voiceLanguages.js";
 import {
   assembleTaggedKeyterms,
   NO_PANE_KEYTERM_READS,
@@ -99,7 +107,11 @@ import {
   readHostPaneStart,
   type HostPane,
 } from "../../services/voice/hostPaneContext.js";
-import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
+import {
+  collectHeardAsRules,
+  createHeardAsRewriter,
+  sessionHeardAsRules,
+} from "../../../shared/utils/voiceHeardAs.js";
 import { stripHesitations } from "../../../shared/utils/voiceHesitations.js";
 import {
   carrySpansThroughEdits,
@@ -119,7 +131,6 @@ import {
   resolveVoiceCommandTarget,
   type VoiceCommandTarget,
 } from "../../services/voiceCommandTarget.js";
-import { readVoiceOpeningCommand } from "../../services/voiceOpeningCommand.js";
 import {
   planSpokenCommand,
   voiceCommandKeyterms,
@@ -297,6 +308,9 @@ interface VoiceSession {
   warmTimer: ReturnType<typeof setInterval> | null;
   // Its cleanup context, when cleanup was on at its start.
   correctionPrep: CorrectionPrep | null;
+  // Settles once its project vocabulary is read and in use, or can't be; a
+  // stop waits on it until `by` (performance.now()).
+  vocabularyRead: { settled: Promise<void>; by: number } | null;
   // Main's share of the session summary, sent with its ended notice. Kept
   // apart from the buffers above, which are released as the session goes.
   readonly stats: Pick<
@@ -428,8 +442,7 @@ export function getLiveVoiceSession(): {
  * session it was meant to show. The view on screen there may be on another
  * host than the owner's, so it is told the host as well as the workspace
  * (#14773). An owner already on screen takes the keyboard from any other view
- * in its window, a browser panel or a portal tab, which its own focus moves
- * can't reach; a switch focuses the view it brings in.
+ * in its window or a browser panel, which its own focus moves can't reach; a switch focuses the view it brings in.
  */
 function showSessionWindow(session: VoiceSession): void {
   const win = getWindowForWebContents(session.sender);
@@ -469,7 +482,7 @@ export function requestLiveSessionStop(sessionId?: string, returnToTarget = fals
 
 /**
  * Whether a focused page that isn't an app view (a browser or dev-preview
- * guest, a portal tab) takes this keystroke from the page. The dictation key
+ * guest) takes this keystroke from the page. The dictation key
  * stops dictation running in any view, as it would from an app view; a held
  * key's repeats go with it. With nothing running it stays the page's (#14601).
  */
@@ -602,6 +615,11 @@ const CODE_NAME_READ_BUDGET_MS = 300;
 // The worktree's diff is read as the dictation starts and wanted only at its
 // cleanup, so it has longer than the start's other reads.
 const DIFF_NAMES_READ_BUDGET_MS = 800;
+// A dictation can stop before its project vocabulary is read: the keyterms
+// stop waiting for it well before the read's own limit, the project I/O gate's
+// 2s. A stop waits for it, beside the provider's drain, until this long after
+// the read began, so the owner's rerun has it.
+const VOCABULARY_READ_DEADLINE_MS = 2_500;
 
 // A pause's prefetch covers the passage so far, so a session's dictation pays
 // for its opening again at each one. Past these a stop just sends its own.
@@ -668,7 +686,12 @@ function normalizeSpoken(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram", "grok"];
+const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = [
+  "openai",
+  "deepgram",
+  "grok",
+  "local",
+];
 
 // The only fields setSettings writes. Everything else is refused: `keyterms` is
 // assembled per session, the dictionary and its suggestion queue change only
@@ -848,6 +871,20 @@ export function getVoiceSettings(): VoiceInputSettings {
   }
 
   return merged;
+}
+
+// Cleanup, its prompts and file-link detection load with the first voice
+// session that uses them, never while handlers register at boot.
+async function getCorrectionService(): Promise<VoiceCorrectionService> {
+  if (correctionService) return correctionService;
+  const { VoiceCorrectionService } = await import("../../services/VoiceCorrectionService.js");
+  return (correctionService ??= new VoiceCorrectionService());
+}
+
+/** Whether a model's cleanup rules say what code names are: Luna's never learned of them. */
+async function cleanupReadsCodeNames(model: string): Promise<boolean> {
+  const { correctionInstructionsFor } = await import("../../../shared/config/voiceCorrection.js");
+  return correctionInstructionsFor(model).core.includes("<code_names>");
 }
 
 async function getService(): Promise<VoiceTranscriptionService> {
@@ -1142,9 +1179,8 @@ function correctionSettingsFor(
     knownNames: names,
     ...(repositoryNames.length > 0 ? { repositoryNames } : {}),
     ...(worktree ? { worktree } : {}),
-    // Global rules only, matching the live rewriter. Project heard-as forms
-    // belong in both places, through sessionDictionary.
-    heardAs: collectHeardAsRules(settings.dictionary),
+    // The live rewriter's rules: the project's over the user's own.
+    heardAs: sessionHeardAsRules(settings.dictionary, vocabulary),
     customInstructions: settings.correctionCustomInstructions,
     language: normalizeVoiceLanguage(settings.language),
     ...(transcriber ? { transcriber } : {}),
@@ -1368,8 +1404,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (reason !== "stopped" || session.intent !== "dictation" || session.ended) return false;
       const settings = getVoiceSettings();
       if (!mayCorrect(settings)) return false;
-      correctionService ??= new VoiceCorrectionService();
-      correctionService.preconnect(settings.correctionProvider);
+      void getCorrectionService()
+        .then((correction) => correction.preconnect(settings.correctionProvider))
+        .catch((error: unknown) => {
+          logDebug("[VoiceInput] Cleanup preconnect failed", voiceErrorLogFields(error));
+        });
       return true;
     };
     const prep = session.correctionPrep;
@@ -1399,8 +1438,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       try {
         // Drain the transcription service first (waits for pending
         // transcriptions, fires remaining complete events) — the subscription
-        // stays up until it has.
-        await service?.stopGracefully();
+        // stays up until it has. A stop also waits a little for a project
+        // vocabulary still being read, so its rules reach the owner before
+        // the end; a newer start never waits on that.
+        await Promise.all([
+          service?.stopGracefully(),
+          reason === "stopped" && session.vocabularyRead
+            ? withinBudget(
+                session.vocabularyRead.settled,
+                undefined,
+                "Vocabulary read",
+                Math.max(0, session.vocabularyRead.by - performance.now())
+              )
+            : undefined,
+        ]);
       } catch (error) {
         releaseHeldSend(session, "strip");
         session.flushUtterance?.("literal");
@@ -1521,6 +1572,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       flushUtterance: null,
       warmTimer: null,
       correctionPrep: null,
+      vocabularyRead: null,
       stats: {
         provider: null,
         biasTermCount: null,
@@ -1616,8 +1668,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // or the key removed since the start sends nothing.
       const settings = getVoiceSettings();
       if (session.ended || !mayCorrect(settings)) return;
-      correctionService ??= new VoiceCorrectionService();
-      await correctionService.warm(
+      const correction = await getCorrectionService();
+      if (session.ended) return;
+      await correction.warm(
         correctionSettingsFor(
           settings,
           projectInfo,
@@ -1643,7 +1696,15 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     startedAt: number,
     terminalId: string | undefined
   ): Promise<VoiceStartOutcome> => {
-    const svc = await getService();
+    // Its transcripts look for spoken file references through the cleanup
+    // service, so that loads beside the transcriber rather than after it. A
+    // cleanup service that fails to load costs file links, not the session.
+    const [svc] = await Promise.all([
+      getService(),
+      getCorrectionService().catch((error: unknown) => {
+        logWarn("[VoiceInput] Cleanup service failed to load", voiceErrorLogFields(error));
+      }),
+    ]);
     const serviceReadyAt = performance.now();
     // The renderer went away during the import — nothing is left to record for.
     if (session.sender.isDestroyed()) endSession(session, "cancelled");
@@ -1652,8 +1713,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
     session.stats.provider = settings.transcriptionProvider;
-    // Like the keyterms, the rules are the dictionary as it was at the start.
-    const rewriteHeardAs = createHeardAsRewriter(collectHeardAsRules(settings.dictionary));
+    // Like the keyterms, the rules are the dictionary as it was at the start:
+    // the user's own until the project's vocabulary is read, then both.
+    let rewriteHeardAs = createHeardAsRewriter(collectHeardAsRules(settings.dictionary));
 
     // Kick off keyterm assembly concurrently with the subscription/provider
     // setup below so leading speech isn't delayed waiting on git/terminal reads.
@@ -1683,6 +1745,24 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             ? null
             : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
         );
+    // Read before the keyterms, which wait on it, so a provider that waits on
+    // those transcribes nothing before the project's rules are in place. The
+    // owner gets the vocabulary too: its reruns over the whole dictation, which
+    // put right a completion that landed first, take the same rules.
+    const vocabularyReadBy = performance.now() + VOCABULARY_READ_DEADLINE_MS;
+    session.vocabularyRead = {
+      settled: vocabulary.then(
+        (entries) => {
+          if (entries.length === 0) return;
+          rewriteHeardAs = createHeardAsRewriter(sessionHeardAsRules(settings.dictionary, entries));
+          if (session.sender.isDestroyed()) return;
+          const update: VoiceSessionVocabulary = { sessionId: session.id, vocabulary: entries };
+          session.sender.send(CHANNELS.VOICE_INPUT_SESSION_VOCABULARY, update);
+        },
+        () => {}
+      ),
+      by: vocabularyReadBy,
+    };
     const projectDictionary = vocabulary.then(dictionaryTerms);
     // The names and the worktree come from one read, bounded here by the
     // keyterms' own budget so the keyterms and cleanup get the same answer. A
@@ -1712,25 +1792,28 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // cleanup can use it. It rides beside the context rather than in it, so
     // the warm-up never waits on git, and the whole read, finding the worktree
     // included, is held to its budget.
-    const diffNames: Promise<string[]> =
-      keytermTarget.projectPath &&
-      session.intent === "dictation" &&
-      mayCorrect(settings) &&
-      correctionInstructionsFor(settings.correctionModel).core.includes("<code_names>")
-        ? withinBudget(
-            resolveFileLinkCwd(
-              session.projectId,
-              terminalId,
-              keytermTarget.projectPath,
-              deps.ptyClient
-            )
-              .then((cwd) => (cwd ? readWorktreeDiffNames(cwd, DIFF_NAMES_READ_BUDGET_MS) : []))
-              .catch((): string[] => []),
-            [],
-            "Worktree diff read",
-            DIFF_NAMES_READ_BUDGET_MS
+    const diffNamesRoot =
+      keytermTarget.projectPath && session.intent === "dictation" && mayCorrect(settings)
+        ? keytermTarget.projectPath
+        : null;
+    const diffNames: Promise<string[]> = diffNamesRoot
+      ? cleanupReadsCodeNames(settings.correctionModel)
+          .then((reads) =>
+            reads
+              ? withinBudget(
+                  resolveFileLinkCwd(session.projectId, terminalId, diffNamesRoot, deps.ptyClient)
+                    .then((cwd) =>
+                      cwd ? readWorktreeDiffNames(cwd, DIFF_NAMES_READ_BUDGET_MS) : []
+                    )
+                    .catch((): string[] => []),
+                  [],
+                  "Worktree diff read",
+                  DIFF_NAMES_READ_BUDGET_MS
+                )
+              : []
           )
-        : Promise.resolve([]);
+          .catch((): string[] => [])
+      : Promise.resolve([]);
     const sessionContext: Promise<CorrectionSessionContext> = Promise.all([
       dictationContext,
       paneReads ?? NO_PANE_KEYTERM_READS,
@@ -1777,26 +1860,29 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const commandTerms = commandTargetPromise.then((target) =>
       target ? voiceCommandKeyterms(target.vocabulary, COMMAND_KEYTERM_LIMIT) : []
     );
+    // The on-device model takes no bias terms, so none are gathered for it.
     const keytermsPromise = (
-      hostContext
-        ? hostContext.then((read) =>
-            assembleTaggedKeyterms({
+      transcribesOnDevice(settings.transcriptionProvider)
+        ? Promise.resolve([])
+        : hostContext
+          ? hostContext.then((read) =>
+              assembleTaggedKeyterms({
+                customDictionary,
+                projectDictionary,
+                projectName: read?.projectName ?? undefined,
+                names,
+                commandTerms,
+                paneReads: read?.keyterms ?? NO_PANE_KEYTERM_READS,
+              })
+            )
+          : assembleTaggedKeyterms({
               customDictionary,
               projectDictionary,
-              projectName: read?.projectName ?? undefined,
+              projectName: keytermTarget.projectName,
               names,
               commandTerms,
-              paneReads: read?.keyterms ?? NO_PANE_KEYTERM_READS,
+              paneReads: paneReads ?? NO_PANE_KEYTERM_READS,
             })
-          )
-        : assembleTaggedKeyterms({
-            customDictionary,
-            projectDictionary,
-            projectName: keytermTarget.projectName,
-            names,
-            commandTerms,
-            paneReads: paneReads ?? NO_PANE_KEYTERM_READS,
-          })
     ).catch((err: unknown): VoiceSentTerm[] => {
       logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
         ...voiceErrorLogFields(err),
@@ -1808,12 +1894,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       session.stats.biasTermCount = terms.length;
     });
 
-    // OpenAI Realtime emits spoken dictation commands ("new paragraph",
+    // Every provider writes spoken dictation commands ("new paragraph",
     // "new line", "send it") as literal text; they are rewritten post-hoc,
-    // gated on the session-snapshotted paragraphing strategy.
+    // gated on the session-snapshotted paragraphing strategy. They are
+    // English, so Auto-detect reads them too, whatever the passage's language.
     const spokenCommands =
       settings.paragraphingStrategy === "spoken-command" &&
-      normalizeVoiceLanguage(settings.language) === "en";
+      spokenCommandsAvailable(settings.language);
     // OpenAI's VAD already waits out a long silence, and checks it again,
     // before it ends an utterance; only the short endpoints need more.
     const sendSettleMs =
@@ -2312,8 +2399,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
     const keyterms = taggedKeyterms ? recordAssembledTerms(taggedKeyterms) : null;
     const providerStartAt = performance.now();
-    // Its transcripts look for spoken file references through it.
-    correctionService ??= new VoiceCorrectionService();
     // Field names avoid "key": the logger blanks any field containing it.
     logInfo("[VoiceInput] Start timing — provider start", {
       sessionId: session.id,
@@ -2852,18 +2937,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       ));
     }
     // Only a command the target lists now, so the renderer names a token, never a file.
-    const openingCommandRead = readVoiceOpeningCommand(
-      commandTarget?.vocabulary.entries ?? [],
-      request.openingCommandToken
+    // Its YAML and TOML parsers load here, not at boot.
+    const openingCommandRead = import("../../services/voiceOpeningCommand.js").then(
+      ({ readVoiceOpeningCommand }) =>
+        readVoiceOpeningCommand(
+          commandTarget?.vocabulary.entries ?? [],
+          request.openingCommandToken
+        )
     );
     const context = sessionContext ? await sessionContext : NO_SESSION_CONTEXT;
     const { terminalOutput, agentReply } = terminalContext;
     const recentPrompts = ownRecentPrompts(ctx.projectId, request);
     // Read where the repository names were, and only for rules that say what
-    // code names are: Luna's never learned of them.
+    // code names are.
     const codeNames =
-      context.codeNameRoot &&
-      correctionInstructionsFor(settings.correctionModel).core.includes("<code_names>")
+      context.codeNameRoot && (await cleanupReadsCodeNames(settings.correctionModel))
         ? await readCodeNames(
             context.codeNameRoot,
             [...context.repositoryNames, ...(await context.diffNames)],
@@ -2911,7 +2999,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       signal?: AbortSignal;
     } = {}
   ): Promise<CorrectReply> => {
-    const svc = (correctionService ??= new VoiceCorrectionService());
     // The request is its passage's alone. Only the view that sent it going
     // away cancels it, since the reply would reach no one: no session starting
     // or ending, the passage's own included, ever does.
@@ -2925,7 +3012,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (signal?.aborted) lifetime.abort();
     signal?.addEventListener("abort", cancel, { once: true });
     try {
-      const prepared = await (options.prepared ?? prepareCleanup(ctx, request, settings));
+      const [svc, prepared] = await Promise.all([
+        getCorrectionService(),
+        options.prepared ?? prepareCleanup(ctx, request, settings),
+      ]);
       if (lifetime.signal.aborted) {
         return {
           action: "no_change",
@@ -3004,16 +3094,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     request: VoiceInputRewritePayload,
     settings: VoiceInputSettings
   ): Promise<VoiceRewriteOutcome> => {
-    if (!correctionService) {
-      correctionService = new VoiceCorrectionService();
-    }
+    const correction = await getCorrectionService();
     const hostPane = hostPaneOf(ctx.projectId);
     const projectInfo = hostPane
       ? projectInfoOf(
           await readHostPaneProject(hostPane, { timeoutMs: HOST_PROJECT_READ_BUDGET_MS })
         )
       : getProjectInfo(ctx.projectId);
-    return correctionService.rewrite(request, {
+    return correction.rewrite(request, {
       model: settings.correctionModel,
       apiKey: cleanupApiKey(settings),
       customDictionary: dictionaryTerms(settings.dictionary),
@@ -3026,6 +3114,50 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleGetLastTerms = async (): Promise<LastDictationTerms | null> => lastDictationTerms;
+
+  // The on-device model's files. Loaded on first use, so a user who never
+  // picks it pays nothing; every view hears its status from then on.
+  let stopLocalModelBroadcast: (() => void) | null = null;
+  const localSpeech = async () => {
+    const mod = await import("../../services/voice/localSpeech.js");
+    if (!disposed) {
+      stopLocalModelBroadcast ??= mod.onLocalSpeechModelStatus((status) => {
+        for (const wc of getAllAppWebContents()) {
+          if (wc.isDestroyed()) continue;
+          try {
+            wc.send(CHANNELS.VOICE_INPUT_LOCAL_MODEL_STATUS, status);
+          } catch {
+            // A view being torn down misses it; a new one pulls the current status.
+          }
+        }
+      });
+    }
+    return mod;
+  };
+  const handleGetLocalModel = async (): Promise<LocalSpeechModelStatus> =>
+    (await localSpeech()).getLocalSpeechModels().check();
+  const handleDownloadLocalModel = async (): Promise<LocalSpeechModelStatus> => {
+    const models = (await localSpeech()).getLocalSpeechModels();
+    // Minutes long: progress and the outcome arrive on the status push.
+    void models.download();
+    return models.status();
+  };
+  const handleCancelLocalModel = async (): Promise<LocalSpeechModelStatus> => {
+    const models = (await localSpeech()).getLocalSpeechModels();
+    await models.cancel();
+    return models.status();
+  };
+  const handleRemoveLocalModel = async (): Promise<LocalSpeechModelStatus> => {
+    if (liveSession || drainingSession) {
+      throw new AppError({
+        code: "VALIDATION",
+        message: "Stop dictating before removing the on-device model.",
+      });
+    }
+    const mod = await localSpeech();
+    await mod.removeLocalSpeechModel();
+    return mod.getLocalSpeechModels().status();
+  };
 
   const sessionNamespace = defineIpcNamespace({
     name: "voiceInput",
@@ -3079,6 +3211,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         VOICE_INPUT_METHOD_CHANNELS.restartReplacedApp,
         handleRestartReplacedApp
       ),
+      getLocalModel: op(VOICE_INPUT_METHOD_CHANNELS.getLocalModel, handleGetLocalModel),
+      downloadLocalModel: op(
+        VOICE_INPUT_METHOD_CHANNELS.downloadLocalModel,
+        handleDownloadLocalModel
+      ),
+      cancelLocalModel: op(VOICE_INPUT_METHOD_CHANNELS.cancelLocalModel, handleCancelLocalModel),
+      removeLocalModel: op(VOICE_INPUT_METHOD_CHANNELS.removeLocalModel, handleRemoveLocalModel),
       prefetchCorrections: opValidated(
         VOICE_INPUT_METHOD_CHANNELS.prefetchCorrections,
         VoiceInputPrefetchCorrectionsSchema,
@@ -3113,6 +3252,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (liveSession) endSession(liveSession, "cancelled");
     if (drainingSession) endSession(drainingSession, "cancelled");
     disposed = true;
+    stopLocalModelBroadcast?.();
+    stopLocalModelBroadcast = null;
     for (const release of [...requestHolds]) release();
     requestHolds.clear();
     for (const end of [...cleanupHandoffs]) end();

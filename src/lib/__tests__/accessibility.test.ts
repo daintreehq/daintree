@@ -1,10 +1,19 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { closeAndAnnounce, restoreFocusTo, TABBABLE_SELECTOR } from "../accessibility";
+import {
+  closeAndAnnounce,
+  handFocusOff,
+  restoreFocusTo,
+  TABBABLE_SELECTOR,
+} from "../accessibility";
 import {
   useAnnouncerStore,
   _resetAnnouncerDeliveryForTests,
 } from "@/store/accessibilityAnnouncerStore";
+import {
+  _resetTooltipFocusSuppressionForTests,
+  isTooltipSuppressedForElement,
+} from "@/lib/tooltipFocusSuppression";
 
 interface DocumentWithAriaNotify extends Document {
   ariaNotify?: (message: string, options?: { priority?: "normal" | "high" }) => void;
@@ -170,6 +179,83 @@ describe("restoreFocusTo", () => {
 
     expect(() => restoreFocusTo(removed)).not.toThrow();
     expect(document.activeElement).toBe(document.body);
+  });
+});
+
+describe("handFocusOff", () => {
+  function addButton(label: string, parent: HTMLElement = document.body): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.textContent = label;
+    parent.appendChild(button);
+    return button;
+  }
+
+  // Only the ring the departing control actually showed decides the handoff.
+  function showingRing(from: HTMLElement, ring: boolean) {
+    vi.spyOn(from, "matches").mockImplementation((selector) =>
+      selector === ":focus-visible" ? ring : !ring
+    );
+  }
+
+  afterEach(() => {
+    _resetTooltipFocusSuppressionForTests();
+    document.body.innerHTML = "";
+  });
+
+  it("keeps the ring when the control losing focus was showing one", () => {
+    const from = addButton("from");
+    const target = addButton("target");
+    from.focus();
+    showingRing(from, true);
+    const focus = vi.spyOn(target, "focus");
+
+    handFocusOff(from, target);
+
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(document.activeElement).toBe(target);
+  });
+
+  // A mouse user who clicked the control never saw a ring, and the handoff
+  // shouldn't paint one either.
+  it("hands focus over ringless after a pointer press", () => {
+    const from = addButton("from");
+    const target = addButton("target");
+    from.focus();
+    showingRing(from, false);
+    const focus = vi.spyOn(target, "focus");
+
+    handFocusOff(from, target);
+
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+    expect(document.activeElement).toBe(target);
+  });
+
+  it("keeps the receiving element's tooltip from opening on the handoff", () => {
+    const from = addButton("from");
+    const target = addButton("target");
+    from.focus();
+
+    handFocusOff(from, target);
+
+    expect(isTooltipSuppressedForElement(target)).toBe(true);
+  });
+
+  it("falls back to the app shell, ringless still, when no candidate survives", () => {
+    const root = document.createElement("div");
+    root.id = "root";
+    document.body.appendChild(root);
+    const shellButton = addButton("shell", root);
+    const from = addButton("from");
+    const removed = addButton("removed");
+    removed.remove();
+    from.focus();
+    showingRing(from, false);
+    const focus = vi.spyOn(shellButton, "focus");
+
+    handFocusOff(from, removed, null);
+
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+    expect(document.activeElement).toBe(shellButton);
   });
 });
 

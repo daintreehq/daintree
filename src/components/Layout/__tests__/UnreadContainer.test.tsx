@@ -20,7 +20,7 @@ let mockTerminals: PtyPanelData[] = [];
 let mockTabGroups = new Map<string, TabGroup>();
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
-  useUnreadTerminals: () => mockTerminals,
+  useFleetBandTerminals: () => mockTerminals,
 }));
 
 let mockPluginRows: PluginAttentionRow[] = [];

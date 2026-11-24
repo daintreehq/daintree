@@ -488,6 +488,54 @@ describe("SessionStore.revokeSession", () => {
   });
 });
 
+describe("SessionStore.revokeSessionsByCredential (#17213)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  it("ends every live session the credential opened, on both transports, and nothing else", () => {
+    const sse = fakeSseSession();
+    const http = fakeHttpSession();
+    const other = fakeHttpSession();
+    store.sessions.set("sse", sse);
+    store.httpSessions.set("http", http);
+    store.httpSessions.set("other", other);
+    store.bindSessionCredential("sse", "old-key");
+    store.bindSessionCredential("http", "old-key");
+    store.bindSessionCredential("other", "pane-token");
+    store.sessionOriginMap.set("http", "external");
+    store.sessionWorkspaceMap.set("http", "ws-1");
+
+    expect(store.revokeSessionsByCredential("old-key")).toBe(2);
+
+    expect(sse.transport.close).toHaveBeenCalled();
+    expect(http.transport.close).toHaveBeenCalled();
+    expect(other.transport.close).not.toHaveBeenCalled();
+    expect([...store.sessions.keys(), ...store.httpSessions.keys()]).toEqual(["other"]);
+    expect([...store.sessionCredentialMap.keys()]).toEqual(["other"]);
+    expect(store.hasLiveWorkspaceBinding("ws-1")).toBe(false);
+  });
+
+  it("revokes nothing for a credential no session holds, and is safe to repeat", () => {
+    const session = fakeSseSession();
+    store.sessions.set("s", session);
+    store.bindSessionCredential("s", "current-key");
+
+    expect(store.revokeSessionsByCredential("old-key")).toBe(0);
+    expect(store.revokeSessionsByCredential("current-key")).toBe(1);
+    expect(store.revokeSessionsByCredential("current-key")).toBe(0);
+    expect(session.transport.close).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("SessionStore dropAbuseState wiring (#8467)", () => {
   let dropAbuseSpy: ReturnType<typeof vi.fn<(sessionId: string) => void>>;
   let store: SessionStore;
@@ -1085,6 +1133,38 @@ describe("SessionStore.nextFigureNumber (#9828)", () => {
     store.sessionHelpIdMap.delete("transport-c");
 
     expect(store.figureCounters.has("help-c")).toBe(false);
+  });
+
+  it("keeps the count while another transport of the same help session is live", () => {
+    // `daintree call` from the Assistant's pane opens and closes its own
+    // transport on the help bearer; the Assistant's next figure must not
+    // restart at 1 when it goes.
+    store.httpSessions.set("assistant", fakeHttpSession());
+    store.sessionHelpIdMap.set("assistant", "help-s");
+    store.httpSessions.set("shell-call", fakeHttpSession());
+    store.sessionHelpIdMap.set("shell-call", "help-s");
+    store.nextFigureNumber("help-s");
+    store.nextFigureNumber("help-s");
+
+    store.retireSession("shell-call", "session-ended");
+
+    expect(store.nextFigureNumber("help-s")).toBe(3);
+
+    store.retireSession("assistant", "session-ended");
+
+    expect(store.figureCounters.has("help-s")).toBe(false);
+  });
+
+  it("doesn't keep the count for a sibling row with no live transport", () => {
+    // A handshake that failed after its help id was filed leaves a row behind.
+    store.httpSessions.set("assistant", fakeHttpSession());
+    store.sessionHelpIdMap.set("assistant", "help-t");
+    store.sessionHelpIdMap.set("never-filed", "help-t");
+    store.nextFigureNumber("help-t");
+
+    store.retireSession("assistant", "session-ended");
+
+    expect(store.figureCounters.has("help-t")).toBe(false);
   });
 
   it("clears all counters on drain()", () => {

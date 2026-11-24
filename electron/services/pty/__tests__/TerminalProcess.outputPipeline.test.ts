@@ -451,6 +451,267 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
   });
 });
 
+describe("TerminalProcess update-installed observation (#17905)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+  });
+
+  const unsubscribers: Array<() => void> = [];
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  function collect() {
+    const seen: Array<Record<string, unknown>> = [];
+    unsubscribers.push(
+      events.on("agent:update-installed-changed", (payload) => seen.push({ ...payload }))
+    );
+    return seen;
+  }
+
+  // Claude's footer on the 80-column pane: hints left, the notice flush right.
+  const footer = (notice = "✔ Update installed · /restart to apply") => {
+    const left = "  ? for shortcuts";
+    return `${left}${" ".repeat(79 - left.length - notice.length)}${notice}\r\n`;
+  };
+
+  function claudeTerminal(updateAgentState = vi.fn()) {
+    const terminal = createTerminal({ launchAgentId: "claude" }, undefined, {
+      updateAgentState,
+    });
+    terminal.getInfo().detectedAgentId = "claude";
+    terminal.getInfo().agentState = "working";
+    return terminal;
+  }
+
+  it("records the footer on a working Claude pane without touching its state", async () => {
+    const seen = collect();
+    const updateAgentState = vi.fn();
+    const terminal = claudeTerminal(updateAgentState);
+
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    const observedAt = seen[0]?.timestamp;
+    expect(seen).toEqual([
+      {
+        terminalId: "t1",
+        updateInstalled: { observedAt, namesRestart: true },
+        timestamp: observedAt,
+      },
+    ]);
+    expect(terminal.getInfo().updateInstalled).toEqual({ observedAt, namesRestart: true });
+    expect(terminal.getInfo().agentState).toBe("working");
+    expect(updateAgentState).not.toHaveBeenCalled();
+
+    // Repaints with the footer still up are the same observation.
+    ptyOnDataCallback!("more output\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("reads which offer the footer made", async () => {
+    const seen = collect();
+    const terminal = claudeTerminal();
+
+    ptyOnDataCallback!(footer("✔ Update installed · Restart to update"));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getInfo().updateInstalled?.namesRestart).toBe(false);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it.each([
+    ["a pane launched as Claude before detection names it", "claude", undefined],
+    ["a pane whose detected agent is Codex", "codex", "codex"],
+    ["a plain shell", undefined, undefined],
+  ] as const)("ignores the footer on %s", async (_name, launchAgentId, detectedAgentId) => {
+    const seen = collect();
+    const terminal = createTerminal(launchAgentId ? { launchAgentId } : undefined);
+    if (detectedAgentId) terminal.getInfo().detectedAgentId = detectedAgentId;
+
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(seen).toEqual([]);
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+
+    terminal.dispose();
+  });
+
+  it("clears on the first frame after another CLI takes the pane", async () => {
+    const seen = collect();
+    const terminal = claudeTerminal();
+
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    terminal.getInfo().detectedAgentId = "codex";
+    ptyOnDataCallback!("codex output\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)).toEqual({
+      terminalId: "t1",
+      updateInstalled: null,
+      timestamp: expect.any(Number),
+    });
+
+    terminal.dispose();
+  });
+
+  const detect = (terminal: TerminalProcess, agentType: "claude" | "codex") =>
+    terminal.handleAgentDetection(
+      { detectionState: "agent", detected: true, agentType, processName: agentType },
+      terminal.getInfo().spawnedAt
+    );
+
+  it("reads a footer already on screen the moment Claude is first detected", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    // Claude's screen, drawn before detection caught up, then nothing more.
+    ptyOnDataCallback!(`${"─".repeat(79)}\r\n❯ \r\n${"─".repeat(79)}\r\n${footer()}`);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([]);
+
+    detect(terminal, "claude");
+
+    expect(terminal.getInfo().updateInstalled?.namesRestart).toBe(true);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("doesn't credit footer text a shell left on screen to a Claude detected before it draws", async () => {
+    const seen = collect();
+    const terminal = createTerminal();
+
+    ptyOnDataCallback!(
+      "$ tail notes.txt\r\n  ✔ Update installed · /restart to apply\r\n$ claude\r\n"
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    detect(terminal, "claude");
+
+    expect(seen).toEqual([]);
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+
+    terminal.dispose();
+  });
+
+  it("keeps the last run's fence through a first-detection screen it can't read", async () => {
+    const terminal = claudeTerminal();
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    // Claude exits; its footer stays up above the shell prompt.
+    terminal.getInfo().detectedAgentId = undefined;
+    terminal.getInfo().launchAgentId = undefined;
+    ptyOnDataCallback!("$ claude\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(true);
+
+    // The next Claude is detected before it draws: no composer in view.
+    detect(terminal, "claude");
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(true);
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+
+    terminal.dispose();
+  });
+
+  it("clears the moment another agent is detected, with no frame after", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    detect(terminal, "claude");
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    detect(terminal, "codex");
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)?.updateInstalled).toBeNull();
+
+    terminal.dispose();
+  });
+
+  it("clears when an idle Claude pane is killed", async () => {
+    const seen = collect();
+    const terminal = claudeTerminal();
+    terminal.getInfo().agentState = "idle";
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    terminal.kill();
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)?.updateInstalled).toBeNull();
+
+    terminal.dispose();
+  });
+
+  it("lets the next run read its own footer once the shell has scrolled the old one away", async () => {
+    const terminal = claudeTerminal();
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+
+    // Claude exits to the shell, which keeps drawing under the old footer.
+    terminal.getInfo().detectedAgentId = undefined;
+    terminal.getInfo().launchAgentId = undefined;
+    ptyOnDataCallback!("$ ls\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(true);
+
+    ptyOnDataCallback!("\x1b[2J\x1b[H$ clear\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().updateFooterSighting?.fenced).toBe(false);
+
+    terminal.dispose();
+  });
+
+  it("clears when a detection pass names a different Claude process", async () => {
+    const seen = collect();
+    const terminal = claudeTerminal();
+
+    ptyOnDataCallback!(footer());
+    await vi.advanceTimersByTimeAsync(250);
+    const spawnedAt = terminal.getInfo().spawnedAt;
+    terminal.handleAgentProcessObservation(
+      { agentType: "claude", command: "claude", pid: 4242 },
+      spawnedAt
+    );
+    terminal.handleAgentProcessObservation(
+      { agentType: "claude", command: "claude", pid: 4242 },
+      spawnedAt
+    );
+    expect(terminal.getInfo().updateInstalled).toBeDefined();
+
+    terminal.handleAgentProcessObservation(
+      { agentType: "claude", command: "claude", pid: 5151 },
+      spawnedAt
+    );
+
+    expect(terminal.getInfo().updateInstalled).toBeUndefined();
+    expect(seen.at(-1)?.updateInstalled).toBeNull();
+
+    terminal.dispose();
+  });
+});
+
 describe("TerminalProcess Claude usage observation (#15727)", () => {
   // 10am on Nov 2 in Sydney.
   const now = Date.UTC(2026, 10, 1, 23, 0);
@@ -1029,8 +1290,32 @@ describe("TerminalProcess background output streaming", () => {
     ptyOnDataCallback!("beta");
 
     expect(emitData).toHaveBeenCalledTimes(2);
-    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "alpha", 5);
-    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "beta", 9);
+    expect(emitData).toHaveBeenNthCalledWith(
+      1,
+      "t1",
+      "alpha",
+      5,
+      new TextEncoder().encode("alpha")
+    );
+    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "beta", 9, new TextEncoder().encode("beta"));
+
+    terminal.dispose();
+  });
+
+  it("offsets the stream by each chunk's UTF-8 bytes and hands those bytes on", () => {
+    const emitData = vi.fn();
+    const terminal = createTerminal(undefined, { emitData });
+    const chunks = ["héllo │ ", "😀", "lone \ud83d half", "\ufeffbom"];
+
+    let offset = 0;
+    for (const chunk of chunks) ptyOnDataCallback!(chunk);
+
+    chunks.forEach((chunk, index) => {
+      offset += Buffer.byteLength(chunk, "utf8");
+      const [id, data, streamEnd, encoded] = emitData.mock.calls[index];
+      expect([id, data, streamEnd]).toEqual(["t1", chunk, offset]);
+      expect(Buffer.from(encoded as Uint8Array).equals(Buffer.from(chunk, "utf8"))).toBe(true);
+    });
 
     terminal.dispose();
   });
@@ -1048,8 +1333,20 @@ describe("TerminalProcess background output streaming", () => {
     // No deferral: each background chunk reaches the renderer fan-out immediately,
     // exactly like a foreground chunk. The OSC 9;4 heartbeat also stays per-chunk.
     expect(emitData).toHaveBeenCalledTimes(2);
-    expect(emitData).toHaveBeenNthCalledWith(1, "t1", "chunk-a", 7);
-    expect(emitData).toHaveBeenNthCalledWith(2, "t1", "chunk-b", 14);
+    expect(emitData).toHaveBeenNthCalledWith(
+      1,
+      "t1",
+      "chunk-a",
+      7,
+      new TextEncoder().encode("chunk-a")
+    );
+    expect(emitData).toHaveBeenNthCalledWith(
+      2,
+      "t1",
+      "chunk-b",
+      14,
+      new TextEncoder().encode("chunk-b")
+    );
     expect(feed).toHaveBeenCalledTimes(2);
 
     // Advancing timers must NOT fan out any additional (coalesced) batch — there
@@ -1259,5 +1556,496 @@ describe("TerminalProcess in-thread bracketed paste (#15629)", () => {
 
     terminal.dispose();
     expect(terminal.isBracketedPasteMode()).toBe(false);
+  });
+});
+
+describe("TerminalProcess Codex limit reset (#17906)", () => {
+  // 10:00 in New York (EST, UTC-5), where the pane's Codex runs.
+  const seenAt = Date.UTC(2026, 10, 19, 15, 0);
+  const env = { TZ: "America/New_York" };
+  const banner = "■ You’ve hit your usage limit. Try again at 3:40 PM.\r\n";
+  const resetMinute = Date.UTC(2026, 10, 19, 20, 40);
+  const weeklyReset = Date.UTC(2026, 10, 21, 20, 40);
+  // Codex ignores TZ on Windows, so the fixture's zone only holds elsewhere.
+  const itWithTz = it.skipIf(process.platform === "win32");
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(seenAt);
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  const codexPane = () =>
+    createTerminal({ launchAgentId: "codex" }, undefined, undefined, {
+      ...defaultSpawnContext(),
+      env,
+    });
+  const stampOf = (terminal: TerminalProcess) => {
+    const answer = terminal.answerCodexLimit({}, terminal.analysisObservedSince());
+    if ("reset" in answer) throw new Error(`expected a stamp, got ${JSON.stringify(answer)}`);
+    return answer.stamp;
+  };
+  const codexBucket = (...windows: Array<{ usedPercent: number; resetsAt: number | null }>) => ({
+    limitId: "codex",
+    limitName: null,
+    windows,
+    unreadable: false,
+  });
+
+  itWithTz("answers from the banner alone, with no text leaving", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const stamp = stampOf(terminal);
+    const answer = terminal.answerCodexLimit(
+      { ...stamp, evidence: null },
+      terminal.analysisObservedSince()
+    );
+    expect(answer).toEqual({
+      reset: {
+        status: "known",
+        resetsAt: resetMinute + 60_000,
+        precision: "minute",
+        source: "banner",
+        observedAt: stamp.observedAt,
+      },
+      // The sighting it is about, so a wait can be tied to it (#17909).
+      stamp,
+    });
+    expect(JSON.stringify(answer)).not.toMatch(/usage limit|PM/);
+    terminal.dispose();
+  });
+
+  itWithTz(
+    "keeps yesterday's stop as yesterday's through an idle night and a repaint",
+    async () => {
+      const terminal = codexPane();
+      ptyOnDataCallback!(banner);
+      await vi.advanceTimersByTimeAsync(250);
+      const sighted = stampOf(terminal);
+
+      // Nothing all night, then a repaint after local midnight passes through a
+      // blank and a half-drawn frame on its way back.
+      vi.setSystemTime(Date.UTC(2026, 10, 20, 5, 30));
+      ptyOnDataCallback!("\x1b[2J\x1b[H");
+      await vi.advanceTimersByTimeAsync(250);
+      const since = terminal.analysisObservedSince();
+      expect(terminal.answerCodexLimit({}, since)).toEqual({
+        reset: { status: "unknown", reason: "no-banner" },
+      });
+      ptyOnDataCallback!("■ You’ve hit your usage limi");
+      await vi.advanceTimersByTimeAsync(250);
+      expect(terminal.answerCodexLimit({}, since)).toEqual({
+        reset: { status: "unknown", reason: "unreadable-banner" },
+      });
+      ptyOnDataCallback!("t. Try again at 3:40 PM.\r\n");
+      await vi.advanceTimersByTimeAsync(250);
+
+      // Still Thursday's 3:40 PM, long passed: never a known Friday 3:40 PM.
+      expect(terminal.answerCodexLimit({ ...sighted, evidence: null }, since)).toEqual({
+        reset: { status: "unknown", reason: "late-reading", observedAt: sighted.observedAt },
+        stamp: sighted,
+      });
+      terminal.dispose();
+    }
+  );
+
+  itWithTz("reads the same banner back after a prompt as a new stop", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const first = stampOf(terminal);
+    ptyOnDataCallback!("\x1b[2J\x1b[H");
+    await vi.advanceTimersByTimeAsync(250);
+    (
+      terminal as unknown as { terminalInfo: { lastTypedInputAt: number } }
+    ).terminalInfo.lastTypedInputAt = Date.now();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(stampOf(terminal).seq).toBe(first.seq + 1);
+    terminal.dispose();
+  });
+
+  itWithTz("answers from a prompt reading, and won't from a late one that can't tell", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const stamp = stampOf(terminal);
+    const since = terminal.analysisObservedSince();
+    const reading = (requestedAt: number) => ({
+      requestedAt,
+      receivedAt: requestedAt + 1_000,
+      buckets: [
+        codexBucket(
+          { usedPercent: 100, resetsAt: resetMinute + 42_000 },
+          { usedPercent: 100, resetsAt: weeklyReset }
+        ),
+      ],
+    });
+    expect(
+      terminal.answerCodexLimit({ ...stamp, evidence: reading(Date.now()) }, since)
+    ).toMatchObject({ reset: { status: "known", resetsAt: weeklyReset, source: "quota" } });
+
+    const late = resetMinute + 5 * 60_000;
+    vi.setSystemTime(late);
+    expect(terminal.answerCodexLimit({ ...stamp, evidence: reading(late) }, since)).toMatchObject({
+      reset: { status: "unknown", reason: "late-reading" },
+    });
+    // Asked afresh that late, it answers without asking for a reading at all.
+    expect(terminal.answerCodexLimit({}, since)).toMatchObject({
+      reset: { status: "unknown", reason: "late-reading" },
+    });
+    terminal.dispose();
+  });
+
+  itWithTz("starts a new sighting once the banner was gone past a repaint", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const first = stampOf(terminal);
+    ptyOnDataCallback!("\x1b[2J\x1b[H");
+    await vi.advanceTimersByTimeAsync(10_000);
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const second = stampOf(terminal);
+    expect(second.seq).toBe(first.seq + 1);
+    expect(second.observedAt).toBeGreaterThan(first.observedAt + 10_000);
+    terminal.dispose();
+  });
+
+  itWithTz("offers the evening before for a banner half-drawn across midnight", async () => {
+    vi.setSystemTime(Date.UTC(2026, 10, 20, 4, 58, 30));
+    const terminal = codexPane();
+    ptyOnDataCallback!("• Working\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    vi.setSystemTime(Date.UTC(2026, 10, 20, 5, 0, 10));
+    ptyOnDataCallback!("■ You’ve hit your usage limit.");
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!(" Try again at 11:59 PM.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    // Tonight's 11:59 PM, or last night's, which has passed: it can't be told.
+    expect(terminal.answerCodexLimit({}, terminal.analysisObservedSince())).toMatchObject({
+      reset: { status: "unknown", reason: "ambiguous-time" },
+    });
+    terminal.dispose();
+  });
+
+  it("answers for its own process and agent run only", async () => {
+    const replaced = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const replacedStamp = stampOf(replaced);
+    replaced.dispose();
+
+    const terminal = codexPane();
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    const stamp = stampOf(terminal);
+    // A replacement counts from the same sequence; only the run tells them apart.
+    expect(stamp.seq).toBe(replacedStamp.seq);
+    expect(stamp.run).not.toBe(replacedStamp.run);
+    const since = terminal.analysisObservedSince();
+
+    expect(
+      terminal.answerCodexLimit({ seq: stamp.seq, run: "another-pane", evidence: null }, since)
+    ).toEqual({ reset: { status: "unknown", reason: "banner-changed" } });
+    expect(
+      terminal.answerCodexLimit({ ...stamp, seq: stamp.seq + 1, evidence: null }, since)
+    ).toEqual({ reset: { status: "unknown", reason: "banner-changed" } });
+    expect(terminal.answerCodexLimit({}, null)).toEqual({
+      reset: { status: "unknown", reason: "not-observed" },
+    });
+    expect(terminal.answerCodexLimit({}, (since ?? 0) + 1)).toEqual({
+      reset: { status: "unknown", reason: "not-observed" },
+    });
+
+    // Another Codex took over the pane before any look at its screen.
+    (
+      terminal as unknown as { terminalInfo: { agentIncarnation: number } }
+    ).terminalInfo.agentIncarnation = 1;
+    expect(terminal.answerCodexLimit({}, since)).toEqual({
+      reset: { status: "unknown", reason: "no-banner" },
+    });
+    terminal.dispose();
+  });
+
+  it("answers a credit stop outright and stops answering once the banner is gone", async () => {
+    const terminal = codexPane();
+    ptyOnDataCallback!("■ Your workspace is out of credits. Add credits to continue.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    const since = terminal.analysisObservedSince();
+    expect(terminal.answerCodexLimit({}, since)).toMatchObject({
+      reset: { status: "unknown", reason: "no-reset" },
+    });
+
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.answerCodexLimit({}, since)).toEqual({
+      reset: { status: "unknown", reason: "no-banner" },
+    });
+    terminal.dispose();
+  });
+
+  it("reads no Codex banner in another agent's pane", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    ptyOnDataCallback!(banner);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.answerCodexLimit({}, terminal.analysisObservedSince())).toEqual({
+      reset: { status: "unknown", reason: "no-banner" },
+    });
+    terminal.dispose();
+  });
+});
+
+describe("TerminalProcess continuing at a Codex limit's reset (#17909)", () => {
+  const unsubscribers: Array<() => void> = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 10, 19, 15, 0));
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  function collect() {
+    const stops: Array<Record<string, unknown>> = [];
+    const offers: unknown[] = [];
+    unsubscribers.push(
+      events.on("agent:codex-limit-stopped", (payload) => stops.push({ ...payload })),
+      events.on("agent:fallback-triggered", (payload) => offers.push(payload))
+    );
+    return { stops, offers };
+  }
+
+  const BANNER = "■ You’ve hit your usage limit. Try again at 3:40 PM.";
+  /** Codex 0.170 at its stop: the banner, then the composer's tinted band and its footer. */
+  const stopScreen = (footer = "  ? for shortcuts") =>
+    "\x1b[?2004h\x1b[2J\x1b[H• Ran the tests.\r\n\r\n" +
+    `${BANNER}\r\n\r\n` +
+    "\x1b[48;2;30;30;30m\x1b[K\r\n" +
+    "\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[22m\x1b[K\r\n" +
+    "\x1b[K\x1b[0m\r\n" +
+    footer;
+
+  type Internals = {
+    terminalInfo: { ptyProcess: IPty; agentState?: string; waitingReason?: string };
+  };
+  const infoOf = (terminal: TerminalProcess) => (terminal as unknown as Internals).terminalInfo;
+
+  async function stoppedPane({ armed = true, footer }: { armed?: boolean; footer?: string } = {}) {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "codex" });
+    if (armed) terminal.setCodexLimitContinueArmed(true);
+    ptyOnDataCallback!(stopScreen(footer));
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    const write = vi.spyOn(infoOf(terminal).ptyProcess, "write");
+    const typed = () => write.mock.calls.map(([data]) => data).join("");
+    return { terminal, seen, typed };
+  }
+
+  const stopOf = (seen: { stops: Array<Record<string, unknown>> }) => {
+    const { run, seq } = seen.stops[0] as { run: string; seq: number };
+    return { run, seq };
+  };
+
+  async function continueAt(terminal: TerminalProcess, stop: { run: string; seq: number }) {
+    const result = terminal.continueAtCodexLimit(stop);
+    await vi.advanceTimersByTimeAsync(2_000);
+    return result;
+  }
+
+  it("reports an armed pane's settled stop once, as its process and sighting alone", async () => {
+    const { terminal, seen } = await stoppedPane();
+    expect(seen.stops).toEqual([
+      { terminalId: "t1", run: expect.any(String), seq: 1, timestamp: expect.any(Number) },
+    ]);
+    // Sitting there, or repainted, is the same stop.
+    ptyOnDataCallback!(stopScreen());
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(seen.stops).toHaveLength(1);
+    // A pane launched with no preset never offers a fallback.
+    expect(seen.offers).toEqual([]);
+    terminal.dispose();
+  });
+
+  it("reports nothing for an unarmed pane, and the stop already on screen once armed", async () => {
+    const { terminal, seen } = await stoppedPane({ armed: false });
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+    expect(seen.stops).toEqual([]);
+
+    terminal.setCodexLimitContinueArmed(true);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen.stops).toHaveLength(1);
+    terminal.dispose();
+  });
+
+  it("types `continue` into a pane still where its limit left it", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "continued",
+      line: "continue",
+    });
+    expect(typed()).toBe("continue\r");
+    terminal.dispose();
+  });
+
+  it("resumes a /goal run whose footer says it hit the limit", async () => {
+    const { terminal, seen, typed } = await stoppedPane({
+      footer: "  Goal hit usage limits (/goal resume)",
+    });
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "continued",
+      line: "/goal resume",
+    });
+    expect(typed()).toBe("/goal resume\r");
+    terminal.dispose();
+  });
+
+  it("types nothing after any input since the stop", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    terminal.write("x");
+    terminal.write("\x7f");
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).not.toContain("continue");
+    terminal.dispose();
+  });
+
+  it("counts an Enter alone, sent through the input lane, as input since the stop", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    terminal.submit("\r");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).not.toContain("continue");
+    terminal.dispose();
+  });
+
+  it("keeps what happened since the stop when the same banner comes back after a while", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    // A transcript opened over the stop for a while, then closed.
+    terminal.write("\x14");
+    ptyOnDataCallback!("\x1b[2J\x1b[H  Transcript\r\n");
+    await vi.advanceTimersByTimeAsync(10_000);
+    terminal.write("q");
+    ptyOnDataCallback!(stopScreen());
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    expect(seen.stops).toHaveLength(2);
+    const redisplayed = seen.stops[1] as { run: string; seq: number };
+    expect(await continueAt(terminal, { run: redisplayed.run, seq: redisplayed.seq })).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).toBe("\x14q");
+    terminal.dispose();
+  });
+
+  it("starts afresh at the same banner when a new turn ran into it", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    terminal.write("try again\r");
+    ptyOnDataCallback!("\x1b[2J\x1b[H› try again\r\n\r\n• Working (2s)\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!(
+      "\x1b[2J\x1b[H› try again\r\n\r\n• Looked at the failing test.\r\n\r\n" +
+        `${BANNER}\r\n\r\n` +
+        "\x1b[48;2;30;30;30m\x1b[K\r\n" +
+        "\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[22m\x1b[K\r\n" +
+        "\x1b[K\x1b[0m\r\n  ? for shortcuts"
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(seen.stops).toHaveLength(2);
+    const next = seen.stops[1] as { run: string; seq: number };
+    expect(await continueAt(terminal, { run: next.run, seq: next.seq })).toEqual({
+      status: "continued",
+      line: "continue",
+    });
+    expect(typed()).toBe("try again\rcontinue\r");
+    terminal.dispose();
+  });
+
+  it("withholds the Enter of a line disarmed while it waits for it", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const result = terminal.continueAtCodexLimit(stopOf(seen));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(typed()).toBe("continue");
+    terminal.setCodexLimitContinueArmed(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await result).toEqual({ status: "skipped", reason: "not-delivered" });
+    expect(typed()).toBe("continue");
+    terminal.dispose();
+  });
+
+  it("refuses a line asked for under an arming that was turned off and on again", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const result = terminal.continueAtCodexLimit(stopOf(seen));
+    terminal.setCodexLimitContinueArmed(false);
+    terminal.setCodexLimitContinueArmed(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await result).toEqual({ status: "skipped", reason: "disarmed" });
+    expect(typed()).toBe("");
+    terminal.dispose();
+  });
+
+  it("types nothing once a choice dialog showed after the stop, though it has gone", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const info = infoOf(terminal);
+    info.agentState = "waiting";
+    info.waitingReason = "approval";
+    ptyOnDataCallback!(stopScreen());
+    await vi.advanceTimersByTimeAsync(250);
+    info.waitingReason = "error";
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "skipped",
+      reason: "dialog-since",
+    });
+    expect(typed()).toBe("");
+    terminal.dispose();
+  });
+
+  it("types nothing for another process's stop, or once disarmed", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    const stop = stopOf(seen);
+    expect(await continueAt(terminal, { ...stop, run: "an-earlier-process" })).toEqual({
+      status: "skipped",
+      reason: "process-changed",
+    });
+    terminal.setCodexLimitContinueArmed(false);
+    expect(await continueAt(terminal, stop)).toEqual({ status: "skipped", reason: "disarmed" });
+    expect(typed()).toBe("");
+    terminal.dispose();
+  });
+
+  it("types nothing once something was printed below the banner", async () => {
+    const { terminal, seen, typed } = await stoppedPane();
+    ptyOnDataCallback!(
+      "\x1b[2J\x1b[H" +
+        `${BANNER}\r\n\r\n• Retrying the request\r\n\r\n` +
+        "\x1b[48;2;30;30;30m\x1b[K\r\n" +
+        "\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[22m\x1b[K\r\n" +
+        "\x1b[K\x1b[0m\r\n  ? for shortcuts"
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    expect(await continueAt(terminal, stopOf(seen))).toEqual({
+      status: "skipped",
+      reason: "banner-not-last",
+    });
+    expect(typed()).toBe("");
+    terminal.dispose();
   });
 });

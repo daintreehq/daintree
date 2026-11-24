@@ -53,6 +53,13 @@ import {
   rebaseCorrectionBaseline,
 } from "@/services/voiceCorrectionLanding";
 import { recordComposerBindings } from "../inputEditorExtensions/composerBindings";
+import {
+  keepComposerRemount,
+  restoreComposerRemount,
+} from "../inputEditorExtensions/composerRemount";
+import { takeComposerSnapshot } from "@/lib/composerRemount";
+import { usePanelStore } from "@/store/panelStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { recordBuiltCompartmentConfig } from "./useCompartmentDriver";
 
 interface UseEditorFactoryParams {
@@ -63,7 +70,6 @@ interface UseEditorFactoryParams {
   draftKeyRef: React.RefObject<string>;
   editorHostRef: React.RefObject<HTMLDivElement | null>;
   editorViewRef: React.RefObject<EditorView | null>;
-  value: string;
   disabled: boolean;
   placeholder: string;
   effectiveTheme: ITheme;
@@ -91,7 +97,7 @@ interface UseEditorFactoryParams {
   keymapHandlersRef: React.RefObject<{
     onEnter: () => boolean;
     onModEnter: () => boolean;
-    onEscape: () => boolean;
+    onEscape: (event?: KeyboardEvent) => boolean;
     onArrowUp: () => boolean;
     onArrowDown: () => boolean;
     onArrowLeft: () => boolean;
@@ -102,6 +108,7 @@ interface UseEditorFactoryParams {
     onPopStash: () => boolean;
     onExpand: () => boolean;
     onHistorySearch: () => boolean;
+    onAutocompleteNote: () => boolean;
   } | null>;
   domEventHandlers: Extension;
   imagePasteExtension: Extension;
@@ -116,7 +123,6 @@ export function useEditorFactory({
   draftKeyRef,
   editorHostRef,
   editorViewRef,
-  value,
   disabled,
   placeholder,
   effectiveTheme,
@@ -129,7 +135,6 @@ export function useEditorFactory({
   filePasteExtension,
   plainPasteKeymap,
 }: UseEditorFactoryParams) {
-  const initialValueRef = useRef(value);
   // Read when a review swaps, not when the editor was built.
   const voiceIdRef = useRef(voiceId);
   useLayoutEffect(() => {
@@ -140,6 +145,14 @@ export function useEditorFactory({
     const host = editorHostRef.current;
     if (!host) return;
     if (editorViewRef.current) return;
+
+    // The draft this editor shows for as long as it lives. A tab switch builds
+    // another editor in the same composer, so the draft is read now, not kept
+    // from its first render, and what this one held is kept for its own draft.
+    const draftKey = draftKeyRef.current;
+    const readDraft = () => useTerminalInputStore.getState().draftInputs.get(draftKey) ?? "";
+    const doc = readDraft();
+    const kept = takeComposerSnapshot(draftKey, doc);
 
     const {
       themeCompartmentRef,
@@ -201,7 +214,7 @@ export function useEditorFactory({
       interimWidgetField,
       dictationFollow,
       voiceCaret,
-      createCaretTracker(() => draftKeyRef.current),
+      createCaretTracker(() => draftKeyRef.current, kept?.caretPublished === true),
       completionBoundary,
       pendingAIField,
       pendingLock,
@@ -215,7 +228,7 @@ export function useEditorFactory({
         createCustomKeymap({
           onEnter: () => keymapHandlersRef.current?.onEnter() ?? false,
           onModEnter: () => keymapHandlersRef.current?.onModEnter() ?? false,
-          onEscape: () => keymapHandlersRef.current?.onEscape() ?? false,
+          onEscape: (event) => keymapHandlersRef.current?.onEscape(event) ?? false,
           onArrowUp: () => keymapHandlersRef.current?.onArrowUp() ?? false,
           onArrowDown: () => keymapHandlersRef.current?.onArrowDown() ?? false,
           onArrowLeft: () => keymapHandlersRef.current?.onArrowLeft() ?? false,
@@ -227,6 +240,7 @@ export function useEditorFactory({
           onPopStash: () => keymapHandlersRef.current?.onPopStash() ?? false,
           onExpand: () => keymapHandlersRef.current?.onExpand() ?? false,
           onHistorySearch: () => keymapHandlersRef.current?.onHistorySearch() ?? false,
+          onAutocompleteNote: () => keymapHandlersRef.current?.onAutocompleteNote() ?? false,
         })
       ),
       domEventHandlers,
@@ -234,7 +248,8 @@ export function useEditorFactory({
       filePasteExtension,
       plainPasteKeymap,
     ];
-    const state = EditorState.create({ doc: initialValueRef.current, extensions });
+    const created = EditorState.create({ doc, extensions });
+    const state = kept ? restoreComposerRemount(created, kept) : created;
 
     const view = new EditorView({ state, parent: host });
     editorViewRef.current = view;
@@ -253,6 +268,11 @@ export function useEditorFactory({
     });
 
     return () => {
+      // A panel closed to the trash keeps its draft for an undone close, but
+      // not what its composer held: the close lets that go.
+      if (usePanelStore.getState().panelsById[terminalId]?.location !== "trash") {
+        keepComposerRemount(view, draftKey, readDraft());
+      }
       view.destroy();
       editorViewRef.current = null;
     };

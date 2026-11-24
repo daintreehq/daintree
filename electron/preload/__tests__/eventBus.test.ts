@@ -34,6 +34,22 @@ describe("createEventBus", () => {
     expect(second).toEqual([]);
   });
 
+  it("opens the latest Decisions question clicked before the view's host subscribed (#17232)", () => {
+    const reference = (questionId: string) => ({
+      hostId: "host-1",
+      projectId: "project-1",
+      terminalId: "term-1",
+      questionId,
+    });
+    push(ipc, "decisions:open-question", { reference: reference("q-1") });
+    push(ipc, "decisions:open-question", { reference: reference("q-2") });
+
+    const received: unknown[] = [];
+    bus.on("decisions:open-question", (payload) => received.push(payload));
+
+    expect(received).toEqual([{ reference: reference("q-2") }]);
+  });
+
   it("replays every FIFO event in arrival order", () => {
     push(ipc, "plugin:archive-install-intent", { path: "a.dntr" });
     push(ipc, "plugin:archive-install-intent", { path: "b.dntr" });

@@ -1,7 +1,32 @@
 /**
- * Every selectable editor id, in picker display order. The single source of truth:
- * the union, the `setConfig` allowlist, and the picker's ordering all derive from
- * it, so a new editor cannot compile into one list and be missing from another.
+ * The JetBrains IDEs, each its own choice, in the order a saved
+ * `LEGACY_JETBRAINS_EDITOR_ID` searches their launchers.
+ */
+export const JETBRAINS_EDITOR_IDS = [
+  "jetbrains-webstorm",
+  "jetbrains-idea",
+  "jetbrains-phpstorm",
+  "jetbrains-pycharm",
+  "jetbrains-goland",
+  "jetbrains-rider",
+  "jetbrains-clion",
+  "jetbrains-datagrip",
+  "jetbrains-rubymine",
+] as const;
+
+export type JetBrainsEditorId = (typeof JETBRAINS_EDITOR_IDS)[number];
+
+/**
+ * Saved before each JetBrains IDE had its own id, when one entry stood for all of
+ * them: it opens whichever is found first. Still read and launched as it always
+ * was, but the picker offers it only while it is the saved choice.
+ */
+export const LEGACY_JETBRAINS_EDITOR_ID = "webstorm";
+
+/**
+ * Every editor id a config can hold, in picker display order. The single source of
+ * truth: the union, the `setConfig` allowlist, and the picker's ordering all derive
+ * from it, so a new editor cannot compile into one list and be missing from another.
  */
 export const KNOWN_EDITOR_IDS = [
   "vscode",
@@ -11,7 +36,8 @@ export const KNOWN_EDITOR_IDS = [
   "antigravity-ide",
   "zed",
   "neovim",
-  "webstorm",
+  LEGACY_JETBRAINS_EDITOR_ID,
+  ...JETBRAINS_EDITOR_IDS,
   "sublime",
   "custom",
 ] as const;
@@ -20,6 +46,26 @@ export type KnownEditorId = (typeof KNOWN_EDITOR_IDS)[number];
 
 export function isKnownEditorId(value: unknown): value is KnownEditorId {
   return typeof value === "string" && (KNOWN_EDITOR_IDS as readonly string[]).includes(value);
+}
+
+/**
+ * Editors that only run inside a terminal, with the program a terminal app
+ * would run for each. Every launch is detached with its streams ignored, so one
+ * of these would start as a process nobody can see (#17441): automatic
+ * selection passes over them, and choosing one explains how to run it through a
+ * terminal app instead.
+ */
+const TERMINAL_ONLY_EDITOR_COMMANDS: ReadonlyMap<KnownEditorId, string> = new Map([
+  ["neovim", "nvim"],
+]);
+
+/**
+ * The program to run in a terminal app, or undefined for an editor that opens
+ * its own window. A Map, so an id read from a settings file can never resolve
+ * to an inherited object member.
+ */
+export function terminalOnlyEditorCommand(id: KnownEditorId): string | undefined {
+  return TERMINAL_ONLY_EDITOR_COMMANDS.get(id);
 }
 
 /** Persisted preference for the user's chosen editor */

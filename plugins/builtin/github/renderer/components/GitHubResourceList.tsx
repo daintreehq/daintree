@@ -41,6 +41,7 @@ import {
   type PRStateFilter,
 } from "../stores/githubFilterStore";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
+import { hasAnyGitHubToken } from "../../shared/enterprise.js";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import type { Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
@@ -296,7 +297,7 @@ export function GitHubResourceList({
   const githubConfigInitialized = useGitHubConfigStore((s) => s.isInitialized);
   const githubConfig = useGitHubConfigStore((s) => s.config);
   const showNoTokenEmptyState =
-    githubConfigInitialized && githubConfig !== null && !githubConfig.hasToken;
+    githubConfigInitialized && githubConfig !== null && !hasAnyGitHubToken(githubConfig);
   const remoteHostName = useRemoteHostName();
 
   // Self-init the GitHub config store so the no-token empty state can render
@@ -674,6 +675,31 @@ export function GitHubResourceList({
   // subtree that owns their effects.
   const isDropdownOpen = useContext(FixedDropdownVisibleContext);
   const rootRef = useRef<HTMLDivElement>(null);
+  // Read by the close-time hand-back below, which Radix runs on a timer after
+  // the commit that closed the menu, where a render-time value would be stale.
+  const isDropdownOpenRef = useRef(isDropdownOpen);
+  useEffect(() => {
+    isDropdownOpenRef.current = isDropdownOpen;
+  }, [isDropdownOpen]);
+
+  /**
+   * Where a closing child menu (a row's actions, view options, select) sends
+   * focus: back to the search field, but only while there is still a panel to
+   * come back to. Radix hands focus back a task after the menu unmounts, which
+   * is after whatever the menu's choice opened has taken it. A new worktree
+   * dialog or a bulk create closes this panel as it opens, and a modal raised
+   * from elsewhere can sit over a panel that stays open under it; either way,
+   * taking focus then pulls the keyboard out of the dialog the user was just
+   * handed.
+   */
+  const returnFocusToSearch = useCallback(() => {
+    if (!isDropdownOpenRef.current) return;
+    const active = document.activeElement;
+    const modal = active instanceof Element ? active.closest('[aria-modal="true"]') : null;
+    if (modal && !rootRef.current?.contains(modal)) return;
+    focusSearchInput();
+  }, [focusSearchInput]);
+
   const wasDropdownOpenRef = useRef(isDropdownOpen);
   useEffect(() => {
     if (isDropdownOpen) return;
@@ -1280,7 +1306,7 @@ export function GitHubResourceList({
               // arrows and Enter dead after every change.
               onCloseAutoFocus={(event: Event) => {
                 event.preventDefault();
-                focusSearchInput();
+                returnFocusToSearch();
               }}
             >
               {/* Each group carries its own aria-label: Radix renders them as
@@ -1369,7 +1395,7 @@ export function GitHubResourceList({
               // row menus do via `onMenuClose`.
               onCloseAutoFocus={(event: Event) => {
                 event.preventDefault();
-                focusSearchInput();
+                returnFocusToSearch();
               }}
             >
               <DropdownMenuLabel>Select</DropdownMenuLabel>
@@ -1679,7 +1705,7 @@ export function GitHubResourceList({
                     onMenuOpenChange={(next: boolean) =>
                       setOpenRowMenuNumber(next ? item.number : null)
                     }
-                    onMenuClose={focusSearchInput}
+                    onMenuClose={returnFocusToSearch}
                     onOpenExternalUrl={handleOpenUrlExternal}
                     isActive={activeIndex === index}
                     onPointerActivate={() => setActiveIndex(index)}

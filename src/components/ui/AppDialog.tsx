@@ -8,18 +8,18 @@ import {
   useId,
   createContext,
   useContext,
-  useSyncExternalStore,
   type CSSProperties,
 } from "react";
 import { InsetSurface } from "@/components/ui/insetSurface";
 import { createPortal } from "react-dom";
-import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
+import { getVisibleTabbableElements } from "@/lib/accessibility";
+import { resolveFocusOpener } from "@/lib/focusOpener";
 import {
-  getVisibleTabbableElements,
-  INTERACTIVE_CONTROL_SELECTOR,
-  TRUNCATION_DISCLOSURE_ATTR,
-} from "@/lib/accessibility";
+  DIALOG_CLOSE_ATTR,
+  firstDialogFocusTarget,
+  focusAfterOverlayCloses,
+} from "@/lib/openModalFocus";
 import { logError } from "@/utils/logger";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
@@ -36,7 +36,6 @@ import {
 import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
 import { publishScrollbarGutter } from "@/lib/scrollbarGutter";
 import { useDockPopoverOpen } from "@/lib/dockPopoverLayer";
-import { usePortalStore } from "@/store/portalStore";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
@@ -85,24 +84,6 @@ type DialogPlacement = "center" | "right" | "left" | "window";
  * identity changes while the dialog is open, e.g. the next row after a delete).
  */
 type RestoreFocusTarget = React.RefObject<HTMLElement | null> | (() => HTMLElement | null);
-
-/**
- * A dialog opened from a menu item is recorded against the menu's trigger. The
- * item's select handler runs before the menu closes, so the item still holds
- * focus when the opener is read — and it unmounts with the menu, which would
- * leave the close nothing to restore to but the app shell.
- */
-function resolveOpener(active: HTMLElement | null): HTMLElement | null {
-  let opener = active;
-  // A submenu is labelled by its sub-trigger, itself an item of the parent menu.
-  for (let depth = 0; depth < 4; depth++) {
-    const triggerId = opener?.closest('[role="menu"]')?.getAttribute("aria-labelledby");
-    const trigger = triggerId ? document.getElementById(triggerId) : null;
-    if (!trigger || trigger === opener) break;
-    opener = trigger;
-  }
-  return opener;
-}
 
 /**
  * Resolve a {@link RestoreFocusTarget} to an element. Tolerates a throwing
@@ -210,13 +191,29 @@ export interface AppDialogProps {
    */
   preferRestoreFocusTo?: boolean;
   /**
+   * False for a close that takes the user somewhere else: the dialog leaves
+   * focus where it is when it finishes closing, and `onCloseComplete` moves it.
+   * Restoring first would send focus back to the opener on its way to the
+   * destination, a second jump the user sees. Read when the close finishes.
+   * The restore it skipped is handed to `onCloseComplete`, for a hand-off that
+   * falls through.
+   */
+  restoreFocusOnClose?: boolean;
+  /**
    * Runs once the dialog has finished closing and handed focus back. A
    * follow-up dialog opened from here captures the control the user was on as
    * its opener; opened any earlier, it would capture a closing control and
    * this dialog's restore would then move focus out behind it. Not called
-   * when the dialog unmounts or reopens before its exit finishes.
+   * when the dialog unmounts or reopens before its exit finishes. After a close
+   * that skipped restoring focus, it is passed that restore to run instead.
    */
-  onCloseComplete?: () => void;
+  onCloseComplete?: (restoreSkippedFocus?: () => void) => void;
+  /**
+   * Keys aimed anywhere in the dialog, the surface itself included, before its
+   * controls see them: for a chord that acts on the whole dialog. React bubbles
+   * a portalled child's keys through here too, so check the target is inside.
+   */
+  onKeyDownCapture?: React.KeyboardEventHandler<HTMLDivElement>;
   "data-testid"?: string;
 }
 
@@ -290,28 +287,6 @@ const PLACEMENT_MOTION: Record<
   window: { starting: "", shown: "", hidden: "" },
 };
 
-// Window dialogs up right now. A dialog opened over one covers the whole window
-// too: the strip it would leave for the Portal holds the window dialog by then,
-// and left unscrimmed there, a click would reach it from behind a modal.
-let windowDialogsUp = 0;
-const windowDialogListeners = new Set<() => void>();
-
-function subscribeWindowDialogs(listener: () => void): () => void {
-  windowDialogListeners.add(listener);
-  return () => {
-    windowDialogListeners.delete(listener);
-  };
-}
-
-function isWindowDialogUp(): boolean {
-  return windowDialogsUp > 0;
-}
-
-function noteWindowDialog(delta: 1 | -1): void {
-  windowDialogsUp += delta;
-  for (const listener of windowDialogListeners) listener();
-}
-
 export function AppDialog({
   isOpen,
   onClose,
@@ -329,7 +304,9 @@ export function AppDialog({
   focusResetKey,
   restoreFocusTo,
   preferRestoreFocusTo = false,
+  restoreFocusOnClose = true,
   onCloseComplete,
+  onKeyDownCapture,
   "data-testid": dataTestId,
 }: AppDialogProps) {
   // A dock popover renders above the standard modal tier, so a dialog opened
@@ -369,34 +346,20 @@ export function AppDialog({
     );
   }, []);
 
-  const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
-    useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
-  );
-  // A window covers the Portal's strip with the rest: the Portal is hidden
-  // while any overlay is up, so there is nothing there to keep in reach.
-  const overWindowDialog = useSyncExternalStore(
-    subscribeWindowDialogs,
-    isWindowDialogUp,
-    isWindowDialogUp
-  );
-  const portalOffset = portalOpen && placement !== "window" && !overWindowDialog ? portalWidth : 0;
-
   // Hold the latest `restoreFocusTo` in a ref so `restoreFocus` stays
   // identity-stable. It feeds the unmount-cleanup effect's dep array; if it
   // changed identity (e.g. a caller passing an inline function), the cleanup
   // would fire mid-open and restore focus prematurely.
   const restoreFocusToRef = useRef(restoreFocusTo);
   const preferRestoreFocusToRef = useRef(preferRestoreFocusTo);
+  const restoreFocusOnCloseRef = useRef(restoreFocusOnClose);
   useEffect(() => {
     restoreFocusToRef.current = restoreFocusTo;
     preferRestoreFocusToRef.current = preferRestoreFocusTo;
-  }, [restoreFocusTo, preferRestoreFocusTo]);
+    restoreFocusOnCloseRef.current = restoreFocusOnClose;
+  }, [restoreFocusTo, preferRestoreFocusTo, restoreFocusOnClose]);
 
-  const restoreFocus = useCallback(() => {
-    const el = previousActiveElement.current;
-    previousActiveElement.current = null;
-    openerCapturedRef.current = false;
-    if (!el) return;
+  const returnFocusTo = useCallback((el: HTMLElement) => {
     // Re-arm the tooltip focus-open suppression right before the focus
     // move: focusing a tooltip trigger re-opens its tooltip synchronously
     // through Radix's focus path, and this runs an exit animation after
@@ -423,21 +386,40 @@ export function AppDialog({
       target.focus();
       if (document.activeElement === target) return;
     }
-    // Otherwise hand focus to the first tabbable child of the app shell rather
-    // than letting it silently fall to <body>.
-    const root = document.getElementById("root");
-    const fallback = root ? getVisibleTabbableElements(root)[0] : undefined;
-    fallback?.focus();
+    // Otherwise into the dialog still open underneath, if any — this one
+    // portals outside `#root`, so the app shell is behind that dialog's
+    // backdrop — and only then the shell.
+    focusAfterOverlayCloses(dialogRef.current);
   }, []);
+
+  // Lets go of this opening's opener, so the next opening records its own.
+  const takeOpener = useCallback(() => {
+    const el = previousActiveElement.current;
+    previousActiveElement.current = null;
+    openerCapturedRef.current = false;
+    return el;
+  }, []);
+
+  const restoreFocus = useCallback(() => {
+    const el = takeOpener();
+    if (el) returnFocusTo(el);
+  }, [takeOpener, returnFocusTo]);
 
   const onCloseCompleteRef = useRef(onCloseComplete);
   useEffect(() => {
     onCloseCompleteRef.current = onCloseComplete;
   }, [onCloseComplete]);
   const handleAnimateOut = useCallback(() => {
-    restoreFocus();
-    onCloseCompleteRef.current?.();
-  }, [restoreFocus]);
+    if (restoreFocusOnCloseRef.current) {
+      restoreFocus();
+      onCloseCompleteRef.current?.();
+      return;
+    }
+    const el = takeOpener();
+    onCloseCompleteRef.current?.(() => {
+      if (el) returnFocusTo(el);
+    });
+  }, [restoreFocus, takeOpener, returnFocusTo]);
 
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen,
@@ -447,13 +429,6 @@ export function AppDialog({
   });
 
   useOverlayState(isOpen || shouldRender);
-
-  const coversWindow = placement === "window" && shouldRender;
-  useEffect(() => {
-    if (!coversWindow) return;
-    noteWindowDialog(1);
-    return () => noteWindowDialog(-1);
-  }, [coversWindow]);
 
   // Re-measure the platform's reserved scrollbar gutter as the dialog opens.
   // It is a UA/OS property, not a stylesheet value — and one the user can
@@ -503,7 +478,15 @@ export function AppDialog({
     focusAtOpenRef.current = active;
     if (openerCapturedRef.current) return;
     openerCapturedRef.current = true;
-    previousActiveElement.current = resolveOpener(active);
+    previousActiveElement.current = resolveFocusOpener(active);
+  }, [isOpen]);
+
+  // Resolved again once this commit's DOM is in: a palette that closes in the
+  // same commit this dialog opens in may not have marked itself closing yet
+  // when the insertion pass read its field.
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    previousActiveElement.current = resolveFocusOpener(previousActiveElement.current);
   }, [isOpen]);
 
   useEffect(() => {
@@ -513,6 +496,14 @@ export function AppDialog({
       initialFocusOwedRef.current = false;
     }
   }, [isOpen, effectiveInitialFocus, restoreFocus]);
+
+  // What the last commit asked for, read by a frame queued before it: React flushes passive effects
+  // in a later task than the commit, so a frame can run in between, and must leave a newer request to
+  // the frame its own effect queues rather than pay it with the focus it was queued for.
+  const committedInitialFocusRef = useRef(effectiveInitialFocus);
+  useLayoutEffect(() => {
+    committedInitialFocusRef.current = effectiveInitialFocus;
+  }, [effectiveInitialFocus]);
 
   const focusResetKeyRef = useRef(focusResetKey);
   useLayoutEffect(() => {
@@ -530,6 +521,12 @@ export function AppDialog({
     const frame = requestAnimationFrame(() => {
       const root = dialogRef.current;
       if (!root || !initialFocusOwedRef.current) return;
+      if (
+        focusResetKeyRef.current !== focusResetKey ||
+        committedInitialFocusRef.current !== effectiveInitialFocus
+      ) {
+        return;
+      }
       initialFocusOwedRef.current = false;
       // A consumer that focuses its own field on open (UpdateCwdDialog,
       // CreateProjectFolderDialog) has already placed focus inside by the time
@@ -547,21 +544,11 @@ export function AppDialog({
       if (effectiveInitialFocus === "cancel" || effectiveInitialFocus === "confirm") {
         target = root.querySelector<HTMLElement>(`[data-confirm-role="${effectiveInitialFocus}"]`);
       }
-      if (!target) {
-        // The header's close button is first in DOM order, but it is the one
-        // control that answers nothing — arriving there makes a reflexive
-        // Enter throw the dialog away. Land on it only when nothing else is
-        // tabbable.
-        // Nor on a truncated label made tabbable only to show its full text:
-        // focus there opens its tooltip the moment the dialog appears.
-        // The marker can also land on a real control (a custom `Button` child
-        // looks non-interactive to the tooltip), so only a non-control counts.
-        const tabbable = getVisibleTabbableElements(root).filter(
-          (el) =>
-            !el.hasAttribute(TRUNCATION_DISCLOSURE_ATTR) || el.matches(INTERACTIVE_CONTROL_SELECTOR)
-        );
-        target = tabbable.find((el) => !el.hasAttribute(DIALOG_CLOSE_ATTR)) ?? tabbable[0] ?? null;
-      }
+      // The header's close button is first in DOM order, but it is the one
+      // control that answers nothing: land on it only when nothing else is
+      // tabbable. A custom `Button` child looks non-interactive to the
+      // truncation tooltip, so its marker can land on a real control.
+      target ??= firstDialogFocusTarget(root);
       if (target) {
         target.focus();
       } else {
@@ -679,6 +666,9 @@ export function AppDialog({
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "Tab" && dialogRef.current) {
+      // Taken by what has focus (the composer accepting a completion): the
+      // browser won't move focus, so there is nothing to wrap.
+      if (e.defaultPrevented) return;
       // Don't interfere if another modal (e.g., a nested dialog portal) has focus
       const activeEl = document.activeElement;
       if (activeEl) {
@@ -772,7 +762,6 @@ export function AppDialog({
           isVisible ? "opacity-100" : "opacity-0"
         )}
         style={{
-          right: portalOffset,
           transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
           // A window's layer is the view itself, so it fades on the view's
           // curves (as the plugin manager does) rather than a scrim's linear
@@ -840,6 +829,7 @@ export function AppDialog({
             } as CSSProperties
           }
           onClick={(e) => e.stopPropagation()}
+          onKeyDownCapture={onKeyDownCapture}
         >
           {/* The tier this dialog actually painted at, so overlays opened
               inside it stack above it when a dock popover promoted it. */}
@@ -912,9 +902,6 @@ function dialogRuleClass(visible: boolean): string {
  * the hang drops there.
  */
 const DIALOG_LEADING_ACTION_HANG = "-ml-4 contrast-more:ml-0 forced-colors:ml-0";
-
-/** Marks the header close button, which initial focus passes over. */
-const DIALOG_CLOSE_ATTR = "data-dialog-close";
 
 // Footer actions announce unavailability with `aria-disabled`, never the native
 // attribute — a natively-disabled button leaves the tab order and refuses focus,
@@ -1179,6 +1166,14 @@ export interface DialogAction {
   intent?: "default" | "destructive";
   /** A leading glyph, sized by the button like any other icon child. */
   icon?: React.ReactNode;
+  /**
+   * Honoured on the primary. A press that can't answer, the second of a
+   * double-click or any press while unavailable, neither activates the action
+   * nor takes focus to it. For a confirm whose next question is promoted under
+   * the pointer: otherwise the press meant for the last answer answers the next
+   * one, or parks focus on its primary, one Enter from approving it.
+   */
+  ignoresRepeatPress?: boolean;
 }
 
 interface AppDialogFooterProps {
@@ -1324,8 +1319,17 @@ AppDialog.Footer = function AppDialogFooter({
           {primaryAction && (
             <Button
               variant={getPrimaryVariant()}
+              onMouseDown={(event) => {
+                if (!primaryAction.ignoresRepeatPress) return;
+                if (primaryAction.disabled || event.detail > 1) event.preventDefault();
+              }}
               onClick={(event) => {
-                if (primaryAction.disabled) {
+                // Keyboard activation clicks with `detail` 0, so only pointer
+                // repeats are refused.
+                if (
+                  primaryAction.disabled ||
+                  (primaryAction.ignoresRepeatPress && event.detail > 1)
+                ) {
                   event.preventDefault();
                   event.stopPropagation();
                   return;

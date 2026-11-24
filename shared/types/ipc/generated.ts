@@ -12,8 +12,20 @@ export interface GeneratedIpcInvokeMap {
     args: [request: import("./agentAccounts.js").AddAgentAccountRequest];
     result: import("./agentAccounts.js").AddAgentAccountResult;
   };
+  "agent-accounts:apply-everywhere": {
+    args: [request: import("./agentAccounts.js").ApplyAccountEverywhereRequest];
+    result: import("../agentSettings.js").AgentSettings;
+  };
+  "agent-accounts:list-choices-away": {
+    args: [agentId: string, accountId: string | null];
+    result: import("./agentAccounts.js").AccountChoicesAway;
+  };
   "agent-accounts:remove": {
     args: [agentId: string, accountId: string];
+    result: import("../agentSettings.js").AgentSettings;
+  };
+  "agent-accounts:rename": {
+    args: [agentId: string, accountId: string | null, name: string];
     result: import("../agentSettings.js").AgentSettings;
   };
   "agent-capabilities:get-agent-ids": {
@@ -134,6 +146,18 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string, pinned: boolean];
     result: import("./agentToolbarPins.js").AgentToolbarPinsSnapshot;
   };
+  "agent-usage:get-tracking": {
+    args: [];
+    result: import("./agentUsage.js").AgentUsageTrackingSnapshot;
+  };
+  "agent-usage:set-following": {
+    args: [payload: { following: boolean }];
+    result: import("./agentUsage.js").AgentUsageSnapshot | null;
+  };
+  "agent-usage:set-tracking": {
+    args: [payload: { enabled: boolean }];
+    result: import("./agentUsage.js").AgentUsageTrackingSnapshot;
+  };
   "app:clear-quarantined-panel": {
     args: [panelId: string];
     result: { cleared: boolean };
@@ -161,6 +185,22 @@ export interface GeneratedIpcInvokeMap {
   "artifact:save-to-file": {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
+  };
+  "bulk-worktree-runs:command": {
+    args: [command: { runId: string; kind: "cancel" | "retry-failed" }];
+    result: import("./bulkWorktreeRuns.js").BulkWorktreeRunCommandResult;
+  };
+  "bulk-worktree-runs:dismiss": {
+    args: [runId: string];
+    result: boolean;
+  };
+  "bulk-worktree-runs:list": {
+    args: [];
+    result: import("./bulkWorktreeRuns.js").BulkWorktreeRunSnapshot[];
+  };
+  "bulk-worktree-runs:publish": {
+    args: [snapshot: import("./bulkWorktreeRuns.js").BulkWorktreeRunSnapshot];
+    result: void;
   };
   "canopy-host:assistant-invoke": {
     args: [
@@ -191,6 +231,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:mark-all-read"
         | "canopy:mark-seen"
         | "canopy:read-input-lines"
+        | "canopy:read-worktrees"
         | "canopy:refresh"
         | "canopy:remove-trashed"
         | "canopy:rename"
@@ -234,6 +275,7 @@ export interface GeneratedIpcInvokeMap {
       | import("./canopy.js").CanopyInputLineReading[]
       | import("./canopy.js").CanopyTrashOutcome[]
       | import("./canopy.js").CanopyUntrashOutcome[]
+      | import("./canopy.js").CanopyWorktreeReading[]
       | null;
   };
   "canopy-host:list-assistants": {
@@ -412,6 +454,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:read-input-lines": {
     args: [targets: import("./canopy.js").CanopyRunTarget[]];
     result: import("./canopy.js").CanopyInputLineReading[];
+  };
+  "canopy:read-worktrees": {
+    args: [targets: import("./canopy.js").CanopyRunTarget[]];
+    result: import("./canopy.js").CanopyWorktreeReading[];
   };
   "canopy:refresh": {
     args: [];
@@ -636,6 +682,134 @@ export interface GeneratedIpcInvokeMap {
     args: [text: string];
     result: void;
   };
+  "cloud-hosts:add-account": {
+    args: [payload: import("../cloudHosts.js").CloudAccountAddRequest];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
+  "cloud-hosts:allow-account-provider": {
+    args: [payload: { accountId: string; consent: string }];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
+  "cloud-hosts:check-account-key": {
+    args: [
+      payload: {
+        providerId: string;
+        credentials: import("../cloudHosts.js").CloudCredentialValues;
+        consent?: string | undefined;
+      },
+    ];
+    result: import("../cloudHosts.js").CloudAccountCheckResult;
+  };
+  "cloud-hosts:create-host": {
+    args: [payload: import("../cloudHosts.js").CloudHostCreateRequest];
+    result: { hostId: string };
+  };
+  "cloud-hosts:create-host-for-worktree": {
+    args: [payload: import("../cloudHosts.js").CloudHostCreateForWorktreeRequest];
+    result: { hostId: string; requestedAt: number };
+  };
+  "cloud-hosts:delete-machine": {
+    args: [payload: { hostId: string; resourceId: string | null }];
+    result: void;
+  };
+  "cloud-hosts:dismiss-worktree-cleanup": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
+  "cloud-hosts:get-catalog": {
+    args: [payload: { accountId: string; refresh?: boolean | undefined }];
+    result: import("../cloudHosts.js").CloudCatalog;
+  };
+  "cloud-hosts:get-snapshot": {
+    args: [];
+    result: import("../cloudHosts.js").CloudHostsSnapshot;
+  };
+  "cloud-hosts:import-host": {
+    args: [payload: import("../cloudHosts.js").CloudHostImportRequest];
+    result: { hostId: string };
+  };
+  "cloud-hosts:list-resources": {
+    args: [payload: { accountId: string }];
+    result: import("../cloudHosts.js").CloudResourceSummary[];
+  };
+  "cloud-hosts:prepare-worktree-cleanup": {
+    args: [
+      payload: {
+        worktree: import("../cloudHosts.js").CloudWorktreeRef;
+        machines: import("../cloudHosts.js").CloudWorktreeCleanupRequest[];
+        mutationId: string | null;
+      },
+    ];
+    result: void;
+  };
+  "cloud-hosts:refresh-host": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
+  "cloud-hosts:remove-account": {
+    args: [payload: { accountId: string }];
+    result: void;
+  };
+  "cloud-hosts:rename-account": {
+    args: [payload: { accountId: string; displayName: string }];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
+  "cloud-hosts:replace-account-key": {
+    args: [
+      payload: {
+        accountId: string;
+        credentials: import("../cloudHosts.js").CloudCredentialValues;
+        consent?: string | undefined;
+      },
+    ];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
+  "cloud-hosts:retry-create": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
+  "cloud-hosts:retry-worktree-cleanup": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
+  "cloud-hosts:set-lifetime": {
+    args: [payload: { hostId: string; lifetimeHours: number | null }];
+    result: void;
+  };
+  "cloud-hosts:settle-worktree-cleanup": {
+    args: [
+      payload: {
+        worktree: import("../cloudHosts.js").CloudWorktreeRef;
+        deleted: boolean | null;
+        mutationId: string | null;
+      },
+    ];
+    result: import("../cloudHosts.js").CloudWorktreeCleanupOutcome[];
+  };
+  "cloud-hosts:start-host": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
+  "cloud-hosts:stop-host": {
+    args: [payload: { hostId: string }];
+    result: void;
+  };
+  "cloud-hosts:trust-host-key": {
+    args: [payload: { hostId: string; fingerprint: string }];
+    result: void;
+  };
+  "cloud-hosts:validate-account": {
+    args: [payload: { accountId: string }];
+    result: import("../cloudHosts.js").CloudAccountSummary;
+  };
+  "codex-limit-continue:list": {
+    args: [];
+    result: import("../codexLimitContinuation.js").CodexLimitContinueEntry[];
+  };
+  "codex-limit-continue:set": {
+    args: [terminalId: string, enabled: boolean];
+    result: void;
+  };
   "codex:find-sessions": {
     args: [__0: { cwd: string; codexHome?: string | undefined }];
     result: import("./agentSubagents.js").CodexFolderSessionsResult;
@@ -714,6 +888,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
   };
+  "decisions:answer-question": {
+    args: [payload: import("../decisionsQuestion.js").AnswerDecisionQuestionPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionAnswerResult;
+  };
   "decisions:approve-pairing": {
     args: [payload: import("../decisions.js").ApproveDecisionsPairingPayload];
     result: import("../decisions.js").DecisionsPairingApproveResult;
@@ -721,6 +899,14 @@ export interface GeneratedIpcInvokeMap {
   "decisions:cancel-model-evaluation": {
     args: [payload: import("../decisionsModel.js").CancelDecisionsModelEvaluationPayload];
     result: import("../decisionsModel.js").DecisionsModelState;
+  };
+  "decisions:cancel-question": {
+    args: [payload: import("../decisionsQuestion.js").CancelDecisionQuestionPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionCancelResult;
+  };
+  "decisions:cancel-question-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").CancelDecisionQuestionByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionCancelResult;
   };
   "decisions:cancel-relay-deploy": {
     args: [deployId: string];
@@ -754,8 +940,12 @@ export interface GeneratedIpcInvokeMap {
     args: [pairingId: string];
     result: import("../decisions.js").DecisionsPairingDeclineResult;
   };
+  "decisions:decline-question": {
+    args: [payload: import("../decisionsQuestion.js").DeclineDecisionQuestionPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionDeclineResult;
+  };
   "decisions:delete-local-data": {
-    args: [];
+    args: [payload: import("../decisions.js").DecisionsKeyErasurePayload];
     result: import("../decisions.js").DecisionsLocalDeleteResult;
   };
   "decisions:delete-relay-data": {
@@ -763,7 +953,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("../decisions.js").DecisionsRelayDeleteResult;
   };
   "decisions:disconnect-relay": {
-    args: [];
+    args: [payload: import("../decisions.js").DecisionsKeyErasurePayload];
     result: import("../decisions.js").DecisionsStatus;
   };
   "decisions:enroll-host": {
@@ -777,6 +967,22 @@ export interface GeneratedIpcInvokeMap {
   "decisions:export-recovery-kit": {
     args: [payload: import("../decisions.js").ExportDecisionsRecoveryKitPayload];
     result: import("../decisions.js").DecisionsKitExportResult;
+  };
+  "decisions:get-answer-result": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionAnswerResultPayload];
+    result: import("../decisionsQuestion.js").DecisionAnswerResultRead;
+  };
+  "decisions:get-decline-result": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionDeclineResultPayload];
+    result: import("../decisionsQuestion.js").DecisionDeclineResultRead;
+  };
+  "decisions:get-follow-up-result": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionFollowUpResultPayload];
+    result: import("../decisionsQuestion.js").DecisionFollowUpResultRead;
+  };
+  "decisions:get-involvement": {
+    args: [];
+    result: import("../decisionsInvolvement.js").DecisionsInvolvementRead;
   };
   "decisions:get-model": {
     args: [];
@@ -794,6 +1000,36 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsPolicy;
   };
+  "decisions:get-question-content": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionContentResult;
+  };
+  "decisions:get-question-content-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionContentResult;
+  };
+  "decisions:get-question-image": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionImagePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionImagePartResult;
+  };
+  "decisions:get-question-image-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionImageByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionImagePartResult;
+  };
+  "decisions:get-question-pane-by-reference": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionByReferencePayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionPaneResult;
+  };
+  "decisions:get-question-summaries": {
+    args: [payload: import("../decisionsQuestion.js").GetDecisionQuestionSummariesPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionSummariesResult;
+  };
+  "decisions:get-question-summaries-by-reference": {
+    args: [
+      payload: import("../decisionsQuestion.js").GetDecisionQuestionSummariesByReferencePayload,
+    ];
+    result: import("../decisionsQuestion.js").DecisionQuestionSummariesResult;
+  };
   "decisions:get-setup-check": {
     args: [];
     result: import("../decisions.js").DecisionsSetupCheckRun | null;
@@ -801,6 +1037,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:get-status": {
     args: [];
     result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:host-attention": {
+    args: [request: import("../decisionsAttention.js").DecisionsHostAttentionRequest];
+    result: import("../decisionsAttention.js").DecisionsHostAttentionResult;
   };
   "decisions:list-answer-destinations": {
     args: [questionId: string];
@@ -818,9 +1058,17 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisionsHosts.js").DecisionsHostsResult;
   };
+  "decisions:list-questions": {
+    args: [];
+    result: import("../decisionsQuestion.js").DecisionQuestionList;
+  };
   "decisions:mark-answer-handled": {
     args: [payload: import("../decisionsAttention.js").MarkDecisionsAnswerHandledPayload];
     result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
+  "decisions:mark-questions": {
+    args: [payload: import("../decisionsQuestion.js").MarkDecisionQuestionsPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionMarkResult;
   };
   "decisions:prepare-relay-deploy": {
     args: [];
@@ -829,6 +1077,10 @@ export interface GeneratedIpcInvokeMap {
   "decisions:reassign-answer": {
     args: [payload: import("../decisionsAttention.js").ReassignDecisionsAnswerPayload];
     result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
+  "decisions:remove-settled-questions": {
+    args: [];
+    result: import("../decisions.js").DecisionsHistoryRemoveResult;
   };
   "decisions:report-composer-drafts": {
     args: [keys: string[]];
@@ -850,9 +1102,17 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../decisions.js").DecisionsRotateKeysResult;
   };
+  "decisions:send-follow-up": {
+    args: [payload: import("../decisionsQuestion.js").SendDecisionFollowUpPayload];
+    result: import("../decisionsQuestion.js").DecisionQuestionFollowUpResult;
+  };
   "decisions:set-agent-ask-human": {
     args: [payload: import("../decisions.js").SetDecisionsAgentAskHumanPayload];
     result: import("../decisions.js").DecisionsPolicy;
+  };
+  "decisions:set-agent-stopped-pushes": {
+    args: [enabled: boolean];
+    result: import("../decisions.js").DecisionsStatus;
   };
   "decisions:set-auto-enroll-hosts": {
     args: [enabled: boolean];
@@ -866,6 +1126,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
     result: import("../decisions.js").DecisionsStatus;
   };
+  "decisions:set-hold-phone-pushes": {
+    args: [enabled: boolean];
+    result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:set-involvement": {
+    args: [payload: import("../decisionsInvolvement.js").SetDecisionsInvolvementPayload];
+    result: import("../decisionsInvolvement.js").DecisionsInvolvementSaveResult;
+  };
   "decisions:set-model": {
     args: [payload: import("../decisionsModel.js").SetDecisionsModelPayload];
     result: import("../decisionsModel.js").DecisionsModelState;
@@ -873,10 +1141,6 @@ export interface GeneratedIpcInvokeMap {
   "decisions:set-model-threshold": {
     args: [payload: import("../decisionsModel.js").SetDecisionsModelThresholdPayload];
     result: import("../decisionsModel.js").DecisionsModelState;
-  };
-  "decisions:set-proxy-allowlisted": {
-    args: [allowed: boolean];
-    result: import("../decisions.js").DecisionsPolicy;
   };
   "decisions:set-terminal-snapshots": {
     args: [payload: import("../decisions.js").SetDecisionsTerminalSnapshotsPayload];
@@ -988,6 +1252,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "demo:wait-for-selector": {
     args: [payload: import("./demo.js").DemoWaitForSelectorPayload];
+    result: void;
+  };
+  "dev-preview:cancel-destructive-preview-sizes": {
+    args: [request: import("./devPreview.js").DevPreviewDestructivePreviewSizesCancelRequest];
     result: void;
   };
   "dev-preview:ensure": {
@@ -2021,6 +2289,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; prNumber: number }];
     result: import("./forge.js").ForgeCIStatusSummary | null;
   };
+  "forge:get-deployments": {
+    args: [payload: { cwd: string; target: import("../forge.js").DeploymentTarget }];
+    result: { deployments: import("./forge.js").ForgeDeployment[] } | null;
+  };
   "forge:get-first-page-cache": {
     args: [payload: { cwd: string }];
     result: import("./forge.js").ForgeFirstPageCachePayload | null;
@@ -2052,6 +2324,10 @@ export interface GeneratedIpcInvokeMap {
   "forge:get-prs-by-numbers": {
     args: [payload: { cwd: string; numbers: number[] }];
     result: import("../forge.js").PRLookupResult[];
+  };
+  "forge:get-pull-request-term": {
+    args: [payload: { providerId: string }];
+    result: import("../forge.js").ForgePullRequestTerm | null;
   };
   "forge:get-rate-limit-details": {
     args: [payload: { cwd: string }];
@@ -2174,7 +2450,14 @@ export interface GeneratedIpcInvokeMap {
     result: import("../git.js").GitBaseIntegrationCommitPreview;
   };
   "git:list-push-commits": {
-    args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
+    args: [
+      payload: {
+        cwd: string;
+        branchName: string;
+        limit?: number | undefined;
+        includeStaged?: boolean | undefined;
+      },
+    ];
     result: import("../git.js").GitPushCommitPreview;
   };
   "git:list-rebase-commits": {
@@ -2208,6 +2491,14 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: void;
+  };
+  "git:stage-hunks": {
+    args: [payload: { cwd: string; filePath: string; hunks: string[] }];
+    result: import("./git.js").GitHunkStagingResult;
+  };
+  "git:unstage-hunks": {
+    args: [payload: { cwd: string; filePath: string; hunks: string[] }];
+    result: import("./git.js").GitHunkStagingResult;
   };
   "global-env:get": {
     args: [];
@@ -2284,43 +2575,68 @@ export interface GeneratedIpcInvokeMap {
     result: string[];
   };
   "help:global-assistant-attach": {
-    args: [eligible?: boolean | undefined];
+    args: [eligible?: boolean | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantAttachment;
   };
+  "help:global-assistant-can-run": {
+    args: [agentId: string];
+    result: boolean;
+  };
   "help:global-assistant-cancel-launch": {
-    args: [expectedGeneration?: number | undefined];
+    args: [expectedGeneration?: number | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-claim-input": {
-    args: [attachmentId: string, from?: string | undefined];
+    args: [attachmentId: string, from?: string | undefined, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-detach": {
-    args: [attachmentId: string];
+    args: [attachmentId: string, slot?: number | undefined];
     result: void;
   };
   "help:global-assistant-discard": {
-    args: [expectedGeneration?: number | undefined];
+    args: [
+      expectedGeneration?: number | undefined,
+      slot?: number | undefined,
+      expectedRunning?: boolean | undefined,
+      expectedHandsTo?: number | undefined,
+    ];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-ensure": {
-    args: [];
+    args: [slot?: number | undefined, launchGeneration?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-input-eligible": {
-    args: [attachmentId: string, eligible: boolean];
+    args: [attachmentId: string, eligible: boolean, slot?: number | undefined];
     result: void;
   };
+  "help:global-assistant-list": {
+    args: [];
+    result: import("./help.js").GlobalAssistantView[];
+  };
   "help:global-assistant-release-input": {
-    args: [attachmentId: string];
+    args: [attachmentId: string, slot?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-replace": {
+    args: [replacement: import("./help.js").GlobalAssistantReplacement];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-restart": {
-    args: [expectedGeneration?: number | undefined];
+    args: [expectedGeneration?: number | undefined, slot?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-set-coordinator": {
+    args: [slot: number];
+    result: import("./help.js").GlobalAssistantView[];
+  };
+  "help:global-assistant-start-new": {
+    args: [agentId: string];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-state": {
-    args: [];
+    args: [slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:list-past-sessions": {
@@ -2424,6 +2740,10 @@ export interface GeneratedIpcInvokeMap {
   "host-metrics:process-inventory": {
     args: [payload: { hostId: string }];
     result: import("./hostMetrics.js").HostProcessInventoryResult;
+  };
+  "host-metrics:set-following": {
+    args: [payload: { following: boolean }];
+    result: void;
   };
   "host-metrics:submit-fleet": {
     args: [payload: import("./hostMetrics.js").HostFleetSubmitPayload];
@@ -2678,6 +2998,10 @@ export interface GeneratedIpcInvokeMap {
     args: [terminalId: string];
     result: void;
   };
+  "menu:set-undo-close": {
+    args: [state: import("../menu.js").UndoCloseMenuState];
+    result: void;
+  };
   "menu:show-application": {
     args: [payload?: import("../menu.js").ShowApplicationMenuPayload | undefined];
     result: void;
@@ -2685,6 +3009,34 @@ export interface GeneratedIpcInvokeMap {
   "menu:show-context": {
     args: [payload: import("../menu.js").ShowContextMenuPayload];
     result: string | null;
+  };
+  "merged-worktree-cleanup:ack-receipts": {
+    args: [payload: import("../mergedWorktreeCleanup.js").MergedWorktreeCleanupAckReceiptsPayload];
+    result: void;
+  };
+  "merged-worktree-cleanup:preview": {
+    args: [payload: import("../mergedWorktreeCleanup.js").MergedWorktreeCleanupPreviewPayload];
+    result: import("../mergedWorktreeCleanup.js").MergedWorktreeCleanupPreview;
+  };
+  "merged-worktree-cleanup:set-enabled": {
+    args: [payload: import("../mergedWorktreeCleanup.js").MergedWorktreeCleanupSetEnabledPayload];
+    result: void;
+  };
+  "merged-worktree-cleanup:take-receipts": {
+    args: [];
+    result: import("../mergedWorktreeCleanup.js").MergedWorktreeRemovalReceipt[];
+  };
+  "notification-sounds:get-custom-dir": {
+    args: [];
+    result: string;
+  };
+  "notification-sounds:import": {
+    args: [payload: import("./notificationSounds.js").ImportNotificationSoundPayload];
+    result: import("./notificationSounds.js").CustomNotificationSound;
+  };
+  "notification-sounds:list": {
+    args: [];
+    result: import("./notificationSounds.js").CustomNotificationSoundEntry[];
   };
   "onboarding:checklist-dismiss": {
     args: [];
@@ -2697,6 +3049,10 @@ export interface GeneratedIpcInvokeMap {
   "onboarding:checklist-mark-item": {
     args: [item: import("./maps.js").ChecklistItemId];
     result: void;
+  };
+  "onboarding:checklist-reopen": {
+    args: [];
+    result: import("./maps.js").ChecklistState;
   };
   "onboarding:complete": {
     args: [];
@@ -3027,8 +3383,8 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginBackgroundUpdateCheckSettings;
   };
   "plugin:browse-catalog": {
-    args: [];
-    result: import("../plugin.js").PluginCatalogBrowseResult;
+    args: [request?: import("../plugin.js").PluginCatalogBrowseRequest | undefined];
+    result: import("../plugin.js").PluginCatalogsBrowseResult;
   };
   "plugin:cancel-install": {
     args: [jobId: string];
@@ -3037,6 +3393,18 @@ export interface GeneratedIpcInvokeMap {
   "plugin:capture-panel": {
     args: [rect: import("../pluginPanelCapture.js").PluginPanelCaptureRect];
     result: import("../pluginPanelCapture.js").PluginPanelCaptureResult;
+  };
+  "plugin:catalog-sources-add": {
+    args: [url: string];
+    result: import("../plugin.js").PluginCatalogSourceAddResult;
+  };
+  "plugin:catalog-sources-get": {
+    args: [];
+    result: import("../plugin.js").PluginCatalogSources;
+  };
+  "plugin:catalog-sources-remove": {
+    args: [url: string];
+    result: import("../plugin.js").PluginCatalogSources;
   };
   "plugin:check-for-update": {
     args: [pluginId: string];
@@ -3288,11 +3656,18 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "plugin:report-panel-lifecycle": {
-    args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
+    args: [
+      events: import("../plugin.js").PluginPanelLifecycleEvent[],
+      options?: { replay?: boolean | undefined } | undefined,
+    ];
     result: void;
   };
   "plugin:report-unsaved-panels": {
     args: [panels: import("../pluginUnsavedPanels.js").PluginUnsavedPanelReport[]];
+    result: void;
+  };
+  "plugin:report-view-consumers": {
+    args: [viewIds: string[]];
     result: void;
   };
   "plugin:restart-worker": {
@@ -3400,7 +3775,11 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginTourDescriptor[];
   };
   "plugin:uninstall": {
-    args: [pluginId: string, deleteSettings?: boolean | undefined];
+    args: [
+      pluginId: string,
+      deleteSettings?: boolean | undefined,
+      removeCloudAccountIds?: string[] | undefined,
+    ];
     result: void;
   };
   "plugin:unsaved-panels-get": {
@@ -3451,42 +3830,6 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { forwardId: string }];
     result: void;
   };
-  "portal:close-tab": {
-    args: [payload: import("../portal.js").PortalCloseTabPayload];
-    result: void;
-  };
-  "portal:create": {
-    args: [payload: import("../portal.js").PortalCreatePayload];
-    result: void;
-  };
-  "portal:go-back": {
-    args: [tabId: string];
-    result: boolean;
-  };
-  "portal:go-forward": {
-    args: [tabId: string];
-    result: boolean;
-  };
-  "portal:hide": {
-    args: [];
-    result: void;
-  };
-  "portal:navigate": {
-    args: [payload: import("../portal.js").PortalNavigatePayload];
-    result: void;
-  };
-  "portal:reload": {
-    args: [tabId: string];
-    result: void;
-  };
-  "portal:resize": {
-    args: [bounds: import("../portal.js").PortalBounds];
-    result: void;
-  };
-  "portal:show": {
-    args: [payload: import("../portal.js").PortalShowPayload];
-    result: boolean;
-  };
   "privacy:clear-cache": {
     args: [];
     result: { cleared: number; failed: number };
@@ -3505,7 +3848,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "privacy:open-data-folder": {
     args: [];
-    result: void;
+    result: { opened: boolean };
   };
   "privacy:reset-all-data": {
     args: [];
@@ -3578,6 +3921,14 @@ export interface GeneratedIpcInvokeMap {
   "project-history:peek": {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;
+  };
+  "project-links:change": {
+    args: [payload: import("../projectLinks.js").ProjectLinksChangePayload];
+    result: import("../projectLinks.js").ProjectLinksChangeResult;
+  };
+  "project-links:get-declared": {
+    args: [payload: { projectId: string }];
+    result: import("../projectLinks.js").DeclaredProjectLink[];
   };
   "project-match:find": {
     args: [payload: import("./projectMatch.js").FindProjectMatchPayload];
@@ -3755,7 +4106,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "project:sleep": {
-    args: [projectId: string];
+    args: [projectId: string, options?: import("./project.js").ProjectSleepOptions | undefined];
     result: import("./project.js").ProjectSleepResult;
   };
   "recent-dictations:list": {
@@ -3773,6 +4124,10 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:add": {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
+  };
+  "remote-hosts:answer-ssh-sign-in": {
+    args: [payload: import("./remoteHosts.js").AnswerSshSignInPayload];
+    result: boolean;
   };
   "remote-hosts:bring-back": {
     args: [payload: { hostId: string }];
@@ -3801,6 +4156,14 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:cancel-pending-switch": {
     args: [payload: import("./remoteHosts.js").CancelPendingSwitchPayload];
     result: boolean;
+  };
+  "remote-hosts:cancel-ssh-sign-in": {
+    args: [payload: import("./remoteHosts.js").CancelSshSignInPayload];
+    result: boolean;
+  };
+  "remote-hosts:check-agent-forwarding": {
+    args: [payload: { hostId: string }];
+    result: import("./remoteHosts.js").HostAgentForwardingCheck;
   };
   "remote-hosts:connect": {
     args: [payload: { hostId: string; restart?: boolean | undefined }];
@@ -3885,6 +4248,10 @@ export interface GeneratedIpcInvokeMap {
   "remote-hosts:start-host-mode": {
     args: [payload: import("./remoteHosts.js").HostSetupTarget];
     result: import("./remoteHosts.js").StartHostModeResult;
+  };
+  "remote-hosts:start-ssh-sign-in": {
+    args: [payload: import("./remoteHosts.js").StartSshSignInPayload];
+    result: import("./remoteHosts.js").SshSignInResult;
   };
   "remote-hosts:switch-window-host": {
     args: [payload: import("./remoteHosts.js").SwitchWindowHostPayload];
@@ -4054,12 +4421,12 @@ export interface GeneratedIpcInvokeMap {
               | "failed"
               | "skipped"
               | "cancelled"
-              | "exited"
               | "done"
+              | "interrupted"
+              | "exited"
               | "needs-you"
               | "replaced"
-              | "lost"
-              | "interrupted";
+              | "lost";
             evidence:
               | {
                   kind: "handback";
@@ -4176,12 +4543,12 @@ export interface GeneratedIpcInvokeMap {
               | "failed"
               | "skipped"
               | "cancelled"
-              | "exited"
               | "done"
+              | "interrupted"
+              | "exited"
               | "needs-you"
               | "replaced"
-              | "lost"
-              | "interrupted";
+              | "lost";
             evidence:
               | {
                   kind: "handback";
@@ -4412,6 +4779,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { sessionId: string; mode: "browse" | "select" }];
     result: import("./sitePreview.js").SitePreviewBindingState;
   };
+  "site-preview:set-paused": {
+    args: [payload: { sessionId: string; paused: boolean }];
+    result: void;
+  };
   "slash-commands:list": {
     args: [payload: { agentId: string; projectPath?: string | undefined }];
     result: import("../slashCommands.js").SlashCommand[];
@@ -4542,6 +4913,10 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: void;
   };
+  "terminal-config:set-osc52-clipboard-enabled": {
+    args: [enabled: boolean];
+    result: void;
+  };
   "terminal-config:set-performance-mode": {
     args: [performanceMode: boolean];
     result: void;
@@ -4654,6 +5029,10 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: { token: string } | null;
   };
+  "terminal:reset-modes": {
+    args: [id: string];
+    result: boolean;
+  };
   "terminal:restart-service": {
     args: [];
     result: void;
@@ -4663,8 +5042,8 @@ export interface GeneratedIpcInvokeMap {
     result: boolean;
   };
   "terminal:search-semantic-buffers": {
-    args: [query: string, isRegex: boolean];
-    result: import("./terminal.js").SemanticSearchMatch[];
+    args: [query: string, isRegex: boolean, terminalIds?: string[] | undefined];
+    result: import("./terminal.js").SemanticSearchResult;
   };
   "terminal:spawn": {
     args: [
@@ -4691,10 +5070,12 @@ export interface GeneratedIpcInvokeMap {
         scheduledRun?: { scheduleId: string; runId: string } | undefined;
         agentSessionId?: string | undefined;
         exactResume?: boolean | undefined;
+        conversationStore?: { sessionId: string; configDir: string } | undefined;
         worktreeId?: string | undefined;
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
+        fallbackChainIndex?: number | undefined;
         handbackCode?: string | undefined;
         whenDone?: "background" | "close" | undefined;
         hasFirstPrompt?: boolean | undefined;
@@ -4787,6 +5168,10 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { projectId: string }];
     result: import("./api.js").VoiceDictionaryEntry[];
   };
+  "voice-dictionary:import-terms": {
+    args: [__0: { entries: { term: string; heardAs?: string[] | undefined }[] }];
+    result: import("./api.js").VoiceDictionaryChange;
+  };
   "voice-dictionary:record-suggestions": {
     args: [__0: { candidates: { word: string; original: string }[] }];
     result: import("./api.js").VoiceDictionaryState;
@@ -4830,6 +5215,14 @@ export interface GeneratedIpcInvokeMap {
     args: [sessionId: string];
     result: void;
   };
+  "voice-input:cancel-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
+  };
+  "voice-input:download-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
+  };
   "voice-input:flush-paragraph": {
     args: [sessionId: string];
     result: { rawText: string | null };
@@ -4841,6 +5234,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-input:get-live-session": {
     args: [];
     result: import("../voice.js").VoiceLiveSessionUpdate;
+  };
+  "voice-input:get-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
   };
   "voice-input:is-app-replaced": {
     args: [];
@@ -4870,6 +5267,10 @@ export interface GeneratedIpcInvokeMap {
   "voice-input:publish-details": {
     args: [request: import("../voice.js").VoicePublishDetailsRequest];
     result: boolean;
+  };
+  "voice-input:remove-local-model": {
+    args: [];
+    result: import("../voice.js").LocalSpeechModelStatus;
   };
   "voice-input:restart-replaced-app": {
     args: [];
@@ -4947,6 +5348,10 @@ export interface GeneratedIpcInvokeMap {
   "webview:set-device-emulation": {
     args: [payload: import("./webviewEmulation.js").DeviceEmulationRequest];
     result: { applied: boolean };
+  };
+  "webview:set-find-open": {
+    args: [panelId: string, open: boolean];
+    result: void;
   };
   "window-chrome:set-banner-severity": {
     args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];

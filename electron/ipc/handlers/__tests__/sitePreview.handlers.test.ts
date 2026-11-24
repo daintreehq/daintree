@@ -6,6 +6,7 @@ import type { IpcContext } from "../../types.js";
 const bridge = vi.hoisted(() => ({
   detach: vi.fn(async () => undefined),
   setMode: vi.fn(async () => ({ sessionId: "s1" })),
+  setPaused: vi.fn(async () => undefined),
   clearSelection: vi.fn(async () => undefined),
   clearHover: vi.fn(async () => undefined),
   disposeAll: vi.fn(async () => undefined),
@@ -79,6 +80,9 @@ describe("sitePreview handlers", () => {
     await expect(
       all.setMode.handler(ctx(null), { sessionId: "s1", mode: "select" })
     ).rejects.toThrow(/project/i);
+    await expect(
+      all.setPaused.handler(ctx(null), { sessionId: "s1", paused: true })
+    ).rejects.toThrow(/project/i);
     await expect(all.clearSelection.handler(ctx(null), { sessionId: "s1" })).rejects.toThrow(
       /project/i
     );
@@ -92,11 +96,15 @@ describe("sitePreview handlers", () => {
     const all = await ops();
     await all.detach.handler(ctx("project-a"), { sessionId: "s1" });
     await all.setMode.handler(ctx("project-a"), { sessionId: "s1", mode: "select" });
+    await all.setPaused.handler(ctx("project-a"), { sessionId: "s1", paused: true });
+    await all.setPaused.handler(ctx("project-a"), { sessionId: "s1", paused: false });
     await all.clearSelection.handler(ctx("project-a"), { sessionId: "s1" });
     await all.clearHover.handler(ctx("project-a"), { sessionId: "s1" });
 
     expect(bridge.detach).toHaveBeenCalledWith("project-a", "s1");
     expect(bridge.setMode).toHaveBeenCalledWith("project-a", "s1", "select");
+    expect(bridge.setPaused).toHaveBeenCalledWith("project-a", "s1", true);
+    expect(bridge.setPaused).toHaveBeenLastCalledWith("project-a", "s1", false);
     expect(bridge.clearSelection).toHaveBeenCalledWith("project-a", "s1");
     expect(bridge.clearHover).toHaveBeenCalledWith("project-a", "s1");
   });
@@ -110,6 +118,11 @@ describe("sitePreview handlers", () => {
       all.setMode.schema.safeParse({ sessionId: "s1", mode: "select", script: "x" }).success
     ).toBe(false);
     expect(all.setMode.schema.safeParse({ sessionId: "s1", mode: "inspect" }).success).toBe(false);
+    expect(all.setPaused.schema.safeParse({ sessionId: "s1", paused: false }).success).toBe(true);
+    expect(all.setPaused.schema.safeParse({ sessionId: "s1", paused: "yes" }).success).toBe(false);
+    expect(
+      all.setPaused.schema.safeParse({ sessionId: "s1", paused: true, mode: "select" }).success
+    ).toBe(false);
     expect(all.clearHover.schema.safeParse({ sessionId: "" }).success).toBe(false);
     expect(all.clearSelection.schema.safeParse({ sessionId: "x".repeat(200) }).success).toBe(false);
   });

@@ -95,8 +95,12 @@ vi.spyOn(fs.promises, "access").mockImplementation(async (p: fs.PathLike, m?: nu
   return realAccess(p, m);
 });
 
+// The JetBrains Toolbox scripts dir sits under the home directory; pointing it
+// into the fixture keeps an IDE installed on this machine out of the result.
+vi.spyOn(os, "homedir").mockReturnValue(root);
+
 // Linux keeps the run off the real /Applications bundles; on macOS every
-// editor also probes ~2 app-bundle dirs (WebStorm: 22), which only adds work.
+// editor also probes ~2 app-bundle dirs (IntelliJ IDEA, PyCharm: 4), which only adds work.
 Object.defineProperty(process, "platform", { value: "linux" });
 process.env.PATH = dirs.join(path.delimiter);
 delete process.env.VISUAL;
@@ -172,7 +176,7 @@ const found = sample
   .filter((e) => e.executablePath)
   .map((e) => `${e.id}=${path.basename(e.executablePath!)}`);
 const launched = path.basename(execaMock.execa.mock.lastCall?.[0] ?? "none");
-if (found.join(",") !== "webstorm=rider,sublime=subl" || launched !== "rider") {
+if (found.join(",") !== "jetbrains-rider=rider,sublime=subl" || launched !== "rider") {
   throw new Error(`Unexpected discovery result: ${found.join(",")} / ${launched}`);
 }
 // Straight to the fd: bench mode swallows console output.

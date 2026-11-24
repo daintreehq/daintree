@@ -178,6 +178,11 @@ export interface AssistantTerminalControlDeps {
   revoke(sessionId: string): Promise<void>;
   /** Where a send for a mid-turn assistant is held (#16620); absent or null, none is. */
   queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
+  /**
+   * The global assistant session that coordinates (#18143), listed as the
+   * global one. Absent, the first running session is.
+   */
+  globalCoordinatorSlot?: () => Promise<number>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** The reply a screen shows, ending at the handback marker observed when there is one. */
@@ -445,18 +450,27 @@ export class AssistantTerminalControl {
   }
 
   private scopeOf(caller: AssistantCaller, laneProjectId: string): AssistantTarget["scope"] | null {
-    if (laneProjectId === caller.projectId) return "project";
-    return isGlobalAssistantId(laneProjectId) && reachesGlobal(caller) ? "global" : null;
+    // A global session is never a project peer, not even of the other global session (#18142).
+    if (isGlobalAssistantId(laneProjectId)) return reachesGlobal(caller) ? "global" : null;
+    return laneProjectId === caller.projectId ? "project" : null;
   }
 
   async list(caller: AssistantCaller): Promise<AssistantListResult> {
     const assistants: AssistantEntry[] = [];
     const occupied = new Set<number>();
-    let global: GlobalAssistantEntry | null = null;
+    // The session that coordinates (#18143), and none while it isn't running:
+    // the other one acts on no worker, so it isn't the global assistant to reach.
+    const coordinator = (await this.deps.globalCoordinatorSlot?.().catch(() => null)) ?? null;
+    let globalLane: RunningLane | null = null;
     for (const lane of this.deps.listRunningLanes()) {
-      if (lane.projectId !== caller.projectId) {
-        if (global === null && this.scopeOf(caller, lane.projectId) === "global") {
-          global = await this.globalEntryFor(lane);
+      if (lane.projectId !== caller.projectId || isGlobalAssistantId(lane.projectId)) {
+        if (
+          this.scopeOf(caller, lane.projectId) === "global" &&
+          (coordinator !== null
+            ? lane.slot === coordinator
+            : globalLane === null || lane.slot < globalLane.slot)
+        ) {
+          globalLane = lane;
         }
         continue;
       }
@@ -489,6 +503,7 @@ export class AssistantTerminalControl {
     const vacantSlots = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
       (slot) => !occupied.has(slot) && !kept.has(slot)
     );
+    const global = globalLane === null ? null : await this.globalEntryFor(globalLane);
     return { projectId: caller.projectId, assistants, vacantSlots, keptSlots, global };
   }
 
@@ -1191,6 +1206,8 @@ export function liveAssistantTerminalControl(deps: {
     keptLanes: (projectId) => deps.help.listKeptLanes(projectId),
     claimLaneResume: (projectId, slot) => deps.help.claimLaneResume(projectId, slot),
     revoke: (sessionId) => deps.help.revokeSession(sessionId),
+    globalCoordinatorSlot: async () =>
+      (await import("../globalAssistant.js")).globalAssistantCoordinatorSlot(),
     extractReply: deps.extractReply,
     projectName: deps.projectName,
     ...(deps.queue !== undefined ? { queue: deps.queue } : {}),

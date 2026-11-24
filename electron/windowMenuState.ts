@@ -41,6 +41,11 @@ function itemIdFor(windowId: number): string {
   return `${OPEN_WINDOW_ITEM_ID_PREFIX}${windowId}`;
 }
 
+/** Whether `id` names an item of the Window menu's list of open windows. */
+export function isOpenWindowMenuItemId(id: string): boolean {
+  return id.startsWith(OPEN_WINDOW_ITEM_ID_PREFIX);
+}
+
 /**
  * The Window menu's list of open windows, in the order they opened, each named
  * by its window title. Call {@link noteOpenWindowMenuInstalled} once the menu

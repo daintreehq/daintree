@@ -3,14 +3,25 @@ import type { PowerPolicySnapshot } from "../../shared/types/powerPolicy.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getPowerPolicy } from "./powerPolicy.js";
 import { getAllAppWebContents } from "./webContentsRegistry.js";
+import { sendLatestWins } from "./frozenViewDelivery.js";
+
+const POWER_POLICY_EVENT = "system:power-policy-changed";
+// Keyed by event name: other `events:push` events sharing the channel are not
+// replaceable by this one.
+const POWER_POLICY_KEY = `${CHANNELS.EVENTS_PUSH}:${POWER_POLICY_EVENT}`;
 
 function envelope(snapshot: PowerPolicySnapshot) {
-  return { name: "system:power-policy-changed", payload: snapshot };
+  return { name: POWER_POLICY_EVENT, payload: snapshot };
+}
+
+function sendPolicy(wc: WebContents, snapshot: PowerPolicySnapshot): void {
+  sendLatestWins(wc, POWER_POLICY_KEY, CHANNELS.EVENTS_PUSH, envelope(snapshot));
 }
 
 /**
  * Every view, cached ones included: a cached view keeps its motion suppressed
  * on its own, but it must already hold the current policy when it comes back.
+ * A frozen one holds only the newest policy until it thaws (#17038).
  */
 export function publishPowerPolicy(snapshot: PowerPolicySnapshot): void {
   let targets: WebContents[];
@@ -19,14 +30,7 @@ export function publishPowerPolicy(snapshot: PowerPolicySnapshot): void {
   } catch {
     return;
   }
-  for (const wc of targets) {
-    try {
-      if (wc.isDestroyed()) continue;
-      wc.send(CHANNELS.EVENTS_PUSH, envelope(snapshot));
-    } catch {
-      // A view tearing down must not cost the others their copy.
-    }
-  }
+  for (const wc of targets) sendPolicy(wc, snapshot);
 }
 
 /**
@@ -37,10 +41,5 @@ export function publishPowerPolicy(snapshot: PowerPolicySnapshot): void {
 export function deliverPowerPolicy(wc: WebContents): void {
   const snapshot = getPowerPolicy();
   if (snapshot.level === "active") return;
-  try {
-    if (wc.isDestroyed()) return;
-    wc.send(CHANNELS.EVENTS_PUSH, envelope(snapshot));
-  } catch {
-    // Retried on the view's next load.
-  }
+  sendPolicy(wc, snapshot);
 }

@@ -3,7 +3,11 @@
 // after the user has oriented.
 export const SETTINGS_HIGHLIGHT_DECAY_MS = 1500;
 
-// The control a landed-on section hands focus to: its setting first (a switch, a
+// A section can name the control a landing hands focus to, ahead of its first
+// field: the App theme section names "Change theme…", the button that opened the
+// theme browser whose close lands back on that section.
+const SECTION_FOCUS_TARGET_SELECTOR = "[data-settings-focus-target]:not([disabled])";
+// Otherwise the control a landed-on section hands focus to: its setting first (a switch, a
 // select, a field), then anything else operable in it. Only looking for an <input>
 // left focus stranded in the search box for every switch, select and button row.
 const SECTION_CONTROL_SELECTOR = [
@@ -24,6 +28,7 @@ const SECTION_FALLBACK_SELECTOR = 'button:not([disabled]), a[href], [tabindex="0
 export function landOnSettingsElement(el: HTMLElement): void {
   el.scrollIntoView({ behavior: "instant", block: "start" });
   const control =
+    el.querySelector<HTMLElement>(SECTION_FOCUS_TARGET_SELECTOR) ??
     el.querySelector<HTMLElement>(SECTION_CONTROL_SELECTOR) ??
     el.querySelector<HTMLElement>(SECTION_FALLBACK_SELECTOR);
   control?.focus({ preventScroll: true });

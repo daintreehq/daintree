@@ -3,7 +3,11 @@ import {
   selectContributionsForProject,
   getPluginContributionScope,
 } from "../../../services/plugin/PluginContributionBroadcaster.js";
-import { getFileDecorationImpls } from "../../../services/fileDecorationRegistry.js";
+import {
+  getFileDecorationImpls,
+  hasForgeGatedFileDecorations,
+} from "../../../services/fileDecorationRegistry.js";
+import { makeForgeProviderId } from "../../../../shared/utils/forgeProviderIds.js";
 import type { FileDecoration } from "../../../../shared/types/forge.js";
 import type {
   WorktreeDeleteNoteSource,
@@ -12,7 +16,7 @@ import type {
 } from "../../../../shared/types/plugin.js";
 import type { IpcContext } from "../../types.js";
 import { PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS } from "../../../../shared/config/pluginBudgets.js";
-import { getPluginService } from "./service.js";
+import { getPluginService, type PluginServiceSingleton } from "./service.js";
 import { safeAppend } from "./auditAppend.js";
 
 /**
@@ -33,6 +37,30 @@ const DECORATION_TIMEOUT = Symbol("decoration-timeout");
  */
 function presentString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * The canonical id of the code forge `projectId` resolves to, for the
+ * forge-gated decoration providers, or `null` when there is none or it can't
+ * be read. Activates nothing: deciding whether to wake a forge's plugin is the
+ * point. Waits for the plugin catalog first, since a half-registered set of
+ * forge providers can resolve to the wrong one or to none.
+ */
+async function resolveDecorationCodeForge(
+  service: PluginServiceSingleton,
+  projectId: string | null
+): Promise<string | null> {
+  if (projectId === null) return null;
+  try {
+    await service.waitForCatalog();
+    const { resolveProjectForgeProvider } = await import("../forgeResolution.js");
+    const { entry } = await resolveProjectForgeProvider(projectId);
+    return entry ? makeForgeProviderId(entry.pluginId, entry.contribution.id) : null;
+  } catch {
+    // A stale remote or unreadable repository resolves no forge, which keeps
+    // gated providers asleep exactly as a project with no remote does.
+    return null;
+  }
 }
 
 /**
@@ -59,18 +87,27 @@ export async function handleFileDecorationsGet(
   if (cleanPaths.length === 0) return {};
   const requested = new Set(cleanPaths);
 
+  const service = await getPluginService();
+  // A provider gated on a forge serves only projects hosted there, so a
+  // GitLab or local-only repository never wakes a GitHub decorator. The same
+  // answer filters activation and the impl lookup: a plugin already running
+  // for another project must not be asked either.
+  const codeForgeProviderId = hasForgeGatedFileDecorations(scope)
+    ? await resolveDecorationCodeForge(service, ctx.projectId)
+    : null;
+
   // Implicit activation: any plugin that declares a provider for this scope is
   // forced to `activate()` before the impl lookup, so providers bound during
   // activate() are queryable on the first pull. No-op once already activated.
   // Only plugins the sender's project shows: a hidden plugin is not started by
   // that project's file views, and its decorations stay out of them.
-  await (await getPluginService()).activatePluginsForFileDecorationScope(scope, ctx.projectId);
+  await service.activatePluginsForFileDecorationScope(scope, ctx.projectId, codeForgeProviderId);
 
   // The merge is first-writer-per-field, so the project's own plugin goes
   // ahead of installed ones: it is the more specific source. Array#sort is
   // stable, which keeps load order within each group.
   const impls = selectContributionsForProject(
-    getFileDecorationImpls(scope),
+    getFileDecorationImpls(scope, codeForgeProviderId),
     (entry) => entry.pluginId,
     ctx.projectId
   ).sort(

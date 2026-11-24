@@ -12,17 +12,23 @@ import {
   HANDBACK_CODE_PATTERN,
   HANDBACK_MESSAGE_MAX_CHARS,
 } from "../../../shared/types/handback.js";
-import type { PtyHostEvent, TerminalFlowStatus } from "../../../shared/types/pty-host.js";
+import type {
+  PtyHostEvent,
+  TerminalFlowStatus,
+  TerminalReliabilityMetricPayload,
+} from "../../../shared/types/pty-host.js";
 import type { AgentStateChangeTrigger } from "../../types/index.js";
 import type {
   AgentFallbackReason,
   AgentFallbackTriggeredPayload,
+  UpdateInstalledObservation,
 } from "../../../shared/types/ipc/agent.js";
 import {
   CLAUDE_USAGE_STATEMENTS,
   CLAUDE_USAGE_WINDOWS,
 } from "../../../shared/types/ipc/agentQuota.js";
 import { observeClaudeUsage, type ClaudeUsageRecord } from "../claude/ClaudeUsageObservations.js";
+import { invalidateTerminalInventoryPrefetch } from "../terminalInventoryPrefetch.js";
 
 const FALLBACK_REASONS: ReadonlySet<AgentFallbackReason> = new Set([
   "connection",
@@ -50,6 +56,13 @@ export interface PtyEventsBridgeConfig {
     forced?: boolean;
     timestamp: number;
   }) => void;
+
+  /**
+   * True for a terminal Main has placed on another shard than the one this
+   * event came from. A `pause-duration-gauge` entry naming one is a late word
+   * from a shard the terminal has moved off, and is dropped.
+   */
+  isForeignTerminal?: (terminalId: string) => boolean;
 }
 
 const VALID_AGENT_STATE_CHANGE_TRIGGERS: ReadonlySet<AgentStateChangeTrigger> = new Set([
@@ -109,6 +122,20 @@ function claudeUsageObservation(
 }
 
 /** The terminal an agent event is about, wherever its shape carries it. */
+/**
+ * The observation an `agent-update-installed-changed` event carries, rebuilt
+ * from its two fields so nothing else rides to the renderer. Undefined when it
+ * isn't one.
+ */
+function updateInstalledObservation(value: unknown): UpdateInstalledObservation | null | undefined {
+  if (value === null) return null;
+  if (!value || typeof value !== "object") return undefined;
+  const { observedAt, namesRestart } = value as Partial<UpdateInstalledObservation>;
+  if (typeof observedAt !== "number" || !Number.isFinite(observedAt)) return undefined;
+  if (typeof namesRestart !== "boolean") return undefined;
+  return { observedAt, namesRestart };
+}
+
 function agentEventTerminalId(event: PtyHostEvent): string {
   const fields = event as {
     id?: unknown;
@@ -123,6 +150,27 @@ function agentEventTerminalId(event: PtyHostEvent): string {
  * Bridge PTY Host events to the internal event bus.
  * Returns true if the event was handled as a domain event.
  */
+/**
+ * The gauge without entries for terminals another shard owns, or null when
+ * nothing of it is left. Every other metric passes through unchanged.
+ */
+function dropForeignGaugeEntries(
+  payload: TerminalReliabilityMetricPayload,
+  isForeign: (terminalId: string) => boolean
+): TerminalReliabilityMetricPayload | null {
+  if (payload.metricType !== "pause-duration-gauge") return payload;
+  const held = payload.perTerminalHeld ?? [];
+  const cleared = payload.clearedTerminalIds ?? [];
+  const ownHeld = held.filter((entry) => !isForeign(entry.terminalId));
+  const ownCleared = cleared.filter((terminalId) => !isForeign(terminalId));
+  if (ownHeld.length === held.length && ownCleared.length === cleared.length) return payload;
+  if (ownHeld.length === 0 && ownCleared.length === 0) return null;
+  const scoped: TerminalReliabilityMetricPayload = { ...payload, perTerminalHeld: ownHeld };
+  if (ownCleared.length > 0) scoped.clearedTerminalIds = ownCleared;
+  else delete scoped.clearedTerminalIds;
+  return scoped;
+}
+
 export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConfig): boolean {
   // A host's throwaway run (#14445) is its Shell session's alone: none of its
   // agent's observations reach the bus, so no renderer, notification, sound or
@@ -141,6 +189,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         traceId: event.traceId,
         trigger: normalizeAgentTrigger(event.trigger),
         confidence: normalizeConfidence(event.confidence),
+        ...(event.terminalClosing === true ? { terminalClosing: true as const } : {}),
         cwd: event.cwd,
         waitingReason: event.waitingReason,
         sessionCost: event.sessionCost,
@@ -240,6 +289,20 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         timestamp: event.timestamp,
       });
       return true;
+
+    case "agent-update-installed-changed": {
+      const updateInstalled = updateInstalledObservation(event.updateInstalled);
+      if (updateInstalled === undefined || typeof event.terminalId !== "string") return true;
+      events.emit("agent:update-installed-changed", {
+        terminalId: event.terminalId,
+        updateInstalled,
+        timestamp: event.timestamp,
+      });
+      // A view switched to now would restore from an inventory read before
+      // this, and the footer, staying up, never says it again.
+      invalidateTerminalInventoryPrefetch();
+      return true;
+    }
 
     // Main's record for `agent.readQuota` and Settings, not the bus: no
     // plugin or notice has a use for it.
@@ -373,9 +436,13 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
       });
       return true;
 
-    case "terminal-reliability-metric":
-      events.emit("terminal:reliability-metric", event.payload);
+    case "terminal-reliability-metric": {
+      const payload = config?.isForeignTerminal
+        ? dropForeignGaugeEntries(event.payload, config.isForeignTerminal)
+        : event.payload;
+      if (payload) events.emit("terminal:reliability-metric", payload);
       return true;
+    }
 
     default:
       return false;

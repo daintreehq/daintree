@@ -129,6 +129,55 @@ describe("resilientAtomicWriteFileIf", () => {
     expect(dirSyncs()).toEqual([[tmpDir]]);
   });
 
+  posixIt("skips the parent sync when not durable, and still honours the check", async () => {
+    await expect(
+      resilientAtomicWriteFileIf(target, "background", () => true, "utf-8", { durable: false })
+    ).resolves.toBe(true);
+    await expect(
+      resilientAtomicWriteFileIf(target, "refused", () => false, "utf-8", { durable: false })
+    ).resolves.toBe(false);
+
+    expect(readFileSync(target, "utf8")).toBe("background");
+    expect(dirSyncs()).toEqual([]);
+    expect(stragglers()).toEqual([]);
+  });
+
+  posixIt("reports the commit at the rename, before the directory sync settles", async () => {
+    let releaseDirSync!: () => void;
+    dirSyncTap.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (releaseDirSync = resolve))
+    );
+    const onCommitted = vi.fn(() => readFileSync(target, "utf8"));
+
+    const writing = resilientAtomicWriteFileIf(target, "payload", () => true, "utf-8", {
+      onCommitted,
+    });
+    await vi.waitFor(() => expect(dirSyncs()).toHaveLength(1));
+
+    expect(onCommitted).toHaveBeenCalledTimes(1);
+    expect(onCommitted.mock.results[0].value).toBe("payload");
+    releaseDirSync();
+    await expect(writing).resolves.toBe(true);
+
+    const refused = vi.fn();
+    await resilientAtomicWriteFileIf(target, "other", () => false, "utf-8", {
+      onCommitted: refused,
+    });
+    expect(refused).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a failing commit callback without retrying the rename that landed", async () => {
+    const writing = resilientAtomicWriteFileIf(target, "payload", () => true, "utf-8", {
+      onCommitted: () => {
+        throw errno("EBUSY");
+      },
+    });
+
+    await expect(writing).rejects.toMatchObject({ code: "EBUSY" });
+    expect(renameTap).toHaveBeenCalledTimes(1);
+    expect(readFileSync(target, "utf8")).toBe("payload");
+  });
+
   posixIt("surfaces a failed directory sync with the file already in place", async () => {
     dirSyncTap.mockRejectedValueOnce(errno("EIO"));
 

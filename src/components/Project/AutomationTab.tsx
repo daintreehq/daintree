@@ -2,6 +2,8 @@ import { Plus, Trash2, ChevronUp, ChevronDown } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { RadioChoiceRow } from "@/components/ui/RadioChoice";
@@ -27,7 +29,9 @@ import {
 } from "@/components/Settings/SettingsGroup";
 import { SettingsInput } from "@/components/Settings/SettingsInput";
 import { useRowFocus } from "@/components/Settings/useRowFocus";
+import { useReorderFocus } from "@/components/Settings/useReorderFocus";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { MergedWorktreeCleanupSection } from "./MergedWorktreeCleanupSection";
 
 const LOCATION_OPTIONS = [
   { value: "grid", label: "Grid" },
@@ -172,6 +176,7 @@ export function AutomationTab({
     focusRow,
     focusAfterDelete,
   } = useRowFocus();
+  const { registerArrow, focusMoved } = useReorderFocus();
 
   const effectivePathPattern = trimmedWorktreePathPattern || globalPathPattern;
   const pathPatternPreview =
@@ -229,6 +234,7 @@ export function AutomationTab({
     if (target < 0 || target >= runCommands.length) return;
     const updated = [...runCommands];
     [updated[index], updated[target]] = [updated[target]!, updated[index]!];
+    focusMoved(runCommands[index]!.id, direction === -1 ? "up" : "down");
     onRunCommandsChange(updated);
   };
 
@@ -270,32 +276,51 @@ export function AutomationTab({
                     )}
                   </div>
                   <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => moveRunCommand(index, -1)}
-                      disabled={index === 0}
-                      aria-label={`Move ${name} up`}
-                    >
-                      <ChevronUp />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={() => moveRunCommand(index, 1)}
-                      disabled={index === runCommands.length - 1}
-                      aria-label={`Move ${name} down`}
-                    >
-                      <ChevronDown />
-                    </Button>
-                    <Button
-                      variant="ghost-danger"
-                      size="icon-sm"
-                      onClick={() => deleteRunCommand(index)}
-                      aria-label={`Delete ${name}`}
-                    >
-                      <Trash2 />
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          ref={registerArrow(cmd.id, "up")}
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => moveRunCommand(index, -1)}
+                          aria-disabled={index === 0 || undefined}
+                          className={ARIA_DISABLED_CLASSES}
+                          aria-label={`Move ${name} up`}
+                        >
+                          <ChevronUp />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Move up</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          ref={registerArrow(cmd.id, "down")}
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => moveRunCommand(index, 1)}
+                          aria-disabled={index === runCommands.length - 1 || undefined}
+                          className={ARIA_DISABLED_CLASSES}
+                          aria-label={`Move ${name} down`}
+                        >
+                          <ChevronDown />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Move down</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost-danger"
+                          size="icon-sm"
+                          onClick={() => deleteRunCommand(index)}
+                          aria-label={`Remove ${name}`}
+                        >
+                          <Trash2 />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Remove</TooltipContent>
+                    </Tooltip>
                   </div>
                   <Input
                     type="text"
@@ -458,6 +483,8 @@ export function AutomationTab({
           />
         </SettingsGroup>
       </SettingsSection>
+
+      {currentProject?.id && <MergedWorktreeCleanupSection projectId={currentProject.id} />}
 
       <SettingsSection
         id="project-terminal-settings"

@@ -235,6 +235,12 @@ export class PluginMcpSupervisor {
    */
   private readonly settingChangeTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly toolsInvalidatedListeners = new Set<ToolsInvalidatedListener>();
+  /**
+   * Supervisor-wide, never reset: an evicted key's state is recreated from
+   * scratch on reinstall, and a per-state counter would restart at the value a
+   * pending escalation fence captured for the evicted server.
+   */
+  private lastSpawnGeneration = 0;
 
   constructor(options?: { spawner?: SubprocessSpawner; killTree?: ProcessTreeKiller }) {
     this.spawner = options?.spawner ?? defaultSpawner;
@@ -334,9 +340,8 @@ export class PluginMcpSupervisor {
       surfacedToolCount: 0,
     };
     // Reset transient fields for a restart of a previously-stopped/crashed
-    // entry. A "crashed" entry may still hold a live subprocess (e.g. the
-    // handshake timed out but the server is still running), so kill it
-    // before nulling the reference — otherwise the orphan process leaks.
+    // entry. Should a "crashed" entry still hold a subprocess, kill it before
+    // nulling the reference — otherwise the orphan process leaks.
     if (existing) {
       if (existing.subprocess) {
         void this.terminateSubprocess(
@@ -416,7 +421,7 @@ export class PluginMcpSupervisor {
     // Bump the spawn generation so a delayed group kill scheduled by a prior
     // shutdownOne (for this same key) can detect that a newer process now owns
     // the key and skip the kill — guarding against PID reuse (#9235).
-    state.spawnGeneration++;
+    state.spawnGeneration = ++this.lastSpawnGeneration;
     // Execa's subprocess promise rejects with the kill error when the child
     // exits non-zero or is killed. Without a `.catch` attached at spawn time
     // it surfaces as an unhandled rejection, which Electron 37+ utility
@@ -438,8 +443,35 @@ export class PluginMcpSupervisor {
     try {
       await handshakePromise;
     } catch {
-      // runHandshake records the failure into state.lastError already.
+      // runHandshake records the failure into state.lastError already. A server
+      // still attached here never exited on its own: it hung or refused the
+      // handshake, and nothing else will ever stop it (#17212).
+      if (state.status === "crashed" && state.subprocess === subprocess) {
+        this.terminateFailedHandshake(key, state);
+      }
     }
+  }
+
+  /** Detach and kill a server that is still running after its handshake failed. */
+  private terminateFailedHandshake(key: string, state: SupervisedServerState): void {
+    const subprocess = state.subprocess;
+    if (!subprocess) return;
+    const pid = state.pid;
+    // Detaching first makes the stream listeners ignore the dying process, so
+    // its close can't run the unexpected-exit path over this one.
+    state.subprocess = null;
+    state.pid = null;
+    state.stdoutBuffer = "";
+    state.toolsCache = null;
+    state.toolsListInflight = null;
+    state.surfacedToolCount = 0;
+    for (const [id, pending] of state.pendingCalls) {
+      state.pendingCalls.delete(id);
+      pending.reject(new Error(state.lastError ?? "MCP server handshake failed"));
+    }
+    // An exit, not a stop: the server failed, and failure backoff must count it.
+    this.emitToolsInvalidated(state, "exited");
+    void this.terminateSubprocess(key, subprocess, pid, state.spawnGeneration);
   }
 
   private async runHandshake(state: SupervisedServerState): Promise<void> {
@@ -463,23 +495,28 @@ export class PluginMcpSupervisor {
       },
     };
 
+    let resolveInit!: (value: unknown) => void;
+    let rejectInit!: (reason: Error) => void;
     const responsePromise = new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        state.pendingCalls.delete(initId);
-        reject(new Error(`MCP server "${state.contribution.name}" handshake timed out`));
-      }, HANDSHAKE_TIMEOUT_MS);
-      state.pendingCalls.set(initId, {
-        resolve: (value) => {
-          clearTimeout(timer);
-          resolve(value);
-        },
-        reject: (reason) => {
-          clearTimeout(timer);
-          reject(reason);
-        },
-        timer,
-      });
+      resolveInit = resolve;
+      rejectInit = reject;
     });
+    const timer = setTimeout(() => {
+      state.pendingCalls.delete(initId);
+      rejectInit(new Error(`MCP server "${state.contribution.name}" handshake timed out`));
+    }, HANDSHAKE_TIMEOUT_MS);
+    const initCall: PendingCall = {
+      resolve: (value) => {
+        clearTimeout(timer);
+        resolveInit(value);
+      },
+      reject: (reason) => {
+        clearTimeout(timer);
+        rejectInit(reason);
+      },
+      timer,
+    };
+    state.pendingCalls.set(initId, initCall);
 
     try {
       writeFrame(stdin, initialize);
@@ -493,6 +530,12 @@ export class PluginMcpSupervisor {
       state.status = "ready";
       state.lastError = null;
     } catch (err) {
+      // A failed initialize write leaves the call pending: drop it and its
+      // timer, which would otherwise reject a promise no one awaits any more.
+      if (state.pendingCalls.get(initId) === initCall) {
+        clearTimeout(timer);
+        state.pendingCalls.delete(initId);
+      }
       // A shutdown that lands mid-handshake already set status to "stopped"
       // and rejected the pending init call. Don't clobber that with "crashed"
       // — the UI distinction between user-cancelled and crashed matters.
@@ -1076,14 +1119,31 @@ export class PluginMcpSupervisor {
 
   /**
    * Drop every supervised-server state entry owned by `pluginId` from the map.
-   * Call this ONLY on a full uninstall, after {@link shutdown} — a plain
-   * disable/reload must keep the entry so the log viewer retains pre-restart
-   * stderr history. Without this, an uninstalled plugin's state (its bounded
-   * stderr ring, contribution, lastError) leaks in `this.states` forever.
+   * Call this ONLY on a full uninstall — a plain disable/reload must keep the
+   * entry so the log viewer retains pre-restart stderr history. Without this,
+   * an uninstalled plugin's state (its bounded stderr ring, contribution,
+   * lastError) leaks in `this.states` forever and bleeds into a reinstall.
    */
   removeState(pluginId: string): void {
-    for (const key of this.states.keys()) {
-      if (key.startsWith(`${pluginId} `)) this.states.delete(key);
+    this.removeStatesWhere((owner) => owner === pluginId);
+  }
+
+  /**
+   * {@link removeState} for every owner `match` accepts, such as each
+   * per-project instance of an uninstalled package. A server not yet stopped is
+   * shut down first, so eviction never strands a process or a pending
+   * settings-change restart outside the map.
+   */
+  removeStatesWhere(match: (pluginId: string) => boolean): void {
+    for (const [key, state] of [...this.states]) {
+      if (!match(state.pluginId)) continue;
+      if (state.status !== "stopped" || state.subprocess) {
+        // Synchronous up to its kill: the state is stopped and detached here.
+        void this.shutdownOne(key).catch((err) => {
+          console.warn(`[PluginMcpSupervisor] shutdown of evicted "${key}" threw:`, err);
+        });
+      }
+      this.states.delete(key);
     }
   }
 
@@ -1100,7 +1160,12 @@ export class PluginMcpSupervisor {
     contribution: McpServerContribution;
     resolveSettings: (template: string) => Promise<string>;
   }): Promise<void> {
-    await this.shutdownOne(stateKey(input.pluginId, input.serverId));
+    const key = stateKey(input.pluginId, input.serverId);
+    const before = this.states.get(key);
+    await this.shutdownOne(key);
+    // Evicted while the old process was going down: its plugin was
+    // uninstalled, and starting now would resurrect it.
+    if (before && this.states.get(key) !== before) return;
     await this.startOne(input.pluginId, input.pluginDir, input.contribution, input.resolveSettings);
   }
 

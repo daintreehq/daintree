@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useRef, useState, useMemo, Suspense } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useMemo,
+  Suspense,
+} from "react";
 import { Check } from "lucide-react";
 import type { ForgeProviderContribution, ForgeProviderEntry } from "@shared/types";
 import type { ForgeProviderRole } from "@shared/types/forge";
@@ -22,7 +30,14 @@ import { SettingsActions, SettingsEmptyRow, SettingsGroup, SettingsRow } from ".
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { ForgeAuditLogViewer } from "./ForgeAuditLogViewer";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
+import {
+  SettingsDeepLinkHold,
+  useHoldSettingsDeepLink,
+  useSettingsDeepLink,
+} from "./settingsDeepLink";
 import { useTabLoad } from "@/hooks";
+import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
+import { useProjectStore } from "@/store";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { ErrorRetryRow } from "@/components/Settings/auditLogParts";
 import { logError } from "@/utils/logger";
@@ -30,8 +45,59 @@ import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import { pluralize } from "@/lib/pluralize";
 
 const GENERAL_ID = "general";
+// Settings search's credentials result, and its result for this page.
+const TOKEN_LINK_ID = "forge-access-token";
+const PAGE_LINK_ID = "tab-nav-code-forge";
 const CREDENTIAL_RESULT_DISPLAY_MS = 5000;
 const EXPORT_FEEDBACK_MS = 2000;
+
+function searchWords(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+/**
+ * The one provider the search words name ("gitlab token"), or null when none or several
+ * do. A name inside a longer one that also matches gives way to it, so "github
+ * enterprise token" names GitHub Enterprise rather than both.
+ */
+export function providerNamedInQuery(
+  query: string | null,
+  options: readonly ForgeProviderOption[]
+): string | null {
+  const words = query ? ` ${searchWords(query)} ` : "";
+  if (!words.trim()) return null;
+  const named = options
+    .map((option) => ({ id: option.id, name: ` ${searchWords(option.name)} ` }))
+    .filter(({ name }) => name.trim() !== "" && words.includes(name));
+  const [only, ...others] = named.filter(
+    (match) => !named.some((other) => other !== match && other.name.includes(match.name))
+  );
+  return only && others.length === 0 ? only.id : null;
+}
+
+/**
+ * Which subtab a link to provider credentials opens: the provider the search named,
+ * else the one the active project routes to, else the provider already showing, else
+ * the first that can run. General holds no credentials, so it's only the answer when
+ * no provider is registered.
+ */
+export function forgeCredentialsSubtab(
+  query: string | null,
+  options: readonly ForgeProviderOption[],
+  projectProviderId: string | null,
+  current: string
+): string {
+  const named = providerNamedInQuery(query, options);
+  if (named !== null) return named;
+  if (projectProviderId !== null && options.some((option) => option.id === projectProviderId)) {
+    return projectProviderId;
+  }
+  if (current !== GENERAL_ID) return current;
+  return (options.find((option) => !option.unavailable) ?? options[0])?.id ?? GENERAL_ID;
+}
 
 interface CodeForgeSettingsTabProps {
   activeSubtab: string | null;
@@ -55,7 +121,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     }
   }, []);
 
-  const { loadError, retryAction } = useTabLoad({
+  const { isLoading, loadError, retryAction } = useTabLoad({
     initialize: loadProviders,
     errorMessage: "Couldn't load forge providers",
     timeoutMessage: "Forge providers took too long to load.",
@@ -235,6 +301,38 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
 
   useSettingsTabValidation("code-forge", Boolean(loadError));
 
+  // A link from search lands on the provider it's about, so it waits for the provider
+  // list, and for a credentials link the provider the active project routes to.
+  const deepLink = useSettingsDeepLink();
+  const currentProjectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  const projectForge = useResolvedForgeProvider(currentProjectId);
+  const credentialsLink = deepLink.sectionId === TOKEN_LINK_ID;
+  const routing = isLoading || (credentialsLink && projectForge.loading);
+  // Routed once per link: a subtab picked while the provider's panel is still loading
+  // in is the user's, not one to switch back. Kept by the link's identity, so a new
+  // link to the same section routes afresh, and the same link shown again doesn't.
+  const [routedLink, setRoutedLink] = useState<object | null>(null);
+  const routed = deepLink.request !== null && routedLink === deepLink.request;
+  const linkSubtab =
+    routing || routed
+      ? null
+      : credentialsLink
+        ? forgeCredentialsSubtab(
+            deepLink.query,
+            providerOptions,
+            projectForge.providerId,
+            effectiveSubtab
+          )
+        : deepLink.sectionId === PAGE_LINK_ID
+          ? providerNamedInQuery(deepLink.query, providerOptions)
+          : null;
+  useHoldSettingsDeepLink(routing || (linkSubtab !== null && linkSubtab !== effectiveSubtab));
+  useLayoutEffect(() => {
+    if (linkSubtab === null) return;
+    setRoutedLink(deepLink.request);
+    if (linkSubtab !== effectiveSubtab) onSubtabChange(linkSubtab);
+  }, [deepLink.request, linkSubtab, effectiveSubtab, onSubtabChange]);
+
   const isGeneral = effectiveSubtab === GENERAL_ID;
   const selectedEntry = !isGeneral
     ? providers.find((p) => makeForgeProviderId(p.pluginId, p.contribution.id) === effectiveSubtab)
@@ -335,8 +433,9 @@ function ProviderPanel({ providerId, entry }: { providerId: string; entry: Forge
     );
   }
   if (SlotView) {
+    // The provider's own panel loads in on its first showing; a link waits for it.
     return (
-      <Suspense fallback={null}>
+      <Suspense fallback={<SettingsDeepLinkHold />}>
         <SlotView />
       </Suspense>
     );

@@ -28,6 +28,11 @@ export function forgetComposerState(draftKey: string, owner: object): void {
   if (states.get(draftKey)?.owner === owner) states.delete(draftKey);
 }
 
+/** Whether `owner` is the composer whose state is published for the draft. */
+export function ownsComposerState(draftKey: string, owner: object): boolean {
+  return states.get(draftKey)?.owner === owner;
+}
+
 /**
  * The composer's selection in `draft`, or null when the composer was never
  * focused or no longer shows that draft: positions in any other text would

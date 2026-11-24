@@ -2600,7 +2600,7 @@ export class CanopyService {
         ...snapshot,
         busy: false,
         sequence: 0,
-        ...(this.active ? {} : { link: undefined }),
+        ...(this.active ? {} : { reader: undefined }),
       });
       // A view that was told a scan was under way must still hear it ended.
       if (sent === this.lastBroadcast && !(this.lastBroadcastBusy && !snapshot.busy)) return;

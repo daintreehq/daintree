@@ -28,6 +28,8 @@ vi.mock("@/store/panelStore", () => ({
       updateAgentState: vi.fn(),
       setRuntimeStatus: vi.fn(),
     }),
+    // A resync drops held pause durations through the real buffer (#17575).
+    setState: vi.fn(),
   },
 }));
 vi.mock("@/services/TerminalInstanceService", () => ({

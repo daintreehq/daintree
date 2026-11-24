@@ -8,6 +8,8 @@ const running = vi.hoisted(
 const detached = vi.hoisted(() => new Set<string>());
 /** Help sessions a schedule started (#16169), with their run. */
 const scheduled = vi.hoisted(() => new Map<string, { scheduleId: string; runId: string }>());
+/** The conversation each help session's lane runs, as main minted it (#17919). */
+const conversations = vi.hoisted(() => new Map<string, string>());
 /** Which project each of this machine's views shows, by WebContents id. */
 const views = vi.hoisted(() => new Map<number, string>());
 /** The host-control runtime install hands the MCP server. */
@@ -61,6 +63,7 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     getRunningLaneSession: (projectId: string, slot: number) =>
       running.get(`${projectId}:${slot}`) ?? null,
     getScheduledRunOf: (helpSessionId: string) => scheduled.get(helpSessionId) ?? null,
+    getConversationOwnershipId: (helpSessionId: string) => conversations.get(helpSessionId) ?? null,
     listRunningLanes: () =>
       [...running.keys()].map((key) => {
         const [projectId, slot] = laneOf(key);
@@ -96,8 +99,16 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
 const globalAssistant = vi.hoisted(() => ({
   /** The views showing it, the one holding its input first. Null: no service. */
   views: null as number[] | null,
+  /** The session that coordinates (#18143). */
+  coordinator: 0,
+  standDown: new Set<(sessionId: string) => void>(),
 }));
 vi.mock("../../../services/globalAssistant.js", () => ({
+  globalAssistantCoordinatorSlot: () => globalAssistant.coordinator,
+  onGlobalAssistantStandDown: (listener: (sessionId: string) => void) => {
+    globalAssistant.standDown.add(listener);
+    return () => globalAssistant.standDown.delete(listener);
+  },
   peekGlobalAssistantService: () =>
     globalAssistant.views && {
       presenterWebContentsId: (canAsk: (id: number) => boolean = () => true) =>
@@ -182,6 +193,18 @@ import { HostRegistry } from "../../client/HostRegistry.js";
 import { markProjectlessView } from "../../../window/projectlessViews.js";
 import { IDLE_RELEASE_MS, RemoteHostManager } from "../../client/RemoteHostManager.js";
 import { TransportError } from "../../client/transport.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../../services/persistence/migrations");
@@ -221,6 +244,7 @@ afterEach(() => {
   running.clear();
   detached.clear();
   scheduled.clear();
+  conversations.clear();
   views.clear();
   generations.clear();
   queued.length = 0;
@@ -269,6 +293,7 @@ describe("installHostControl (#13493)", () => {
       isHostControlEnabled: () => true,
     });
     runLocally("proj-1", 0, "a");
+    conversations.set("a", "conv-a");
     const runtime = hostControl.runtime as HostCallRuntime;
 
     const listed = await runtime.list("a");
@@ -292,6 +317,8 @@ describe("installHostControl (#13493)", () => {
         caller: expect.objectContaining({
           senderId: "local",
           helpSessionId: "a",
+          // From main's own record of the lane (#17919).
+          conversationId: "conv-a",
           shellName: "greg-mbp",
           local: true,
         }),
@@ -402,6 +429,63 @@ describe("installHostControl (#13493)", () => {
     expect(allowed).toMatchObject({ ok: true, value: { outcome: "ok" } });
 
     off();
+  });
+
+  it("lets only the global session that coordinates act, under the work's conversation (#18143)", async () => {
+    globalAssistant.coordinator = 0;
+    const off = installHostControl({ observeHosts: () => [], isHostControlEnabled: () => false });
+    for (const [slot, sessionId, conversation] of [
+      [0, "global-a", "work"],
+      [1, "global-b", "other"],
+    ] as const) {
+      running.set(`${GLOBAL_ASSISTANT_ID}:${slot}`, {
+        sessionId,
+        terminalId: `t-${sessionId}`,
+        projectViewWebContentsId: 0,
+      });
+      generations.set(`t-${sessionId}`, 1);
+      conversations.set(sessionId, conversation);
+    }
+    const runtime = hostControl.runtime as HostCallRuntime;
+    const call = (sessionId: string, tool: string) =>
+      runtime.call(
+        sessionId,
+        { hostId: "local", projectId: "proj-1", tool, args: { terminalId: "w", command: "go" } },
+        { tier: "full" }
+      );
+    const opened = () =>
+      mcp.opened.map((open) => [open.caller.helpSessionId, open.caller.conversationId]);
+
+    expect(await call("global-b", "terminal.list")).toMatchObject({ value: { outcome: "ok" } });
+    expect(await call("global-b", "terminal.sendCommandOwned")).toMatchObject({
+      value: { outcome: "policy_rejected", detail: expect.stringContaining("isn't coordinating") },
+    });
+    expect(await call("global-a", "terminal.sendCommandOwned")).toMatchObject({
+      value: { outcome: "ok" },
+    });
+    expect(opened()).toEqual([
+      ["global-b", undefined],
+      ["global-a", "work"],
+    ]);
+
+    // Handed over: the work's id moved with coordination.
+    globalAssistant.coordinator = 1;
+    conversations.set("global-a", "other");
+    conversations.set("global-b", "work");
+    expect(await call("global-a", "terminal.sendCommandOwned")).toMatchObject({
+      value: { outcome: "policy_rejected" },
+    });
+    expect(await call("global-b", "terminal.sendCommandOwned")).toMatchObject({
+      value: { outcome: "ok" },
+    });
+    expect(opened().at(-1)).toEqual(["global-b", "work"]);
+
+    // A stand-down reaches the runtime until the install is torn down.
+    const standDown = vi.spyOn(runtime, "standDown");
+    for (const listener of globalAssistant.standDown) listener("global-a");
+    expect(standDown).toHaveBeenCalledWith("global-a");
+    off();
+    expect(globalAssistant.standDown.size).toBe(0);
   });
 
   describe("asking the person for the global assistant", () => {
@@ -855,5 +939,68 @@ describe("installRetiredSendsNotice (#13496)", () => {
     expect(queued).toEqual([]);
     expect(journalled()).toBe(1);
     off();
+  });
+});
+
+describe("installHostControlLinkClient forgetting a host's credential (#17207)", () => {
+  const teardown: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const off of teardown.splice(0).reverse()) off();
+  });
+
+  function linkClient(retiring: Set<string>): HostControlLinkClient {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-link-credential-"));
+    const sqlite = openDb(path.join(dir, "shell.db"), migrationsFolder).sqlite;
+    sharedDb.sqlite = sqlite;
+    teardown.push(() => {
+      sharedDb.sqlite = null;
+      sqlite.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+    teardown.push(
+      installHostControlLinkClient({
+        session: async () => null,
+        onSessionOpened: () => () => {},
+        // Re-pointing keeps the id: the host is still in the list throughout.
+        knownHosts: () => ["studio", "other"],
+        onHostsChanged: () => () => {},
+        hostName: (hostId) => hostId,
+        isRetiring: (hostId) => retiring.has(hostId),
+      })
+    );
+    return getRemoteService("hostControlLinkClient")!;
+  }
+
+  it("mints a fresh one for the next machine under the same id, leaving other hosts' alone", () => {
+    const client = linkClient(new Set());
+    const before = client.pluginCredential("studio");
+    const beforeSender = client.senderIdOf("studio");
+    const other = client.pluginCredential("other");
+    expect(beforeSender).not.toBeNull();
+
+    client.forgetHost("studio");
+
+    expect(client.senderIdOf("studio")).toBeNull();
+    expect(client.pluginCredential("studio")).not.toBe(before);
+    expect(client.senderIdOf("studio")).not.toBe(beforeSender);
+    expect(client.pluginCredential("other")).toBe(other);
+  });
+
+  it("neither mints nor presents one while the host is being re-pointed", () => {
+    const retiring = new Set<string>();
+    const client = linkClient(retiring);
+    client.pluginCredential("studio");
+    retiring.add("studio");
+
+    // A link still up meanwhile reaches the old machine: it is shown nothing.
+    expect(() => client.pluginCredential("studio")).toThrow();
+    expect(client.senderIdOf("studio")).toBeNull();
+    client.forgetHost("studio");
+    expect(() => client.pluginCredential("studio")).toThrow();
+
+    retiring.delete("studio");
+    expect(client.pluginCredential("studio")).toEqual(expect.any(String));
+    expect(client.senderIdOf("studio")).not.toBeNull();
   });
 });

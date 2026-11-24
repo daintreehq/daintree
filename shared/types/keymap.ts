@@ -30,6 +30,7 @@ export type BuiltInKeyAction =
   | "nav.toggleSidebar"
   | "nav.toggleFocusMode"
   | "nav.quickSwitcher"
+  | "nav.quickOpenFile"
   | "nav.focusRegion.next"
   | "nav.focusRegion.prev"
 
@@ -90,6 +91,7 @@ export type BuiltInKeyAction =
   | "terminal.toggleDockAll"
   | "terminal.new"
   | "terminal.reopenLast"
+  | "panel.undoClose"
   | "terminal.resumeSessions"
   | "terminal.maximize"
   | "terminal.inject"
@@ -125,6 +127,7 @@ export type BuiltInKeyAction =
   | "terminal.popStash"
   | "terminal.scrollToLastActivity"
   | "terminal.sendToAgent"
+  | "terminal.copyClean"
   | "terminal.bulkCommand"
   | "terminal.armDefault"
   | "terminal.disarmAll"
@@ -167,7 +170,6 @@ export type BuiltInKeyAction =
   // Panel management
   | "panel.palette"
   | "panel.toggleDiagnostics"
-  | "panel.togglePortal"
   | "panel.diagnosticsLogs"
   | "panel.diagnosticsEvents"
   | "panel.diagnosticsMessages"
@@ -175,14 +177,15 @@ export type BuiltInKeyAction =
   // Notification inbox
   | "notifications.toggle"
 
-  // Portal actions
-  | "portal.newTab"
-  | "portal.closeTab"
-  | "portal.nextTab"
-  | "portal.prevTab"
-
   // Dev preview actions
   | "devPreview.reloadPreview"
+
+  // Diff viewer actions
+  | "diff.nextChange"
+  | "diff.previousChange"
+  | "diff.nextFile"
+  | "diff.previousFile"
+  | "diff.toggleViewed"
 
   // Action palette
   | "action.palette"
@@ -194,12 +197,15 @@ export type BuiltInKeyAction =
   | "pilot.openProject"
   | "canopy.toggle"
   | "canopy.openWindow"
+  | "decisions.openInbox"
+  | "decisions.openNextQuestion"
   | "project.switcherPalette"
   | "project.mruCycleOlder"
   | "project.openInNewWindow"
   | "project.sleep"
   | "project.restart"
   | "project.sleepIdle"
+  | "project.sleepAll"
 
   // Remote Hosts (bound only where Remote Hosts is supported)
   | "host.switch"
@@ -255,6 +261,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "nav.toggleSidebar",
   "nav.toggleFocusMode",
   "nav.quickSwitcher",
+  "nav.quickOpenFile",
   "nav.focusRegion.next",
   "nav.focusRegion.prev",
   "file.open",
@@ -313,6 +320,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.toggleDockAll",
   "terminal.new",
   "terminal.reopenLast",
+  "panel.undoClose",
   "terminal.resumeSessions",
   "terminal.maximize",
   "terminal.inject",
@@ -348,6 +356,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.popStash",
   "terminal.scrollToLastActivity",
   "terminal.sendToAgent",
+  "terminal.copyClean",
   "terminal.bulkCommand",
   "terminal.armDefault",
   "terminal.disarmAll",
@@ -380,17 +389,17 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "window.zoomReset",
   "panel.palette",
   "panel.toggleDiagnostics",
-  "panel.togglePortal",
   "notifications.toggle",
   "panel.diagnosticsLogs",
   "panel.diagnosticsEvents",
   "panel.diagnosticsMessages",
   "notifications.toggle",
-  "portal.newTab",
-  "portal.closeTab",
-  "portal.nextTab",
-  "portal.prevTab",
   "devPreview.reloadPreview",
+  "diff.nextChange",
+  "diff.previousChange",
+  "diff.nextFile",
+  "diff.previousFile",
+  "diff.toggleViewed",
   "action.palette",
   "action.palette.open",
   "action.repeatLast",
@@ -398,12 +407,15 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "pilot.openProject",
   "canopy.toggle",
   "canopy.openWindow",
+  "decisions.openInbox",
+  "decisions.openNextQuestion",
   "project.switcherPalette",
   "project.mruCycleOlder",
   "project.openInNewWindow",
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "project.sleepAll",
   "host.switch",
   "help.shortcuts",
   "help.shortcutsAlt",

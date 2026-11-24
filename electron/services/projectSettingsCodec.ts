@@ -28,6 +28,10 @@ import { normalizeDaintreeMcpTier } from "../../shared/types/project.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { normalizeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import { sanitizeDictionary } from "../../shared/utils/voiceDictionary.js";
+import { sanitizeProjectLinks } from "../../shared/utils/projectLinks.js";
+// A custom id is kept by its shape alone: the codec is pure, and a reference to an
+// import whose file is briefly missing shouldn't be dropped from the project.
+import { isSelectableNotificationSound } from "../../shared/types/ipc/notificationSounds.js";
 
 export const PROJECT_SETTINGS_SCHEMA_VERSION = 1;
 
@@ -40,15 +44,6 @@ export const PROJECT_SETTINGS_SCHEMA_VERSION = 1;
 export type ProjectSettingsDecodeResult =
   | { ok: true; settings: ProjectSettings }
   | { ok: false; reason: "future-version"; onDiskVersion: number };
-
-const ALLOWED_NOTIFICATION_SOUNDS = [
-  "chime.wav",
-  "ping.wav",
-  "complete.wav",
-  "waiting.wav",
-  "error.wav",
-  "pulse.wav",
-];
 
 const VALID_PREDICATE_SCOPES = new Set(["current", "all"]);
 const VALID_PREDICATE_STATES = new Set(["all", "working", "waiting", "finished"]);
@@ -97,25 +92,22 @@ function decodeNotificationOverrides(raw: unknown): Partial<NotificationSettings
 
   if (
     typeof obj.completedSoundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.completedSoundFile)
+    isSelectableNotificationSound(obj.completedSoundFile)
   ) {
     result.completedSoundFile = obj.completedSoundFile;
-  } else if (
-    typeof obj.soundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.soundFile)
-  ) {
+  } else if (typeof obj.soundFile === "string" && isSelectableNotificationSound(obj.soundFile)) {
     // Legacy alias from a previous settings shape.
     result.completedSoundFile = obj.soundFile;
   }
   if (
     typeof obj.waitingSoundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.waitingSoundFile)
+    isSelectableNotificationSound(obj.waitingSoundFile)
   ) {
     result.waitingSoundFile = obj.waitingSoundFile;
   }
   if (
     typeof obj.escalationSoundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.escalationSoundFile)
+    isSelectableNotificationSound(obj.escalationSoundFile)
   ) {
     result.escalationSoundFile = obj.escalationSoundFile;
   }
@@ -136,7 +128,7 @@ function decodeNotificationOverrides(raw: unknown): Partial<NotificationSettings
   }
   if (
     typeof obj.workingPulseSoundFile === "string" &&
-    ALLOWED_NOTIFICATION_SOUNDS.includes(obj.workingPulseSoundFile)
+    isSelectableNotificationSound(obj.workingPulseSoundFile)
   ) {
     result.workingPulseSoundFile = obj.workingPulseSoundFile;
   }
@@ -364,6 +356,12 @@ function migrateLegacyFields(raw: Record<string, unknown>): Record<string, unkno
     migrated.daintreeMcpTier = "core";
   }
 
+  // portalLinks → links (#17243). A list under the new key wins, even an
+  // empty one: it was written after the move, so the legacy list is older.
+  if (!Array.isArray(migrated.links) && Array.isArray(migrated.portalLinks)) {
+    migrated.links = migrated.portalLinks;
+  }
+
   return migrated;
 }
 
@@ -468,6 +466,7 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
       typeof migrated.defaultWorktreeMode === "string" ? migrated.defaultWorktreeMode : undefined,
     daintreeMcpTier: decodeMcpTier(migrated.daintreeMcpTier),
     daintreeMcpSkipConfirmations: decodeMcpSkipConfirmations(migrated),
+    removeMergedWorktrees: migrated.removeMergedWorktrees === true ? true : undefined,
     exposeDaintreeMcpToAgents:
       typeof migrated.exposeDaintreeMcpToAgents === "boolean"
         ? migrated.exposeDaintreeMcpToAgents
@@ -479,6 +478,7 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
     voiceDictionary: Array.isArray(migrated.voiceDictionary)
       ? sanitizeDictionary(migrated.voiceDictionary, 0)
       : undefined,
+    links: sanitizeProjectLinks(migrated.links),
     preferredImageViewer:
       migrated.preferredImageViewer && typeof migrated.preferredImageViewer === "object"
         ? (migrated.preferredImageViewer as ProjectSettings["preferredImageViewer"])
@@ -497,9 +497,9 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
  * Transient fields (`insecureEnvironmentVariables`,
  * `unresolvedSecureEnvironmentVariables`, `agentInstructions`) are stripped
  * — those are runtime helpers, not persisted state. The legacy
- * `resourceEnvironment`, `exposeDaintreeMcpToAgents`, and `githubRemote`
- * fields are also stripped since they have already been migrated into their
- * canonical counterparts at decode time.
+ * `resourceEnvironment`, `exposeDaintreeMcpToAgents`, `githubRemote` and
+ * `portalLinks` fields are also stripped since they have already been
+ * migrated into their canonical counterparts at decode time.
  */
 export function encodeEnvelope(settings: ProjectSettings): Record<string, unknown> {
   // Strip transient runtime fields, both legacy migration fields, the
@@ -514,6 +514,9 @@ export function encodeEnvelope(settings: ProjectSettings): Record<string, unknow
   delete persistable.resourceEnvironment;
   delete persistable.exposeDaintreeMcpToAgents;
   delete persistable.githubRemote;
+  // Read into `links` at decode; a save payload that still carries it must
+  // not land a list `links` would fall back to.
+  delete persistable.portalLinks;
   delete persistable.agentInstructions;
   // Removed exit-snapshot feature (#10850/#10855): drop any stale opt-out flag a
   // passthrough save payload might still carry so it never re-lands on disk.
@@ -575,9 +578,11 @@ export const ProjectSettingsSaveSchema = z
     defaultWorktreeMode: z.string().optional(),
     daintreeMcpTier: z.enum(["off", "core", "full"]).optional(),
     daintreeMcpSkipConfirmations: z.boolean().optional(),
+    removeMergedWorktrees: z.boolean().optional(),
     exposeDaintreeMcpToAgents: z.boolean().optional(),
     browserAllowedHosts: z.array(z.string()).optional(),
     voiceDictionary: z.array(z.unknown()).optional(),
+    links: z.array(z.unknown()).optional(),
     agentInstructions: z.unknown().optional(),
   })
   .passthrough()

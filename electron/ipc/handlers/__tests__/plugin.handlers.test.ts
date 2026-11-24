@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { setPluginAssistantReachSource } from "../../../services/plugin/pluginAssistantReach.js";
 import { PLUGIN_INVOKE_MAX_ARGS_BYTES } from "../../../../shared/config/pluginBudgets.js";
 import { access, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -89,11 +90,19 @@ function hidePluginInProject(projectId: string, pluginId: string): void {
   hiddenPlugins.add(`${projectId}|${pluginId}`);
 }
 
-const { mockStableArgsSha256 } = vi.hoisted(() => ({ mockStableArgsSha256: vi.fn() }));
+const { mockStableArgsSha256, mockBoundedStableArgsSha256 } = vi.hoisted(() => ({
+  mockStableArgsSha256: vi.fn(),
+  mockBoundedStableArgsSha256: vi.fn(),
+}));
 vi.mock("../../../utils/pluginMcpHash.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/pluginMcpHash.js")>();
   mockStableArgsSha256.mockImplementation(actual.stableArgsSha256);
-  return { ...actual, stableArgsSha256: mockStableArgsSha256 };
+  mockBoundedStableArgsSha256.mockImplementation(actual.boundedStableArgsSha256);
+  return {
+    ...actual,
+    stableArgsSha256: mockStableArgsSha256,
+    boundedStableArgsSha256: mockBoundedStableArgsSha256,
+  };
 });
 
 const { mockGetPluginRecipes, mockRecordPluginRecipeUse, mockUpdatePluginRecipeMetadata } =
@@ -236,8 +245,15 @@ vi.mock("../../../services/forgeProviderRegistry.js", () => ({
 }));
 
 const mockGetFileDecorationImpls = vi.fn();
+const mockHasForgeGatedFileDecorations = vi.fn((_scope: string) => false);
 vi.mock("../../../services/fileDecorationRegistry.js", () => ({
   getFileDecorationImpls: (...args: unknown[]) => mockGetFileDecorationImpls(...args),
+  hasForgeGatedFileDecorations: (scope: string) => mockHasForgeGatedFileDecorations(scope),
+}));
+
+const mockResolveProjectForgeProvider = vi.fn();
+vi.mock("../forgeResolution.js", () => ({
+  resolveProjectForgeProvider: (...args: unknown[]) => mockResolveProjectForgeProvider(...args),
 }));
 
 const mockAuditAppend = vi.fn();
@@ -285,6 +301,7 @@ vi.mock("../../../utils/netManualRedirectFetch.js", () => ({
 import { registerPluginHandlers } from "../plugin.js";
 import { notifyIpcEnvelopeRejected } from "../../envelopeRejections.js";
 import { PluginPayloadTooLargeError } from "../../../services/plugin/pluginPayloadLimits.js";
+import { PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES } from "../../../services/plugin/pluginAuditArgsHash.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../ipcGuard.js";
 import { PluginInvokeOwnershipError } from "../../../services/plugin/PluginInvokeErrors.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
@@ -298,6 +315,7 @@ import {
 } from "../../../services/plugin/PluginHostedViewRegistry.js";
 import type { PluginHostedViewDescriptor } from "../../../../shared/types/plugin.js";
 import { MAX_PROJECT_SURFACE_UPDATES } from "../../../../shared/types/plugin.js";
+import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -1138,6 +1156,135 @@ describe("registerPluginHandlers", () => {
     expect(mockUninstallPlugin).not.toHaveBeenCalled();
   });
 
+  describe("a plugin's cloud accounts on uninstall (#17353)", () => {
+    function cloud(overrides: Record<string, unknown> = {}) {
+      const order: string[] = [];
+      const service = {
+        pluginCloudAccounts: vi.fn(
+          () =>
+            new Map([
+              [
+                "acme.clouds",
+                [{ id: "ca_acmeplugin1", name: "Work", providerName: "EC2", hosts: [] }],
+              ],
+            ])
+        ),
+        requirePluginAccounts: vi.fn(() => {
+          order.push("require");
+        }),
+        removePluginAccounts: vi.fn(async () => {
+          order.push("remove");
+        }),
+        ...overrides,
+      };
+      mockUninstallPlugin.mockImplementation(async () => {
+        order.push("uninstall");
+      });
+      registerRemoteService("cloudHosts", service as never);
+      return { service, order };
+    }
+
+    afterEach(() => {
+      _resetRemoteServicesForTest();
+      mockUninstallPlugin.mockReset();
+    });
+
+    it("removes the listed accounts only after the plugin is gone, checking them first", async () => {
+      const { service, order } = cloud();
+      await getHandler("plugin:uninstall")({}, "acme.clouds", false, [
+        "ca_acmeplugin1",
+        "ca_acmeplugin1",
+      ]);
+      expect(order).toEqual(["require", "uninstall", "remove"]);
+      expect(service.requirePluginAccounts).toHaveBeenCalledWith("acme.clouds", ["ca_acmeplugin1"]);
+      expect(service.removePluginAccounts).toHaveBeenCalledWith("acme.clouds", ["ca_acmeplugin1"]);
+    });
+
+    it("answers only once the removal has finished, with its failure", async () => {
+      let fail: (error: Error) => void = () => {};
+      const { service } = cloud({
+        removePluginAccounts: vi.fn(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              fail = reject;
+            })
+        ),
+      });
+      let settled = false;
+      const answer = (
+        getHandler("plugin:uninstall")({}, "acme.clouds", false, [
+          "ca_acmeplugin1",
+        ]) as Promise<void>
+      ).finally(() => {
+        settled = true;
+      });
+      await vi.waitFor(() => expect(service.removePluginAccounts).toHaveBeenCalled());
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      fail(new Error("Work is still on this device"));
+      await expect(answer).rejects.toThrow("Work is still on this device");
+    });
+
+    it("keeps every account when none is named, and when the uninstall fails", async () => {
+      const { service } = cloud();
+      await getHandler("plugin:uninstall")({}, "acme.clouds", true);
+      expect(mockUninstallPlugin).toHaveBeenCalledWith("acme.clouds", true);
+      expect(service.removePluginAccounts).not.toHaveBeenCalled();
+
+      mockUninstallPlugin.mockRejectedValueOnce(new Error("files busy"));
+      await expect(
+        getHandler("plugin:uninstall")({}, "acme.clouds", false, ["ca_acmeplugin1"])
+      ).rejects.toThrow("files busy");
+      expect(service.removePluginAccounts).not.toHaveBeenCalled();
+    });
+
+    it("uninstalls nothing for a removal it can't do", async () => {
+      const { service } = cloud({
+        requirePluginAccounts: vi.fn(() => {
+          throw new Error("Boat doesn't belong to that plugin's cloud provider.");
+        }),
+      });
+      const handler = getHandler("plugin:uninstall");
+      await expect(handler({}, "acme.clouds", false, ["ca_builtin0001"])).rejects.toThrow(
+        /doesn't belong/
+      );
+      await expect(handler({}, "acme.clouds", false, ["not-an-id"])).rejects.toThrow(
+        /cloud account ids/
+      );
+      await expect(handler({}, "acme.clouds", false, "ca_acmeplugin1")).rejects.toThrow(
+        /cloud account ids/
+      );
+      expect(mockUninstallPlugin).not.toHaveBeenCalled();
+      expect(service.removePluginAccounts).not.toHaveBeenCalled();
+
+      _resetRemoteServicesForTest();
+      await expect(handler({}, "acme.clouds", false, ["ca_acmeplugin1"])).rejects.toThrow(
+        /no cloud accounts on this machine/
+      );
+      expect(mockUninstallPlugin).not.toHaveBeenCalled();
+    });
+
+    it("lists an installed plugin's cloud accounts with it, and leaves the rest as they were", async () => {
+      cloud();
+      const installed = {
+        instanceId: "acme.clouds",
+        origin: "global",
+        manifest: { name: "acme.clouds" },
+      };
+      const other = {
+        instanceId: "acme.other",
+        origin: "global",
+        manifest: { name: "acme.other" },
+      };
+      mockListPlugins.mockReturnValueOnce([installed, other]);
+      const listed = (await getHandler("plugin:list")()) as Array<Record<string, unknown>>;
+      expect(listed[0]!.cloudAccounts).toEqual([
+        { id: "ca_acmeplugin1", name: "Work", providerName: "EC2", hosts: [] },
+      ]);
+      expect(listed[1]).toBe(other);
+    });
+  });
+
   it("PLUGIN_CHECK_FOR_UPDATE returns invalid-id for an empty id without delegating", async () => {
     const handler = getHandler("plugin:check-for-update");
     const result = await handler({}, "");
@@ -1179,28 +1326,74 @@ describe("registerPluginHandlers", () => {
 
   // ── #16751: plugin:actions-invoke carries a dispatch context beside the args ──
 
-  it("PLUGIN_ACTIONS_INVOKE hands dispatchHandler a frozen copy of the context, apart from the args", async () => {
-    mockDispatchHandler.mockResolvedValue({ resumed: true });
-    const handler = getHandler("plugin:actions-invoke");
-    const sent = { dispatchSource: "agent", origin: "assistant", approval: "person" };
+  it.each(["assistant", "global-assistant"] as const)(
+    "PLUGIN_ACTIONS_INVOKE hands dispatchHandler a frozen copy of the %s context, apart from the args",
+    async (origin) => {
+      const uninstall = setPluginAssistantReachSource({
+        has: (id) => id === "acme.my-plugin.resume",
+        ids: () => ["acme.my-plugin.resume"],
+      });
+      onTestFinished(uninstall);
+      mockDispatchHandler.mockResolvedValue({ resumed: true });
+      const handler = getHandler("plugin:actions-invoke");
+      const sent = { dispatchSource: "agent", origin, approval: "person" };
 
-    const result = await handler(
+      const result = await handler(
+        { sender: { id: 33 } },
+        "acme.my-plugin",
+        "acme.my-plugin.resume",
+        { approval: "forged" },
+        sent
+      );
+
+      expect(result).toEqual({ resumed: true });
+      const [pluginId, channel, ctx, args, actionContext] = mockDispatchHandler.mock.calls[0]!;
+      expect([pluginId, channel]).toEqual(["acme.my-plugin", "acme.my-plugin.resume"]);
+      expect(ctx).toMatchObject({ webContentsId: 33, pluginId: "acme.my-plugin" });
+      // The args stay the plugin's payload, whatever they say.
+      expect(args).toEqual([{ approval: "forged" }]);
+      expect(actionContext).toEqual(sent);
+      expect(actionContext).not.toBe(sent);
+      expect(Object.isFrozen(actionContext)).toBe(true);
+    }
+  );
+
+  // #18153: the plugin may drop the opt-in between admission and the handler running.
+  it.each(["assistant", "global-assistant"] as const)(
+    "PLUGIN_ACTIONS_INVOKE refuses a %s call to an action no longer offered to it",
+    async (origin) => {
+      const handler = getHandler("plugin:actions-invoke");
+      await expect(
+        handler(
+          { sender: { id: 33 } },
+          "acme.my-plugin",
+          "acme.my-plugin.resume",
+          {},
+          {
+            dispatchSource: "agent",
+            origin,
+            approval: "person",
+          }
+        )
+      ).rejects.toThrow(/no longer offered to the assistant/);
+      expect(mockDispatchHandler).not.toHaveBeenCalled();
+    }
+  );
+
+  it("PLUGIN_ACTIONS_INVOKE still runs an agent call that names no assistant", async () => {
+    mockDispatchHandler.mockResolvedValue({ ok: 1 });
+    const handler = getHandler("plugin:actions-invoke");
+    await handler(
       { sender: { id: 33 } },
       "acme.my-plugin",
       "acme.my-plugin.resume",
-      { approval: "forged" },
-      sent
+      {},
+      {
+        dispatchSource: "agent",
+        approval: "person",
+      }
     );
-
-    expect(result).toEqual({ resumed: true });
-    const [pluginId, channel, ctx, args, actionContext] = mockDispatchHandler.mock.calls[0]!;
-    expect([pluginId, channel]).toEqual(["acme.my-plugin", "acme.my-plugin.resume"]);
-    expect(ctx).toMatchObject({ webContentsId: 33, pluginId: "acme.my-plugin" });
-    // The args stay the plugin's payload, whatever they say.
-    expect(args).toEqual([{ approval: "forged" }]);
-    expect(actionContext).toEqual(sent);
-    expect(actionContext).not.toBe(sent);
-    expect(Object.isFrozen(actionContext)).toBe(true);
+    expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -1209,6 +1402,10 @@ describe("registerPluginHandlers", () => {
     ["an origin other than the assistant", { dispatchSource: "agent", origin: "pane" }],
     ["an approval other than a person", { dispatchSource: "agent", approval: "grant" }],
     ["an assistant origin off the agent source", { dispatchSource: "user", origin: "assistant" }],
+    [
+      "a global Assistant origin off the agent source",
+      { dispatchSource: "menu", origin: "global-assistant" },
+    ],
     ["a person's approval on a plugin dispatch", { dispatchSource: "plugin", approval: "person" }],
     ["no context at all", undefined],
   ])("PLUGIN_ACTIONS_INVOKE refuses %s without dispatching", async (_label, context) => {
@@ -1365,6 +1562,29 @@ describe("registerPluginHandlers", () => {
       errorMessage: expect.stringMatching(/at least \d+ bytes/),
     });
     expect(mockStableArgsSha256).not.toHaveBeenCalled();
+    expect(mockBoundedStableArgsSha256).not.toHaveBeenCalled();
+  });
+
+  it("PLUGIN_INVOKE audits a large accepted invoke without hashing its args on main (#17069)", async () => {
+    mockDispatchHandler.mockRejectedValue(new Error("boom"));
+
+    registerPluginHandlers();
+    const invokeHandler = mockIpcMainHandle.mock.calls.find(
+      (c: unknown[]) => c[0] === "plugin:invoke"
+    )![1] as (...args: unknown[]) => unknown;
+
+    const trustedEvent = {
+      senderFrame: { url: "app://daintree/" },
+      sender: { id: 1 },
+    };
+    // Well inside the invoke cap, so it is dispatched, but large enough that
+    // sorting, serializing and digesting it would stall main on every record.
+    const large = "x".repeat(PLUGIN_AUDIT_ARGS_HASH_MAX_BYTES + 1);
+    await expect(invokeHandler(trustedEvent, "x", "y", large)).rejects.toThrow("boom");
+    expect(mockDispatchHandler).toHaveBeenCalledTimes(1);
+    expect(mockAuditAppend.mock.calls[0][0]).toMatchObject({ result: "error", argsHash: "" });
+    expect(mockStableArgsSha256).not.toHaveBeenCalled();
+    expect(mockBoundedStableArgsSha256).not.toHaveBeenCalled();
   });
 
   it("PLUGIN_INVOKE meters refused args against the load live at the refusal", async () => {
@@ -2695,7 +2915,8 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({ "a.ts": { tooltip: "G" } });
       expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
         "s:1",
-        "project-b"
+        "project-b",
+        null
       );
       expect(localImpl.impl.provideDecorations).not.toHaveBeenCalled();
     });
@@ -2710,7 +2931,8 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(globalImpl.impl.provideDecorations).not.toHaveBeenCalled();
       expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
         "s:1",
-        "project-b"
+        "project-b",
+        null
       );
 
       mockGetProjectForWebContents.mockReturnValue("project-c");
@@ -2725,6 +2947,117 @@ describe("PLUGIN_FILE_DECORATIONS_GET handler", () => {
       expect(await getHandler()(SENDER, "s:1", ["a.ts"])).toEqual({
         "a.ts": { badge: "A", tooltip: "G" },
       });
+    });
+  });
+
+  describe("forge-gated providers (#17069)", () => {
+    const github = {
+      entry: {
+        pluginId: "daintree.github",
+        contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+      },
+      resolvedVia: "hostname",
+    };
+
+    beforeEach(() => {
+      mockHasForgeGatedFileDecorations.mockReset().mockReturnValue(false);
+      mockResolveProjectForgeProvider.mockReset();
+      mockGetFileDecorationImpls.mockReturnValue([]);
+      mockGetProjectForWebContents.mockReturnValue("project-a");
+    });
+
+    it("resolves the sender project's code forge and filters activation and lookup by it", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockResolvedValue(github);
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(mockResolveProjectForgeProvider).toHaveBeenCalledWith("project-a");
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "project-a",
+        "daintree.github.github"
+      );
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "daintree.github.github"
+      );
+    });
+
+    it("hands a GitLab project's forge through, which no GitHub-gated provider matches", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockResolvedValue({
+        entry: {
+          pluginId: "daintree.gitlab",
+          contribution: { id: "gitlab", name: "GitLab", matches: ["gitlab.com"] },
+        },
+        resolvedVia: "hostname",
+      });
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "project-a",
+        "daintree.gitlab.gitlab"
+      );
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "daintree.gitlab.gitlab"
+      );
+    });
+
+    it("waits for the plugin catalog before resolving, so a half-loaded registry can't decide", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      let releaseCatalog!: () => void;
+      vi.mocked(pluginService.waitForCatalog).mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          releaseCatalog = resolve;
+        })
+      );
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockResolvedValue(github);
+
+      const pull = getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]) as Promise<unknown>;
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(pluginService.waitForCatalog).toHaveBeenCalled();
+      expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
+
+      releaseCatalog();
+      await pull;
+      expect(mockResolveProjectForgeProvider).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolves no forge when the project's remote can't be read", async () => {
+      const { pluginService } = await import("../../../services/PluginService.js");
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockResolveProjectForgeProvider.mockRejectedValue(new Error("stale remote"));
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(pluginService.activatePluginsForFileDecorationScope).toHaveBeenCalledWith(
+        "worktree-diff:/r",
+        "project-a",
+        null
+      );
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith("worktree-diff:/r", null);
+    });
+
+    it("reads no git remote when no provider for the scope is gated", async () => {
+      await getHandler()(SENDER, "worktree-files:/r", ["a.ts"]);
+      expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
+    });
+
+    it("resolves no forge for a sender with no project", async () => {
+      mockHasForgeGatedFileDecorations.mockReturnValue(true);
+      mockGetProjectForWebContents.mockReturnValue(null);
+
+      await getHandler()(SENDER, "worktree-diff:/r", ["a.ts"]);
+
+      expect(mockResolveProjectForgeProvider).not.toHaveBeenCalled();
+      expect(mockGetFileDecorationImpls).toHaveBeenCalledWith("worktree-diff:/r", null);
     });
   });
 });
@@ -4141,6 +4474,23 @@ describe("plugin:invoke over the link", () => {
     expect(call[3]).toEqual([{ id: "n1" }]);
     expect(call[4]).toEqual({ dispatchSource: "user", approval: "person" });
     expect(Object.isFrozen(call[4])).toBe(true);
+  });
+
+  // #18153: main marks the global Assistant only on a send to this machine's own view.
+  it("refuses a window on another machine claiming this machine's global Assistant", async () => {
+    registerPluginHandlers();
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteEndpoint(), client },
+      "plugin:actions-invoke",
+      [
+        "acme.graph",
+        "acme.graph.resume",
+        { id: "n1" },
+        { dispatchSource: "agent", origin: "global-assistant", approval: "person" },
+      ]
+    );
+    expect(envelope.ok).toBe(false);
+    expect(mockDispatchHandler).not.toHaveBeenCalled();
   });
 
   it("refuses another project's plugin by the endpoint's own binding", async () => {

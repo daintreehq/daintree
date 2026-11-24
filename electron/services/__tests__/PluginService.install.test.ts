@@ -96,6 +96,7 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
     callTool: vi.fn(),
     restart: vi.fn(),
     removeState: vi.fn(),
+    removeStatesWhere: vi.fn(),
     list: vi.fn(() => []),
     getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
   }),
@@ -125,6 +126,7 @@ import { PluginBlocklistService } from "../plugin/PluginBlocklistService.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
+import { setPluginCloudConsentForgetter } from "../plugin/pluginCloudProviders.js";
 import type { PluginInstallExpectation } from "../../../shared/types/plugin.js";
 
 /** A PluginBlocklistService backed by an in-memory list (no network/disk). */
@@ -1565,6 +1567,28 @@ describe("installPlugin — consent reset on upgrade (#10518)", () => {
     expect(capConsentMock.revokeAllForPlugin).toHaveBeenCalledWith("acme.uninstall-consent");
 
     service.dispose();
+  });
+
+  it("keeps the cloud provider consent across an update and forgets it on uninstall (#17352)", async () => {
+    // Uninstalls by earlier tests, heard with no cloud side to forget them, are drained first.
+    setPluginCloudConsentForgetter(() => {});
+    const forgotten: string[] = [];
+    setPluginCloudConsentForgetter((pluginId) => forgotten.push(pluginId));
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    try {
+      const v1 = await makeArchive({ name: "acme.cloud-consent", version: "1.0.0" });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+      const v2 = await makeArchive({ name: "acme.cloud-consent", version: "2.0.0" });
+      expect((await service.installPlugin(v2)).status).toBe("installed");
+      // An update leaves it to the declarations: unchanged ones ask nothing again.
+      expect(forgotten).toEqual([]);
+
+      await service.uninstallPlugin("acme.cloud-consent");
+      expect(forgotten).toEqual(["acme.cloud-consent"]);
+    } finally {
+      setPluginCloudConsentForgetter(null);
+      service.dispose();
+    }
   });
 });
 

@@ -117,6 +117,7 @@ function preparation(overrides: Partial<HostSwitchPreparation> = {}): HostSwitch
     toHostId: "studio-01",
     projectId: "p1",
     projectName: "daintree",
+    display: { name: "daintree", emoji: "🎸", color: "#ff5500" },
     worktreePath: "/Users/greg/Projects/daintree",
     branch: "feature/host-chip",
     branchCheck: { kind: "same-tip", remote: "origin", sha: "abc" },
@@ -252,6 +253,7 @@ describe("HostSwitchDialog", () => {
       source: { kind: "remote", url: "git@github.com:daintreehq/daintree.git" },
       destination: "/home/greg/Projects/daintree",
       branch: { name: "feature/host-chip", remoteBranch: "feature/host-chip" },
+      display: { name: "daintree", emoji: "🎸", color: "#ff5500" },
     });
   });
 
@@ -486,6 +488,7 @@ describe("HostSwitchDialog", () => {
       kind: "open",
       branch: null,
       navigateOnly: true,
+      display: { name: "daintree", emoji: "🎸", color: "#ff5500" },
     });
   });
 
@@ -524,6 +527,59 @@ describe("HostSwitchDialog", () => {
       candidate: { projectId: "host-p1" },
     });
   });
+
+  it.each([
+    ["with the worktree open", "/home/greg/code/daintree-worktrees/feature-host-chip", true],
+    ["without the worktree", null, false],
+  ] as const)(
+    "tells the asker where the window landed, %s",
+    async (_label, worktreePath, worktreeOpened) => {
+      prepare.mockResolvedValue(
+        preparation({
+          hasUncommittedChanges: false,
+          candidates: [
+            {
+              projectId: "host-p1",
+              path: "/home/greg/code/daintree",
+              name: "daintree",
+              remotes: [{ name: "origin", url: "https://github.com/daintreehq/daintree" }],
+              source: "registered",
+              matchedBy: "remote-url",
+              lastOpenedAt: null,
+            },
+          ],
+        })
+      );
+      execute.mockResolvedValue({
+        kind: "opened",
+        hostId: "studio-01",
+        projectId: "host-p1",
+        projectPath: "/home/greg/code/daintree",
+        projectName: "daintree",
+        worktreePath,
+        canCheckOutBranch: false,
+        branchNote: null,
+        setupRecipeId: null,
+      });
+      const onLanding = vi.fn();
+      render(<HostSwitchDialog request={{ ...request, onLanding }} onClose={vi.fn()} />);
+      await waitFor(() => expect(switchToHost).toHaveBeenCalledTimes(1));
+      const options = switchToHost.mock.calls[0]![3] as {
+        onLanded: () => void;
+        onStayed: () => void;
+        focusIntent?: unknown;
+      };
+      // It lands on that worktree, even in a window that already shows the project.
+      expect(options.focusIntent).toEqual(
+        worktreePath === null ? undefined : { intent: "focus-worktree", worktreeId: worktreePath }
+      );
+      expect(onLanding).not.toHaveBeenCalled();
+      options.onLanded();
+      expect(onLanding).toHaveBeenLastCalledWith({ landed: true, worktreeOpened });
+      options.onStayed();
+      expect(onLanding).toHaveBeenLastCalledWith({ landed: false });
+    }
+  );
 
   it("opens straight away, without a question, when there is nothing to decide", async () => {
     prepare.mockResolvedValue(

@@ -1,8 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { actionService } from "@/services/ActionService";
+import { Callout } from "@/components/ui/Callout";
+import { CopyButton } from "@/components/ui/CopyButton";
+import { logsClient } from "@/clients/logsClient";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
@@ -49,8 +51,18 @@ function buildDetailsText(
   return lines.join("\n");
 }
 
-function openLogs() {
-  void actionService.dispatch("logs.openFile", undefined, { source: "user" });
+const LOGS_UNAVAILABLE_MESSAGE = "Couldn't open the log file. Select View logs to try again.";
+
+// Direct IPC rather than actionService: this renders during startup crashes and
+// in auxiliary windows where renderer action definitions are never registered.
+// Resolves false for every failure (a missing preload bridge throws synchronously).
+async function openLogs(): Promise<boolean> {
+  try {
+    await logsClient.openFile();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function ErrorFallback({
@@ -75,11 +87,27 @@ export function ErrorFallback({
   const { copied: idCopied, copy: copyId } = useCopyWithFeedback({
     announcement: "Error ID copied",
   });
-  const { copied: detailsCopied, copy: copyDetails } = useCopyWithFeedback({
-    announcement: "Error details copied",
-  });
 
   const announcedRef = useRef(false);
+  const [logsFailed, setLogsFailed] = useState(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const logsRequestRef = useRef(0);
+
+  const handleViewLogs = useCallback(() => {
+    const request = ++logsRequestRef.current;
+    setLogsFailed(false);
+    void openLogs().then((ok) => {
+      // A slow failure from an earlier click must not overwrite a later success.
+      if (request === logsRequestRef.current && mountedRef.current) setLogsFailed(!ok);
+    });
+  }, []);
 
   // Fullscreen carries role="alertdialog" + autoFocus on its primary button —
   // AT already gets a focus shift + accessible-name read, so a duplicate
@@ -119,9 +147,7 @@ export function ErrorFallback({
     description = "Your terminals and agents are still running. Try again to reload this area.";
   }
 
-  const handleCopyDetails = () => {
-    void copyDetails(buildDetailsText(error, errorInfo, incidentId, name));
-  };
+  const getDetailsText = () => buildDetailsText(error, errorInfo, incidentId, name);
 
   return (
     <div
@@ -223,15 +249,14 @@ export function ErrorFallback({
             </Button>
           )}
           {isComponent && (
-            <Button
-              type="button"
+            <CopyButton
+              label="Copy details"
               variant="ghost"
               size="sm"
-              onClick={handleCopyDetails}
+              text={getDetailsText}
+              announcement="Error details copied"
               data-testid="error-fallback-copy-details"
-            >
-              {detailsCopied ? "Copied" : "Copy details"}
-            </Button>
+            />
           )}
         </div>
 
@@ -255,12 +280,24 @@ export function ErrorFallback({
               type="button"
               variant="ghost"
               size="sm"
-              onClick={openLogs}
+              onClick={handleViewLogs}
               data-testid="error-fallback-logs"
             >
               View logs
             </Button>
           </div>
+        )}
+
+        {logsFailed && !isComponent && (
+          <Callout
+            severity="error"
+            size="compact"
+            role="alert"
+            data-testid="error-fallback-logs-error"
+            className="text-left"
+          >
+            {LOGS_UNAVAILABLE_MESSAGE}
+          </Callout>
         )}
 
         {showIncidentId && !isComponent && (
@@ -301,15 +338,14 @@ export function ErrorFallback({
                 <span className="text-xs text-text-secondary">
                   {import.meta.env.DEV ? "Stack trace" : "Stack trace, with personal paths removed"}
                 </span>
-                <Button
-                  type="button"
+                <CopyButton
+                  label="Copy details"
                   variant="ghost"
                   size="sm"
-                  onClick={handleCopyDetails}
+                  text={getDetailsText}
+                  announcement="Error details copied"
                   data-testid="error-fallback-copy-details"
-                >
-                  {detailsCopied ? "Copied" : "Copy details"}
-                </Button>
+                />
               </div>
               {/* Production stacks are scrubbed before display so crash reporters
                   never expose user paths or secrets; dev keeps the raw stack. */}

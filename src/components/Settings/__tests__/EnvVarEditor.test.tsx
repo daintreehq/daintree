@@ -11,10 +11,22 @@
  *  - Removing a row commits the updated env immediately.
  *  - Renaming a key commits only when the new name is non-empty and unique.
  */
-import { useState, type ReactElement } from "react";
+import { useContext, useEffect, useState, type ContextType, type ReactElement } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render as rtlRender, fireEvent, screen, type RenderOptions } from "@testing-library/react";
+import {
+  act,
+  render as rtlRender,
+  fireEvent,
+  screen,
+  type RenderOptions,
+} from "@testing-library/react";
 import { EnvVarEditor } from "../EnvVarEditor";
+import {
+  SettingsFlushContext,
+  SettingsFlushProvider,
+  type FailedSettingsFlush,
+  type SettingsFlushReason,
+} from "../SettingsFlushRegistry";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 function render(ui: ReactElement, options?: Omit<RenderOptions, "queries">) {
@@ -38,6 +50,14 @@ vi.mock("lucide-react", () => ({
   Info: () => <span data-testid="info-icon" />,
 }));
 
+type AutoFocusHandler = (event: Event) => void;
+
+// Radix's own open/close focus moves don't happen in jsdom, so the content's
+// handlers are kept against its node and the tests fire them where Radix would.
+const popoverAutoFocus = vi.hoisted(
+  () => new WeakMap<Element, { open?: AutoFocusHandler; close?: AutoFocusHandler }>()
+);
+
 // Render Popover children inline so jsdom doesn't need to wrestle Radix's
 // Portal / focus-trap machinery — we're asserting on the picker behavior,
 // not on portal mechanics.
@@ -45,8 +65,46 @@ vi.mock("@/components/ui/popover", () => ({
   Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverAnchor: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  PopoverContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  PopoverContent: ({
+    children,
+    onOpenAutoFocus,
+    onCloseAutoFocus,
+    onMouseDown,
+  }: {
+    children: React.ReactNode;
+    onOpenAutoFocus?: AutoFocusHandler;
+    onCloseAutoFocus?: AutoFocusHandler;
+    onMouseDown?: React.MouseEventHandler<HTMLDivElement>;
+  }) => (
+    <div
+      ref={(el) => {
+        if (el) popoverAutoFocus.set(el, { open: onOpenAutoFocus, close: onCloseAutoFocus });
+      }}
+      onMouseDown={onMouseDown}
+    >
+      {children}
+    </div>
+  ),
 }));
+
+/**
+ * Fires the key cell's popover autofocus handler the way Radix's FocusScope
+ * does, including what happens when nobody cancels it: a close hands focus back
+ * to whatever had it when the list opened, which is the name field.
+ */
+function firePopoverAutoFocus(keyInput: HTMLElement, which: "open" | "close"): Event {
+  const listbox = document.getElementById(keyInput.getAttribute("aria-controls") ?? "");
+  const handler = listbox?.parentElement
+    ? popoverAutoFocus.get(listbox.parentElement)?.[which]
+    : undefined;
+  if (!handler) throw new Error(`No ${which} autofocus handler for the suggestions list`);
+  const event = new Event(`focusScope.autoFocusOn${which === "open" ? "Mount" : "Unmount"}`, {
+    cancelable: true,
+  });
+  handler(event);
+  if (which === "close" && !event.defaultPrevented) keyInput.focus();
+  return event;
+}
 
 interface DialogAction {
   label: string;
@@ -531,6 +589,104 @@ describe("EnvVarEditor", () => {
       expect(controls).toBeTruthy();
       // The listbox referenced by aria-controls must exist in the DOM.
       expect(document.getElementById(controls!)).toBeTruthy();
+    });
+
+    describe("focus", () => {
+      function renderPicker(row = 0) {
+        const utils = render(
+          <EnvVarEditor
+            env={{ FOO: "v", BAR: "w" }}
+            onChange={onChange}
+            suggestions={sampleSuggestions}
+          />
+        );
+        const keyInput = utils.getAllByTestId("env-editor-key")[row] as HTMLInputElement;
+        const valueInput = utils.getAllByTestId("env-editor-value")[row] as HTMLInputElement;
+        return { ...utils, keyInput, valueInput };
+      }
+
+      it("opening the list leaves focus in the name field", () => {
+        const { keyInput } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+
+        const opened = firePopoverAutoFocus(keyInput, "open");
+
+        expect(opened.defaultPrevented).toBe(true);
+        expect(document.activeElement).toBe(keyInput);
+      });
+
+      it("Tab closes an open list and focus stays where Tab sent it", () => {
+        const { keyInput, valueInput } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        expect(keyInput.getAttribute("aria-expanded")).toBe("true");
+
+        // Tab is not prevented: the browser moves focus on to the value field.
+        expect(fireEvent.keyDown(keyInput, { key: "Tab" })).toBe(true);
+        expect(keyInput.getAttribute("aria-expanded")).toBe("false");
+        valueInput.focus();
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(document.activeElement).toBe(valueInput);
+      });
+
+      it("a close caused by focus moving elsewhere does not pull it back to the name field", () => {
+        const { keyInput, getAllByTestId } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        expect(keyInput.getAttribute("aria-expanded")).toBe("true");
+
+        // Clicking another row's field dismisses the list from outside.
+        const otherValue = getAllByTestId("env-editor-value")[1] as HTMLInputElement;
+        act(() => otherValue.focus());
+        expect(keyInput.getAttribute("aria-expanded")).toBe("false");
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(document.activeElement).toBe(otherValue);
+      });
+
+      it("Enter on a highlighted suggestion moves focus to that row's value field", () => {
+        const { keyInput, valueInput } = renderPicker(1);
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        fireEvent.keyDown(keyInput, { key: "Enter" });
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(keyInput.value).toBe("ANTHROPIC_API_KEY");
+        expect(document.activeElement).toBe(valueInput);
+        expect(onChange).toHaveBeenLastCalledWith({ FOO: "v", ANTHROPIC_API_KEY: "w" });
+      });
+
+      it("clicking a suggestion keeps focus off the list and lands it in that row's value field", () => {
+        const { keyInput, valueInput } = renderPicker(1);
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        const listbox = document.getElementById(keyInput.getAttribute("aria-controls")!)!;
+        const option = Array.from(listbox.querySelectorAll('[role="option"]')).find((el) =>
+          (el.textContent ?? "").includes("OPENAI_API_KEY")
+        )!;
+
+        // A press on the list must not take focus out of the name field first.
+        expect(fireEvent.mouseDown(option)).toBe(false);
+        fireEvent.click(option);
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(keyInput.value).toBe("OPENAI_API_KEY");
+        expect(document.activeElement).toBe(valueInput);
+        expect(onChange).toHaveBeenLastCalledWith({ FOO: "v", OPENAI_API_KEY: "w" });
+      });
+
+      it("Escape closes the list and focus stays in the name field", () => {
+        const { keyInput } = renderPicker();
+        keyInput.focus();
+        fireEvent.keyDown(keyInput, { key: "ArrowDown" });
+        fireEvent.keyDown(keyInput, { key: "Escape" });
+        firePopoverAutoFocus(keyInput, "close");
+
+        expect(keyInput.getAttribute("aria-expanded")).toBe("false");
+        expect(document.activeElement).toBe(keyInput);
+      });
     });
   });
 
@@ -1173,5 +1329,306 @@ describe("EnvVarEditor", () => {
       expect(input.getAttribute("type")).toBe("password");
       expect(input.getAttribute("autocomplete")).toBe("new-password");
     });
+  });
+});
+
+describe("unsaved drafts", () => {
+  type FlushApi = NonNullable<ContextType<typeof SettingsFlushContext>>;
+
+  let onChange: ReturnType<typeof vi.fn<(env: Record<string, string>) => void>>;
+  let registry: FlushApi | null = null;
+  const captureRegistry = (api: FlushApi) => {
+    registry = api;
+  };
+
+  beforeEach(() => {
+    onChange = vi.fn<(env: Record<string, string>) => void>();
+    registry = null;
+  });
+
+  function RegistryProbe({ onRegistry }: { onRegistry: (api: FlushApi) => void }) {
+    const api = useContext(SettingsFlushContext);
+    useEffect(() => {
+      if (api) onRegistry(api);
+    }, [api, onRegistry]);
+    return null;
+  }
+
+  /** The editor under the Settings dialog's flush registry. */
+  function renderInSettings(ui: ReactElement) {
+    return rtlRender(ui, {
+      wrapper: ({ children }) => (
+        <TooltipProvider>
+          <SettingsFlushProvider>
+            {children}
+            <RegistryProbe onRegistry={captureRegistry} />
+          </SettingsFlushProvider>
+        </TooltipProvider>
+      ),
+    });
+  }
+
+  async function flushSettings(reason: SettingsFlushReason = "close") {
+    let failed: FailedSettingsFlush[] = [];
+    await act(async () => {
+      failed = await registry!.flushAll(reason);
+    });
+    return failed;
+  }
+
+  const keys = () =>
+    (screen.getAllByTestId("env-editor-key") as HTMLInputElement[]).map((el) => el.value);
+
+  describe("closing Settings", () => {
+    it("saves an edit no blur reached", async () => {
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-value")[0]!, { target: { value: "2" } });
+      expect(onChange).not.toHaveBeenCalled();
+
+      expect(await flushSettings()).toEqual([]);
+      expect(onChange).toHaveBeenLastCalledWith({ FOO: "2" });
+    });
+
+    it("holds the close on a blank name, and says so where the close stopped", async () => {
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} settingsTab="agents" />
+      );
+      const barKey = screen.getAllByTestId("env-editor-key")[1] as HTMLInputElement;
+      fireEvent.change(barKey, { target: { value: "" } });
+      fireEvent.change(screen.getAllByTestId("env-editor-value")[0]!, { target: { value: "9" } });
+      // Not blurred yet, so the blank name isn't flagged.
+      expect(screen.queryByTestId("env-editor-error-empty")).toBeNull();
+
+      const failed = await flushSettings();
+
+      expect(failed).toHaveLength(1);
+      expect(failed[0]!.tab).toBe("agents");
+      const landing = document.getElementById(failed[0]!.landOn);
+      expect(landing?.querySelector('[data-testid="env-editor-key"]')).toBe(barKey);
+      expect(screen.getByTestId("env-editor-error-empty")).toBeTruthy();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      { problem: "malformed", edits: [[1, "BAD NAME"]], landsOn: 1 },
+      { problem: "repeated", edits: [[2, "BAR"]], landsOn: 1 },
+      {
+        problem: "malformed then blank",
+        edits: [
+          [2, ""],
+          [1, "BAD NAME"],
+        ],
+        landsOn: 1,
+      },
+      {
+        problem: "blank then repeated",
+        edits: [
+          [0, ""],
+          [2, "BAR"],
+        ],
+        landsOn: 0,
+      },
+    ] as const)("lands on the first row a $problem name holds up", async ({ edits, landsOn }) => {
+      renderInSettings(
+        <EnvVarEditor
+          env={{ FOO: "1", BAR: "2", BAZ: "3" }}
+          onChange={onChange}
+          settingsTab="environment"
+        />
+      );
+      const keyInputs = screen.getAllByTestId("env-editor-key");
+      for (const [row, name] of edits) {
+        fireEvent.change(keyInputs[row]!, { target: { value: name } });
+      }
+
+      const failed = await flushSettings();
+
+      expect(failed.map((f) => f.tab)).toEqual(["environment"]);
+      const landing = document.getElementById(failed[0]!.landOn);
+      expect(landing?.querySelector('[data-testid="env-editor-key"]')).toBe(keyInputs[landsOn]);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    // Rows the saved env still has in full: a draft compared by its saveable
+    // part alone would read as saved here.
+    it.each([
+      { added: "left blank", name: "" },
+      { added: "repeating a saved name", name: "FOO" },
+    ])("holds the close on an added row $added", async ({ name }) => {
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />
+      );
+      fireEvent.click(screen.getByTestId("env-editor-add"));
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: name } });
+
+      expect(await flushSettings()).toHaveLength(1);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("never holds a hide, and leaves the draft as it was", async () => {
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} settingsTab="agents" />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "" } });
+
+      expect(await flushSettings("hide")).toEqual([]);
+      expect(keys()).toEqual(["FOO", ""]);
+      expect(screen.queryByTestId("env-editor-error-empty")).toBeNull();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("treats a saved name that only trims to something invalid as saved", async () => {
+      renderInSettings(
+        <EnvVarEditor env={{ " ": "1", FOO: "2" }} onChange={onChange} settingsTab="agents" />
+      );
+      expect(await flushSettings()).toEqual([]);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("has nothing to do while the table is what is saved", async () => {
+      renderInSettings(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} settingsTab="agents" />
+      );
+      expect(await flushSettings()).toEqual([]);
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("stays out of the close without a Settings page to report to", async () => {
+      renderInSettings(<EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} />);
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "" } });
+      expect(await flushSettings()).toEqual([]);
+    });
+
+    it("lets an override emptied without a blur fall back to the inherited value", async () => {
+      renderInSettings(
+        <EnvVarEditor
+          env={{ API_KEY: "mine" }}
+          inheritedEnv={{ API_KEY: "global" }}
+          onChange={onChange}
+          settingsTab="agents"
+        />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-value")[0]!, { target: { value: "" } });
+
+      expect(await flushSettings()).toEqual([]);
+      expect(onChange).toHaveBeenLastCalledWith({});
+      const value = screen.getAllByTestId("env-editor-value")[0] as HTMLInputElement;
+      expect(value.value).toBe("global");
+      expect(value.disabled).toBe(true);
+    });
+  });
+
+  describe("switching agent or preset", () => {
+    it("brings back a draft that couldn't save after switching away and back", () => {
+      const { rerender } = render(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} contextKey="switch-a" />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[0]!, {
+        target: { value: "BAD NAME" },
+      });
+
+      rerender(<EnvVarEditor env={{ BAR: "2" }} onChange={onChange} contextKey="switch-b" />);
+      expect(keys()).toEqual(["BAR"]);
+
+      rerender(<EnvVarEditor env={{ FOO: "1" }} onChange={onChange} contextKey="switch-a" />);
+      expect(keys()).toEqual(["BAD NAME"]);
+      expect(screen.getByTestId("env-editor-error-invalid")).toBeTruthy();
+      expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("brings it back across a remount, with a blank name flagged at once", () => {
+      const first = render(
+        <EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} contextKey="remount" />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "" } });
+      first.unmount();
+
+      render(
+        <EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} contextKey="remount" />
+      );
+      expect(keys()).toEqual(["FOO", ""]);
+      expect(screen.getByTestId("env-editor-error-empty")).toBeTruthy();
+    });
+
+    it("rebuilds the inherited rows from what is inherited on return", () => {
+      const { rerender } = render(
+        <EnvVarEditor
+          env={{ X: "1", A: "mine" }}
+          inheritedEnv={{ A: "1", C: "3" }}
+          onChange={onChange}
+          contextKey="inherit-a"
+        />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[0]!, { target: { value: "" } });
+
+      rerender(<EnvVarEditor env={{}} onChange={onChange} contextKey="inherit-b" />);
+      rerender(
+        <EnvVarEditor
+          env={{ X: "1", A: "mine" }}
+          inheritedEnv={{ A: "changed", B: "2" }}
+          onChange={onChange}
+          contextKey="inherit-a"
+        />
+      );
+
+      // A stays the override it was; C is no longer inherited; B now is.
+      expect(keys()).toEqual(["", "A", "B"]);
+      const values = (screen.getAllByTestId("env-editor-value") as HTMLInputElement[]).map(
+        (el) => el.value
+      );
+      expect(values).toEqual(["1", "mine", "2"]);
+      expect(screen.getAllByTestId("env-editor-row-inherited")).toHaveLength(1);
+    });
+
+    it("drops a parked draft once the env it was drafted against has changed", () => {
+      const { rerender } = render(
+        <EnvVarEditor env={{ FOO: "1" }} onChange={onChange} contextKey="stale-a" />
+      );
+      fireEvent.change(screen.getAllByTestId("env-editor-key")[0]!, { target: { value: "" } });
+
+      rerender(<EnvVarEditor env={{}} onChange={onChange} contextKey="stale-b" />);
+      rerender(<EnvVarEditor env={{ FOO: "9" }} onChange={onChange} contextKey="stale-a" />);
+
+      expect(keys()).toEqual(["FOO"]);
+      expect((screen.getAllByTestId("env-editor-value")[0] as HTMLInputElement).value).toBe("9");
+    });
+  });
+
+  it("Discard changes puts back the saved table", () => {
+    render(<EnvVarEditor env={{ FOO: "1", BAR: "2" }} onChange={onChange} />);
+    expect(screen.queryByTestId("env-editor-discard")).toBeNull();
+    fireEvent.change(screen.getAllByTestId("env-editor-key")[1]!, { target: { value: "FOO" } });
+    fireEvent.change(screen.getAllByTestId("env-editor-value")[0]!, { target: { value: "9" } });
+
+    fireEvent.click(screen.getByTestId("env-editor-discard"));
+
+    expect(keys()).toEqual(["FOO", "BAR"]);
+    const values = (screen.getAllByTestId("env-editor-value") as HTMLInputElement[]).map(
+      (el) => el.value
+    );
+    expect(values).toEqual(["1", "2"]);
+    expect(screen.queryByTestId("env-editor-error-duplicate")).toBeNull();
+    expect(screen.queryByTestId("env-editor-discard")).toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("an import lands in a draft that can't save yet instead of replacing it", () => {
+    render(<EnvVarEditor env={{ FOO: "1" }} onChange={onChange} />);
+    const fooKey = screen.getAllByTestId("env-editor-key")[0]!;
+    fireEvent.change(fooKey, { target: { value: "BAD NAME" } });
+
+    fireEvent.click(screen.getByTestId("env-editor-import"));
+    fireEvent.change(screen.getByTestId("import-env-textarea"), { target: { value: "NEW=2" } });
+    fireEvent.click(screen.getByTestId("app-dialog-primary"));
+
+    expect(keys()).toEqual(["BAD NAME", "NEW"]);
+    expect(onChange).not.toHaveBeenCalled();
+
+    // Fixing the name saves both.
+    fireEvent.change(fooKey, { target: { value: "FOO" } });
+    fireEvent.blur(fooKey);
+    expect(onChange).toHaveBeenLastCalledWith({ FOO: "1", NEW: "2" });
   });
 });

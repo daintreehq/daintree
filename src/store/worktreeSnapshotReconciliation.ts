@@ -359,6 +359,7 @@ export function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolea
     attachmentsEqual(a.attachments, b.attachments) &&
     worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
     lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus) &&
+    lifecycleStatusEqual(a.setupRun, b.setupRun) &&
     setupStatusEqual(a.setupStatus, b.setupStatus) &&
     lifecyclePhaseResultsEqual(a.lifecyclePhaseResults, b.lifecyclePhaseResults) &&
     linkedEqual(a.linked ?? null, b.linked ?? null)
@@ -436,8 +437,12 @@ function lifecycleStatusEqual(
     a.commandIndex === b.commandIndex &&
     a.totalCommands === b.totalCommands &&
     a.startedAt === b.startedAt &&
+    a.commandStartedAt === b.commandStartedAt &&
     a.completedAt === b.completedAt &&
-    a.error === b.error
+    a.error === b.error &&
+    // A running phase's output changes on its own while it prints.
+    a.output === b.output &&
+    a.logPath === b.logPath
   );
 }
 

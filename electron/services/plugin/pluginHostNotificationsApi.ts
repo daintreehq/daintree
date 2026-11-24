@@ -28,6 +28,7 @@ import {
   type HostApprovedPluginPresetLaunch,
 } from "../../../shared/utils/agentPresetLaunchConsent.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import { supersedeByPluginLaunch } from "../mcp-server/assistantPaneCreations.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import {
   isBuiltInActionId,
@@ -52,6 +53,7 @@ import type {
 import { type PluginHostFactoryDeps, isProjectViewUnavailable } from "./pluginHostDeps.js";
 import type { PluginEventScope } from "./pluginEventScope.js";
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
+import { assistantGrantEpoch } from "../pluginAgentMcp/assistantGrantEpoch.js";
 
 /**
  * A targeted `terminal.close` for a project with no live view (#13507): main
@@ -311,6 +313,7 @@ export interface PluginHostNotificationsContext {
     | "panelLifecycleBroker"
     | "pluginDisplayName"
     | "pluginNotificationsBlocked"
+    | "assistantNotifications"
     | "pluginTasks"
     | "plugins"
     | "safeAppendAudit"
@@ -477,6 +480,7 @@ export function buildNotificationsHostApi(
       ? dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId)
       : dispatcher.sendDispatchToRenderer(actionId, args, projectId, pluginId, approval));
     if (isBound()) recordPluginLaunch(pluginId, actionId, args, result, projectId);
+    supersedeByPluginLaunch(actionId, result, projectId);
     return result;
   };
   /**
@@ -748,6 +752,10 @@ export function buildNotificationsHostApi(
     // what the plugin could already put in its own panel menu.
     notify: async (options) => {
       const id = randomUUID();
+      // When it was raised, before any wait: one raised before the person ends
+      // an assistant's grant never reaches an assistant under a later one.
+      const raisedAt = Date.now();
+      const raisedEpoch = assistantGrantEpoch();
       if (!deps.plugins.has(pluginId)) return { id };
       const parsed = PluginNotifyOptionsSchema.safeParse(options);
       if (!parsed.success) {
@@ -757,7 +765,7 @@ export function buildNotificationsHostApi(
             .join("; ")}`
         );
       }
-      const { title, body, os, dedupeKey } = parsed.data;
+      const { title, body, os, dedupeKey, audience } = parsed.data;
       const severity = parsed.data.severity ?? "info";
       const passive = parsed.data.delivery === "passive";
       const actions = (parsed.data.actions ?? []).map((action, index) => ({
@@ -855,6 +863,31 @@ export function buildNotificationsHostApi(
             .catch(() => {
               // Best-effort, like the local push.
             });
+        }
+        // An assistant hears only what the person was let see, and only for a
+        // project, whose Agent tools switch is the grant (#18154). Loaded in
+        // order, and never published for an instance replaced meanwhile.
+        if (audience === "assistant" && projectId !== null && deps.assistantNotifications) {
+          try {
+            const assistants = await deps.assistantNotifications();
+            if (!isBound()) return { id };
+            assistants.publish(
+              {
+                notificationId: id,
+                pluginId,
+                pluginName: displayName,
+                projectId,
+                dedupeKey: dedupeKey ?? null,
+                severity,
+                createdAt: raisedAt,
+                title,
+                body,
+              },
+              raisedEpoch
+            );
+          } catch (error) {
+            console.warn("[PluginHost] Couldn't offer a notification to assistants", error);
+          }
         }
         return { id };
       });

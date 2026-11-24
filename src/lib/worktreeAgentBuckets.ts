@@ -104,14 +104,13 @@ export function deriveWorktreeAgentBuckets(
     if (!run) continue;
     // Working is read off the state, not the band: a park or snooze shelves an
     // agent's demands, not its work, and a snoozed agent still running must
-    // never let its worktree read as finished.
-    if (run.agentState === "working" || run.agentState === "directing") {
-      working = true;
-      continue;
-    }
+    // never let its worktree read as finished. An agent at work can still be
+    // waiting on the user, for a Decisions question it asked before carrying on.
+    const busy = run.agentState === "working" || run.agentState === "directing";
+    if (busy) working = true;
     const band = bandForRun(run);
     if (ATTENTION_FILTER_BANDS.has(band)) attention = true;
-    else if (FINISHED_FILTER_BANDS.has(band)) {
+    else if (!busy && FINISHED_FILTER_BANDS.has(band)) {
       handedBack = true;
       if (band === "review") unseen = true;
     }

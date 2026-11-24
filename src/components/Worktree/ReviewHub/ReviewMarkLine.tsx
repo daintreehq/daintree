@@ -39,7 +39,7 @@ interface ReviewMarkLineProps {
 const NOTICE_FILES = 3;
 
 const LINE_ACTION_CLASS =
-  "shrink-0 inline-flex items-center gap-1 text-text-secondary hover:text-text-primary";
+  "shrink-0 inline-flex items-center justify-center gap-1 min-h-6 min-w-6 -my-1 text-text-secondary hover:text-text-primary";
 
 /**
  * The quiet line under Review Hub's header once a worktree has a review mark
@@ -177,7 +177,10 @@ export function ReviewMarkLine({
                 <button
                   type="button"
                   className={cn(LINE_ACTION_CLASS, "ml-auto")}
-                  onClick={onClear}
+                  onClick={() => {
+                    if (isClearing) return;
+                    onClear();
+                  }}
                   aria-label="Clear review mark"
                   aria-disabled={isClearing || undefined}
                   aria-busy={isClearing || undefined}
@@ -185,7 +188,7 @@ export function ReviewMarkLine({
                 >
                   <X className="size-3" aria-hidden="true" />
                   <span aria-hidden="true" className="hidden @[30rem]/mark-line:inline">
-                    {isClearing ? "Clearing…" : "Clear review mark"}
+                    Clear review mark
                   </span>
                 </button>
               </TooltipTrigger>

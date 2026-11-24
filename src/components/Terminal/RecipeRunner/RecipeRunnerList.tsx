@@ -165,7 +165,9 @@ export function RecipeRunnerList({
       )}
 
       <div role="status" aria-live="polite" className="sr-only">
-        {isSearchActive ? `${flatRecipes.length} recipes found` : ""}
+        {isSearchActive
+          ? `${flatRecipes.length} ${flatRecipes.length === 1 ? "recipe" : "recipes"} found`
+          : ""}
       </div>
 
       <div

@@ -23,7 +23,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Repeat last action | `⌘+⇧+.` | `Ctrl+Shift+.` |
 | Toggle sidebar | `⌘+B` | `Ctrl+B` |
 | Toggle focus mode (hide sidebar and assistant) | `⌘+K ⌘+F` | `Ctrl+K Ctrl+F` |
-| Switch host | `⌘+⌥+U` | `Ctrl+Alt+U` (Linux only) |
+| Switch host | `⌘+⌥+U` | `Ctrl+Alt+U` |
 
 ## Terminal
 
@@ -62,6 +62,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Move panel to grid | `⌘+⇧+⌥+G` | `Ctrl+Shift+Alt+G` |
 | Inject context into focused terminal | `⌘+⇧+I` | `Ctrl+Shift+I` |
 | Send selection to another terminal | `⌘+K ⌘+I` | `Ctrl+K Ctrl+I` |
+| Copy selection as clean text | `⌘+⇧+⌥+C` | `Ctrl+Shift+Alt+C` (Linux only) |
 | Arm all eligible terminals in the current worktree | `⌘+⇧+B` | `Ctrl+Shift+B` |
 | Focus panel above | `⌘+⌥+↑` | `Ctrl+Alt+Up` (Windows), `Ctrl+Shift+Up` (Linux) |
 | Focus panel below | `⌘+⌥+↓` | `Ctrl+Alt+Down` (Windows), `Ctrl+Shift+Down` (Linux) |
@@ -142,11 +143,11 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
 | Open panel palette | `⌘+N` | `Ctrl+N` |
+| Undo closing a panel | `⌘+Z` | `Ctrl+Z` |
 | Open diagnostics dock to Logs tab | `⌃+⇧+L` | `Ctrl+Shift+L` |
 | Open diagnostics dock to Problems tab | `⌃+⇧+M` | `Ctrl+Shift+M` |
 | Toggle diagnostics dock | `⌃+⇧+J` | `Ctrl+Shift+J` |
 | Toggle notification inbox | `⌘+⇧+N` | `Ctrl+Shift+N` |
-| Toggle portal panel | `⌘+\` | `Ctrl+\` |
 | Open focused panel context menu | `⇧+F10` | `Shift+F10` |
 | Open focused panel context menu | `ContextMenu` | `ContextMenu` |
 
@@ -177,19 +178,14 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
+| Next hunk in the diff, on into the next file | `N` | `N` |
+| Previous hunk in the diff, back into the previous file | `P` | `P` |
+| Next file in the diff | `]` | `]` |
+| Previous file in the diff | `[` | `[` |
+| Mark the diff's file viewed, or the focused file in its list | `V` | `V` |
 | Stage all changes | `⌘+K ⌘+G` | `Ctrl+K Ctrl+G` |
 | Commit staged changes | `⌘+K ⌘+C` | `Ctrl+K Ctrl+C` |
 | Push to remote | `⌘+K ⌘+P` | `Ctrl+K Ctrl+P` |
-
-## Portal
-
-| Action | macOS | Windows/Linux |
-| --- | --- | --- |
-| Close active portal tab | `⌘+W` | `Ctrl+W` |
-| Next portal tab | `⌃+Tab` | `Ctrl+Tab` |
-| Previous portal tab | `⌃+⇧+Tab` | `Ctrl+Shift+Tab` |
-| New portal tab | `⌘+T` | `Ctrl+T` |
-| Close active portal tab | — | `Ctrl+F4` (Windows only) |
 
 ## Dev preview
 

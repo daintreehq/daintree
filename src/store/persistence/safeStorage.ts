@@ -397,10 +397,14 @@ function createPersistWriter<T>(
     { incoming: string; written: string; backedUp: boolean; settled: boolean }
   >();
 
-  const write = (name: string, value: StorageValue<T>, serializedValue?: string): void => {
+  // Returns whether repeating this exact snapshot would change nothing on
+  // storage: the bytes landed (durably or in the memory fallback) and, with a
+  // merger, the merge was verified as a fixed point. A quota failure, or a
+  // merge write that may still move on its next repeat, returns false.
+  const write = (name: string, value: StorageValue<T>): boolean => {
     if (mergeOnWrite) {
-      // Zustand calls setItem after every set(), including no-op and
-      // transient-field sets, so most calls repeat the last snapshot. We must
+      // A repeat of the last snapshot still reaches here until a write has
+      // proved it a fixed point (the adapters skip only after that). We must
       // NOT dedup on the incoming value or the merged output alone: identical
       // `value`s can merge differently as the shared disk changes, and
       // different disk states can merge to the same bytes (e.g. re-applying a
@@ -421,7 +425,7 @@ function createPersistWriter<T>(
         last.written === onDiskRaw &&
         (!last.backedUp || raw.readBackup(name) === last.written)
       ) {
-        return;
+        return true;
       }
       const merged = mergeOnWrite({
         baseline: baselines.get(name) ?? null,
@@ -438,24 +442,25 @@ function createPersistWriter<T>(
       // result, which may hold sibling-only keys this view never took into
       // memory). A transient quota failure keeps the old baseline so the next
       // retry still merges correctly.
-      if (result !== "quota") {
-        baselines.set(name, value);
-        lastMergeWrite.set(name, {
-          incoming,
-          written: serialized,
-          backedUp: result === "durable",
-          // The baseline was already this snapshot and the merge left the
-          // disk bytes unchanged: repeating it is a no-op.
-          settled: last?.incoming === incoming && serialized === onDiskRaw,
-        });
-      } else {
+      if (result === "quota") {
         lastMergeWrite.delete(name);
+        return false;
       }
-      return;
+      baselines.set(name, value);
+      // The baseline was already this snapshot and the merge left the disk
+      // bytes unchanged: repeating it is a no-op.
+      const settled = last?.incoming === incoming && serialized === onDiskRaw;
+      lastMergeWrite.set(name, {
+        incoming,
+        written: serialized,
+        backedUp: result === "durable",
+        settled,
+      });
+      return settled;
     }
-    const serialized = serializedValue ?? JSON.stringify(value);
+    const serialized = JSON.stringify(value);
     const last = lastWritten.get(name);
-    if (last?.serialized === serialized && last.memory === raw.usesMemory()) return;
+    if (last?.serialized === serialized && last.memory === raw.usesMemory()) return true;
     const result = raw.setItem(name, serialized);
     if (result === "durable") {
       lastWritten.set(name, { serialized, memory: false });
@@ -463,6 +468,7 @@ function createPersistWriter<T>(
     } else if (result === "memory") {
       lastWritten.set(name, { serialized, memory: true });
     }
+    return result !== "quota";
   };
 
   return {
@@ -480,32 +486,183 @@ function createPersistWriter<T>(
   };
 }
 
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sameItems(left: unknown, right: unknown): boolean {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  for (let i = 0; i < left.length; i += 1) {
+    if (!Object.is(left[i], right[i])) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether two persisted snapshots are the same slice by reference: same
+ * version, same top-level fields, each field the same value or an array of the
+ * same items (`partialize` often rebuilds arrays, e.g. `Array.from(set)`).
+ * Stores update immutably, so a match serializes to the same bytes.
+ */
+function sameSnapshot<T>(left: StorageValue<T>, right: StorageValue<T>): boolean {
+  if (left.version !== right.version) return false;
+  const a: unknown = left.state;
+  const b: unknown = right.state;
+  if (Object.is(a, b)) return true;
+  if (!isRecordLike(a) || !isRecordLike(b)) return false;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) {
+    if (!Object.hasOwn(b, key)) return false;
+    if (!Object.is(a[key], b[key]) && !sameItems(a[key], b[key])) return false;
+  }
+  return true;
+}
+
+/**
+ * Zustand's `persist` calls `setItem` after every `set()`, including ones that
+ * only touch fields `partialize` drops (an audio level, a loading flag), so
+ * most calls repeat the last snapshot. Remembering each key's last accepted
+ * snapshot lets those repeats return before any serialization or storage
+ * access (issue #17055), but only while that snapshot is still queued or is
+ * known to have landed as a fixed point on the storage now active: a quota
+ * failure, a memory-fallback switch, or a merge that may still move on its next
+ * repeat all fall through to a real write, exactly as before.
+ */
+function createSnapshotTracker<T>(raw: ResilientStorage) {
+  const accepted = new Map<string, { value: StorageValue<T>; landed: boolean; memory: boolean }>();
+  return {
+    isRepeat: (name: string, value: StorageValue<T>, queued: boolean): boolean => {
+      const last = accepted.get(name);
+      if (!last || !sameSnapshot(last.value, value)) return false;
+      return queued || (last.landed && last.memory === raw.usesMemory());
+    },
+    accept: (name: string, value: StorageValue<T>): void => {
+      accepted.set(name, { value, landed: false, memory: false });
+    },
+    settle: (name: string, value: StorageValue<T>, landed: boolean): void => {
+      const last = accepted.get(name);
+      if (last?.value !== value) return;
+      last.landed = landed;
+      last.memory = raw.usesMemory();
+    },
+    forget: (name: string): void => {
+      accepted.delete(name);
+    },
+  };
+}
+
+/**
+ * Wraps a projection `partialize` applies to one field (stripping runtime-only
+ * properties from each entry, say) so it returns the same output for as long
+ * as its input is the same reference. Sets that touch other fields then leave
+ * the persisted slice reference-equal, which is what lets the adapters skip
+ * them without serializing anything.
+ */
+export function stableProjection<I, O>(project: (input: I) => O): (input: I) => O {
+  let last: { input: I; output: O } | null = null;
+  return (input) => {
+    if (last && Object.is(last.input, input)) return last.output;
+    const output = project(input);
+    last = { input, output };
+    return output;
+  };
+}
+
 export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): PersistStorage<T> {
   const raw = createResilientStorage(resolveLocalStorage());
   const writer = createPersistWriter(raw, options?.mergeOnWrite);
+  const snapshots = createSnapshotTracker<T>(raw);
 
   return {
     getItem: (name) => {
       const parsed = readPersistedValue<T>(raw, name);
       writer.read(name, parsed);
+      snapshots.forget(name);
       return parsed;
     },
-    setItem: (name, value) => writer.write(name, value),
+    setItem: (name, value) => {
+      if (snapshots.isRepeat(name, value, false)) return;
+      snapshots.accept(name, value);
+      snapshots.settle(name, value, writer.write(name, value));
+    },
     removeItem: (name) => {
       writer.forget(name);
+      snapshots.forget(name);
       raw.removeItem(name);
       raw.removeBackup(name);
     },
   };
 }
 
+// Debounced adapters holding a write that hasn't flushed yet. While any does,
+// the page's last-chance signals land them all synchronously (the storage is
+// synchronous), so a change made inside a debounce window survives: `pagehide`
+// and `beforeunload` for a close or reload, `visibilitychange` to hidden for a
+// minimized window, and main's cached edge for a project switch, which fires
+// none of those and may freeze the view (timers stop) or evict it. With nothing
+// pending, nothing is attached.
+const pendingFlushes = new Set<() => void>();
+let detachPendingFlush: (() => void) | null = null;
+
+function flushAllPending(): void {
+  for (const flushAll of [...pendingFlushes]) flushAll();
+}
+
+function flushPendingWhenHidden(): void {
+  if (typeof document !== "undefined" && document.hidden) flushAllPending();
+}
+
+function attachPendingFlush(): () => void {
+  if (typeof window === "undefined" || typeof window.addEventListener !== "function") {
+    return () => {};
+  }
+  // The detach runs from the last flush's timer, when the page's globals (even
+  // `window.removeEventListener`) may already be gone, so it holds its own.
+  const win = window;
+  const removeWindowListener = win.removeEventListener.bind(win);
+  const doc =
+    typeof document !== "undefined" && typeof document.addEventListener === "function"
+      ? document
+      : null;
+  const removeDocumentListener = doc?.removeEventListener.bind(doc);
+  win.addEventListener("pagehide", flushAllPending);
+  win.addEventListener("beforeunload", flushAllPending);
+  doc?.addEventListener("visibilitychange", flushPendingWhenHidden);
+  // The bridge itself rather than `subscribeProjectViewCachedFlush`: every
+  // persisted store sits on this module, and suites that stub viewCacheState
+  // without that export would throw on their first debounced write.
+  const offCached = win.electron?.app?.onViewCachedFlush?.(flushAllPending);
+  return () => {
+    removeWindowListener("pagehide", flushAllPending);
+    removeWindowListener("beforeunload", flushAllPending);
+    removeDocumentListener?.("visibilitychange", flushPendingWhenHidden);
+    offCached?.();
+  };
+}
+
+function trackPendingFlush(flushAll: () => void, pending: boolean): void {
+  if (pending) pendingFlushes.add(flushAll);
+  else pendingFlushes.delete(flushAll);
+  if (pendingFlushes.size > 0) {
+    detachPendingFlush ??= attachPendingFlush();
+  } else if (detachPendingFlush) {
+    const detach = detachPendingFlush;
+    detachPendingFlush = null;
+    detach();
+  }
+}
+
 /**
  * Like `createSafeJSONStorage`, but coalesces rapid `setItem` calls per key
- * through a trailing-edge debounce. Reads stay synchronous so hydration is
+ * through a trailing-edge debounce. A queued snapshot is kept as the typed
+ * value and serialized once, at flush, so a drag or keystroke stream costs no
+ * `JSON.stringify` per frame. Reads stay synchronous so hydration is
  * unaffected; `removeItem` cancels any pending write for the same key so a
  * `clearAll` followed shortly by a tear-down can't be silently re-populated by
  * a stale write timer. Flushes share the plain adapter's write path, so a
  * snapshot that already landed is not rewritten by a later identical flush.
+ * Pending writes also flush when the page hides, unloads, or is cached.
  */
 export function createDebouncedSafeJSONStorage<T>(
   delayMs: number,
@@ -516,12 +673,12 @@ export function createDebouncedSafeJSONStorage<T>(
 } {
   const raw = createResilientStorage(resolveLocalStorage());
   const writer = createPersistWriter(raw, options?.mergeOnWrite);
-  // Retain the typed incoming value (not just its serialized form) so a
-  // merge-enabled flush can reconcile it against the freshest disk state read
-  // at flush time (issue #11351). `serialized` coalesces identical enqueues.
+  const snapshots = createSnapshotTracker<T>(raw);
+  // Retain the typed incoming value so a merge-enabled flush can reconcile it
+  // against the freshest disk state read at flush time (issue #11351).
   const pending = new Map<
     string,
-    { timer: ReturnType<typeof setTimeout>; value: StorageValue<T>; serialized: string }
+    { timer: ReturnType<typeof setTimeout>; value: StorageValue<T> }
   >();
 
   const flush = (name: string): void => {
@@ -531,7 +688,26 @@ export function createDebouncedSafeJSONStorage<T>(
     // later flush a newer enqueue before its own debounce window elapsed.
     clearTimeout(entry.timer);
     pending.delete(name);
-    writer.write(name, entry.value, entry.serialized);
+    try {
+      snapshots.settle(name, entry.value, writer.write(name, entry.value));
+    } finally {
+      if (pending.size === 0) trackPendingFlush(flushAll, false);
+    }
+  };
+
+  // One key's failure (a value `JSON.stringify` rejects, a throwing merger)
+  // must not keep the others from landing on the way out.
+  const flushAll = (): void => {
+    for (const name of [...pending.keys()]) {
+      try {
+        flush(name);
+      } catch (error) {
+        console.warn("[safeStorage] flushing a pending persisted write failed", {
+          key: name,
+          error: formatErrorMessage(error, "Pending persisted write failed"),
+        });
+      }
+    }
   };
 
   return {
@@ -541,23 +717,27 @@ export function createDebouncedSafeJSONStorage<T>(
       flush(name);
       const parsed = readPersistedValue<T>(raw, name);
       writer.read(name, parsed);
+      snapshots.forget(name);
       return parsed;
     },
     setItem: (name, value) => {
-      const serialized = JSON.stringify(value);
       const existing = pending.get(name);
-      if (existing?.serialized === serialized) return;
+      if (snapshots.isRepeat(name, value, existing !== undefined)) return;
+      snapshots.accept(name, value);
       if (existing) clearTimeout(existing.timer);
+      else if (pending.size === 0) trackPendingFlush(flushAll, true);
       const timer = setTimeout(() => flush(name), delayMs);
-      pending.set(name, { timer, value, serialized });
+      pending.set(name, { timer, value });
     },
     removeItem: (name) => {
       const existing = pending.get(name);
       if (existing) {
         clearTimeout(existing.timer);
         pending.delete(name);
+        if (pending.size === 0) trackPendingFlush(flushAll, false);
       }
       writer.forget(name);
+      snapshots.forget(name);
       raw.removeItem(name);
       raw.removeBackup(name);
     },

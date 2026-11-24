@@ -19,6 +19,12 @@ import type { KeybindingOverridesSnapshot } from "@shared/types/ipc/api";
 export * from "./keybindingUtils";
 export * from "./defaultKeybindings";
 
+/**
+ * The live `when` context for a keystroke. `target` stands in for the event's
+ * own when asking about a keystroke nobody has pressed, whose event has none.
+ */
+type WhenContextProvider = (event: KeyboardEvent, target?: Element | null) => WhenClauseContext;
+
 function scopesConflict(a: KeyScope, b: KeyScope): boolean {
   return a === b || a === "global" || b === "global";
 }
@@ -44,6 +50,17 @@ function sameOverrides(a: Map<string, string[]>, b: Map<string, string[]>): bool
   return true;
 }
 
+function notifyEach(listeners: Set<() => void>): void {
+  // A copy, so a listener that unsubscribes while being notified can't skip the next.
+  for (const listener of Array.from(listeners)) {
+    try {
+      listener();
+    } catch (error) {
+      console.warn("[KeybindingService] listener threw", error);
+    }
+  }
+}
+
 class KeybindingService {
   private bindings: Map<string, RegisteredKeybindingConfig[]> = new Map();
   private overrides: Map<string, string[]> = new Map();
@@ -53,9 +70,12 @@ class KeybindingService {
   private lastInvalidKey: string | null = null;
   private chordTimeout: NodeJS.Timeout | null = null;
   private listeners = new Set<() => void>();
+  // Chord state changes on Cmd+K, Escape and blur; keeping its subscribers apart
+  // spares every binding-display subscriber a wakeup on each of them.
+  private chordListeners = new Set<() => void>();
   private unsubscribeKeyLabels: (() => void) | null = null;
   private whenContext: WhenClauseContext = {};
-  private whenContextProvider: ((event: KeyboardEvent) => WhenClauseContext) | null = null;
+  private whenContextProvider: WhenContextProvider | null = null;
   private shortcutCaptures = 0;
   // The newest save this view holds (#15579). Main numbers every save, and a
   // read, a write's reply and the pushes arrive separately, so an older one is
@@ -97,10 +117,7 @@ class KeybindingService {
     const changed = !sameOverrides(this.overrides, next);
     this.overrides = next;
     // A chord started under the old map may finish on a combo it no longer has.
-    if (changed) {
-      this.clearChordTimeout();
-      this.pendingChord = null;
-    }
+    if (changed) this.clearPendingChord();
     this.notifyListeners();
   }
 
@@ -280,6 +297,10 @@ class KeybindingService {
     return conflicts;
   }
 
+  /**
+   * Changes to the bindings and how they display: overrides, registrations,
+   * the keyboard layout. Chord progress has its own `subscribeChord`.
+   */
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     // Display strings carry the keyboard layout's labels, so a layout change
@@ -294,15 +315,20 @@ class KeybindingService {
     };
   }
 
+  /** Changes to the pending chord and the invalid key it last refused. */
+  subscribeChord(listener: () => void): () => void {
+    this.chordListeners.add(listener);
+    return () => {
+      this.chordListeners.delete(listener);
+    };
+  }
+
   private notifyListeners(): void {
-    const snapshot = Array.from(this.listeners);
-    for (const listener of snapshot) {
-      try {
-        listener();
-      } catch (error) {
-        console.warn("[KeybindingService] listener threw", error);
-      }
-    }
+    notifyEach(this.listeners);
+  }
+
+  private notifyChordListeners(): void {
+    notifyEach(this.chordListeners);
   }
 
   setScope(scope: KeyScope): void {
@@ -314,10 +340,13 @@ class KeybindingService {
     if (this.currentScope !== scope) {
       this.currentScope = scope;
       this.clearPendingChord();
+      // An action bound in several scopes displays the active scope's combo.
+      this.notifyListeners();
     }
   }
 
   restoreScope(scope: KeyScope): void {
+    const previous = this.currentScope;
     const idx = this.scopeStack.lastIndexOf(scope);
     if (idx > 0) {
       this.scopeStack.splice(idx, 1);
@@ -326,6 +355,7 @@ class KeybindingService {
     if (this.currentScope !== scope) {
       this.clearPendingChord();
     }
+    if (this.currentScope !== previous) this.notifyListeners();
   }
 
   setWhenContext(ctx: WhenClauseContext): void {
@@ -339,7 +369,7 @@ class KeybindingService {
    * subscriptions or partial event-driven updates). The static
    * `setWhenContext` value is the fallback when no provider is wired (tests).
    */
-  setWhenContextProvider(provider: ((event: KeyboardEvent) => WhenClauseContext) | null): void {
+  setWhenContextProvider(provider: WhenContextProvider | null): void {
     this.whenContextProvider = provider;
   }
 
@@ -447,7 +477,7 @@ class KeybindingService {
     // harmless no-op so any residual timeout from an earlier code path clears.
     this.clearChordTimeout();
     this.pendingChord = combo;
-    this.notifyListeners();
+    this.notifyChordListeners();
   }
 
   getPendingChord(): string | null {
@@ -459,7 +489,7 @@ class KeybindingService {
     this.clearChordTimeout();
     this.pendingChord = null;
     if (hadChord) {
-      this.notifyListeners();
+      this.notifyChordListeners();
     }
   }
 
@@ -496,7 +526,7 @@ class KeybindingService {
   clearLastInvalidKey(): void {
     if (this.lastInvalidKey === null) return;
     this.lastInvalidKey = null;
-    this.notifyListeners();
+    this.notifyChordListeners();
   }
 
   normalizeKeyForBinding(event: KeyboardEvent): string {
@@ -521,11 +551,84 @@ class KeybindingService {
   }
 
   resolveKeybinding(event: KeyboardEvent): KeybindingResolutionResult {
+    const currentCombo = this.eventToCombo(event);
+    const { chordCompletionMatch, foundChordPrefix, ...matches } = this.matchBindings(
+      event,
+      () => this.whenContextProvider?.(event) ?? this.whenContext
+    );
+    let bestMatch = matches.bestMatch;
+
+    // If chord completion was found, it takes precedence
+    if (chordCompletionMatch) {
+      bestMatch = chordCompletionMatch;
+    }
+
+    // If we found a chord prefix but no complete match, set pending chord
+    if (foundChordPrefix && !bestMatch && !this.pendingChord) {
+      this.setPendingChord(currentCombo);
+      return {
+        match: undefined,
+        chordPrefix: true,
+        shouldConsume: true,
+      };
+    }
+
+    // When a pending chord exists and the second key is neither a chord
+    // completion nor a recognized standalone, surface the attempted combo
+    // so the HUD can echo it, AND consume the event so the key doesn't
+    // leak through to xterm (bare key types in the terminal) or fire a
+    // side-effecting standalone action (e.g. Cmd+B → nav.toggleSidebar)
+    // that the user only pressed as part of the cancelled chord.
+    const invalidChordKey = this.pendingChord !== null && !bestMatch && !foundChordPrefix;
+
+    // Clear pending chord if we found a match or no chord prefix
+    if (bestMatch || !foundChordPrefix) {
+      // lastInvalidKey must be set before clearPendingChord() — the
+      // synchronous notifyChordListeners() call inside that method is when
+      // subscribers read the snapshot.
+      if (invalidChordKey) {
+        this.lastInvalidKey = currentCombo;
+      }
+      this.clearPendingChord();
+    }
+
+    return {
+      match: bestMatch,
+      chordPrefix: foundChordPrefix,
+      shouldConsume: !!bestMatch || foundChordPrefix || invalidChordKey,
+    };
+  }
+
+  /**
+   * The action a keystroke at `target` would run, without starting, ending or
+   * completing a chord: Edit > Undo asks what Cmd+Z would do before anyone
+   * presses it (#17108). With a chord pending, the keystroke is its next key.
+   */
+  peekKeybinding(
+    event: KeyboardEvent,
+    target: Element | null
+  ): RegisteredKeybindingConfig | undefined {
+    const { bestMatch, chordCompletionMatch } = this.matchBindings(
+      event,
+      () => this.whenContextProvider?.(event, target) ?? this.whenContext
+    );
+    return chordCompletionMatch ?? bestMatch;
+  }
+
+  // Which bindings a keystroke matches, reading nothing but the bindings and
+  // the pending chord: resolveKeybinding moves the chord state from it.
+  private matchBindings(
+    event: KeyboardEvent,
+    readWhenContext: () => WhenClauseContext
+  ): {
+    bestMatch: RegisteredKeybindingConfig | undefined;
+    chordCompletionMatch: RegisteredKeybindingConfig | undefined;
+    foundChordPrefix: boolean;
+  } {
     let bestMatch: RegisteredKeybindingConfig | undefined;
     let bestPriority = -Infinity;
     let foundChordPrefix = false;
 
-    const currentCombo = this.eventToCombo(event);
     const mac = isMac();
     const eventKey = normalizeKeyForBinding(event);
 
@@ -538,7 +641,7 @@ class KeybindingService {
     // (conditions may change between prefix and completion).
     let whenCtx: WhenClauseContext | null = null;
     const resolveWhenCtx = (): WhenClauseContext => {
-      whenCtx ??= this.whenContextProvider?.(event) ?? this.whenContext;
+      whenCtx ??= readWhenContext();
       return whenCtx;
     };
 
@@ -605,45 +708,7 @@ class KeybindingService {
       }
     }
 
-    // If chord completion was found, it takes precedence
-    if (chordCompletionMatch) {
-      bestMatch = chordCompletionMatch;
-    }
-
-    // If we found a chord prefix but no complete match, set pending chord
-    if (foundChordPrefix && !bestMatch && !this.pendingChord) {
-      this.setPendingChord(currentCombo);
-      return {
-        match: undefined,
-        chordPrefix: true,
-        shouldConsume: true,
-      };
-    }
-
-    // When a pending chord exists and the second key is neither a chord
-    // completion nor a recognized standalone, surface the attempted combo
-    // so the HUD can echo it, AND consume the event so the key doesn't
-    // leak through to xterm (bare key types in the terminal) or fire a
-    // side-effecting standalone action (e.g. Cmd+B → nav.toggleSidebar)
-    // that the user only pressed as part of the cancelled chord.
-    const invalidChordKey = this.pendingChord !== null && !bestMatch && !foundChordPrefix;
-
-    // Clear pending chord if we found a match or no chord prefix
-    if (bestMatch || !foundChordPrefix) {
-      // lastInvalidKey must be set before clearPendingChord() — the
-      // synchronous notifyListeners() call inside that method is when
-      // subscribers read the snapshot.
-      if (invalidChordKey) {
-        this.lastInvalidKey = currentCombo;
-      }
-      this.clearPendingChord();
-    }
-
-    return {
-      match: bestMatch,
-      chordPrefix: foundChordPrefix,
-      shouldConsume: !!bestMatch || foundChordPrefix || invalidChordKey,
-    };
+    return { bestMatch, chordCompletionMatch, foundChordPrefix };
   }
 
   private scopeAllows(scope: KeyScope): boolean {
@@ -802,7 +867,7 @@ class KeybindingService {
     }> = [];
 
     // Only bindings live in the current scope: an action's second binding in
-    // another scope (a portal-only chord) would otherwise be offered where it
+    // another scope (a dev-preview-only chord) would otherwise be offered where it
     // can't fire.
     const allBindings = this.getAllBindingsWithEffectiveCombos().filter((binding) =>
       this.scopeAllows(binding.scope)

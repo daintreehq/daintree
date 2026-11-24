@@ -15,6 +15,7 @@
  * is which props the palette hands it.
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import { useRef } from "react";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
@@ -228,6 +229,7 @@ import type {
 import { primeRadix } from "@/components/ui/radix-loader";
 
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
+const { ProjectSwitcherConfirmDialogs } = await import("../ProjectSwitcherConfirmDialogs");
 const { usePreferencesStore } = await import("@/store/preferencesStore");
 
 beforeAll(async () => {
@@ -279,9 +281,30 @@ function baseProps() {
   };
 }
 
+/**
+ * The palette beside the view's one confirm host, composed as ModalHostLayer
+ * composes them (#16919): the ⌘P modal shares its search box with the host as
+ * a focus successor, and the dropdown keeps its own.
+ */
+function SwitcherWithConfirms(
+  props: React.ComponentProps<typeof ProjectSwitcherPalette> &
+    Omit<React.ComponentProps<typeof ProjectSwitcherConfirmDialogs>, "paletteInputRef">
+) {
+  const sharedInputRef = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <ProjectSwitcherPalette
+        {...props}
+        paletteInputRef={props.mode === "dropdown" ? undefined : sharedInputRef}
+      />
+      <ProjectSwitcherConfirmDialogs {...props} paletteInputRef={sharedInputRef} />
+    </>
+  );
+}
+
 function renderPalette(overrides: Record<string, unknown> = {}) {
   const props = { ...baseProps(), ...overrides };
-  const view = render(<ProjectSwitcherPalette {...props} />);
+  const view = render(<SwitcherWithConfirms {...props} />);
   return { props, view };
 }
 
@@ -372,7 +395,7 @@ describe.each(["modal", "dropdown"] as const)("Scratch section header menu (%s)"
     expect(deleteAllItem()).toBeNull();
 
     view.rerender(
-      <ProjectSwitcherPalette
+      <SwitcherWithConfirms
         {...baseProps()}
         mode={mode}
         scratchResults={[makeScratch(1), makeScratch(2)]}
@@ -407,7 +430,7 @@ describe.each(["modal", "dropdown"] as const)("Scratch section header menu (%s)"
     expect(deleteAllItem()).toBeNull();
 
     view.rerender(
-      <ProjectSwitcherPalette
+      <SwitcherWithConfirms
         {...baseProps()}
         mode={mode}
         scratchResults={[makeScratch(1)]}
@@ -439,7 +462,7 @@ describe.each(["modal", "dropdown"] as const)("Scratch header actions menu (%s)"
 
     // Paired with the positive case so this can't pass by the menu simply
     // never existing — "absent when empty" only means something next to it.
-    view.rerender(<ProjectSwitcherPalette {...baseProps()} mode={mode} scratchResults={[]} />);
+    view.rerender(<SwitcherWithConfirms {...baseProps()} mode={mode} scratchResults={[]} />);
 
     expect(screen.queryByTestId("scratch-band-menu")).toBeNull();
   });
@@ -478,7 +501,7 @@ describe.each(["modal", "dropdown"] as const)("Scratch header actions menu (%s)"
     // Searching only sets `hidden` — the subtree stays mounted so a deliberate
     // collapse survives clearing the box — so the menu has to sit under it.
     view.rerender(
-      <ProjectSwitcherPalette
+      <SwitcherWithConfirms
         {...baseProps()}
         mode={mode}
         query="spike"
@@ -499,7 +522,7 @@ describe.each(["modal", "dropdown"] as const)("Scratch header actions menu (%s)"
     expect(screen.queryByTestId("scratch-band-menu")).toBeNull();
 
     view.rerender(
-      <ProjectSwitcherPalette
+      <SwitcherWithConfirms
         {...baseProps()}
         mode={mode}
         scratchResults={[makeScratch(1)]}
@@ -551,7 +574,7 @@ describe("Bulk delete confirmation", () => {
     expect(consequenceNoun()).toBe("singular");
 
     view.rerender(
-      <ProjectSwitcherPalette
+      <SwitcherWithConfirms
         {...baseProps()}
         scratchResults={[makeScratch(1)]}
         deleteAllScratchesConfirm={snapshotOf(4)}
@@ -573,7 +596,7 @@ describe("Bulk delete confirmation", () => {
     // Rerendered to null rather than asserted on a fresh render: a spec that only
     // checks the empty case passes with the dialog deleted outright.
     view.rerender(
-      <ProjectSwitcherPalette
+      <SwitcherWithConfirms
         {...baseProps()}
         scratchResults={[makeScratch(1)]}
         deleteAllScratchesConfirm={null}
@@ -752,7 +775,7 @@ describe("Single scratch delete", () => {
       expect(screen.queryByText(/Delete scratch/)).toBeNull();
 
       view.rerender(
-        <ProjectSwitcherPalette
+        <SwitcherWithConfirms
           {...baseProps()}
           mode={mode}
           scratchResults={[makeScratch(1)]}
@@ -773,7 +796,7 @@ describe("Single scratch delete", () => {
     expect(screen.queryByTestId("confirm-dialog")).not.toBeNull();
 
     view.rerender(
-      <ProjectSwitcherPalette
+      <SwitcherWithConfirms
         {...baseProps()}
         scratchResults={[makeScratch(1)]}
         deleteScratchConfirm={null}

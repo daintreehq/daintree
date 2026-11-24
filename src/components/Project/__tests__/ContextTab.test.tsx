@@ -373,6 +373,40 @@ describe("ContextTab file-list preview", () => {
     expect(screen.getByRole("button", { name: "Show fewer" })).toBeTruthy();
   });
 
+  it("uses singular grammar for a single included file", async () => {
+    testConfigMock.mockResolvedValue(resultWithFiles(makeFiles(1)));
+    renderTab();
+
+    await runTestConfig();
+    await waitFor(() => {
+      expect(screen.getByText("1 file would be included")).toBeTruthy();
+    });
+  });
+
+  it("groups large counts and marks the toggle as an expandable link", async () => {
+    testConfigMock.mockResolvedValue({
+      ...resultWithFiles(makeFiles(12)),
+      includedFiles: 12345,
+      excluded: { total: 4321, byReason: {} },
+    });
+    renderTab();
+
+    await runTestConfig();
+    await waitFor(() => {
+      expect(screen.getByText("12,345 files would be included")).toBeTruthy();
+    });
+    expect(screen.getByText(/4,321 excluded/)).toBeTruthy();
+
+    const toggle = screen.getByRole("button", { name: "Show 2 more" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    expect(screen.getByRole("button", { name: "Show fewer" }).getAttribute("aria-expanded")).toBe(
+      "true"
+    );
+  });
+
   it("renders all files without a toggle when at the preview cap", async () => {
     testConfigMock.mockResolvedValue(resultWithFiles(makeFiles(10)));
     renderTab();

@@ -2,19 +2,20 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { ATTACH_STDIO_FLAG } from "../host/attachStdio.js";
 import { parseDiscoveryInfo, type HostDiscoveryInfo } from "../host/discoveryFile.js";
 import {
   maxSocketPathBytes,
+  PID1_COMM_PATH,
   remoteHostSocketLocation,
   type SocketPlatform,
 } from "../host/hostSocketPath.js";
 import type { CommandRunner } from "./commandRunner.js";
 import { createCommandStreamTransport, type StreamCommandChild } from "./commandStreamTransport.js";
 import { sshExecutable } from "./sshExecutable.js";
+import { defaultSshConfigRoots, sshConfigStamp } from "./sshConfig.js";
 import { isValidSshTarget } from "../../../shared/utils/sshTarget.js";
 import {
   HostModeOffError,
@@ -93,7 +94,7 @@ export interface SshTransportOptions {
    */
   ensureRunning?: (signal: AbortSignal) => Promise<boolean>;
   linuxDirName?: string;
-  /** The ssh config files a remembered route depends on; the user's and the system's unless given. */
+  /** The ssh config files a remembered route depends on, with what they Include; the user's and the system's unless given. */
   sshConfigFiles?: string[];
 }
 
@@ -168,9 +169,23 @@ export function controlPathOption(controlPath: string): string {
 
 export { isValidSshTarget };
 
+/**
+ * For every call that runs in batch mode. BatchMode is an option of the ssh
+ * Daintree runs, and the ssh a ProxyJump starts for the jump host never gets
+ * it, so on its own that hop could still ask (a desktop's askpass program)
+ * during a background dial. It inherits this environment, and with it never
+ * asks: a hop that needs an answer refuses, and a person's Sign in is how it
+ * gets one (`SshSignInService`).
+ */
+export const BATCH_SSH_ENV: Readonly<Record<string, string>> = { SSH_ASKPASS_REQUIRE: "never" };
+
 export function defaultSshSpawner(sshPath = sshExecutable()): SshSpawner {
   return (args) =>
-    spawn(sshPath, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true }) as SshChild;
+    spawn(sshPath, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+      env: { ...process.env, ...BATCH_SSH_ENV },
+    }) as SshChild;
 }
 
 export function defaultSshStreamSpawner(sshPath = sshExecutable()): SshStreamSpawner {
@@ -178,6 +193,7 @@ export function defaultSshStreamSpawner(sshPath = sshExecutable()): SshStreamSpa
     spawn(sshPath, args, {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      env: { ...process.env, ...BATCH_SSH_ENV },
     }) as StreamCommandChild;
 }
 
@@ -278,11 +294,20 @@ const CONNECT_TIMEOUT = ["-o", "ConnectTimeout=10"];
 export const SSH_COMMAND_TIMEOUT_MS = 30_000;
 
 export function sshCommonArgs(controlPath: string, controlPersist = "10m"): string[] {
+  return sshMasterArgs(controlPath, controlPersist, false);
+}
+
+/**
+ * A sign-in may wait on a person: behind a ProxyJump the host's banner only
+ * arrives once the jump host has its answer, so the banner wait (which
+ * ConnectTimeout also bounds) is unbounded there; Cancel ends it.
+ */
+function sshMasterArgs(controlPath: string, controlPersist: string, interactive: boolean) {
   return [
     ...OWN_COMMAND_ARGS,
     "-o",
-    "BatchMode=yes",
-    ...CONNECT_TIMEOUT,
+    `BatchMode=${interactive ? "no" : "yes"}`,
+    ...(interactive ? ["-o", "ConnectTimeout=0"] : CONNECT_TIMEOUT),
     ...KEEPALIVE,
     ...NO_FORWARDING,
     "-o",
@@ -301,33 +326,135 @@ export function buildProbeArgs(target: string, controlPath: string, persist?: st
   return [...sshCommonArgs(controlPath, persist), "--", target, PROBE_COMMAND];
 }
 
+/**
+ * The one call that may prompt: a person's Sign in, after a batch call was
+ * refused the login (`SshSignInService`). The probe with BatchMode off, so ssh
+ * asks its SSH_ASKPASS; it leaves the same master every other call rides,
+ * and each of those stays in batch mode.
+ */
+export function buildSignInArgs(target: string, controlPath: string, persist = "10m"): string[] {
+  return [...sshMasterArgs(controlPath, persist, true), "--", target, PROBE_COMMAND];
+}
+
+/**
+ * What ssh says when a ProxyJump or ProxyCommand hop closed the connection
+ * before the host's banner arrived. On a call that may start a master
+ * (ControlPersist), ssh sends that hop's stderr to /dev/null, so a jump host
+ * that refused the login says nothing more than this.
+ */
+const PROXY_CLOSED_EARLY = /Connection closed by UNKNOWN port 65535/;
+
+export function isProxyClosedEarly(stderr: string | null | undefined): boolean {
+  return PROXY_CLOSED_EARLY.test(stderr ?? "");
+}
+
+/** The lines the ssh in front adds once a hop gave up, which would push the hop's own words out of a short tail. */
+const PROXY_CLOSED_LINE =
+  /^(?:kex_exchange_identification: Connection closed|Connection closed by UNKNOWN port 65535)/;
+
+/** A diagnosis's stderr as the hop that refused wrote it: ssh's own failure (255) naming an access refusal, or null. */
+function hopRefusalFrom(code: number | null, stderr: string): string | null {
+  if (code !== SSH_FAILED || !isSshAccessDenied(stderr)) return null;
+  return stderr
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0 && !PROXY_CLOSED_LINE.test(line))
+    .join("\n");
+}
+
+/** ssh's own exit status when it fails, rather than a remote command's. */
+const SSH_FAILED = 255;
+
+/**
+ * The same login with no master involved (`ControlPath=none`), so the hops'
+ * own stderr reaches this side and a jump host's refusal is heard in its own
+ * words. Batch mode, and nothing run there.
+ */
+export function buildHopDiagnosisArgs(target: string): string[] {
+  return [
+    ...OWN_COMMAND_ARGS,
+    "-o",
+    "BatchMode=yes",
+    ...CONNECT_TIMEOUT,
+    ...NO_FORWARDING,
+    "-o",
+    "ControlPath=none",
+    "--",
+    target,
+    "true",
+  ];
+}
+
+/**
+ * When a batch call failed with only {@link isProxyClosedEarly} to say why:
+ * the hop's own refusal (authentication or host key), from one diagnosis run,
+ * or null when a hop didn't refuse the login.
+ */
+export async function hiddenHopRefusal(
+  run: CommandRunner,
+  sshPath: string,
+  target: string,
+  signal?: AbortSignal
+): Promise<string | null> {
+  const result = await run(sshPath, buildHopDiagnosisArgs(target), {
+    timeoutMs: SSH_COMMAND_TIMEOUT_MS,
+    env: BATCH_SSH_ENV,
+    ...(signal ? { signal } : {}),
+  });
+  return hopRefusalFrom(result.code, result.stderr);
+}
+
+/** How often a dial that keeps failing behind a proxy asks the hops again: each ask is one more login there. */
+const HOP_DIAGNOSIS_INTERVAL_MS = 5 * 60_000;
+
 const DISCOVERY_START = "@@dt:discovery";
 const DISCOVERY_END = "@@dt:discovery-end";
 /** The read's status for a missing file: cat's message for it is in the host's locale. */
 const NO_DISCOVERY_FILE_EXIT = 3;
 
+const DISCOVERY_FROM = "@@dt:discovery-from";
+
 /**
  * Prints the file between marker lines, so whatever the user's shell startup
  * files print around it is left out. The path arrives as `$1`, never spliced
  * into the script, so it is quoted once for the login shell, whichever it is.
+ * A Linux host's second path (`$2`) is where it listens when PID 1 isn't
+ * systemd, the same test the host makes (host/hostSocketPath.ts); which one
+ * was read is printed first. Nothing restarts a host there, so a file whose
+ * process has gone (killed outright, or left a zombie) reads as none, and the
+ * dial starts it again rather than meeting a dead socket.
  */
-const DISCOVERY_READ_SCRIPT = `if [ -e "$1" ]; then echo; echo ${DISCOVERY_START}; cat -- "$1" || exit 1; echo; echo ${DISCOVERY_END}; else exit ${NO_DISCOVERY_FILE_EXIT}; fi`;
+const DISCOVERY_READ_SCRIPT = `f=$1; n=1; if [ $# -gt 1 ]; then c=$(head -c 64 ${PID1_COMM_PATH} 2>/dev/null); if [ -n "$c" ] && [ "$c" != systemd ]; then f=$2; n=2; fi; fi; if [ "$n" = 2 ] && [ -e "$f" ]; then p=$(sed -n "s/.*\\"pid\\":\\([0-9][0-9]*\\).*/\\1/p" "$f"); w=$(sed -n "s/.*\\"startedAt\\":\\"\\([^\\"]*\\)\\".*/\\1/p" "$f"); t=""; if [ -n "$p" ]; then t=$(sed "s/.*) //" "/proc/$p/stat" 2>/dev/null); fi; set -- $t; if [ -z "$t" ] || [ "$1" = Z ] || { [ -n "$w" ] && [ "\${20:-}" != "$w" ]; }; then exit ${NO_DISCOVERY_FILE_EXIT}; fi; fi; if [ -e "$f" ]; then echo; echo "${DISCOVERY_FROM} $n"; echo ${DISCOVERY_START}; cat -- "$f" || exit 1; echo; echo ${DISCOVERY_END}; else exit ${NO_DISCOVERY_FILE_EXIT}; fi`;
 
 export function buildCatArgs(
   target: string,
   controlPath: string,
-  filePath: string,
+  filePaths: string | readonly string[],
   persist?: string
 ): string[] {
-  if (!isSafeRemotePath(filePath)) {
-    throw new TransportError(`Refusing to read an unusual remote path: ${filePath}`, null);
+  const paths = typeof filePaths === "string" ? [filePaths] : filePaths;
+  for (const filePath of paths) {
+    if (!isSafeRemotePath(filePath)) {
+      throw new TransportError(`Refusing to read an unusual remote path: ${filePath}`, null);
+    }
   }
   return [
     ...sshCommonArgs(controlPath, persist),
     "--",
     target,
-    `sh -c ${shellQuote(DISCOVERY_READ_SCRIPT)} sh ${shellQuote(filePath)}`,
+    `sh -c ${shellQuote(DISCOVERY_READ_SCRIPT)} sh ${paths.map(shellQuote).join(" ")}`,
   ];
+}
+
+/**
+ * Which of the paths given the read read: 0 for the first, 1 for the second.
+ * Only the marker right before the file counts, so a startup file printing
+ * something like it can't move the socket check to the other place.
+ */
+export function discoveryReadFrom(stdout: string): number {
+  const marker = new RegExp(`(?:^|\n)${DISCOVERY_FROM} ([12])\r?\n${DISCOVERY_START}\r?\n`, "g");
+  let from = 0;
+  for (const match of stdout.matchAll(marker)) from = Number(match[1]) - 1;
+  return from;
 }
 
 /** The discovery file from the read's output; null unless it arrived whole between its markers. */
@@ -556,7 +683,8 @@ export async function closeSshMaster(
   run: CommandRunner,
   clientDir: string,
   target: string,
-  timeoutMs: number
+  timeoutMs: number,
+  sshPath: string = sshExecutable()
 ): Promise<void> {
   if (!isValidSshTarget(target)) return;
   let controlPath: string;
@@ -566,7 +694,7 @@ export async function closeSshMaster(
     return;
   }
   usedMasters.delete(masterKey(target, controlPath));
-  await run(sshExecutable(), buildExitArgs(target, controlPath), { timeoutMs }).catch(() => {});
+  await run(sshPath, buildExitArgs(target, controlPath), { timeoutMs }).catch(() => {});
   if (!controlPath.includes("%")) await fs.rm(controlPath, { force: true }).catch(() => {});
 }
 
@@ -658,6 +786,13 @@ interface RunResult {
   stderr: string;
 }
 
+/** Where the last `cap` bytes start, moved past any UTF-8 continuation byte so no character is cut. */
+export function utf8TailStart(bytes: Buffer, cap: number): number {
+  let start = Math.max(0, bytes.byteLength - cap);
+  while (start > 0 && start < bytes.byteLength && (bytes[start]! & 0xc0) === 0x80) start++;
+  return start;
+}
+
 function collect(stream: Readable | null, cap: number, keepTail: boolean): () => string {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -665,14 +800,26 @@ function collect(stream: Readable | null, cap: number, keepTail: boolean): () =>
     const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     chunks.push(buf);
     size += buf.byteLength;
-    while (keepTail && size > cap && chunks.length > 1) size -= chunks.shift()!.byteLength;
+    // The oldest bytes go first, never more than the excess: a refusal near the
+    // end of a long chunk survives the short lines that follow it.
+    while (keepTail && size > cap && chunks.length > 1) {
+      const excess = size - cap;
+      const oldest = chunks[0]!;
+      if (oldest.byteLength <= excess) {
+        chunks.shift();
+        size -= oldest.byteLength;
+      } else {
+        chunks[0] = oldest.subarray(excess);
+        size -= excess;
+      }
+    }
     if (!keepTail && size > cap) stream.destroy();
   });
   return () => {
     const all = Buffer.concat(chunks);
-    return (
-      keepTail ? all.subarray(Math.max(0, all.byteLength - cap)) : all.subarray(0, cap)
-    ).toString("utf8");
+    return (keepTail ? all.subarray(utf8TailStart(all, cap)) : all.subarray(0, cap)).toString(
+      "utf8"
+    );
   };
 }
 
@@ -706,31 +853,6 @@ interface KnownHost {
   configStamp: string;
 }
 
-/**
- * How the ssh config files stood. A remembered route is only good while they
- * are unchanged: after an edit (an alias re-pointed, say) the next dial runs
- * in full, as every dial did before, instead of carrying on by the control
- * path the old config expanded to. Files they `Include` aren't covered; a
- * person's Retry dials afresh whatever they say.
- */
-async function sshConfigStamp(files: readonly string[]): Promise<string> {
-  const stamps = await Promise.all(
-    files.map(async (file) => {
-      try {
-        const stat = await fs.stat(file);
-        return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-      } catch {
-        return "-";
-      }
-    })
-  );
-  return stamps.join("|");
-}
-
-function defaultSshConfigFiles(): string[] {
-  return [path.join(os.homedir(), ".ssh", "config"), "/etc/ssh/ssh_config"];
-}
-
 const SSH_TIMED_OUT = "ssh did not finish in time";
 
 export class SshTransport implements LinkTransport {
@@ -750,6 +872,12 @@ export class SshTransport implements LinkTransport {
    * longer takes is the link's to notice (`remembered` on the connection).
    */
   private known: KnownHost | null = null;
+  /**
+   * When the hops were last asked why a dial through them closed early and
+   * had no refusal to report. Cleared by a refusal, a dial that got through,
+   * and a fresh dial, so only a proxy that is simply down is asked less often.
+   */
+  private lastHopDiagnosis: number | null = null;
 
   constructor(private readonly options: SshTransportOptions) {
     if (!isValidSshTarget(options.target)) {
@@ -779,10 +907,19 @@ export class SshTransport implements LinkTransport {
     if (options?.fresh) {
       this.known = null;
       this.streamLocal = "unverified";
+      this.lastHopDiagnosis = null;
     }
     let known = this.known;
-    if (known && known.configStamp !== (await this.configStamp())) {
-      this.known = known = null;
+    // Taken just now, so a dial that follows straight on needn't walk the config again.
+    let freshStamp: string | undefined;
+    if (known) {
+      const stamp = await this.configStamp(signal);
+      // A cancelled walk can't vouch for the config; that's no reason to forget the route.
+      if (signal.aborted) throw new TransportError("Connection cancelled", null);
+      if (known.configStamp !== stamp) {
+        this.known = known = null;
+        freshStamp = stamp;
+      }
     }
     if (known) {
       try {
@@ -797,7 +934,7 @@ export class SshTransport implements LinkTransport {
     }
     let reached = false;
     try {
-      return await this.openOnce(signal, () => (reached = true));
+      return await this.openOnce(signal, () => (reached = true), freshStamp);
     } catch (error) {
       // ssh itself failing (unreachable, refused key) is not Daintree being down.
       const ensureRunning = this.options.ensureRunning;
@@ -810,11 +947,13 @@ export class SshTransport implements LinkTransport {
 
   private async openOnce(
     signal: AbortSignal,
-    onReached: () => void
+    onReached: () => void,
+    stampedAt?: string
   ): Promise<LinkTransportConnection> {
     const { target, clientDir } = this.options;
     // Before anything is read: a change made during this dial shows on the next one.
-    const configStamp = await this.configStamp();
+    const configStamp = stampedAt ?? (await this.configStamp(signal));
+    if (signal.aborted) throw new TransportError("Connection cancelled", null);
     await fs.mkdir(clientDir, { recursive: true, mode: 0o700 });
     await fs.chmod(clientDir, 0o700);
     const controlPath = controlPathFor(clientDir, target);
@@ -837,6 +976,18 @@ export class SshTransport implements LinkTransport {
         ) {
           throw new SshAccessError(error.detail ?? "");
         }
+        // A jump host's refusal is hidden on this call: ask it once more
+        // without a master, so a refused login parks the link (and offers a
+        // Sign in) instead of being retried against the jump host for good.
+        if (
+          error instanceof TransportError &&
+          !(error instanceof SshAccessError) &&
+          !signal.aborted &&
+          isProxyClosedEarly(error.detail)
+        ) {
+          const refusal = await this.hopRefusal(signal);
+          if (refusal !== null) throw new SshAccessError(refusal);
+        }
         throw error;
       }
     );
@@ -845,13 +996,25 @@ export class SshTransport implements LinkTransport {
       throw new TransportError("Unrecognised reply from the host", probe.stdout.trim() || null);
     }
     onReached();
-    const location = remoteHostSocketLocation({
-      ...remote,
-      macAppDirName: this.options.macAppDirName,
-      linuxDirName: this.options.linuxDirName,
-    });
+    this.lastHopDiagnosis = null;
+    const located = (startsOnConnect: boolean) =>
+      remoteHostSocketLocation({
+        ...remote,
+        macAppDirName: this.options.macAppDirName,
+        linuxDirName: this.options.linuxDirName,
+        startsOnConnect,
+      });
+    // Which a Linux host uses is the host's to tell (by its PID 1), and the read's.
+    const candidates =
+      remote.platform === "linux" ? [located(false), located(true)] : [located(false)];
+    let location = candidates[0]!;
     const cat = await this.run(
-      buildCatArgs(target, controlPath, location.discoveryPath, persist),
+      buildCatArgs(
+        target,
+        controlPath,
+        candidates.map((candidate) => candidate.discoveryPath),
+        persist
+      ),
       signal
     ).catch((error: unknown) => {
       // The host answered, and Daintree writes this file while it listens: none there is no Host mode.
@@ -862,6 +1025,7 @@ export class SshTransport implements LinkTransport {
       }
       throw error;
     });
+    location = candidates[discoveryReadFrom(cat.stdout)] ?? location;
     const info = parseDiscoveryRead(cat.stdout);
     if (!info) throw new TransportError("Host discovery file is not valid", null);
     // The host writes its socket beside the discovery file, so anything else
@@ -874,8 +1038,38 @@ export class SshTransport implements LinkTransport {
     return this.reach(controlPath, info, null, configStamp, signal);
   }
 
-  private configStamp(): Promise<string> {
-    return sshConfigStamp(this.options.sshConfigFiles ?? defaultSshConfigFiles());
+  /**
+   * {@link hiddenHopRefusal} over this transport's own ssh, at most once per
+   * {@link HOP_DIAGNOSIS_INTERVAL_MS}: a proxy that is simply down would
+   * otherwise double every retry.
+   */
+  private async hopRefusal(signal: AbortSignal): Promise<string | null> {
+    const now = Date.now();
+    if (this.lastHopDiagnosis !== null && now - this.lastHopDiagnosis < HOP_DIAGNOSIS_INTERVAL_MS) {
+      return null;
+    }
+    let refusal: string | null = null;
+    try {
+      await this.run(buildHopDiagnosisArgs(this.options.target), signal);
+    } catch (error) {
+      refusal =
+        error instanceof SshExitError ? hopRefusalFrom(error.code, error.detail ?? "") : null;
+    }
+    // An abandoned ask says nothing, and mustn't hold off the dial that replaced it.
+    if (!signal.aborted) this.lastHopDiagnosis = refusal === null ? now : null;
+    return refusal;
+  }
+
+  /**
+   * A remembered route is only good while the ssh config stands as it did:
+   * after an edit (an alias re-pointed, say, in the config or a file it
+   * Includes) the next dial runs in full, as every dial did before, instead of
+   * carrying on by the control path the old config expanded to.
+   */
+  private configStamp(signal: AbortSignal): Promise<string> {
+    const files = this.options.sshConfigFiles;
+    const roots = files ? files.map((file) => ({ path: file })) : defaultSshConfigRoots();
+    return sshConfigStamp(roots, { signal });
   }
 
   /** Straight to the route an earlier open found, through the master it left running. */

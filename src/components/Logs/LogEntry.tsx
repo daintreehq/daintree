@@ -4,6 +4,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Badge, CountBadge } from "@/components/ui/badge";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { pluralize } from "@/lib/pluralize";
 import { safeStringify } from "@/lib/safeStringify";
 import { sanitizeErrorText } from "@/utils/errorText";
 import type { LogEntry as LogEntryType, LogLevel } from "@/types";
@@ -16,6 +17,8 @@ export interface LogEntryCopyMeta {
 
 interface LogEntryProps {
   entry: LogEntryType;
+  /** Every entry a collapsed row stands for, oldest first; defaults to `entry` alone. */
+  members?: readonly LogEntryType[];
   isExpanded: boolean;
   onToggle: () => void;
   count?: number;
@@ -48,11 +51,53 @@ function formatTimestamp(timestamp: number): string {
   });
 }
 
-function formatContext(context: Record<string, unknown>): string {
-  return safeStringify(context, 2);
+interface ContextVariant {
+  firstId: string;
+  timestamp: number;
+  count: number;
+  /** The serialized context, or null for members logged without one. */
+  text: string | null;
 }
 
-function buildCopyPayload(entry: LogEntryType, count: number, meta?: LogEntryCopyMeta): string {
+// An error logged without details arrives as `{ error: undefined }`, which
+// serializes to `{}` and has nothing to show.
+function hasContextValue(entry: LogEntryType): boolean {
+  return !!entry.context && Object.values(entry.context).some((value) => value !== undefined);
+}
+
+// Entries are immutable once logged, and an expanded group re-renders with every
+// live repeat, so each context is serialized once rather than per render.
+const serializedContexts = new WeakMap<LogEntryType, string | null>();
+
+function serializeContext(entry: LogEntryType): string | null {
+  let text = serializedContexts.get(entry);
+  if (text === undefined) {
+    text = hasContextValue(entry) ? safeStringify(entry.context, 2) : null;
+    serializedContexts.set(entry, text);
+  }
+  return text;
+}
+
+// A collapsed row groups on level, message and source, so its members can each
+// carry their own context (a request ID apiece). Identical ones are shown once,
+// in the order they first appeared.
+function collectContexts(members: readonly LogEntryType[]): ContextVariant[] {
+  const variants = new Map<string | null, ContextVariant>();
+  for (const member of members) {
+    const text = serializeContext(member);
+    const existing = variants.get(text);
+    if (existing) existing.count++;
+    else variants.set(text, { firstId: member.id, timestamp: member.timestamp, count: 1, text });
+  }
+  return [...variants.values()];
+}
+
+function buildCopyPayload(
+  entry: LogEntryType,
+  members: readonly LogEntryType[],
+  count: number,
+  meta?: LogEntryCopyMeta
+): string {
   const iso = new Date(entry.timestamp).toISOString();
   const header = meta
     ? `App: ${meta.appVersion} | Electron: ${meta.electronVersion} | OS: ${meta.platform}\n\n`
@@ -64,15 +109,35 @@ function buildCopyPayload(entry: LogEntryType, count: number, meta?: LogEntryCop
   const body = [headLine, sanitizeErrorText(entry.message)];
   // A collapsed burst pasted as one line would read as a single occurrence.
   if (count > 1) body.push(`(repeated ${count} times)`);
-  if (entry.context && Object.keys(entry.context).length > 0) {
-    body.push(sanitizeErrorText(safeStringify(entry.context, 2)));
+  const variants = collectContexts(members);
+  if (variants.length === 1) {
+    const text = variants[0]?.text;
+    if (text) body.push(sanitizeErrorText(text));
+  } else {
+    for (const variant of variants) {
+      const repeats = variant.count > 1 ? ` (${pluralize(variant.count, "time")})` : "";
+      body.push(
+        "",
+        `[${new Date(variant.timestamp).toISOString()}]${repeats}`,
+        variant.text === null ? "(no context)" : sanitizeErrorText(variant.text)
+      );
+    }
   }
   // Use tilde fence so any backtick blocks inside the log body don't break the outer fence.
   return `${header}~~~log\n${body.join("\n")}\n~~~`;
 }
 
-export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: LogEntryProps) {
-  const hasContext = entry.context && Object.keys(entry.context).length > 0;
+export function LogEntry({
+  entry,
+  members: membersProp,
+  isExpanded,
+  onToggle,
+  count = 1,
+  copyMeta,
+}: LogEntryProps) {
+  const members = membersProp ?? [entry];
+  const hasContext = members.some(hasContextValue);
+  const variants = isExpanded && hasContext ? collectContexts(members) : null;
   const contextPanelId = hasContext ? `context-${entry.id}` : undefined;
   const isoTime = new Date(entry.timestamp).toISOString();
   const isoTimeId = `log-time-${entry.id}`;
@@ -171,7 +236,7 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
         )}
 
         <CopyButton
-          text={() => buildCopyPayload(entry, count, copyMeta)}
+          text={() => buildCopyPayload(entry, members, count, copyMeta)}
           aria-label="Copy log entry"
           tooltip="Copy entry"
           // Shown with the row's pointer or keyboard focus, and kept on an
@@ -183,7 +248,7 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
         />
       </div>
 
-      {isExpanded && hasContext && (
+      {variants && (
         <div
           id={contextPanelId}
           // `border-border-divider`, not the hand-written `.border-divider`: that
@@ -195,7 +260,35 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
           role="region"
           aria-label="Log entry context"
         >
-          <pre className="text-text-primary whitespace-pre-wrap select-text">{formatContext(entry.context!)}</pre>
+          {variants.length === 1 ? (
+            <pre className="text-text-primary whitespace-pre-wrap select-text">
+              {variants[0]?.text}
+            </pre>
+          ) : (
+            <ol className="flex flex-col gap-2">
+              {variants.map((variant) => (
+                <li key={variant.firstId} className="flex flex-col gap-0.5">
+                  <span className="flex items-center gap-1.5 text-text-secondary">
+                    <time dateTime={new Date(variant.timestamp).toISOString()}>
+                      {formatTimestamp(variant.timestamp)}
+                    </time>
+                    {variant.count > 1 && (
+                      <CountBadge label={`repeated ${pluralize(variant.count, "time")}`}>
+                        ×{variant.count}
+                      </CountBadge>
+                    )}
+                  </span>
+                  {variant.text === null ? (
+                    <span className="text-text-secondary">No context</span>
+                  ) : (
+                    <pre className="text-text-primary whitespace-pre-wrap select-text">
+                      {variant.text}
+                    </pre>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
       )}
     </div>

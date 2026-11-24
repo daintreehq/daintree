@@ -12,13 +12,19 @@ import { createSessionServer } from "../sessionServer.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
-import { relayOwnershipPrincipal } from "../resourceOwnership.js";
+import {
+  helpConversationKey,
+  helpOwnershipPrincipal,
+  relayOwnershipPrincipal,
+} from "../resourceOwnership.js";
 import { noteClosedTerminals } from "../sessionCallOwnership.js";
 import type { TerminalProcessRecord, WorktreeLiveTerminal } from "../worktreeProcessGuard.js";
 import type { AgentLastMessageResult } from "../../../../shared/types/agentLastMessage.js";
 import { encodeMessageCursor } from "../../claude/ClaudeMessageCursor.js";
 import { SESSION_GONE, CONFIRMATION_REQUIRED_CODE, type DispatchEnvelope } from "../shared.js";
 import { RendererBridgeUnavailableError } from "../rendererBridge.js";
+import { AssistantTargetError } from "../../assistants/AssistantTerminalControl.js";
+import { CLAUDE_UPDATE_NOT_OFFERED } from "../../../../shared/types/claudeUpdateApply.js";
 import {
   toolErrorPayload,
   fakeDeps,
@@ -85,6 +91,11 @@ describe("session-scoped resource ownership (#11909)", () => {
       },
       {
         ...makeManifestEntry("terminal.restartOnPresetOwned"),
+        kind: "command",
+        danger: "confirm" as const,
+      },
+      {
+        ...makeManifestEntry("terminal.restartOnAccountOwned"),
         kind: "command",
         danger: "confirm" as const,
       },
@@ -1065,6 +1076,118 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
+  // #17919: a resumed Assistant is a new bearer on the same conversation, and
+  // what that conversation launched before the resume is still its own.
+  describe("a resumed Assistant's conversation (#17919)", () => {
+    function launchedBeforeResume() {
+      const h = harness("s-help-a", {
+        "agent.launch": {
+          result: { ok: true, result: { launched: true, terminalId: "terminal-1" } },
+        },
+        "worktree.createWithRecipe": {
+          result: {
+            ok: true,
+            result: { worktreeId: "/tmp/wt", spawnedTerminalIds: [], spawnedTerminalCount: 0 },
+          },
+        },
+        "terminal.restartOnPreset": {
+          result: { ok: true, result: { terminalId: "terminal-1", agentPresetId: "work" } },
+        },
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      const ownership = h.store.resourceOwnership;
+      ownership.bindPrincipal("s-help-a", helpOwnershipPrincipal("help-a"));
+      ownership.attachConversation(helpOwnershipPrincipal("help-a"), helpConversationKey("conv-1"));
+      return h;
+    }
+
+    function bearer(
+      h: ReturnType<typeof launchedBeforeResume>,
+      sessionId: string,
+      helpSessionId: string,
+      conversationId: string
+    ) {
+      seedLiveSession(h.store, sessionId, "external");
+      h.store.sessionOriginMap.set(sessionId, "external");
+      h.store.resourceOwnership.bindPrincipal(sessionId, helpOwnershipPrincipal(helpSessionId));
+      h.store.resourceOwnership.attachConversation(
+        helpOwnershipPrincipal(helpSessionId),
+        helpConversationKey(conversationId)
+      );
+      return createSessionServer(sessionId, h.deps);
+    }
+
+    it("lets the resumed bearer restart, close and delete what it launched before the resume", async () => {
+      const h = launchedBeforeResume();
+      await callTool(h.server, { name: "agent.launch", arguments: { agentId: "claude" } });
+      await callTool(h.server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", recipeId: "r1" },
+      });
+      h.store.resourceOwnership.revokePrincipal(helpOwnershipPrincipal("help-a"));
+
+      const revoked = await callTool(h.server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      expect(toolErrorPayload(revoked).code).toBe("RESOURCE_NOT_OWNED");
+
+      const resumed = bearer(h, "s-help-b", "help-b", "conv-1");
+      const restarted = await callTool(resumed, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-1", presetId: "work" },
+      });
+      expect(restarted.isError).toBeUndefined();
+      const closed = await callTool(resumed, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      expect(closed.isError).toBeUndefined();
+      const deleted = await callTool(resumed, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+      expect(deleted.isError).toBeUndefined();
+      expect(h.dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnPreset",
+        { presetId: "work", terminalId: "terminal-1" },
+        false
+      );
+      expect(h.dispatchAction).toHaveBeenCalledWith(
+        "terminal.close",
+        expect.objectContaining({ terminalId: "terminal-1" }),
+        false
+      );
+      expect(h.dispatchAction).toHaveBeenCalledWith(
+        "worktree.delete",
+        expect.objectContaining({ worktreeId: "/tmp/wt" }),
+        false
+      );
+      expect(h.store.resourceOwnership.list(h.store.resourceOwnership.ownerOf("s-help-b"))).toEqual(
+        []
+      );
+    });
+
+    it("gives a fresh conversation's bearer none of it", async () => {
+      const h = launchedBeforeResume();
+      await callTool(h.server, { name: "agent.launch", arguments: { agentId: "claude" } });
+      h.store.resourceOwnership.revokePrincipal(helpOwnershipPrincipal("help-a"));
+
+      const fresh = bearer(h, "s-help-c", "help-c", "conv-2");
+      const refused = await callTool(fresh, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(toolErrorPayload(refused).code).toBe("RESOURCE_NOT_OWNED");
+      expect(h.dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.close",
+        expect.anything(),
+        expect.anything()
+      );
+    });
+  });
+
   describe("terminal.restartOnPresetOwned (#14369)", () => {
     const RESTART_RESULT = {
       terminalId: "terminal-1",
@@ -1173,6 +1296,359 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
+  // #17917: the tick never confirms the move here; it offers the pane's view
+  // the one move it covers, and the view's answer is what the audit says.
+  describe("terminal.restartOnPresetOwned under the next-fallback tick (#17917)", () => {
+    const NEXT = "terminal.restartOnPresetOwned.nextFallback";
+    const RESTART_RESULT = {
+      terminalId: "terminal-1",
+      agentPresetId: "work",
+      agentSessionIdCleared: true,
+    };
+
+    function tickHarness(
+      sessionId: string,
+      policy: { skipsAll: boolean; delegated: Set<string> },
+      envelope: Record<string, unknown> = { result: { ok: true, result: RESTART_RESULT } }
+    ) {
+      const h = harness(
+        sessionId,
+        { "terminal.restartOnPreset": envelope },
+        { readAssistantConfirmationPolicy: () => policy }
+      );
+      h.store.sessionOriginMap.set(sessionId, "help");
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    const move = {
+      name: "terminal.restartOnPresetOwned",
+      arguments: { terminalId: "terminal-1", presetId: "work" },
+    };
+
+    it("offers the pane's view the move, unconfirmed, and audits the run its view reports", async () => {
+      const { server, dispatchAction, deps } = tickHarness(
+        "s-next",
+        { skipsAll: false, delegated: new Set([NEXT]) },
+        { result: { ok: true, result: RESTART_RESULT }, authorization: "skip-preference" }
+      );
+
+      const result = await callTool(server, move);
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnPreset",
+        { presetId: "work", terminalId: "terminal-1" },
+        false,
+        undefined,
+        undefined,
+        { confirmationCondition: "next-own-fallback" }
+      );
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolId: "terminal.restartOnPresetOwned",
+          authorization: "skip-preference",
+        })
+      );
+    });
+
+    it("offers nothing without the tick, and Never ask still confirms the move outright", async () => {
+      const asks = tickHarness("s-next-off", { skipsAll: false, delegated: new Set() });
+      await callTool(asks.server, move);
+      expect(asks.dispatchAction.mock.calls.at(-1)).toEqual([
+        "terminal.restartOnPreset",
+        { presetId: "work", terminalId: "terminal-1" },
+        false,
+      ]);
+
+      const skips = tickHarness("s-next-never", { skipsAll: true, delegated: new Set() });
+      await callTool(skips.server, move);
+      expect(skips.dispatchAction.mock.calls.at(-1)).toEqual([
+        "terminal.restartOnPreset",
+        { presetId: "work", terminalId: "terminal-1" },
+        true,
+        "skip-preference",
+      ]);
+    });
+
+    it("believes no skip from a view it offered nothing", async () => {
+      const { server, deps } = tickHarness(
+        "s-next-claim",
+        { skipsAll: false, delegated: new Set() },
+        { result: { ok: true, result: RESTART_RESULT }, authorization: "skip-preference" }
+      );
+
+      await callTool(server, move);
+
+      const record = vi.mocked(deps.appendAuditRecord).mock.calls.at(-1)![0];
+      expect(record.authorization).toBeUndefined();
+    });
+
+    it("still refuses a panel the session didn't launch, offering nothing", async () => {
+      const { server, dispatchAction } = tickHarness("s-next-foreign", {
+        skipsAll: false,
+        delegated: new Set([NEXT]),
+      });
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnPresetOwned",
+        arguments: { terminalId: "terminal-theirs", presetId: "work" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("terminal.applyClaudeUpdateOwned (#17908)", () => {
+    const PIN = { terminalId: "terminal-1", generation: 4, observedAt: 900 };
+    const APPLIED = {
+      terminalId: "terminal-1",
+      status: "sent" as const,
+      refusal: null,
+      output: "read" as const,
+      message: "typed",
+    };
+
+    function updateHarness(
+      sessionId: string,
+      approval: DispatchEnvelope = { result: { ok: true, result: { terminalId: "terminal-1" } } }
+    ) {
+      const store = makeStore();
+      // An agent pane's tool set: the update is on core, like the preset move.
+      seedLiveSession(store, sessionId, "core");
+      store.sessionOriginMap.set(sessionId, "external");
+      const manifest: ActionManifestEntry[] = [
+        ...ownedManifest(),
+        {
+          ...makeManifestEntry("terminal.applyClaudeUpdateOwned"),
+          kind: "command",
+          danger: "confirm",
+        },
+      ];
+      const dispatchAction = vi.fn(async (actionId: string) =>
+        actionId === "terminal.applyClaudeUpdate"
+          ? approval
+          : { result: { ok: true as const, result: null } }
+      );
+      type Service = NonNullable<SessionServerDeps["claudeUpdate"]>;
+      const claudeUpdate = {
+        exclusive: vi.fn<Service["exclusive"]>(async (_terminalId, run) => run()),
+        preflight: vi.fn<Service["preflight"]>(async () => PIN),
+        apply: vi.fn<Service["apply"]>(async () => APPLIED),
+      };
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction,
+        requestManifest: vi.fn().mockResolvedValue(manifest),
+        getCachedManifest: vi.fn(() => manifest),
+        // The lock's generic signature is beyond `vi.fn`'s inference.
+        claudeUpdate: claudeUpdate as unknown as Service,
+      });
+      store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return { store, dispatchAction, claudeUpdate, server: createSessionServer(sessionId, deps) };
+    }
+
+    // The approval is the delegate's dialog: `confirmed`, text or anything
+    // else the model sends never reaches it, so the model can't approve it.
+    it("asks through the delegate with the id alone, unconfirmed, then applies", async () => {
+      const { server, dispatchAction, claudeUpdate } = updateHarness("s-update");
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1", confirmed: true, command: "/restart --force" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.applyClaudeUpdate",
+        { terminalId: "terminal-1" },
+        false
+      );
+      expect(claudeUpdate.preflight).toHaveBeenCalledWith("terminal-1", undefined, "s-update");
+      expect(claudeUpdate.apply).toHaveBeenCalledWith(
+        PIN,
+        expect.objectContaining({ inputOwner: "s-update" })
+      );
+      // Read before the person is asked, and applied only after.
+      expect(claudeUpdate.preflight.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchAction.mock.invocationCallOrder[0]!
+      );
+      expect(dispatchAction.mock.invocationCallOrder[0]).toBeLessThan(
+        claudeUpdate.apply.mock.invocationCallOrder[0]!
+      );
+      expect(payloadOf<typeof APPLIED>(result)).toEqual(APPLIED);
+    });
+
+    it("holds the pane for one request at a time, from before anyone is asked", async () => {
+      const { server, claudeUpdate, dispatchAction } = updateHarness("s-update-lock");
+
+      await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(claudeUpdate.exclusive).toHaveBeenCalledWith("terminal-1", expect.any(Function));
+      expect(claudeUpdate.exclusive.mock.invocationCallOrder[0]).toBeLessThan(
+        claudeUpdate.preflight.mock.invocationCallOrder[0]!
+      );
+      expect(claudeUpdate.exclusive.mock.invocationCallOrder[0]).toBeLessThan(
+        dispatchAction.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("refuses a misspelled run rather than taking the run there now", async () => {
+      const { server, claudeUpdate, dispatchAction } = updateHarness("s-update-generation");
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1", generation: "4" },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      expect(claudeUpdate.preflight).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("applies nothing when the person declines", async () => {
+      const { server, claudeUpdate } = updateHarness("s-update-declined", {
+        result: { ok: false, error: { code: "USER_REJECTED", message: "The user declined." } },
+      });
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("USER_REJECTED");
+      expect(claudeUpdate.apply).not.toHaveBeenCalled();
+    });
+
+    it("asks nobody when the pane doesn't offer /restart", async () => {
+      const { server, dispatchAction, claudeUpdate } = updateHarness("s-update-not-offered");
+      claudeUpdate.preflight.mockRejectedValueOnce(
+        new AssistantTargetError(CLAUDE_UPDATE_NOT_OFFERED, "No footer. Nothing was sent.")
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(toolErrorPayload(result).code).toBe(CLAUDE_UPDATE_NOT_OFFERED);
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(claudeUpdate.apply).not.toHaveBeenCalled();
+    });
+
+    it("refuses a panel the session did not create, without reading or asking", async () => {
+      const { store, server, dispatchAction, claudeUpdate } = updateHarness("s-update-foreign");
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-theirs" },
+      });
+
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(claudeUpdate.preflight).not.toHaveBeenCalled();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("holds the pane to the session at the moment of the send", async () => {
+      const { store, server, claudeUpdate } = updateHarness("s-update-released");
+      let authorize: (() => void) | undefined;
+      claudeUpdate.apply.mockImplementationOnce(async (_pin, request) => {
+        authorize = request.authorize;
+        return APPLIED;
+      });
+
+      await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      expect(() => authorize!()).not.toThrow();
+      store.resourceOwnership.release("s-update-released", "terminal", "terminal-1");
+      expect(() => authorize!()).toThrow(/no longer this session's/);
+    });
+  });
+  describe("terminal.restartOnAccountOwned (#17079)", () => {
+    const RESTART_RESULT = {
+      terminalId: "terminal-1",
+      agentAccountId: null,
+      agentSessionIdCleared: true,
+    };
+
+    function restartHarness(sessionId: string) {
+      const h = harness(sessionId, {
+        "terminal.restartOnAccount": { result: { ok: true, result: RESTART_RESULT } },
+      });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return h;
+    }
+
+    // `confirmed` never crosses, so the approval is the host's; an explicit
+    // null (the CLI's own login) and `keepConversation: false` both do.
+    it("delegates with only the id, the account and the ask to keep it, unconfirmed", async () => {
+      const { server, dispatchAction } = restartHarness("s-account");
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnAccountOwned",
+        arguments: {
+          terminalId: "terminal-1",
+          accountId: null,
+          keepConversation: false,
+          confirmed: true,
+        },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnAccount",
+        { accountId: null, keepConversation: false, terminalId: "terminal-1" },
+        false
+      );
+      expect(payloadOf<typeof RESTART_RESULT>(result)).toEqual(RESTART_RESULT);
+    });
+
+    it("refuses a panel the session did not create, without dispatching", async () => {
+      const { store, server, dispatchAction } = restartHarness("s-account-foreign");
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
+
+      const result = await callTool(server, {
+        name: "terminal.restartOnAccountOwned",
+        arguments: { terminalId: "terminal-theirs", accountId: "account-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("forwards a saved account's id and keeps ownership across the restart", async () => {
+      const { store, server, dispatchAction } = restartHarness("s-account-keeps");
+
+      await callTool(server, {
+        name: "terminal.restartOnAccountOwned",
+        arguments: { terminalId: "terminal-1", accountId: "account-1", keepConversation: true },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.restartOnAccount",
+        { accountId: "account-1", keepConversation: true, terminalId: "terminal-1" },
+        false
+      );
+      expect(dispatchAction).toHaveBeenCalledTimes(1);
+      expect(store.resourceOwnership.owns("s-account-keeps", "terminal", "terminal-1")).toBe(true);
+    });
+  });
+
   describe("terminal.placeOwned (#13662)", () => {
     const PLACE_RESULT = { terminalId: "terminal-1", location: "background", transitioned: true };
 
@@ -2239,6 +2715,131 @@ describe("session-scoped resource ownership (#11909)", () => {
         expect(call[3]).toBe(authorization);
       }
     );
+
+    // "Don't ask again for this kind of action" (#16752): offered on the
+    // dialog the owned delete raises, settled on the id called, and written
+    // only beside an approval that carried it.
+    describe("the dialog's hand-over", () => {
+      const offer = { label: "Delete a worktree it created", detail: "Only a clean one" };
+
+      function delegating(sessionId: string, envelope: Record<string, unknown>) {
+        const commit = vi.fn(() => true);
+        const approved = vi.fn();
+        const prepareAssistantDelegation = vi.fn((calledActionId: string) =>
+          calledActionId === "worktree.deleteOwned" ? { offer, approved, commit } : null
+        );
+        const h = harness(
+          sessionId,
+          { "worktree.delete": envelope },
+          {
+            readAssistantConfirmationPolicy: () => ({ skipsAll: false, delegated: new Set() }),
+            prepareAssistantDelegation,
+          }
+        );
+        h.store.sessionOriginMap.set(sessionId, "help");
+        h.store.resourceOwnership.record(sessionId, [{ kind: "worktree", id: "/tmp/wt" }]);
+        return { ...h, commit, approved, prepareAssistantDelegation };
+      }
+
+      it("offers it for the owned id on the delete it is sent as, and writes it on approval", async () => {
+        const { server, dispatchAction, commit, prepareAssistantDelegation } = delegating(
+          "s-hand-over",
+          {
+            result: { ok: true, result: null },
+            confirmationDecision: "approved",
+            approvalScope: "delegate",
+          }
+        );
+
+        await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/tmp/wt" },
+        });
+
+        expect(prepareAssistantDelegation).toHaveBeenCalledWith("worktree.deleteOwned");
+        expect(dispatchAction).toHaveBeenCalledWith(
+          "worktree.delete",
+          { worktreeId: "/tmp/wt" },
+          false,
+          undefined,
+          undefined,
+          { delegationOffer: offer, onDelegationApproved: expect.any(Function) }
+        );
+        expect(commit).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        { confirmationDecision: "approved" },
+        { confirmationDecision: "rejected", approvalScope: "delegate" },
+        { confirmationDecision: "timeout", approvalScope: "delegate" },
+      ])("writes nothing for $confirmationDecision without an approved tick", async (answer) => {
+        const { server, commit, dispatchAction } = delegating("s-no-hand-over", {
+          result: { ok: true, result: null },
+          ...answer,
+        });
+
+        await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/tmp/wt" },
+        });
+
+        // Offered, so the missing write is the answer's doing, not a missing offer.
+        expect(dispatchAction.mock.calls.at(-1)?.[5]).toMatchObject({ delegationOffer: offer });
+        expect(commit).not.toHaveBeenCalled();
+      });
+
+      it("offers nothing for a call that already runs without asking", async () => {
+        const prepareAssistantDelegation = vi.fn(() => ({
+          offer,
+          approved: () => {},
+          commit: () => true,
+        }));
+        const { store, server, dispatchAction } = harness(
+          "s-skipped-hand-over",
+          { "worktree.delete": { result: { ok: true, result: null } } },
+          {
+            readAssistantConfirmationPolicy: () => ({ skipsAll: true, delegated: new Set() }),
+            prepareAssistantDelegation,
+          }
+        );
+        store.sessionOriginMap.set("s-skipped-hand-over", "help");
+        store.resourceOwnership.record("s-skipped-hand-over", [
+          { kind: "worktree", id: "/tmp/wt" },
+        ]);
+
+        await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/tmp/wt" },
+        });
+
+        expect(prepareAssistantDelegation).not.toHaveBeenCalled();
+        expect(dispatchAction.mock.calls.at(-1)?.slice(2)).toEqual([true, "skip-preference"]);
+      });
+
+      it("offers nothing to a session that isn't the assistant", async () => {
+        const prepareAssistantDelegation = vi.fn(() => ({
+          offer,
+          approved: () => {},
+          commit: () => true,
+        }));
+        const { store, server, dispatchAction } = harness(
+          "s-external-hand-over",
+          { "worktree.delete": { result: { ok: true, result: null } } },
+          { prepareAssistantDelegation }
+        );
+        store.resourceOwnership.record("s-external-hand-over", [
+          { kind: "worktree", id: "/tmp/wt" },
+        ]);
+
+        await callTool(server, {
+          name: "worktree.deleteOwned",
+          arguments: { worktreeId: "/tmp/wt" },
+        });
+
+        expect(prepareAssistantDelegation).not.toHaveBeenCalled();
+        expect(dispatchAction.mock.calls.at(-1)).toHaveLength(3);
+      });
+    });
 
     it("still refuses a worktree the session does not own under the skip preference (#12874)", async () => {
       const { store, server, dispatchAction } = harness(

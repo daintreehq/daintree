@@ -55,6 +55,7 @@ import {
   Radio,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Send,
   SquareTerminal,
@@ -83,6 +84,7 @@ export function TerminalSelectionMenuItems({
   onViewSelectedFile,
   separatorAfter = true,
   onSendToAgent,
+  copyCleanKeybinding,
   onOpenInFileBrowser,
   onAction,
 }: {
@@ -101,6 +103,8 @@ export function TerminalSelectionMenuItems({
   separatorAfter?: boolean;
   /** Absent where there is no agent picker to send to. */
   onSendToAgent?: () => void;
+  /** Absent where the shortcut can't reach the terminal (Canopy keeps app keys out). */
+  copyCleanKeybinding?: string;
   onOpenInFileBrowser: (
     scope: WorktreeScope,
     path: string,
@@ -122,7 +126,11 @@ export function TerminalSelectionMenuItems({
         Copy
         <ContextMenuShortcut shortcut={clipboardCombos.copy} />
       </ContextMenuItem>
-      <ContextMenuItem disabled={!hasSelection} onSelect={() => onAction("copy-clean")}>
+      <ContextMenuItem
+        disabled={!hasSelection}
+        onSelect={() => onAction("copy-clean")}
+        keybinding={copyCleanKeybinding}
+      >
         <Copy className={ICON_CLASS} aria-hidden="true" />
         Copy clean text
       </ContextMenuItem>
@@ -223,9 +231,10 @@ export function TerminalFleetMenuItems({
   isArmed,
   fleetSize,
   fleetRun,
-  detectedAgentId,
+  isAgent,
   isWatched,
   whenDone,
+  continueAtLimitReset,
   onRequestPark,
   onAction,
 }: {
@@ -233,10 +242,12 @@ export function TerminalFleetMenuItems({
   isArmed: boolean;
   fleetSize: number;
   fleetRun: ReturnType<typeof useFleetRunMenuState>;
-  detectedAgentId: string | undefined;
+  isAgent: boolean;
   isWatched: boolean;
   /** The pane's When done choice (#16171); absent where it can't be armed. */
   whenDone?: TerminalWhenDone;
+  /** Whether the pane continues once its usage limit resets (#17909); absent where it can't. */
+  continueAtLimitReset?: boolean;
   onRequestPark: () => void;
   onAction: MenuActionHandler;
 }) {
@@ -257,11 +268,12 @@ export function TerminalFleetMenuItems({
   const hasReadMark = fleetEligible && handBackState !== "none";
   const hasRunItems = canSnooze || canPark || isParked || hasReadMark;
   const hasFleetMenu = fleetEligible || hasRunItems;
-  if (!detectedAgentId && !hasFleetMenu) return null;
+  const showWhenDone = whenDone !== undefined && (isAgent || whenDone !== "keep");
+  if (!isAgent && !hasFleetMenu && !showWhenDone && continueAtLimitReset === undefined) return null;
 
   return (
     <>
-      {detectedAgentId && (
+      {isAgent && (
         <ContextMenuCheckboxItem
           checked={isWatched}
           onSelect={() => onAction("toggle-watch")}
@@ -269,6 +281,14 @@ export function TerminalFleetMenuItems({
         >
           Watch
           <ContextMenuShortcut shortcut={watchShortcut} />
+        </ContextMenuCheckboxItem>
+      )}
+      {continueAtLimitReset !== undefined && (
+        <ContextMenuCheckboxItem
+          checked={continueAtLimitReset}
+          onSelect={() => onAction("toggle-continue-at-limit-reset")}
+        >
+          Continue when usage limit resets
         </ContextMenuCheckboxItem>
       )}
       {hasFleetMenu && (
@@ -358,7 +378,7 @@ export function TerminalFleetMenuItems({
           </ContextMenuSubContent>
         </ContextMenuSub>
       )}
-      {detectedAgentId && whenDone !== undefined && (
+      {showWhenDone && (
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <FlagTriangleRight className={ICON_CLASS} aria-hidden="true" />
@@ -395,6 +415,7 @@ export function TerminalSessionMenuItems({
   terminalId,
   terminalPty,
   hasPty,
+  canResetModes,
   isPaused,
   isInputLocked,
   isVoiceLockedHere,
@@ -410,6 +431,8 @@ export function TerminalSessionMenuItems({
   terminalId: string;
   terminalPty: PtyPanelData | undefined;
   hasPty: boolean;
+  /** A live screen to reset: hidden once the process exits or while restore holds the pane. */
+  canResetModes: boolean;
   isPaused: boolean;
   isInputLocked: boolean | undefined;
   isVoiceLockedHere: boolean;
@@ -448,6 +471,12 @@ export function TerminalSessionMenuItems({
             <ContextMenuItem onSelect={() => onAction("redraw")}>
               <RefreshCw className={ICON_CLASS} aria-hidden="true" />
               Redraw
+            </ContextMenuItem>
+          )}
+          {canResetModes && (
+            <ContextMenuItem onSelect={() => onAction("reset-modes")}>
+              <RotateCcw className={ICON_CLASS} aria-hidden="true" />
+              Reset terminal modes
             </ContextMenuItem>
           )}
           {terminalPty?.launchAgentId && !terminalPty.restoreRecovery && (

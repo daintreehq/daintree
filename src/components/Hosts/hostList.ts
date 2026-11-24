@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import {
   LOCAL_HOST_ID,
   type HostConnectionState,
+  type HostId,
   type HostListEntry,
   type HostMetricsSummary,
 } from "@shared/types/remoteHosts";
@@ -34,6 +35,14 @@ let statusSnapshot: HostListSnapshot = EMPTY;
 const listeners = new Set<() => void>();
 let stop: (() => void) | null = null;
 let generation = 0;
+
+/**
+ * When each host was last forgotten (removed, or re-pointed at another
+ * machine), in forget order. Main drops a host's history only once the list
+ * itself changes, so a seed asked for before then can still carry it.
+ */
+let forgetSequence = 0;
+const forgottenAt = new Map<HostId, number>();
 
 let figuresDemand = 0;
 let stopWatchingView: (() => void) | null = null;
@@ -116,6 +125,9 @@ function applyRemoteHostsEvent(event: RemoteHostsEvent): boolean {
       });
       return true;
     }
+    case "host-forgotten":
+      forgetHostFigures(event.hostId);
+      return true;
     default:
       return true;
   }
@@ -166,6 +178,16 @@ function applyMetricsEvent(event: HostMetricsEvent): void {
   applySummary(event.summary);
 }
 
+type HostMetricsApi = NonNullable<NonNullable<typeof window.electron>["hostMetrics"]>;
+
+/** Main samples this machine's own load beside other hosts only while a view follows the figures. */
+function announceFollowing(api: HostMetricsApi, following: boolean): void {
+  if (typeof api.setFollowing !== "function") return;
+  void api
+    .setFollowing({ following })
+    .catch((error: unknown) => logWarn("[Hosts] Couldn't update host figures demand", { error }));
+}
+
 /**
  * Follow host summaries into the list and the sparklines' history. Seeds once
  * remote hosts are actually in use, so a machine with none reads nothing.
@@ -176,15 +198,19 @@ function followFigures(): () => void {
   const current = ++figuresGeneration;
   const live = () => current === figuresGeneration;
   const off = api.onEvent(applyMetricsEvent);
-  const seed = () =>
-    api
+  announceFollowing(api, true);
+  const seed = () => {
+    const askedAt = forgetSequence;
+    return api
       .getSnapshots()
-      .then((snapshots) => {
+      .then((all) => {
         if (!live()) return;
+        const snapshots = all.filter((entry) => (forgottenAt.get(entry.hostId) ?? 0) <= askedAt);
         useHostMetricsStore.getState().seed(snapshots);
         applySeed(snapshots);
       })
       .catch((error: unknown) => logWarn("[Hosts] Couldn't read host summaries", { error }));
+  };
   const inUse = window.electron?.remoteHosts?.isInUse;
   if (typeof inUse === "function") {
     void inUse()
@@ -196,6 +222,7 @@ function followFigures(): () => void {
   return () => {
     figuresGeneration += 1;
     off();
+    announceFollowing(api, false);
   };
 }
 
@@ -212,6 +239,22 @@ function setFollowingFigures(on: boolean): void {
   useHostMetricsStore.getState().reset();
   if (snapshot.localSummary !== null || snapshot.hosts.some((h) => h.summary !== null)) {
     publish({ hosts: withFollowedFigures(snapshot.hosts), localSummary: null });
+  }
+}
+
+/**
+ * Drop a removed or re-pointed host's figures: its summary and load history,
+ * and anything a seed already on its way still carries of the old machine.
+ * Heard while anything follows the list, which figures always are.
+ */
+function forgetHostFigures(hostId: HostId): void {
+  forgottenAt.set(hostId, ++forgetSequence);
+  useHostMetricsStore.getState().forget(hostId);
+  if (snapshot.hosts.some((h) => h.descriptor.id === hostId && h.summary !== null)) {
+    publish({
+      ...snapshot,
+      hosts: snapshot.hosts.map((h) => (h.descriptor.id === hostId ? { ...h, summary: null } : h)),
+    });
   }
 }
 
@@ -236,6 +279,32 @@ function acquireFigures(): () => void {
 }
 
 /**
+ * A read's answer, except that a host whose link was heard since it was asked
+ * for keeps the link it now has. Its summary is the held one unless the link
+ * stayed up throughout, when the answer's may be fresher; across a drop the
+ * answer's may be from before it.
+ */
+function keepLinksHeard(
+  hosts: HostListEntry[],
+  heard: ReadonlyMap<HostId, boolean>
+): HostListEntry[] {
+  if (heard.size === 0) return hosts;
+  return hosts.map((entry) => {
+    const dropped = heard.get(entry.descriptor.id);
+    if (dropped === undefined) return entry;
+    const held = snapshot.hosts.find((h) => h.descriptor.id === entry.descriptor.id);
+    if (!held) return entry;
+    if (held.connection.status !== "connected") {
+      return { ...entry, connection: held.connection, summary: null };
+    }
+    const upThroughout = !dropped && entry.connection.status === "connected";
+    const answered = entry.summary ?? undefined;
+    const summary = upThroughout && isFresher(held.summary, answered) ? answered : held.summary;
+    return { ...entry, connection: held.connection, summary };
+  });
+}
+
+/**
  * Follow the host list while anything shows it. Makes no calls at all where
  * Remote Hosts doesn't exist, so nothing changes for a Windows build.
  */
@@ -248,13 +317,18 @@ function start(): () => void {
   // Bumped by every full list, from either source. An answer to a request
   // made before the latest full list is older than it and is dropped.
   let listVersion = 0;
+  // Links heard since the latest read was asked for, and whether each went
+  // down meanwhile. Its answer may still carry what they were before, since a
+  // reply and a push share no order.
+  const linksHeard = new Map<HostId, boolean>();
   const refresh = () => {
     const requestedAt = ++listVersion;
+    linksHeard.clear();
     api
       .list()
       .then((hosts) => {
         if (current !== generation || requestedAt !== listVersion) return;
-        publish({ ...snapshot, hosts: remoteEntries(hosts) });
+        publish({ ...snapshot, hosts: keepLinksHeard(remoteEntries(hosts), linksHeard) });
       })
       .catch((error: unknown) => {
         logWarn("[Hosts] Couldn't read the host list", { error });
@@ -264,6 +338,10 @@ function start(): () => void {
     api.onEvent((event) => {
       if (event.type === "hosts-changed") listVersion += 1;
       if (!applyRemoteHostsEvent(event)) refresh();
+      else if (event.type === "connection-changed") {
+        const dropped = event.connection.status !== "connected";
+        linksHeard.set(event.hostId, dropped || linksHeard.get(event.hostId) === true);
+      }
     })
   );
   refresh();
@@ -333,6 +411,7 @@ export function _resetHostListForTesting(): void {
   stopFigures?.();
   stopFigures = null;
   figuresDemand = 0;
+  forgottenAt.clear();
   snapshot = EMPTY;
   statusSnapshot = EMPTY;
 }

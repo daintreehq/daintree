@@ -75,6 +75,7 @@ function makeDelegate(): WorkerAnalysisDelegate {
     onBootComplete: vi.fn(),
     onPtyResponse: vi.fn(),
     getProcessState: () => null,
+    onProcessTreeRefresh: () => () => {},
     getAgentContext: () => ({ agentLive: false, agentState: undefined }),
     onMirrorGeometry: vi.fn(),
     onViewport: vi.fn(),
@@ -513,6 +514,115 @@ describe("AnalysisWorkerPool", () => {
     e2ePool.dispose();
   });
 
+  it("reads the screen alone once a held feed has reached the worker (#17984)", async () => {
+    const e2ePool = new AnalysisWorkerPool(1, () => new RuntimeBackedWorker());
+    const backend = e2ePool.createBackend(
+      {
+        ...makeSpec("t1"),
+        rows: 4,
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 100_000 },
+      },
+      makeDelegate()
+    )!;
+
+    backend.feedChunk("scrolled-away\r\n".repeat(10), { agentLive: false });
+    backend.feedChunk("MARKER-held-bytes", { agentLive: false }); // held host-side
+
+    const screen = await backend.serializeScreen();
+    expect(screen?.data).toContain("MARKER-held-bytes");
+    expect(screen?.data).not.toContain(
+      "scrolled-away\r\nscrolled-away\r\nscrolled-away\r\nscrolled-away"
+    );
+    expect(screen?.partial).toBe(true);
+
+    e2ePool.dispose();
+  });
+
+  it("answers no screen when a held feed can't reach the worker (#17984)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 500 },
+      },
+      makeDelegate()
+    )!;
+    const worker = workers[0];
+    backend.feedChunk("x".repeat(20), { agentLive: false }); // posted
+    backend.feedChunk("y".repeat(5), { agentLive: false }); // held
+    // Only the held output is lost: a request would still go out.
+    const post = worker.postMessage.bind(worker);
+    worker.postMessage = (msg: unknown) => {
+      if ((msg as HostToWorkerMessage).type === "data") throw new Error("dropped");
+      post(msg);
+    };
+
+    const reading = backend.serializeScreen();
+    expect(worker.messagesOfType("request")).toHaveLength(0);
+    await expect(reading).resolves.toBeNull();
+  });
+
+  it("moves its observed-since stamp for every loss, two in one millisecond included (#17984)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 50 },
+      },
+      makeDelegate()
+    )!;
+    const overflow = () => {
+      backend.feedChunk("x".repeat(20), { agentLive: false });
+      backend.feedChunk("y".repeat(30), { agentLive: false });
+      backend.feedChunk("z".repeat(30), { agentLive: false });
+    };
+    vi.setSystemTime(20_000);
+    overflow();
+    const first = backend.observedSince();
+    overflow();
+    expect(workers[0].messagesOfType("create")).toHaveLength(3);
+    expect(first).toBe(20_000);
+    expect(backend.observedSince()).toBeGreaterThan(first!);
+  });
+
+  it("answers no screen when the slot is rebuilt while it reads (#17984)", async () => {
+    const backend = pool.createBackend(
+      {
+        ...makeSpec("t1"),
+        flowControl: { highWatermark: 10, lowWatermark: 5, holdHardCap: 50 },
+      },
+      makeDelegate()
+    )!;
+    const worker = workers[0];
+    const reply = { data: "SCREEN", cols: 80, rows: 24 };
+    const answer = (promise: Promise<unknown>) => {
+      const request = worker.messagesOfType("request").at(-1)!;
+      expect(request.op).toBe("serialize-screen");
+      worker.emit("message", {
+        type: "response",
+        requestId: request.requestId,
+        terminalId: "t1",
+        result: reply,
+        generation: request.generation,
+      });
+      return promise;
+    };
+
+    await expect(answer(backend.serializeScreen())).resolves.toEqual(reply);
+
+    const reading = backend.serializeScreen();
+    // Past the hard cap the hold is dropped and the slot rebuilt empty.
+    backend.feedChunk("x".repeat(20), { agentLive: false });
+    backend.feedChunk("y".repeat(30), { agentLive: false });
+    backend.feedChunk("z".repeat(30), { agentLive: false });
+    expect(worker.messagesOfType("create")).toHaveLength(2);
+    await expect(answer(reading)).resolves.toBeNull();
+
+    // A mirror that lost output before the read covers everything since.
+    await expect(answer(backend.serializeScreen())).resolves.toEqual(reply);
+  });
+
   it("discards a worker reply stamped with a superseded generation", async () => {
     const backend = pool.createBackend(makeSpec("t1"), makeDelegate())!;
     const worker = workers[0];
@@ -914,5 +1024,233 @@ describe("WorkerAnalysisBackend feed accounting", () => {
       backend.resyncGeometry(120, 40);
       expect(posted.filter((m) => m.type === "ensure-geometry")).toHaveLength(1);
     });
+  });
+
+  describe("mode reset ordering (#17328)", () => {
+    const RESET = "\x1b[!p";
+
+    it("parses behind output still held under flow control", () => {
+      const { backend, delivered } = stubBackend();
+      holdOutput(backend, "\x1b[?2004h");
+
+      expect(backend.feedModeReset(RESET)).toBe(true);
+
+      // Overtaking the hold would let the program's own `?2004h` land after
+      // the reset and put the cleared mode back in the mirror.
+      const heldIndex = delivered.findIndex((m) => m.type === "data" && m.data === "\x1b[?2004h");
+      const resetIndex = delivered.findIndex((m) => m.type === "prelude" && m.data === RESET);
+      expect(heldIndex).toBeGreaterThanOrEqual(0);
+      expect(resetIndex).toBeGreaterThan(heldIndex);
+    });
+
+    it("writes nothing when the hold can't reach the worker first", () => {
+      const { backend, control, posted } = stubBackend();
+      holdOutput(backend, "HELD");
+
+      control.sendSucceeds = false;
+      expect(backend.feedModeReset(RESET)).toBe(false);
+      control.sendSucceeds = true;
+
+      // Not even attempted: a reset posted past an undelivered hold would parse
+      // ahead of output the pane has already shown.
+      expect(posted.some((m) => m.type === "prelude")).toBe(false);
+    });
+
+    it("refuses, and keeps reporting the program's paste mode, when the reset itself can't be posted", () => {
+      const { backend, control, posted } = stubBackend();
+      backend.handleWorkerEvent({
+        type: "viewport",
+        terminalId: "t1",
+        lines: [],
+        cursorLine: null,
+        bracketedPasteMode: true,
+      });
+
+      control.sendSucceeds = false;
+      expect(backend.feedModeReset(RESET)).toBe(false);
+
+      expect(posted.some((m) => m.type === "prelude" && m.data === RESET)).toBe(true);
+      expect(backend.isBracketedPasteMode()).toBe(true);
+    });
+
+    it("stops reporting bracketed paste as soon as the reset is accepted", () => {
+      const { backend } = stubBackend();
+      backend.handleWorkerEvent({
+        type: "viewport",
+        terminalId: "t1",
+        lines: [],
+        cursorLine: null,
+        bracketedPasteMode: true,
+      });
+      expect(backend.isBracketedPasteMode()).toBe(true);
+
+      backend.feedModeReset(RESET);
+
+      expect(backend.isBracketedPasteMode()).toBe(false);
+    });
+  });
+});
+
+describe("WorkerAnalysisBackend process-state mirror (#17043)", () => {
+  type ProcessState = { hasActiveChildren: boolean; cpuUsage: number };
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function processStateBackend(initial: ProcessState | null) {
+    const delivered: HostToWorkerMessage[] = [];
+    const control = { sendSucceeds: true };
+    let current = initial;
+    const listeners = new Set<() => void>();
+    const getProcessState = vi.fn(() => current);
+    const delegate: WorkerAnalysisDelegate = {
+      ...makeDelegate(),
+      getProcessState,
+      onProcessTreeRefresh: (listener) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+    const pool: AnalysisPoolHost = {
+      post: (_id, msg) => {
+        if (control.sendSucceeds) delivered.push(msg);
+        return control.sendSucceeds;
+      },
+      request: () => Promise.resolve(null),
+      unregister: () => {},
+    };
+    const backend = new WorkerAnalysisBackend(makeSpec("t1"), delegate, pool);
+    backend.init();
+    return {
+      backend,
+      control,
+      listeners,
+      getProcessState,
+      delivered,
+      pushes: () =>
+        delivered.filter((m) => m.type === "process-state") as Array<
+          Extract<HostToWorkerMessage, { type: "process-state" }>
+        >,
+      refresh: () => {
+        for (const listener of Array.from(listeners)) listener();
+      },
+      setState: (next: ProcessState | null) => {
+        current = next;
+      },
+    };
+  }
+
+  const monitor = { agentId: "claude", initialState: "idle", skipInitialStateEmit: false } as const;
+
+  it("pushes the first reading, then only readings that changed", () => {
+    const { backend, pushes, refresh, setState, delivered, getProcessState } = processStateBackend({
+      hasActiveChildren: true,
+      cpuUsage: 0,
+    });
+    backend.startMonitor(monitor);
+    expect(delivered.find((m) => m.type === "monitor-start")).toMatchObject({
+      hasProcessValidator: true,
+    });
+    // One read answers both the validator flag and the first push.
+    expect(getProcessState).toHaveBeenCalledTimes(1);
+    // The worker's own default is {true, 0}; the first push still goes.
+    expect(pushes()).toHaveLength(1);
+
+    refresh();
+    refresh();
+    expect(pushes()).toHaveLength(1);
+
+    setState({ hasActiveChildren: true, cpuUsage: 12.5 });
+    refresh();
+    setState({ hasActiveChildren: false, cpuUsage: 12.5 });
+    refresh();
+    refresh();
+    expect(pushes().map((m) => [m.hasActiveChildren, m.cpuUsage])).toEqual([
+      [true, 0],
+      [true, 12.5],
+      [false, 12.5],
+    ]);
+  });
+
+  it("does no process-state work between census refreshes", async () => {
+    vi.useFakeTimers();
+    const { backend, pushes, getProcessState } = processStateBackend({
+      hasActiveChildren: false,
+      cpuUsage: 0,
+    });
+    backend.startMonitor(monitor);
+    getProcessState.mockClear();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(getProcessState).not.toHaveBeenCalled();
+    expect(pushes()).toHaveLength(1);
+    backend.release();
+  });
+
+  it("never subscribes when the host has no validator to mirror", () => {
+    const { backend, listeners, delivered } = processStateBackend(null);
+    backend.startMonitor(monitor);
+
+    expect(listeners.size).toBe(0);
+    expect(delivered.find((m) => m.type === "monitor-start")).toMatchObject({
+      hasProcessValidator: false,
+    });
+    expect(delivered.some((m) => m.type === "process-state")).toBe(false);
+  });
+
+  it("retries an undelivered reading on the next refresh", () => {
+    const { backend, control, pushes, refresh, setState } = processStateBackend({
+      hasActiveChildren: true,
+      cpuUsage: 0,
+    });
+    backend.startMonitor(monitor);
+    setState({ hasActiveChildren: false, cpuUsage: 0 });
+    control.sendSucceeds = false;
+    refresh();
+    control.sendSucceeds = true;
+
+    refresh();
+
+    expect(pushes().map((m) => m.hasActiveChildren)).toEqual([true, false]);
+  });
+
+  it("starts each monitor and each rebuilt slot from a fresh push", () => {
+    const { backend, listeners, pushes } = processStateBackend({
+      hasActiveChildren: false,
+      cpuUsage: 3,
+    });
+    backend.startMonitor(monitor);
+    backend.stopMonitor();
+    expect(listeners.size).toBe(0);
+
+    backend.startMonitor(monitor);
+    expect(listeners.size).toBe(1);
+    expect(pushes()).toHaveLength(2);
+
+    // The replacement session starts from its own default, whatever the old one held.
+    backend.handleWorkerLost();
+    expect(listeners.size).toBe(1);
+    expect(pushes()).toHaveLength(3);
+  });
+
+  it.each([
+    ["release", (b: WorkerAnalysisBackend) => b.release()],
+    ["detach", (b: WorkerAnalysisBackend) => b.handleDetached()],
+  ] as const)("drops its census subscription on %s", (_label, end) => {
+    const { backend, listeners, pushes, refresh, setState } = processStateBackend({
+      hasActiveChildren: true,
+      cpuUsage: 0,
+    });
+    backend.startMonitor(monitor);
+    expect(listeners.size).toBe(1);
+
+    end(backend);
+    setState({ hasActiveChildren: false, cpuUsage: 50 });
+    refresh();
+
+    expect(listeners.size).toBe(0);
+    expect(pushes()).toHaveLength(1);
   });
 });

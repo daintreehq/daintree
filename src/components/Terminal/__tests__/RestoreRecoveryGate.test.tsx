@@ -18,6 +18,7 @@ import {
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 const findSessions = vi.hoisted(() => vi.fn());
@@ -258,7 +259,9 @@ describe("RestoreRecoveryGate (#12434)", () => {
 
     render(<RestoreRecoveryGate panelId="p-1" />);
 
-    expect(screen.getByRole("heading", { name: "Worktree no longer available" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Choose where this panel runs" })).toBeTruthy();
+    // Nothing lists the worktree it is filed under, so it can't be offered.
+    expect(screen.queryByRole("button", { name: "Use this worktree" })).toBeNull();
     expect(screen.queryByText("Runs in")).toBeNull();
     expect(screen.queryByRole("button", { name: "Start new session" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
@@ -275,6 +278,99 @@ describe("RestoreRecoveryGate (#12434)", () => {
     expect(await screen.findByRole("button", { name: "Resume session" })).toBeTruthy();
     expect(screen.getByText("Runs in")).toBeTruthy();
     expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+  });
+
+  it("offers to run a held pane in the worktree it is filed under once that is listed (#18009)", async () => {
+    // Held because restore couldn't read the list: still filed where it was
+    // moved, still set to start in the checkout it began in.
+    seed(
+      heldPanel("p-1", {
+        cwd: "/repo",
+        conversationCwd: undefined,
+        // An id spelled otherwise than the path it lists.
+        worktreeId: "wt-task-a",
+        restoreRecovery: {
+          reason: "destination-unavailable",
+          sessionId: "sess-a",
+          awaitingDestination: true,
+        },
+      })
+    );
+    const view = {
+      getState: () => ({
+        worktrees: new Map([
+          ["/repo", { path: "/repo" }],
+          ["wt-task-a", { path: "/worktrees/task-a" }],
+        ]),
+      }),
+      subscribe: () => () => {},
+    } as never;
+
+    render(
+      <WorktreeStoreContext value={view}>
+        <RestoreRecoveryGate panelId="p-1" />
+      </WorktreeStoreContext>
+    );
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Use this worktree" }));
+    });
+
+    expect(held("p-1").cwd).toBe("/worktrees/task-a");
+    // Its conversation is still looked up where it began.
+    expect(held("p-1").conversationCwd).toBe("/repo");
+    expect(held("p-1").restoreRecovery).toEqual({
+      reason: "destination-unavailable",
+      sessionId: "sess-a",
+    });
+    expect(await screen.findByRole("button", { name: "Resume session" })).toBeTruthy();
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+  });
+
+  it("offers no worktree a held pane already runs inside", () => {
+    seed(
+      heldPanel("p-1", {
+        cwd: "/worktrees/task-a/web",
+        restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
+      })
+    );
+    const view = {
+      getState: () => ({
+        worktrees: new Map([["/worktrees/task-a", { path: "/worktrees/task-a" }]]),
+      }),
+      subscribe: () => () => {},
+    } as never;
+
+    render(
+      <WorktreeStoreContext value={view}>
+        <RestoreRecoveryGate panelId="p-1" />
+      </WorktreeStoreContext>
+    );
+
+    expect(screen.queryByRole("button", { name: "Use this worktree" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Keep original folder" })).toBeTruthy();
+  });
+
+  it("still offers it to a pane in a sibling folder sharing the worktree's name", () => {
+    seed(
+      heldPanel("p-1", {
+        cwd: "/worktrees/task-ab",
+        restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
+      })
+    );
+    const view = {
+      getState: () => ({
+        worktrees: new Map([["/worktrees/task-a", { path: "/worktrees/task-a" }]]),
+      }),
+      subscribe: () => () => {},
+    } as never;
+
+    render(
+      <WorktreeStoreContext value={view}>
+        <RestoreRecoveryGate panelId="p-1" />
+      </WorktreeStoreContext>
+    );
+
+    expect(screen.getByRole("button", { name: "Use this worktree" })).toBeTruthy();
   });
 
   it("keeps the folder it shows, even when the pane last ran somewhere else", () => {

@@ -62,10 +62,17 @@ const shared = vi.hoisted(() => ({
   drainPromise: null as null | Promise<void>,
   /** Stored voice settings on top of the enabled, keyed defaults. */
   voiceInput: {} as Record<string, unknown>,
-  /** Each project's dictation vocabulary, by id. */
-  vocabularies: {} as Record<string, string[]>,
+  /** Each project's dictation vocabulary, by id: a bare term has no heard-as forms. */
+  vocabularies: {} as Record<
+    string,
+    Array<string | { term: string; heardAs: string[]; source: string; addedAt: number }>
+  >,
   /** What the correction service was last asked to prefer. */
   correctionDictionary: null as string[] | null,
+  /** The heard-as rules the correction service was last handed. */
+  correctionHeardAs: undefined as unknown,
+  /** When set, a project vocabulary read answers only once it settles. */
+  vocabularyGate: null as null | Promise<void>,
   /** When set, the names a start gathers, in place of reading them. */
   names: null as null | Promise<{ hosts: string[]; projects: string[]; worktrees: string[] }>,
   /** The worktree a start finds the terminal in, gathered with `names`. */
@@ -163,6 +170,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       },
       settings: {
         customDictionary: string[];
+        heardAs?: unknown;
         knownNames?: string[];
         repositoryNames?: string[];
         worktree?: { name: string; titles: string[] };
@@ -174,6 +182,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       shared.correctionRecentPrompts = request.recentPrompts;
       shared.correctionFollowingText = request.followingText;
       shared.correctionDictionary = settings.customDictionary;
+      shared.correctionHeardAs = settings.heardAs;
       shared.correctionNames = settings.knownNames;
       shared.correctionRepositoryNames = settings.repositoryNames;
       shared.correctionWorktree = settings.worktree;
@@ -200,9 +209,12 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 
 vi.mock("../../../services/projectVoiceDictionary.js", () => ({
   readProjectVoiceDictionary: vi.fn(async (id: string) => {
+    if (shared.vocabularyGate) await shared.vocabularyGate;
     const terms = shared.vocabularies[id];
     if (!terms) throw new Error("Project not found");
-    return terms.map((term) => ({ term, heardAs: [], source: "manual", addedAt: 0 }));
+    return terms.map((term) =>
+      typeof term === "string" ? { term, heardAs: [], source: "manual", addedAt: 0 } : term
+    );
   }),
 }));
 
@@ -274,6 +286,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
     VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
     VOICE_INPUT_SESSION_ENDED: "voice-input:session-ended",
+    VOICE_INPUT_SESSION_VOCABULARY: "voice-input:session-vocabulary",
   },
 }));
 
@@ -811,6 +824,8 @@ describe("voiceInput — keyterm target", () => {
     shared.voiceInput = {};
     shared.vocabularies = { "proj-a": ["PtyClient"], "proj-b": ["BravoTerm"] };
     shared.correctionDictionary = null;
+    shared.correctionHeardAs = undefined;
+    shared.vocabularyGate = null;
     shared.names = null;
     shared.worktree = null;
     shared.repoNames = [];
@@ -949,6 +964,158 @@ describe("voiceInput — keyterm target", () => {
     shared.viewProjectId = "proj-b";
     await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
     expect(shared.correctionDictionary).toEqual(["Global", "ptyclient"]);
+  });
+
+  // #17217: the project's PtyClient is heard as "patty client" and dropped the
+  // user's own "pity client"; the user's Zustand rule still runs.
+  describe("the project's heard-as rules", () => {
+    const entry = (term: string, ...heardAs: string[]) => ({
+      term,
+      heardAs,
+      source: "manual",
+      addedAt: 0,
+    });
+    const PROJECT = [entry("PtyClient", "patty client")];
+    const RULES = [
+      { heard: "patty client", term: "PtyClient" },
+      { heard: "zoo stand", term: "Zustand" },
+    ];
+    let received: Array<{ channel: string; payload: unknown }>;
+    const completions = () =>
+      received
+        .filter((m) => m.channel === "voice-input:transcription-complete")
+        .map((m) => (m.payload as { text: string }).text);
+    const vocabularyPushes = () =>
+      received.filter((m) => m.channel === "voice-input:session-vocabulary");
+
+    beforeEach(() => {
+      received = [];
+      sink.current = received;
+      shared.vocabularies = { "proj-a": PROJECT, "proj-b": ["BravoTerm"] };
+      shared.voiceInput = {
+        correctionEnabled: true,
+        dictionary: [entry("ptyclient", "pity client"), entry("Zustand", "zoo stand")],
+      };
+    });
+
+    it("rewrites each completion with them, over the user's own rule for the same term", async () => {
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      shared.eventCallback!({
+        type: "complete",
+        text: "fix patty client, pity client and zoo stand",
+      });
+
+      expect(completions()).toEqual(["fix PtyClient, pity client and Zustand"]);
+      // The owner's reruns over the whole dictation get the same vocabulary.
+      expect(vocabularyPushes()).toEqual([
+        {
+          channel: "voice-input:session-vocabulary",
+          payload: { sessionId: currentSessionId, vocabulary: PROJECT },
+        },
+      ]);
+    });
+
+    it("gives a vocabulary still being read at the stop time to land before the session ends", async () => {
+      let release!: () => void;
+      shared.vocabularyGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      shared.eventCallback!({ type: "complete", text: "fix patty client" });
+      const stopping = stop();
+      await Promise.resolve();
+      expect(vocabularyPushes()).toEqual([]);
+
+      release();
+      await stopping;
+      const channels = received.map((m) => m.channel);
+      expect(channels.indexOf("voice-input:session-vocabulary")).toBeGreaterThan(-1);
+      expect(channels.indexOf("voice-input:session-vocabulary")).toBeLessThan(
+        channels.indexOf("voice-input:session-ended")
+      );
+    });
+
+    // The read began at 1000 and has until 3500 (performance.now()).
+    const stopWhileReading = async (stopAt: number, wait: () => Promise<void>) => {
+      let release!: () => void;
+      shared.vocabularyGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let now = 1_000;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+      try {
+        await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+        now = stopAt;
+        const stopping = stop();
+        await wait();
+        release();
+        await stopping;
+        await vi.waitFor(() => expect(vocabularyPushes()).toHaveLength(1));
+      } finally {
+        clock.mockRestore();
+      }
+      const channels = received.map((m) => m.channel);
+      return channels.indexOf("voice-input:session-ended") <
+        channels.indexOf("voice-input:session-vocabulary")
+        ? "after the end"
+        : "before the end";
+    };
+
+    it("waits for a read still in its window at the stop, more than a second of it", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const landed = await stopWhileReading(1_600, async () => {
+          await vi.advanceTimersByTimeAsync(1_500);
+          expect(received.map((m) => m.channel)).not.toContain("voice-input:session-ended");
+        });
+        expect(landed).toBe("before the end");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("ends a stop once the read's window has passed, without it", async () => {
+      const landed = await stopWhileReading(3_600, () =>
+        vi.waitFor(() =>
+          expect(received.map((m) => m.channel)).toContain("voice-input:session-ended")
+        )
+      );
+      expect(landed).toBe("after the end");
+    });
+
+    it("keeps to the user's rules, and sends no vocabulary, for a dictation with none", async () => {
+      shared.viewProjectId = "proj-b";
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      shared.eventCallback!({ type: "complete", text: "fix patty client and pity client" });
+
+      expect(completions()).toEqual(["fix patty client and ptyclient"]);
+      expect(vocabularyPushes()).toEqual([]);
+    });
+
+    it("hands cleanup the same rules, warmed and sent, read ahead or not", async () => {
+      await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+      await vi.waitFor(() => expect(shared.warmSettings.length).toBeGreaterThan(0));
+      expect(shared.warmSettings.at(-1)?.heardAs).toEqual(RULES);
+      await stop();
+
+      await getHandler("voice-input:correct")(fakeEvent, {
+        rawText: "fix it",
+        terminalId: "t-1",
+        sessionId: currentSessionId,
+      });
+      expect(shared.correctionHeardAs).toEqual(RULES);
+
+      shared.correctionHeardAs = undefined;
+      await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
+      expect(shared.correctionHeardAs).toEqual(RULES);
+
+      shared.viewProjectId = "proj-b";
+      await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
+      expect(shared.correctionHeardAs).toEqual([
+        { heard: "pity client", term: "ptyclient" },
+        { heard: "zoo stand", term: "Zustand" },
+      ]);
+    });
   });
 
   it("hands names to assembly unread, so they share its budget instead of delaying it", async () => {

@@ -31,6 +31,25 @@ function isDriveLease(value: unknown): value is PtyHostDriveLease {
   );
 }
 
+/**
+ * Replace `target` with `projectIds`, or leave it untouched when the payload
+ * is not a list of project ids. Indexed rather than `.some()`, which skips
+ * holes: a sparse array like `["a", <hole>]` would pass and then insert
+ * `undefined` into the set.
+ */
+function replaceProjectSet(target: Set<string>, projectIds: unknown, type: string): void {
+  const malformed =
+    !Array.isArray(projectIds) ||
+    projectIds.length !== Object.keys(projectIds).length ||
+    projectIds.some((projectId) => typeof projectId !== "string" || !projectId);
+  if (malformed) {
+    console.warn(`[PtyHost] ${type} payload is not a list of project ids, ignoring`);
+    return;
+  }
+  target.clear();
+  for (const projectId of projectIds as string[]) target.add(projectId);
+}
+
 export function createConnectionHandlers(ctx: HostContext): HandlerMap {
   const {
     ptyManager,
@@ -38,6 +57,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     terminalWorkerConnections,
     windowProjectMap,
     fallbackEligibleProjects,
+    frozenViewProjects,
     windowFocusedTerminalMap,
     disconnectWindow,
     disconnectTerminalWorkerPort,
@@ -418,25 +438,18 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     // entry here would keep the IPC fallback open for a project whose every
     // view now holds a port — a permanent double-path for its output.
     "set-fallback-eligible-projects": (msg) => {
-      const projectIds: unknown = msg.projectIds;
       // Validated in full BEFORE the set is touched. Clearing first and
       // filtering as we go would let a malformed payload erase the current
       // protection and reopen the starvation — the one direction this message
       // must never fail in. An empty array is legitimate and still clears.
-      // Indexed rather than `.some()`, which skips holes: a sparse array like
-      // `["a", <hole>]` would pass and then insert `undefined` into the set.
-      const malformed =
-        !Array.isArray(projectIds) ||
-        projectIds.length !== Object.keys(projectIds).length ||
-        projectIds.some((projectId) => typeof projectId !== "string" || !projectId);
-      if (malformed) {
-        console.warn(
-          "[PtyHost] set-fallback-eligible-projects payload is not a list of project ids, ignoring"
-        );
-        return;
-      }
-      fallbackEligibleProjects.clear();
-      for (const projectId of projectIds as string[]) fallbackEligibleProjects.add(projectId);
+      replaceProjectSet(fallbackEligibleProjects, msg.projectIds, msg.type);
+    },
+
+    // Authoritative replace, like the eligible set. A malformed payload keeps
+    // the current set: a stale entry only skips copies a frozen view could not
+    // have read, and the pane repaints from the host mirror when it returns.
+    "set-frozen-view-projects": (msg) => {
+      replaceProjectSet(frozenViewProjects, msg.projectIds, msg.type);
     },
 
     // Authoritative replace from Main's drive lease; validated before it is applied.

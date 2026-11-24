@@ -26,6 +26,7 @@ vi.mock("remark-gfm", async (importOriginal) => {
 import { refractor } from "refractor/core";
 import { MarkdownDocument, MARKDOWN_FONT_SIZE_TOKEN } from "../MarkdownDocument";
 import { _clearHighlightCacheForTests } from "../markdownRenderPolicy";
+import { markdownTargetLine } from "../markdownHeadingTargets";
 import { MARKDOWN_FONT_SIZE_STEPS } from "@/store/preferencesStore";
 import { installAppPluginKitHost } from "@/services/plugin/appPluginKitHost";
 
@@ -360,7 +361,7 @@ describe("MarkdownDocument", () => {
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 
-  it("ignores same-document anchors, protocol-relative URLs, and javascript: links", () => {
+  it("dispatches nothing for an anchor with no target, protocol-relative URLs, and javascript: links", () => {
     render(
       <MarkdownDocument
         {...FIXTURE_PROPS}
@@ -413,6 +414,332 @@ describe("MarkdownDocument", () => {
     expect(window.getSelection()?.toString()).toBe(document_.textContent);
     expect(window.getSelection()?.toString()).not.toContain("sidebar chrome");
     window.getSelection()?.removeAllRanges();
+  });
+});
+
+/**
+ * jsdom has no layout, so a pane here is a box whose geometry is stubbed: it
+ * scrolls (overflow auto, taller content than view) and reports its top, and
+ * each element the test names reports where it sits inside it.
+ */
+function stubPane(pane: HTMLElement, top: number): void {
+  Object.defineProperty(pane, "clientHeight", { configurable: true, value: 400 });
+  Object.defineProperty(pane, "scrollHeight", { configurable: true, value: 4000 });
+  pane.getBoundingClientRect = () => ({ top }) as DOMRect;
+}
+
+function placeAt(element: Element, top: number): void {
+  element.getBoundingClientRect = () => ({ top }) as DOMRect;
+}
+
+const TOC_PLAN = [
+  "# Plan",
+  "",
+  "- [Risks](#risks)",
+  "",
+  "Intro.",
+  "",
+  "## Risks",
+  "",
+  "Late.",
+].join("\n");
+
+describe("MarkdownDocument same-document links (#17335)", () => {
+  it("gives headings GitHub's prefixed ids, numbering repeats in document order", () => {
+    const { container } = render(
+      <MarkdownDocument
+        {...FIXTURE_PROPS}
+        content={"# Plan\n\n## Risks\n\n## What's new? (v2)\n\n### Risks"}
+      />
+    );
+
+    const ids = [...container.querySelectorAll("h1, h2, h3")].map((heading) => heading.id);
+    expect(ids).toEqual([
+      "user-content-plan",
+      "user-content-risks",
+      "user-content-whats-new-v2",
+      "user-content-risks-1",
+    ]);
+  });
+
+  it("scrolls the clicked document's pane to its heading and focuses it, leaving a twin document alone", () => {
+    const { getByTestId } = render(
+      <div>
+        <div data-testid="pane-a" style={{ overflowY: "auto" }}>
+          <MarkdownDocument {...FIXTURE_PROPS} content={TOC_PLAN} />
+        </div>
+        <div data-testid="pane-b" style={{ overflowY: "auto" }}>
+          <MarkdownDocument {...FIXTURE_PROPS} filePath="/repo/docs/other.md" content={TOC_PLAN} />
+        </div>
+      </div>
+    );
+    const paneA = getByTestId("pane-a");
+    const paneB = getByTestId("pane-b");
+    stubPane(paneA, 0);
+    stubPane(paneB, 500);
+    const headingA = paneA.querySelector("h2")!;
+    const headingB = paneB.querySelector("h2")!;
+    placeAt(headingA, 900);
+    placeAt(headingB, 500 + 1200);
+    paneB.scrollTop = 100;
+
+    const linkB = paneB.querySelector("a")!;
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    linkB.dispatchEvent(click);
+
+    expect(click.defaultPrevented).toBe(true);
+    // Lands 8px below the pane's top: 100 already scrolled + 1200 down - 8.
+    expect(paneB.scrollTop).toBe(1292);
+    expect(document.activeElement).toBe(headingB);
+    expect(headingB.getAttribute("tabindex")).toBe("-1");
+    expect(paneA.scrollTop).toBe(0);
+    expect(headingA.hasAttribute("tabindex")).toBe(false);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("never falls back to another document for a heading this one lacks", () => {
+    const { getByTestId } = render(
+      <div>
+        <div data-testid="pane-a" style={{ overflowY: "auto" }}>
+          <MarkdownDocument {...FIXTURE_PROPS} content={"## Nowhere"} />
+        </div>
+        <div data-testid="pane-b" style={{ overflowY: "auto" }}>
+          <MarkdownDocument {...FIXTURE_PROPS} content={"[gone](#nowhere)\n\n## Risks"} />
+        </div>
+      </div>
+    );
+    const paneA = getByTestId("pane-a");
+    const paneB = getByTestId("pane-b");
+    stubPane(paneA, 0);
+    stubPane(paneB, 500);
+    const elsewhere = paneA.querySelector("h2")!;
+    placeAt(elsewhere, 900);
+    const before = document.activeElement;
+
+    screen.getByRole("link", { name: "gone" }).click();
+
+    expect(paneA.scrollTop).toBe(0);
+    expect(paneB.scrollTop).toBe(0);
+    expect(document.activeElement).toBe(before);
+    expect(elsewhere.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("scrolls only the document's own pane, never a scroller around it", () => {
+    const { getByTestId } = render(
+      <div data-testid="app" style={{ overflowY: "auto" }}>
+        <div data-testid="pane" style={{ overflowY: "auto" }}>
+          <MarkdownDocument {...FIXTURE_PROPS} content={TOC_PLAN} />
+        </div>
+      </div>
+    );
+    const app = getByTestId("app");
+    const pane = getByTestId("pane");
+    stubPane(app, 0);
+    stubPane(pane, 40);
+    placeAt(pane.querySelector("h2")!, 40 + 700);
+
+    screen.getByRole("link", { name: "Risks" }).click();
+
+    expect(pane.scrollTop).toBe(692);
+    expect(app.scrollTop).toBe(0);
+  });
+
+  it("lands the heading below chrome the host pins over the pane", () => {
+    const { getByTestId } = render(
+      <div data-testid="pane" style={{ overflowY: "auto" }}>
+        <MarkdownDocument {...FIXTURE_PROPS} content={TOC_PLAN} anchorTopGap={56} />
+      </div>
+    );
+    const pane = getByTestId("pane");
+    stubPane(pane, 0);
+    placeAt(pane.querySelector("h2")!, 700);
+
+    screen.getByRole("link", { name: "Risks" }).click();
+
+    expect(pane.scrollTop).toBe(644);
+  });
+
+  it("follows a footnote to its note and back to the reference", () => {
+    const { getByTestId } = render(
+      <div data-testid="pane" style={{ overflowY: "auto" }}>
+        <MarkdownDocument {...FIXTURE_PROPS} content={"Claim.[^1]\n\n[^1]: The source."} />
+      </div>
+    );
+    const pane = getByTestId("pane");
+    stubPane(pane, 0);
+    const reference = pane.querySelector<HTMLAnchorElement>("a[data-footnote-ref]")!;
+    const note = pane.querySelector("#user-content-fn-1")!;
+    const back = pane.querySelector<HTMLAnchorElement>("a[data-footnote-backref]")!;
+    placeAt(note, 1500);
+    placeAt(reference, 300);
+
+    reference.click();
+    expect(pane.scrollTop).toBe(1492);
+    expect(document.activeElement).toBe(note);
+
+    pane.scrollTop = 0;
+    back.click();
+    expect(pane.scrollTop).toBe(292);
+    expect(document.activeElement).toBe(reference);
+    // A link is focusable already; nothing is added to it.
+    expect(reference.hasAttribute("tabindex")).toBe(false);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("does nothing for a link that names no heading in the document", () => {
+    const { getByTestId } = render(
+      <div data-testid="pane" style={{ overflowY: "auto" }}>
+        <MarkdownDocument
+          {...FIXTURE_PROPS}
+          content={"[gone](#nowhere) [bare](#) [Shouting](#RISKS)\n\n## Risks"}
+        />
+      </div>
+    );
+    const pane = getByTestId("pane");
+    stubPane(pane, 0);
+    placeAt(pane.querySelector("h2")!, 700);
+    const before = document.activeElement;
+
+    for (const name of ["gone", "Shouting"]) screen.getByRole("link", { name }).click();
+    screen.getByText("bare").click();
+
+    expect(pane.scrollTop).toBe(0);
+    expect(document.activeElement).toBe(before);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  // Edit mode resolves `#risks` against the source with its own parse; both
+  // must name the same place, or a link means two things across the toggle.
+  it("mints exactly the ids Edit mode resolves to each heading's line", () => {
+    const source = [
+      "# Plan",
+      "",
+      "## Risks",
+      "",
+      "Risks",
+      "-----",
+      "",
+      "### `slug()` & [more](./more.md)",
+      "",
+      "Claim.[^note]",
+      "",
+      "[^note]: Source.",
+    ].join("\n");
+    const { container } = render(<MarkdownDocument {...FIXTURE_PROPS} content={source} />);
+
+    const ids = [...container.querySelectorAll("[id^='user-content-']")].map((el) => el.id);
+    expect(ids).toEqual([
+      "user-content-plan",
+      "user-content-risks",
+      "user-content-risks-1",
+      "user-content-slug--more",
+      "user-content-fnref-note",
+      "user-content-fn-note",
+    ]);
+    expect(ids.map((id) => markdownTargetLine(source, `#${id}`))).toEqual([1, 3, 5, 8, 10, 12]);
+  });
+
+  it("does not re-parse the document when only the landing gap changes", () => {
+    const { rerender } = render(
+      <MarkdownDocument {...FIXTURE_PROPS} content={TOC_PLAN} anchorTopGap={8} />
+    );
+    const attachesAfterFirstRender = gfmAttaches.count;
+
+    rerender(<MarkdownDocument {...FIXTURE_PROPS} content={TOC_PLAN} anchorTopGap={56} />);
+
+    expect(gfmAttaches.count).toBe(attachesAfterFirstRender);
+  });
+});
+
+describe("MarkdownDocument front matter (#17334)", () => {
+  const frontmatterBlocks = (container: HTMLElement) => [
+    ...container.querySelectorAll<HTMLElement>("[data-frontmatter]"),
+  ];
+
+  it("shows YAML front matter as its raw lines above the body, not as a rule and a heading", () => {
+    const yaml = [
+      "name: release-check",
+      "description: Checks the release branch",
+      "",
+      "allowed-tools:",
+      "  - Bash(git log:*)",
+    ].join("\n");
+    const { container } = render(
+      <MarkdownDocument
+        {...FIXTURE_PROPS}
+        content={`---\n${yaml}\n---\n\n# Release check\n\nBody.`}
+      />
+    );
+
+    const [block, ...rest] = frontmatterBlocks(container);
+    expect(rest).toEqual([]);
+    expect(block?.dataset.frontmatter).toBe("yaml");
+    expect(block?.tagName).toBe("DIV");
+    // Raw and whole: the blank line stays, and the nested list keeps the
+    // indentation that makes it YAML.
+    expect(block?.textContent).toBe(yaml);
+    expect(container.querySelector(".markdown-document")?.firstElementChild).toBe(block);
+    expect(container.querySelector("hr")).toBeNull();
+    expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual([
+      "Release check",
+    ]);
+  });
+
+  it("shows TOML front matter the same way", () => {
+    const { container } = render(
+      <MarkdownDocument {...FIXTURE_PROPS} content={'+++\ntitle = "Plan"\n+++\n\n# Plan'} />
+    );
+
+    const [block] = frontmatterBlocks(container);
+    expect(block?.dataset.frontmatter).toBe("toml");
+    expect(block?.textContent).toBe('title = "Plan"');
+    expect(screen.getAllByRole("heading").map((heading) => heading.textContent)).toEqual(["Plan"]);
+  });
+
+  it("never interprets a value: markup in it stays text", () => {
+    const { container } = render(
+      <MarkdownDocument
+        {...FIXTURE_PROPS}
+        content={"---\ndescription: <b>bold</b> **strong** [link](https://x.dev)\n---\n"}
+      />
+    );
+
+    const [block] = frontmatterBlocks(container);
+    expect(block?.textContent).toBe("description: <b>bold</b> **strong** [link](https://x.dev)");
+    expect(block?.querySelector("b, strong, a")).toBeNull();
+  });
+
+  it("leaves a fence that isn't front matter to Markdown", () => {
+    // Unclosed, and not on the first line: a rule each, as before.
+    for (const content of ["---\nname: x\n\n# Title", "\n---\nname: x\n---\n\n# Title"]) {
+      const { container, unmount } = render(
+        <MarkdownDocument {...FIXTURE_PROPS} content={content} />
+      );
+      expect(frontmatterBlocks(container)).toEqual([]);
+      expect(container.querySelector("hr")).not.toBeNull();
+      unmount();
+    }
+  });
+
+  it("draws nothing for blank front matter", () => {
+    for (const content of ["---\n\n---\n\n# Title", "---\n \t\n  \n---\n\n# Title"]) {
+      const { container, unmount } = render(
+        <MarkdownDocument {...FIXTURE_PROPS} content={content} />
+      );
+      expect(frontmatterBlocks(container)).toEqual([]);
+      expect(container.querySelector("hr")).toBeNull();
+      expect(container.querySelector(".markdown-document")?.firstElementChild?.tagName).toBe("H1");
+      unmount();
+    }
+  });
+
+  it("keeps heading ids and their lines past the front matter, whose `#` lines are comments", () => {
+    const source = "---\n# Risks\ntitle: Plan\n---\n\n# Risks\n\n## Risks";
+    const { container } = render(<MarkdownDocument {...FIXTURE_PROPS} content={source} />);
+
+    const ids = [...container.querySelectorAll("[id^='user-content-']")].map((el) => el.id);
+    expect(ids).toEqual(["user-content-risks", "user-content-risks-1"]);
+    expect(ids.map((id) => markdownTargetLine(source, `#${id}`))).toEqual([6, 8]);
   });
 });
 

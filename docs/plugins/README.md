@@ -65,6 +65,7 @@ The two entry points are at the top of this page. Everything below is reference 
 | --- | --- |
 | [Agent extensions](./agent-extensions.md) | The two MCP directions — `mcpServers` (Daintree is the client) and `agentMcp` (Daintree serves your tools and the host's database tools to terminal agents, one server per plugin) — the agent access setting, `.daintree/mcp.json`, troubleshooting tools missing from `/mcp`, plus skills |
 | [Forge providers](./forge-provider.md) | Implementing a code-hosting backend. **Built-in plugins only** — an installed plugin's providers register but stay unbacked, and project scope rejects them |
+| [Cloud providers](./cloud-provider.md) | Adding a cloud whose machines Daintree creates, starts, stops and uses as hosts: the manifest entry, the worker implementation, each call's deadline and failures. Installed plugins only |
 | [Tours](./tours.md) | Shipping a narrated welcome tour for a plugin or a panel: manifest entry, narration and cues, scenes from the kit and the mock Daintree window, voicing, previewing, and the house style |
 
 **Contract and internals**

@@ -11,7 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 import {
   CodexAppServerError,
   runCodexAppServerSession,
@@ -24,6 +24,11 @@ import {
   type CodexQuotaProfileTarget,
 } from "./CodexQuotaProfiles.js";
 import type { AgentSettingsEntry } from "../../../shared/types/agentSettings.js";
+import type {
+  CodexLimitBucketEvidence,
+  CodexLimitEvidence,
+  CodexLimitWindowEvidence,
+} from "../../../shared/types/codexLimitReset.js";
 import type {
   CodexQuotaProfile,
   CodexQuotaProfileHomeReason,
@@ -53,12 +58,25 @@ interface CodexAccountIdentity {
 interface HomeReading {
   result: CodexQuotaResult;
   identity: CodexAccountIdentity | null;
+  /** Every bucket as the server sent it, for a stopped pane's reset (#17906); null with no answer. */
+  evidence: CodexLimitEvidence | null;
 }
 
 interface HomeCacheEntry {
   cached: HomeReading | null;
   inFlight: Promise<HomeReading> | null;
+  /**
+   * Whether some caller of `inFlight` must have its answer. One only a
+   * background watch is waiting on is dropped before it starts once that
+   * watch stops wanting it (#17981).
+   */
+  needed: boolean;
+  /** The background callers of `inFlight`: it's still wanted while any of them wants it. */
+  wantedBy: Array<() => boolean>;
 }
+
+/** What a dropped background read rejects with; never reaches a caller that needed the answer. */
+class QuotaReadDropped extends Error {}
 
 /** Keyed by realpath'd home, never by preset: presets sharing a home share a reading. */
 let cacheByHome = new Map<string, HomeCacheEntry>();
@@ -127,6 +145,61 @@ export function normalizeCodexRateLimits(raw: unknown, fetchedAt: number): Codex
   };
 }
 
+/** Undefined for a window the server didn't send; null for one it sent that can't be read. */
+function toEvidenceWindow(raw: unknown): CodexLimitWindowEvidence | null | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  if (typeof raw !== "object") return null;
+  const { usedPercent, resetsAt } = raw as Record<string, unknown>;
+  if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent) || usedPercent < 0) {
+    return null;
+  }
+  if (resetsAt === null || resetsAt === undefined) return { usedPercent, resetsAt: null };
+  if (typeof resetsAt !== "number" || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  return { usedPercent, resetsAt: Math.round(resetsAt * 1000) };
+}
+
+function toEvidenceBucket(raw: unknown, key: string | null): CodexLimitBucketEvidence {
+  const snapshot = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+  const windows: CodexLimitWindowEvidence[] = [];
+  let unreadable = snapshot === null;
+  for (const slot of [snapshot?.primary, snapshot?.secondary]) {
+    const window = toEvidenceWindow(slot);
+    if (window === null) unreadable = true;
+    else if (window !== undefined) windows.push(window);
+  }
+  return {
+    limitId: nonEmptyString(snapshot?.limitId) ?? key,
+    limitName: nonEmptyString(snapshot?.limitName),
+    windows,
+    unreadable,
+  };
+}
+
+/**
+ * Every bucket of a `GetAccountRateLimitsResponse`, for judging a stopped
+ * pane's banner by (#17906): the per-limit map, or the single snapshot an
+ * older CLI sends. Unlike {@link normalizeCodexRateLimits} it keeps the model
+ * buckets, since the banner names the one it means, and a window with no
+ * duration. Null when the response isn't one.
+ */
+export function toCodexLimitEvidence(
+  raw: unknown,
+  requestedAt: number,
+  receivedAt: number
+): CodexLimitEvidence | null {
+  if (!raw || typeof raw !== "object") return null;
+  const { rateLimits, rateLimitsByLimitId } = raw as Record<string, unknown>;
+  const buckets =
+    rateLimitsByLimitId && typeof rateLimitsByLimitId === "object"
+      ? Object.entries(rateLimitsByLimitId).map(([key, snapshot]) =>
+          toEvidenceBucket(snapshot, key)
+        )
+      : rateLimits && typeof rateLimits === "object"
+        ? [toEvidenceBucket(rateLimits, null)]
+        : null;
+  return buckets === null ? null : { requestedAt, receivedAt, buckets };
+}
+
 function toUnavailableReason(error: unknown): CodexQuotaUnavailableReason {
   if (error instanceof CodexAppServerError) {
     if (error.reason === "cli-missing") return "cli-missing";
@@ -163,13 +236,19 @@ async function readAccountEmail(call: CodexAppServerCall): Promise<string | null
 }
 
 /** `codexHome` undefined means main's own env, exactly as before presets were read. */
-async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReading> {
+/** `dropIfUnwanted` throws {@link QuotaReadDropped} for a background read nobody wants any more. */
+async function fetchCodexQuota(
+  codexHome: string | undefined,
+  dropIfUnwanted?: () => void
+): Promise<HomeReading> {
   // Held outside the session: if the deadline lands during the optional account
   // read, the quota that already arrived is still the answer.
   let quota: { raw: unknown; fetchedAt: number } | null = null;
+  let requestedAt = Date.now();
   try {
     const { raw, accountId, email } = await runCodexAppServerSession(
       async (call) => {
+        requestedAt = Date.now();
         const raw = await call<unknown>("account/rateLimits/read");
         quota = { raw, fetchedAt: Date.now() };
         const accountId =
@@ -180,33 +259,54 @@ async function fetchCodexQuota(codexHome: string | undefined): Promise<HomeReadi
         const email = accountId ? await readAccountEmail(call) : null;
         return { raw, accountId, email };
       },
-      codexHome === undefined ? {} : { codexHome }
+      {
+        ...(codexHome === undefined ? {} : { codexHome }),
+        ...(dropIfUnwanted ? { beforeSpawn: dropIfUnwanted } : {}),
+      }
     );
     const result = normalizeCodexRateLimits(raw, Date.now());
+    const answered = quota as { raw: unknown; fetchedAt: number } | null;
     return {
       result,
       identity: result.status === "ok" && accountId && email ? { accountId, email } : null,
+      evidence: toCodexLimitEvidence(raw, requestedAt, answered?.fetchedAt ?? Date.now()),
     };
   } catch (error) {
+    if (error instanceof QuotaReadDropped) throw error;
     const answered = quota as { raw: unknown; fetchedAt: number } | null;
     if (answered) {
-      return { result: normalizeCodexRateLimits(answered.raw, answered.fetchedAt), identity: null };
+      return {
+        result: normalizeCodexRateLimits(answered.raw, answered.fetchedAt),
+        identity: null,
+        evidence: toCodexLimitEvidence(answered.raw, requestedAt, answered.fetchedAt),
+      };
     }
+    // A read nobody wants any more, that never got an answer (its slot timed
+    // out, say), is dropped rather than cached as a failure.
+    dropIfUnwanted?.();
     return {
       result: { status: "unavailable", reason: toUnavailableReason(error), fetchedAt: Date.now() },
       identity: null,
+      evidence: null,
     };
   }
 }
 
+/**
+ * `stillWanted` marks a background read: asked again when its turn in this
+ * queue comes and just before Codex would be spawned for it, it is dropped
+ * there if false and nobody that needs the answer has joined it, so it
+ * neither holds the queue nor starts Codex. Absent, the caller needs the answer.
+ */
 function readHome(
   home: string,
   codexHome: string | undefined,
-  force: boolean
+  force: boolean,
+  stillWanted?: () => boolean
 ): Promise<HomeReading> {
   let entry = cacheByHome.get(home);
   if (!entry) {
-    entry = { cached: null, inFlight: null };
+    entry = { cached: null, inFlight: null, needed: false, wantedBy: [] };
     cacheByHome.set(home, entry);
   }
   const { cached } = entry;
@@ -215,16 +315,36 @@ function readHome(
     if (Date.now() - cached.result.fetchedAt < ttl) return Promise.resolve(cached);
   }
   // A refresh still joins a read already in flight rather than queueing a second.
-  if (entry.inFlight) return entry.inFlight;
+  if (entry.inFlight) {
+    // A watch started again joins the stopped one's read and keeps it wanted.
+    if (stillWanted) entry.wantedBy.push(stillWanted);
+    else entry.needed = true;
+    return entry.inFlight;
+  }
   const owner = entry;
-  const request = enqueue(() => fetchCodexQuota(codexHome)).then((result) => {
+  owner.needed = !stillWanted;
+  owner.wantedBy = stillWanted ? [stillWanted] : [];
+  const dropIfUnwanted = stillWanted
+    ? () => {
+        if (!owner.needed && !owner.wantedBy.some((wanted) => wanted())) {
+          throw new QuotaReadDropped();
+        }
+      }
+    : undefined;
+  const request = enqueue(async () => {
+    dropIfUnwanted?.();
+    return fetchCodexQuota(codexHome, dropIfUnwanted);
+  }).then((result) => {
     owner.cached = result;
     return result;
   });
   owner.inFlight = request;
-  void request.finally(() => {
-    if (owner.inFlight === request) owner.inFlight = null;
-  });
+  request
+    .finally(() => {
+      if (owner.inFlight === request) owner.inFlight = null;
+    })
+    // A dropped read rejects only for the background callers awaiting it.
+    .catch(() => {});
   return request;
 }
 
@@ -254,8 +374,13 @@ async function unreadableReason(
  * path computed from it; every other home, the agent-wide one included, is
  * named the way a pane's env names it.
  */
-function readTarget(target: CodexQuotaProfileTarget, homeKey: string, force: boolean) {
-  return readHome(homeKey, target.inheritsMainEnv ? undefined : target.home, force);
+function readTarget(
+  target: CodexQuotaProfileTarget,
+  homeKey: string,
+  force: boolean,
+  stillWanted?: () => boolean
+) {
+  return readHome(homeKey, target.inheritsMainEnv ? undefined : target.home, force, stillWanted);
 }
 
 async function readDefaultHome(force: boolean): Promise<CodexQuotaResult> {
@@ -409,6 +534,82 @@ export function readCodexQuotaProfiles(): Promise<CodexQuotaProfile[]> {
 /** Every profile past the cache, for an explicit Retry. */
 export function refreshCodexQuotaProfiles(): Promise<CodexQuotaProfile[]> {
   return readProfiles(true);
+}
+
+/** One readable home's reading, keyed by its realpath'd identity. Main's alone. */
+export interface CodexHomeQuota {
+  homeKey: string;
+  isDefault: boolean;
+  accountNames: string[];
+  presetNames: string[];
+  result: CodexQuotaResult;
+}
+
+/**
+ * The quota of only the homes in `homes` (#17318), canonical key to the home
+ * as a running pane's env named it, behind the same cache and queue as every
+ * other read: a home with no agent in it is never asked about. A home a
+ * profile names is read and labelled as Settings reads it; one none does (a
+ * project's own `CODEX_HOME`) is read the way that pane runs, unlabelled.
+ * Never rejects.
+ */
+export async function readCodexQuotaForHomes(
+  homes: ReadonlyMap<string, string>,
+  /** Asked as each home's read reaches the queue: false drops it, and that home is left out. */
+  stillWanted?: () => boolean
+): Promise<CodexHomeQuota[]> {
+  if (homes.size === 0) return [];
+  const profiles = await foldBySameDirectory(resolveCodexQuotaProfiles(await readCodexSettings()));
+  const named = new Set(profiles.map((target) => target.homeKey));
+  const unnamed: CanonicalTarget[] = [...homes]
+    .filter(([homeKey]) => !named.has(homeKey))
+    .map(([homeKey, home]) => ({
+      home,
+      homeKey,
+      isDefault: false,
+      presetNames: [],
+      presetOrder: [],
+    }));
+  const readings: CodexHomeQuota[] = [];
+  for (const target of [...profiles, ...unnamed]) {
+    if (!homes.has(target.homeKey) || (await unreadableReason(target))) continue;
+    let result: CodexQuotaResult;
+    try {
+      ({ result } = await readTarget(target, target.homeKey, false, stillWanted));
+    } catch (error) {
+      if (error instanceof QuotaReadDropped) continue;
+      throw error;
+    }
+    readings.push({
+      homeKey: target.homeKey,
+      isDefault: target.isDefault,
+      accountNames: target.accountNames ?? [],
+      presetNames: target.presetNames,
+      result,
+    });
+  }
+  return readings;
+}
+
+/**
+ * A reading of the Codex home a stopped pane runs on, for judging its banner
+ * by (#17906). Always a new request, through the same queue but past the
+ * cache: one asked for now is after the banner showed whatever the clock
+ * says, and a stopped pane's home is kept nowhere after. `home` is the
+ * absolute home the pane's env named, resolved once to the folder it names
+ * now; one Codex hasn't made is never read. Null when there is no reading.
+ * Never rejects.
+ */
+export async function readCodexHomeLimitEvidence(home: string): Promise<CodexLimitEvidence | null> {
+  if (!(await isDirectory(home))) return null;
+  let physical: string;
+  try {
+    physical = await realpath(home);
+  } catch {
+    return null;
+  }
+  const reading = await enqueue(() => fetchCodexQuota(physical));
+  return reading.evidence;
 }
 
 /** The queue is kept: a read still running from before the reset must still finish first. */

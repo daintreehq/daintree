@@ -27,6 +27,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Button } from "../../ui/button";
 import { CopyButton } from "../../ui/CopyButton";
 import { Spinner } from "../../ui/Spinner";
+import { LifecycleRunBody, LifecycleRunFacts } from "./LifecycleRunDetails";
 import { SpinningIcon } from "../../ui/SpinningIcon";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { systemClient } from "@/clients/systemClient";
@@ -179,6 +180,12 @@ export function EnvironmentPopover({
     checkRequested || (lifecycle?.phase === "resource-status" && lifecycle.state === "running");
   // A fast phase never flashes a spinner; the trigger's pulse already covers it.
   const showActivity = useDohertyGate(!!activity);
+  // What the running commands are doing. Not for a status check, whose output
+  // lands below as the environment's last reported output.
+  const runningCommands =
+    isLifecycleRunning && lifecycle && lifecycle.phase !== "resource-status"
+      ? lifecycle
+      : undefined;
 
   const output = resourceLastOutput?.trim();
   const showOutput = !!output && !isRedundantOutput(output);
@@ -290,6 +297,8 @@ export function EnvironmentPopover({
         align="start"
         className="w-96 max-w-[calc(100vw-2rem)] p-0 text-xs focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         aria-label={`${environmentName} environment`}
+        // Where a running command's log hands focus back when the run settles.
+        data-lifecycle-focus-return=""
         ref={contentRef}
         onOpenAutoFocus={(event) => {
           // Land on the popover itself rather than its first control: focusing
@@ -322,9 +331,18 @@ export function EnvironmentPopover({
         {hasBody && (
           <div className="flex flex-col gap-3 px-3 pt-2 pb-3">
             {activity && showActivity && (
-              <div className="flex items-center gap-1.5 text-text-secondary">
-                <Spinner size="xs" />
-                <span>{activity}…</span>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <div className="flex items-center gap-1.5 text-text-secondary">
+                  <Spinner size="xs" />
+                  <span>
+                    {runningCommands ? (
+                      <LifecycleRunFacts status={runningCommands} lead={`${activity}…`} />
+                    ) : (
+                      `${activity}…`
+                    )}
+                  </span>
+                </div>
+                {runningCommands && <LifecycleRunBody status={runningCommands} />}
               </div>
             )}
 

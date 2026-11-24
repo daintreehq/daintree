@@ -6,6 +6,7 @@ import type { PresentationLevels } from "@shared/config/presentationProfile";
 import type { ProjectPresentationSnapshot } from "@shared/types/ipc/projectPresentation";
 import type { PluginLaunchEntryConfig } from "@shared/types/plugin";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { _resetTooltipFocusSuppressionForTests } from "@/lib/tooltipFocusSuppression";
 import { useProjectStore } from "@/store/projectStore";
 import {
   _resetProjectPresentationStoreForTest,
@@ -133,6 +134,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  _resetTooltipFocusSuppressionForTests();
   Reflect.deleteProperty(window, "electron");
   _resetProjectPresentationStoreForTest();
   useProjectStore.setState({ currentProject: null });
@@ -161,8 +163,13 @@ describe("LauncherPresentationSection", () => {
       "agents",
     ]);
     expect(groupRow("agents").getByText("In More")).toBeTruthy();
-    // A demoted group moves only inside More, so it has nowhere to go.
-    expect(groupRow("agents").getByLabelText("Move Agents up").hasAttribute("disabled")).toBe(true);
+    // A demoted group moves only inside More, so it has nowhere to go; the arrow
+    // says so without leaving the tab order.
+    const up = groupRow("agents").getByLabelText("Move Agents up");
+    expect(up.getAttribute("aria-disabled")).toBe("true");
+    expect(up.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(up);
+    expect(setLauncherGroupOrder).not.toHaveBeenCalled();
   });
 
   it("saves the whole order on a move, keeping groups that are not drawn right now", async () => {
@@ -323,5 +330,89 @@ describe("LauncherPresentationSection", () => {
     for (const button of screen.getAllByLabelText(/^Move /)) {
       expect(button.hasAttribute("disabled")).toBe(true);
     }
+  });
+});
+
+describe("LauncherPresentationSection keyboard reordering", () => {
+  // A keyboard Enter or Space on a focused button is a click with no pointer behind it.
+  const press = async (button: HTMLElement) => {
+    act(() => button.focus());
+    await act(async () => {
+      fireEvent.click(button);
+    });
+  };
+  const focusedButton = () => document.activeElement as HTMLButtonElement;
+
+  it("keeps focus on the group it moved into the first position", async () => {
+    await renderSection();
+    await press(groupRow("panels").getByLabelText("Move Panels up"));
+    expect(drawnOrder().slice(0, 2)).toEqual(["panels", "agents"]);
+    expect(focusedButton().getAttribute("aria-label")).toBe("Move Panels up");
+    expect(focusedButton().disabled).toBe(false);
+    expect(focusedButton().getAttribute("aria-disabled")).toBe("true");
+    // Pressing again at the top saves nothing more.
+    await press(focusedButton());
+    expect(setLauncherGroupOrder).toHaveBeenCalledTimes(1);
+    expect(focusedButton().getAttribute("aria-label")).toBe("Move Panels up");
+  });
+
+  it("keeps focus on the group it moved into the last position", async () => {
+    await renderSection();
+    await press(groupRow(`plugin:${TOOLS}`).getByLabelText("Move Tools down"));
+    expect(drawnOrder().slice(-2)).toEqual(["recipes", `plugin:${TOOLS}`]);
+    expect(focusedButton().getAttribute("aria-label")).toBe("Move Tools down");
+    expect(focusedButton().disabled).toBe(false);
+    expect(focusedButton().getAttribute("aria-disabled")).toBe("true");
+    await press(focusedButton());
+    expect(setLauncherGroupOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps focus on a group moved down to the edge of More", async () => {
+    setLauncherGroupOrder.mockImplementation((order) =>
+      Promise.resolve(
+        snapshot({ launcherAgents: "demoted" }, { launcherGroupOrder: order, revision: 1 })
+      )
+    );
+    await renderSection(snapshot({ launcherAgents: "demoted" }));
+    // Shown groups end at recipes; agents is alone in More.
+    await press(groupRow(`plugin:${TOOLS}`).getByLabelText("Move Tools down"));
+    expect(drawnOrder()).toEqual([
+      `plugin:${NOTES}`,
+      "panels",
+      "recipes",
+      `plugin:${TOOLS}`,
+      "agents",
+    ]);
+    expect(focusedButton().getAttribute("aria-label")).toBe("Move Tools down");
+    expect(focusedButton().getAttribute("aria-disabled")).toBe("true");
+    await press(focusedButton());
+    expect(setLauncherGroupOrder).toHaveBeenCalledTimes(1);
+  });
+
+  // React restores a keyed row's focus across its own relocation, so only an
+  // activation that never focused the arrow shows the moved group is followed.
+  it.each([
+    ["panels", "Move Panels up"],
+    [`plugin:${TOOLS}`, "Move Tools down"],
+  ])("follows %s after a click that left focus elsewhere", async (id, name) => {
+    await renderSection();
+    const before = drawnOrder();
+    await act(async () => {
+      fireEvent.click(groupRow(id).getByLabelText(name), { detail: 1 });
+    });
+    expect(drawnOrder()).not.toEqual(before);
+    expect(focusedButton().getAttribute("aria-label")).toBe(name);
+  });
+
+  it.each([
+    ["Move Panels up", "Move up"],
+    ["Move Agents up", "Move up"],
+    ["Move Tools down", "Move down"],
+    ["Move Recipes down", "Move down"],
+  ])("names the %s arrow in a tooltip, at the end of the list too", async (name, tooltip) => {
+    await renderSection();
+    act(() => screen.getByLabelText(name).focus());
+    const tip = await screen.findByRole("tooltip", { hidden: true }, { timeout: 3000 });
+    expect(tip.textContent).toBe(tooltip);
   });
 });

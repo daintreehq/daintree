@@ -206,11 +206,15 @@ const ACTIVATING_EVENTS = [
 export interface PickerHost {
   channel: string;
   mode: PickerMode;
+  /** Start paused: the preview was already out of sight when this document was installed. */
+  paused?: boolean;
   post(event: ElementPickerEvent): void;
 }
 
 export interface PickerHandle {
   setMode(mode: PickerMode): void;
+  /** Stop every listener, observer and frame while nobody can see the preview, or resume them. */
+  setPaused(paused: boolean): void;
   /** Drop the selection and its outline without reporting it: the host asked. */
   clearSelection(): void;
   clearHover(): void;
@@ -466,6 +470,11 @@ function primaryOf(contributions: readonly Extracted[]): Extracted | null {
 export function createPicker(host: PickerHost): PickerHandle {
   let mode: PickerMode = host.mode;
   let disposed = false;
+  /**
+   * Nobody can see the preview. Nothing listens, observes or draws until it
+   * resumes; the mode and the selection are kept for when it does.
+   */
+  let paused = host.paused === true;
   let hovered: Element | null = null;
   /** The nearest component the hovered element's framework named, for its label. */
   let hoverName: string | null = null;
@@ -1276,7 +1285,7 @@ export function createPicker(host: PickerHost): PickerHandle {
   }
 
   function schedule(): void {
-    if (disposed || frame !== 0) return;
+    if (disposed || paused || frame !== 0) return;
     frame = requestAnimationFrame(onFrame);
   }
 
@@ -1812,17 +1821,22 @@ export function createPicker(host: PickerHost): PickerHandle {
     return parent === null ? [] : childrenOf(parent);
   }
 
-  /** Arrows walk the rendered tree the way a browser inspector does; Escape lets go. */
+  /**
+   * Arrows walk the rendered tree the way a browser inspector does; Escape
+   * lets go of the selection, and with nothing selected asks the host to close
+   * the picker. A `<webview>` guest's keys never reach the host's DOM, so the
+   * picker has to say so itself.
+   */
   function onKeyDown(event: Event): void {
     const keyboard = event as KeyboardEvent;
     // Keys during composition belong to the IME, never to the picker.
     if (keyboard.isComposing === true || keyboard.keyCode === 229) return;
     if (keyboard.key === "Escape") {
-      // Swallowed only when there was a selection to clear; otherwise the host
-      // still owns Escape for leaving the picker.
-      if (selection.length === 0) return;
       suppress(event);
-      select(null, "user");
+      // A held key peels one layer, not the selection and the picker with it.
+      if (keyboard.repeat) return;
+      if (selection.length > 0) select(null, "user");
+      else host.post({ type: "dismissRequested" });
       return;
     }
     const current = primary();
@@ -1885,7 +1899,7 @@ export function createPicker(host: PickerHost): PickerHandle {
    * picker deliberately installs into documents, not ahead of them.
    */
   function attachSelectListeners(): void {
-    if (selectTeardown.length > 0) return;
+    if (paused || selectTeardown.length > 0) return;
     const capture: AddEventListenerOptions = { capture: true };
     for (const type of ACTIVATING_EVENTS) {
       listen(window, type, type === "click" ? onSelectClick : suppress, capture, selectTeardown);
@@ -1933,7 +1947,7 @@ export function createPicker(host: PickerHost): PickerHandle {
    * outline would otherwise be left behind by the first scroll.
    */
   function attachTracking(): void {
-    if (trackTeardown.length > 0) return;
+    if (paused || trackTeardown.length > 0) return;
     const passiveCapture: AddEventListenerOptions = { capture: true, passive: true };
     listen(window, "scroll", schedule, passiveCapture, trackTeardown);
     listen(window, "resize", schedule, { passive: true }, trackTeardown);
@@ -1971,7 +1985,7 @@ export function createPicker(host: PickerHost): PickerHandle {
    */
   function syncTracking(): void {
     if (disposed) return;
-    if (mode === "select" || selection.length > 0) {
+    if (!paused && (mode === "select" || selection.length > 0)) {
       attachTracking();
       return;
     }
@@ -2023,6 +2037,31 @@ export function createPicker(host: PickerHost): PickerHandle {
     }
     syncTracking();
     if (selection.length > 0) schedule();
+  }
+
+  /**
+   * Stop or resume everything the picker does in the page. Pausing leaves the
+   * mode and the selection as they are, so resuming puts back exactly what
+   * they need: Inspect's listeners, the outline's tracking, a fresh frame.
+   */
+  function setPaused(next: boolean): void {
+    if (disposed || next === paused) return;
+    paused = next;
+    if (paused) {
+      detachSelectListeners();
+      if (frame !== 0) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
+      pendingHit = undefined;
+      // The pointer cannot be over a page nobody can see.
+      setHover(null);
+      syncTracking();
+      return;
+    }
+    if (mode === "select") attachSelectListeners();
+    syncTracking();
+    if (mode === "select" || selection.length > 0) schedule();
   }
 
   function clearSelection(): void {
@@ -2306,6 +2345,7 @@ export function createPicker(host: PickerHost): PickerHandle {
 
   return {
     setMode,
+    setPaused,
     clearSelection,
     clearHover,
     setAvailability,

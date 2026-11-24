@@ -53,10 +53,10 @@ beforeEach(() => {
 });
 
 describe("HostDetail assistant control (#13493, #13496)", () => {
-  it("is the one assistant switch beside notifications, and saves only its own field", async () => {
+  it("is the one assistant switch beside notifications and agent forwarding, and saves only its own field", async () => {
     render(<HostDetail entry={entry()} onBack={() => {}} />);
     expect(screen.getByText("Notify me about this host")).toBeTruthy();
-    expect(screen.getAllByRole("switch")).toHaveLength(2);
+    expect(screen.getAllByRole("switch")).toHaveLength(3);
     expect(controlSwitch().getAttribute("aria-checked")).toBe("false");
     expect(controlSwitch().hasAttribute("disabled")).toBe(false);
     await act(async () => {

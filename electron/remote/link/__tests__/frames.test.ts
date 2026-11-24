@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  BULK_CHUNK_BYTES,
   DEFAULT_MAX_FRAME_BYTES,
   FRAME_HEADER_BYTES,
   FrameDecoder,
   FrameProtocolError,
   Lane,
+  allocFramePayload,
   encodeFrame,
 } from "../frames.js";
 
@@ -70,6 +72,85 @@ describe("link frames", () => {
     expect(() =>
       encodeFrame({ lane: Lane.RPC, kind: 1, streamId: -1, payload: new Uint8Array() })
     ).toThrow();
+  });
+
+  describe("payloads allocated with header room", () => {
+    const filled = (n: number): Uint8Array => {
+      const payload = allocFramePayload(n);
+      for (let i = 0; i < n; i++) payload[i] = (i * 31 + 7) & 0xff;
+      return payload;
+    };
+
+    it("frames in place, byte for byte what a copied payload frames as", () => {
+      for (const n of [0, 1, 3000, BULK_CHUNK_BYTES]) {
+        const payload = filled(n);
+        const before = new Uint8Array(payload);
+        const copied = encodeFrame({
+          lane: Lane.BULK,
+          kind: 2,
+          streamId: 0xfffffffe,
+          payload: before,
+        });
+        const out = encodeFrame({ lane: Lane.BULK, kind: 2, streamId: 0xfffffffe, payload });
+
+        expect(out).toEqual(copied);
+        expect(out.buffer).toBe(payload.buffer);
+        expect(out.byteOffset + FRAME_HEADER_BYTES).toBe(payload.byteOffset);
+        expect(payload).toEqual(before);
+        const [decoded] = new FrameDecoder().push(out);
+        expect(decoded!.payload).toEqual(before);
+      }
+    });
+
+    it("copies on a second encode, leaving the first frame's header as it was", () => {
+      const payload = filled(64);
+      const first = encodeFrame({ lane: Lane.BULK, kind: 2, streamId: 1, payload });
+      const firstBytes = new Uint8Array(first);
+      const second = encodeFrame({ lane: Lane.RPC, kind: 3, streamId: 2, payload });
+
+      expect(second.buffer).not.toBe(payload.buffer);
+      expect(first).toEqual(firstBytes);
+      const frames = new FrameDecoder().push(Buffer.concat([first, second]));
+      expect(frames.map((f) => [f.lane, f.kind, f.streamId])).toEqual([
+        [Lane.BULK, 2, 1],
+        [Lane.RPC, 3, 2],
+      ]);
+      expect(frames[1]!.payload).toEqual(new Uint8Array(payload));
+    });
+
+    // A fragment is a view into the middle of a larger payload: the bytes in
+    // front of it belong to the fragment before, never to a header.
+    it("copies a view into the payload rather than writing over the bytes in front of it", () => {
+      const payload = filled(100);
+      const before = new Uint8Array(payload);
+      const out = encodeFrame({
+        lane: Lane.RPC,
+        kind: 1,
+        streamId: 1,
+        payload: payload.subarray(50),
+      });
+
+      expect(out.buffer).not.toBe(payload.buffer);
+      expect(payload).toEqual(before);
+      const [decoded] = new FrameDecoder().push(out);
+      expect(decoded!.payload).toEqual(before.subarray(50));
+      expect(encodeFrame({ lane: Lane.RPC, kind: 1, streamId: 0, payload }).buffer).toBe(
+        payload.buffer
+      );
+    });
+
+    it("keeps the header room through an encode that refuses the frame", () => {
+      const payload = filled(100);
+      expect(() => encodeFrame({ lane: Lane.RPC, kind: 256, streamId: 0, payload })).toThrow(
+        FrameProtocolError
+      );
+      expect(() => encodeFrame({ lane: Lane.RPC, kind: 1, streamId: 0, payload }, 64)).toThrow(
+        FrameProtocolError
+      );
+      expect(encodeFrame({ lane: Lane.RPC, kind: 1, streamId: 0, payload }).buffer).toBe(
+        payload.buffer
+      );
+    });
   });
 
   describe("reassembly capacity", () => {

@@ -57,7 +57,7 @@ describe("restartTerminalWithoutView", () => {
     // Told once, before the kill (#15918).
     const beforeChange = vi.fn(() => expect(invoke).not.toHaveBeenCalled());
     await expect(
-      restartTerminalWithoutView(PROJECT.id, "t1", deps, () => true, beforeChange)
+      restartTerminalWithoutView(PROJECT.id, "t1", deps, { beforeChange })
     ).resolves.toBe("restarted");
 
     expect(beforeChange).toHaveBeenCalledTimes(1);
@@ -175,7 +175,7 @@ describe("restartTerminalWithoutView", () => {
 
     const beforeChange = vi.fn();
     await expect(
-      restartTerminalWithoutView(PROJECT.id, "t1", deps, () => true, beforeChange)
+      restartTerminalWithoutView(PROJECT.id, "t1", deps, { beforeChange })
     ).resolves.toBe("unsupported");
     expect(invoke).not.toHaveBeenCalled();
     // Nothing changed, so nothing is told (#15918).
@@ -365,14 +365,63 @@ describe("restartTerminalWithoutView", () => {
 
   it("stops before the kill when the terminal was relaunched during its checks", async () => {
     const { deps, invoke } = setup({ id: "t2", command: "npm run dev" }, {});
+    let current = true;
+    const read = deps.getProjectState;
+    deps.getProjectState = async (projectId) => {
+      const state = await read(projectId);
+      current = false;
+      return state;
+    };
 
-    await expect(restartTerminalWithoutView(PROJECT.id, "t2", deps, () => false)).resolves.toBe(
-      "stale"
-    );
+    await expect(
+      restartTerminalWithoutView(PROJECT.id, "t2", deps, { isCurrent: () => current })
+    ).resolves.toBe("stale");
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("doesn't respawn when the terminal was relaunched or the policy stopped during the kill", async () => {
+  it("stops before the kill when the restart stopped being wanted during its checks", async () => {
+    const { deps, invoke } = setup({ id: "t2", command: "npm run dev" }, {});
+    let wanted = true;
+    const read = deps.getProjectState;
+    deps.getProjectState = async (projectId) => {
+      const state = await read(projectId);
+      wanted = false;
+      return state;
+    };
+    const beforeChange = vi.fn();
+
+    await expect(
+      restartTerminalWithoutView(PROJECT.id, "t2", deps, {
+        stillWanted: () => wanted,
+        beforeChange,
+      })
+    ).resolves.toBe("stale");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(beforeChange).not.toHaveBeenCalled();
+  });
+
+  it("finishes the respawn of a restart that stopped being wanted during the kill", async () => {
+    const { deps, invoke } = setup(
+      { id: "t1", launchAgentId: "claude", command: "claude" },
+      { agentState: "working" },
+      "sess-123"
+    );
+    let wanted = true;
+    const kill = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) => {
+      const answer = await kill(projectId, channel, args);
+      if (channel === CHANNELS.TERMINAL_GRACEFUL_KILL) wanted = false;
+      return answer;
+    });
+
+    await expect(
+      restartTerminalWithoutView(PROJECT.id, "t1", deps, { stillWanted: () => wanted })
+    ).resolves.toBe("restarted");
+    expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_GRACEFUL_KILL, CHANNELS.TERMINAL_SPAWN]);
+    expect(spawned(invoke)).toMatchObject({ id: "t1" });
+  });
+
+  it("doesn't respawn when the terminal was relaunched or its decision's service stopped during the kill", async () => {
     const { deps, invoke, store } = setup(
       { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "kept" },
       { agentState: "working" },
@@ -386,9 +435,9 @@ describe("restartTerminalWithoutView", () => {
       return answer;
     });
 
-    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps, () => current)).resolves.toBe(
-      "stale"
-    );
+    await expect(
+      restartTerminalWithoutView(PROJECT.id, "t1", deps, { isCurrent: () => current })
+    ).resolves.toBe("stale");
     expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_GRACEFUL_KILL]);
     expect(store.read()?.terminals[0]?.agentSessionId).toBe("kept");
   });

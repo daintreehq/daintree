@@ -26,8 +26,7 @@ vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({ getActiveShutdown: ()
 vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: () => ({
     recordRendererGone: vi.fn(),
-    getLastBackupTimestamp: () => null,
-    getBackupPanelCount: () => null,
+    getRecoveryPageBackupInfo: () => ({ backupTimestamp: null, panelCount: null }),
   }),
 }));
 vi.mock("../../ipc/errorHandlers.js", () => ({ notifyError: vi.fn() }));

@@ -1,4 +1,4 @@
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 
 /**
  * A pane's own place in the fleet, read as two booleans so arming or disarming
@@ -6,9 +6,9 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
  * whole `armedIds` set (or its size) wakes every pane in the grid on every
  * change.
  *
- * `isFleetComposing` is membership AND a fleet of two or more, so an unarmed
- * pane reads a constant when the fleet grows past one. An `isolated` pane is
- * never part of the fleet.
+ * `isFleetComposing` is membership AND a fleet of two or more, counting agents
+ * on other hosts, so an unarmed pane reads a constant when the fleet grows past
+ * one. An `isolated` pane is never part of the fleet.
  */
 export function useFleetMembership(
   terminalId: string,
@@ -16,7 +16,7 @@ export function useFleetMembership(
 ): { isArmed: boolean; isFleetComposing: boolean } {
   const isArmed = useFleetArmingStore((s) => !isolated && s.armedIds.has(terminalId));
   const isFleetComposing = useFleetArmingStore(
-    (s) => !isolated && s.armedIds.has(terminalId) && s.armedIds.size >= 2
+    (s) => !isolated && s.armedIds.has(terminalId) && selectFleetMemberCount(s) >= 2
   );
   return { isArmed, isFleetComposing };
 }

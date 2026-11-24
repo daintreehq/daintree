@@ -1,5 +1,5 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
-import type { AutocompleteItem } from "@/components/Terminal/AutocompleteMenu";
+import { firstEnabledIndex, type AutocompleteItem } from "@/components/Terminal/AutocompleteMenu";
 import type { ActiveCompletionContext } from "../hybridInputParsing";
 
 interface UseAutocompleteStateParams {
@@ -7,6 +7,12 @@ interface UseAutocompleteStateParams {
   activeCompletionContext: ActiveCompletionContext | null;
   autocompleteItems: AutocompleteItem[];
   rootRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Outside the root once portalled: the menu, and the Expanded Editor's host
+   * the editor moves into. A press in either is not a press away.
+   */
+  menuRef: React.RefObject<HTMLElement | null>;
+  modalEditorHostRef: React.RefObject<HTMLElement | null>;
   selectedIndex: number;
   setSelectedIndex: Dispatch<SetStateAction<number>>;
   lastQueryRef: React.RefObject<string>;
@@ -18,6 +24,8 @@ export function useAutocompleteState({
   activeCompletionContext,
   autocompleteItems,
   rootRef,
+  menuRef,
+  modalEditorHostRef,
   selectedIndex,
   setSelectedIndex,
   lastQueryRef,
@@ -39,7 +47,9 @@ export function useAutocompleteState({
   // `#` is ordinary text far more often than a reference (`# Heading`,
   // `color: #333`), so its menu starts with nothing selected and Enter sends
   // what was typed until a row is chosen.
-  const initialIndex = activeCompletionContext?.triggerChar === "#" ? -1 : 0;
+  // Elsewhere it starts on the first row a key can act on.
+  const startsUnselected = activeCompletionContext?.triggerChar === "#";
+  const initialIndex = startsUnselected ? -1 : firstEnabledIndex(autocompleteItems);
 
   useEffect(() => {
     const prev = prevRef.current;
@@ -59,12 +69,19 @@ export function useAutocompleteState({
       // Items merged/refreshed for the same query: keep the selected key if it
       // survived, else clamp into range — or, where nothing starts selected,
       // select nothing rather than a row that was never chosen.
-      const clamped =
-        initialIndex < 0 ? -1 : Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
+      const clampedRaw = Math.min(selectedIndex, Math.max(0, autocompleteItems.length - 1));
+      const clamped = startsUnselected
+        ? -1
+        : autocompleteItems[clampedRaw]?.disabled === true
+          ? initialIndex
+          : clampedRaw;
       const survivingIndex = prev.selectedKey
         ? autocompleteItems.findIndex((item) => item.key === prev.selectedKey)
         : -1;
-      const nextIndex = survivingIndex >= 0 ? survivingIndex : clamped;
+      const nextIndex =
+        survivingIndex >= 0 && autocompleteItems[survivingIndex]?.disabled !== true
+          ? survivingIndex
+          : clamped;
       if (nextIndex !== selectedIndex) setSelectedIndex(nextIndex);
       prevRef.current = {
         queryKey,
@@ -80,7 +97,15 @@ export function useAutocompleteState({
       items: autocompleteItems,
       selectedKey: autocompleteItems[selectedIndex]?.key ?? prev.selectedKey,
     };
-  }, [queryKey, initialIndex, autocompleteItems, selectedIndex, setSelectedIndex, lastQueryRef]);
+  }, [
+    queryKey,
+    initialIndex,
+    startsUnselected,
+    autocompleteItems,
+    selectedIndex,
+    setSelectedIndex,
+    lastQueryRef,
+  ]);
 
   useEffect(() => {
     if (!isAutocompleteOpen) return;
@@ -90,9 +115,11 @@ export function useAutocompleteState({
       const target = event.target as Node | null;
       if (!target) return;
       if (root.contains(target)) return;
+      if (menuRef.current?.contains(target)) return;
+      if (modalEditorHostRef.current?.contains(target)) return;
       setActiveCompletionContext(null);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [isAutocompleteOpen, rootRef, setActiveCompletionContext]);
+  }, [isAutocompleteOpen, rootRef, menuRef, modalEditorHostRef, setActiveCompletionContext]);
 }

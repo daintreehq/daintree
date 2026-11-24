@@ -21,10 +21,15 @@ const sendToWebContentsMock = vi.hoisted(() =>
   )
 );
 const projectStoreMock = vi.hoisted(() => ({
-  getAllProjects: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number }>>(() => []),
+  getCompletionWatermarks: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number | null }>>(
+    () => []
+  ),
+  getRankedProjectIds: vi.fn<() => string[]>(() => []),
 }));
 const scratchStoreMock = vi.hoisted(() => ({
-  getAllScratches: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number }>>(() => []),
+  getCompletionWatermarks: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number | null }>>(
+    () => []
+  ),
 }));
 
 const eventEmitter = vi.hoisted(() => {
@@ -56,8 +61,8 @@ const helpSessionMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../ipc/utils.js", () => ({
-  typedBroadcast: broadcastMock,
-  sendToWebContents: sendToWebContentsMock,
+  typedBroadcastLatestWins: broadcastMock,
+  sendLatestWinsToWebContents: sendToWebContentsMock,
 }));
 
 vi.mock("../events.js", () => ({ events: eventEmitter }));
@@ -75,6 +80,18 @@ import {
   ASSISTANT_PROJECTION_PARITY,
   PARITY_ASSISTANT_TERMINAL,
 } from "./helpers/assistantProjectionParity.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 type FakePtyClient = {
   getAllTerminalsAsync: ReturnType<typeof vi.fn>;
@@ -113,8 +130,9 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(1_830_001);
   eventEmitter._reset();
-  projectStoreMock.getAllProjects.mockReturnValue([]);
-  scratchStoreMock.getAllScratches.mockReturnValue([]);
+  projectStoreMock.getCompletionWatermarks.mockReturnValue([]);
+  projectStoreMock.getRankedProjectIds.mockReturnValue([]);
+  scratchStoreMock.getCompletionWatermarks.mockReturnValue([]);
   availabilityMock.isHelpTerminal.mockReset();
   availabilityMock.isHelpTerminal.mockReturnValue(false);
 });
@@ -153,7 +171,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("interval swap does not duplicate pollers — only the new cadence fires after updatePollInterval", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     const svc = new ProjectStatsService(ptyClient as never);
     svc.start();
 
@@ -171,7 +189,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("partial getProjectStats failure does not corrupt the status map for fulfilled projects", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([
       { id: "ok-1" },
       { id: "fail" },
       { id: "ok-2" },
@@ -199,7 +217,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("agent-terminal filter excludes trashed, dev-preview, hasPty:false, and non-agent kinds without agentId", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       { projectId: "p1", isTrashed: true, kind: "terminal", agentState: "working" },
       { projectId: "p1", kind: "dev-preview", agentState: "working" },
@@ -239,7 +257,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("reports the blocked subset and the oldest wait's start", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       {
         projectId: "p1",
@@ -293,7 +311,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("omits oldestWaitingSince when no waiting terminal has recorded a transition", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       {
         id: "w1",
@@ -325,7 +343,7 @@ describe("ProjectStatsService adversarial", () => {
     // all. A field missing from it means the UI silently keeps showing the old
     // reading, so every field the payload carries has to be compared.
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     const waiting = (waitingReason: string) => [
       {
         id: "w1",
@@ -362,7 +380,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("broadcasts when only the oldest wait's start changes", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     const waitingSince = (lastStateChange: number) => [
       {
         id: "w1",
@@ -399,7 +417,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("excludes the Daintree Assistant help terminal from agent counts and subtracts it from processCount (#10989)", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     availabilityMock.isHelpTerminal.mockImplementation((id: string) => id === "help-1");
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       // The assistant help terminal — a real agent PTY, but tooling-internal.
@@ -440,7 +458,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("only subtracts help terminals from their own project's processCount (#10989)", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
     availabilityMock.isHelpTerminal.mockImplementation((id: string) => id === "help-p1");
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       {
@@ -487,7 +505,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("clamps processCount to zero if the PTY-host count momentarily lags the help count (#10989)", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     availabilityMock.isHelpTerminal.mockImplementation((id: string) => id === "help-1");
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       {
@@ -519,7 +537,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("does not subtract a trashed or hasPty:false help terminal from processCount (#10989)", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     availabilityMock.isHelpTerminal.mockImplementation((id) => id.startsWith("help-"));
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       // Trashed → the PTY host already excludes it from terminalCount, so it
@@ -560,7 +578,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("counts plain terminals with a runtime-detected agent as active/waiting", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       // Plain terminal, no stored agentId, runtime-detected — counts (active)
       {
@@ -615,7 +633,7 @@ describe("ProjectStatsService adversarial", () => {
     // `agent:state-changed`; only the soft-delete trash/restore paths
     // would otherwise wait for the 5s poll.
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     const svc = new ProjectStatsService(ptyClient as never);
     svc.start();
     ptyClient.getAllTerminalsAsync.mockClear();
@@ -632,7 +650,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("debounce coalesces a burst of agent:state-changed events into one compute", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     const svc = new ProjectStatsService(ptyClient as never);
     svc.start();
     ptyClient.getAllTerminalsAsync.mockClear();
@@ -650,7 +668,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("replays the retained snapshot to a view that missed every broadcast", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
@@ -673,7 +691,7 @@ describe("ProjectStatsService adversarial", () => {
   });
 
   it("replays through the view filter, so a remote-bound view can be left out", async () => {
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     const svc = new ProjectStatsService(makePtyClient() as never);
     svc.refresh();
     await vi.runAllTimersAsync();
@@ -689,7 +707,7 @@ describe("ProjectStatsService adversarial", () => {
   });
 
   it("replays to a view attached over a link on the live channel", async () => {
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     const svc = new ProjectStatsService(makePtyClient() as never);
     const endpoint = { kind: "remote-view" as const, isClosed: vi.fn(() => false), send: vi.fn() };
 
@@ -721,7 +739,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("skips a destroyed view and swallows a send that throws", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     const svc = new ProjectStatsService(ptyClient as never);
     svc.refresh();
     await vi.runAllTimersAsync();
@@ -748,7 +766,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("start() does not fire an eager initial compute (deferred to first-interactive)", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
 
     const svc = new ProjectStatsService(ptyClient as never);
     svc.start();
@@ -764,7 +782,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("race guard: an older read cannot land over a newer one, because the newer waits for it", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
 
     let resolveOldTerminals!: (terms: unknown[]) => void;
     let resolveNewTerminals!: (terms: unknown[]) => void;
@@ -814,20 +832,20 @@ describe("ProjectStatsService adversarial", () => {
     const svc = new ProjectStatsService(ptyClient as never);
 
     // 1) Non-empty broadcast — lastBroadcast = { p1: {processCount: 3, ...} }
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     svc.refresh();
     await vi.runAllTimersAsync();
     const afterFirst = broadcastMock.mock.calls.length;
     expect(afterFirst).toBeGreaterThanOrEqual(1);
 
     // 2) Projects removed — empty broadcast fires; must reset lastBroadcast
-    projectStoreMock.getAllProjects.mockReturnValue([]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([]);
     svc.refresh();
     await vi.runAllTimersAsync();
 
     // 3) Same project re-added with identical stats — must broadcast
     // (would be suppressed by shallowEqual if lastBroadcast still held it)
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     svc.refresh();
     await vi.runAllTimersAsync();
 
@@ -841,7 +859,7 @@ describe("ProjectStatsService adversarial", () => {
 
   it("stop() invalidates an in-flight compute — no broadcast after teardown", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
 
     let resolvePty!: (terms: unknown[]) => void;
     ptyClient.getAllTerminalsAsync.mockReturnValueOnce(
@@ -904,7 +922,7 @@ describe("ProjectStatsService overlapping triggers (#16417)", () => {
     );
 
   beforeEach(() => {
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
   });
 
   it("still broadcasts when every read outlasts the poll", async () => {
@@ -970,7 +988,7 @@ describe("ProjectStatsService overlapping triggers (#16417)", () => {
 
     // A poll tolerates a read a TTL old, and invalidating for it would detach
     // the fleet poller's share of the same read. It still gets its own compute.
-    expect(projectStoreMock.getAllProjects).toHaveBeenCalledTimes(2);
+    expect(projectStoreMock.getCompletionWatermarks).toHaveBeenCalledTimes(2);
     expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
     expect(broadcasts()).toEqual([3]);
     svc.stop();
@@ -1197,8 +1215,8 @@ describe("ProjectStatsService scratch workspaces", () => {
 
   it("gives a scratch its own entry alongside a project", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
-    scratchStoreMock.getAllScratches.mockReturnValue([{ id: SCRATCH_ID }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([{ id: SCRATCH_ID }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       agentTerminal("p1", "working"),
       agentTerminal(SCRATCH_ID, "waiting", { id: "w1", spawnedAt: 1 }),
@@ -1224,8 +1242,8 @@ describe("ProjectStatsService scratch workspaces", () => {
   // workspaces are scratches would have broadcast an empty map forever.
   it("computes for a scratch-only fleet instead of short-circuiting", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([]);
-    scratchStoreMock.getAllScratches.mockReturnValue([{ id: SCRATCH_ID }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([]);
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([{ id: SCRATCH_ID }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([agentTerminal(SCRATCH_ID, "working")]);
 
     const svc = new ProjectStatsService(ptyClient as never);
@@ -1241,8 +1259,8 @@ describe("ProjectStatsService scratch workspaces", () => {
 
   it("offers the scratch's own watermark its completions, and never counts them unread", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([]);
-    scratchStoreMock.getAllScratches.mockReturnValue([
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([]);
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([
       { id: SCRATCH_ID, lastCompletionSeenAt: 1_000 },
     ]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
@@ -1265,7 +1283,7 @@ describe("ProjectStatsService scratch workspaces", () => {
     expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBe(2_000);
 
     // The scratch's own watermark, not the projects', covers it once stamped.
-    scratchStoreMock.getAllScratches.mockReturnValue([
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([
       { id: SCRATCH_ID, lastCompletionSeenAt: 2_000 },
     ]);
     svc.refresh();
@@ -1273,10 +1291,80 @@ describe("ProjectStatsService scratch workspaces", () => {
     expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBeUndefined();
   });
 
+  // The store's projection reports an unstamped row as null rather than
+  // leaving the field out, as a hydrated row did (#17806).
+  it("reads a null watermark as none, for a project and a scratch alike", async () => {
+    const ptyClient = makePtyClient();
+    const stamp = (seen: number | null) => {
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([
+        { id: "p1", lastCompletionSeenAt: seen },
+      ]);
+      scratchStoreMock.getCompletionWatermarks.mockReturnValue([
+        { id: SCRATCH_ID, lastCompletionSeenAt: seen },
+      ]);
+    };
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      agentTerminal("p1", "completed", { lastStateChange: 2_000 }),
+      agentTerminal(SCRATCH_ID, "completed", { lastStateChange: 3_000 }),
+    ]);
+    const svc = new ProjectStatsService(ptyClient as never);
+
+    stamp(5_000);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(svc.getAcknowledgeableCompletionAt("p1")).toBeUndefined();
+    expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBeUndefined();
+
+    stamp(null);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(svc.getAcknowledgeableCompletionAt("p1")).toBe(2_000);
+    expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBe(3_000);
+    svc.stop();
+  });
+
+  // The issue's empty transition, reached through the last workspace being a
+  // scratch: tombstoned, it leaves the projection, and the catalog is empty.
+  it("publishes an empty map when the last scratch goes, and a fresh one when it returns", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      agentTerminal(SCRATCH_ID, "completed", { lastStateChange: 3_000 }),
+    ]);
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([
+      { id: SCRATCH_ID, lastCompletionSeenAt: null },
+    ]);
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const first = broadcastMock.mock.calls.at(-1)![1];
+    expect(first).toHaveProperty(SCRATCH_ID);
+    expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBe(3_000);
+
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([]);
+    const reads = ptyClient.getAllTerminalsWithCompletenessAsync.mock.calls.length;
+    const sent = broadcastMock.mock.calls.length;
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(broadcastMock.mock.calls.length).toBe(sent + 1);
+    expect(broadcastMock.mock.calls.at(-1)![1]).toEqual({});
+    expect(svc.getAcknowledgeableCompletionAt(SCRATCH_ID)).toBeUndefined();
+    expect(svc.getLastBroadcast()).toEqual({});
+    expect(ptyClient.getAllTerminalsWithCompletenessAsync.mock.calls.length).toBe(reads);
+
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([
+      { id: SCRATCH_ID, lastCompletionSeenAt: null },
+    ]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(broadcastMock.mock.calls.length).toBe(sent + 2);
+    expect(broadcastMock.mock.calls.at(-1)![1]).toEqual(first);
+    svc.stop();
+  });
+
   it("drops a deleted scratch's entry on the next compute", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
-    scratchStoreMock.getAllScratches.mockReturnValue([{ id: SCRATCH_ID }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([{ id: SCRATCH_ID }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([agentTerminal(SCRATCH_ID, "working")]);
 
     const svc = new ProjectStatsService(ptyClient as never);
@@ -1284,7 +1372,7 @@ describe("ProjectStatsService scratch workspaces", () => {
     await vi.runAllTimersAsync();
     expect(broadcastMock.mock.calls.at(-1)![1]).toHaveProperty(SCRATCH_ID);
 
-    scratchStoreMock.getAllScratches.mockReturnValue([]);
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
     svc.refresh();
     await vi.runAllTimersAsync();
@@ -1320,7 +1408,7 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
   }
 
   beforeEach(() => {
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     availabilityMock.isHelpTerminal.mockImplementation((id: string) => id.startsWith("help"));
     helpSessionMock.isPanelVisible.mockReturnValue(true);
   });
@@ -1346,6 +1434,32 @@ describe("ProjectStatsService assistant presence (#11806)", () => {
     expect(p1).not.toHaveProperty("assistantStateSince");
     // The PTY is still the host's to account for, hidden or not.
     expect(p1.processCount).toBe(0);
+    svc.stop();
+  });
+
+  it("reports no assistant while the help-session service has not loaded, without loading it", async () => {
+    // Its panel can't be open before it loads; the panel answer stays "shown"
+    // here so only the unloaded service can account for the silence.
+    resetHelpSessionRuntimeForTests();
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "working", lastStateChange: 1_000 }),
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 1 });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(lastPayload().p1).not.toHaveProperty("assistantState");
+    expect(helpSessionMock.isPanelVisible).not.toHaveBeenCalled();
+
+    // The same assistant, once the service has loaded, is reported.
+    const { helpSessionService } = await import("../HelpSessionService.js");
+    publishHelpSessionService(helpSessionService);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(lastPayload().p1.assistantState).toBe("working");
     svc.stop();
   });
 
@@ -1483,7 +1597,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
   it("counts live, untrashed terminals per workspace without a per-project read", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       { id: "a", projectId: "p1", kind: "terminal" },
       { id: "b", projectId: "p1", kind: "terminal", hasPty: false },
@@ -1508,7 +1622,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     // The host attributes such a terminal by cwd and stamps the id onto it as a
     // side effect of `get-project-stats` — skipping the call would skip that.
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       { id: "owned", projectId: "p1", kind: "terminal" },
       { id: "unowned", kind: "terminal", cwd: "/repo/p2" },
@@ -1528,9 +1642,58 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     svc.stop();
   });
 
+  // The first query whose project the terminal's cwd matches claims it, so the
+  // order of the questions picks the owner when two registered projects match
+  // (a linked worktree and its main checkout). The id read is unordered, so the
+  // questions follow the ranked list the poll used to read (#17806).
+  it("asks the most used project first when an unowned terminal is waiting for an owner", async () => {
+    const SCRATCH_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const ptyClient = makePtyClient();
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([
+      { id: "legacy-worktree" },
+      { id: "main-checkout" },
+    ]);
+    scratchStoreMock.getCompletionWatermarks.mockReturnValue([{ id: SCRATCH_ID }]);
+    projectStoreMock.getRankedProjectIds.mockReturnValue(["main-checkout", "legacy-worktree"]);
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([{ id: "owned", projectId: "main-checkout" }]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    // With every terminal owned, nothing asks the host and nothing is ranked.
+    expect(projectStoreMock.getRankedProjectIds).not.toHaveBeenCalled();
+    expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      { id: "unowned", kind: "terminal", cwd: "/repo/.worktrees/feature" },
+    ]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(ptyClient.getProjectStats.mock.calls.map(([id]) => id)).toEqual([
+      "main-checkout",
+      "legacy-worktree",
+      SCRATCH_ID,
+    ]);
+
+    // The rank, not the catalog, sets the order: reversing it reverses the asks.
+    projectStoreMock.getRankedProjectIds.mockReturnValue(["legacy-worktree", "main-checkout"]);
+    ptyClient.getProjectStats.mockClear();
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(ptyClient.getProjectStats.mock.calls.map(([id]) => id)).toEqual([
+      "legacy-worktree",
+      "main-checkout",
+      SCRATCH_ID,
+    ]);
+    svc.stop();
+  });
+
   it("asks the host for a trashed unowned terminal, which its matcher still attributes", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       { id: "binned", kind: "terminal", isTrashed: true },
     ]);
@@ -1563,7 +1726,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
     it("keeps the row of a workspace it says nothing about, and updates the one it answered", async () => {
       const ptyClient = makePtyClient();
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
       const svc = new ProjectStatsService(ptyClient as never);
       await seenHealthy(ptyClient, svc);
 
@@ -1580,7 +1743,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
     it("takes the host's count for an unowned terminal over the row it would have kept", async () => {
       const ptyClient = makePtyClient();
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
       const svc = new ProjectStatsService(ptyClient as never);
       await seenHealthy(ptyClient, svc);
 
@@ -1600,7 +1763,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
     it("still asks the host about an unowned terminal, whose owner that query stamps", async () => {
       const ptyClient = makePtyClient();
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
       const svc = new ProjectStatsService(ptyClient as never);
       await seenHealthy(ptyClient, svc);
 
@@ -1619,7 +1782,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
     it("does not let a per-workspace timeout zero what a complete snapshot saw", async () => {
       const ptyClient = makePtyClient();
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
       ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
         read([terminal("a", "p1"), { id: "u", kind: "terminal" }], false)
       );
@@ -1636,7 +1799,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
       { name: "publishes the zero with no owner in doubt", doubt: [], expected: 0 },
     ])("for a workspace named only by a trashed terminal, $name", async ({ doubt, expected }) => {
       const ptyClient = makePtyClient();
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
       const svc = new ProjectStatsService(ptyClient as never);
       await seenHealthy(ptyClient, svc);
 
@@ -1653,7 +1816,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
     it("believes the zero once a complete read reports it", async () => {
       const ptyClient = makePtyClient();
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
       const svc = new ProjectStatsService(ptyClient as never);
       await seenHealthy(ptyClient, svc);
 
@@ -1674,11 +1837,11 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
     it("does not bring back a workspace removed while it is degraded", async () => {
       const ptyClient = makePtyClient();
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
       const svc = new ProjectStatsService(ptyClient as never);
       await seenHealthy(ptyClient, svc);
 
-      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+      projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
       ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
         read([terminal("a", "p1")], true)
       );
@@ -1694,7 +1857,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
     // The shard that timed out on the fan-out would time out again per
     // workspace; queuing that behind the first timeout outlasts the poll.
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
     ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue({
       terminals: [{ id: "a", projectId: "p1", kind: "terminal" }],
       degraded: true,
@@ -1714,7 +1877,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
   it("does not fall back for an unowned terminal that has exited", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       { id: "gone", kind: "terminal", hasPty: false, isExited: true },
     ]);
@@ -1731,7 +1894,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
   it("shares one host read with the fleet poller, and re-reads after an agent transition", async () => {
     vi.setSystemTime(1_830_000_000_000 - 100);
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       {
         id: "t1",
@@ -1779,7 +1942,7 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
   it("counts a watched hand-back and an unread wait as finished, and recomputes when the user sees each", async () => {
     const ptyClient = makePtyClient();
-    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    projectStoreMock.getCompletionWatermarks.mockReturnValue([{ id: "p1" }]);
     ptyClient.getAllTerminalsAsync.mockResolvedValue([
       {
         id: "t1",

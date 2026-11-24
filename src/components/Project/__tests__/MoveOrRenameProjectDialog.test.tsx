@@ -41,6 +41,7 @@ vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
 import { useProjectRelocationStore } from "@/store/projectRelocationStore";
 import { MoveOrRenameProjectDialog } from "../MoveOrRenameProjectDialog";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 const OLD_PATH = "/repos/proj";
 
@@ -353,6 +354,51 @@ describe("MoveOrRenameProjectDialog", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(updateProject).not.toHaveBeenCalled();
     expect(applyRelocation).not.toHaveBeenCalled();
+  });
+
+  it("blocks a 300-byte folder name on a Linux host and lets one within 255 bytes through", async () => {
+    setHostPlatformInfo({ platform: "linux" });
+    try {
+      openMove();
+      render(<MoveOrRenameProjectDialog />);
+
+      fireEvent.change(screen.getByTestId("relocate-folder-input"), {
+        target: { value: "あ".repeat(100) },
+      });
+      expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+      // Past the preview debounce with the bad name still in the field.
+      const PAST_PREVIEW_DEBOUNCE_MS = 400;
+      await new Promise((r) => setTimeout(r, PAST_PREVIEW_DEBOUNCE_MS));
+      expect(previewRelocation).not.toHaveBeenCalled();
+
+      fireEvent.change(screen.getByTestId("relocate-folder-input"), {
+        target: { value: "あ".repeat(85) },
+      });
+      await waitFor(() => expect(previewRelocation).toHaveBeenCalledTimes(1));
+      expect(previewRelocation).toHaveBeenCalledWith(
+        expect.objectContaining({ newPath: expect.stringMatching(/\/あ{85}$/) })
+      );
+    } finally {
+      _resetHostPlatformForTests();
+    }
+  });
+
+  it("previews a 300-byte folder name on a macOS host", async () => {
+    setHostPlatformInfo({ platform: "darwin" });
+    try {
+      openMove();
+      render(<MoveOrRenameProjectDialog />);
+
+      fireEvent.change(screen.getByTestId("relocate-folder-input"), {
+        target: { value: "あ".repeat(100) },
+      });
+      await waitFor(() => expect(previewRelocation).toHaveBeenCalledTimes(1));
+      expect(previewRelocation).toHaveBeenCalledWith(
+        expect.objectContaining({ newPath: expect.stringMatching(/\/あ{100}$/) })
+      );
+    } finally {
+      _resetHostPlatformForTests();
+    }
   });
 
   it("explains an unavailable primary in the footer status line", async () => {

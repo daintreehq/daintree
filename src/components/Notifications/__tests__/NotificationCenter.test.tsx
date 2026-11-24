@@ -51,7 +51,7 @@ vi.mock("@/lib/notify", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/notify")>();
   return {
     ...actual,
-    isNotificationEventKind: vi.fn(
+    isSilenceableEventKind: vi.fn(
       (v: string | undefined) =>
         v === "completed" || v === "waiting" || v === "workingPulse" || v === "uiFeedback"
     ),
@@ -1087,6 +1087,46 @@ describe("NotificationCenter overflow menu", () => {
     expect(callOrder).toEqual(["clearAll", "onClose"]);
   });
 
+  it("keeps Clear all's confirm up when a row action finishes under it (#16937)", async () => {
+    getMock.mockReturnValue({ enabled: true });
+    useUIStore.setState({ notificationCenterOpen: true });
+    let settle!: (result: unknown) => void;
+    dispatchMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        })
+    );
+    setEntries([
+      makeEntry({
+        id: "a",
+        message: "Has action",
+        actions: [{ actionId: "test.action", label: "Retry" }],
+      }),
+    ]);
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    const trigger = screen.getByLabelText("More notification actions");
+    await act(async () => {
+      fireEvent.pointerDown(trigger, { button: 0 });
+      fireEvent.pointerUp(trigger, { button: 0 });
+      fireEvent.click(trigger);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Clear all…"));
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+
+    await act(async () => {
+      settle({ ok: true });
+    });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(true);
+    expect(screen.getByRole("button", { name: "Clear notifications" })).toBeTruthy();
+  });
+
   it("leaves the history intact when the clear confirm is dismissed", async () => {
     setEntries([makeEntry(), makeEntry({ id: "entry-keep" })]);
     render(<NotificationCenter open onClose={vi.fn()} />);
@@ -1278,6 +1318,111 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("wakes a snooze that ended before it opened, so the unread count matches its rows", () => {
+    setEntries([
+      makeEntry({
+        type: "error",
+        message: "Overdue wake",
+        correlationId: "overdue-thread",
+        seenAsToast: false,
+      }),
+    ]);
+    // Mounted but closed, as during the exit animation of a reopen.
+    const { rerender } = render(<NotificationCenter open={false} onClose={vi.fn()} />);
+    const overdue = { "overdue-thread": Date.now() - 1000 };
+    act(() => {
+      useNotificationHistoryStore.setState({ snoozedThreads: overdue, unreadCount: 0 });
+    });
+    expect(useNotificationHistoryStore.getState().snoozedThreads).toEqual(overdue);
+
+    rerender(<NotificationCenter open onClose={vi.fn()} />);
+
+    expect(useNotificationHistoryStore.getState().snoozedThreads).toEqual({});
+    expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+  });
+
+  it("offers the Snoozed tab only while a row stands behind a snooze", () => {
+    setEntries([makeEntry({ message: "Plain" })]);
+    useNotificationHistoryStore.setState({
+      snoozedThreads: { orphan: Date.now() + 10 * 60_000 },
+    });
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+
+    // Archived rows live in Archived, so one behind a snooze doesn't earn the tab.
+    act(() => {
+      setEntries([
+        makeEntry({ message: "Plain" }),
+        makeEntry({ message: "Done", correlationId: "orphan", archivedAt: Date.now() }),
+      ]);
+    });
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+
+    act(() => {
+      setEntries([
+        makeEntry({ message: "Plain" }),
+        makeEntry({ message: "Held back", correlationId: "orphan", seenAsToast: false }),
+      ]);
+    });
+    expect(screen.getByRole("radio", { name: "Snoozed" })).toBeTruthy();
+  });
+
+  it("leaves a Snoozed tab whose row is gone even when the snooze key outlives it", () => {
+    setEntries([
+      makeEntry({ message: "Plain" }),
+      makeEntry({ message: "Held back", correlationId: "thread", seenAsToast: false }),
+    ]);
+    useNotificationHistoryStore.setState({
+      snoozedThreads: { thread: Date.now() + 10 * 60_000 },
+    });
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    act(() => {
+      fireEvent.click(screen.getByRole("radio", { name: "Snoozed" }));
+    });
+    expect(screen.getByRole("radio", { name: "Snoozed" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+
+    act(() => {
+      setEntries([makeEntry({ message: "Plain" })]);
+    });
+
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+    expect(screen.getByRole("radio", { name: "All" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("leaves the Snoozed tab for All when pruning removes the snoozed thread's last row", () => {
+    const until = Date.now() + 10 * 60_000;
+    setEntries([
+      makeEntry({ message: "Plain" }),
+      makeEntry({ message: "Held back", correlationId: "thread", seenAsToast: false }),
+    ]);
+    useNotificationHistoryStore.setState({ snoozedThreads: { thread: until } });
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+    act(() => {
+      fireEvent.click(screen.getByRole("radio", { name: "Snoozed" }));
+    });
+    expect(screen.getByRole("radio", { name: "Snoozed" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+
+    act(() => {
+      useNotificationHistoryStore
+        .getState()
+        .importEntries(
+          Array.from({ length: 200 }, (_, i) =>
+            makeEntry({ message: `Newer ${i}`, timestamp: Date.now() + 1000 + i })
+          )
+        );
+    });
+
+    expect(screen.queryByRole("radio", { name: "Snoozed" })).toBeNull();
+    expect(screen.getByRole("radio", { name: "All" }).getAttribute("aria-checked")).toBe("true");
   });
 
   it("keeps a thread off the rail when it wakes from a snooze after aging out", () => {
@@ -1518,6 +1663,16 @@ describe("NotificationCenter — Group by context toggle", () => {
     const header = screen.getByTestId("context-section-header");
     expect(header.textContent).toContain("wt-unknown");
     expect(screen.getByTestId("context-section-unavailable")).toBeTruthy();
+  });
+
+  it("discloses a clipped section name through the themed tooltip, never a native title", () => {
+    useNotificationSettingsStore.setState({ groupByContext: true });
+    setEntries([makeEntry({ message: "Stray", context: { worktreeId: "wt-unknown" } })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const header = screen.getByTestId("context-section-header");
+    expect(header.querySelector("[title]")).toBeNull();
   });
 
   it("marks a gone main worktree unavailable even when its name is the project's", () => {
@@ -2762,6 +2917,31 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(dispatchMock).toHaveBeenCalledWith("test.action", { x: 1 });
   });
 
+  it("closes the inbox once Mod+Enter's action has run (#16937)", async () => {
+    getMock.mockReturnValue({ enabled: true });
+    useUIStore.setState({ notificationCenterOpen: true });
+    setEntries([
+      makeEntry({
+        id: "a",
+        message: "Has action",
+        actions: [{ actionId: "test.action", label: "Open", actionArgs: { x: 1 } }],
+      }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const row = getRows(container)[0]!;
+
+    act(() => {
+      row.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(row, { key: "Enter", metaKey: isMac(), ctrlKey: !isMac() });
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith("test.action", { x: 1 });
+    expect(useUIStore.getState().notificationCenterOpen).toBe(false);
+  });
+
   it("does not dispatch on Mod+Enter when the action is unavailable", async () => {
     getMock.mockReturnValue({ enabled: false });
     setEntries([
@@ -2964,6 +3144,31 @@ describe("archived tab and 'e' archive keybinding", () => {
     const archived = entries.find((e) => e.id === "b")!;
     expect(archived.archivedAt).not.toBeNull();
     expect(archived.seenAsToast).toBe(true);
+  });
+
+  it("a held 'e' archives only the originally focused row", async () => {
+    setEntries([
+      makeEntry({ id: "a", message: "First" }),
+      makeEntry({ id: "b", message: "Second" }),
+      makeEntry({ id: "c", message: "Third" }),
+    ]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const list = container.querySelector('[role="list"]') as HTMLElement;
+
+    act(() => {
+      getRows(container)[0]?.focus();
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e" });
+    });
+    await act(async () => {
+      fireEvent.keyDown(list, { key: "e", repeat: true });
+      fireEvent.keyDown(list, { key: "e", repeat: true });
+    });
+
+    const entries = useNotificationHistoryStore.getState().entries;
+    expect(entries.filter((e) => e.archivedAt !== null)).toHaveLength(1);
   });
 
   it("'e' on a thread archives every non-archived entry in the thread", async () => {

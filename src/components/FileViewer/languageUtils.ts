@@ -3,6 +3,8 @@ export const LANGUAGE_MAP: Record<string, string> = {
   jsx: "jsx",
   ts: "typescript",
   tsx: "tsx",
+  mts: "typescript",
+  cts: "typescript",
   mjs: "javascript",
   cjs: "javascript",
   html: "markup",

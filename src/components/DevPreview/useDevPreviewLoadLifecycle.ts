@@ -6,10 +6,11 @@ import { isDevPreviewPanel } from "@shared/types/panel";
 import { DEV_PREVIEW_PROXY_STATUS_TEXT } from "@shared/utils/devPreviewProxy";
 import { applyDevPreviewEmulation } from "./viewportEmulation";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { pushBrowserHistory } from "../Browser/historyUtils";
+import { followGuestCommit } from "../Browser/historyUtils";
 import { STOPPED_LOAD_TITLE } from "../Browser/browserUtils";
 import { loadWebviewUrl } from "./loadWebviewUrl";
 import type { BlockedNavAction } from "./BlockedNavBanner";
+import type { GuestHistoryIntent } from "./useGuestHistorySnapshot";
 
 export type SessionStorageEntry = [string, string];
 
@@ -60,6 +61,9 @@ export function webviewLoadErrorHeading(code: WebviewLoadErrorCode): string {
   }
 }
 
+// Coalesce favicon-updated bursts to avoid thrashing the URL-history store.
+const FAVICON_DEBOUNCE_MS = 200;
+
 // Chromium net error codes — see net/base/net_error_list.h
 const ERR_SSL_PROTOCOL_ERROR = -107;
 const ERR_CERT_RANGE_END = -200;
@@ -73,6 +77,7 @@ interface UseDevPreviewLoadLifecycleParams {
   zoomFactor: number;
   evictingRef: React.RefObject<boolean>;
   lastSetUrlRef: React.MutableRefObject<string>;
+  guestHistoryIntentRef: React.RefObject<GuestHistoryIntent>;
   setHistory: React.Dispatch<React.SetStateAction<BrowserHistory>>;
   setBlockedNav: React.Dispatch<BlockedNavAction>;
   onRenderProcessGone?: (details: { reason: string; exitCode: number }) => void;
@@ -98,6 +103,7 @@ export function useDevPreviewLoadLifecycle({
   zoomFactor,
   evictingRef,
   lastSetUrlRef,
+  guestHistoryIntentRef,
   setHistory,
   setBlockedNav,
   onRenderProcessGone,
@@ -215,6 +221,40 @@ export function useDevPreviewLoadLifecycle({
       useUrlHistoryStore.getState().recordVisit(currentProjectId, navigatedUrl, title);
     };
 
+    // Moves the history to the entry the guest just committed, as a step through
+    // its own session history when it was one: Back, Forward, a menu jump or the
+    // page's own history.back() never leave a fresh entry behind.
+    const followCommit = (navigatedUrl: string, sameDocument: boolean) => {
+      const intent = guestHistoryIntentRef.current;
+      const offset = intent.stepOffset;
+      intent.stepOffset = null;
+      // Read before any prune below: that clears the entries ahead as well.
+      let traversed = false;
+      try {
+        traversed = webview.canGoForward();
+      } catch {
+        // Detached guest: treat the commit as a fresh entry.
+      }
+      // The saved-history load commits as a new document — or in place when only
+      // its fragment differs. The old document's own same-document commits while
+      // it is still loading leave the prune for it.
+      const pruneTarget = intent.pruneOnCommitOf;
+      if (pruneTarget !== null && (!sameDocument || navigatedUrl === pruneTarget)) {
+        intent.pruneOnCommitOf = null;
+        try {
+          webview.clearHistory();
+        } catch {
+          // Detached guest: its replacement starts with no history to prune.
+        }
+      }
+      // A step the host asked for is followed even onto the URL already showing:
+      // the guest may have moved between two entries for it.
+      if (offset !== null || navigatedUrl !== lastSetUrlRef.current) {
+        setHistory((prev) => followGuestCommit(prev, navigatedUrl, { offset, traversed }));
+        lastSetUrlRef.current = navigatedUrl;
+      }
+    };
+
     const handlePageTitleUpdated = (event: Event) => {
       const detail = event as Event & { title?: string; explicitSet?: boolean };
       if (detail.explicitSet === false) return;
@@ -228,6 +268,30 @@ export function useDevPreviewLoadLifecycle({
           // webview may be detached
         }
       }
+    };
+
+    // Mirrors BrowserPane: the favicon lands on the URL showing when Chromium
+    // reported it, never on one a later navigation moved to.
+    let faviconDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const handlePageFaviconUpdated = (event: Event) => {
+      const detail = event as Event & { favicons?: string[] };
+      const currentProjectId = projectIdRef.current;
+      const favicon = detail.favicons?.[0];
+      if (!currentProjectId || !favicon) return;
+      // Oversized data URLs could exceed the persisted store's quota.
+      if (favicon.startsWith("data:") && favicon.length > 8192) return;
+      let capturedUrl: string;
+      try {
+        capturedUrl = webview.getURL();
+      } catch {
+        return;
+      }
+      if (!capturedUrl || capturedUrl === "about:blank") return;
+      if (faviconDebounceTimer) clearTimeout(faviconDebounceTimer);
+      faviconDebounceTimer = setTimeout(() => {
+        faviconDebounceTimer = null;
+        useUrlHistoryStore.getState().updateFavicon(currentProjectId, capturedUrl, favicon);
+      }, FAVICON_DEBOUNCE_MS);
     };
 
     const handleRenderProcessGone = (e: Electron.RenderProcessGoneEvent) => {
@@ -607,10 +671,7 @@ export function useDevPreviewLoadLifecycle({
           failLoadRetryRef.current = null;
         }
       }
-      if (navigatedUrl !== lastSetUrlRef.current) {
-        setHistory((prev) => pushBrowserHistory(prev, navigatedUrl));
-        lastSetUrlRef.current = navigatedUrl;
-      }
+      followCommit(navigatedUrl, false);
       recordVisit(navigatedUrl);
     };
 
@@ -618,10 +679,7 @@ export function useDevPreviewLoadLifecycle({
       if (!e.isMainFrame) return;
       setBlockedNav({ type: "DISMISS" });
       const navigatedUrl = e.url;
-      if (navigatedUrl !== lastSetUrlRef.current) {
-        setHistory((prev) => pushBrowserHistory(prev, navigatedUrl));
-        lastSetUrlRef.current = navigatedUrl;
-      }
+      followCommit(navigatedUrl, true);
       recordVisit(navigatedUrl);
     };
 
@@ -640,6 +698,7 @@ export function useDevPreviewLoadLifecycle({
       handleDidNavigateInPage as unknown as EventListener
     );
     webview.addEventListener("page-title-updated", handlePageTitleUpdated);
+    webview.addEventListener("page-favicon-updated", handlePageFaviconUpdated);
 
     return () => {
       webview.removeEventListener("did-start-loading", handleDidStartLoading);
@@ -657,6 +716,11 @@ export function useDevPreviewLoadLifecycle({
         handleDidNavigateInPage as unknown as EventListener
       );
       webview.removeEventListener("page-title-updated", handlePageTitleUpdated);
+      webview.removeEventListener("page-favicon-updated", handlePageFaviconUpdated);
+      if (faviconDebounceTimer) {
+        clearTimeout(faviconDebounceTimer);
+        faviconDebounceTimer = null;
+      }
       if (failLoadRetryRef.current) {
         clearTimeout(failLoadRetryRef.current);
         failLoadRetryRef.current = null;
@@ -675,6 +739,7 @@ export function useDevPreviewLoadLifecycle({
     loadTimeoutMs,
     evictingRef,
     lastSetUrlRef,
+    guestHistoryIntentRef,
     setHistory,
     setBlockedNav,
     id,

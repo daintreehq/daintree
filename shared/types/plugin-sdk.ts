@@ -37,6 +37,7 @@ export type {
   KeybindingContribution,
   ContextMenuContribution,
   ContextMenuLocation,
+  ContextMenuAvailabilityRequest,
   TerminalLinkContribution,
   TerminalLinkUrlContribution,
   TerminalLinkSubject,
@@ -74,6 +75,13 @@ export type {
 // the attribute name at runtime. A raw `plugin://` view cannot import this, so
 // `PanelViewProps.styleRootAttributes` carries the same thing as a prop.
 export { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "./plugin.js";
+// Values, not types: a worker registers its availability handler on this
+// channel at runtime and trims its reasons to the host's limit.
+export {
+  CONTEXT_MENU_AVAILABILITY_CHANNEL,
+  CONTEXT_MENU_AVAILABILITY_REASON_MAX,
+  CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS,
+} from "./plugin.js";
 
 // ── Panel lifecycle (worker-facing) ─────────────────────────────────
 
@@ -338,18 +346,22 @@ export type {
   PluginTerminalReadScreenOptions,
   PluginTerminalScreenResult,
 } from "./plugin.js";
+export type { TerminalInputLine, TerminalInputLineState } from "./terminalStatus.js";
 
 // ── Handing work to agents (host.agents, host.sendToAgent, drag) ────
 // The drag contract is runtime values a view needs at `dragstart`, so the
 // constants and the helper are value exports.
 
 export type {
+  PluginAgentBand,
+  PluginAgentCanopyNote,
   PluginAgentInputOptions,
   PluginAgentInputResult,
   PluginAgentInterruptResult,
   PluginAgentKeysInput,
   PluginAgentKeysResult,
   PluginAgentPane,
+  PluginAgentPaneObservation,
   PluginAgentRun,
   PluginAgentsApi,
   PluginAllAgentsSnapshot,
@@ -431,6 +443,42 @@ export type {
   ContextProviderCallOptions,
 } from "./pluginContextProvider.js";
 
+// ── Cloud provider contract (#17351) ────────────────────────────────
+
+export type {
+  CloudProviderCallCredentials,
+  CloudProviderCatalog,
+  CloudProviderContribution,
+  CloudProviderCreateRequest,
+  CloudProviderDescriptor,
+  CloudProviderImpl,
+  CloudProviderMethod,
+  CloudProviderResource,
+  CloudProviderSshAccess,
+} from "./pluginCloudProvider.js";
+export type {
+  CloudAccountCheckResult,
+  CloudAccountScopeChoice,
+  CloudBillingScope,
+  CloudCredentialField,
+  CloudCredentialValues,
+  CloudHostErrorCode,
+  CloudLifetimeModel,
+  CloudMachineState,
+  CloudMachineType,
+  CloudProviderCapabilities,
+  CloudProviderPersistence,
+  CloudProvisioning,
+  CloudProvisioningChoice,
+  CloudProvisioningDimension,
+  CloudProvisioningInput,
+  CloudProvisioningOptions,
+  CloudProvisioningSelection,
+  CloudSshTransport,
+  CloudSshTrust,
+  CloudSshTunnelCommand,
+} from "./cloudHosts.js";
+
 // ── Services between plugins (#14105) ───────────────────────────────
 
 export type {
@@ -490,6 +538,10 @@ export type {
   RateLimitInfo,
   FileDecoration,
   ChecksCapability,
+  DeploymentsCapability,
+  Deployment,
+  DeploymentState,
+  DeploymentTarget,
   AutoMergeCapability,
   EnableAutoMergeInput,
   EnableAutoMergeResult,

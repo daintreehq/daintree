@@ -18,6 +18,7 @@ import {
   MAX_PACKET_PAYLOAD,
   type BackpressureManager,
 } from "./backpressure.js";
+import { isTerminalAgentLive } from "../services/pty/agentLiveness.js";
 import type { IpcQueueManager } from "./ipcQueue.js";
 import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
 import type { RendererConnection, TerminalWorkerConnection } from "./handlers/types.js";
@@ -36,6 +37,8 @@ export interface VisualOutputRouterDeps {
   terminalWorkerConnections: ReadonlyMap<number, ReadonlyMap<string, TerminalWorkerConnection>>;
   windowProjectMap: ReadonlyMap<number, string | null>;
   fallbackEligibleProjects: ReadonlySet<string>;
+  /** Projects whose every view may be CDP-frozen, pushed by Main (#17038). */
+  frozenViewProjects: ReadonlySet<string>;
   ipcDataMirrorTerminals: ReadonlySet<string>;
   packetFramer: PacketFramer;
   getVisualBuffers: () => SharedRingBuffer[];
@@ -55,7 +58,16 @@ export interface VisualOutputRouterDeps {
 }
 
 export interface VisualOutputRouter {
-  routeOutput(id: string, data: string | Uint8Array, streamEnd: number | undefined): void;
+  /**
+   * `encoded`, when given with a string `data`, is that string as UTF-8 in a
+   * standalone buffer nothing else holds, so no route encodes it again.
+   */
+  routeOutput(
+    id: string,
+    data: string | Uint8Array,
+    streamEnd: number | undefined,
+    encoded?: Uint8Array
+  ): void;
   tryReplayAndResume(id: string): void;
   resumePausedTerminal(id: string): void;
   /** Swaps out the per-terminal throughput tally accumulated since the last call. */
@@ -71,6 +83,7 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     terminalWorkerConnections,
     windowProjectMap,
     fallbackEligibleProjects,
+    frozenViewProjects,
     ipcDataMirrorTerminals,
     packetFramer,
     getVisualBuffers,
@@ -104,13 +117,22 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     return typeof data === "string" ? data : textDecoder.decode(data);
   }
 
-  function routeOutput(id: string, data: string | Uint8Array, streamEnd: number | undefined): void {
+  function routeOutput(
+    id: string,
+    data: string | Uint8Array,
+    streamEnd: number | undefined,
+    encoded?: Uint8Array
+  ): void {
+    const utf8 = typeof data === "string" ? encoded : undefined;
+    // Read before a sole batcher can take the buffer.
+    const utf8Length = utf8?.byteLength;
     // Throughput-rate gauge accumulation — raw PTY byte/packet counts before
     // any path routing, suspension gating, or chunk wrapping. Gated so the hot
     // path is untouched when metrics are disabled (the default).
     if (metricsEnabled()) {
       const rawByteCount =
-        typeof data === "string" ? Buffer.byteLength(data, "utf8") : data.byteLength;
+        utf8Length ??
+        (typeof data === "string" ? Buffer.byteLength(data, "utf8") : data.byteLength);
       let acc = throughputAccumulator.get(id);
       if (!acc) {
         acc = { totalBytes: 0, packetCount: 0 };
@@ -123,6 +145,8 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     // Terminal output always updates headless state; visual streaming can be suspended under backpressure.
     const isSuspended = backpressureManager.isSuspended(id);
     const terminalInfo = getTerminal(id);
+    const analysisBuffer = getAnalysisBuffer();
+    const analyzes = analysisBuffer !== null && terminalInfo?.analysisEnabled === true;
 
     // Every chunk mutates the headless buffer regardless of routing — bump the
     // epoch unconditionally so a suppressed/suspended/dropped chunk invalidates
@@ -177,19 +201,22 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
       if (targets.length > 0) {
         // Carry raw bytes on the hot MessagePort path so the renderer receives a
         // transferred ArrayBuffer instead of a structured-cloned UTF-8 string.
-        // TextEncoder encodes strings into a standalone, exactly-sized buffer in
-        // one pass; the `new Uint8Array(...)` wrap on the bytes branch escapes
-        // node-pty's Buffer pool slab — each batcher will copy these chunks into
-        // a fresh isolated buffer at flush time before they land in the
-        // postMessage transfer list.
-        const chunk = typeof data === "string" ? textEncoder.encode(data) : new Uint8Array(data);
+        // A string arrives already encoded from its terminal, or TextEncoder
+        // encodes it into a standalone, exactly-sized buffer in one pass; the
+        // `new Uint8Array(...)` wrap on the bytes branch escapes node-pty's
+        // Buffer pool slab — each batcher will copy these chunks into a fresh
+        // isolated buffer at flush time before they land in the postMessage
+        // transfer list.
+        const chunk =
+          utf8 ?? (typeof data === "string" ? textEncoder.encode(data) : new Uint8Array(data));
         const byteCount = chunk.byteLength;
 
         // The chunk's ArrayBuffer can only be transferred zero-copy when exactly one
         // batcher receives it: a transfer detaches the buffer, and per-batcher flush
         // timing is independent, so with 2+ targets any flush would neuter the chunk
-        // out from under siblings still waiting to copy it. Sole target → owned.
-        const owned = targets.length === 1;
+        // out from under siblings still waiting to copy it. Sole target → owned,
+        // unless the analysis frame below reads the same pre-encoded bytes.
+        const owned = targets.length === 1 && !(utf8 !== undefined && analyzes);
         // Output landing within the input window is likely keystroke echo — let
         // the batcher accelerate a pending throughput flush so typing into a
         // flooding terminal isn't held a frame behind the flood.
@@ -326,7 +353,7 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
       const shardIndex = selectShard(id, visualBuffers.length);
       const shard = visualBuffers[shardIndex];
 
-      const dataBytes = typeof data === "string" ? Buffer.from(data) : data;
+      const dataBytes = utf8 ?? (typeof data === "string" ? Buffer.from(data) : data);
       let wroteAny = false;
       let offset = 0;
 
@@ -493,9 +520,21 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     // Its own block, ahead of the primary fallback below: a different delivery
     // class with its own balance, and never a pause.
     if (isHiddenFallback) {
-      const dataString = toStringForIpc(data);
-      const dataBytes = Buffer.byteLength(dataString, "utf8");
-      if (ipcQueueManager.getHiddenQueuedBytes(id) + dataBytes > IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES) {
+      // A frozen view drains none of this until it thaws, then parses all of
+      // it inside the warm paint gate, so a plain terminal skips it from the
+      // first byte (#17038). An agent's copies keep their budget: its xterm is
+      // the only one answering its terminal queries.
+      const audienceFrozen =
+        termProjectId !== null &&
+        frozenViewProjects.has(termProjectId) &&
+        terminalInfo !== undefined &&
+        !isTerminalAgentLive(terminalInfo);
+      const dataString = audienceFrozen ? "" : toStringForIpc(data);
+      const dataBytes = audienceFrozen ? 0 : (utf8Length ?? Buffer.byteLength(dataString, "utf8"));
+      if (
+        audienceFrozen ||
+        ipcQueueManager.getHiddenQueuedBytes(id) + dataBytes > IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES
+      ) {
         // Nothing is lost: the host mirror holds every byte. The cached views
         // only need to know they must repaint, once per run of skips.
         if (ipcQueueManager.noteHiddenSkip(id)) {
@@ -516,7 +555,7 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
       // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure
       // Skip IPC fallback for backgrounded or suspended terminals (wake will resync via snapshot)
       const dataString = toStringForIpc(data);
-      const dataBytes = Buffer.byteLength(dataString, "utf8");
+      const dataBytes = utf8Length ?? Buffer.byteLength(dataString, "utf8");
 
       if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
         // Enforce hard cap: drop data if adding it would exceed max queue size
@@ -624,9 +663,8 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
 
     // Semantic Analysis (Worker) - best-effort, can drop frames
     // Only write to analysis buffer if terminal has analysis enabled (agent terminals)
-    const analysisBuffer = getAnalysisBuffer();
-    if (analysisBuffer && terminalInfo?.analysisEnabled) {
-      const analysisPacket = packetFramer.frame(id, data);
+    if (analysisBuffer && analyzes) {
+      const analysisPacket = packetFramer.frame(id, utf8 ?? data);
       if (analysisPacket) {
         const analysisWritten = analysisBuffer.write(analysisPacket);
         if (analysisWritten === 0 && process.env.DAINTREE_VERBOSE) {

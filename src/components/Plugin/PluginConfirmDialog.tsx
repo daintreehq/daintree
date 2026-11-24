@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginConfirmStore, type PluginConfirmationDecision } from "@/store/pluginConfirmStore";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
@@ -50,7 +50,12 @@ export function PluginConfirmDialog() {
 
   if (current === null) {
     return (
-      <ErrorBoundary variant="component" componentName="PluginConfirmDialog" resetKeys={[resetKey]}>
+      <ErrorBoundary
+        variant="component"
+        componentName="PluginConfirmDialog"
+        resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginConfirmStore.getState().drop(resetKey))}
+      >
         <ConfirmDialog
           isOpen={false}
           title=""
@@ -70,7 +75,12 @@ export function PluginConfirmDialog() {
   const hasArgs = current.argsSummary.length > 0;
 
   return (
-    <ErrorBoundary variant="component" componentName="PluginConfirmDialog" resetKeys={[resetKey]}>
+    <ErrorBoundary
+      variant="component"
+      componentName="PluginConfirmDialog"
+      resetKeys={[resetKey]}
+      onError={afterCatch(() => usePluginConfirmStore.getState().drop(resetKey))}
+    >
       <ConfirmDialog
         isOpen={true}
         onClose={() => resolveOnce(current.requestId, "rejected")}
@@ -89,8 +99,10 @@ export function PluginConfirmDialog() {
         // below happens to be open — the role must not flip as the user toggles.
         hasPreview={hasArgs}
         // The queue advances by swapping `current` on a mounted dialog, so the
-        // body's scroll offset would otherwise carry into the next request.
+        // body's scroll offset and the focus on the button that answered would
+        // otherwise carry into the next request.
         bodyResetKey={current.requestId}
+        focusResetKey={current.requestId}
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
       >

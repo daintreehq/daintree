@@ -39,7 +39,10 @@ function resolves(from: string, specifier: string): string | null {
 
 /** Every module specifier a file names: imports, re-exports and `import()` calls. */
 function specifiers(file: string): string[] {
-  const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest);
+  const text = fs.readFileSync(file, "utf8");
+  // A string escape could spell a part of the module name, so parse those too.
+  if (!text.includes("CanopyView") && !text.includes("\\")) return [];
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest);
   const found: string[] = [];
   const visit = (node: ts.Node) => {
     if (

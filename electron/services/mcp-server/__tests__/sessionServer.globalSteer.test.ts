@@ -13,6 +13,8 @@ import {
   stampTypedInput,
 } from "../../../../shared/utils/terminalInputProvenance.js";
 import { WorkerSteerQueue } from "../../assistants/WorkerSteerQueue.js";
+import { ClaudeUpdateApply, type ClaudeUpdateRecord } from "../../assistants/ClaudeUpdateApply.js";
+import { CLAUDE_UPDATE_NOT_OFFERED } from "../../../../shared/types/claudeUpdateApply.js";
 import type { LaneWake, NotifyTerminalInfo, TerminalNotifyHandlers } from "../terminalNotify.js";
 import { SessionStore } from "../sessionStore.js";
 import {
@@ -47,6 +49,7 @@ const TOOLS = [
   "terminal.closeOwned",
   "terminal.restartOnPresetOwned",
   "terminal.injectOwned",
+  "terminal.applyClaudeUpdateOwned",
 ];
 
 const LANES = [
@@ -140,6 +143,30 @@ function harness(options: {
     principalId: "relay-principal",
   });
   const refuseWrite = vi.fn(() => options.refuseWrite ?? null);
+  // A Claude Code update's request (#17908) over the same fake pty-host: its
+  // lines are written at once, and Claude answers nothing.
+  const claudeUpdate = new ClaudeUpdateApply({
+    getTerminal: async (id, token) => {
+      const record = records.get(id) as ClaudeUpdateRecord | undefined;
+      if (!record) return null;
+      return token === undefined
+        ? { ...record }
+        : {
+            ...record,
+            submission: {
+              token,
+              phase: "pty_written",
+              output: { text: "❯ /restart", truncated: false, state: "closed" },
+            },
+          };
+    },
+    getLiveGeneration: (id) => generations.get(id) ?? null,
+    // Claude Code at its prompt with an empty input box.
+    serializedState: async () => ({ data: "⏺ Done.\r\n────────\r\n❯ \r\n────────" }),
+    submit: (id, text, token, guard, inputOwner) => pty.submit(id, text, token, guard, inputOwner),
+    withdraw: () => {},
+    sleep: async () => {},
+  });
   const deps = fakeDeps({
     sessionStore: store,
     requestManifest: vi.fn().mockResolvedValue(TOOLS.map(makeManifestEntry)),
@@ -153,6 +180,7 @@ function harness(options: {
     // need its absence to refuse, so both are given one here.
     globalSteer: steer,
     workerSteerQueue: queue,
+    claudeUpdate,
   });
   return { deps, store, pty, records, generations, refuseWrite, wakes };
 }
@@ -321,7 +349,10 @@ describe.each(LANES)("a global Assistant's relayed call ($lane) (#14551)", ({ sh
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
-  it("still refuses to close, restart or inject into a worker it didn't launch", async () => {
+  // The close of a finished agent has its own gate, which asks the calling
+  // Shell (#16750); this session has no Shell to ask, so the steer never
+  // lets a close through.
+  it("still refuses to restart or inject into a worker it didn't launch, and closes nothing through the steer", async () => {
     const { deps, pty } = harness({ shellName, global: true, tier: "full" });
     const server = await serve(deps);
 
@@ -774,6 +805,207 @@ describe.each(LANES)(
       expect(result.isError).toBeFalsy();
       expect(wakes).toEqual([]);
       expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
+    });
+  }
+);
+
+describe.each(LANES)(
+  "a global Assistant's Claude Code update ($lane) (#17908)",
+  ({ shellName }) => {
+    const offering = (extra: Partial<ClaudeUpdateRecord> = {}): WorkerSteerRecord =>
+      ({
+        ...atPrompt({ agentIncarnation: 1 }),
+        updateInstalled: { observedAt: 900, namesRestart: true },
+        ...extra,
+      }) as WorkerSteerRecord;
+
+    it("asks the person, then types /restart alone into a worker it didn't launch", async () => {
+      const { deps, pty, records } = harness({ shellName, global: true });
+      records.set(WORKER, offering());
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: WORKER, generation: 4, confirmed: true },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "terminal.applyClaudeUpdate",
+        { terminalId: WORKER },
+        false
+      );
+      expect(pty.submit).toHaveBeenCalledTimes(1);
+      expect(pty.submit.mock.calls[0]![1]).toBe("/restart");
+      expect(answerOf(result)).toMatchObject({ terminalId: WORKER, status: "sent", refusal: null });
+    });
+
+    it("types nothing when the person declines", async () => {
+      const { deps, pty, records } = harness({ shellName, global: true });
+      records.set(WORKER, offering());
+      vi.mocked(deps.dispatchAction).mockResolvedValueOnce({
+        result: { ok: false, error: { code: "USER_REJECTED", message: "Declined." } },
+      });
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: WORKER, generation: 4 },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("USER_REJECTED");
+      expect(pty.submit).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["without the run's generation", {}, offering(), "VALIDATION_ERROR"],
+      ["for another run", { generation: 3 }, offering(), WORKER_STEER_REFUSALS.restarted],
+      [
+        "when the footer didn't name /restart",
+        { generation: 4 },
+        offering({ updateInstalled: { observedAt: 900, namesRestart: false } }),
+        CLAUDE_UPDATE_NOT_OFFERED,
+      ],
+      [
+        "when no update was seen",
+        { generation: 4 },
+        offering({ updateInstalled: undefined }),
+        CLAUDE_UPDATE_NOT_OFFERED,
+      ],
+      [
+        "for another agent",
+        { generation: 4 },
+        offering({ detectedAgentId: "codex" }),
+        CLAUDE_UPDATE_NOT_OFFERED,
+      ],
+    ])("asks nobody and types nothing %s", async (_name, args, record, code) => {
+      const { deps, pty, records } = harness({ shellName, global: true });
+      records.set(WORKER, record);
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: WORKER, ...args },
+      });
+
+      expect(toolErrorPayload(result).code).toBe(code);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(pty.submit).not.toHaveBeenCalled();
+    });
+
+    it("reaches a worker handed to it the same way, through the steer's gate", async () => {
+      const { deps, pty, records } = harness({ shellName, global: true });
+      records.set(HANDED, offering());
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: HANDED, generation: 3 },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "terminal.applyClaudeUpdate",
+        { terminalId: HANDED },
+        false
+      );
+      expect(pty.submit).toHaveBeenCalledTimes(1);
+    });
+
+    it("asks nobody about a worker of another project", async () => {
+      const { deps, pty, records, generations } = harness({ shellName, global: true });
+      records.set(
+        "term-elsewhere",
+        offering({ projectId: "proj-2" } as Partial<ClaudeUpdateRecord>)
+      );
+      generations.set("term-elsewhere", 6);
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: "term-elsewhere", generation: 6 },
+      });
+
+      expect(toolErrorPayload(result).code).toBe(WORKER_STEER_REFUSALS.notFound);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(pty.submit).not.toHaveBeenCalled();
+    });
+
+    it("asks nobody while another window drives the project", async () => {
+      const { deps, pty, records } = harness({
+        shellName,
+        global: true,
+        refuseWrite: { code: "DRIVEN_ELSEWHERE", message: "Another window drives it." },
+      });
+      records.set(WORKER, offering());
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: WORKER, generation: 4 },
+      });
+
+      expect(toolErrorPayload(result).code).toBe("DRIVEN_ELSEWHERE");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(pty.submit).not.toHaveBeenCalled();
+    });
+
+    it("types nothing when another window takes the project while the person decides", async () => {
+      const { deps, pty, records, refuseWrite } = harness({ shellName, global: true });
+      records.set(WORKER, offering());
+      vi.mocked(deps.dispatchAction).mockImplementationOnce(async () => {
+        refuseWrite.mockReturnValue({
+          code: "DRIVEN_ELSEWHERE",
+          message: "Another window drives it.",
+        });
+        return { result: { ok: true, result: { terminalId: WORKER } } };
+      });
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: WORKER, generation: 4 },
+      });
+
+      expect(answerOf(result)).toMatchObject({ status: "not-sent", reason: "not-allowed" });
+      expect(pty.submit).not.toHaveBeenCalled();
+    });
+
+    it("still refuses /restart sent as a steer's prompt, at the prompt or held", async () => {
+      const { deps, pty, records, wakes } = harness({ shellName, global: true });
+      records.set(WORKER, offering());
+      const server = await serve(deps);
+
+      const now = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: WORKER, command: "/restart", generation: 4 },
+      });
+      expect(toolErrorPayload(now).code).toBe(WORKER_STEER_REFUSALS.commandNotAllowed);
+
+      records.set(WORKER, offering({ agentState: "working", waitingReason: undefined }));
+      const held = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: WORKER, command: "/restart", generation: 4, whenBusy: "queue" },
+      });
+      expect(toolErrorPayload(held).code).toBe(WORKER_STEER_REFUSALS.commandNotAllowed);
+      expect(pty.submit).not.toHaveBeenCalled();
+      expect(wakes).toEqual([]);
+    });
+
+    it("leaves a project assistant's relayed call to the panes it launched", async () => {
+      const { deps, pty, records } = harness({ shellName, global: false });
+      records.set(WORKER, offering());
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.applyClaudeUpdateOwned",
+        arguments: { terminalId: WORKER, generation: 4 },
+      });
+
+      expect(toolErrorPayload(result).code).toBe(RESOURCE_NOT_OWNED_CODE);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(pty.submit).not.toHaveBeenCalled();
     });
   }
 );

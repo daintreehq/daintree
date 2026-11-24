@@ -264,6 +264,8 @@ export class PortForwardManager {
   /** Latest lookup per subdomain; an older lookup that finishes later changes nothing. */
   private readonly previewGenerations = new Map<string, number>();
   private previewGeneration = 0;
+  /** How many times each host has been forgotten, so work begun before then can tell. */
+  private readonly forgets = new Map<HostId, number>();
   private readonly now: () => number;
   private readonly spawn: SshSpawner;
   private disposed = false;
@@ -523,7 +525,14 @@ export class PortForwardManager {
     this.forwards.delete(key);
     const hold = this.holds.get(key);
     this.holds.delete(key);
+    const forgets = this.forgets.get(forward.info.hostId) ?? 0;
     if (!(await this.teardown(forward))) {
+      if ((this.forgets.get(forward.info.hostId) ?? 0) !== forgets) {
+        // The host was forgotten meanwhile: nothing of its is to be kept, so it closes as forgetHost would.
+        if (forward.driver.kind === "ssh") await forward.driver.relay?.close();
+        this.emit();
+        return;
+      }
       // ssh still holds the port: keep it listed so it can be stopped again.
       this.forwards.set(key, forward);
       if (hold && !this.holds.has(key)) this.holds.set(key, hold);
@@ -559,10 +568,19 @@ export class PortForwardManager {
     for (const [key, spec] of this.lapsed) {
       if (spec.hostId === hostId) this.lapsed.delete(key);
     }
+    // A Stop still waiting on ssh must not put one back.
+    this.forgets.set(hostId, (this.forgets.get(hostId) ?? 0) + 1);
     const prefix = keyOf(hostId, 0).slice(0, -1);
     for (const key of [...this.holds.keys()]) if (key.startsWith(prefix)) this.holds.delete(key);
     for (const [subdomain, key] of this.previewKeys) {
       if (key.startsWith(prefix)) this.previewKeys.delete(subdomain);
+    }
+    // Its previews' answers were the old machine's, and so is a lookup of its
+    // still out there; another host's lookup of the same origin stands.
+    for (const [subdomain, cached] of this.previewCache) {
+      if (cached.hostId !== hostId) continue;
+      this.previewCache.delete(subdomain);
+      this.previewGenerations.set(subdomain, ++this.previewGeneration);
     }
     for (const [key, recreation] of this.recreating) {
       if (key.startsWith(prefix)) recreation.stopped = true;
@@ -574,7 +592,6 @@ export class PortForwardManager {
     const gone = [...this.forwards].filter(([, forward]) => forward.info.hostId === hostId);
     if (gone.length === 0) return;
     for (const [key] of gone) this.forwards.delete(key);
-    this.previewCache.clear();
     // Its master may be gone with it: cancelling is only a courtesy, the local side always closes.
     await Promise.all(gone.map(([, forward]) => this.teardown(forward).catch(() => false)));
     await Promise.all(
@@ -1072,6 +1089,10 @@ export class PortForwardManager {
     generation: number
   ): Promise<RemoteUpstreamResolution | null> {
     let resolution: PreviewResolution | null = null;
+    // Forgotten meanwhile, the host's answer is the machine it named before,
+    // whatever has happened to the cache since.
+    const forgets = this.forgets.get(hostId) ?? 0;
+    const forgotten = () => (this.forgets.get(hostId) ?? 0) !== forgets;
     const session = this.deps.sessionFor(hostId);
     if (session) {
       try {
@@ -1086,6 +1107,7 @@ export class PortForwardManager {
         resolution = null;
       }
     }
+    if (forgotten()) return null;
     const current = () => this.previewGenerations.get(subdomain) === generation;
     if (!current()) {
       // A newer lookup, or the preview's release, overtook this one: its answer is the one that counts.
@@ -1099,6 +1121,8 @@ export class PortForwardManager {
         { hostId, remotePort: resolution.port, origin: "dev-preview", label: "Dev preview" },
         owner
       );
+      // forgetHost closes the forward itself; nothing here may point at it.
+      if (forgotten()) return null;
       if (current()) {
         this.notePreviewForward(subdomain, key);
       } else {

@@ -1,5 +1,5 @@
 import { CHANNELS } from "../ipc/channels.js";
-import { sendToWebContents, typedBroadcast } from "../ipc/utils.js";
+import { sendLatestWinsToWebContents, typedBroadcastLatestWins } from "../ipc/utils.js";
 import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
@@ -9,7 +9,8 @@ import {
   canopyRefinementFor,
   onCanopyRefinementsChanged,
 } from "./canopy/canopyRefinementSource.js";
-import { helpSessionService } from "./HelpSessionService.js";
+import { decisionAttentionFor, onAnswerAttentionChanged } from "./runAnswerAttentionSource.js";
+import { loadedHelpSessionService } from "./helpSessionRuntime.js";
 import {
   getSharedTerminalSnapshot,
   invalidateSharedTerminalSnapshot,
@@ -93,6 +94,9 @@ export class ProjectStatsService {
     // Canopy reading an ask or a false alarm moves the same tallies, and the
     // host has nothing new to say about it.
     this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.debouncedCompute()));
+    // A Decisions question opening, cleared or answered moves them too, with
+    // nothing on the host to announce it. No counts arrive while Decisions is off.
+    this.eventUnsubscribes.push(onAnswerAttentionChanged(() => this.debouncedCompute()));
     // So does the user looking at a wait no reading placed: it stops being
     // unread, and nothing on the host moved.
     const offWaits = this.runHandBack?.onWaitChanged(() => this.debouncedCompute());
@@ -157,7 +161,7 @@ export class ProjectStatsService {
    */
   pushSnapshotTo(webContents: Electron.WebContents): void {
     if (Object.keys(this.lastBroadcast).length === 0) return;
-    sendToWebContents(webContents, CHANNELS.PROJECT_STATS_UPDATED, this.lastBroadcast);
+    sendLatestWinsToWebContents(webContents, CHANNELS.PROJECT_STATS_UPDATED, this.lastBroadcast);
   }
 
   /** {@link pushSnapshotTo} for a view attached over a link. */
@@ -316,9 +320,17 @@ export class ProjectStatsService {
     }
     if (!hasLiveUnownedTerminal(terminals)) return tallied;
 
+    // The first query whose project the terminal's cwd matches claims it, and a
+    // linked worktree matches both its main checkout's project and a legacy one
+    // registered at the worktree. Asking the most used first leaves the claim
+    // where it went when this poll read the ranked list (#17806).
+    const rank = new Map(projectStore.getRankedProjectIds().map((id, i) => [id, i]));
+    const ordered = [...projectIds].sort(
+      (a, b) => (rank.get(a) ?? rank.size) - (rank.get(b) ?? rank.size)
+    );
     const counts = new Map<string, number>();
     const results = await Promise.allSettled(
-      projectIds.map((id) => this.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
+      ordered.map((id) => this.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
     );
     for (const result of results) {
       if (result.status === "fulfilled") {
@@ -340,17 +352,21 @@ export class ProjectStatsService {
       // Scratches ride the same map: a scratch terminal is already stamped with
       // the scratch id as its `projectId` (#11079), the counting helper treats
       // ids as opaque, and the two id formats are disjoint (64-hex vs UUID), so
-      // a scratch row can never shadow a project's entry (#11518).
-      const allProjects = projectStore.getAllProjects();
-      const allScratches = scratchStore.getAllScratches();
-      const projectIds = [...allProjects.map((p) => p.id), ...allScratches.map((s) => s.id)];
+      // a scratch row can never shadow a project's entry (#11518). Only ids and
+      // watermarks are read: the poll needs no ranking, no full rows and no
+      // status repair, which every tick would otherwise pay for (#17806).
+      const workspaces = [
+        ...projectStore.getCompletionWatermarks(),
+        ...scratchStore.getCompletionWatermarks(),
+      ];
+      const projectIds = workspaces.map((workspace) => workspace.id);
       if (projectIds.length === 0) {
         // Track the empty broadcast so a later non-empty result with the
         // same shape as the prior non-empty broadcast still fires
         // (shallowEqual would otherwise suppress it).
         this.lastBroadcast = {};
         this.acknowledgeableCompletionAt = new Map();
-        typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, {});
+        typedBroadcastLatestWins<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, {});
         return;
       }
 
@@ -361,7 +377,7 @@ export class ProjectStatsService {
 
       // Acknowledgement watermarks ride the same rows already fetched.
       const seenMap = new Map<string, number>();
-      for (const workspace of [...allProjects, ...allScratches]) {
+      for (const workspace of workspaces) {
         if (
           typeof workspace.lastCompletionSeenAt === "number" &&
           workspace.lastCompletionSeenAt > 0
@@ -383,17 +399,19 @@ export class ProjectStatsService {
         // Same visibility gate the pull path applies. Omitting it on either
         // side is the drift the shared helper exists to prevent: the push
         // suppresses unchanged payloads, so a row hydrated with a hidden
-        // assistant would keep reporting it until agent state next moved.
-        (id) => helpSessionService.isPanelVisible(id),
+        // assistant would keep reporting it until agent state next moved. A
+        // service that hasn't loaded has no panel open and no assistant slot.
+        (id) => loadedHelpSessionService()?.isPanelVisible(id) ?? false,
         // Lets concurrent assistants be ranked by who needs the user,
         // rather than by whichever started last (#12108).
-        (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+        (terminalId) => loadedHelpSessionService()?.getSlotForTerminal(terminalId) ?? null,
         // Tells a finished turn from a real ask and keeps parked runs out of
         // attention. The pull path passes the same two, for the reason above.
         runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
         this.runAttention?.getAll(),
         canopyRefinementFor,
-        runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined
+        runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined,
+        decisionAttentionFor
       );
 
       const statusMap: ProjectStatusMap = {};
@@ -465,7 +483,11 @@ export class ProjectStatsService {
       this.acknowledgeableCompletionAt = acknowledgeable;
       if (!this.shallowEqual(statusMap, this.lastBroadcast)) {
         this.lastBroadcast = statusMap;
-        typedBroadcast<"project:stats-updated">(CHANNELS.PROJECT_STATS_UPDATED, statusMap);
+        // The whole map each time, so a frozen view needs only the newest (#17038).
+        typedBroadcastLatestWins<"project:stats-updated">(
+          CHANNELS.PROJECT_STATS_UPDATED,
+          statusMap
+        );
       }
     } catch (error) {
       console.error("[ProjectStatsService] Failed to compute stats:", error);

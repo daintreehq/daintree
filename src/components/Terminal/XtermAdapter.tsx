@@ -53,6 +53,7 @@ import {
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
 import { terminalUploadSurface } from "./uploads/pendingUploads";
+import { noteOsc52Gesture } from "@/services/terminal/osc52";
 import type { TerminalFocusTarget } from "./terminalFocus";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import { resolveInteractiveActionId } from "@/services/actions/resolveInteractiveActionId";
@@ -477,6 +478,10 @@ export function XtermAdapter({
           if (event.type !== "keydown") {
             return true;
           }
+
+          // Before any branch below can consume the key: plain Enter, Ctrl+C
+          // and a bare modifier are all the user at this pane.
+          noteOsc52Gesture(managed, event);
 
           // Get normalized key for modifier-only detection
           const normalizedKey = keybindingService.normalizeKeyForBinding(event);
@@ -913,6 +918,25 @@ export function XtermAdapter({
     peekTerminalService()?.updateOptions(terminalId, delta);
   }, [terminalId, terminalOptions]);
 
+  // A click or a mouse release in the pane opens its OSC 52 window as a key
+  // press does: tmux's mouse-drag copy and Zellij's copy-on-select both send
+  // the sequence when the button comes up. Captured, so it lands even when
+  // xterm forwards the mouse to the program.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const onPointer = (event: PointerEvent) => {
+      const managed = peekTerminalService()?.get(terminalId);
+      if (managed) noteOsc52Gesture(managed, event);
+    };
+    container.addEventListener("pointerdown", onPointer, true);
+    container.addEventListener("pointerup", onPointer, true);
+    return () => {
+      container.removeEventListener("pointerdown", onPointer, true);
+      container.removeEventListener("pointerup", onPointer, true);
+    };
+  }, [terminalId]);
+
   useLayoutEffect(() => {
     isInputLockedRef.current = !!isInputLocked;
     peekTerminalService()?.setInputLocked(terminalId, !!isInputLocked);
@@ -1105,6 +1129,7 @@ export function XtermAdapter({
           <PendingUploadChips
             surface={terminalUploadSurface(terminalId)}
             className="pointer-events-auto absolute bottom-2 left-3 right-3 z-20"
+            onReturnFocus={() => peekTerminalService()?.focus(terminalId)}
           />
           <LazyUploadConfirmHost />
         </>

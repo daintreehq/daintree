@@ -71,6 +71,50 @@ describe("Decisions disclosure", () => {
     }
   });
 
+  it("says presence is a yes or no the relay reads, when it's sent, and how to stop it (#17240)", () => {
+    render(
+      <TooltipProvider>
+        <DecisionsConsentDialog isOpen onCancel={noop} onAccept={noop} />
+      </TooltipProvider>
+    );
+    const item = [...document.querySelectorAll("li")].find((li) =>
+      li.textContent?.startsWith("Whether you're at this computer.")
+    );
+    const text = item?.textContent ?? "";
+    for (const promise of [
+      "While desktop notifications are on",
+      "tells your relay whether you're here",
+      "up to two minutes before notifying your phone",
+      "only a yes or no, which the relay can read",
+      "Remote Hosts never send it",
+      "on unless you turn it off under Questions",
+    ]) {
+      expect(text, promise).toContain(promise);
+    }
+  });
+
+  it("says an agent-stopped push names nothing, and is off until turned on under Questions (#17319)", () => {
+    render(
+      <TooltipProvider>
+        <DecisionsConsentDialog isOpen onCancel={noop} onAccept={noop} />
+      </TooltipProvider>
+    );
+    const item = [...document.querySelectorAll("li")].find((li) =>
+      li.textContent?.startsWith("Push endpoints.")
+    );
+    const text = item?.textContent ?? "";
+    for (const promise of [
+      "A push says only that a question needs you, never the question",
+      "If you turn on phone notifications when an agent stops, under Questions",
+      "that an agent stopped while you were away",
+      // Which agents: Remote Hosts' report too (#17933).
+      "here or on a Remote Host it's connected to",
+      "never which agent, where or how many",
+    ]) {
+      expect(text, promise).toContain(promise);
+    }
+  });
+
   it("agrees to snapshots in the same words the Decisions consent and the Data list show", () => {
     const words = snapshotWords();
     render(

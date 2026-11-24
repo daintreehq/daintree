@@ -6,6 +6,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
 import { useTerminalInputStore } from "../terminalInputStore";
+import { isolatedComposerScope } from "@/lib/draftKey";
+import {
+  _resetComposerSnapshotsForTesting,
+  keepComposerSnapshot,
+  takeComposerSnapshot,
+} from "@/lib/composerRemount";
 import { getViewWorkspaceId } from "../viewWorkspaceId";
 import { VOICE_RECENT_PROMPT_MAX_CHARS } from "@shared/config/voiceCorrection";
 
@@ -28,6 +34,7 @@ describe("terminalInputStore", () => {
       lastTypedAgentTarget: null,
     });
     vi.mocked(getViewWorkspaceId).mockReturnValue(null);
+    _resetComposerSnapshotsForTesting();
   });
 
   describe("fleet draft holds (#14949)", () => {
@@ -182,6 +189,55 @@ describe("terminalInputStore", () => {
       store.clearAllDraftInputs();
 
       expect(useTerminalInputStore.getState().fleetDraftHolds.size).toBe(0);
+    });
+  });
+
+  describe("chips kept across a composer's remount (#16883)", () => {
+    const keep = (draftKey: string) =>
+      keepComposerSnapshot(draftKey, {
+        draft: "look",
+        images: [],
+        files: [],
+        selection: { anchor: 4, head: 4 },
+        caretPublished: true,
+      });
+    const kept = (draftKey: string) => takeComposerSnapshot(draftKey, "look") !== null;
+
+    it("go when the draft is emptied or cleared, and only that draft's", () => {
+      const store = useTerminalInputStore.getState();
+      keep("p:a");
+      keep("p:b");
+      store.setDraftInput("a", "", "p");
+      expect(kept("p:a")).toBe(false);
+
+      keep("p:a");
+      store.clearDraftInput("a", "p");
+      expect(kept("p:a")).toBe(false);
+      expect(kept("p:b")).toBe(true);
+    });
+
+    it("stay through a write that leaves text", () => {
+      keep("p:a");
+      useTerminalInputStore.getState().setDraftInput("a", "look", "p");
+      expect(kept("p:a")).toBe(true);
+    });
+
+    it("go with the project's drafts, except a preserved terminal's", () => {
+      keep("p:a");
+      keep("p:b");
+      keep("q:a");
+      useTerminalInputStore.getState().resetForProjectSwitch("p", new Set(["b"]));
+      expect(kept("p:a")).toBe(false);
+      expect(kept("p:b")).toBe(true);
+      expect(kept("q:a")).toBe(true);
+    });
+
+    it("all go when every draft is cleared", () => {
+      keep("p:a");
+      keep("q:b");
+      useTerminalInputStore.getState().clearAllDraftInputs();
+      expect(kept("p:a")).toBe(false);
+      expect(kept("q:b")).toBe(false);
     });
   });
 
@@ -676,6 +732,69 @@ describe("terminalInputStore", () => {
       expect(after.commandHistory.size).toBe(0);
       expect(after.historyIndex.size).toBe(0);
       expect(after.tempDraft.size).toBe(0);
+    });
+
+    it("keeps another host's isolated draft for a terminal of the same id", () => {
+      const store = useTerminalInputStore.getState();
+      const otherHost = isolatedComposerScope("host-b");
+
+      store.setDraftInput("term-1", "local", "project-a");
+      store.setDraftInput("term-1", "local isolated", isolatedComposerScope());
+      store.setDraftInput("term-1", "reply to host-b", otherHost);
+      store.setPendingDraft("term-1", "pending for host-b", otherHost);
+      store.stashEditorState("term-1", makeState("stashed for host-b"), otherHost);
+      store.addToHistory("term-1", "sent to host-b", otherHost);
+      store.addToHistory("term-1", "sent here", "project-a");
+      store.navigateHistory("term-1", "up", "half a reply", otherHost);
+      store.navigateHistory("term-1", "up", "half a prompt", "project-a");
+      const remoteKey = `${otherHost}:term-1`;
+      const snapshot = {
+        draft: "reply to host-b",
+        images: [],
+        files: [],
+        selection: { anchor: 0, head: 0 },
+        caretPublished: false,
+      };
+      keepComposerSnapshot(remoteKey, snapshot);
+      keepComposerSnapshot("project-a:term-1", { ...snapshot, draft: "local" });
+
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      const after = useTerminalInputStore.getState();
+      expect([...after.draftInputs.keys()]).toEqual([remoteKey]);
+      expect(after.getDraftInput("term-1", otherHost)).toBe("reply to host-b");
+      expect([...after.pendingDrafts.keys()]).toEqual([remoteKey]);
+      expect(after.hasStashedEditorState("term-1", otherHost)).toBe(true);
+      expect([...after.commandHistory.keys()]).toEqual([remoteKey]);
+      expect([...after.historyIndex.keys()]).toEqual([remoteKey]);
+      expect(after.tempDraft.get(remoteKey)).toBe("half a reply");
+      expect(after.tempDraft.size).toBe(1);
+      expect(takeComposerSnapshot(remoteKey, "reply to host-b")).not.toBeNull();
+      expect(takeComposerSnapshot("project-a:term-1", "local")).toBeNull();
+    });
+
+    it("clears a colon-holding id's own isolated draft and leaves another host's", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("agent:1", "local isolated", isolatedComposerScope());
+      store.setDraftInput("agent:1", "local", "project-a");
+      store.setDraftInput("agent:1", "reply to host-b", isolatedComposerScope("host-b"));
+
+      useTerminalInputStore.getState().clearTerminalState("agent:1");
+
+      expect([...useTerminalInputStore.getState().draftInputs.keys()]).toEqual([
+        `${isolatedComposerScope("host-b")}:agent:1`,
+      ]);
+    });
+
+    it("leaves the store alone when only another host holds the id", () => {
+      useTerminalInputStore
+        .getState()
+        .setDraftInput("term-1", "reply to host-b", isolatedComposerScope("host-b"));
+
+      const before = useTerminalInputStore.getState();
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      expect(useTerminalInputStore.getState()).toBe(before);
     });
   });
 

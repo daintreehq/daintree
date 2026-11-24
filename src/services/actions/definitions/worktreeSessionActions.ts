@@ -13,6 +13,7 @@ import {
   resolveWorktreeDisplayName,
 } from "@/utils/destructiveSessionConfirm";
 import { isForegroundDispatch } from "./dispatchSource";
+import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
 
 // Shared by argsSchema + run() so the worktree id is extracted via a validated
 // parse rather than an unchecked `as` cast (keeps the lint ratchet green).
@@ -255,7 +256,17 @@ export function registerWorktreeSessionActions(
       if (pending && pending.kind === "worktreeTrashAll") {
         useTerminalPendingDestructiveActionStore.getState().clear();
       }
-      state.bulkTrashByWorktree(targetWorktreeId);
+      // The confirmation re-dispatches as the person; the close is still
+      // whoever asked for it first.
+      const source =
+        pending?.kind === "worktreeTrashAll"
+          ? (pending.dispatchSource ?? ctx.dispatchSource)
+          : ctx.dispatchSource;
+      userCloseCommit(
+        source,
+        targets.map((t) => t.id),
+        () => state.bulkTrashByWorktree(targetWorktreeId)
+      )();
     },
   }));
 

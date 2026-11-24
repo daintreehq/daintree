@@ -166,6 +166,39 @@ describe("relay check copy", () => {
     ).toBe("/health answered, but the connection failed reading /api/v1/info");
   });
 
+  it("tells the relay set up here apart from one met while setting up (#18059)", () => {
+    const origin = "https://relay.example.com";
+    const compatibility = compare({});
+    const claimed = { result: "claimed", origin, compatibility } as const;
+    const unclaimed = { result: "unclaimed", origin, compatibility } as const;
+
+    // Typed into the field: someone else's claim, or one to make.
+    expect(describeRelayCheck(claimed)).toMatchObject({
+      severity: "info",
+      label: "relay.example.com is claimed",
+      detail: expect.stringMatching(/already has an owner/),
+    });
+    expect(describeRelayCheck(unclaimed)?.label).toBe("relay.example.com is ready to claim");
+
+    // This computer's own relay: its claim isn't news, and no owner is a discrepancy.
+    const own = describeRelayCheck(claimed, true)!;
+    expect(own.severity).toBe("success");
+    expect(own.label).toBe("relay.example.com answered as a Decisions relay");
+    expect(`${own.label} ${own.detail}`).not.toMatch(/already has an owner|is claimed/);
+    const ownless = describeRelayCheck(unclaimed, true)!;
+    expect(ownless.severity).toBe("warning");
+    expect(ownless.label).toBe("relay.example.com reports no owner");
+
+    // Everything else reads the same either way.
+    const unreachable = {
+      result: "unreachable",
+      origin,
+      endpoint: "health",
+      reason: "dns",
+    } as const;
+    expect(describeRelayCheck(unreachable, true)).toEqual(describeRelayCheck(unreachable));
+  });
+
   it("leaves an address that was never sent to the field", () => {
     expect(describeRelayCheck({ result: "invalid-url", reason: "credentials" })).toBeNull();
   });

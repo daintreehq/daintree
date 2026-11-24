@@ -6,28 +6,69 @@ import {
 } from "@shared/utils/pluginFocusedPanel";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { usePanelStore } from "./panelStore";
-import { useMacroFocusStore } from "./macroFocusStore";
 
 /**
  * The panel holding real DOM focus in this view, as a plugin may see it.
- * `focusedId` is not used: it keeps naming the last panel while the Portal,
- * the assistant or the sidebar has focus. A panel's DOM root carries
+ * `focusedId` is not used: it keeps naming the last panel while the assistant
+ * or the sidebar has focus. A panel's DOM root carries
  * `data-panel-id`, and a `<webview>` guest's focus leaves the element itself
  * as the embedder's `activeElement`, so browser panels resolve the same way.
  */
 export function readFocusedPanel(): PluginFocusedPanel {
-  if (typeof document === "undefined" || !document.hasFocus()) return NO_FOCUSED_PANEL;
+  return projectFocusTarget(resolveFocusTarget());
+}
+
+type PanelRecord = ReturnType<typeof usePanelStore.getState>["panelsById"][string];
+
+/**
+ * Where DOM focus sits, resolved once per move. The focused element's
+ * ancestry can't change while it keeps focus: a focused node that is removed
+ * or reparented hands focus to `<body>`.
+ */
+interface FocusTarget {
+  readonly hasFocus: boolean;
+  readonly active: Element | null;
+  readonly root: Element | null;
+  readonly panelId: string | null;
+}
+
+const NO_FOCUS_TARGET: FocusTarget = {
+  hasFocus: false,
+  active: null,
+  root: null,
+  panelId: null,
+};
+
+function resolveFocusTarget(): FocusTarget {
+  if (typeof document === "undefined") return NO_FOCUS_TARGET;
+  const hasFocus = document.hasFocus();
   const active = document.activeElement;
-  // The Portal dock's own chrome (tab strip, launchpad). Focus inside a Portal
-  // page is a separate webContents, which main observes directly.
-  const portalDock = useMacroFocusStore.getState().refs.get("portal");
-  if (portalDock && active && portalDock.contains(active)) {
-    return toPluginFocusedPanel({ kind: "portal" });
-  }
+  if (!hasFocus) return { ...NO_FOCUS_TARGET, active };
   const root = active instanceof Element ? active.closest("[data-panel-id]") : null;
-  const panelId = root?.getAttribute("data-panel-id");
-  if (!panelId) return NO_FOCUSED_PANEL;
-  const panel = usePanelStore.getState().panelsById[panelId];
+  return { ...NO_FOCUS_TARGET, hasFocus, active, root, panelId: panelIdOf(root) };
+}
+
+function panelIdOf(root: Element | null): string | null {
+  return root?.getAttribute("data-panel-id") || null;
+}
+
+/** Whether `target` still stands, checked without walking the DOM. */
+function focusTargetHolds(target: FocusTarget): boolean {
+  return (
+    document.hasFocus() === target.hasFocus &&
+    document.activeElement === target.active &&
+    (target.root === null || panelIdOf(target.root) === target.panelId)
+  );
+}
+
+function focusedRecord(target: FocusTarget): PanelRecord | undefined {
+  return target.panelId === null ? undefined : usePanelStore.getState().panelsById[target.panelId];
+}
+
+function projectFocusTarget(
+  target: FocusTarget,
+  panel: PanelRecord | undefined = focusedRecord(target)
+): PluginFocusedPanel {
   if (!panel) return NO_FOCUSED_PANEL;
   // A PTY-backed plugin panel is stored as a terminal; it is still a plugin's.
   return toPluginFocusedPanel({
@@ -50,13 +91,26 @@ export function subscribeFocusedPanelReporter(): () => void {
   if (typeof send !== "function") return () => {};
 
   let last: PluginFocusedPanel | null = null;
+  let target: FocusTarget | null = null;
+  let projectedFrom: PanelRecord | undefined;
   let scheduled = false;
+  let fullRead = false;
   let disposed = false;
 
   const flush = () => {
     scheduled = false;
     if (disposed) return;
-    const next = readFocusedPanel();
+    // Store writes land on nearly every frame while agents stream, the focused
+    // terminal's own record included: walk the DOM only when focus may have
+    // moved, and project the current record through where it was found.
+    let current = target;
+    const resolve = fullRead || current === null || !focusTargetHolds(current);
+    fullRead = false;
+    if (resolve || current === null) current = target = resolveFocusTarget();
+    const panel = focusedRecord(current);
+    if (!resolve && panel === projectedFrom) return;
+    projectedFrom = panel;
+    const next = projectFocusTarget(current, panel);
     if (last !== null && pluginFocusedPanelEquals(last, next)) return;
     last = next;
     try {
@@ -67,10 +121,14 @@ export function subscribeFocusedPanelReporter(): () => void {
   };
   // Deferred to a microtask: mid-transition `activeElement` is `<body>`
   // between a focusout and the matching focusin.
-  const schedule = () => {
+  const queueSample = () => {
     if (scheduled || disposed) return;
     scheduled = true;
     queueMicrotask(flush);
+  };
+  const schedule = () => {
+    fullRead = true;
+    queueSample();
   };
 
   document.addEventListener("focusin", schedule);
@@ -81,11 +139,11 @@ export function subscribeFocusedPanelReporter(): () => void {
   // no `focusout`; sample again once React has committed it.
   let frame: number | null = null;
   const onStoreChange = () => {
-    schedule();
+    queueSample();
     if (frame !== null || typeof requestAnimationFrame !== "function") return;
     frame = requestAnimationFrame(() => {
       frame = null;
-      schedule();
+      queueSample();
     });
   };
   const unsubscribeStore = usePanelStore.subscribe(onStoreChange);

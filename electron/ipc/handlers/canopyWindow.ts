@@ -63,10 +63,13 @@ function closeWhenCanopyIsOff(close: () => void): () => void {
  * Bring back the Canopy window a launch found open at the last quit (#16336):
  * only while Canopy is on, behind the window the user is in, and never once a
  * Canopy window has stood this session, which would reopen one the user has
- * since opened or closed themselves. True when it opened one.
+ * since opened or closed themselves. The exception is one Keep Agents Running
+ * closed along with every other window: it comes back with them. True when it
+ * opened one.
  */
-export function restoreCanopyWindow(): boolean {
-  if (readCanopyMode() !== "on" || hasCanopyWindowOpenedThisSession()) return false;
+export function restoreCanopyWindow({ afterKeepAgentsRunning = false } = {}): boolean {
+  if (readCanopyMode() !== "on") return false;
+  if (hasCanopyWindowOpenedThisSession() && !afterKeepAgentsRunning) return false;
   openCanopyWindow(closeWhenCanopyIsOff, { revealMode: "showInactive" });
   return true;
 }
@@ -139,7 +142,7 @@ export const canopyWindowNamespace = defineIpcNamespace({
         const destination = await resolveAssistantDestination(subject);
         if (!destination) return "ended";
         if (destination.scope === "global") {
-          showCanopyGlobalAssistant(subject, await globalAssistantInputOwner());
+          showCanopyGlobalAssistant(subject, await globalAssistantInputOwner(subject.terminalId));
           return null;
         }
         const holder = await assistantLaneHolder(destination.projectId, destination.lane);

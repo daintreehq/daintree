@@ -19,7 +19,15 @@ import { getWindowForWebContents } from "../../../window/webContentsRegistry.js"
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import { supersedePendingHostSwitch } from "../../../window/windowHost.js";
-import { claimProjectActivation } from "../../../window/projectActivationClaims.js";
+import {
+  claimProjectActivation,
+  findOtherProjectOwner,
+  focusWorkspaceOwner,
+  hasLiveProjectView,
+  releaseCachedOwner,
+} from "../../../window/projectOwnership.js";
+import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
+import { currentWindowSwitch } from "../../../window/windowSwitchEpochs.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
@@ -45,7 +53,15 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           if (ctx.endpoint?.kind === "remote-view") {
             return ctx.projectId ? scratchStore.getScratchById(ctx.projectId) : null;
           }
-          return scratchStore.getCurrentScratch();
+          // A local view shows the scratch it is bound to, and none when it is
+          // bound to a project or to nothing. The global pointer names the
+          // scratch whichever window switched last, which a view in another
+          // window must not take as its own (#17186). Only a legacy renderer
+          // with no view manager and no binding still reads it.
+          const scoped = resolveScopedProjectForIpcContext(ctx, deps);
+          if (!scoped) return scratchStore.getCurrentScratch();
+          if (!scoped.workspaceId || scoped.project) return null;
+          return scratchStore.getScratchById(scoped.workspaceId);
         },
         { withContext: true }
       ),
@@ -140,8 +156,49 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // pointed at the previous state so an app restart hydrates a coherent
           // workspace. Mirrors the project:switch flow where `setCurrentProject` is
           // only called after `pvm.switchTo()` resolves.
-          supersedePendingHostSwitch(senderWindow?.id);
           const scratchWindowId = senderWindow?.id ?? deps.mainWindow?.id;
+          supersedePendingHostSwitch(scratchWindowId);
+
+          // The sender view's own binding, captured before anything awaits: once
+          // the swap lands this view is the one left behind. The window's switch
+          // epoch too, so the activation can tell whether a project switch was
+          // asked for in this window while the swap waited.
+          const departingWorkspaceId = ctx.projectId;
+          const switchEpoch =
+            scratchWindowId !== undefined ? currentWindowSwitch(scratchWindowId) : 0;
+
+          // One live view per workspace across the app, as for a project
+          // (#12596): a scratch another window shows, or is on its way to,
+          // comes forward there, and one another window only caches is
+          // released so it can open here. Synchronous, and in the same tick as
+          // the claim below, so the scratch never has a live view in two
+          // windows. A cached view that can't be released refuses the switch;
+          // its "show in that window" recovery is a project switch, which
+          // can't take a scratch, so it isn't offered.
+          const owner = hasLiveProjectView(pvm, scratchId)
+            ? null
+            : releaseCachedOwner(
+                findOtherProjectOwner(deps.windowRegistry, scratchId, {
+                  windowId: scratchWindowId,
+                  projectViewManager: pvm,
+                }),
+                scratchId,
+                scratch.name,
+                { showable: false }
+              );
+          if (owner) {
+            // Never still cached: without `showInOtherWindow`, a cached owner
+            // is released above or refuses the switch.
+            if (owner.state !== "cached") {
+              focusWorkspaceOwner(
+                { ...owner, state: owner.state },
+                scratchId,
+                options?.focusIntent
+              );
+            }
+            // The requesting view still shows what it showed.
+            return null;
+          }
 
           // Claimed like project:switch's target, until the pointers below are
           // committed: while the switch waits on the window's queue the scratch
@@ -174,7 +231,6 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
             // way from one scratch to another (#11936). The scratch itself is
             // recorded too: it is a workspace like any other, so the way back
             // into it is the same entry that leads back out.
-            const departingWorkspaceId = ctx.projectId;
             if (scratchWindowId !== undefined) {
               const history = getProjectHistory(scratchWindowId);
               if (departingWorkspaceId) history.record(departingWorkspaceId);
@@ -189,6 +245,9 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
               view: activeView?.webContents ?? ctx.event?.sender,
               windowRegistry: deps.windowRegistry,
               ptyClient: deps.ptyClient,
+              workspaceClient: deps.worktreeService,
+              outgoingWorkspaceId: departingWorkspaceId,
+              switchEpoch,
             });
           } finally {
             releaseClaim();

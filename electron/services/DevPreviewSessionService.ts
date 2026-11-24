@@ -7,7 +7,6 @@ import { processDevPreviewOutput } from "./DevPreviewOutputProcessor.js";
 import {
   CACHE_DIRS,
   clearCacheDirs,
-  computeDirSize,
   detectPackageManagerInfo,
   statDirMeta,
 } from "./DevPreviewDiskUsage.js";
@@ -75,6 +74,20 @@ import type {
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+
+/** One confirmation opening's size scans: stopping `signal` stops every `measure` it started. */
+export interface DevPreviewDirSizeScan {
+  signal: AbortSignal;
+  /** Bytes the directory occupies, or null when it is missing or couldn't be measured. */
+  measure(dirPath: string): Promise<number | null>;
+}
+
+function unmeasuredSizes(): DevPreviewDestructivePreviewSizes {
+  return {
+    cacheDirSizes: Object.fromEntries(CACHE_DIRS.map((relPath) => [relPath, null])),
+    nodeModulesSizeBytes: null,
+  };
+}
 
 interface DevPreviewSession extends DevPreviewSessionState {
   cwd: string;
@@ -481,123 +494,134 @@ export class DevPreviewSessionService {
     const key = createSessionKey(request.projectId, request.panelId);
     let state: DevPreviewSessionState | undefined;
     await this.runLocked(key, async () => {
-      if (this.disposed) return;
-      // A user-stopped panel still takes the latest config (so a later restart
-      // from the dashboard or palette launches current settings, and a
-      // session exists for it after relaunch) but only an explicit resume
-      // launches it.
-      const refused = this.userStopped.has(key) && !request.resumeUserStopped;
-      if (!refused) this.clearUserStopped(key);
-      const created = !this.sessions.has(key);
-      const session = this.getOrCreateSession(request.projectId, request.panelId);
-      const envChanged = !envEquals(session.env, request.env);
-      const nextTurbopackEnabled = request.turbopackEnabled ?? true;
-      const nextEndpoint = request.endpoint?.trim() || null;
-      const changedFields: string[] = [];
-      if (session.cwd !== request.cwd) changedFields.push("cwd");
-      if (session.worktreeId !== request.worktreeId) changedFields.push("worktreeId");
-      if (session.devCommand !== request.devCommand) changedFields.push("devCommand");
-      if (session.endpoint !== nextEndpoint) changedFields.push("endpoint");
-      if (session.turbopackEnabled !== nextTurbopackEnabled) changedFields.push("turbopackEnabled");
-      if (envChanged) changedFields.push("env");
-      const configChanged = changedFields.length > 0;
-      // The server runs from `cwd`; the worktree only says where it's filed. A
-      // move that changes nothing else re-files it, never restarts it in the
-      // directory it was already in (#14958).
-      const launchConfigChanged = changedFields.some((field) => field !== "worktreeId");
-
-      this.recordSessionDiagnostic(session, { type: "ensure-requested", configChanged });
-      if (configChanged) {
-        this.recordSessionDiagnostic(session, { type: "config-changed", changed: changedFields });
-      }
-
-      session.cwd = request.cwd;
-      const prevWorktreeId = session.worktreeId;
-      session.worktreeId = request.worktreeId;
-      session.devCommand = request.devCommand;
-      session.endpoint = nextEndpoint;
-      session.turbopackEnabled = nextTurbopackEnabled;
-      if (envChanged) {
-        session.env = cloneEnv(request.env);
-      }
-
-      // A config change is an explicit "try again with new settings" — clear a
-      // tripped crash-loop guard so the fresh config gets its full attempt
-      // budget instead of inheriting a stopped state from the old config. A
-      // user's Start is just as explicit, and must not wait behind a backoff.
-      if (launchConfigChanged || request.resumeUserStopped) {
-        resetCrashLoopGuard(session);
-      }
-
-      // A refused (stopped) panel must not take a worktree's dashboard and
-      // card controls away from a live session sharing that worktree.
-      const ownsMapping = (worktreeId: string): boolean => {
-        if (!refused) return true;
-        const mappedKey = this.worktreeToSession.get(worktreeId);
-        if (mappedKey === undefined || mappedKey === key) return true;
-        const mapped = this.sessions.get(mappedKey);
-        return !mapped || !RUNNING_STATES.has(mapped.status);
-      };
-      // Only this session's own claim on the worktree it left goes, and it goes
-      // to a preview still there rather than leaving that worktree's card bare.
-      if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
-        this.restoreWorktreeMapping(prevWorktreeId, key);
-      }
-      if (session.worktreeId && ownsMapping(session.worktreeId)) {
-        this.worktreeToSession.set(session.worktreeId, key);
-      }
-
-      if (refused) {
-        // Broadcast so surfaces that hydrated before this session existed
-        // (WorktreeCard after relaunch) see it and can offer Start.
-        if (created || configChanged) this.updateSession(session, {});
-        return;
-      }
-
-      if (session.endpoint !== null) {
-        await this.connectEndpoint(session);
-        state = this.getSessionState(request.projectId, request.panelId);
-        return;
-      }
-
-      const commandError = getInvalidCommandMessage(session.devCommand);
-      if (commandError) {
-        this.recordSessionDiagnostic(session, {
-          type: "command-invalid",
-          message: capDiagnosticText(commandError),
-        });
-        invalidatePendingLaunch(session);
-        if (launchConfigChanged && session.terminalId) {
-          await this.stopSessionTerminal(session, "invalid-command");
-        }
-        this.updateSession(session, {
-          status: "error",
-          error: { type: "unknown", message: commandError },
-          url: null,
-          predictedUrl: null,
-          terminalId: null,
-          isRestarting: false,
-        });
-        return;
-      }
-
-      if (launchConfigChanged) {
-        invalidatePendingLaunch(session);
-        if (session.terminalId) {
-          const epoch = await this.stopSessionTerminal(session, "config-change");
-          if (this.relaunchSuperseded(session, epoch)) return;
-        }
-      } else if (configChanged) {
-        // Nothing relaunches to announce the new worktree, so cards, the
-        // dashboard and the restore manifest hear it here.
-        this.updateSession(session, {});
-        if (RUNNING_STATES.has(session.status)) this.persistManifest();
-      }
-
-      await this.ensureSessionTerminal(session);
-      state = this.getSessionState(request.projectId, request.panelId);
+      state = await this.ensureUnderLock(request, key);
     });
     return state ?? this.getSessionState(request.projectId, request.panelId);
+  }
+
+  /**
+   * The body of `ensure`, for a caller already holding this key's lock: `restart`
+   * starts a restore placeholder through it without releasing the lock between
+   * finding no live session and creating one.
+   */
+  private async ensureUnderLock(
+    request: DevPreviewEnsureRequest,
+    key: string
+  ): Promise<DevPreviewSessionState | undefined> {
+    if (this.disposed) return;
+    // A user-stopped panel still takes the latest config (so a later restart
+    // from the dashboard or palette launches current settings, and a
+    // session exists for it after relaunch) but only an explicit resume
+    // launches it.
+    const refused = this.userStopped.has(key) && !request.resumeUserStopped;
+    if (!refused) this.clearUserStopped(key);
+    const created = !this.sessions.has(key);
+    const session = this.getOrCreateSession(request.projectId, request.panelId);
+    const envChanged = !envEquals(session.env, request.env);
+    const nextTurbopackEnabled = request.turbopackEnabled ?? true;
+    const nextEndpoint = request.endpoint?.trim() || null;
+    const changedFields: string[] = [];
+    if (session.cwd !== request.cwd) changedFields.push("cwd");
+    if (session.worktreeId !== request.worktreeId) changedFields.push("worktreeId");
+    if (session.devCommand !== request.devCommand) changedFields.push("devCommand");
+    if (session.endpoint !== nextEndpoint) changedFields.push("endpoint");
+    if (session.turbopackEnabled !== nextTurbopackEnabled) changedFields.push("turbopackEnabled");
+    if (envChanged) changedFields.push("env");
+    const configChanged = changedFields.length > 0;
+    // The server runs from `cwd`; the worktree only says where it's filed. A
+    // move that changes nothing else re-files it, never restarts it in the
+    // directory it was already in (#14958).
+    const launchConfigChanged = changedFields.some((field) => field !== "worktreeId");
+
+    this.recordSessionDiagnostic(session, { type: "ensure-requested", configChanged });
+    if (configChanged) {
+      this.recordSessionDiagnostic(session, { type: "config-changed", changed: changedFields });
+    }
+
+    session.cwd = request.cwd;
+    const prevWorktreeId = session.worktreeId;
+    session.worktreeId = request.worktreeId;
+    session.devCommand = request.devCommand;
+    session.endpoint = nextEndpoint;
+    session.turbopackEnabled = nextTurbopackEnabled;
+    if (envChanged) {
+      session.env = cloneEnv(request.env);
+    }
+
+    // A config change is an explicit "try again with new settings" — clear a
+    // tripped crash-loop guard so the fresh config gets its full attempt
+    // budget instead of inheriting a stopped state from the old config. A
+    // user's Start is just as explicit, and must not wait behind a backoff.
+    if (launchConfigChanged || request.resumeUserStopped) {
+      resetCrashLoopGuard(session);
+    }
+
+    // A refused (stopped) panel must not take a worktree's dashboard and
+    // card controls away from a live session sharing that worktree.
+    const ownsMapping = (worktreeId: string): boolean => {
+      if (!refused) return true;
+      const mappedKey = this.worktreeToSession.get(worktreeId);
+      if (mappedKey === undefined || mappedKey === key) return true;
+      const mapped = this.sessions.get(mappedKey);
+      return !mapped || !RUNNING_STATES.has(mapped.status);
+    };
+    // Only this session's own claim on the worktree it left goes, and it goes
+    // to a preview still there rather than leaving that worktree's card bare.
+    if (prevWorktreeId && prevWorktreeId !== session.worktreeId) {
+      this.restoreWorktreeMapping(prevWorktreeId, key);
+    }
+    if (session.worktreeId && ownsMapping(session.worktreeId)) {
+      this.worktreeToSession.set(session.worktreeId, key);
+    }
+
+    if (refused) {
+      // Broadcast so surfaces that hydrated before this session existed
+      // (WorktreeCard after relaunch) see it and can offer Start.
+      if (created || configChanged) this.updateSession(session, {});
+      return;
+    }
+
+    if (session.endpoint !== null) {
+      await this.connectEndpoint(session);
+      return this.getSessionState(request.projectId, request.panelId);
+    }
+
+    const commandError = getInvalidCommandMessage(session.devCommand);
+    if (commandError) {
+      this.recordSessionDiagnostic(session, {
+        type: "command-invalid",
+        message: capDiagnosticText(commandError),
+      });
+      invalidatePendingLaunch(session);
+      if (launchConfigChanged && session.terminalId) {
+        await this.stopSessionTerminal(session, "invalid-command");
+      }
+      this.updateSession(session, {
+        status: "error",
+        error: { type: "unknown", message: commandError },
+        url: null,
+        predictedUrl: null,
+        terminalId: null,
+        isRestarting: false,
+      });
+      return;
+    }
+
+    if (launchConfigChanged) {
+      invalidatePendingLaunch(session);
+      if (session.terminalId) {
+        const epoch = await this.stopSessionTerminal(session, "config-change");
+        if (this.relaunchSuperseded(session, epoch)) return;
+      }
+    } else if (configChanged) {
+      // Nothing relaunches to announce the new worktree, so cards, the
+      // dashboard and the restore manifest hear it here.
+      this.updateSession(session, {});
+      if (RUNNING_STATES.has(session.status)) this.persistManifest();
+    }
+
+    await this.ensureSessionTerminal(session);
+    return this.getSessionState(request.projectId, request.panelId);
   }
 
   async restart(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState> {
@@ -612,7 +636,27 @@ export class DevPreviewSessionService {
     try {
       await this.runLocked(key, async () => {
         const session = this.sessions.get(key);
-        if (!session) return;
+        if (!session) {
+          // A server that was running when Daintree last closed has only its
+          // restore placeholder until its panel mounts: restarting it is
+          // starting it (#9094). Decided under this lock, so a panel's own
+          // ensure queued ahead wins and its newer config is the one restarted.
+          const restored = this.restoredEntries.get(key);
+          if (!restored) return;
+          const restoreRequest: DevPreviewEnsureRequest = {
+            panelId: restored.panelId,
+            projectId: restored.projectId,
+            cwd: restored.cwd,
+            devCommand: restored.devCommand,
+            worktreeId: restored.worktreeId,
+            env: restored.env,
+            turbopackEnabled: restored.turbopackEnabled,
+            resumeUserStopped: true,
+          };
+          validateEnsureRequest(restoreRequest);
+          state = await this.ensureUnderLock(restoreRequest, key);
+          return;
+        }
 
         // User-initiated restart cancels any pending crash-loop backoff and
         // clears the guard so this attempt starts from a clean slate.
@@ -1066,24 +1110,15 @@ export class DevPreviewSessionService {
       return this.restart({ panelId: session.panelId, projectId: session.projectId });
     }
 
-    // No live session — fall back to a restore placeholder so the dashboard's
+    // No live session — fall back to a restore placeholder so the card's
     // restart offer for a server that was running when Daintree last closed
     // actually spawns it. This is an explicit user action, so (unlike a launch)
-    // spawning IS the intended behavior here (#9094); ensure() drops the
-    // manifest entry and starts the PTY. Mirrors getByWorktree's restore
-    // fallback so the dashboard restart isn't a silent no-op.
+    // spawning IS the intended behavior here (#9094); restart() starts the
+    // placeholder by its own key. Mirrors getByWorktree's restore fallback so
+    // the restart isn't a silent no-op.
     for (const entry of this.restoredEntries.values()) {
       if (entry.worktreeId === worktreeId) {
-        return this.ensure({
-          panelId: entry.panelId,
-          projectId: entry.projectId,
-          cwd: entry.cwd,
-          devCommand: entry.devCommand,
-          worktreeId: entry.worktreeId,
-          env: entry.env,
-          turbopackEnabled: entry.turbopackEnabled,
-          resumeUserStopped: true,
-        });
+        return this.restart({ panelId: entry.panelId, projectId: entry.projectId });
       }
     }
 
@@ -1689,21 +1724,37 @@ export class DevPreviewSessionService {
     };
   }
 
+  /**
+   * Every directory goes through `scan`, which owns the concurrency bound and
+   * the opening's lifetime, including a missing one: its existence check runs
+   * inside the scan's slot, so a stat hung on a dead mount still counts against
+   * the bound. Once the scan is stopped every size answers null, even those
+   * already measured, so a superseded opening never reports a partial figure.
+   */
   async getDestructivePreviewSizes(
-    request: DevPreviewDestructivePreviewSizesRequest
+    request: DevPreviewDestructivePreviewSizesRequest,
+    scan: DevPreviewDirSizeScan
   ): Promise<DevPreviewDestructivePreviewSizes> {
     validateSessionRequest(request);
+    if (scan.signal.aborted) return unmeasuredSizes();
     const cwd = this.resolveSessionCwd(request);
+    // Each tier shows one figure, so only that one is measured: a large .next
+    // would otherwise delay the reinstall preview, and node_modules/.vite would
+    // be walked once as a cache root and again inside node_modules.
     const skipNodeModules = request.skipNodeModules === true;
+    const skipCacheDirs = request.skipCacheDirs === true;
     const [cacheDirEntries, nodeModulesSizeBytes] = await Promise.all([
-      Promise.all(
-        CACHE_DIRS.map(async (relPath) => {
-          const size = await computeDirSize(path.join(cwd, relPath));
-          return [relPath, size] as const;
-        })
-      ),
-      skipNodeModules ? Promise.resolve(null) : computeDirSize(path.join(cwd, "node_modules")),
+      skipCacheDirs
+        ? Promise.resolve([])
+        : Promise.all(
+            CACHE_DIRS.map(async (relPath) => {
+              const size = await scan.measure(path.join(cwd, relPath));
+              return [relPath, size] as const;
+            })
+          ),
+      skipNodeModules ? Promise.resolve(null) : scan.measure(path.join(cwd, "node_modules")),
     ]);
+    if (scan.signal.aborted) return unmeasuredSizes();
     return {
       cacheDirSizes: Object.fromEntries(cacheDirEntries),
       nodeModulesSizeBytes,

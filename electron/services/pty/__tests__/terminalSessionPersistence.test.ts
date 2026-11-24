@@ -14,6 +14,8 @@ import {
   mirrorNeedsResize,
   resizeMirror,
   restoreSessionFromFile,
+  readSessionRestore,
+  applySessionRestore,
   deleteSessionFile,
   evictSessionFiles,
   writeHibernatedMarker,
@@ -37,6 +39,61 @@ const syncWriter = vi.hoisted(() => ({
   beforeWrite: null as null | (() => void),
   afterWrite: null as null | (() => void),
 }));
+// Every async read of a session file, a one-shot failure for one path, and a
+// one-shot hold on the next directory sync of a given directory.
+const sessionReads = vi.hoisted(() => {
+  const state = {
+    paths: [] as string[],
+    fault: null as null | { path: string; code: string },
+    dirSyncHold: null as null | { dir: string; until: Promise<void>; reached: () => void },
+  };
+  const wrap = (actual: typeof import("node:fs/promises")) => ({
+    ...actual,
+    default: actual,
+    readFile: (...args: Parameters<typeof actual.readFile>) => {
+      const [target] = args;
+      if (typeof target === "string") state.paths.push(target);
+      const fault = state.fault;
+      if (fault && fault.path === target) {
+        state.fault = null;
+        return Promise.reject(Object.assign(new Error(fault.code), { code: fault.code }));
+      }
+      return actual.readFile(...args);
+    },
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const handle = await actual.open(...args);
+      const hold = state.dirSyncHold;
+      if (hold && hold.dir === args[0]) {
+        state.dirSyncHold = null;
+        const sync = handle.sync.bind(handle);
+        handle.sync = async () => {
+          hold.reached();
+          await hold.until;
+          return sync();
+        };
+      }
+      return handle;
+    },
+  });
+  return Object.assign(state, { wrap });
+});
+// utils/fs.ts imports the bare specifier; this module the node: one.
+vi.mock("node:fs/promises", async (importOriginal) =>
+  sessionReads.wrap(await importOriginal<typeof import("node:fs/promises")>())
+);
+vi.mock("fs/promises", async (importOriginal) =>
+  sessionReads.wrap(await importOriginal<typeof import("node:fs/promises")>())
+);
+
+// The options each async atomic write was given, by destination.
+const asyncWrites = vi.hoisted(() => [] as Array<{ path: string; durable: unknown }>);
+
+// Records the shutdown flush of background writes, passing through to the real fs.
+const shutdownFlush = vi.hoisted(() => ({
+  files: [] as string[],
+  // The file each directory sync was asked to cover.
+  dirs: [] as string[],
+}));
 vi.mock("../../../utils/fs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../utils/fs.js")>();
   return {
@@ -47,6 +104,18 @@ vi.mock("../../../utils/fs.js", async (importOriginal) => {
       syncWriter.beforeWrite?.();
       actual.resilientAtomicWriteFileSync(...args);
       syncWriter.afterWrite?.();
+    },
+    resilientAtomicWriteFile: (...args: Parameters<typeof actual.resilientAtomicWriteFile>) => {
+      asyncWrites.push({ path: args[0], durable: args[3]?.durable });
+      return actual.resilientAtomicWriteFile(...args);
+    },
+    syncFileSync: (filePath: string) => {
+      shutdownFlush.files.push(filePath);
+      return actual.syncFileSync(filePath);
+    },
+    syncParentDirectorySync: (filePath: string) => {
+      shutdownFlush.dirs.push(filePath);
+      actual.syncParentDirectorySync(filePath);
     },
   };
 });
@@ -166,7 +235,7 @@ describe("terminalSessionPersistence", () => {
       cols: 80,
       rows: 24,
     });
-    writeHibernatedMarker("term-perm-sync");
+    await writeHibernatedMarker("term-perm-sync");
 
     const sessionDir = path.join(userDataDir, "terminal-sessions");
     expect(fs.statSync(sessionDir).mode & 0o777).toBe(0o700);
@@ -1022,6 +1091,15 @@ describe("terminalSessionPersistence", () => {
       expect(fs.existsSync(path.join(sessionDir, "unrelated.tmp"))).toBe(true);
     });
 
+    it("sweeps a stale orphaned .hibernated.*.tmp from an interrupted marker write", async () => {
+      const tmpName = "term-11.hibernated.1700000000000-abc123.tmp";
+      await createFile(tmpName, "", 6 * 60 * 1000);
+
+      await evictSessionFiles({ ttlMs: 30 * 24 * 60 * 60 * 1000, maxBytes: 1024 * 1024 });
+
+      expect(fs.existsSync(path.join(sessionDir, tmpName))).toBe(false);
+    });
+
     it("preserves recent .restore.*.tmp files within the grace period", async () => {
       const tmpName = "term-10.restore.1700000000000-def456.tmp";
       // Within the 5-minute grace window — write may still be in progress
@@ -1118,8 +1196,8 @@ describe("terminalSessionPersistence", () => {
   });
 
   describe("hibernation markers", () => {
-    it("writes and reads a hibernation marker", () => {
-      writeHibernatedMarker("term-hibernate-1");
+    it("writes and reads a hibernation marker", async () => {
+      await writeHibernatedMarker("term-hibernate-1");
 
       const markerPath = getHibernatedMarkerPath("term-hibernate-1");
       expect(markerPath).not.toBeNull();
@@ -1138,7 +1216,7 @@ describe("terminalSessionPersistence", () => {
       const sessionDir = path.join(userDataDir, "terminal-sessions");
       await fsp.mkdir(sessionDir, { recursive: true });
       await fsp.writeFile(path.join(sessionDir, "term-del.restore"), "data", "utf8");
-      writeHibernatedMarker("term-del");
+      await writeHibernatedMarker("term-del");
 
       expect(fs.existsSync(path.join(sessionDir, "term-del.hibernated"))).toBe(true);
 
@@ -1152,7 +1230,7 @@ describe("terminalSessionPersistence", () => {
       const sessionDir = path.join(userDataDir, "terminal-sessions");
       await fsp.mkdir(sessionDir, { recursive: true });
       await fsp.writeFile(path.join(sessionDir, "term-hib.restore"), "content", "utf8");
-      writeHibernatedMarker("term-hib");
+      await writeHibernatedMarker("term-hib");
 
       const headless = createMockHeadless();
       const result = restoreSessionFromFile(headless as never, "term-hib");
@@ -1177,6 +1255,219 @@ describe("terminalSessionPersistence", () => {
       expect(bannerOf(headless)).not.toBe(bannerOf(plainHeadless));
       // Marker should be cleaned up
       expect(fs.existsSync(path.join(sessionDir, "term-hib.hibernated"))).toBe(false);
+    });
+
+    it("writes the marker without the flushes a power cut would need", async () => {
+      asyncWrites.length = 0;
+      await writeHibernatedMarker("term-cheap");
+
+      expect(asyncWrites).toEqual([
+        { path: getHibernatedMarkerPath("term-cheap"), durable: false },
+      ]);
+    });
+
+    it("never rejects, even when the session directory can't be made", async () => {
+      // A file where the directory should be makes mkdir fail.
+      await fsp.writeFile(path.join(userDataDir, "terminal-sessions"), "not a directory");
+
+      await expect(writeHibernatedMarker("term-blocked")).resolves.toBeUndefined();
+    });
+  });
+
+  describe("async restore", () => {
+    let sessionDir: string;
+
+    beforeEach(async () => {
+      sessionDir = path.join(userDataDir, "terminal-sessions");
+      await fsp.mkdir(sessionDir, { recursive: true });
+    });
+
+    async function seedSession(id: string, raw: string, hibernated: boolean): Promise<void> {
+      const filePath = path.join(sessionDir, `${id}.restore`);
+      await fsp.writeFile(filePath, raw, "utf8");
+      // Same mtime for every seeded file, so banners built from it can be compared.
+      const mtime = new Date(2026, 0, 2, 3, 4);
+      await fsp.utimes(filePath, mtime, mtime);
+      if (hibernated) await writeHibernatedMarker(id);
+    }
+
+    it("replays exactly what the synchronous restore replays, consuming the marker", async () => {
+      const raw = "DAINTREE_SESSION_v2\n40x12\nprevious screen";
+      await seedSession("term-async", raw, true);
+      await seedSession("term-sync", raw, true);
+
+      const payload = await readSessionRestore("term-async");
+      expect(payload).toMatchObject({
+        captureGeometry: { cols: 40, rows: 12 },
+        wasHibernated: true,
+      });
+      expect(fs.existsSync(getHibernatedMarkerPath("term-async")!)).toBe(false);
+
+      const asyncHeadless = createMockHeadless();
+      const syncHeadless = createMockHeadless();
+      const asyncResult = applySessionRestore(asyncHeadless as never, "term-async", payload!);
+      const syncResult = restoreSessionFromFile(syncHeadless as never, "term-sync");
+
+      expect(asyncResult.restored).toBe(true);
+      expect(syncResult.restored).toBe(true);
+      expect(asyncHeadless.write).toHaveBeenCalledWith("previous screen");
+      expect(asyncHeadless.write.mock.calls.map(([data]) => data)).toEqual(
+        syncHeadless.write.mock.calls.map(([data]) => data)
+      );
+      expect(asyncHeadless.resize.mock.calls).toEqual(syncHeadless.resize.mock.calls);
+    });
+
+    it("reads nothing for a missing or unsupported session, leaving its marker", async () => {
+      expect(await readSessionRestore("term-missing")).toBeNull();
+
+      await seedSession("term-future", "DAINTREE_SESSION_v9\npayload", true);
+      expect(await readSessionRestore("term-future")).toBeNull();
+      expect(fs.existsSync(getHibernatedMarkerPath("term-future")!)).toBe(true);
+    });
+
+    it("reads nothing when the file can't be read, leaving its marker", async () => {
+      await seedSession("term-locked", "DAINTREE_SESSION_v2\n80x24\nscreen", true);
+      sessionReads.fault = { path: getSessionPath("term-locked")!, code: "EACCES" };
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      expect(await readSessionRestore("term-locked")).toBeNull();
+      expect(fs.existsSync(getHibernatedMarkerPath("term-locked")!)).toBe(true);
+      warn.mockRestore();
+    });
+
+    it("skips a session file past the size cap without reading it", async () => {
+      await seedSession("term-small", "DAINTREE_SESSION_v2\n80x24\nscreen", false);
+      await seedSession("term-huge", "x".repeat(SESSION_SNAPSHOT_MAX_BYTES + 64), false);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      sessionReads.paths.length = 0;
+
+      expect(await readSessionRestore("term-small")).not.toBeNull();
+      expect(await readSessionRestore("term-huge")).toBeNull();
+      expect(sessionReads.paths).toEqual([getSessionPath("term-small")]);
+      warn.mockRestore();
+    });
+
+    it("still restores the screen when its marker can't be consumed", async () => {
+      await seedSession("term-stuck", "DAINTREE_SESSION_v2\n80x24\nscreen", false);
+      await seedSession("term-stuck-sync", "DAINTREE_SESSION_v2\n80x24\nscreen", false);
+      // A directory where the marker should be: unlinking it fails, and not with ENOENT.
+      fs.mkdirSync(path.join(getHibernatedMarkerPath("term-stuck")!, "pin"), { recursive: true });
+      fs.mkdirSync(path.join(getHibernatedMarkerPath("term-stuck-sync")!, "pin"), {
+        recursive: true,
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const payload = await readSessionRestore("term-stuck");
+      const headless = createMockHeadless();
+      const sync = restoreSessionFromFile(headless as never, "term-stuck-sync");
+
+      expect(payload).toMatchObject({ content: "screen", wasHibernated: false });
+      expect(sync.restored).toBe(true);
+      expect(headless.write).toHaveBeenCalledWith("screen");
+      warn.mockRestore();
+    });
+  });
+
+  describe("background writes at shutdown", () => {
+    const screen = { data: "screen", cols: 80, rows: 24 };
+
+    beforeEach(() => {
+      shutdownFlush.files.length = 0;
+      shutdownFlush.dirs.length = 0;
+    });
+
+    it("flushes a file whose newest write skipped its fsyncs", async () => {
+      await persistSessionSnapshotAsync("term-bg", screen, undefined, { durable: false });
+
+      flushPendingSessionWritesSync();
+
+      expect(shutdownFlush.files).toEqual([getSessionPath("term-bg")]);
+      expect(shutdownFlush.dirs.map((covered) => path.dirname(covered))).toEqual([
+        path.join(userDataDir, "terminal-sessions"),
+      ]);
+    });
+
+    it("flushes each file once, and nothing on a second shutdown", async () => {
+      await persistSessionSnapshotAsync("term-a", screen, undefined, { durable: false });
+      await persistSessionSnapshotAsync("term-a", screen, undefined, { durable: false });
+      await persistSessionSnapshotAsync("term-b", screen, undefined, { durable: false });
+
+      flushPendingSessionWritesSync();
+      flushPendingSessionWritesSync();
+
+      expect(shutdownFlush.files.sort()).toEqual(
+        [getSessionPath("term-a"), getSessionPath("term-b")].sort()
+      );
+      expect(shutdownFlush.dirs).toHaveLength(1);
+    });
+
+    // Windows has no directory sync to hold the durable write in.
+    posixIt("flushes a background write that overtakes a durable one's sync", async () => {
+      const sessionPath = getSessionPath("term-overtaken")!;
+      let release!: () => void;
+      let reached!: () => void;
+      const durableRenamed = new Promise<void>((resolve) => (reached = resolve));
+      sessionReads.dirSyncHold = {
+        dir: path.dirname(sessionPath),
+        until: new Promise<void>((resolve) => (release = resolve)),
+        reached,
+      };
+
+      const durable = persistSessionSnapshotAsync("term-overtaken", {
+        data: "older",
+        cols: 80,
+        rows: 24,
+      });
+      await durableRenamed;
+      await persistSessionSnapshotAsync(
+        "term-overtaken",
+        { data: "newer", cols: 80, rows: 24 },
+        undefined,
+        { durable: false }
+      );
+      release();
+      await durable;
+
+      flushPendingSessionWritesSync();
+
+      expect(fs.readFileSync(sessionPath, "utf8")).toBe("DAINTREE_SESSION_v2\n80x24\nnewer");
+      expect(shutdownFlush.files).toEqual([sessionPath]);
+    });
+
+    it("leaves alone a file a durable write has since replaced", async () => {
+      await persistSessionSnapshotAsync("term-async-durable", screen, undefined, {
+        durable: false,
+      });
+      await persistSessionSnapshotAsync("term-async-durable", screen);
+      await persistSessionSnapshotAsync("term-sync-durable", screen, undefined, { durable: false });
+      persistSessionSnapshotSync("term-sync-durable", screen);
+
+      flushPendingSessionWritesSync();
+
+      expect(shutdownFlush.files).toEqual([]);
+      expect(shutdownFlush.dirs).toEqual([]);
+    });
+
+    it("forgets a deleted session's file", async () => {
+      await persistSessionSnapshotAsync("term-gone", screen, undefined, { durable: false });
+      await deleteSessionFile("term-gone");
+
+      flushPendingSessionWritesSync();
+
+      expect(shutdownFlush.files).toEqual([]);
+    });
+
+    it("forgets every file when persistence is suppressed at shutdown", async () => {
+      await persistSessionSnapshotAsync("term-suppressed", screen, undefined, { durable: false });
+      setSessionPersistSuppressed(true);
+      try {
+        flushPendingSessionWritesSync();
+      } finally {
+        setSessionPersistSuppressed(false);
+      }
+      flushPendingSessionWritesSync();
+
+      expect(shutdownFlush.files).toEqual([]);
     });
   });
 });

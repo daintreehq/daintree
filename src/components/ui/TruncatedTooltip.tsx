@@ -54,7 +54,9 @@ export function TruncatedTooltip({
   open,
   onOpenChange,
 }: TruncatedTooltipProps) {
-  const ownDetection = useTruncationDetection();
+  const ownDetection = useTruncationDetection(
+    typeof content === "string" || typeof content === "number" ? content : undefined
+  );
   const isTruncated = isTruncatedProp ?? ownDetection.isTruncated;
   const showTooltip = isTruncated && !disabled;
 
@@ -62,7 +64,9 @@ export function TruncatedTooltip({
   const isFocusable = FOCUSABLE_TAGS.has(childType.toUpperCase());
 
   const mergedRef = mergeRefs(
-    isTruncatedProp ? undefined : ownDetection.ref,
+    // A caller that answers for itself, either way, measures elsewhere: this
+    // would be one more observation per row for a result nobody reads.
+    isTruncatedProp !== undefined ? undefined : ownDetection.ref,
     // React 19 carries a ref as a prop; reading `element.ref` is deprecated
     // and warns in development.
     (children.props as { ref?: React.Ref<unknown> }).ref
@@ -77,13 +81,19 @@ export function TruncatedTooltip({
   }
 
   return (
+    // The Radix root and trigger stay mounted even while the text fits: a
+    // conditional wrapper would replace the child's DOM node every time
+    // truncation flips, dropping focus and orphaning anything that measured
+    // the old node. Only the content (portal, popper, presence) is lazy.
     // The tooltip IS the content here (the untruncated text), so it stays as
     // long as the user is reading it — no auto-dismiss.
     <Tooltip open={showTooltip ? open : false} onOpenChange={onOpenChange} autoDismiss={false}>
       <TooltipTrigger asChild>{React.cloneElement(children, extraProps)}</TooltipTrigger>
-      <TooltipContent side={side} align={align} className={contentClassName}>
-        {content}
-      </TooltipContent>
+      {showTooltip && (
+        <TooltipContent side={side} align={align} className={contentClassName}>
+          {content}
+        </TooltipContent>
+      )}
     </Tooltip>
   );
 }

@@ -4,6 +4,7 @@ import {
   checkRowLabel,
   composePrChecksAgentText,
   getCheckOutcomeVisual,
+  isFailingOrRunningCheck,
   preparePrChecks,
   safeDetailsUrl,
   sanitizeCheckName,
@@ -395,6 +396,26 @@ describe("composePrChecksAgentText", () => {
     expect(text).toContain("/tmp/wt");
   });
 
+  it("names a GitLab merge request as one, and leaves out GitHub's log command", () => {
+    const text = composePrChecksAgentText({
+      prNumber: 42,
+      prUrl: "https://gitlab.com/o/r/-/merge_requests/42",
+      prTerm: "merge-request",
+      worktreePath: "/tmp/wt",
+      rows: preparePrChecks([check({ name: "rspec", conclusion: "failure" })]),
+    })!;
+
+    // GitLab writes it `!42`, but `!` is a shell history introducer and the
+    // hand-off strips it; the number still names the merge request.
+    expect(text).toContain("on merge request 42.");
+    expect(text).toContain('Merge request: "https://gitlab.com/o/r/-/merge_requests/42"');
+    expect(text).not.toMatch(/pull request|\bPR\b|gh run view|!/);
+    expect(text).toContain(
+      "fetch them yourself from each check's detailsUrl, and check the results still match the MR's current head."
+    );
+    expect(parsePayload(text).checks.map((entry) => entry.name)).toEqual(["rspec"]);
+  });
+
   it("carries each failing check's workflow and app, whether or not the row shows them", () => {
     const text = compose([
       check({ name: "build", conclusion: "failure", workflow: "CI", app: "GitHub Actions" }),
@@ -627,5 +648,29 @@ describe("summarizePrChecks", () => {
     const summary = summarizePrChecks(rows);
     expect(counted(summary.settledLabel)).toBe(summary.settledCount);
     expect(summary.settledCount).toBe(rows.filter((row) => row.group === "settled").length);
+  });
+});
+
+describe("isFailingOrRunningCheck", () => {
+  it("takes running checks and the ones that failed or timed out, and nothing else", () => {
+    const cases: Array<[ForgeCheckRun, boolean]> = [
+      [check({ status: "in_progress", conclusion: undefined }), true],
+      [check({ conclusion: "failure" }), true],
+      [check({ conclusion: "timed_out" }), true],
+      [check({ status: "queued", conclusion: undefined }), false],
+      [check({ conclusion: "cancelled" }), false],
+      [check({ conclusion: "action_required" }), false],
+      [check({ conclusion: "success" }), false],
+      [check({ conclusion: "skipped" }), false],
+      [check({ conclusion: "neutral" }), false],
+      [check({ conclusion: undefined }), false],
+    ];
+    const rows = preparePrChecks(cases.map(([run]) => run));
+    // Rows come back reordered; each keeps its response index as its key.
+    const picked = rows
+      .filter((row) => isFailingOrRunningCheck(row))
+      .map((row) => Number(row.key))
+      .sort((a, b) => a - b);
+    expect(picked).toEqual(cases.flatMap(([, expected], index) => (expected ? [index] : [])));
   });
 });

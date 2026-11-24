@@ -1,5 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getLoadedVoiceRecordingService,
+  setInitializedVoiceRecordingService,
+} from "@/services/voiceRecordingRuntime";
 import { fireEvent, render as rtlRender, screen, type RenderOptions } from "@testing-library/react";
 import { VoiceInputButton } from "../VoiceInputButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -28,6 +32,12 @@ function createVoiceInputApi() {
     validateApiKey: vi.fn(),
   };
 }
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
+});
 
 describe("VoiceInputButton", () => {
   beforeEach(() => {
@@ -93,9 +103,11 @@ describe("VoiceInputButton", () => {
     );
     const button = getByRole("button");
     expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
-    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.getAttribute("aria-pressed")).toBeNull();
     fireEvent.focus(button);
-    expect((await screen.findByRole("tooltip")).textContent).toBe("Stop recording");
+    const tip = (await screen.findByRole("tooltip")).textContent;
+    expect(tip).toContain("Stop recording");
+    expect(tip).toContain("Ctrl");
   });
 
   it("offers setup again once the session that outlived dictation has closed", async () => {
@@ -112,7 +124,7 @@ describe("VoiceInputButton", () => {
     expect(button.getAttribute("aria-pressed")).toBeNull();
     // Its last words are still on their way, but it offers no restart.
     fireEvent.focus(button);
-    expect((await screen.findByRole("tooltip")).textContent).toBe("Finishing transcription…");
+    expect((await screen.findByRole("tooltip")).textContent).toContain("Finishing transcription…");
   });
 
   it("renders a resume affordance when this panel is paused", async () => {
@@ -126,9 +138,11 @@ describe("VoiceInputButton", () => {
     );
     const button = getByRole("button");
     expect(button.getAttribute("aria-label")).toBe("Resume voice recording");
-    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.getAttribute("aria-pressed")).toBeNull();
     fireEvent.focus(button);
-    expect((await screen.findByRole("tooltip")).textContent).toContain("Paused");
+    const tip = (await screen.findByRole("tooltip")).textContent;
+    expect(tip).toContain("Paused");
+    expect(tip).toContain("Space");
   });
 
   it("clicking while paused calls togglePause instead of toggle", () => {
@@ -226,7 +240,7 @@ describe("VoiceInputButton", () => {
     const button = screen.getByRole("button");
 
     expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
-    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.getAttribute("aria-pressed")).toBeNull();
     fireEvent.focus(button);
     expect((await screen.findByRole("tooltip")).textContent).toContain("Click to stop");
   });
@@ -259,7 +273,7 @@ describe("VoiceInputButton", () => {
       const button = getByRole("button");
       // Either way the session is open and a press stops it.
       expect(button.getAttribute("aria-label")).toBe("Stop voice recording");
-      expect(button.getAttribute("aria-pressed")).toBe("true");
+      expect(button.getAttribute("aria-pressed")).toBeNull();
       fireEvent.focus(button);
       expect((await screen.findByRole("tooltip")).textContent).toContain(tip);
     }
@@ -300,5 +314,64 @@ describe("VoiceInputButton", () => {
     const { getByRole } = render(<VoiceInputButton panelId="panel-1" />);
     fireEvent.focus(getByRole("button"));
     expect((await screen.findByRole("tooltip")).textContent).toContain("stops in 10s");
+  });
+});
+
+// A click before this view has loaded the voice service waits for it (#17031).
+describe("VoiceInputButton — a click that loads the voice service", () => {
+  beforeEach(() => {
+    setInitializedVoiceRecordingService(null);
+    vi.spyOn(voiceRecordingService, "initialize").mockImplementation(() => {});
+    useVoiceRecordingStore.setState({
+      isConfigured: false,
+      status: "idle",
+      lastError: null,
+      activeTarget: null,
+      pendingTarget: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("starts dictation once the service has loaded", async () => {
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    const { getByRole } = render(<VoiceInputButton panelId="panel-1" projectId="project-1" />);
+
+    fireEvent.click(getByRole("button"));
+    expect(toggleSpy).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => expect(toggleSpy).toHaveBeenCalledTimes(1));
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "panel-1" }));
+  });
+
+  it("starts nothing in a panel the button no longer serves once the service loads", async () => {
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    const { getByRole, rerender } = render(
+      <VoiceInputButton panelId="panel-1" projectId="project-1" />
+    );
+
+    fireEvent.click(getByRole("button"));
+    // Its tab closed: the pane shows the next tab's panel through the same button.
+    rerender(<VoiceInputButton panelId="panel-2" projectId="project-1" />);
+
+    await vi.waitFor(() => expect(getLoadedVoiceRecordingService()).toBe(voiceRecordingService));
+    await Promise.resolve();
+    expect(toggleSpy).not.toHaveBeenCalled();
+  });
+
+  it("starts nothing when the button has gone by the time the service loads", async () => {
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    const { getByRole, unmount } = render(
+      <VoiceInputButton panelId="panel-1" projectId="project-1" />
+    );
+
+    fireEvent.click(getByRole("button"));
+    unmount();
+
+    await vi.waitFor(() => expect(getLoadedVoiceRecordingService()).toBe(voiceRecordingService));
+    await Promise.resolve();
+    expect(toggleSpy).not.toHaveBeenCalled();
   });
 });

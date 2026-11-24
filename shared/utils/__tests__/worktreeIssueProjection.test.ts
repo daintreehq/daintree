@@ -3,6 +3,7 @@ import type { PluginWorktreeLinked } from "../../types/plugin.js";
 import { BUILTIN_GITHUB_PROVIDER_ID, BUILTIN_GITLAB_PROVIDER_ID } from "../forgeProviderIds.js";
 import {
   issueNumberBelongsToLinkedPr,
+  worktreeIssueIsGitHub,
   worktreeIssueLinkTarget,
 } from "../worktreeIssueProjection.js";
 
@@ -108,5 +109,22 @@ describe("worktreeIssueLinkTarget", () => {
     expect(worktreeIssueLinkTarget({ issueProviderId: "acme.linear.linear" })).toEqual({
       issueProviderId: "acme.linear.linear",
     });
+  });
+});
+
+describe("worktreeIssueIsGitHub", () => {
+  it("treats a link without provenance as GitHub's", () => {
+    expect(worktreeIssueIsGitHub({})).toBe(true);
+  });
+
+  it("accepts the canonical and legacy GitHub provider ids", () => {
+    expect(worktreeIssueIsGitHub({ issueProviderId: BUILTIN_GITHUB_PROVIDER_ID })).toBe(true);
+    expect(worktreeIssueIsGitHub({ issueProviderId: "github" })).toBe(true);
+    expect(worktreeIssueIsGitHub({ issueProviderId: "builtin.github" })).toBe(true);
+  });
+
+  it("rejects links owned by another provider", () => {
+    expect(worktreeIssueIsGitHub({ issueProviderId: "daintree.linear.linear" })).toBe(false);
+    expect(worktreeIssueIsGitHub({ issueProviderId: BUILTIN_GITLAB_PROVIDER_ID })).toBe(false);
   });
 });

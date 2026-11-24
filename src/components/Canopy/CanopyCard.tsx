@@ -83,6 +83,7 @@ import {
   useVoiceRecordingStore,
   type VoiceRecordingTarget,
 } from "@/store/voiceRecordingStore";
+import { REVIEW_ATTENTION_LABEL } from "@/components/Decisions/decisionsAttentionModel";
 import { VoiceMicNoticeBanner } from "@/components/Terminal/VoiceMicNoticeBanner";
 import {
   InlineStatusBanner,
@@ -350,6 +351,8 @@ export function CanopyCard({
   const [focused, setFocused] = useState(false);
   const { row } = item;
   const run = row.run;
+  // The All hosts list names a workspace by its host too.
+  const runProjectId = parseAllHostsKey(run.workspaceId)?.id ?? run.workspaceId;
   const canReply = canReplyTo(item, stream.secretPrompt);
   const answerChoices = answerOptions(item);
   const canTrash = canTrashItem(item);
@@ -488,6 +491,10 @@ export function CanopyCard({
     const timer = setTimeout(() => setAnswerArmed(null), TRASH_CONFIRM_MS);
     return () => clearTimeout(timer);
   }, [answerArmed]);
+
+  // Park's dialog opens once the menu has handed the keyboard back to its
+  // button: opened any sooner, the menu's close would take it from the dialog.
+  const parkAfterCloseRef = useRef(false);
 
   const pressTrash = () => {
     if (!trashArmed) {
@@ -797,8 +804,11 @@ export function CanopyCard({
     if (watchId === null && mountedRef.current) return false;
     countUse();
     const images = imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined;
+    // Decided before the `try`: React Compiler can't lower a logical inside a
+    // try block and would give up on the whole card.
+    const throughStream = mountedRef.current && watchId !== null;
     try {
-      if (mountedRef.current && watchId !== null) {
+      if (throughStream) {
         await terminalApi.terminalSubmit(watchId, text, images);
       } else {
         await terminalApi.submitReply(item.runId, { spawnedAt: run.spawnedAt }, text, images);
@@ -915,7 +925,11 @@ export function CanopyCard({
             {archived ? <ArchiveRestore aria-hidden="true" /> : <Archive aria-hidden="true" />}
           </HeaderControl>
           {aside !== undefined && canSetAside && (
-            <DropdownMenu>
+            <DropdownMenu
+              onOpenChange={(open) => {
+                if (open) parkAfterCloseRef.current = false;
+              }}
+            >
               <Tooltip>
                 <TooltipTrigger asChild>
                   <DropdownMenuTrigger asChild>
@@ -931,8 +945,19 @@ export function CanopyCard({
                 </TooltipTrigger>
                 <TooltipContent side="bottom">Park or snooze</TooltipContent>
               </Tooltip>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => aside.onPark(item)}>
+              <DropdownMenuContent
+                align="end"
+                onCloseAutoFocus={() => {
+                  if (!parkAfterCloseRef.current) return;
+                  parkAfterCloseRef.current = false;
+                  requestAnimationFrame(() => aside.onPark(item));
+                }}
+              >
+                <DropdownMenuItem
+                  onSelect={() => {
+                    parkAfterCloseRef.current = true;
+                  }}
+                >
                   <CirclePause className="size-3.5" aria-hidden="true" />
                   Park…
                 </DropdownMenuItem>
@@ -1021,9 +1046,9 @@ export function CanopyCard({
               ? {
                   action: {
                     id: "review-answers",
-                    label: "Review answers",
+                    label: REVIEW_ATTENTION_LABEL,
                     variant: "primary" as const,
-                    ariaLabel: `Review answers for ${row.title}`,
+                    ariaLabel: `${REVIEW_ATTENTION_LABEL} for ${row.title}`,
                     onClick: () => answers.onReviewAnswers(item),
                   },
                 }
@@ -1153,8 +1178,7 @@ export function CanopyCard({
           spawnedAt={run.spawnedAt}
           api={terminalApi}
           cwd={run.cwd}
-          // The All hosts list names a workspace by its host too.
-          projectId={parseAllHostsKey(run.workspaceId)?.id ?? run.workspaceId}
+          projectId={runProjectId}
           reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item)}
@@ -1246,6 +1270,8 @@ export function CanopyCard({
                 isolated
                 otherHostId={otherHostId}
                 voiceTarget={voiceTarget}
+                // Its draft stays its own; the prompts it sends are the run's project's.
+                historyProjectId={runProjectId}
                 terminalId={item.runId}
                 cwd={otherHost ? "" : (run.cwd ?? "")}
                 agentId={agentId}

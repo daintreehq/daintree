@@ -26,6 +26,7 @@ import { isPathInside } from "@shared/utils/path";
 import { buildDaintreeFileUrl } from "@/components/FileViewer/filePreviewKinds";
 import { MarkdownImageTrackingContext, TrackedMarkdownImage } from "./markdownImageRefresh";
 import { MermaidDiagram } from "./mermaid/MermaidDiagram";
+import { MarkdownBlockquote } from "./markdownAlerts";
 import { canonicalLang } from "./fenceLanguage";
 import { hastText } from "./hastText";
 import { MarkdownTable, MarkdownTableCell, MarkdownTableHeaderCell } from "./MarkdownTable";
@@ -168,6 +169,13 @@ export interface MarkdownRenderPolicyOptions {
   filePath: string;
   /** Containment root for daintree-file:// image loads. */
   rootPath: string;
+  /**
+   * Follows a same-document link (`#risks`). Only a host that renders a whole
+   * document in one pass, so that its headings carry ids, passes one; without
+   * it such a link does nothing. Kept stable: a new function re-parses the
+   * document.
+   */
+  onFragmentLink?: (href: string) => void;
 }
 
 /**
@@ -225,6 +233,7 @@ export interface MarkdownRenderPolicy {
 export function useMarkdownRenderPolicy({
   filePath,
   rootPath,
+  onFragmentLink,
 }: MarkdownRenderPolicyOptions): MarkdownRenderPolicy {
   const urlTransform = useMemo<MarkdownRenderPolicy["urlTransform"]>(() => {
     return (url: string, key: string): string | null | undefined => {
@@ -249,12 +258,16 @@ export function useMarkdownRenderPolicy({
   }, [filePath, rootPath]);
 
   const handleLinkActivate = useMemo(() => {
-    return (href: string | undefined) => activateMarkdownLink(href, { filePath, rootPath });
-  }, [filePath, rootPath]);
+    return (href: string | undefined) => {
+      if (onFragmentLink && href?.startsWith("#")) onFragmentLink(href);
+      else activateMarkdownLink(href, { filePath, rootPath });
+    };
+  }, [filePath, rootPath, onFragmentLink]);
 
   const components = useMemo<Components>(
     () => ({
       img: MarkdownImage,
+      blockquote: MarkdownBlockquote,
       table: MarkdownTable,
       th: MarkdownTableHeaderCell,
       td: MarkdownTableCell,

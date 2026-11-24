@@ -258,6 +258,22 @@ describe("WorkspaceService refresh resilience (escape hatch)", () => {
     expect(r1).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps a not-found issue's retry delay through a focus pass but not a manual refresh", async () => {
+    const m1 = registerMonitor("/test/wt-1");
+    vi.spyOn(service as any, "discoverAndSyncWorktrees").mockResolvedValue(undefined);
+    vi.spyOn(m1, "refresh").mockResolvedValue(undefined);
+
+    await service.refresh("focus-1", undefined, "focus");
+    expect(mockPullRequestService.refresh).toHaveBeenLastCalledWith({
+      preserveIssueBackoff: true,
+    });
+
+    await service.refresh("manual-1");
+    expect(mockPullRequestService.refresh).toHaveBeenLastCalledWith({
+      preserveIssueBackoff: false,
+    });
+  });
+
   const gitStatusCalls = () =>
     vi
       .mocked(getWorktreeChangesWithStats)

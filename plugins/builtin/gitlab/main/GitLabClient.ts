@@ -38,6 +38,12 @@ export interface GitLabRestOptions {
   query?: Record<string, QueryValue>;
   body?: unknown;
   timeoutMs?: number;
+  /**
+   * Send this read on its own instead of joining an identical one already in
+   * flight — for an explicit "fetch fresh" that must not be answered by a
+   * request that started before it.
+   */
+  fresh?: boolean;
 }
 
 export interface GitLabRestResult<T> {
@@ -96,6 +102,27 @@ export function resetLastRateLimitInfo(): void {
 export function resetRateLimitSnapshots(): void {
   rateLimitGeneration += 1;
   rateLimitByHost.clear();
+}
+
+/**
+ * Pending GET reads, keyed by everything that shapes their answer, so callers
+ * asking the same question at the same moment (the toolbar's stats and an open
+ * list, a PR read and its CI read) share one request.
+ */
+const readFlights = new Map<string, Promise<GitLabRestResult<unknown>>>();
+
+/**
+ * Bumped by {@link resetReadFlights}. A read that started before the bump stays
+ * with the callers that already joined it but is never registered or joined
+ * afterwards, so nothing fetched under a previous credential or instance can
+ * answer a later caller.
+ */
+let readFlightGeneration = 0;
+
+/** Detach every pending read from later callers. Called on invalidation. */
+export function resetReadFlights(): void {
+  readFlightGeneration += 1;
+  readFlights.clear();
 }
 
 /**
@@ -161,6 +188,25 @@ export async function resolveRequestAuth(host: string): Promise<RequestAuth> {
   return { base: instanceUrl, token, version: getTokenVersion() };
 }
 
+/**
+ * Same request, same key: the destination, the credential decision (never the
+ * credential itself), its version, and the query in a stable order.
+ */
+function readFlightKey(options: GitLabRestOptions, auth: RequestAuth): string {
+  const query = Object.entries(options.query ?? {})
+    .filter(([, value]) => value !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return JSON.stringify([
+    options.host.toLowerCase(),
+    auth.base,
+    auth.token ? "token" : "anonymous",
+    auth.version,
+    options.path,
+    query,
+    options.timeoutMs ?? null,
+  ]);
+}
+
 function buildQueryString(query: Record<string, QueryValue> | undefined): string {
   if (!query) return "";
   const params = new URLSearchParams();
@@ -208,11 +254,43 @@ async function parseErrorMessage(response: Response): Promise<string> {
  * target host matches the configured instance (see {@link tokenAllowedForHost});
  * public projects on other GitLab hosts still work unauthenticated. Captures
  * rate-limit headers per host and folds authoritative 401s into token health
- * (guarded by the token version captured at send time).
+ * (guarded by the token version captured at send time). Identical GET reads in
+ * flight at the same time share one request unless `fresh` is set.
  */
 export async function gitlabRest<T>(options: GitLabRestOptions): Promise<GitLabRestResult<T>> {
   const rateLimitEpoch = rateLimitGeneration;
-  const { base, token, version: versionAtRequest } = await resolveRequestAuth(options.host);
+  const flightEpoch = readFlightGeneration;
+  const auth = await resolveRequestAuth(options.host);
+  const method = options.method ?? "GET";
+  if (
+    method !== "GET" ||
+    options.body !== undefined ||
+    // Invalidated while the auth was resolving: this read belongs to the
+    // previous generation and must not become one later callers can join.
+    flightEpoch !== readFlightGeneration
+  ) {
+    return sendRest<T>(options, auth, rateLimitEpoch);
+  }
+  const key = readFlightKey(options, auth);
+  if (!options.fresh) {
+    const pending = readFlights.get(key);
+    if (pending) return pending as Promise<GitLabRestResult<T>>;
+  }
+  const flight: Promise<GitLabRestResult<T>> = sendRest<T>(options, auth, rateLimitEpoch).finally(
+    () => {
+      if (readFlights.get(key) === flight) readFlights.delete(key);
+    }
+  );
+  readFlights.set(key, flight);
+  return flight;
+}
+
+async function sendRest<T>(
+  options: GitLabRestOptions,
+  auth: RequestAuth,
+  rateLimitEpoch: number
+): Promise<GitLabRestResult<T>> {
+  const { base, token, version: versionAtRequest } = auth;
   const url = `${base}/api/v4${options.path}${buildQueryString(options.query)}`;
 
   const headers: Record<string, string> = { Accept: "application/json" };

@@ -4,13 +4,18 @@ import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { resolveScopeKind, stripCcrPrefix } from "./scopeUtils";
 import {
+  getPermissionAutoArgs,
   isAgentTerminalBypassSupported,
+  permissionArgsForLevel,
   resolveDangerousMode,
+  resolveEffectivePermissionLevel,
   combineDangerousModes,
   type AgentSettingsEntry,
   type DangerousMode,
+  type PermissionLevel,
 } from "@shared/types";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { sanitizePreset } from "@shared/utils/agentPresets";
 
 interface UseAgentScopeProps {
   agentId: string;
@@ -72,30 +77,28 @@ export function useAgentScope({
 
   const customFlagsOverride = selectedPreset?.customFlags;
 
-  // Tri-state bypass (#10432 follow-up). The control edits the *active scope's
-  // own* mode; "Default" (inherit) defers to its parent (preset → agent →
-  // global) and an explicit "off" vetoes a broader "on".
+  // Permission mode (#10432 follow-up, #17435). The control edits the *active
+  // scope's own* mode; "Inherit" defers to its parent (preset → agent →
+  // global), and an explicit "off" or "auto" beats a broader "on".
   const agentMode = resolveDangerousMode(activeEntry);
   const presetMode = selectedPreset ? resolveDangerousMode(selectedPreset) : undefined;
   const dangerousMode: DangerousMode =
     scopeKind === "custom" ? (presetMode ?? "inherit") : agentMode;
 
-  // True when the global skip-permissions switch (#10432) turns bypass on for
-  // this agent — the baseline an "inherit" resolves to. Only agents with a
-  // terminal bypass flag follow it (#16414).
+  // Only agents with a terminal bypass flag follow the global switch (#16414).
   const globalSkipPermissions = useAgentSettingsStore(
     (s) => s.settings?.globalSkipPermissions ?? false
   );
   const globalBypassReachesAgent = isAgentTerminalBypassSupported(agentId);
-  const globalBypassActive = globalSkipPermissions && globalBypassReachesAgent;
+  const autoSupported = getPermissionAutoArgs(agentId).length > 0;
 
-  const resolveMode = (mode: DangerousMode): boolean =>
-    mode === "on" ? true : mode === "off" ? false : globalBypassActive;
+  const levelOf = (mode: DangerousMode): PermissionLevel =>
+    resolveEffectivePermissionLevel({ dangerousMode: mode }, agentId, globalSkipPermissions);
 
-  // What the "Default" (inherit) segment resolves to and where that comes from
-  // — drives the explanatory hint under the control.
-  const agentResolvedDangerous = resolveMode(agentMode);
-  const inheritResolvesToOn = scopeKind === "custom" ? agentResolvedDangerous : globalBypassActive;
+  // What the "Inherit" segment resolves to and where that comes from — drives
+  // the explanatory hint under the control.
+  const agentLevel = levelOf(agentMode);
+  const inheritLevel = scopeKind === "custom" ? agentLevel : levelOf("inherit");
   const inheritHint =
     scopeKind === "custom"
       ? "Inherited from agent default"
@@ -103,13 +106,16 @@ export function useAgentScope({
         ? "Inherited from global setting"
         : "The global setting doesn't apply to this agent";
 
-  // Final resolved bypass for the active scope (incl. the global baseline) —
-  // drives the "<flag> added to command" chip.
-  // Any selected preset layers onto the agent, read-only ones included: they
-  // launch through the same resolution, so they report the same way.
-  const effectiveSkipPerms = selectedPreset
-    ? resolveMode(combineDangerousModes(agentMode, presetMode))
-    : agentResolvedDangerous;
+  // Final resolved level for the active scope (incl. the global baseline) —
+  // drives the "<flags> added to command" chip. Any selected preset layers onto
+  // the agent, read-only ones included: they launch through the same
+  // resolution, so they report the same way.
+  const effectiveLevel = selectedPreset
+    ? levelOf(combineDangerousModes(agentMode, presetMode))
+    : agentLevel;
+  const effectivePermissionArgs = permissionArgsForLevel(effectiveLevel, activeEntry, agentId).join(
+    " "
+  );
 
   const isEditableScope = scopeKind === "default" || scopeKind === "custom";
   const customArgsValue =
@@ -158,11 +164,24 @@ export function useAgentScope({
 
   const handleDuplicatePreset = (preset: AgentPreset) => {
     const id = `user-${crypto.randomUUID()}`;
+    // Continuing at a limit's reset is the user's to turn on (#17912): a copy
+    // of a repository's or router's preset never brings it along unseen.
+    // A stored entry the sanitiser drops answers for nothing: the id is then
+    // whichever other source's preset resolves under it.
+    const ownSource = (activeEntry.customPresets ?? []).some(
+      (own) => own.id === preset.id && sanitizePreset(own) !== null
+    );
     const updated = [
       ...(activeEntry.customPresets ?? []),
       // Drop the display title on copy so the duplicate doesn't share an
       // identical custom label with its source — it falls back to the new name.
-      { ...preset, id, name: `${preset.name} (copy)`, displayTitle: undefined },
+      {
+        ...preset,
+        id,
+        name: `${preset.name} (copy)`,
+        displayTitle: undefined,
+        ...(!ownSource && { continueAtLimitReset: undefined }),
+      },
     ];
     void (async () => {
       try {
@@ -315,9 +334,10 @@ export function useAgentScope({
     selectedIsCcr,
     isEditableScope,
     dangerousMode,
-    effectiveSkipPerms,
-    globalBypassActive,
-    inheritResolvesToOn,
+    effectiveLevel,
+    effectivePermissionArgs,
+    autoSupported,
+    inheritLevel,
     inheritHint,
     customArgsValue,
     customArgsPlaceholder,

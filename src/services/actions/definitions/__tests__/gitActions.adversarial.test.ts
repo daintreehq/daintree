@@ -45,12 +45,15 @@ const PUSH_REVIEW = {
   destination: { remote: "origin", branch: "feature/x" },
 };
 
+/** What an approving pull-rebase confirm showed; the pull must carry exactly this (#17188). */
+const PULL_REBASE_REVIEW = { branch: "feature/x", headOid: "f".repeat(40) };
+
 /** Same deferred-Promise gate, for `git.pullRebase` (#8242). */
 async function resolvePullRebaseConfirm(ok: boolean): Promise<void> {
   await vi.waitFor(() => {
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).not.toBeNull();
   });
-  useGitPullRebaseConfirmStore.getState().resolveConfirmation(ok);
+  useGitPullRebaseConfirmStore.getState().resolveConfirmation(ok ? PULL_REBASE_REVIEW : null);
 }
 
 type GitStub = {
@@ -160,7 +163,7 @@ afterEach(() => {
     useGitPushConfirmStore.getState().resolveConfirmation(null);
   }
   if (useGitPullRebaseConfirmStore.getState().pendingConfirm) {
-    useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+    useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
   }
   const forcePending = useGitForcePushStore.getState().pendingConfirm;
   if (forcePending) {
@@ -537,7 +540,7 @@ describe("gitActions adversarial", () => {
     expect(git.pullRebase).not.toHaveBeenCalled();
     await resolvePullRebaseConfirm(true);
     await p;
-    expect(git.pullRebase).toHaveBeenCalledWith("/repo");
+    expect(git.pullRebase).toHaveBeenCalledWith("/repo", PULL_REBASE_REVIEW);
   });
 
   it("git.pullRebase does not reach IPC when the confirm gate is declined", async () => {
@@ -594,7 +597,7 @@ describe("gitActions adversarial", () => {
     const p = run("git.pullRebase", { cwd: "/repo" }, { dispatchSource: "user" });
     await resolvePullRebaseConfirm(true);
     await p;
-    expect(git.pullRebase).toHaveBeenCalledWith("/repo");
+    expect(git.pullRebase).toHaveBeenCalledWith("/repo", PULL_REBASE_REVIEW);
   });
 
   it("git.pullRebase still gates plugin dispatch on the confirm store", async () => {
@@ -629,7 +632,7 @@ describe("gitActions adversarial", () => {
     const p = run("git.pullRebase", undefined, { activeWorktreePath: "/repo" });
     await resolvePullRebaseConfirm(true);
     await p;
-    expect(git.pullRebase).toHaveBeenCalledWith("/repo");
+    expect(git.pullRebase).toHaveBeenCalledWith("/repo", PULL_REBASE_REVIEW);
   });
 
   it("git.commit rejects missing message (undefined) before touching git", async () => {

@@ -80,6 +80,8 @@ export const SETTING_CATALOG = {
           memoryLeakAutoRestartThresholdMb: host,
           screenReaderMode: device,
           cachedProjectViews: device,
+          // This machine's clipboard: a host can never turn it on for it.
+          osc52ClipboardEnabled: device,
           fontSize: device,
           fontFamily: device,
           colorSchemeId: device,
@@ -98,6 +100,7 @@ export const SETTING_CATALOG = {
       parkedRuns: host,
       snoozedRuns: host,
       idleBackgroundAutoClose: host,
+      hostIdle: host,
       pluginBackgroundUpdateCheck: host,
       // The terminal list moves with the host; the grid layout, zoom, sidebar and
       // panel sizes, and palette habits stay with the client. This is the
@@ -129,11 +132,16 @@ export const SETTING_CATALOG = {
       agentSettings: hostGlobalOrProject,
       // The toolbar is this screen's, so which agents it pins is too (#14702).
       agentToolbarPins: device,
+      // Whether this screen shows agent usage, and asks its hosts for it (#17981).
+      // A host's own switch decides whether that host reads it at all.
+      agentUsageTrackingEnabled: device,
       // Which events alert, when they escalate, quiet hours, and how they reach this
       // person are about whoever is at this screen, not the host doing the work. The
       // host still detects the events; a Shell's own choices decide which of them
       // alert it (#14701), and a host's windows use the host's.
       notificationSettings: device,
+      // Imported sound files stay in this device's app data, so their list does too.
+      customNotificationSounds: device,
       userAgentRegistry: host,
       agentUpdateSettings: host,
       // A path on the machine the agents run on, so it is that machine's.
@@ -155,7 +163,11 @@ export const SETTING_CATALOG = {
       voiceInput: device,
       mcpServer: host,
       helpAssistant: host,
+      // The agent each of this machine's global assistant sessions runs on (#18142).
+      globalAssistantPinnedAgents: host,
       pendingErrors: device,
+      // The removals happened on the machine whose worktrees they were.
+      mergedWorktreeRemovalReceipts: host,
       errorFingerprints: device,
       gpu: device,
       crashRecovery: device,
@@ -188,6 +200,7 @@ export const SETTING_CATALOG = {
       projectPluginVisibility: hostGlobalOrProject,
       pluginProjectInstances: hostPerProject,
       pluginLaunchedAgents: host,
+      assistantPaneCreations: host,
       projectSurfaceChoices: hostPerProject,
       projectFileEditorChoices: hostPerProject,
       projectLayoutSeeds: hostPerProject,
@@ -196,6 +209,9 @@ export const SETTING_CATALOG = {
       projectPluginSetupSkips: hostPerProject,
       projectPluginAccountBindings: hostPerProject,
       pluginNotificationSilences: hostGlobalOrProject,
+      // Catalogs are the person's own choice of whom to trust, so they stay on
+      // the machine they sit at; a host window's Browse carries them along.
+      pluginCatalogSources: device,
       hiddenSearchProviders: hostGlobalOrProject,
       pluginContextProvidersOff: hostGlobalOrProject,
       pluginWorktreeDeleteNoteMutes: hostGlobalOrProject,
@@ -209,6 +225,7 @@ export const SETTING_CATALOG = {
       // Dev servers run on the host, so a user Stop is recorded where the panel's server lives.
       devPreviewUserStopped: hostPerProject,
       remoteHosts: device,
+      cloudHosts: device,
       hostMode: device,
       // This machine's own listener and the devices paired to it.
       deviceAnswer: device,
@@ -235,6 +252,8 @@ export const SETTING_CATALOG = {
           askHumanAgents: device,
           terminalSnapshots: device,
           terminalSnapshotsConsentedAt: device,
+          holdPhonePushes: device,
+          agentStoppedPushes: device,
         },
       },
       // An enrolled Host's own record of its enrollment, kept on the Host itself.
@@ -277,6 +296,7 @@ export const SETTING_CATALOG = {
       "daintree-preferences": device,
       "daintree-toolbar-preferences": device,
       "portal-storage": device,
+      "daintree-global-links": device,
       "daintree-sidebar-view:*": devicePerHost,
       "daintree-worktree-filters*": deviceGlobalOrProject,
       "daintree-command-history": devicePerProject,
@@ -311,6 +331,7 @@ export const SETTING_CATALOG = {
       "daintree_cmd_history_*": devicePerProject,
       "daintree_quickrun_autorestart_*": devicePerProject,
       "daintree_quickrun_expanded_*": devicePerProject,
+      daintree_agent_usage_expanded: device,
       daintree_project_hosts_expanded: device,
       daintree_project_hosts_all_shown: device,
       daintree_project_hosts_handoff: device,

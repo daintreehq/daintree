@@ -1,11 +1,12 @@
 // Persistent worker thread that services deferrable SQLite work (WAL
-// checkpoints, quick_check scans, audit-ring snapshot writes) so better-sqlite3
-// never stalls the main-process event loop for them. Opens its OWN connection
-// to the same WAL database — safe alongside main's connection because WAL
-// permits concurrent readers plus a single writer, and both connections set a
-// busy_timeout so write contention blocks briefly instead of throwing
-// SQLITE_BUSY.
+// checkpoints, quick_check scans, periodic backups, audit-ring snapshot
+// writes) so better-sqlite3 never stalls the main-process event loop for them.
+// Opens its OWN connection to the same WAL database — safe alongside main's
+// connection because WAL permits concurrent readers plus a single writer, and
+// both connections set a busy_timeout so write contention blocks briefly
+// instead of throwing SQLITE_BUSY.
 import Database from "better-sqlite3";
+import fs from "node:fs";
 import { parentPort, workerData } from "node:worker_threads";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
@@ -21,10 +22,10 @@ import type {
   DbWorkerResponse,
 } from "./dbWorkerProtocol.js";
 
-const port = parentPort;
-if (!port) {
+if (!parentPort) {
   throw new Error("dbMaintenanceWorker must be spawned as a worker thread");
 }
+const port = parentPort;
 
 const { dbPath } = workerData as DbWorkerData;
 
@@ -93,6 +94,40 @@ function probePath(dbPath: string): DbProbeResult {
   }
 }
 
+// One step of every page: copied step by step, the backup restarts from the
+// first page whenever main's connection writes between steps. A single step
+// holds one WAL read snapshot, which never blocks main's writers.
+const ALL_PAGES_PER_STEP = 0x7fffffff;
+
+async function backupTo(destPath: string): Promise<DbProbeResult> {
+  try {
+    // Owner-only before the copy, since it is a verbatim copy of the whole
+    // database: "w" truncates what an earlier run left, and the fchmod covers
+    // a leftover whose mode the open keeps. Done here, not on main, so main
+    // never opens a candidate this thread may still be writing after a
+    // timed-out request. POSIX-only, as main's chmod after.
+    if (process.platform !== "win32") {
+      const fd = fs.openSync(destPath, "w", 0o600);
+      try {
+        fs.fchmodSync(fd, 0o600);
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+    await sqlite.backup(destPath, { progress: () => ALL_PAGES_PER_STEP });
+  } catch (error) {
+    // A partial copy (disk full, I/O error) is a whole database's worth of
+    // bytes; main never sees this path again once the request has failed.
+    try {
+      fs.rmSync(destPath, { force: true });
+    } catch {
+      // best-effort
+    }
+    throw error;
+  }
+  return probePath(destPath);
+}
+
 function execute(request: DbWorkerRequest): unknown {
   switch (request.op) {
     case "checkpoint":
@@ -102,6 +137,8 @@ function execute(request: DbWorkerRequest): unknown {
       return sqlite.pragma("quick_check", { simple: true });
     case "probePath":
       return probePath(request.dbPath);
+    case "backup":
+      return backupTo(request.destPath);
     case "ringWriteAll":
       return replaceRing(
         sqlite,
@@ -126,10 +163,10 @@ function execute(request: DbWorkerRequest): unknown {
   }
 }
 
-port.on("message", (request: DbWorkerRequest) => {
+async function handle(request: DbWorkerRequest): Promise<void> {
   let response: DbWorkerResponse;
   try {
-    response = { id: request.id, ok: true, result: execute(request) };
+    response = { id: request.id, ok: true, result: await execute(request) };
   } catch (error) {
     response = {
       id: request.id,
@@ -141,4 +178,12 @@ port.on("message", (request: DbWorkerRequest) => {
   if (request.op === "close") {
     port.close();
   }
+}
+
+// Requests run strictly one after another, async ones included: the client
+// relies on FIFO order (a ring write queued behind a backup lands after it,
+// and `close` confirms everything before it has finished).
+let queue: Promise<void> = Promise.resolve();
+port.on("message", (request: DbWorkerRequest) => {
+  queue = queue.then(() => handle(request)).catch(() => undefined);
 });

@@ -25,6 +25,7 @@ import type {
   ProjectIdentity,
   PushBranchOutcome,
   PushBranchPayload,
+  ProjectDisplayIdentity,
 } from "../../../shared/types/ipc/projectMatch.js";
 import {
   LOCAL_HOST_ID,
@@ -39,6 +40,7 @@ import {
   type HostEnsureQuestion,
 } from "../../../shared/types/hostControl.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { normalizeProjectDisplay } from "../../../shared/utils/projectDisplay.js";
 import {
   isSupportedCloneUrl,
   repositoryNameFromRemote,
@@ -298,6 +300,7 @@ export class HostSwitchService {
       toHostId: to.hostId,
       projectId: source.projectId,
       projectName: source.projectName,
+      display: normalizeProjectDisplay(source.display),
       worktreePath: source.worktreePath,
       branch: source.branch,
       branchCheck: source.branchCheck,
@@ -581,6 +584,7 @@ export class HostSwitchService {
             options: { submodules: source.hasSubmodules, depth: "full" },
             // Never a setup recipe: one existing is only said.
             setupRecipeId: null,
+            ...displayOf(source.display),
           },
           this.untracked(opId),
           { assistant: true }
@@ -615,6 +619,7 @@ export class HostSwitchService {
         branchRemoteUrl: branch ? branchRemoteUrl : null,
         // Registering a copy as it is fetches nothing into it.
         ...(branch ? {} : { navigateOnly: true }),
+        ...displayOf(source.display),
         assistant: true,
       });
     } catch (error) {
@@ -741,6 +746,7 @@ export class HostSwitchService {
     return this.gateway(payload.toHostId).listDirectory({
       path: payload.path,
       showHidden: payload.showHidden === true,
+      metadata: payload.metadata === "picker" ? "picker" : undefined,
     });
   }
 
@@ -797,6 +803,7 @@ export class HostSwitchService {
               branch: payload.navigateOnly === true ? null : payload.branch,
               branchRemoteUrl: stripOptional(payload.branchRemoteUrl),
               ...(payload.navigateOnly === true ? { navigateOnly: true } : {}),
+              ...displayOf(payload.display),
             })
           );
         };
@@ -1079,6 +1086,7 @@ export class HostSwitchService {
         branch: payload.branch as HostBranchTarget | null,
         options: payload.options as HostCloneOptions,
         setupRecipeId: payload.setupRecipeId,
+        ...displayOf(payload.display),
         ...mark,
       };
       await this.startResiliently(to, opId, track, () => to.startClone(start), "clone");
@@ -1416,4 +1424,10 @@ function pushResult(hostId: HostId, outcome: PushBranchOutcome): HostSwitchExecu
 
 function opened(hostId: HostId, result: HostProjectOpened): HostSwitchExecuteResult {
   return { kind: "opened", hostId, ...result };
+}
+
+/** The source's name, emoji and colour as a payload field, when it sent a usable one. */
+function displayOf(sent: unknown): { display?: ProjectDisplayIdentity } {
+  const display = normalizeProjectDisplay(sent);
+  return display ? { display } : {};
 }

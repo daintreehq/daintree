@@ -8,9 +8,9 @@ import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { isMac } from "@/lib/platform";
 import { PluginProvenance } from "./PluginProvenance";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
-import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import type { PluginQuickPickItem } from "@shared/types/plugin";
 
 const EMPTY_ITEMS: PluginQuickPickItem[] = [];
@@ -122,8 +122,8 @@ export function PluginQuickPickDialog() {
   }, [promptId, resolveOnce]);
 
   // ⌘/Ctrl+Enter submits the checked set in multi-select mode.
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleListKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
       if (canSelectMany && e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         submitMulti();
@@ -230,6 +230,7 @@ export function PluginQuickPickDialog() {
       variant="component"
       componentName="PluginQuickPickDialog"
       resetKeys={[promptId ?? "null"]}
+      onError={afterCatch(() => dismissFailedUiPrompt(promptId))}
     >
       <SearchablePalette<PluginQuickPickItem>
         tier="command"
@@ -243,7 +244,7 @@ export function PluginQuickPickDialog() {
         onConfirm={handleConfirm}
         onClose={handleClose}
         onHoverIndex={setSelectedIndex}
-        onKeyDown={handleKeyDown}
+        onListKeyDown={handleListKeyDown}
         getItemId={(item) => item.id}
         renderItem={renderItem}
         label={options?.title || "Select an option"}

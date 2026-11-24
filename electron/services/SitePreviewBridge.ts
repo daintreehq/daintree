@@ -42,7 +42,13 @@ import type { CoreGuest, CoreGuestReselectRequest } from "./elementPicker/coreGu
 import type { ElementPickerReselectRequest } from "../../shared/types/ipc/elementPicker.js";
 import type { ElementPickerPushPayload, ElementPickerSink } from "./elementPicker/types.js";
 
-const DEV_PREVIEW_PANEL_KIND = "dev-preview";
+/**
+ * The panel kinds whose guest the picker may bind: a dev preview, and a browser
+ * panel showing a page the agent's own server is serving. Both register their
+ * webview with its kind, and both guests are the same preload-less sandboxed
+ * `<webview>`; the origin policy, not the kind, decides which documents count.
+ */
+const PICKABLE_PANEL_KINDS: ReadonlySet<string> = new Set(["dev-preview", "browser"]);
 
 /** Why the bridge refused a guest envelope: the picker's own verdicts, plus the two it decides itself. */
 type GuestEnvelopeRejection = ElementPickerRejection | "foreign-context" | "rate-limited";
@@ -123,6 +129,11 @@ interface Binding {
    */
   suspended: boolean;
   mode: SitePreviewMode;
+  /**
+   * Nobody can see the preview, so the picker in the page runs nothing. Kept
+   * apart from `mode`, which is the user's choice and comes back with it.
+   */
+  paused: boolean;
   documentEpoch: number;
   /** Highest sequence accepted in the current epoch; -1 before the first. */
   lastSequence: number;
@@ -317,7 +328,7 @@ export class SitePreviewBridge {
   }
 
   /**
-   * The guest a bind may attach to: a live dev preview, in the project the
+   * The guest a bind may attach to: a live dev preview or browser panel, in the project the
    * caller named. The caller states a project; the host proves it. Without
    * this a renderer could name a panel id belonging to another project's view
    * and receive its guest traffic.
@@ -330,14 +341,15 @@ export class SitePreviewBridge {
     if (webContentsId === undefined) {
       throw new AppError({
         code: "NOT_FOUND",
-        message: "No dev preview is available on that panel",
+        message: "No page is available on that panel",
         context: { panelId },
       });
     }
-    if (this.deps.getPanelKind(webContentsId) !== DEV_PREVIEW_PANEL_KIND) {
+    const kind = this.deps.getPanelKind(webContentsId);
+    if (kind === undefined || !PICKABLE_PANEL_KINDS.has(kind)) {
       throw new AppError({
         code: "UNSUPPORTED",
-        message: "That panel is not a dev preview",
+        message: "That panel is not a dev preview or browser",
         context: { panelId },
       });
     }
@@ -345,14 +357,14 @@ export class SitePreviewBridge {
     if (!wc) {
       throw new AppError({
         code: "NOT_FOUND",
-        message: "The dev preview guest is no longer available",
+        message: "The panel's page is no longer available",
         context: { panelId, webContentsId },
       });
     }
     if (this.deps.resolveGuestProject(wc) !== projectId) {
       throw new AppError({
         code: "PERMISSION",
-        message: "That dev preview belongs to a different project",
+        message: "That panel belongs to a different project",
         context: { panelId, projectId },
       });
     }
@@ -370,6 +382,7 @@ export class SitePreviewBridge {
       sessionId: this.deps.newSessionId(),
       bindingName: this.deps.newBindingName(),
       suspended: false,
+      paused: false,
       documentEpoch: 0,
       lastSequence: -1,
       guestReady: false,
@@ -432,6 +445,25 @@ export class SitePreviewBridge {
     if (binding.suspended) return toState(binding);
     await binding.core.setMode(mode);
     return toState(binding);
+  }
+
+  /**
+   * Stop or resume the picker's work in the page while its preview is out of
+   * sight. Recorded like the mode, so every later install of this binding
+   * starts the way the view last asked.
+   */
+  async setPaused(projectId: string, sessionId: string, paused: boolean): Promise<void> {
+    const binding = this.bindings.get(sessionId);
+    if (!binding || binding.projectId !== projectId) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: "No site preview binding for that session",
+        context: { sessionId },
+      });
+    }
+    binding.paused = paused;
+    if (binding.suspended) return;
+    await binding.core.setPaused(paused);
   }
 
   /**
@@ -824,10 +856,12 @@ export class SitePreviewBridge {
     // Read once: both can change across the awaits below.
     const epoch = binding.documentEpoch;
     const installedMode = binding.mode;
+    const installedPaused = binding.paused;
     const installed = await core.install({
       epoch,
       installId,
       mode: installedMode,
+      paused: installedPaused,
       origins: DEFAULT_GUEST_ORIGIN_POLICY,
       frameId,
     });
@@ -836,6 +870,7 @@ export class SitePreviewBridge {
     if (!installed || binding.detached || this.closed) return;
     binding.installedEpoch = epoch;
     if (binding.mode !== installedMode) await core.setMode(binding.mode);
+    if (binding.paused !== installedPaused) await core.setPaused(binding.paused);
   }
 
   /**

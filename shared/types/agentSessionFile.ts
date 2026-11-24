@@ -25,7 +25,7 @@ export const AGENT_SESSION_FILE_AGENT_IDS = ["codex", "claude"] as const;
 export type AgentSessionFileAgentId = (typeof AGENT_SESSION_FILE_AGENT_IDS)[number];
 
 export const AGENT_SESSION_FILE_UNKNOWN_REASONS = [
-  /** No terminal of this project's has that id, or its host didn't answer. */
+  /** No terminal of this workspace's, nor the global Assistant's running session, has that id, or its host didn't answer. */
   "terminal-unavailable",
   /** The pane runs no agent right now: exited, held, or back at its shell. */
   "no-live-agent",

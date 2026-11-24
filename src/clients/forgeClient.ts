@@ -1,7 +1,9 @@
 import type {
   AuthValidation,
+  DeploymentTarget,
   ForgeUser,
   ForgeLabel,
+  ForgePullRequestTerm,
   PushErrorClassification,
   Issue,
   IssueComment,
@@ -28,6 +30,7 @@ import type {
 import type { ForgeNewPRLink, ForgeNewPRLinkRequest } from "@shared/types/ipc/forge";
 import type {
   ForgeCheckRun,
+  ForgeDeployment,
   ForgeCIStatusSummary,
   ForgeRepoMetadataPayload,
   ForgeRepositoryStats,
@@ -77,6 +80,10 @@ export const forgeClient = {
 
   getNewPRLink: (request: ForgeNewPRLinkRequest): Promise<ForgeNewPRLink> => {
     return window.electron.forge.getNewPRLink(request);
+  },
+
+  getPullRequestTerm: (providerId: string): Promise<ForgePullRequestTerm | null> => {
+    return window.electron.forge.getPullRequestTerm({ providerId });
   },
 
   assignIssue: (cwd: string, issueNumber: number, username: string): Promise<ForgeUser[]> => {
@@ -260,6 +267,13 @@ export const forgeClient = {
 
   getChecks: (cwd: string, prNumber: number): Promise<{ checks: ForgeCheckRun[] } | null> => {
     return window.electron.forge.getChecks({ cwd, prNumber });
+  },
+
+  getDeployments: (
+    cwd: string,
+    target: DeploymentTarget
+  ): Promise<{ deployments: ForgeDeployment[] } | null> => {
+    return window.electron.forge.getDeployments({ cwd, target });
   },
 
   resolveAuthorAvatar: (cwd: string, email: string): Promise<string | null> => {

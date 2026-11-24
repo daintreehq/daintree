@@ -516,6 +516,8 @@ const windowProjectMap = new Map<number, string | null>();
 // every consumer is already fed from one that still has a starving view, so it
 // suppressed both alike.
 const fallbackEligibleProjects = new Set<string>();
+// Projects whose every view may be CDP-frozen, pushed by Main (#17038).
+const frozenViewProjects = new Set<string>();
 // Per-window UI-focused terminal id (from the renderer's focusedId). Read by
 // each window's PortQueueManager/PortBatcher to prioritize the focused pane.
 const windowFocusedTerminalMap = new Map<number, string | null>();
@@ -775,6 +777,7 @@ const visualOutputRouter = createVisualOutputRouter({
   terminalWorkerConnections,
   windowProjectMap,
   fallbackEligibleProjects,
+  frozenViewProjects,
   ipcDataMirrorTerminals,
   packetFramer,
   getVisualBuffers: () => visualBuffers,
@@ -934,9 +937,12 @@ const resourceGovernor = new ResourceGovernor({
 });
 
 // Wire up PtyManager events
-ptyManager.on("data", (id: string, data: string | Uint8Array, _routing, streamEnd) => {
-  visualOutputRouter.routeOutput(id, data, streamEnd);
-});
+ptyManager.on(
+  "data",
+  (id: string, data: string | Uint8Array, _routing, streamEnd, encoded?: Uint8Array) => {
+    visualOutputRouter.routeOutput(id, data, streamEnd, encoded);
+  }
+);
 
 ptyManager.on(
   "exit",
@@ -1079,6 +1085,7 @@ events.on("agent:state-changed", (payload) => {
       traceId: payload.traceId,
       trigger: payload.trigger,
       confidence: payload.confidence,
+      ...(payload.terminalClosing ? { terminalClosing: true as const } : {}),
       cwd: payload.cwd,
       waitingReason: payload.waitingReason,
       sessionCost: payload.sessionCost,
@@ -1175,6 +1182,15 @@ events.on("agent:rate-limit-observed", (payload) => {
   });
 });
 
+events.on("agent:update-installed-changed", (payload) => {
+  sendEvent({
+    type: "agent-update-installed-changed",
+    terminalId: payload.terminalId,
+    updateInstalled: payload.updateInstalled,
+    timestamp: payload.timestamp,
+  });
+});
+
 events.on("agent:claude-usage-observed", (payload) => {
   sendEvent({
     type: "agent-claude-usage-observed",
@@ -1186,6 +1202,16 @@ events.on("agent:claude-usage-observed", (payload) => {
     observedAt: payload.observedAt,
     configDir: payload.configDir,
     shell: payload.shell,
+    timestamp: payload.timestamp,
+  });
+});
+
+events.on("agent:codex-limit-stopped", (payload) => {
+  sendEvent({
+    type: "codex-limit-stopped",
+    terminalId: payload.terminalId,
+    run: payload.run,
+    seq: payload.seq,
     timestamp: payload.timestamp,
   });
 });
@@ -1361,6 +1387,7 @@ const hostContext: HostContext = {
   terminalWorkerConnections,
   windowProjectMap,
   fallbackEligibleProjects,
+  frozenViewProjects,
   windowFocusedTerminalMap,
   ipcDataMirrorTerminals,
   analysisWorkerPool,

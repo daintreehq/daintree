@@ -5,13 +5,15 @@ import type { AgentId } from "../../../shared/types/agent.js";
 import type { DriveLeaseHolder, HostDriverObservation } from "../../../shared/types/remoteHosts.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
-import { helpSessionService } from "../../services/HelpSessionService.js";
+import { loadedHelpSessionService } from "../../services/helpSessionRuntime.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { scratchStore } from "../../services/ScratchStore.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { getSharedTerminalSnapshot } from "../../services/sharedTerminalSnapshot.js";
 import { classifyRun, computeProjectAgentCounts } from "../../services/projectAgentCounts.js";
 import { canopyRefinementFor } from "../../services/canopy/canopyRefinementSource.js";
+import { decisionAttentionFor } from "../../services/runAnswerAttentionSource.js";
+import { isDecisionsNeed } from "../../../shared/utils/fleetBands.js";
 import {
   getAgentVersionService,
   getCliAvailabilityServiceRef,
@@ -27,9 +29,11 @@ import { getSanitizedProcessEnv } from "../../utils/gitEnv.js";
 import { createForgeObserver } from "./hostForges.js";
 import { nameLeases } from "./driverObservations.js";
 import { DriveLeaseHolderSchema } from "../link/schemas.js";
+import { getRemoteService } from "../runtime.js";
+import { peekAgentUsageWatch } from "../../services/agentUsage/AgentUsageWatch.js";
 import type { HostSampleSources, ObservedAgents, SampleReaders } from "./sampler.js";
 
-type ProjectInventory = ReturnType<typeof projectStore.getAllProjects>;
+type ProjectInventory = ReturnType<typeof projectStore.getProjectInventory>;
 
 const COMMAND_TIMEOUT_MS = 2_000;
 const WORKTREE_COUNT_TTL_MS = 30_000;
@@ -67,7 +71,7 @@ async function listDir(path: string): Promise<string[]> {
 }
 
 /** Projects with a live workspace on this host: what "open" means here. */
-export function openProjects(projects: ProjectInventory = projectStore.getAllProjects()) {
+export function openProjects(projects: ProjectInventory = projectStore.getProjectInventory()) {
   return projects.filter(
     (project) => project.status === "active" || project.status === "background"
   );
@@ -97,7 +101,7 @@ export async function observeAgents(
   const pty = getPtyClient();
   if (!pty) return null;
   const projectIds = [
-    ...(options.projectIds ?? projectStore.getAllProjects().map((p) => p.id)),
+    ...(options.projectIds ?? projectStore.getProjectInventory().map((p) => p.id)),
     ...scratchStore.getAllScratches().map((s) => s.id),
   ];
   const { terminals, degraded } = await (options.readTerminals
@@ -107,32 +111,52 @@ export async function observeAgents(
 
   const availability = getAgentAvailabilityStore();
   const known = new Set(projectIds);
-  let working = 0;
-  let waiting = 0;
-  let idle = 0;
-  for (const terminal of terminals) {
-    if (!terminal.projectId || !known.has(terminal.projectId)) continue;
-    if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
-    if (terminal.agentState === "working") working += 1;
-    else if (terminal.agentState === "waiting") waiting += 1;
-    else if (terminal.agentState === "idle" || terminal.agentState === "completed") idle += 1;
-  }
-
   // The same sources the switcher's counts read, so a host's summary and its
   // own panes agree about who needs the user (#16058).
   const handBacks = getRunHandBackServiceRef();
   const shelves = getRunAttentionServiceRef();
+  const parked = shelves?.getAll();
+  const snoozed = shelves?.getActiveSnoozes();
+  let working = 0;
+  let waiting = 0;
+  let idle = 0;
+  // Agents at work that Decisions puts in Needs you: counted as asking below,
+  // but in none of the settled states that count is taken from.
+  let askingAtWork = 0;
+  for (const terminal of terminals) {
+    if (!terminal.projectId || !known.has(terminal.projectId)) continue;
+    if (classifyRun(terminal, (id) => availability.isHelpTerminal(id)) !== null) continue;
+    const state = terminal.agentState;
+    if (state === "working") working += 1;
+    else if (state === "waiting") waiting += 1;
+    else if (state === "idle" || state === "completed") idle += 1;
+    if (
+      (state === "working" || state === "directing") &&
+      terminal.id !== undefined &&
+      parked?.has(terminal.id) !== true &&
+      snoozed?.has(terminal.id) !== true &&
+      isDecisionsNeed({
+        agentState: state,
+        waitingReason: terminal.waitingReason,
+        ...decisionAttentionFor(terminal.id),
+      })
+    ) {
+      askingAtWork += 1;
+    }
+  }
   const counts = computeProjectAgentCounts(
     projectIds,
     terminals,
     undefined,
-    shelves?.getActiveSnoozes(),
-    (id) => helpSessionService.isPanelVisible(id),
-    (terminalId) => helpSessionService.getSlotForTerminal(terminalId),
+    snoozed,
+    // As the switcher reads them: an unloaded session service has no panel or lane.
+    (id) => loadedHelpSessionService()?.isPanelVisible(id) ?? false,
+    (terminalId) => loadedHelpSessionService()?.getSlotForTerminal(terminalId) ?? null,
     handBacks ? (id, spawnedAt) => handBacks.getRecord(id, spawnedAt) : undefined,
-    shelves?.getAll(),
+    parked,
     canopyRefinementFor,
-    handBacks ? (id, spawnedAt) => handBacks.getWait(id, spawnedAt) : undefined
+    handBacks ? (id, spawnedAt) => handBacks.getWait(id, spawnedAt) : undefined,
+    decisionAttentionFor
   );
   let asking = 0;
   let blocked = 0;
@@ -141,9 +165,10 @@ export async function observeAgents(
     blocked += entry.blocked;
   }
   // Every run counted as asking or blocked is an idle, finished or waiting one,
-  // so the rest of those are the host's settled runs: a prompt nothing puts in
-  // Needs you among them.
-  const settled = Math.max(0, idle + waiting - asking - blocked);
+  // or an agent at work with a Decisions question, so the rest of the idle,
+  // finished and waiting ones are the host's settled runs: a prompt nothing
+  // puts in Needs you among them.
+  const settled = Math.max(0, idle + waiting - (asking - askingAtWork) - blocked);
   return { working, waiting, idle, attention: { waiting: asking, blocked, idle: settled } };
 }
 
@@ -200,7 +225,7 @@ async function countWorktrees(
  * moves or grace to what {@link currentDriver}'s reads already do.
  */
 function currentDrivers(
-  projects: () => ProjectInventory = () => projectStore.getAllProjects()
+  projects: () => ProjectInventory = () => projectStore.getProjectInventory()
 ): HostDriverObservation[] {
   const lease = peekDriveLeaseService();
   if (!lease) return [];
@@ -217,7 +242,7 @@ function currentDrivers(
  * the link carries) is passed over, or the whole summary would be.
  */
 function currentDriver(
-  projects: () => ProjectInventory = () => projectStore.getAllProjects()
+  projects: () => ProjectInventory = () => projectStore.getProjectInventory()
 ): DriveLeaseHolder | null {
   const lease = peekDriveLeaseService();
   if (!lease) return null;
@@ -230,20 +255,32 @@ function currentDriver(
   return latest;
 }
 
+/** Which projects, at which roots, a worktree count covers; order and status aside. */
+function membershipKey(projects: ReadonlyArray<{ id: string; path: string }>): string {
+  return projects
+    .map((project) => JSON.stringify([project.id, project.path]))
+    .sort()
+    .join("\n");
+}
+
 /** The sources a real host samples from. Slow reads are cached so the 5 s tick stays cheap. */
 export function createHostSampleSources(now: () => number = Date.now): HostSampleSources {
-  let worktrees: { count: number; at: number } | null = null;
+  let worktrees: { key: string; count: number; at: number } | null = null;
   let clis: { list: Array<{ agentId: string; version: string | null }>; at: number } | null = null;
   const forges = createForgeObserver(now);
   const platform: HostSampleSources["platform"] =
     process.platform === "darwin" ? "darwin" : process.platform === "win32" ? "win32" : "linux";
 
   async function projectsSample(open: ProjectInventory) {
-    if (!worktrees || now() - worktrees.at > WORKTREE_COUNT_TTL_MS) {
+    if (open.length === 0) return { projectCount: 0, worktreeCount: 0 };
+    // A count answers only for the projects it covered (#17813): a close, a
+    // swap or a moved root since then would mix two inventories.
+    const key = membershipKey(open);
+    if (!worktrees || worktrees.key !== key || now() - worktrees.at > WORKTREE_COUNT_TTL_MS) {
       const count = await countWorktrees(open);
       // An incomplete count is unknown, and isn't cached: the next sample asks again.
       if (count === null) return { projectCount: open.length, worktreeCount: null };
-      worktrees = { count, at: now() };
+      worktrees = { key, count, at: now() };
     }
     return { projectCount: open.length, worktreeCount: worktrees.count };
   }
@@ -273,7 +310,7 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
       const inventory = (): ProjectInventory => {
         if (!read) {
           try {
-            read = { projects: projectStore.getAllProjects() };
+            read = { projects: projectStore.getProjectInventory() };
           } catch (error) {
             read = { error };
           }
@@ -320,6 +357,22 @@ export function createHostSampleSources(now: () => number = Date.now): HostSampl
       return list;
     },
     forges,
+    // What the watch already holds: a sample never builds it or waits on a read.
+    agentUsage: () => peekAgentUsageWatch()?.latest() ?? null,
+    // Looked up on every sample: the loop can outlive one listener and predate the next.
+    idle: () => {
+      const observation = getRemoteService("hostIdle")?.observation() ?? null;
+      if (!observation) return observation;
+      const keeper = getRemoteService("machineKeeper");
+      const guest = getRemoteService("guestPowerOff");
+      if (
+        keeper?.stopsWhenIdle(observation.idleEndsAt) !== true &&
+        guest?.stopsWhenIdle() !== true
+      ) {
+        return observation;
+      }
+      return { ...observation, stopsWhenIdle: true };
+    },
     now,
   };
 }

@@ -36,6 +36,7 @@ import { findDevServerCandidate } from "@/utils/devServerDetection";
 import { PresentationFeaturesSection } from "./PresentationFeaturesSection";
 import { LauncherPresentationSection } from "./LauncherPresentationSection";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { ProjectLinksSection } from "./ProjectLinksSection";
 
 const DAINTREE_MCP_TIER_OPTIONS: readonly ChoiceboxOption<DaintreeMcpTier>[] = [
   {
@@ -147,6 +148,9 @@ export function GeneralTab({
   const [iconError, setIconError] = useState<string | null>(null);
   const [isDraggingIcon, setIsDraggingIcon] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const hexInputRef = useRef<HTMLInputElement>(null);
+  const iconUploaderRef = useRef<HTMLButtonElement>(null);
+  const focusUploaderAfterRemoveRef = useRef(false);
 
   const [hexInput, setHexInput] = useState(color ?? "");
   const [resolvedSwatches, setResolvedSwatches] = useState<string[]>([]);
@@ -285,9 +289,19 @@ export function GeneralTab({
   };
 
   const handleRemoveIcon = () => {
+    focusUploaderAfterRemoveRef.current = true;
     onProjectIconSvgChange(undefined);
     setIconError(null);
   };
+
+  // The uploader mounts only once the icon is gone, so focus can't move
+  // until that render commits; otherwise the removed button drops focus to body.
+  useEffect(() => {
+    if (!projectIconSvg && focusUploaderAfterRemoveRef.current) {
+      focusUploaderAfterRemoveRef.current = false;
+      iconUploaderRef.current?.focus();
+    }
+  }, [projectIconSvg]);
 
   const handleEnableInRepoSettings = async () => {
     if (!currentProject || inRepoEnabling) return;
@@ -550,6 +564,7 @@ export function GeneralTab({
                       </div>
                     </div>
                     <Input
+                      ref={hexInputRef}
                       type="text"
                       value={hexInput}
                       onChange={(e) => handleHexInputChange(e.target.value)}
@@ -564,9 +579,12 @@ export function GeneralTab({
                     />
                     {color && (
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        onClick={() => onColorChange(undefined)}
+                        onClick={() => {
+                          hexInputRef.current?.focus();
+                          onColorChange(undefined);
+                        }}
                         aria-label="Clear project color"
                       >
                         Clear
@@ -610,12 +628,13 @@ export function GeneralTab({
                         <Upload />
                         Replace
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={handleRemoveIcon}>
+                      <Button variant="ghost-danger" size="sm" onClick={handleRemoveIcon}>
                         Remove
                       </Button>
                     </div>
                   ) : (
                     <button
+                      ref={iconUploaderRef}
                       type="button"
                       data-testid="project-icon-uploader"
                       // The visible prompt joins the row label so the spoken name
@@ -728,6 +747,8 @@ export function GeneralTab({
           />
         </SettingsGroup>
       </SettingsSection>
+
+      {projectId && <ProjectLinksSection projectId={projectId} />}
 
       <SettingsSection
         id="project-agent-integrations"

@@ -9,6 +9,7 @@ import {
   SshAccessError,
   UnusableConnectionError,
   TransportError,
+  WslDistroMissingError,
   createDirectTransport,
   type LinkOpenOptions,
   type LinkTransport,
@@ -606,7 +607,7 @@ describe("LinkClient backoff", () => {
     });
     client.start();
     await waitFor(() => client!.getState().status === "unreachable");
-    expect(client.getState()).toMatchObject({ retryAt: null });
+    expect(client.getState()).toMatchObject({ retryAt: null, blocker: { kind: "ssh-access" } });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(transport.opens).toBe(1);
 
@@ -616,13 +617,13 @@ describe("LinkClient backoff", () => {
     expect(transport.opens).toBe(2);
   });
 
-  it("stops retrying a host this machine can't reach as set up (WSL missing, no such distro)", async () => {
+  it("stops retrying a WSL distribution that isn't there, and says which one", async () => {
     const transport = {
       opens: 0,
       async open(): Promise<never> {
         transport.opens++;
-        throw new UnusableConnectionError(
-          "Ubuntu isn't installed in WSL",
+        throw new WslDistroMissingError(
+          "Debian-dev",
           "There is no distribution with the supplied name."
         );
       },
@@ -639,9 +640,76 @@ describe("LinkClient backoff", () => {
     expect(client.getState()).toMatchObject({
       retryAt: null,
       detail: "There is no distribution with the supplied name.",
+      blocker: { kind: "wsl-distro-missing", distro: "Debian-dev" },
     });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(transport.opens).toBe(1);
+  });
+
+  it("drops the blocker once a retry fails in a way trying again can change", async () => {
+    let missing = true;
+    const transport = {
+      async open(): Promise<never> {
+        if (missing) throw new WslDistroMissingError("Ubuntu", "no such distribution");
+        throw new TransportError("Couldn't reach Ubuntu through WSL", "timed out");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "win32" },
+      backoff: { initialMs: 60_000, jitter: 0 },
+      random: () => 0,
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({
+      retryAt: null,
+      blocker: { kind: "wsl-distro-missing" },
+    });
+    missing = false;
+    client.retryNow();
+    await waitFor(() => {
+      const state = client!.getState();
+      return state.status === "unreachable" && state.retryAt !== null;
+    });
+    expect(client.getState()).not.toHaveProperty("blocker");
+  });
+
+  it("stops retrying a connection this machine can't use, in the transport's words", async () => {
+    const transport = {
+      async open(): Promise<never> {
+        throw new UnusableConnectionError("WSL isn't available on this PC", "spawn ENOENT");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "win32" },
+      backoff: { initialMs: 1, maxMs: 1, jitter: 0 },
+      random: () => 0,
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    expect(client.getState()).toMatchObject({
+      retryAt: null,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    });
+  });
+
+  it("names no blocker for a failure it keeps retrying", async () => {
+    client = new LinkClient({
+      transport: failingTransport("x"),
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 1_000, jitter: 0 },
+      random: () => 0,
+    });
+    client.start();
+    await waitFor(() => client!.getState().status === "unreachable");
+    const state = client.getState();
+    expect(state.status === "unreachable" && state.retryAt).not.toBeNull();
+    expect(state).not.toHaveProperty("blocker");
   });
 
   it("applies jitter below the base delay", async () => {
@@ -1497,6 +1565,17 @@ describe("LinkClient retry during an attempt (#13926)", () => {
       // Waiting on the host's answer to HELLO: past the transport, which the signal no longer reaches.
       await waitFor(() => hellos === 1);
 
+      // A machine coming up asks for the link from every window showing it: one dial, kept (#17546).
+      client.retryNow();
+      client.retryNow();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect({ opens, hellos, disposed: disposes[0] }).toEqual({
+        opens: 1,
+        hellos: 1,
+        disposed: 0,
+      });
+      expect(client.getState()).toEqual({ status: "connecting", attempt: 1 });
+
       client.retryNow({ restart: true });
       await waitFor(() => hellos === 2);
       expect(disposes[0]).toBe(1);
@@ -2031,6 +2110,30 @@ describe("LinkClient network change and focus (#16386)", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(host.hellos).toHaveLength(1);
       expect(link.getState().status).toBe("version-mismatch");
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("asks a host that refused this build again on a person's Retry, and connects once it matches", async () => {
+    const hostOptions = { answerPings: true, protocolVersion: TEST_HANDSHAKE.protocolVersion + 1 };
+    const host = await welcomingHost(hostOptions);
+    try {
+      const link = linkTo(host.transport, {});
+      link.start();
+      await waitFor(() => link.getState().status === "version-mismatch");
+      link.retryNow({ restart: true });
+      await waitFor(() => host.hellos.length === 2);
+      await waitFor(() => link.getState().status === "version-mismatch");
+      // Updated from elsewhere while this link sat parked.
+      hostOptions.protocolVersion = TEST_HANDSHAKE.protocolVersion;
+      link.retryNow({ restart: true });
+      await waitFor(() => link.getState().status === "connected");
+      expect(host.hellos).toHaveLength(3);
+      // Each Retry dials afresh rather than trusting what the refused link learned.
+      expect(host.opened.slice(1).map((opened) => opened?.fresh)).toEqual([true, true]);
     } finally {
       await client?.stop();
       client = null;

@@ -103,7 +103,9 @@ async function answerPullRebaseConfirm(ok: boolean): Promise<void> {
   await vi.waitFor(() => {
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).not.toBeNull();
   });
-  useGitPullRebaseConfirmStore.getState().resolveConfirmation(ok);
+  useGitPullRebaseConfirmStore
+    .getState()
+    .resolveConfirmation(ok ? { branch: "feature/x", headOid: "f".repeat(40) } : null);
 }
 
 async function answerForcePushConfirm(ok: boolean): Promise<void> {
@@ -168,7 +170,7 @@ afterEach(() => {
     useGitPushConfirmStore.getState().resolveConfirmation(null);
   }
   if (useGitPullRebaseConfirmStore.getState().pendingConfirm) {
-    useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+    useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
   }
   const forcePending = useGitForcePushStore.getState().pendingConfirm;
   if (forcePending) {
@@ -500,7 +502,7 @@ describe("git.pullRebase failure (#16667)", () => {
       { source: "agent", confirmed: true }
     );
 
-    expect(git.pullRebase).toHaveBeenCalledWith(WT_PATH);
+    expect(git.pullRebase).toHaveBeenCalledWith(WT_PATH, undefined);
     expectFailedWith(result, cause);
     expect(notifyMock).not.toHaveBeenCalled();
   });

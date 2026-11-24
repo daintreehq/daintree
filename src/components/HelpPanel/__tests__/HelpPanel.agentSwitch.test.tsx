@@ -156,13 +156,15 @@ vi.mock("@/services/TerminalInstanceService", () => {
   };
 });
 vi.mock("@/clients", () => ({ terminalClient: { submit: vi.fn(), sendKey: vi.fn() } }));
+vi.mock("@/components/Plugin/AssistantPluginMenuItems", () => ({
+  AssistantPluginMenuItems: () => null,
+}));
 vi.mock("@shared/config/agentIds", () => ({
   BUILT_IN_AGENT_IDS: ["claude", "codex", "claude-code"] as const,
   isBuiltInAgentId: (v: unknown): v is string =>
     typeof v === "string" && ["claude", "codex", "claude-code"].includes(v),
 }));
 vi.mock("../../../shared/utils/agentAvailability", () => ({ isAgentInstalled: () => true }));
-vi.mock("@/lib/accessibility", () => ({ TABBABLE_SELECTOR: "button" }));
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(), getContext: () => ({}) },
 }));
@@ -244,7 +246,11 @@ vi.mock("@/store", () => {
 });
 
 vi.mock("@/store/macroFocusStore", () => {
-  const state = { focusedRegion: null as string | null, setRegionRef: vi.fn() };
+  const state = {
+    focusedRegion: null as string | null,
+    refs: new Map<string, HTMLElement>(),
+    setRegionRef: vi.fn(),
+  };
   const store = (selector?: (s: typeof state) => unknown) => (selector ? selector(state) : state);
   store.getState = () => state;
   store.setState = (

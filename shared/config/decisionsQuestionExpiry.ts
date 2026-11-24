@@ -10,6 +10,15 @@ const DAY_MS = 24 * HOUR_MS;
 export const DEFAULT_QUESTION_EXPIRY_MS = 7 * DAY_MS;
 
 /**
+ * How long a question asked on an enrolled Remote Host waits when its agent
+ * sets no expiry (#17942). The person's own choice (`defaultQuestionExpiryMs`)
+ * is owned by the computer it was set on and never reaches a Host, so a Host
+ * asks under this one, named here so it is a decision rather than whatever
+ * the defaults happen to hold. A Host reports it to its owner's Shell.
+ */
+export const HOST_DEFAULT_QUESTION_EXPIRY_MS = DEFAULT_QUESTION_EXPIRY_MS;
+
+/**
  * The default expiries Settings offers (#16122), in ms, and null for none.
  * Every one is within what the library accepts (a test checks it), so a saved
  * choice can never make the policy refuse to start. The longest stays under

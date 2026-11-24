@@ -13,6 +13,8 @@ interface SettingsSwitchCardProps {
   disabled?: boolean;
   /** Why the switch is disabled, shown under its description while it is. */
   disabledReason?: string;
+  /** What keeps the setting from taking effect now, shown under its description whatever its state. */
+  note?: string;
   colorScheme?: "accent" | "amber" | "danger";
   /**
    * `card` is a row in a group — standalone, it brings its own one-row group. `compact`
@@ -44,6 +46,7 @@ export function SettingsSwitchCard({
   ariaLabel,
   disabled,
   disabledReason,
+  note,
   colorScheme = "accent",
   variant = "card",
   isModified,
@@ -73,6 +76,7 @@ export function SettingsSwitchCard({
       resetAriaLabel={resetAriaLabel ?? `Reset ${title} to default`}
       disabled={disabled}
       disabledReason={disabledReason}
+      note={note}
       onRowClick={onChange}
       className={variant === "compact" ? "pl-0 pr-0 py-2" : undefined}
       control={({ labelId, descriptionId, disabled: rowDisabled }) => (

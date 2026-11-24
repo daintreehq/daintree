@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useRef, useState } from "react";
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
 import { AlertTriangle, EyeOff, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,16 @@ import {
   type DiffNoteAnchor,
   type DiffNoteLines,
 } from "./diffNotes";
+import {
+  DiffNoteDraftContext,
+  diffNoteFileKey,
+  editDraftBodyKey,
+  fileDraftBodyKey,
+  lineDraftBodyKey,
+  useDiffNoteDraftSession,
+  useDiffNoteDraftState,
+  type DiffNoteDraftSession,
+} from "./diffNoteDrafts";
 
 const SAVE_SHORTCUT = "Cmd+Enter";
 
@@ -49,30 +59,52 @@ export function returnFocusTo(target: HTMLElement | null, via: DiffNoteCloseVia)
 }
 
 interface DiffNoteEditorProps {
+  session: DiffNoteDraftSession;
+  /** Where the session keeps this editor's unsaved text. */
+  bodyKey: string;
+  /** The text to start from when the session has none kept. */
   initialBody: string;
+  /** The view whose gestures this editor answers; none for one that opens nothing. */
+  focusOwner?: object;
   label: string;
   saveLabel: string;
   onSave: (body: string, via: DiffNoteCloseVia) => void;
   onCancel: (via: DiffNoteCloseVia) => void;
-  onChange?: (body: string) => void;
 }
 
 /**
- * Typed text lives here, not in the store: the store is persisted and shared
- * across project views, and every keystroke there would reserialize it — and
- * would rebuild the diff's widget map under the caret.
+ * Typed text lives in the pane's draft session, not the notes store: the store
+ * is persisted and shared across project views, and every keystroke there would
+ * reserialize it — and would rebuild the diff's widget map under the caret.
  */
 function DiffNoteEditor({
+  session,
+  bodyKey,
   initialBody,
+  focusOwner,
   label,
   saveLabel,
   onSave,
   onCancel,
-  onChange,
 }: DiffNoteEditorProps) {
-  const [body, setBody] = useState(initialBody);
+  const [body, setBody] = useState(() => session.readBody(bodyKey) ?? initialBody);
   const canSave = body.trim().length > 0;
   const hintId = useId();
+
+  // Takes focus only when a gesture asked for this editor; one restored by a
+  // refresh or a layout switch stays out of the way. In a layout effect, as
+  // `autoFocus` would be, so the caret is in place before the first paint.
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const focusWanted = useDiffNoteDraftState(
+    session,
+    (state) =>
+      focusOwner !== undefined && state.focus?.key === bodyKey && state.focus.owner === focusOwner
+  );
+  useLayoutEffect(() => {
+    if (!focusWanted) return;
+    textareaRef.current?.focus();
+    session.consumeFocus(bodyKey);
+  }, [focusWanted, session, bodyKey]);
 
   // On the editor rather than the textarea, so the keys still work once Tab has
   // moved on to Cancel or Save. A keystroke committing an IME composition is the
@@ -94,15 +126,15 @@ function DiffNoteEditor({
   return (
     <div className="flex flex-col gap-3" onKeyDown={handleKeyDown}>
       <Textarea
+        ref={textareaRef}
         aria-label={label}
-        autoFocus
         density="compact"
         rows={3}
         value={body}
         placeholder="Leave a note for the agent"
         onChange={(event) => {
           setBody(event.target.value);
-          onChange?.(event.target.value);
+          session.writeBody(bodyKey, event.target.value);
         }}
         aria-describedby={hintId}
       />
@@ -159,55 +191,67 @@ export function nameAnchor(anchor: { kind: "file" } | DiffNoteLines): string {
   return anchor.kind === "file" ? "file note" : `note on ${described.toLowerCase()}`;
 }
 
-/**
- * Unsaved composer text, keyed by the file view that owns the draft.
- * Shift-click moves the draft's widget to a new row, which remounts the
- * composer, so its text can't live only in the editor it had. The owner
- * clears its entry when its draft closes or it unmounts.
- */
-const composerDrafts = new Map<string, string>();
-
-export function clearComposerDraft(ownerId: string): void {
-  composerDrafts.delete(ownerId);
-}
-
 interface DiffNoteComposerProps {
-  /** Stable per owning file view; two panes on one file keep separate drafts. */
-  ownerId: string;
   worktreePath: string;
   filePath: string;
   anchor: DiffNoteAnchor;
+  /** Set when a line draft can't sit under its rows, and why. */
+  placement?: DiffNoteCardPlacement;
+  /** The view that opens this draft, whose gestures hand its editor focus. */
+  focusOwner?: object;
+  /** Called after the session has closed the draft, saved or not. */
   onDone: (via: DiffNoteCloseVia) => void;
 }
 
+/**
+ * A new note being written. A file holds one line draft and one file draft at
+ * once, each with its own text, so opening one never takes over the other.
+ * Shift-click moves the line draft's widget to a new row, which remounts the
+ * composer, so its text lives in the pane's draft session rather than here.
+ */
 export const DiffNoteComposer = memo(function DiffNoteComposer({
-  ownerId,
   worktreePath,
   filePath,
   anchor,
+  placement,
+  focusOwner,
   onDone,
 }: DiffNoteComposerProps) {
   const addNote = useDiffNotesStore((s) => s.addNote);
+  const session = useDiffNoteDraftSession();
+  const fileKey = diffNoteFileKey(worktreePath, filePath);
+  const bodyKey = anchor.kind === "file" ? fileDraftBodyKey(fileKey) : lineDraftBodyKey(fileKey);
+  const close = (via: DiffNoteCloseVia) => {
+    if (anchor.kind === "file") session.closeFile(fileKey);
+    else session.closeLine(fileKey);
+    onDone(via);
+  };
   return (
     <div className="diff-note" data-testid="diff-note-composer">
       <div className={NOTE_HEADER_CLASS}>
         <span>{describeAnchor(anchor)}</span>
+        {placement && <DiffNoteStatus placement={placement} anchor={anchor} draft />}
         {/* Said here because this is the only time the gesture does anything:
             shift-click extends an open draft, and there is none before this. */}
-        {anchor.kind === "lines" && (
+        {anchor.kind === "lines" && !placement && (
           <span className="ml-auto text-right">Shift-click another line number to extend</span>
         )}
       </div>
+      {/* Keyed by the draft it edits: a list or file view that stays mounted
+          while it moves to another file must not carry this file's text there. */}
       <DiffNoteEditor
-        initialBody={composerDrafts.get(ownerId) ?? ""}
+        key={bodyKey}
+        session={session}
+        bodyKey={bodyKey}
+        initialBody=""
+        focusOwner={focusOwner}
         label={`New ${nameAnchor(anchor)}`}
         saveLabel="Add note"
-        onChange={(body) => composerDrafts.set(ownerId, body)}
         onSave={(body, via) => {
           addNote({ worktreePath, filePath, anchor, body });
-          onDone(via);
+          close(via);
         }}
-        onCancel={onDone}
+        onCancel={close}
       />
     </div>
   );
@@ -250,10 +294,16 @@ interface DiffNoteCardProps {
 /** Why the note isn't under its lines, said about those lines. */
 function explainPlacement(
   placement: Exclude<DiffNoteCardPlacement, undefined>,
-  anchor: DiffNoteAnchor
+  anchor: DiffNoteAnchor,
+  draft: boolean
 ): string {
   const lines = describeAnchor(anchor);
   const many = anchor.kind === "lines" && anchor.startLine !== anchor.endLine;
+  if (draft) {
+    return placement === "stale"
+      ? `${lines} changed after this note was started, so it's listed here. Check it still applies before adding it.`
+      : `${lines} ${many ? "aren't" : "isn't"} shown in this view, so the unsaved note is listed here.`;
+  }
   return placement === "stale"
     ? `${lines} changed after this note was written, so it's listed here. Check it still applies before sending.`
     : `${lines} ${many ? "aren't" : "isn't"} shown in this view, so the note is listed here.`;
@@ -262,9 +312,11 @@ function explainPlacement(
 function DiffNoteStatus({
   placement,
   anchor,
+  draft = false,
 }: {
   placement: Exclude<DiffNoteCardPlacement, undefined>;
   anchor: DiffNoteAnchor;
+  draft?: boolean;
 }) {
   const stale = placement === "stale";
   const Glyph = stale ? AlertTriangle : EyeOff;
@@ -287,7 +339,7 @@ function DiffNoteStatus({
         </span>
       </TooltipTrigger>
       {/* Above, so the note it explains stays readable beneath it. */}
-      <TooltipContent side="top">{explainPlacement(placement, anchor)}</TooltipContent>
+      <TooltipContent side="top">{explainPlacement(placement, anchor, draft)}</TooltipContent>
     </Tooltip>
   );
 }
@@ -316,14 +368,22 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
       action: { label: "Undo", onClick: () => restoreNote(deleted) },
     });
   };
-  const markEditing = useDiffNotesStore((s) => s.setEditing);
-  const [editing, setEditing] = useState(false);
+  // The edit is the pane session's, not the card's: a refresh or a layout switch
+  // remounts the card, or moves it between the table and the fallback list, and
+  // the rewrite carries on in whichever card shows the note next.
+  const session = useDiffNoteDraftSession();
   const noteId = note.id;
+  const editing = useDiffNoteDraftState(session, (state) => state.edits[noteId] === true);
+  const [focusOwner] = useState(() => ({}));
   const editButtonRef = useRef<HTMLButtonElement>(null);
   const closedViaRef = useRef<DiffNoteCloseVia | null>(null);
+  const openEditor = () => {
+    session.requestFocus(editDraftBodyKey(noteId), focusOwner);
+    session.openEdit(noteId);
+  };
   const closeEditor = (via: DiffNoteCloseVia) => {
     closedViaRef.current = via;
-    setEditing(false);
+    session.closeEdit(noteId);
   };
 
   // The Edit button comes back only once the editor has gone, so focus waits
@@ -335,11 +395,6 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
     returnFocusTo(editButtonRef.current, via);
   }, [editing]);
 
-  useEffect(() => {
-    if (!editing) return;
-    markEditing(noteId, true);
-    return () => markEditing(noteId, false);
-  }, [editing, noteId, markEditing]);
   const anchorLabel = describeAnchor(note.anchor);
 
   return (
@@ -367,7 +422,7 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
                   variant="ghost"
                   size="icon-xs"
                   aria-label="Edit note"
-                  onClick={() => setEditing(true)}
+                  onClick={openEditor}
                 >
                   <Pencil />
                 </Button>
@@ -393,6 +448,10 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
       </div>
       {editing ? (
         <DiffNoteEditor
+          key={noteId}
+          session={session}
+          bodyKey={editDraftBodyKey(noteId)}
+          focusOwner={focusOwner}
           initialBody={note.body}
           label={`Edit ${nameAnchor(note.anchor)}`}
           saveLabel="Save"
@@ -411,7 +470,9 @@ export const DiffNoteCard = memo(function DiffNoteCard({ note, placement }: Diff
 
 /**
  * A file's pending notes for a body with no diff table to hang them on. Line
- * notes can't be placed without rows, so they read as not in view.
+ * notes can't be placed without rows, so they read as not in view. Notes still
+ * being written are listed too, so a switch to a layout without the table
+ * doesn't hide one mid-sentence.
  */
 export function PendingFileNotes({
   worktreePath,
@@ -420,19 +481,54 @@ export function PendingFileNotes({
   worktreePath: string;
   filePath: string;
 }) {
+  const session = useDiffNoteDraftSession();
+  const fileKey = diffNoteFileKey(worktreePath, filePath);
   const notes = useDiffNotesStore(
     useShallow((state) => selectDiffNotes(state, worktreePath, filePath))
   );
-  if (notes.length === 0) return null;
+  const lineDraft = useDiffNoteDraftState(session, (state) => state.lines[fileKey] ?? null);
+  const fileDraftOpen = useDiffNoteDraftState(session, (state) => state.files[fileKey] === true);
+  const listRef = useRef<HTMLDivElement>(null);
+  // Nothing in this list opened the draft, so a closed one hands focus to the
+  // pane's path pill, the control naming the same file, as a deleted card does.
+  const handFocusBack = (via: DiffNoteCloseVia) =>
+    returnFocusTo(
+      listRef.current
+        ?.closest("[data-panel-id]")
+        ?.querySelector<HTMLElement>("[data-toolbar-path]") ?? null,
+      via
+    );
+  if (notes.length === 0 && !lineDraft && !fileDraftOpen) return null;
   return (
-    <div className="diff-note-list" data-testid="diff-pending-file-notes">
-      {sortDiffNotes(notes).map((note) => (
-        <DiffNoteCard
-          key={note.id}
-          note={note}
-          placement={note.anchor.kind === "file" ? undefined : "unplaced"}
-        />
-      ))}
-    </div>
+    <DiffNoteDraftContext value={session}>
+      <div ref={listRef} className="diff-note-list" data-testid="diff-pending-file-notes">
+        {sortDiffNotes(notes).map((note) => (
+          <DiffNoteCard
+            key={note.id}
+            note={note}
+            placement={note.anchor.kind === "file" ? undefined : "unplaced"}
+          />
+        ))}
+        {lineDraft && (
+          <DiffNoteComposer
+            worktreePath={worktreePath}
+            filePath={filePath}
+            anchor={lineDraft}
+            placement="unplaced"
+            onDone={handFocusBack}
+          />
+        )}
+        {fileDraftOpen && (
+          <DiffNoteComposer
+            worktreePath={worktreePath}
+            filePath={filePath}
+            anchor={FILE_ANCHOR}
+            onDone={handFocusBack}
+          />
+        )}
+      </div>
+    </DiffNoteDraftContext>
   );
 }
+
+const FILE_ANCHOR: DiffNoteAnchor = { kind: "file" };

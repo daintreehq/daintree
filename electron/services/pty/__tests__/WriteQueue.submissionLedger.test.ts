@@ -97,6 +97,65 @@ describe("WriteQueue submission ledger", () => {
     expect(wq.getSubmission("tok-1")?.phase).toBe("cancelled");
   });
 
+  describe("where a guarded line stopped (#18157)", () => {
+    it("says a line its guard refused at the lane wrote nothing", async () => {
+      const h = makeHarness();
+      const wq = new WriteQueue(h.options);
+
+      wq.submit("answer", "tok-1", undefined, () => false);
+      await vi.runAllTimersAsync();
+
+      expect(h.performSubmit).not.toHaveBeenCalled();
+      expect(wq.getSubmission("tok-1")).toMatchObject({
+        phase: "cancelled",
+        cancelledAt: "admission",
+      });
+    });
+
+    it("says a guarded line's Enter was held only when performSubmit marked it", async () => {
+      const h = makeHarness();
+      h.performSubmit.mockImplementation(async (text, ctx) => {
+        if (text === "held") ctx.markEnterHeld?.();
+      });
+      const wq = new WriteQueue(h.options);
+
+      wq.submit("held", "tok-held", undefined, () => true);
+      wq.submit("dropped", "tok-dropped", undefined, () => true);
+      await vi.runAllTimersAsync();
+
+      expect(wq.getSubmission("tok-held")).toMatchObject({
+        phase: "cancelled",
+        cancelledAt: "enter",
+      });
+      // An unmarked return says nothing about where it stopped.
+      expect(wq.getSubmission("tok-dropped")).toEqual({
+        token: "tok-dropped",
+        phase: "cancelled",
+        at: expect.any(Number),
+      });
+    });
+
+    it("never marks an unguarded submission, nor one whose Enter got out", async () => {
+      const h = makeHarness();
+      h.performSubmit.mockImplementation(async (text, ctx) => {
+        ctx.markEnterHeld?.();
+        if (text === "written") ctx.markPtyWritten();
+      });
+      const wq = new WriteQueue(h.options);
+
+      wq.submit("plain", "tok-plain");
+      wq.submit("written", "tok-written", undefined, () => true);
+      await vi.runAllTimersAsync();
+
+      expect(wq.getSubmission("tok-plain")).not.toHaveProperty("cancelledAt");
+      expect(wq.getSubmission("tok-written")).toEqual({
+        token: "tok-written",
+        phase: "pty_written",
+        at: expect.any(Number),
+      });
+    });
+  });
+
   it("records failed when the submit rejects", async () => {
     const h = makeHarness();
     h.performSubmit.mockRejectedValue(new Error("EPIPE: broken pipe"));

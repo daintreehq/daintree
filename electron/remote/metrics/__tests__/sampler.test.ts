@@ -89,6 +89,59 @@ describe("HostMetricsSampler", () => {
     expect(await new HostMetricsSampler(sources()).sample()).not.toHaveProperty("forges");
   });
 
+  it("carries the host's idle clock as it stands, and leaves out one it can't read (#17357)", async () => {
+    for (const idle of [
+      { idleAfterMinutes: 30, lastWorkAt: 5, busy: true, idleEndsAt: null },
+      { idleAfterMinutes: 30, lastWorkAt: 5, busy: false, idleEndsAt: 1_800_005 },
+    ]) {
+      await expect(
+        new HostMetricsSampler(sources({ idle: () => idle })).sample()
+      ).resolves.toMatchObject({ idle });
+    }
+    // Not listening as a host, or a clock that threw: nothing is sent, never an idle host.
+    expect(await new HostMetricsSampler(sources({ idle: () => null })).sample()).not.toHaveProperty(
+      "idle"
+    );
+    expect(
+      await new HostMetricsSampler(
+        sources({
+          idle: () => {
+            throw new Error("store unreadable");
+          },
+        })
+      ).sample()
+    ).not.toHaveProperty("idle");
+    expect(await new HostMetricsSampler(sources()).sample()).not.toHaveProperty("idle");
+  });
+
+  it("carries the usage readings the watch holds, and none while nothing watches (#17318)", async () => {
+    const reading = {
+      agentId: "codex" as const,
+      accountNames: ["Work"],
+      isDefault: false,
+      windowDurationMins: 300,
+      usedPercent: 82,
+      resetsAt: null,
+      observedAt: 5,
+    };
+    await expect(
+      new HostMetricsSampler(sources({ agentUsage: () => [reading] })).sample()
+    ).resolves.toMatchObject({ agentUsage: [reading] });
+    expect(
+      (await new HostMetricsSampler(sources({ agentUsage: () => [] })).sample()).agentUsage
+    ).toEqual([]);
+    for (const agentUsage of [
+      () => null,
+      () => {
+        throw new Error("watch gone");
+      },
+    ]) {
+      expect(await new HostMetricsSampler(sources({ agentUsage })).sample()).not.toHaveProperty(
+        "agentUsage"
+      );
+    }
+  });
+
   it("reports every Linux metric from its source", async () => {
     const files: Record<string, string> = {
       "/proc/pressure/memory": "some avg10=15.00 avg60=1 avg300=1 total=1\n",

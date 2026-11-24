@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { hasRecipeVariables, splitByRecipeVariables } from "@/utils/recipeVariables";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
@@ -20,6 +20,7 @@ function resetStores() {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    crossHostTargets: [],
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useFleetResolutionPreviewStore.getState().clear();
@@ -247,6 +248,54 @@ describe("FleetDraftingPill", () => {
     );
   });
 
+  function armRemote(terminalId: string) {
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key: crossHostTargetKey("studio", terminalId),
+      hostId: "studio",
+      hostName: "Studio",
+      terminalId,
+      title: terminalId,
+    });
+  }
+
+  it("counts an agent on another host as the lone pane's peer (#17182)", () => {
+    seedPanel(makeAgent("t-1"));
+    armAgent("t-1", 0);
+    usePanelStore.setState({ focusedId: "t-1" });
+
+    const { container } = render(<FleetDraftingPill />);
+    expect(container.firstChild).toBeNull();
+
+    act(() => armRemote("r-1"));
+    expect(screen.getByTestId("fleet-drafting-pill-trigger").textContent).toMatch(
+      /Mirroring to 1 peer$/
+    );
+  });
+
+  it("counts every reachable peer across a mix of this view's panes and another host's", () => {
+    seedPanel(makeAgent("t-1"));
+    seedPanel(makeAgent("t-2"));
+    seedPanel(makeAgent("t-3", { isInputLocked: true }));
+    armAgent("t-1", 0);
+    armAgent("t-2", 1);
+    armAgent("t-3", 2);
+    armRemote("r-1");
+    armRemote("r-2");
+    usePanelStore.setState({ focusedId: "t-1" });
+
+    render(<FleetDraftingPill />);
+    const trigger = () => screen.getByTestId("fleet-drafting-pill-trigger").textContent;
+    expect(trigger()).toMatch(/Mirroring to 3 peers/);
+
+    act(() =>
+      useFleetTargetOverridesStore.getState().setSkipped(crossHostTargetKey("studio", "r-2"), true)
+    );
+    expect(trigger()).toMatch(/Mirroring to 2 peers/);
+
+    act(() => useFleetTargetOverridesStore.getState().setSkipped("t-2", true));
+    expect(trigger()).toMatch(/Mirroring to 1 peer/);
+  });
+
   it("leaves a locked peer out of the reach count and its row (#14964)", () => {
     seedPanel(makeAgent("t-1"));
     seedPanel(makeAgent("t-2"));
@@ -378,6 +427,108 @@ describe("FleetDraftingPill — per-target edit and skip (#8691)", () => {
     const result = textarea.dispatchEvent(event);
     // defaultPrevented = true means the handler called preventDefault.
     expect(result).toBe(false);
+  });
+
+  describe("an IME's Enter and Escape in an override field (#17450)", () => {
+    // The first keeps the key's own legacy code, so only `isComposing` marks it.
+    const imeSignals = (keyCode: number) => [
+      { signal: "isComposing", init: { isComposing: true, keyCode } },
+      { signal: "keyCode 229", init: { keyCode: 229 } },
+    ];
+
+    // The spy stands in for the pane's input bar behind the popover, which
+    // broadcasts the fleet on an Enter that reaches it.
+    function renderBehind() {
+      const behind = vi.fn();
+      render(
+        <div onKeyDown={behind}>
+          <FleetDraftingPill />
+        </div>
+      );
+      return behind;
+    }
+
+    function editedField(): HTMLTextAreaElement {
+      const textarea = screen.getAllByTestId<HTMLTextAreaElement>(
+        "fleet-resolution-row-textarea"
+      )[1]!;
+      textarea.focus();
+      fireEvent.change(textarea, { target: { value: "ni hao" } });
+      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
+      return textarea;
+    }
+
+    function expectEditKept(textarea: HTMLTextAreaElement) {
+      expect(textarea.value).toBe("ni hao");
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBe("ni hao");
+      expect(document.activeElement).toBe(textarea);
+      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
+    }
+
+    it.each(imeSignals(13))(
+      "keeps the edit, the focus and the popover when an IME's Enter confirms a candidate ($signal)",
+      ({ init }) => {
+        const behind = renderBehind();
+        const textarea = editedField();
+
+        // The IME still gets the key to commit its candidate.
+        expect(fireEvent.keyDown(textarea, { key: "Enter", ...init })).toBe(true);
+
+        expectEditKept(textarea);
+        expect(behind).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(imeSignals(27))(
+      "keeps the edit, the focus and the popover when an IME's Escape dismisses its candidates ($signal)",
+      ({ init }) => {
+        const behind = renderBehind();
+        const textarea = editedField();
+
+        // The popover's own guard cancels this event, which is what keeps Radix from dismissing.
+        fireEvent.keyDown(textarea, { key: "Escape", ...init });
+
+        expectEditKept(textarea);
+        expect(behind).not.toHaveBeenCalled();
+      }
+    );
+
+    it("lets a key the IME is still processing through to the panes behind", () => {
+      const behind = renderBehind();
+      const textarea = editedField();
+
+      fireEvent.keyDown(textarea, { key: "a", isComposing: true });
+
+      expect(behind).toHaveBeenCalledTimes(1);
+    });
+
+    it("still reverts the edit and blurs on a plain Escape, with the popover open", () => {
+      const behind = renderBehind();
+      const textarea = editedField();
+      const resolved = useFleetResolutionPreviewStore
+        .getState()
+        .previews.find((p) => p.terminalId === "t-2")!.resolvedPayload;
+
+      expect(fireEvent.keyDown(textarea, { key: "Escape", keyCode: 27 })).toBe(false);
+
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBeUndefined();
+      expect(textarea.value).toBe(resolved);
+      expect(document.activeElement).not.toBe(textarea);
+      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
+      expect(behind).not.toHaveBeenCalled();
+    });
+
+    it("still commits the edit and blurs on a plain Enter", () => {
+      const behind = renderBehind();
+      const textarea = editedField();
+
+      expect(fireEvent.keyDown(textarea, { key: "Enter", keyCode: 13 })).toBe(false);
+
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides["t-2"]).toBe("ni hao");
+      expect(document.activeElement).not.toBe(textarea);
+      expect(useFleetResolutionPreviewStore.getState().open).toBe(true);
+      expect(behind).not.toHaveBeenCalled();
+    });
   });
 
   it("clears overrides when the popover closes (user dismiss)", () => {

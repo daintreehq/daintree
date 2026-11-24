@@ -39,3 +39,11 @@ export interface ShowApplicationMenuPayload {
   x?: number;
   y?: number;
 }
+
+/**
+ * What the next Cmd+Z in a project view would reopen, for Edit > Undo to name
+ * (#17108): the panels in the close it takes back first, and the one panel's
+ * title when there is just one. `null` when Cmd+Z there would undo text or
+ * there is nothing to reopen, and Edit > Undo reads "Undo".
+ */
+export type UndoCloseMenuState = { count: number; title: string | null } | null;

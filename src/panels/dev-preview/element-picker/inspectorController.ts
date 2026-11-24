@@ -42,6 +42,11 @@ import { mismatchMessage, runtimeIssueMessage, wireFailureMessage } from "./copy
 import { usePanelStore } from "@/store/panelStore";
 import { redactUrl } from "./pageText.js";
 import {
+  isProjectViewObservable,
+  subscribeProjectViewCachedFlush,
+  subscribeProjectViewObservability,
+} from "@/lib/viewCacheState";
+import {
   citedRevisions,
   displayLine,
   elementClaim,
@@ -91,9 +96,25 @@ export interface ElementPickerApi {
 export interface PreviewSessionApi {
   detach(request: { sessionId: string }): Promise<void>;
   setMode(request: { sessionId: string; mode: SitePreviewMode }): Promise<SitePreviewBindingState>;
+  /** Stop or resume everything the picker does in the page while nobody can see it. */
+  setPaused(request: { sessionId: string; paused: boolean }): Promise<void>;
   /** Drop the page's selection without observing anything. */
   clearSelection(request: { sessionId: string }): Promise<void>;
   clearHover(request: { sessionId: string }): Promise<void>;
+}
+
+/**
+ * Whether anyone can see this project's view at all. A cached project view
+ * keeps its preview's page running, so the picker has to be told to stop.
+ */
+export interface ViewLifecycleApi {
+  isObservable(): boolean;
+  subscribe(listener: () => void): () => void;
+  /**
+   * Run `flush` as main caches the view, ahead of any freeze: a frozen view
+   * could not tell the page anything until it thawed.
+   */
+  subscribeCachedFlush(flush: () => Promise<unknown>): () => void;
 }
 
 export interface ElementCaptureApi {
@@ -119,6 +140,8 @@ export interface InspectorDeps {
   capture?: ElementCaptureApi;
   /** The window is attached to another machine, where a local picture's path means nothing. */
   remoteWindow?: () => boolean;
+  /** Absent where there is no project view to be cached: the preview counts as observable. */
+  viewLifecycle?: ViewLifecycleApi;
 }
 
 export interface InspectorContext {
@@ -181,7 +204,13 @@ export type WorkspaceState =
  * error is retried, a remembered app that has gone is chosen again, and a
  * server running from another checkout can only be restarted from this one.
  */
-export type WorkspaceFailure = "read-error" | "invalid-app" | "unknown-worktree" | "other-worktree";
+export type WorkspaceFailure =
+  | "read-error"
+  | "invalid-app"
+  | "unknown-worktree"
+  | "other-worktree"
+  /** A browser panel's page whose server runs from another worktree. */
+  | "served-elsewhere";
 
 export interface PageState {
   epoch: number;
@@ -471,6 +500,11 @@ export function defaultInspectorDeps(): InspectorDeps {
     now: () => Date.now(),
     capture: window.electron.webview,
     remoteWindow: isRemoteWindow,
+    viewLifecycle: {
+      isObservable: isProjectViewObservable,
+      subscribe: (listener) => subscribeProjectViewObservability(listener),
+      subscribeCachedFlush: subscribeProjectViewCachedFlush,
+    },
   };
 }
 
@@ -500,6 +534,9 @@ function originOf(url: string): string | null {
  * The host reports a workspace it no longer holds for this view — released,
  * evicted, or never this view's — as a `NOT_FOUND` naming the closed workspace.
  */
+/** Refusals about a document already left that are asked again before one is taken as the answer. */
+const MAX_STALE_REFUSALS = 3;
+
 export function isWorkspaceClosed(error: unknown): boolean {
   if (!isClientAppError(error) || error.code !== "NOT_FOUND") return false;
   return clientErrorText(error, "").includes(ELEMENT_PICKER_WORKSPACE_CLOSED);
@@ -526,6 +563,8 @@ export class InspectorController implements DevPreviewToolSession {
   readonly panelId: string;
   private state: InspectorState = INITIAL_INSPECTOR_STATE;
   private readonly listeners = new Set<() => void>();
+  /** Turns the picker off, as its toggle would; the host's, from the session context. */
+  private closeTool: () => void = () => {};
   private readonly unsubscribers: Array<() => void> = [];
   private context: InspectorContext = { projectId: null, worktreeId: null, worktreePath: null };
   // Undefined until the first context arrives: a preview that starts with no
@@ -534,9 +573,22 @@ export class InspectorController implements DevPreviewToolSession {
   private workspaceRequest = 0;
   private projectRequest = 0;
   private bindRequest = 0;
+  /** Whether any of the picker's surfaces are mounted, which is whether the preview's pane is. */
+  private surfacesVisible = false;
+  /** What the page was last told about pausing, and which binding it was told on. */
+  private pauseSent: { sessionId: string; paused: boolean } | null = null;
+  /** The bind on its way, which a cached view's freeze has to wait for. */
+  private bindInFlight: Promise<unknown> | null = null;
   /** The host's last word on whether the preview is showing a page, and which. */
   private pageReady = false;
   private pageUrl = "";
+  /** The document a served-elsewhere refusal was read for; the next one asks again. */
+  private servedElsewhereFor: string | null = null;
+  /** Refusals in a row that were about a document the panel had already left. */
+  private staleRefusals = 0;
+  /** Documents the panel has moved on from, and the last one that announced itself. */
+  private documentsLeft = 0;
+  private lastAnnouncedKey: string | null = null;
   private reattachTimer: ReturnType<typeof setTimeout> | null = null;
   private connectRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private connectAttempts = 0;
@@ -580,6 +632,11 @@ export class InspectorController implements DevPreviewToolSession {
       this.handleSourceChanged(payload)
     );
     this.unsubscribers.push(subscribeComposerMemory(() => this.holdSources()));
+    const lifecycle = deps.viewLifecycle;
+    if (lifecycle) {
+      this.unsubscribers.push(lifecycle.subscribe(() => this.syncPause()));
+      this.unsubscribers.push(lifecycle.subscribeCachedFlush(() => this.pauseBeforeFreeze()));
+    }
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -596,6 +653,57 @@ export class InspectorController implements DevPreviewToolSession {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
     if (patch.selection !== undefined || patch.workspace !== undefined) this.holdSources();
+    if (patch.binding !== undefined) this.syncPause();
+  }
+
+  /**
+   * Out of sight — no surface mounted (its tab is inactive, say), or the
+   * project view cached or its window hidden — the page's picker stops its
+   * pointer listeners, observers and frames. The mode and the selection stay
+   * as the user left them, and come back with the preview.
+   */
+  private wantsPause(): boolean {
+    return !this.surfacesVisible || this.deps.viewLifecycle?.isObservable() === false;
+  }
+
+  /**
+   * Tell the page when that changes what it was last told. A new binding's
+   * page starts running, so it only ever needs telling to stop.
+   */
+  private syncPause(paused: boolean = this.wantsPause()): void {
+    if (this.disposed) return;
+    const binding = this.state.binding;
+    if (binding.status !== "bound") return;
+    const sessionId = binding.sessionId;
+    const before = this.pauseSent?.sessionId === sessionId ? this.pauseSent.paused : false;
+    if (before === paused) return;
+    const sent = { sessionId, paused };
+    this.pauseSent = sent;
+    void this.deps.preview.setPaused(sent).catch(() => {
+      // Not applied, so the page is as it was: the next change sends it again.
+      if (this.pauseSent === sent) this.pauseSent = { sessionId, paused: before };
+    });
+  }
+
+  /**
+   * Main holds a cached view's freeze until this settles. It waits for any bind
+   * on its way, a replacement included — a frozen view could not hear the
+   * reply — then sends the pause. Sending is enough: main applies it to the
+   * page whether or not this view is frozen by then, and a page that is frozen
+   * itself (parked in the dock) must not hold up the view's freeze.
+   *
+   * The flush runs before the view reads as cached, so with nothing to wait
+   * for the pause is forced. After a wait the view's state has caught up, and
+   * may say the user is already back.
+   */
+  private async pauseBeforeFreeze(): Promise<void> {
+    let waited = false;
+    for (let pending = this.bindInFlight; pending !== null; pending = this.bindInFlight) {
+      waited = true;
+      await pending.catch(() => undefined);
+      if (this.disposed || this.bindInFlight === pending) break;
+    }
+    this.syncPause(waited ? this.wantsPause() : true);
   }
 
   /**
@@ -641,6 +749,8 @@ export class InspectorController implements DevPreviewToolSession {
    * want of a page gets its retry.
    */
   update(context: DevPreviewToolSessionContext): void {
+    this.closeTool = context.close;
+    this.surfacesVisible = context.visible;
     const pageReady = context.isWebviewReady && context.url.length > 0;
     if (context.url.length > 0) this.pageUrl = context.url;
     this.updateContext({
@@ -660,6 +770,7 @@ export class InspectorController implements DevPreviewToolSession {
       // a cold dev server — up to a minute of "waiting" beside a loaded page.
       void this.retryConnect();
     }
+    this.syncPause();
   }
 
   updateContext(context: InspectorContext): void {
@@ -715,6 +826,9 @@ export class InspectorController implements DevPreviewToolSession {
     const { projectId, worktreeId, worktreePath } = this.context;
     if (!projectId || !worktreeId || !worktreePath) return;
     const request = ++this.workspaceRequest;
+    // Main reads who serves the page as of now: a refusal is stale only if
+    // the panel has left a document since.
+    const leftAtStart = this.documentsLeft;
     // A preview moved between worktrees keeps running its server from the old
     // one: the page would show one checkout while the agent works in another.
     const cwd = panelCwd(usePanelStore.getState().panelsById[this.panelId]);
@@ -753,6 +867,7 @@ export class InspectorController implements DevPreviewToolSession {
       });
     } catch (error) {
       if (request !== this.workspaceRequest) return;
+      this.staleRefusals = 0;
       this.patchState({
         workspace: {
           status: "failed",
@@ -767,6 +882,22 @@ export class InspectorController implements DevPreviewToolSession {
       if (result.status === "ready") this.releaseWorkspace(result.workspaceId);
       return;
     }
+    // A refusal about a document the panel has since left says nothing about
+    // the one it shows, which arrived while main was looking and skipped its
+    // own check: ask again, keeping any click held for the source.
+    // A page that keeps reloading gets a few such retries, then the answer.
+    if (
+      result.status === "unavailable" &&
+      result.reason === "other-worktree" &&
+      this.documentsLeft !== leftAtStart &&
+      this.staleRefusals < MAX_STALE_REFUSALS
+    ) {
+      this.staleRefusals += 1;
+      void this.openWorkspace(appPath, listed);
+      return;
+    }
+    this.staleRefusals = 0;
+    const openedFor = this.documentKey();
     switch (result.status) {
       case "ready":
         this.patchState({
@@ -794,12 +925,14 @@ export class InspectorController implements DevPreviewToolSession {
         return;
       case "unavailable":
         this.patchState({
-          workspace: {
-            status: "failed",
-            reason: result.reason,
-            message: appPath ?? "",
-          },
+          workspace:
+            result.reason === "other-worktree"
+              ? this.servedElsewhere(result.serverWorktreeId, openedFor)
+              : { status: "failed", reason: result.reason, message: appPath ?? "" },
         });
+        if (result.reason === "other-worktree") {
+          this.markServedFrom(result.serverWorktreeId, openedFor);
+        }
         this.releaseHeld();
         return;
     }
@@ -862,6 +995,35 @@ export class InspectorController implements DevPreviewToolSession {
     });
   }
 
+  /** Refused because another worktree serves the page, as of the document the open was for. */
+  private servedElsewhere(serverWorktreeId: string, openedFor: string | null): WorkspaceState {
+    this.servedElsewhereFor = openedFor;
+    return { status: "failed", reason: "served-elsewhere", message: serverWorktreeId };
+  }
+
+  /**
+   * A pick that asked for no source was published before main answered about
+   * its page: it is told where the page is served from once main has said.
+   */
+  private markServedFrom(serverWorktreeId: string, documentKey: string | null): void {
+    const selection = this.state.selection;
+    if (selection.status !== "ready") return;
+    const picked = selection.selection;
+    if (picked.workspaceId !== null || picked.servedFrom !== undefined) return;
+    if (`${picked.sessionId}#${picked.documentEpoch}` !== documentKey) return;
+    this.patchState({
+      selection: { ...selection, selection: { ...picked, servedFrom: serverWorktreeId } },
+    });
+  }
+
+  /** The document showing now, across rebinds: a new binding counts its epochs from 0 again. */
+  private documentKey(): string | null {
+    const binding = this.state.binding;
+    const page = this.state.page;
+    if (page === null) return null;
+    return `${binding.status === "bound" ? binding.sessionId : ""}#${page.epoch}`;
+  }
+
   private currentWorkspaceId(): string | null {
     const workspace = this.state.workspace;
     return workspace.status === "ready" ? workspace.workspaceId : null;
@@ -872,13 +1034,16 @@ export class InspectorController implements DevPreviewToolSession {
    * too. Reopen once per lost workspace; a second failure is reported, not
    * looped on.
    */
+  /**
+   * Reopen a workspace main closed, whichever call heard of it first. What
+   * belonged to it goes with it; a pick that never asked it for source stays.
+   */
   private recoverClosedWorkspace(workspaceId: string): void {
     if (this.disposed || this.currentWorkspaceId() !== workspaceId) return;
     if (this.recoveringWorkspace === workspaceId) return;
     this.recoveringWorkspace = workspaceId;
     this.selectionRequest++;
-    this.endReprove();
-    this.patchState({ workspace: { status: "idle" }, selection: { status: "none" } });
+    this.closeWorkspace();
     void this.openWorkspace();
   }
 
@@ -933,8 +1098,14 @@ export class InspectorController implements DevPreviewToolSession {
     // snapshot can't be replayed, and a session on the panel isn't proof it
     // was this controller's.
     let state: SitePreviewBindingState;
+    const pending = this.deps.picker.bind({ panelId: previewPanelId, mode: this.state.mode });
+    this.bindInFlight = pending;
+    const settled = () => {
+      if (this.bindInFlight === pending) this.bindInFlight = null;
+    };
+    pending.then(settled, settled);
     try {
-      state = await this.deps.picker.bind({ panelId: previewPanelId, mode: this.state.mode });
+      state = await pending;
     } catch (error) {
       if (request !== this.bindRequest) return;
       this.bufferedEvents = [];
@@ -945,7 +1116,7 @@ export class InspectorController implements DevPreviewToolSession {
       this.patchState({
         binding: {
           status: "failed",
-          message: clientErrorText(error, "Couldn't connect to the dev preview"),
+          message: clientErrorText(error, "Couldn't connect to the page"),
           retrying,
         },
       });
@@ -1195,6 +1366,24 @@ export class InspectorController implements DevPreviewToolSession {
         const binding = this.state.binding;
         if (binding.status === "bound") patch.binding = { ...binding, url: event.url };
         this.patchState(patch);
+        const key = this.documentKey();
+        if (this.lastAnnouncedKey !== null && key !== this.lastAnnouncedKey)
+          this.documentsLeft += 1;
+        this.lastAnnouncedKey = key;
+        const workspace = this.state.workspace;
+        if (
+          workspace.status === "failed" &&
+          workspace.reason === "served-elsewhere" &&
+          this.servedElsewhereFor !== this.documentKey()
+        ) {
+          // A new document may come from a server this worktree now runs: main
+          // reads who is listening again. A workspace that opened stays open
+          // across documents, so a reload's re-proof keeps it; main checks the
+          // server again on each resolve instead.
+          this.servedElsewhereFor = this.documentKey();
+          void this.openWorkspace();
+          return;
+        }
         // The route around the page changes with the page.
         if (previousUrl !== event.url) void this.refreshProject();
         return;
@@ -1211,6 +1400,15 @@ export class InspectorController implements DevPreviewToolSession {
         this.watchPointerLeaving(event.observation !== null);
         return;
       case "frameworksDetected":
+        return;
+      case "dismissRequested":
+        // The page's Escape found nothing selected. Its keys never reach the
+        // host's DOM, so this is the only way that Escape gets out — heard by
+        // the session, not a surface, which may still be loading. Browse hands
+        // the page its own keys; a request in flight from Inspect is not the
+        // user asking now.
+        if (this.state.mode !== "select" || this.state.modePending) return;
+        this.closeTool();
         return;
     }
   }
@@ -1272,7 +1470,15 @@ export class InspectorController implements DevPreviewToolSession {
   ): PickedSelection {
     const binding = this.state.binding;
     this.selectionCount += 1;
+    // The verdict belongs to the page this was picked on, not to whatever the
+    // panel shows by the time a request about it goes in.
+    const current = this.state.workspace;
+    const servedFrom =
+      workspace === null && current.status === "failed" && current.reason === "served-elsewhere"
+        ? current.message
+        : null;
     return {
+      ...(servedFrom !== null ? { servedFrom } : {}),
       selectionId: `${this.panelId}:${this.generation}:${epoch}:${this.selectionCount}`,
       previewPanelId: this.panelId,
       sessionId: binding.status === "bound" ? binding.sessionId : "",
@@ -1450,7 +1656,14 @@ export class InspectorController implements DevPreviewToolSession {
         budget: RESOLVE_BUDGET,
       });
     } catch (error) {
-      if (!this.isCurrentResolve(request, reproving)) return;
+      if (!this.isCurrentResolve(request, reproving)) {
+        // The answer is stale, the closure isn't: main can close a workspace
+        // at any resolve (another worktree took the page's port), and a newer
+        // pick that resolved nothing would never hear of it. Reopened without
+        // touching what the newer pick holds.
+        if (isWorkspaceClosed(error)) this.recoverClosedWorkspace(workspace.workspaceId);
+        return;
+      }
       if (isWorkspaceClosed(error)) {
         this.endReprove();
         this.recoverClosedWorkspace(workspace.workspaceId);
@@ -1864,6 +2077,17 @@ export class InspectorController implements DevPreviewToolSession {
   }
 
   /** Drop the selection, here and on the page. */
+  /**
+   * Escape from the preview's chrome: let go of what is selected, if
+   * anything, as Escape in the page does. False leaves the key to the host,
+   * which turns the picker off.
+   */
+  handleEscape(): boolean {
+    if (this.state.selection.status === "none") return false;
+    void this.clearSelection();
+    return true;
+  }
+
   async clearSelection(): Promise<void> {
     this.selectionRequest++;
     this.held = null;

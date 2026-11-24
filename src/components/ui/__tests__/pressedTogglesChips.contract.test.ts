@@ -15,7 +15,6 @@ const RAW_ARIA_PRESSED: Record<string, string> = {
   // their pressed look.
   "src/components/Layout/Toolbar.tsx": "toolbar armed chip",
   "src/components/Layout/ToolbarAssistantButton.tsx": "toolbar armed chip",
-  "src/components/Layout/ToolbarPortalButton.tsx": "toolbar armed chip",
   // A promoted plugin button a plugin made a toggle (#13785).
   "src/components/Layout/PluginTrayButton.tsx": "toolbar armed chip",
   // Checkable rows in the sources popover: a check glyph carries the state,
@@ -24,6 +23,7 @@ const RAW_ARIA_PRESSED: Record<string, string> = {
   "src/components/EventInspector/EventFilters.tsx": "checkable popover rows",
   // Show/hide value: the eye glyph is the state, the established reveal idiom.
   "src/components/Settings/AgentScopeEditor/ReadOnlyDetail.tsx": "reveal toggle",
+  "src/components/Settings/Decisions/DecisionsRelaySetup.tsx": "reveal toggle",
   "src/components/Settings/EnvVarRow.tsx": "reveal toggle",
   "src/components/Settings/ImportEnvDialog.tsx": "reveal toggle",
   "src/components/Settings/McpServerSettingsTab.tsx": "reveal toggle",

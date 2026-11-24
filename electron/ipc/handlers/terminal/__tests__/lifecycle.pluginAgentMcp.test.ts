@@ -64,7 +64,7 @@ vi.mock("../../../../services/pty/terminalShell.js", async (importOriginal) => (
 
 vi.mock("../../../../services/pty/agentSessionHistory.js", () => ({
   persistAgentSession: vi.fn().mockResolvedValue(undefined),
-  listAgentSessions: vi.fn(() => []),
+  listAgentSessionsOrThrow: vi.fn(() => []),
   clearAgentSessions: vi.fn().mockResolvedValue(undefined),
   pruneAgentSessions: vi.fn().mockResolvedValue(undefined),
   DEFAULT_RETENTION_DAYS: 30,
@@ -249,6 +249,18 @@ import {
   clearPluginAgentRegistryForTests,
   registerPluginAgents,
 } from "../../../../../shared/config/pluginAgentRegistry.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -428,6 +440,8 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
       const { command, env } = ptyClient.spawn.mock.calls[0][1];
       expect(env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+      // The listener is up for Decisions, but nothing here could use the control surface.
+      expect(env?.DAINTREE_MCP_URL).toBeUndefined();
       const servers = await readServers(configPathFromCommand(command));
       expect(Object.keys(servers)).toEqual(["daintree-decisions"]);
       expect(servers["daintree-decisions"].url).toBe(
@@ -461,35 +475,46 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
     });
 
     it("hands a tier-on launch both servers on the control surface's listener", async () => {
-      decisionsOn();
-      mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
+      // Off the default port, as when 45454 was taken: the agent's own entry
+      // and the endpoint its scripts inherit must name the port that was bound.
+      const port = 45463;
+      Object.assign(mcpServerService, { currentPort: port });
+      try {
+        decisionsOn();
+        mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "core" });
 
-      await spawn({ id: "term-dec-core" });
-      await spawn({ id: "term-dec-core-codex", command: "codex", launchAgentId: "codex" });
+        await spawn({ id: "term-dec-core" });
+        await spawn({ id: "term-dec-core-codex", command: "codex", launchAgentId: "codex" });
 
-      const claude = ptyClient.spawn.mock.calls[0][1];
-      const servers = await readServers(configPathFromCommand(claude.command));
-      expect(Object.keys(servers)).toEqual(["daintree", "daintree-decisions"]);
-      expect(servers["daintree-decisions"].url).toBe("http://127.0.0.1:45454/mcp/decisions");
-      const control = claude.env?.DAINTREE_MCP_TOKEN as string;
-      expect(servers.daintree.headers.Authorization).toBe(`Bearer ${control}`);
-      expect(mcpPaneConfigService.getDecisionsPrincipal("term-dec-core")).toBe(
-        mcpPaneConfigService.getOwnershipPrincipalForToken(control)
-      );
+        const claude = ptyClient.spawn.mock.calls[0][1];
+        const servers = await readServers(configPathFromCommand(claude.command));
+        expect(Object.keys(servers)).toEqual(["daintree", "daintree-decisions"]);
+        expect(servers["daintree-decisions"].url).toBe(`http://127.0.0.1:${port}/mcp/decisions`);
+        const control = claude.env?.DAINTREE_MCP_TOKEN as string;
+        expect(servers.daintree.headers.Authorization).toBe(`Bearer ${control}`);
+        // Claude itself reads SSE; a script in the pane gets the Streamable HTTP endpoint.
+        expect(claude.env?.DAINTREE_MCP_URL).toBe(`http://127.0.0.1:${port}/mcp`);
+        expect(mcpPaneConfigService.getDecisionsPrincipal("term-dec-core")).toBe(
+          mcpPaneConfigService.getOwnershipPrincipalForToken(control)
+        );
 
-      const codex = ptyClient.spawn.mock.calls[1][1];
-      expect(codex.command).toContain('mcp_servers.daintree.url="http://127.0.0.1:45454/mcp"');
-      expect(codex.command).toContain(
-        'mcp_servers.daintree-decisions.url="http://127.0.0.1:45454/mcp/decisions"'
-      );
-      const codexControl = codex.env?.DAINTREE_MCP_TOKEN as string;
-      const codexDecisions = codex.env?.DAINTREE_DECISIONS_MCP_TOKEN as string;
-      expect(mcpPaneConfigService.getTierForToken(codexControl)).toBe("core");
-      expect(mcpPaneConfigService.getDecisionsBearerForToken(codexDecisions)).toEqual({
-        paneId: "term-dec-core-codex",
-        principal: mcpPaneConfigService.getOwnershipPrincipalForToken(codexControl),
-        workspaceId: PROJECT_A,
-      });
+        const codex = ptyClient.spawn.mock.calls[1][1];
+        expect(codex.command).toContain(`mcp_servers.daintree.url="http://127.0.0.1:${port}/mcp"`);
+        expect(codex.command).toContain(
+          `mcp_servers.daintree-decisions.url="http://127.0.0.1:${port}/mcp/decisions"`
+        );
+        const codexControl = codex.env?.DAINTREE_MCP_TOKEN as string;
+        expect(codex.env?.DAINTREE_MCP_URL).toBe(`http://127.0.0.1:${port}/mcp`);
+        const codexDecisions = codex.env?.DAINTREE_DECISIONS_MCP_TOKEN as string;
+        expect(mcpPaneConfigService.getTierForToken(codexControl)).toBe("core");
+        expect(mcpPaneConfigService.getDecisionsBearerForToken(codexDecisions)).toEqual({
+          paneId: "term-dec-core-codex",
+          principal: mcpPaneConfigService.getOwnershipPrincipalForToken(codexControl),
+          workspaceId: PROJECT_A,
+        });
+      } finally {
+        Object.assign(mcpServerService, { currentPort: 45454 });
+      }
     });
 
     it("hands a plugin-granted pane its plugin server and the Decisions server", async () => {
@@ -500,6 +525,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
       const { command, env } = ptyClient.spawn.mock.calls[0][1];
       expect(env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+      expect(env?.DAINTREE_MCP_URL).toBeUndefined();
       const servers = await readServers(configPathFromCommand(command));
       expect(Object.keys(servers)).toEqual(["daintree-ledger", "daintree-decisions"]);
       expect(servers["daintree-decisions"].url).toBe("http://127.0.0.1:45454/mcp/decisions");
@@ -642,6 +668,7 @@ describe("terminal spawn handler - plugin MCP servers for agent launches", () =>
 
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+    expect(spawnArgs.env?.DAINTREE_MCP_URL).toBeUndefined();
     const servers = await readServers(configPathFromCommand(spawnArgs.command));
     expect(servers.daintree).toBeUndefined();
     expect(Object.keys(servers)).toEqual(["daintree-ledger"]);

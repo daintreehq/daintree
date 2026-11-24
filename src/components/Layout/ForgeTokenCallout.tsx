@@ -39,10 +39,13 @@ const COPY: Record<Exclude<ForgeTokenErrorKind, "not-configured">, (name: string
   sso: (name) => `${name} token needs SSO authorization`,
 };
 
-const DESCRIPTION: Record<Exclude<ForgeTokenErrorKind, "not-configured">, string> = {
-  invalid: "Reconnect to restore issue and pull request counts.",
-  permissions: "Update the token's access to restore issue and pull request counts.",
-  sso: "Authorize the token for this organization to restore issue and pull request counts.",
+const DESCRIPTION: Record<
+  Exclude<ForgeTokenErrorKind, "not-configured">,
+  (restores: string) => string
+> = {
+  invalid: (restores) => `Reconnect to restore ${restores}.`,
+  permissions: (restores) => `Update the token's access to restore ${restores}.`,
+  sso: (restores) => `Authorize the token for this organization to restore ${restores}.`,
 };
 
 export interface ForgeTokenCalloutProps {
@@ -51,6 +54,11 @@ export interface ForgeTokenCalloutProps {
   providerId: string;
   providerName: string;
   errorKind: ForgeTokenErrorKind | null;
+  /**
+   * The counts a working token brings back. Only pull requests when the
+   * project's issues come from another tracker (#13700).
+   */
+  restores?: string;
   /** The stats request is in flight; each settle is a fresh verdict. */
   validating: boolean;
   onReconnect: () => void;
@@ -197,6 +205,7 @@ export function ForgeTokenCallout({
   providerId,
   providerName,
   errorKind,
+  restores = "issue and pull request counts",
   validating,
   onReconnect,
   onOpenChange,
@@ -319,7 +328,7 @@ export function ForgeTokenCallout({
       >
         <InlineStatusBanner
           title={title}
-          description={DESCRIPTION[reconnectKind]}
+          description={DESCRIPTION[reconnectKind](restores)}
           severity="warning"
           role="status"
           animated={false}

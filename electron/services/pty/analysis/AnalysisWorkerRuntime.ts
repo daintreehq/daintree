@@ -1,5 +1,5 @@
 import { setPluginAgentRegistry } from "../../../../shared/config/pluginAgentRegistry.js";
-import { getPtyPowerLevel, setPtyPowerLevel } from "../ptyPowerPolicy.js";
+import { setPtyPowerLevel } from "../ptyPowerPolicy.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AnalysisSession } from "./AnalysisSession.js";
 import type { IdleHeapCompactor } from "./idleHeapCompactor.js";
@@ -18,10 +18,11 @@ import type {
 export const MEMORY_SAMPLE_INTERVAL_MS = 2000;
 
 /**
- * Cadence for a worker with no heap-affecting traffic while the power policy
- * is saving. Half the governor's 10s freshness bound, so a quiet worker's
- * memory never reads as unknown; any heap activity returns it to the base
- * cadence for the next sample.
+ * Cadence for a worker with no heap-affecting traffic since its last sample,
+ * whatever the power policy: a quiet worker's heap has nothing moving it, and
+ * a focused window with idle terminals is still idle. Half the governor's 10s
+ * freshness bound, so a quiet worker's memory never reads as unknown; any heap
+ * activity returns it to the base cadence for the next sample.
  */
 export const QUIET_MEMORY_SAMPLE_INTERVAL_MS = 5000;
 
@@ -137,9 +138,9 @@ export class AnalysisWorkerRuntime {
 
   /**
    * One-shot chain rather than a fixed interval so each sample picks the next
-   * cadence: the base rate while the policy is active or the mirrors saw heap
-   * traffic since the last sample, the quiet rate otherwise. Metadata ticks
-   * never count as activity (see HEAP_ACTIVITY_MESSAGE_TYPES).
+   * cadence: the base rate while the mirrors saw heap traffic since the last
+   * sample, the quiet rate otherwise. Metadata ticks never count as activity
+   * (see HEAP_ACTIVITY_MESSAGE_TYPES).
    */
   private scheduleMemorySample(delayMs: number): void {
     this.memorySampleTimer = setTimeout(() => {
@@ -152,7 +153,7 @@ export class AnalysisWorkerRuntime {
       this.idleHeapCompactor?.maybeCompact();
       const base = this.memorySampleIntervalMs;
       if (base === null) return;
-      const busy = this.heapActivitySinceSample || getPtyPowerLevel() === "active";
+      const busy = this.heapActivitySinceSample;
       this.heapActivitySinceSample = false;
       this.scheduleMemorySample(busy ? base : Math.max(base, QUIET_MEMORY_SAMPLE_INTERVAL_MS));
     }, delayMs);
@@ -217,8 +218,11 @@ export class AnalysisWorkerRuntime {
     switch (msg.type) {
       case "create": {
         this.sessions.get(msg.terminalId)?.free();
-        this.sessions.set(msg.terminalId, new AnalysisSession(msg, this.emit));
-        return;
+        const session = new AnalysisSession(msg, this.emit);
+        this.sessions.set(msg.terminalId, session);
+        // Returned so handleMessage arms the per-terminal barrier behind the
+        // restore's disk read.
+        return session.restorePersistedSession();
       }
       case "data":
         this.sessions.get(msg.terminalId)?.feedChunk(msg.data, msg.flags, msg.epoch);
@@ -298,9 +302,11 @@ export class AnalysisWorkerRuntime {
         const promise =
           msg.op === "serialize"
             ? session.serialize(msg.tailRows !== undefined ? { tailRows: msg.tailRows } : undefined)
-            : msg.op === "serialize-persistence"
-              ? session.serializeForPersistence()
-              : session.captureFinalSnapshot();
+            : msg.op === "serialize-screen"
+              ? session.serializeScreen()
+              : msg.op === "serialize-persistence"
+                ? session.serializeForPersistence()
+                : session.captureFinalSnapshot();
         // Returned so handleMessage arms the per-terminal barrier: later
         // messages must not mutate the session until this settles.
         return promise.then(

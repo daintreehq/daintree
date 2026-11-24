@@ -6,7 +6,7 @@ const ipcMainMock = vi.hoisted(() => ({
 }));
 
 const recorderMock = vi.hoisted(() => ({
-  listByProject: vi.fn<(projectId: string) => unknown[]>(() => []),
+  latestByProject: vi.fn<(projectId: string) => unknown[]>(() => []),
   listBySchedule: vi.fn<(scheduleId: string) => unknown[]>(() => []),
   listInboxPending: vi.fn<() => unknown[]>(() => []),
   clearInboxPending: vi.fn<(ids: readonly string[]) => string[]>((ids) => [...ids]),
@@ -122,8 +122,8 @@ describe("scheduledRuns handlers", () => {
     });
   });
 
-  it("lists a project's runs and a schedule's runs", async () => {
-    recorderMock.listByProject.mockReturnValue([{ id: "run-1" }]);
+  it("lists each schedule's latest run in a project, and a schedule's runs", async () => {
+    recorderMock.latestByProject.mockReturnValue([{ id: "run-1" }]);
     recorderMock.listBySchedule.mockReturnValue([{ id: "run-2" }]);
 
     await expect(
@@ -132,7 +132,7 @@ describe("scheduledRuns handlers", () => {
     await expect(
       invoke(CHANNELS.SCHEDULED_RUNS_LIST_BY_SCHEDULE, { scheduleId: "schedule-1" })
     ).resolves.toEqual([{ id: "run-2" }]);
-    expect(recorderMock.listByProject).toHaveBeenCalledWith("project-1");
+    expect(recorderMock.latestByProject).toHaveBeenCalledWith("project-1");
     expect(recorderMock.listBySchedule).toHaveBeenCalledWith("schedule-1");
   });
 
@@ -140,7 +140,7 @@ describe("scheduledRuns handlers", () => {
     await expect(
       invoke(CHANNELS.SCHEDULED_RUNS_LIST_BY_PROJECT, { projectId: "" })
     ).rejects.toThrow(/validation failed/);
-    expect(recorderMock.listByProject).not.toHaveBeenCalled();
+    expect(recorderMock.latestByProject).not.toHaveBeenCalled();
   });
 
   it("answers an empty history when the history can't be opened", async () => {

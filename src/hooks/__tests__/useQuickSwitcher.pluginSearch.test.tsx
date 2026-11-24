@@ -187,11 +187,25 @@ describe("useQuickSwitcher plugin search providers", () => {
   it("leaves out providers the user turned off or whose keyword another plugin holds", async () => {
     catalog = [
       provider({ shown: false }),
-      provider({ key: "other.notes.notes", pluginId: "other.notes", keywordTakenBy: "Acme" }),
+      provider({
+        key: "acme.docs.docs",
+        pluginId: "acme.docs",
+        pluginName: "Acme Docs",
+        keyword: "docs",
+        blend: false,
+      }),
+      provider({
+        key: "other.docs.docs",
+        pluginId: "other.docs",
+        keyword: "docs",
+        keywordTakenBy: "Acme Docs",
+      }),
     ];
     const { result } = await openSwitcher();
     act(() => result.current.setQuery("notes"));
     expect(result.current.keywordProvider).toBeNull();
+    act(() => result.current.setQuery("docs"));
+    expect(result.current.keywordProvider?.key).toBe("acme.docs.docs");
     await settle(150);
     expect(bridge.querySearchProvider).not.toHaveBeenCalled();
   });

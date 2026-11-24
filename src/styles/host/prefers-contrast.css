@@ -142,6 +142,13 @@
     outline-width: 3px;
   }
 
+  /* The code viewer's ring sits on its scroll wrapper, inset so it stays inside
+     the box, so the offset deepens with the width. */
+  [data-code-viewer-scroll]:has(.cm-content:focus-visible) {
+    outline-width: 3px;
+    outline-offset: -3px;
+  }
+
   /* A voice send's wait paints the shell itself, outside the states above: its
      caption, and the dictation status caption that shares its place, take the
      stepped-up placeholder ink, and its progress bar the full foreground. */

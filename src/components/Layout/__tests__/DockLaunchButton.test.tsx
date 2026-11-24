@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, createEvent, waitFor, act, cleanup } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
@@ -27,6 +27,7 @@ const addPanelMock = vi.fn();
 let popoverCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let popoverPointerDownOutsideSpy: (() => void) | null = null;
 let popoverEscapeKeyDownSpy: ((e: { preventDefault: () => void }) => void) | null = null;
+let popoverInteractOutsideSpy: ((e: Event) => void) | null = null;
 let popoverOpenAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let popoverOpenChangeSpy: ((open: boolean) => void) | null = null;
 /** Which side the content anchored on — the one thing placement changes. */
@@ -152,6 +153,7 @@ let mockAgentSettings: {
       accounts?: Array<{ id: string; name: string; configDir: string }>;
       accountId?: string;
       worktreeAccounts?: Record<string, string | null>;
+      defaultLoginName?: string;
     }
   >;
 } | null = { agents: {} };
@@ -358,6 +360,7 @@ vi.mock("@/components/ui/popover", () => ({
     onCloseAutoFocus,
     onPointerDownOutside,
     onEscapeKeyDown,
+    onInteractOutside,
     onFocus,
     onKeyDown,
     onMouseDown,
@@ -369,6 +372,7 @@ vi.mock("@/components/ui/popover", () => ({
     onCloseAutoFocus?: (e: { preventDefault: () => void }) => void;
     onPointerDownOutside?: () => void;
     onEscapeKeyDown?: (e: { preventDefault: () => void }) => void;
+    onInteractOutside?: (e: Event) => void;
     onFocus?: React.FocusEventHandler<HTMLDivElement>;
     onKeyDown?: React.KeyboardEventHandler<HTMLDivElement>;
     onMouseDown?: React.MouseEventHandler<HTMLDivElement>;
@@ -377,6 +381,7 @@ vi.mock("@/components/ui/popover", () => ({
     popoverCloseAutoFocusSpy = onCloseAutoFocus ?? null;
     popoverPointerDownOutsideSpy = onPointerDownOutside ?? null;
     popoverEscapeKeyDownSpy = onEscapeKeyDown ?? null;
+    popoverInteractOutsideSpy = onInteractOutside ?? null;
     popoverSide = side;
     // Radix renders FocusScope/DismissableLayer with asChild, so these land on
     // the same node the focus trap parks focus on. tabIndex mirrors that.
@@ -446,7 +451,8 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
   };
 });
 
-import { DockLaunchButton } from "../DockLaunchButton";
+import { DockLaunchButton, preloadDockLaunchPalette } from "../DockLaunchButton";
+import { DockLaunchPalette } from "../DockLaunchPalette";
 import { usePluginLaunchEntriesStore } from "@/store/pluginLaunchEntriesStore";
 import type { LauncherArrangement } from "@shared/config/launcherArrangement";
 import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuStrings";
@@ -546,6 +552,10 @@ function movePointer(
 // launcher scrolls the active option into view on every selection move.
 Element.prototype.scrollIntoView = vi.fn();
 
+// The palette is its own chunk. Loaded once here, so every launcher below draws
+// it in its first commit; the cold path has its own file.
+beforeAll(() => preloadDockLaunchPalette());
+
 beforeEach(() => {
   mockRecipes = [];
   mockMruEntries = [];
@@ -561,6 +571,7 @@ beforeEach(() => {
   popoverCloseAutoFocusSpy = null;
   popoverPointerDownOutsideSpy = null;
   popoverEscapeKeyDownSpy = null;
+  popoverInteractOutsideSpy = null;
   popoverOpenAutoFocusSpy = null;
   popoverOpenChangeSpy = null;
   popoverSide = undefined;
@@ -1338,20 +1349,14 @@ describe("DockLaunchButton", () => {
     );
   });
 
-  it("falls back to the recipe manager from the cue when no worktree is active", () => {
-    // recipe.editor.open's handler hard-requires a string worktreeId and
-    // silently no-ops on undefined — the common first-run case has no active
-    // worktree, so the cue must route to the manager instead of dead-ending.
+  it("opens a project-wide draft from the cue when no worktree is active (#16906)", () => {
+    // The common first-run case, and every folder without git, has no active
+    // worktree; the editor then drafts a project recipe.
     mockRecipes = [];
     const { getByText } = renderButton();
 
     fireEvent.click(getByText("Create a recipe"));
-    expect(actionDispatchMock).toHaveBeenCalledWith("recipe.manager.open", {}, { source: "menu" });
-    expect(actionDispatchMock).not.toHaveBeenCalledWith(
-      "recipe.editor.open",
-      expect.anything(),
-      expect.anything()
-    );
+    expect(actionDispatchMock.mock.calls).toEqual([["recipe.editor.open", {}, { source: "menu" }]]);
   });
 
   it("fills the first column past a short agent list instead of leaving it empty", () => {
@@ -2813,6 +2818,44 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       expect(document.activeElement).toBe(searchInput(container));
     });
 
+    // The vetoes live in the palette and reach the content shell through its
+    // handle, so these run real cancelable events through the real shell.
+    it("holds the launcher through an outside click, then spends Escape on capture, query, close", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "cla" } });
+      openCapture(container);
+      const capturing = () => container.querySelector('[data-testid="capture-widget-claude"]');
+      expect(capturing()).toBeTruthy();
+      input.focus();
+
+      const outside = new Event("pointerdown", { cancelable: true });
+      act(() => popoverInteractOutsideSpy!(outside));
+      expect(outside.defaultPrevented).toBe(true);
+      expect(capturing()).toBeTruthy();
+
+      const escape = () => new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+      const first = escape();
+      act(() => popoverEscapeKeyDownSpy!(first));
+      expect(first.defaultPrevented).toBe(true);
+      expect(capturing()).toBeNull();
+      expect(input.value).toBe("cla");
+
+      const second = escape();
+      act(() => popoverEscapeKeyDownSpy!(second));
+      expect(second.defaultPrevented).toBe(true);
+      expect(input.value).toBe("");
+
+      const third = escape();
+      act(() => popoverEscapeKeyDownSpy!(third));
+      expect(third.defaultPrevented).toBe(false);
+
+      // Nothing recording, so an outside click dismisses as usual.
+      const later = new Event("pointerdown", { cancelable: true });
+      act(() => popoverInteractOutsideSpy!(later));
+      expect(later.defaultPrevented).toBe(false);
+    });
+
     it("clears the recorder when the launcher closes", () => {
       const { container } = renderButton({ agents: READY });
       openCapture(container);
@@ -3237,6 +3280,16 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       for (const row of accountRows(container)) {
         expect(row.getAttribute("aria-label")).toMatch(/^[^,]+, Claude account/);
       }
+    });
+
+    it("names the default login as the user named it (#17080)", () => {
+      mockAgentSettings = {
+        agents: { claude: { accounts: [COMPANY, PERSONAL], defaultLoginName: "Home" } },
+      };
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      expect(accountRows(container)[0]?.textContent).toContain("Home · default login");
     });
 
     describe("quota headroom (#16407)", () => {
@@ -3767,5 +3820,55 @@ describe("DockLaunchButton — project arrangement (#13791)", () => {
     fireEvent.change(searchInput(container), { target: { value: "claude" } });
     expect(getByText("Claude")).toBeTruthy();
     expect(moreRow(container)).toBeUndefined();
+  });
+});
+
+// The cold path end to end, with the palette's own chunk held back, is in
+// DockLaunchButton.coldLoad.test.tsx; this is the real palette's half of it.
+describe("DockLaunchPalette focus on a late arrival", () => {
+  function renderPalette({ open, focusOnMount }: { open: boolean; focusOnMount: boolean }) {
+    const inputRef = { current: null as HTMLInputElement | null };
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    outside.focus();
+    const utils = render(
+      <DockLaunchPalette
+        agents={AGENTS}
+        onLaunchAgent={vi.fn()}
+        activeWorktreeId={null}
+        cwd="/tmp"
+        placement="dock"
+        open={open}
+        onClose={vi.fn()}
+        inputRef={inputRef}
+        handleRef={{ current: null }}
+        agentAvailability={undefined}
+        newAgentIds={new Set()}
+        markAgentsSeen={vi.fn()}
+        focusOnMount={focusOnMount}
+      />
+    );
+    return { ...utils, outside, input: () => inputRef.current };
+  }
+
+  afterEach(() => {
+    document.body.querySelectorAll(":scope > button").forEach((el) => el.remove());
+  });
+
+  it("takes focus into its search box when it lands after the content opened", () => {
+    const { input } = renderPalette({ open: true, focusOnMount: true });
+    expect(document.activeElement).toBe(input());
+  });
+
+  it("leaves focus to the content shell on a warm open", () => {
+    // Focusing here would run before Radix's focus scope records where focus
+    // came from, and the close would then return focus to this input.
+    const { outside } = renderPalette({ open: true, focusOnMount: false });
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it("takes nothing when it lands after the launcher already closed", () => {
+    const { outside } = renderPalette({ open: false, focusOnMount: true });
+    expect(document.activeElement).toBe(outside);
   });
 });

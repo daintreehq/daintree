@@ -44,7 +44,6 @@ function mountComposer() {
         draftKeyRef,
         editorHostRef,
         editorViewRef,
-        value: "",
         disabled: false,
         placeholder: "Ask anything",
         effectiveTheme: THEME,

@@ -9,5 +9,6 @@ export function createDiffDefaults(options: DiffPanelOptions): Partial<DiffPanel
     ...(options.baseBranch != null && { baseBranch: options.baseBranch }),
     ...(options.changeSet != null && { changeSet: options.changeSet }),
     ...(options.viewedKey != null && { viewedKey: options.viewedKey }),
+    ...(options.fileSide != null && { fileSide: options.fileSide }),
   };
 }

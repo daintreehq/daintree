@@ -20,7 +20,10 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
-import { FIXED_SHORTCUTS } from "@/components/KeyboardShortcuts/fixedShortcuts";
+import {
+  DOUBLE_SHIFT_SHORTCUT,
+  FIXED_SHORTCUTS,
+} from "@/components/KeyboardShortcuts/fixedShortcuts";
 import { pluralize } from "@/lib/pluralize";
 import {
   buildShortcutRows,
@@ -528,7 +531,8 @@ export function KeyboardShortcutsTab() {
   const doubleShiftSubtitle = canopyOn ? DOUBLE_SHIFT_SUBTITLE : DOUBLE_SHIFT_SUBTITLE_NOT_ON;
   const showGestures =
     (filterMode !== "modified" || !doubleShiftOpensCanopy) &&
-    matchesQuery(query, DOUBLE_SHIFT_TITLE, doubleShiftSubtitle, "Shift");
+    (matchesQuery(query, DOUBLE_SHIFT_TITLE, doubleShiftSubtitle, "Shift") ||
+      matchesKeys(query, displayedKeys(DOUBLE_SHIFT_SHORTCUT.keys.join(" "), isMac())));
   // Back on its default it leaves the Modified list, taking the focused switch
   // with it; search is where the keyboard carries on, as for a binding row.
   const setDoubleShift = (value: boolean) => {
@@ -728,6 +732,8 @@ export function KeyboardShortcutsTab() {
       <ConfirmDialog
         isOpen={isResetDialogOpen}
         onClose={handleCancelReset}
+        // A reset that lands disables Reset all, which can't take focus back.
+        restoreFocusTo={searchRef}
         title="Reset keyboard shortcuts?"
         description={`${overrideCount} customized ${overrideCount === 1 ? "shortcut goes" : "shortcuts go"} back to ${overrideCount === 1 ? "its default" : "their defaults"}. Export a profile first to keep a copy you can import later.`}
         confirmLabel="Reset shortcuts"

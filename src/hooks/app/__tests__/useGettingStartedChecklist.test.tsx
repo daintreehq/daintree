@@ -4,24 +4,30 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 // --- Mocks ---
 
+const getChecklistMock = vi.fn(() =>
+  Promise.resolve({
+    items: {
+      openedProject: false,
+      launchedAgent: false,
+      createdWorktree: false,
+      ranSecondParallelAgent: false,
+    },
+    dismissed: false,
+    celebrationShown: false,
+  })
+);
+
 const onboardingMock = {
   get: vi.fn((): Promise<{ completed: boolean; setupBannerDismissed?: boolean }> =>
     Promise.resolve({ completed: true })
   ),
-  getChecklist: vi.fn(() =>
-    Promise.resolve({
-      items: {
-        openedProject: false,
-        launchedAgent: false,
-        createdWorktree: false,
-        ranSecondParallelAgent: false,
-      },
-      dismissed: false,
-      celebrationShown: false,
-    })
-  ),
+  getChecklist: getChecklistMock,
   markChecklistItem: vi.fn(() => Promise.resolve()),
   dismissChecklist: vi.fn(() => Promise.resolve()),
+  // Main clears the persisted dismissal and answers with what it stored.
+  reopenChecklist: vi.fn(() =>
+    getChecklistMock().then((state) => ({ ...state, dismissed: false }))
+  ),
 };
 
 vi.stubGlobal("window", {
@@ -766,6 +772,281 @@ describe("useGettingStartedChecklist", () => {
       fire({ t2: working("t2") });
 
       expect(onboardingMock.markChecklistItem).not.toHaveBeenCalledWith("ranSecondParallelAgent");
+    });
+  });
+
+  describe("reopening a dismissed checklist", () => {
+    const dismissedChecklist = {
+      items: {
+        openedProject: false,
+        launchedAgent: false,
+        createdWorktree: false,
+        ranSecondParallelAgent: false,
+      },
+      dismissed: true,
+      celebrationShown: false,
+    };
+
+    let pushHandler: ((next: ChecklistStateLike) => void) | null = null;
+    const withPush = onboardingMock as typeof onboardingMock & {
+      onChecklistPush?: (fn: (next: ChecklistStateLike) => void) => () => void;
+    };
+
+    beforeEach(() => {
+      onboardingMock.getChecklist.mockResolvedValue(dismissedChecklist);
+      pushHandler = null;
+      withPush.onChecklistPush = (fn) => {
+        pushHandler = fn;
+        return () => {};
+      };
+    });
+
+    afterEach(() => {
+      delete withPush.onChecklistPush;
+    });
+
+    function showGettingStarted() {
+      const showCall = vi
+        .mocked(window.addEventListener)
+        .mock.calls.filter((c) => c[0] === "daintree:show-getting-started")
+        .at(-1);
+      expect(showCall).toBeDefined();
+      const listener = showCall![1];
+      const event = new Event("daintree:show-getting-started");
+      if (typeof listener === "function") listener(event);
+      else listener.handleEvent(event);
+    }
+
+    async function mountDismissed() {
+      const hook = renderHook(() => useGettingStartedChecklist(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(hook.result.current.visible).toBe(false);
+      return hook;
+    }
+
+    it("credits milestones reached while it was dismissed", async () => {
+      const { result } = await mountDismissed();
+
+      // Milestones reached during normal use, after the early dismissal.
+      projectState = { currentProject: "/some/project" };
+      terminalState = {
+        panelsById: { t1: { id: "t1", kind: "terminal", launchAgentId: "claude" } },
+        panelIds: ["t1"],
+        focusedId: null,
+      };
+      worktreeState = {
+        worktrees: new Map([
+          ["main", {}],
+          ["feature", {}],
+        ]),
+      };
+      act(() => {
+        for (const sub of projectSubscribers) sub(projectState, { currentProject: null });
+        for (const sub of terminalSubscribers)
+          sub(terminalState, { panelsById: {}, panelIds: [], focusedId: null });
+        for (const sub of worktreeSubscribers) sub(worktreeState, { worktrees: new Map() });
+      });
+      expect(onboardingMock.markChecklistItem).not.toHaveBeenCalled();
+
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.visible).toBe(true);
+      expect(result.current.checklist?.dismissed).toBe(false);
+      expect(result.current.checklist?.items).toEqual({
+        openedProject: true,
+        launchedAgent: true,
+        createdWorktree: true,
+        ranSecondParallelAgent: false,
+      });
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("launchedAgent");
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("createdWorktree");
+    });
+
+    it("resumes tracking live completions after reopening", async () => {
+      const { result } = await mountDismissed();
+
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      act(() => {
+        projectState = { currentProject: "/some/project" };
+        for (const sub of projectSubscribers) sub(projectState, { currentProject: null });
+      });
+
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
+      expect(result.current.checklist?.items.openedProject).toBe(true);
+    });
+
+    it("clears the persisted dismissal, not just this view's copy", async () => {
+      const { result } = await mountDismissed();
+
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(onboardingMock.reopenChecklist).toHaveBeenCalledTimes(1);
+      expect(result.current.forced).toBe(true);
+    });
+
+    it("stays open when reopening credits the last remaining step", async () => {
+      onboardingMock.getChecklist.mockResolvedValue({
+        ...dismissedChecklist,
+        items: {
+          openedProject: false,
+          launchedAgent: true,
+          createdWorktree: true,
+          ranSecondParallelAgent: true,
+        },
+      });
+      const { result } = await mountDismissed();
+      projectState = { currentProject: "/some/project" };
+
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
+      expect(Object.values(result.current.checklist!.items).every(Boolean)).toBe(true);
+      expect(result.current.visible).toBe(true);
+    });
+
+    it("keeps progress main reports that this view never saw", async () => {
+      // Credited in another project view, so neither this view's hydration
+      // nor its stores know about it.
+      onboardingMock.reopenChecklist.mockResolvedValueOnce({
+        ...dismissedChecklist,
+        dismissed: false,
+        items: { ...dismissedChecklist.items, ranSecondParallelAgent: true },
+      });
+      const { result } = await mountDismissed();
+
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.checklist?.items.ranSecondParallelAgent).toBe(true);
+    });
+
+    it("picks tracking back up when another view reopens it", async () => {
+      const { result } = await mountDismissed();
+      projectState = { currentProject: "/some/project" };
+
+      await act(async () => {
+        pushHandler!({ ...dismissedChecklist, dismissed: false });
+      });
+
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
+      expect(result.current.checklist?.dismissed).toBe(false);
+      expect(result.current.visible).toBe(true);
+    });
+
+    it("credits each step once when its own reopen echo arrives before the reply", async () => {
+      // Main pushes to every view, the sender included, before it replies.
+      onboardingMock.reopenChecklist.mockImplementationOnce(() => {
+        const reopened = { ...dismissedChecklist, dismissed: false };
+        pushHandler!(reopened);
+        return Promise.resolve(reopened);
+      });
+      const { result } = await mountDismissed();
+      projectState = { currentProject: "/some/project" };
+
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // The open project is the only step the stores hold.
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledTimes(1);
+      expect(onboardingMock.markChecklistItem).toHaveBeenCalledWith("openedProject");
+      expect(result.current.checklist?.items.openedProject).toBe(true);
+      expect(result.current.forced).toBe(true);
+    });
+
+    it("keeps a step this view credited when a push doesn't know about it yet", async () => {
+      onboardingMock.getChecklist.mockResolvedValue({ ...dismissedChecklist, dismissed: false });
+      const { result } = renderHook(() => useGettingStartedChecklist(true));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      act(() => result.current.markItem("createdWorktree"));
+
+      await act(async () => {
+        pushHandler!({ ...dismissedChecklist, dismissed: false });
+      });
+
+      expect(result.current.checklist?.items.createdWorktree).toBe(true);
+    });
+
+    it("hides a checklist Help forced open when another view dismisses it", async () => {
+      const { result } = await mountDismissed();
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.forced).toBe(true);
+
+      await act(async () => {
+        pushHandler!(dismissedChecklist);
+      });
+
+      expect(result.current.visible).toBe(false);
+      expect(result.current.forced).toBe(false);
+    });
+
+    it("a hydration read that began before a dismissal doesn't undo it", async () => {
+      const { result, rerender } = renderHook(({ loaded }) => useGettingStartedChecklist(loaded), {
+        initialProps: { loaded: false },
+      });
+      // Reopened before the app state finished loading.
+      await act(async () => {
+        showGettingStarted();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.visible).toBe(true);
+
+      let answerHydration: (state: ChecklistStateLike) => void = () => {};
+      onboardingMock.getChecklist.mockImplementationOnce(
+        () => new Promise((resolve) => (answerHydration = resolve))
+      );
+      rerender({ loaded: true });
+      act(() => result.current.dismiss());
+      await act(async () => {
+        answerHydration({ ...dismissedChecklist, dismissed: false });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.checklist?.dismissed).toBe(true);
+      expect(result.current.visible).toBe(false);
+    });
+
+    it("a dismissal made while the reopen is in flight wins", async () => {
+      let answerReopen: (state: ChecklistStateLike) => void = () => {};
+      onboardingMock.reopenChecklist.mockImplementationOnce(
+        () => new Promise((resolve) => (answerReopen = resolve))
+      );
+      const { result } = await mountDismissed();
+
+      act(() => showGettingStarted());
+      act(() => result.current.dismiss());
+      await act(async () => {
+        answerReopen({ ...dismissedChecklist, dismissed: false });
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(result.current.visible).toBe(false);
+      expect(result.current.forced).toBe(false);
+      expect(result.current.checklist?.dismissed).toBe(true);
     });
   });
 });

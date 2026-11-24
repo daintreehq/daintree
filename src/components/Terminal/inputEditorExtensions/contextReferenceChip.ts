@@ -1,5 +1,5 @@
 import { EditorView, Decoration, WidgetType } from "@codemirror/view";
-import { StateEffect, StateField, type EditorState } from "@codemirror/state";
+import { StateEffect, StateField, type EditorState, type Text } from "@codemirror/state";
 import type { ContextProviderEntry } from "@shared/types/pluginContextProvider";
 import { formatContextReference } from "@shared/utils/pluginContextReference";
 import { contextReferenceLabel } from "@/lib/contextReferenceLabels";
@@ -84,12 +84,13 @@ interface ContextChipState {
 }
 
 function buildTokens(
-  text: string,
+  doc: Text,
   providers: ReadonlyMap<string, ContextReferenceChipProvider>
 ): ContextChipToken[] {
+  // With no provider nothing is drawn, so the draft is never read whole.
   if (providers.size === 0) return [];
   const tokens: ContextChipToken[] = [];
-  for (const token of getAllAtContextReferences(text)) {
+  for (const token of getAllAtContextReferences(doc.toString())) {
     const provider = providers.get(token.prefix);
     if (provider) tokens.push({ ...token, provider });
   }
@@ -158,7 +159,7 @@ class ContextReferenceChipWidget extends WidgetType {
 export const contextReferenceChipField = StateField.define<ContextChipState>({
   create(state) {
     const providers = new Map<string, ContextReferenceChipProvider>();
-    return { providers, tokens: buildTokens(state.doc.toString(), providers) };
+    return { providers, tokens: buildTokens(state.doc, providers) };
   },
   update(value, tr) {
     let providers = value.providers;
@@ -166,7 +167,8 @@ export const contextReferenceChipField = StateField.define<ContextChipState>({
       if (effect.is(setContextReferenceProviders)) providers = effect.value;
     }
     if (!tr.docChanged && providers === value.providers) return value;
-    return { providers, tokens: buildTokens(tr.state.doc.toString(), providers) };
+    if (providers.size === 0 && value.providers.size === 0) return value;
+    return { providers, tokens: buildTokens(tr.state.doc, providers) };
   },
   provide: (f) => [
     EditorView.decorations.of((view) => {

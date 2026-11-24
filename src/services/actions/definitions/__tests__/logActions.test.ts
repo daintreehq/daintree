@@ -4,7 +4,7 @@ import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../..
 const errorStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const notificationHistoryMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const logsClientMock = vi.hoisted(() => ({ clear: vi.fn() }));
-const eventInspectorClientMock = vi.hoisted(() => ({ getEvents: vi.fn() }));
+const eventInspectorClientMock = vi.hoisted(() => ({ getEvents: vi.fn(), clear: vi.fn() }));
 const logsStoreMock = vi.hoisted(() => ({ clearLogs: vi.fn() }));
 
 vi.mock("@/store/errorStore", () => ({
@@ -23,7 +23,19 @@ vi.mock("@/clients", () => ({
   telemetryPreviewClient: {},
 }));
 
+// ActionService pulls in the shortcut-hint store and keybinding service at
+// module load; the repeat-last case below only needs it to dispatch.
+vi.mock("@/store/shortcutHintStore", () => ({
+  shortcutHintStore: {
+    getState: vi.fn(() => ({ counts: {}, show: vi.fn(), incrementCount: vi.fn() })),
+  },
+}));
+vi.mock("@/services/KeybindingService", () => ({
+  keybindingService: { getEffectiveCombo: vi.fn(() => null), getDisplayCombo: vi.fn(() => "") },
+}));
+
 import { registerLogActions } from "../logActions";
+import { useEventStore, type EventRecord } from "@/store/eventStore";
 
 function setupActions(): ActionRegistry {
   const actions: ActionRegistry = new Map();
@@ -341,6 +353,96 @@ describe("logs.clear", () => {
   });
 });
 
+function makeEvent(id: string): EventRecord {
+  return {
+    id,
+    timestamp: Number(id.replace(/\D/g, "")) || 1,
+    type: "agent:state-changed",
+    category: "agent",
+    payload: {},
+    source: "main",
+  };
+}
+
+describe("eventInspector.clear", () => {
+  beforeEach(() => {
+    useEventStore.getState().reset();
+  });
+
+  it("keeps the captured events and the selection when main's clear fails", async () => {
+    useEventStore.getState().setEvents([makeEvent("e1"), makeEvent("e2")]);
+    useEventStore.getState().setSelectedEvent("e2");
+    eventInspectorClientMock.clear.mockRejectedValue(new Error("bridge closed"));
+
+    await expect(run(setupActions(), "eventInspector.clear")).rejects.toThrow("bridge closed");
+
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e1", "e2"]);
+    expect(useEventStore.getState().selectedEventId).toBe("e2");
+  });
+
+  it("keeps what arrived and what was selected while a failing clear was pending", async () => {
+    useEventStore.getState().setEvents([makeEvent("e1"), makeEvent("e2")]);
+    useEventStore.getState().setSelectedEvent("e1");
+    let rejectClear!: (error: Error) => void;
+    eventInspectorClientMock.clear.mockReturnValue(
+      new Promise<void>((_, reject) => {
+        rejectClear = reject;
+      })
+    );
+
+    const pending = run(setupActions(), "eventInspector.clear");
+    useEventStore.getState().addEvents([makeEvent("e3")]);
+    useEventStore.getState().setSelectedEvent("e3");
+    rejectClear(new Error("bridge closed"));
+
+    await expect(pending).rejects.toThrow("bridge closed");
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e1", "e2", "e3"]);
+    expect(useEventStore.getState().selectedEventId).toBe("e3");
+  });
+
+  it("drops what was captured before the clear but keeps events that arrived during it", async () => {
+    useEventStore.getState().setEvents([makeEvent("e1"), makeEvent("e2")]);
+    useEventStore.getState().setSelectedEvent("e1");
+    let resolveClear!: () => void;
+    eventInspectorClientMock.clear.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveClear = resolve;
+      })
+    );
+
+    const pending = run(setupActions(), "eventInspector.clear");
+    // Nothing goes until main acknowledges the clear.
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e1", "e2"]);
+    expect(useEventStore.getState().selectedEventId).toBe("e1");
+    useEventStore.getState().addEvents([makeEvent("e3")]);
+    resolveClear();
+    await pending;
+
+    expect(eventInspectorClientMock.clear).toHaveBeenCalledTimes(1);
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e3"]);
+    expect(useEventStore.getState().selectedEventId).toBeNull();
+  });
+
+  it("keeps a selection made on an event that arrived during the clear", async () => {
+    useEventStore.getState().setEvents([makeEvent("e1")]);
+    let resolveClear!: () => void;
+    eventInspectorClientMock.clear.mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveClear = resolve;
+      })
+    );
+
+    const pending = run(setupActions(), "eventInspector.clear");
+    useEventStore.getState().addEvents([makeEvent("e2")]);
+    useEventStore.getState().setSelectedEvent("e2");
+    resolveClear();
+    await pending;
+
+    expect(useEventStore.getState().events.map((e) => e.id)).toEqual(["e2"]);
+    expect(useEventStore.getState().selectedEventId).toBe("e2");
+  });
+});
+
 describe("eventInspector.getEvents pagination", () => {
   /** Mirrors ActionService.dispatch, which validates argsSchema before run(). */
   async function runParsed(actions: ActionRegistry, id: string, args?: unknown): Promise<any> {
@@ -396,5 +498,37 @@ describe("eventInspector.getEvents pagination", () => {
     await expect(runParsed(actions, "eventInspector.getEvents", { cursor: "-1" })).rejects.toThrow(
       /Invalid cursor/
     );
+  });
+});
+
+describe("logs.setLogLevel", () => {
+  it("opens the picker without displacing the action repeat-last replays (#16948)", async () => {
+    const { ActionService } = await import("@/services/ActionService");
+    const service = new ActionService();
+    for (const [, factory] of setupActions()) {
+      service.register(factory() as AnyActionDefinition);
+    }
+    service.register({
+      id: "test.repeatable",
+      title: "Repeatable",
+      description: "A repeatable command",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      run: async () => {},
+    } as unknown as AnyActionDefinition);
+    const dispatchEvent = vi.fn();
+    vi.stubGlobal("window", { dispatchEvent });
+    try {
+      await service.dispatch("test.repeatable" as never, undefined, { source: "user" });
+      const result = await service.dispatch("logs.setLogLevel", undefined, { source: "user" });
+
+      expect(result.ok).toBe(true);
+      expect(dispatchEvent).toHaveBeenCalledOnce();
+      expect(service.getLastAction()?.actionId).toBe("test.repeatable");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

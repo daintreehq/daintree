@@ -28,6 +28,7 @@ import { WatcherController, type WatcherControllerHost } from "./WatcherControll
 import { SnapshotBuilder, type SnapshotBuilderHost } from "./SnapshotBuilder.js";
 import { StatPrecheck, type StatPrecheckHost } from "./StatPrecheck.js";
 import { BaseDivergence, type BaseDivergenceHost } from "./BaseDivergence.js";
+import type { SharedBaseRefResolver } from "./SharedBaseRefResolver.js";
 import {
   GitStatusPass,
   type GitStatusPassHost,
@@ -310,6 +311,7 @@ export class WorktreeMonitor {
   // Extra state
   private _createdAt: number | undefined;
   private _lifecycleStatus: WorktreeLifecycleStatus | undefined;
+  private _setupRun: WorktreeLifecycleStatus | undefined;
   private _setupStatus: WorktreeSetupStatus | undefined;
   // Accumulated per-phase teardown results. Lifecycle owned by
   // WorktreeLifecycleService.runLifecycleTeardown (cleared at run start, upserted
@@ -426,7 +428,8 @@ export class WorktreeMonitor {
     private mainBranch: string,
     pollQueue?: PQueue,
     generation: number = 0,
-    statusAdmission?: StatusAdmissionController
+    statusAdmission?: StatusAdmissionController,
+    sharedBaseRefs?: SharedBaseRefResolver
   ) {
     this.statusAdmission = statusAdmission;
     this.id = worktree.id;
@@ -681,6 +684,9 @@ export class WorktreeMonitor {
       get lifecycleStatus() {
         return monitor._lifecycleStatus;
       },
+      get setupRun() {
+        return monitor._setupRun;
+      },
       get setupStatus() {
         return monitor._setupStatus;
       },
@@ -871,7 +877,7 @@ export class WorktreeMonitor {
         return monitor._pollAbortController.signal;
       },
     };
-    this.baseDivergence = new BaseDivergence(baseDivergenceHost, this.statPrecheck);
+    this.baseDivergence = new BaseDivergence(baseDivergenceHost, this.statPrecheck, sharedBaseRefs);
 
     const gitStatusPassHost: GitStatusPassHost = {
       get id() {
@@ -1345,6 +1351,10 @@ export class WorktreeMonitor {
     return this._lifecycleStatus;
   }
 
+  get setupRun(): WorktreeLifecycleStatus | undefined {
+    return this._setupRun;
+  }
+
   get setupStatus(): WorktreeSetupStatus | undefined {
     return this._setupStatus;
   }
@@ -1459,6 +1469,12 @@ export class WorktreeMonitor {
 
   setLifecycleStatus(status: WorktreeLifecycleStatus | undefined): void {
     this._lifecycleStatus = status;
+    if (
+      status?.phase === "setup" &&
+      (status.state === "success" || status.state === "failed" || status.state === "timed-out")
+    ) {
+      this._setupRun = status;
+    }
   }
 
   /**

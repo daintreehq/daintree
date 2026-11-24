@@ -66,11 +66,18 @@ const gateRules = topLevelRules(css).filter((rule) =>
 );
 const LOOPS = [
   ".animate-spin-slow",
+  ".animate-spin",
   ".animate-activity-pulse",
   ".animate-breathe",
   ".animate-pulse",
   ".motion-safe\\:animate-pulse",
+  ".animate-pulse-immediate",
+  ".animate-skeleton-shimmer::after",
+  ".pulse-skeleton-shimmer::after",
+  ".forge-status-loading::after",
+  ".palette-loading-bar__sweep",
 ];
+const SKELETON_PULSES = [".animate-pulse-delayed", ".animate-pulse-immediate"];
 
 function ruleFor(target: string): TopLevelRule | undefined {
   return gateRules.find((rule) => rule.selectors.includes(PREFIX + target));
@@ -79,6 +86,7 @@ function ruleFor(target: string): TopLevelRule | undefined {
 describe("power-saving motion CSS", () => {
   it.each([
     ".animate-spin-slow",
+    ".animate-spin",
     ".animate-activity-pulse",
     ".animate-breathe",
     ".animate-pulse",
@@ -87,12 +95,14 @@ describe("power-saving motion CSS", () => {
     expect(ruleFor(target)?.declarations.get("animation")).toBe("none");
   });
 
-  it.each([".animate-skeleton-shimmer::after", ".pulse-skeleton-shimmer::after"])(
-    "hides the %s sweep rather than parking it mid-bone",
-    (target) => {
-      expect(ruleFor(target)?.declarations.get("display")).toBe("none");
-    }
-  );
+  it.each([
+    ".animate-skeleton-shimmer::after",
+    ".pulse-skeleton-shimmer::after",
+    ".forge-status-loading::after",
+    ".palette-loading-bar__sweep",
+  ])("hides the %s sweep rather than parking it mid-track", (target) => {
+    expect(ruleFor(target)?.declarations.get("display")).toBe("none");
+  });
 
   it("targets named classes only — never a wildcard", () => {
     const selectors = gateRules.flatMap((rule) => rule.selectors);
@@ -112,11 +122,17 @@ describe("power-saving motion CSS", () => {
     }
   });
 
-  it("leaves the gated loading pulses alone so skeletons never vanish", () => {
-    const selectors = gateRules.flatMap((rule) => rule.selectors);
-    expect(selectors.some((s) => s.includes("animate-pulse-delayed"))).toBe(false);
-    expect(selectors.some((s) => s.includes("animate-pulse-immediate"))).toBe(false);
-  });
+  it.each(SKELETON_PULSES)(
+    "pauses the %s skeleton pulse rather than removing it, so no bone vanishes or replays its gate",
+    (target) => {
+      const declarations = ruleFor(target)?.declarations;
+      expect(declarations?.get("animation-play-state")).toBe("paused");
+      // Dropping or renaming the animation would restart the reveal on return.
+      for (const property of declarations?.keys() ?? []) {
+        expect(["animation", "animation-name", "display", "opacity"]).not.toContain(property);
+      }
+    }
+  );
 
   describe("reduced rate", () => {
     const reducedRule = (target: string) =>
@@ -139,6 +155,15 @@ describe("power-saving motion CSS", () => {
           .map((selector) => selector.slice(prefix.length))
           .sort();
       expect(targets(REDUCED_PREFIX)).toEqual(targets(PREFIX));
+    });
+
+    it("keeps the delayed skeleton's one-shot reveal eased and steps only its pulse", () => {
+      const timing = reducedRule(".animate-pulse-delayed")?.declarations.get(
+        "animation-timing-function"
+      );
+      const [reveal, pulse] = (timing ?? "").split(/,(?![^(]*\))/).map((part) => part.trim());
+      expect(reveal).not.toMatch(/^steps\(/);
+      expect(stepsOf(pulse)).toBeGreaterThan(0);
     });
 
     it("never hides or removes an animation at the reduced rate", () => {

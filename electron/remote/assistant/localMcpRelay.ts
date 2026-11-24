@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import type { LinkSession } from "../link/session.js";
+import type { RelayNextFallback } from "../../services/mcp-server/shared.js";
 import type { AgentDirectory } from "../../../shared/types/agentDirectory.js";
 import type {
   McpCallAnswer,
@@ -33,7 +34,14 @@ export const LOCAL_RELAY_LINK_SESSION_ID = LOCAL_HOST_ID;
 
 export interface LocalMcpRelayDeps extends Pick<
   McpRelayExecutorDeps,
-  "hasProject" | "openSession" | "retirePrincipal" | "now" | "idleMs"
+  | "hasProject"
+  | "openSession"
+  | "retirePrincipal"
+  | "forgetConversation"
+  | "keptConversations"
+  | "noteConversationCall"
+  | "now"
+  | "idleMs"
 > {
   /** This machine's name, as the prompts its assistants send say where they came from. */
   machineName(): string;
@@ -47,6 +55,12 @@ export interface LocalMcpRelayDeps extends Pick<
    * calls still out have settled, and a held send must not outlive it.
    */
   endHeldSends?(helpSessionId: string): void;
+  /**
+   * Whether a local call's preset move may run unasked once the view finds it
+   * the pane's next own step, and the note that it ran (#17917), as a Shell
+   * matches a host's dispatch of one of its calls.
+   */
+  nextFallback?: RelayNextFallback;
   /** Puts one confirm-gated local call to the person, as a host's question would be. */
   receiveApproval(
     payload: RelayApprovePayload | RelayApproveTimedPayload
@@ -60,6 +74,11 @@ export interface LocalMcpRelayDeps extends Pick<
 
 export interface LocalMcpRelay {
   relayCall(request: RelayCallRequest): Promise<McpCallAnswer>;
+  /**
+   * Stops one of `relayCall`'s calls from `helpSessionId` (#17985), as a
+   * host's MCP_CANCEL does; false when it couldn't be held.
+   */
+  cancelCall(helpSessionId: string, callId: string): boolean;
   /**
    * `terminal.getStatus` in several of this machine's projects (#16191), each
    * through the gates `relayCall` meets there, screens redacted as a host's are.
@@ -93,6 +112,9 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
     hasProject: deps.hasProject,
     openSession: deps.openSession,
     ...(deps.retirePrincipal ? { retirePrincipal: deps.retirePrincipal } : {}),
+    ...(deps.forgetConversation ? { forgetConversation: deps.forgetConversation } : {}),
+    ...(deps.keptConversations ? { keptConversations: deps.keptConversations } : {}),
+    ...(deps.noteConversationCall ? { noteConversationCall: deps.noteConversationCall } : {}),
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.idleMs !== undefined ? { idleMs: deps.idleMs } : {}),
   });
@@ -109,17 +131,24 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
   let disposed = false;
   // One spec for each principal and project, whichever call opens its session first.
   const specFor = (
-    target: { helpSessionId: string; projectId: string; tier: "core" | "full" },
+    target: {
+      helpSessionId: string;
+      conversationId?: string;
+      projectId: string;
+      tier: "core" | "full";
+    },
     global: boolean
   ): RelayMcpSessionSpec => ({
     linkSessionId: LOCAL_RELAY_LINK_SESSION_ID,
     senderId: LOCAL_RELAY_SENDER_ID,
     helpSessionId: target.helpSessionId,
+    ...(target.conversationId !== undefined ? { conversationId: target.conversationId } : {}),
     projectId: target.projectId,
     tier: target.tier,
     shellName: deps.machineName(),
     local: true,
     ...(global ? { global: true as const } : {}),
+    ...(deps.nextFallback ? { nextFallback: deps.nextFallback } : {}),
     deliverNotices: (fired) => {
       if (disposed || fired.length === 0) return;
       deps.receiveNotices({
@@ -146,6 +175,8 @@ export function createLocalMcpRelay(deps: LocalMcpRelayDeps): LocalMcpRelay {
       if (disposed) return { status: "refused", reason: "server-off" };
       return executor.call(specFor(payload, payload.global === true), payload);
     },
+    cancelCall: (helpSessionId, callId) =>
+      !disposed && executor.cancel(LOCAL_RELAY_SENDER_ID, helpSessionId, callId) !== "full",
     status: async (payload) => {
       const read = deps.readAgents;
       return readProjectStatuses(

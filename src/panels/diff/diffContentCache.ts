@@ -34,6 +34,25 @@ export interface CachedDiff {
 const diffCache = new Map<string, CachedDiff>();
 const inflightDiffRequests = new Map<string, Promise<CachedDiff | null>>();
 let diffCacheGeneration = 0;
+// Per file, bumped when its diffs are evicted, so a read that started before
+// the eviction can't put the old patch back when it lands, and a pane showing
+// one of its sides reads it again.
+const fileEpochs = new Map<string, number>();
+const fileEpochListeners = new Set<() => void>();
+
+/** How many times this file's diffs were evicted; a change means read again. */
+export function getFileDiffEpoch(worktreePath: string, filePath: string): number {
+  return fileEpochs.get(fileEpochKey(worktreePath, filePath)) ?? 0;
+}
+
+export function subscribeFileDiffEpochs(listener: () => void): () => void {
+  fileEpochListeners.add(listener);
+  return () => fileEpochListeners.delete(listener);
+}
+
+function fileEpochKey(worktreePath: string, filePath: string): string {
+  return `${worktreePath}\u0000${filePath}`;
+}
 
 /** Identifies what to diff — the two fetch paths differ past this point. */
 export type DiffSubject =
@@ -64,7 +83,29 @@ export type DiffSubject =
 export function _resetDiffCacheForTests(): void {
   diffCache.clear();
   inflightDiffRequests.clear();
+  fileEpochs.clear();
   diffCacheGeneration++;
+}
+
+/**
+ * Drop every working-tree, staged and unstaged diff of one file, and any read
+ * of one still in flight, and have every pane showing one of its sides read
+ * it again. Staging a hunk moves the index under both sides without touching
+ * the file, so the freshness key, which reads the file's status, time and line
+ * counts, never notices.
+ */
+export function evictCachedDiffsForFile(worktreePath: string, filePath: string): void {
+  const epochKey = fileEpochKey(worktreePath, filePath);
+  fileEpochs.set(epochKey, (fileEpochs.get(epochKey) ?? 0) + 1);
+  const prefixes = (["working-tree", "staged", "unstaged"] as const).map((source) =>
+    [source, worktreePath, filePath, ""].join("\u0000")
+  );
+  for (const map of [diffCache, inflightDiffRequests]) {
+    for (const key of [...map.keys()]) {
+      if (prefixes.some((prefix) => key.startsWith(prefix))) map.delete(key);
+    }
+  }
+  for (const listener of [...fileEpochListeners]) listener();
 }
 
 export function diffCacheKey(subject: DiffSubject, ignoreWhitespace: boolean): string {
@@ -164,6 +205,21 @@ async function fetchDiffContent(
 }
 
 /**
+ * Whether a diff of this source is kept once it lands. A base-branch key is
+ * `baseBranch + currentBranch` — branch NAMES, which are not content identity:
+ * `main` advancing produces the same key for different content, and the
+ * freshness signal can't catch it either (it reads working-tree file metadata,
+ * which is "missing" for a clean worktree). So a reopen would serve the old
+ * diff with no stale banner. The modal this replaced cached nothing here; keep
+ * it that way until we can key on commit ids. A since-review diff is
+ * uncacheable for the same reason: its mark can be replaced or cleared under an
+ * unchanged key.
+ */
+export function isCacheableDiffSource(source: DiffSubject["source"]): boolean {
+  return source !== "base-branch" && source !== "since-review";
+}
+
+/**
  * Single fetch path shared by the foreground load and the next-file prefetch:
  * cache hits resolve without dispatching and in-flight requests are deduped so
  * the two never double-spend the shared gitOps rate-limit budget. The
@@ -177,16 +233,9 @@ export function requestDiff(
   freshnessKey?: string
 ): Promise<CachedDiff | null> {
   const key = diffCacheKey(subject, ignoreWhitespace);
-  // A base-branch key is `baseBranch + currentBranch` — branch NAMES, which are
-  // not content identity: `main` advancing produces the same key for different
-  // content, and the freshness signal can't catch it either (it reads
-  // working-tree file metadata, which is "missing" for a clean worktree). So a
-  // reopen would serve the old diff with no stale banner. The modal this
-  // replaced cached nothing here; keep it that way until we can key on commit
-  // ids. In-flight dedup still applies — that window is one request's lifetime.
-  // A since-review diff is uncacheable for the same reason: its mark can be
-  // replaced or cleared under an unchanged key.
-  const cacheable = subject.source !== "base-branch" && subject.source !== "since-review";
+  // In-flight dedup still applies to an uncacheable subject — that window is
+  // one request's lifetime.
+  const cacheable = isCacheableDiffSource(subject.source);
   if (!bypassCache) {
     if (cacheable) {
       const cached = diffCache.get(key);
@@ -201,12 +250,16 @@ export function requestDiff(
     if (inflight) return inflight;
   }
   const generation = diffCacheGeneration;
+  const epochKey = fileEpochKey(subject.worktreePath, subject.filePath);
+  const epoch = fileEpochs.get(epochKey);
   const request = fetchDiffContent(subject, ignoreWhitespace)
     .then((fetched) => {
       if (fetched === null) return null;
       const entry: CachedDiff = { content: fetched.content, freshnessKey };
       if (fetched.sinceReview) entry.sinceReview = fetched.sinceReview;
-      if (cacheable && generation === diffCacheGeneration) cacheDiff(key, entry);
+      if (cacheable && generation === diffCacheGeneration && epoch === fileEpochs.get(epochKey)) {
+        cacheDiff(key, entry);
+      }
       return entry;
     })
     .finally(() => {

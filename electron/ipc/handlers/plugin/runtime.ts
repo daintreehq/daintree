@@ -320,7 +320,8 @@ export async function handleRestartWorker(
  */
 export async function handleReportPanelLifecycle(
   ctx: IpcContext,
-  events: PluginPanelLifecycleEvent[]
+  events: PluginPanelLifecycleEvent[],
+  options?: { replay?: boolean }
 ): Promise<void> {
   // `ctx.event.sender` lets the service forget this renderer's panels when its
   // view is destroyed — otherwise a closed project view's panels linger and get
@@ -328,7 +329,8 @@ export async function handleReportPanelLifecycle(
   (await getPluginService()).ingestPanelLifecycleEvents(
     ctx.webContentsId,
     events,
-    panelLifecycleSourceFor(ctx)
+    panelLifecycleSourceFor(ctx),
+    { replay: options?.replay === true }
   );
 }
 
@@ -343,6 +345,39 @@ export async function handleReportPanelInventory(
     nonPluginPanelIds,
     panelLifecycleSourceFor(ctx)
   );
+}
+
+/**
+ * Record the plugin views the sender has mounted outside the panel grid
+ * (#17068): settings, sidebar, toolbar and Canopy views, surfaces and file
+ * editors. Each entry is a view id, once per mount; main resolves who owns it.
+ * Watched like the unsaved-panel report, so a reload, crash or closed view
+ * never leaves a worker held open for views no longer on screen.
+ */
+export async function handleReportViewConsumers(ctx: IpcContext, viewIds: string[]): Promise<void> {
+  const sender = ctx.event?.sender;
+  // A document that already ended would never fire the events that forget its report.
+  if (sender?.isDestroyed()) return;
+  const source = sender ? undefined : panelLifecycleSourceFor(ctx);
+  const watch = sender
+    ? watchWebContentsDocument(sender)
+    : source
+      ? watchSourceHandle(source)
+      : undefined;
+  if (!watch) return;
+  // Watched across the await too, for the same reason.
+  let ended = false;
+  const stopWatching = watch(() => {
+    ended = true;
+  });
+  let service: Awaited<ReturnType<typeof getPluginService>>;
+  try {
+    service = await getPluginService();
+  } finally {
+    stopWatching();
+  }
+  if (ended) return;
+  service.ingestHostedViewConsumers(ctx.webContentsId, watch, viewIds);
 }
 
 /**

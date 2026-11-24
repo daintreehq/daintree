@@ -22,11 +22,16 @@ vi.mock("../../../utils/logger.js", () => ({
   }),
 }));
 
-const { isClaudeSessionWithoutTranscriptMock } = vi.hoisted(() => ({
-  isClaudeSessionWithoutTranscriptMock: vi.fn(
-    async (_record: unknown, _terminalId: string) => false
-  ),
-}));
+const { isClaudeSessionWithoutTranscriptMock, getClaudePaneConversationStoreMock } = vi.hoisted(
+  () => ({
+    isClaudeSessionWithoutTranscriptMock: vi.fn(
+      async (_record: unknown, _terminalId: string) => false
+    ),
+    getClaudePaneConversationStoreMock: vi.fn(
+      (_terminalId: string, _sessionId: string | undefined): unknown => undefined
+    ),
+  })
+);
 
 // The real lookup reads the developer's own Claude store; keep every case here
 // independent of whatever happens to be on this machine.
@@ -39,6 +44,7 @@ vi.mock("../../claude/ClaudeSessionStore.js", () => ({
   observeClaudeTranscript: vi.fn(async () => "unknown"),
   findUntouchedClaudeSession: vi.fn(async () => undefined),
   isClaudeSessionWithoutTranscript: isClaudeSessionWithoutTranscriptMock,
+  getClaudePaneConversationStore: getClaudePaneConversationStoreMock,
 }));
 
 import { journalAgentSession, journalAgentSessionRecord } from "../agentSessionJournal.js";
@@ -73,6 +79,8 @@ describe("journalAgentSession", () => {
     disposeLifecycleLedger();
     isClaudeSessionWithoutTranscriptMock.mockReset();
     isClaudeSessionWithoutTranscriptMock.mockResolvedValue(false);
+    getClaudePaneConversationStoreMock.mockReset();
+    getClaudePaneConversationStoreMock.mockReturnValue(undefined);
     recordedEvents = [];
     unsubscribe = events.on("agent-session:recorded", (payload) => {
       recordedEvents.push({ sessionId: payload.sessionId });
@@ -100,6 +108,37 @@ describe("journalAgentSession", () => {
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ sessionId: "sess-1", agentId: "claude" });
     expect(recordedEvents).toEqual([{ sessionId: "sess-1" }]);
+  });
+
+  it("records where a conversation its pane reopened from another account's folder is stored (#17087)", async () => {
+    const store = { sessionId: "sess-1", configDir: "/home/me/.claude-company" };
+    getClaudePaneConversationStoreMock.mockImplementation((terminalId, sessionId) =>
+      terminalId === "term-1" && sessionId === "sess-1" ? store : undefined
+    );
+
+    await journalAgentSession(makeRecord("sess-1"), { terminalId: "term-1", generation: null });
+    await journalAgentSession(makeRecord("sess-2"), { terminalId: "term-1", generation: null });
+
+    const records = new Map(
+      (await readSessionHistory(userDataDir)).map((record) => [record.sessionId, record])
+    );
+    expect(records.get("sess-1")?.conversationStore).toEqual(store);
+    expect(records.get("sess-2")).not.toHaveProperty("conversationStore");
+  });
+
+  it("keeps the store the closing launch had when a respawn replaces it mid-check (#17087)", async () => {
+    const store = { sessionId: "sess-1", configDir: "/home/me/.claude-company" };
+    getClaudePaneConversationStoreMock.mockReturnValue(store);
+    // The respawn lands while the close is still asking whether a transcript exists.
+    isClaudeSessionWithoutTranscriptMock.mockImplementation(async () => {
+      getClaudePaneConversationStoreMock.mockReturnValue(undefined);
+      return false;
+    });
+
+    await journalAgentSession(makeRecord("sess-1"), { terminalId: "term-1", generation: null });
+
+    const [record] = await readSessionHistory(userDataDir);
+    expect(record?.conversationStore).toEqual(store);
   });
 
   it("lands a close already out of Canopy's Trash when the user removed its run while it ended", async () => {

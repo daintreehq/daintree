@@ -2,12 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
-import { usePortalStore } from "@/store/portalStore";
 import { isDevPreviewPanel } from "@shared/types/panel";
-import { buildDevPreviewPartition, partitionProjectKey } from "@shared/utils/partitionUtils";
-import { pluginViewHostId } from "@/components/Plugin/remotePluginView";
-import { logError } from "@/utils/logger";
-import { getPortalBoundsWithRetry, showPortalTabIfNoOverlay } from "./portalHelpers";
 
 const argsSchema = z
   .object({
@@ -55,10 +50,12 @@ export function registerDevPreviewActions(
     title: "Reload preview",
     description:
       "Reload the dev preview page without restarting its dev server. Try this first when the preview looks stale; restart the server only when its process is wedged or its config changed.",
+    paletteDescription: "Reload the dev preview page without restarting its server",
     category: "devServer",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["stale"],
     palette: {
       mode: "requireContext",
       isReady: () => isDevPreviewFocused(),
@@ -82,6 +79,7 @@ export function registerDevPreviewActions(
     title: "Restart dev server",
     description:
       "Stop the dev server and start it again, keeping caches and dependencies. The preview is down until it returns; reload the page first unless the server process itself is the problem.",
+    paletteDescription: "Stop and restart the dev server, keeping caches and dependencies",
     category: "devServer",
     kind: "command",
     danger: "safe",
@@ -141,77 +139,6 @@ export function registerDevPreviewActions(
     run: async (args: unknown, ctx: ActionContext) => {
       const target = resolveTarget(args, ctx);
       await window.electron.devPreview.reinstallAndRestart(target);
-    },
-  }));
-
-  actions.set("devPreview.promoteToPortal", () => ({
-    id: "devPreview.promoteToPortal",
-    title: "Open in portal",
-    description:
-      "Open the current dev preview URL in a Portal tab, sharing the same session (cookies, localStorage, IndexedDB). The dev preview stays open; sessionStorage does not carry over.",
-    category: "devServer",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    keywords: ["portal", "promote", "browser", "preview", "session"],
-    palette: {
-      mode: "requireContext",
-      // resolveTarget() needs a focused dev preview AND ctx.projectId.
-      isReady: (ctx) => Boolean(ctx.projectId) && isDevPreviewFocused(),
-      reason: "Focus a dev preview to open it in a Portal",
-    },
-    argsSchema,
-    run: async (args: unknown, ctx: ActionContext) => {
-      const { panelId, projectId } = resolveTarget(args, ctx);
-      const panel = usePanelStore.getState().getTerminal(panelId);
-      if (!panel || !isDevPreviewPanel(panel)) {
-        throw new Error("Focused panel is not a dev preview");
-      }
-
-      const url = panel.browserUrl?.trim() || panel.devServerUrl?.trim();
-      if (!url) {
-        // Nothing has loaded yet — no-op rather than opening a blank tab.
-        return;
-      }
-
-      const partition = buildDevPreviewPartition(
-        partitionProjectKey(projectId, pluginViewHostId()),
-        panel.worktreeId,
-        panelId
-      );
-      const title = panel.title?.trim() || "Dev preview";
-      const tabId = `tab-${crypto.randomUUID()}`;
-
-      const portal = usePortalStore.getState();
-      if (!portal.isOpen) {
-        portal.setOpen(true);
-      }
-
-      const bounds = await getPortalBoundsWithRetry();
-      try {
-        // Create the WebContentsView on the dev-preview partition BEFORE the tab
-        // becomes active. PortalVisibilityController auto-creates any active,
-        // not-yet-created tab via a partition-less portal.create; pre-creating
-        // here (and marking it created) makes that path a no-op so the shared
-        // session isn't lost to a racing default-partition view (#9102).
-        await window.electron.portal.create({ tabId, url, partition });
-        const store = usePortalStore.getState();
-        store.markTabCreated(tabId);
-        usePortalStore.setState((s) => ({
-          tabs: [...s.tabs, { id: tabId, url, title, partition }],
-          activeTabId: tabId,
-        }));
-        if (bounds) {
-          await showPortalTabIfNoOverlay(tabId, bounds);
-        }
-      } catch (error) {
-        logError("Failed to promote dev preview to portal", error);
-        // Roll the half-created tab back, then rethrow: swallowing here made
-        // dispatch() resolve {ok:true} on a failed promotion, so the caller had
-        // nothing to surface and the user saw nothing at all (#11114).
-        usePortalStore.getState().closeTab(tabId);
-        throw error;
-      }
     },
   }));
 }

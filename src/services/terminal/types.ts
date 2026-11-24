@@ -98,6 +98,11 @@ export interface ManagedTerminal {
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;
+  /**
+   * Brings the cached selection up to date before a read. Set by the listener
+   * installer, which defers extracting selection text while a drag is live.
+   */
+  syncCachedSelection?: () => void;
   exitSubscribers: Set<(exitCode: number | null) => void>;
   parserHandler?: { dispose: () => void };
   getRefreshTier: RefreshTierProvider;
@@ -248,6 +253,12 @@ export interface ManagedTerminal {
 
   // Focus state
   isFocused: boolean;
+  /**
+   * `performance.now()` of the last real key press or click in this pane,
+   * which opens its OSC 52 clipboard window (#17327). Never stamped by PTY
+   * writes made on the user's behalf.
+   */
+  lastUserGestureAt?: number;
 
   // Render backpressure / synchronization hints
   pendingWrites?: number;

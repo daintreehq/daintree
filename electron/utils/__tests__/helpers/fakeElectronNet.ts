@@ -20,6 +20,8 @@ export class FakeClientRequest extends EventEmitter {
   readonly headers: Record<string, string> = {};
   aborted = false;
   ended = false;
+  /** What `end()` sent as the request body. */
+  body: string | undefined;
   /** A redirect this request was allowed to follow, in order. */
   readonly followed: string[] = [];
   response: (Readable & { statusCode: number }) | null = null;
@@ -36,7 +38,8 @@ export class FakeClientRequest extends EventEmitter {
     this.headers[name.toLowerCase()] = value;
   }
 
-  end(): void {
+  end(chunk?: string | Buffer): void {
+    if (chunk !== undefined) this.body = String(chunk);
     this.ended = true;
     queueMicrotask(() => this.net.serve(this, this.options.url!));
   }

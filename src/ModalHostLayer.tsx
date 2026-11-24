@@ -1,34 +1,48 @@
-import { Suspense } from "react";
+import { Suspense, type ReactNode } from "react";
 import { TourHost } from "@/components/Tour/TourHost";
-import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
+import type { Project, ProjectCreationIdentity } from "@shared/types";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
 import type { ProjectCloneStartRequest } from "@shared/types/ipc/projectClone";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
-import type { UseQuickSwitcherReturn } from "./hooks/useQuickSwitcher";
-import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
-import { MORE_AGENTS_PANEL_ID, type UsePanelPaletteReturn } from "./hooks/usePanelPalette";
 import type { UseProjectSwitcherPaletteReturn } from "./hooks/useProjectSwitcherPalette";
-import type { UseActionPaletteReturn } from "./hooks/useActionPalette";
-import type { UseWorktreePaletteReturn } from "./hooks/useWorktreePalette";
-import type { UseQuickCreatePaletteReturn } from "./hooks/useQuickCreatePalette";
 import type { GettingStartedChecklistState } from "./hooks/app/useGettingStartedChecklist";
 import type { ReEntrySummaryState } from "./hooks/useReEntrySummary";
 import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
 import type { PluginDeepLinkState } from "./hooks/app";
 import type { SettingsTab } from "./components/Settings";
 import type { NonGitFolderStep } from "./components/Project/NonGitFolderDialog";
-import { ErrorBoundary } from "./components/ErrorBoundary";
-import { launchPanelKind } from "@/registry/panelKindLaunch";
-import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
-import { notify } from "@/lib/notify";
-import { logError } from "@/utils/logger";
+import type { PluginUiPromptParams } from "@shared/types/pluginUiPrompt";
+import { afterCatch, ErrorBoundary } from "./components/ErrorBoundary";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
+import { ProjectSwitcherModalLayer } from "./components/Project/ProjectSwitcherModalLayer";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
+import { useWorktreeResourceTeardownConfirmStore } from "@/store/worktreeResourceTeardownConfirmStore";
 import { cancelRecipeRunConfirmations } from "@/store/recipeRunConfirmStore";
 import {
   cancelScheduleRunConfirmations,
   useScheduleRunConfirmStore,
 } from "@/store/scheduleRunConfirmStore";
+import {
+  declineFailedLayoutApplyConfirmation,
+  useLayoutApplyConfirmStore,
+} from "@/store/layoutApplyConfirmStore";
+import {
+  declineGlobalAssistantReplacement,
+  useGlobalAssistantReplaceConfirmStore,
+} from "@/store/globalAssistantReplaceConfirmStore";
+import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
+import { declineFailedMcpConfirmation } from "@/store/mcpConfirmStore";
+import { usePluginConfirmStore } from "@/store/pluginConfirmStore";
+import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
+import { usePluginCapabilityConfirmStore } from "@/store/pluginCapabilityConfirmStore";
+import { usePluginArchiveInstallStore } from "@/store/pluginArchiveInstallStore";
+import { declineFailedPanelLimitConfirmation } from "@/store/panelLimitStore";
+import { declineFailedGitPushConfirmation } from "@/store/gitPushConfirmStore";
+import { declineFailedGitPullRebaseConfirmation } from "@/store/gitPullRebaseConfirmStore";
+import { declineFailedFileMutationConfirmation } from "@/store/fileMutationConfirmStore";
+import { declineFailedGitWorktreeOperationConfirmation } from "@/store/gitWorktreeOperationConfirmStore";
+import { useGitForcePushStore } from "@/store/gitForcePushStore";
+import { cancelFailedRecipeConflict } from "@/store/recipeConflictStore";
 import { usePilotStore } from "@/store/pilotStore";
 import { useCanopyOfferShown } from "@/hooks/app/useCanopyOfferShown";
 import { useScratchStore } from "@/store/scratchStore";
@@ -42,20 +56,7 @@ import { HostSwitchMount } from "./components/HostSwitch/HostSwitchMount";
 import { HostsOverviewMount } from "./components/Hosts/Overview/HostsOverviewMount";
 import { MaximizeFlights, PanelTransitionOverlay } from "./components/Panel";
 import { usePluginManagerStore } from "./store";
-import { actionService } from "./services/ActionService";
 import {
-  LazyQuickSwitcher,
-  LazySendToAgentPalette,
-  LazyWorktreePalette,
-  LazyQuickCreatePalette,
-  LazyPanelPalette,
-  LazyProjectSwitcherPalette,
-  LazyThemePalette,
-  LazyResumeSessionsPalette,
-  LazyRecentDictationsPalette,
-  LazyLogLevelPalette,
-  LazyActionPalette,
-  LazyWorktreeOverviewModal,
   LazyPilotView,
   LazyCanopyOffer,
   LazyCrossWorktreeDiff,
@@ -67,6 +68,7 @@ import {
   LazyLayoutApplyConfirmDialog,
   LazyRecipeRunConfirmDialog,
   LazyScheduleRunConfirmDialog,
+  LazyGlobalAssistantReplaceConfirmDialog,
   LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
@@ -87,46 +89,36 @@ import {
   LazyGitWorktreeOperationConfirmDialog,
   LazyGitForcePushConfirmDialog,
   LazyProjectSleepConfirmDialog,
+  LazyWorktreeResourceTeardownConfirmDialog,
   LazyRecipeConflictDialog,
   LazyOnboardingFlow,
   LazyGettingStartedChecklist,
   LazyProjectGroupDialogs,
 } from "./lazyPanels";
 import { useProjectGroupsStore } from "./store/projectGroupsStore";
+import {
+  QuickSwitcherHost,
+  SendToAgentPaletteHost,
+  WorktreePaletteHost,
+  QuickCreatePaletteHost,
+  PanelPaletteHost,
+  ThemePaletteHost,
+  ResumeSessionsPaletteHost,
+  RecentDictationsPaletteHost,
+  LogLevelPaletteHost,
+  ActionPaletteHost,
+  WorktreeOverviewHost,
+} from "./PaletteHosts";
 
 interface ModalHostLayerProps {
-  quickSwitcher: UseQuickSwitcherReturn;
-  shouldMountQuickSwitcher: boolean;
-  sendToAgentPalette: ReturnType<typeof useSendToAgentPalette>;
-  shouldMountSendToAgentPalette: boolean;
-  worktreePalette: UseWorktreePaletteReturn;
-  shouldMountWorktreePalette: boolean;
-  quickCreatePalette: UseQuickCreatePaletteReturn;
-  shouldMountQuickCreatePalette: boolean;
-  panelPalette: UsePanelPaletteReturn;
-  shouldMountPanelPalette: boolean;
   resumeSession: (session: AgentSessionRecord) => Promise<void>;
   handleLaunchAgent: (type: string) => void | Promise<void>;
   defaultTerminalCwd: string | undefined;
   activeWorktreeId: string | null;
   isProjectSwitcherModalOpen: boolean;
   projectSwitcherPalette: UseProjectSwitcherPaletteReturn;
-  isThemePaletteOpen: boolean;
-  shouldMountThemePalette: boolean;
-  closeThemePalette: () => void;
-  isResumeSessionsPaletteOpen: boolean;
-  shouldMountResumeSessionsPalette: boolean;
-  isRecentDictationsPaletteOpen: boolean;
-  shouldMountRecentDictationsPalette: boolean;
-  isLogLevelPaletteOpen: boolean;
-  shouldMountLogLevelPalette: boolean;
-  closeLogLevelPalette: () => void;
-  actionPalette: UseActionPaletteReturn;
-  shouldMountActionPalette: boolean;
   isWorktreeOverviewOpen: boolean;
   closeWorktreeOverview: () => void;
-  worktrees: WorktreeState[];
-  isLoading: boolean;
   selectWorktree: (id: string, options?: { source?: "user" | "focus" }) => void;
   availability: UseAgentLauncherReturn["availability"];
   crossDiffDialog: { isOpen: boolean; initialWorktreeId: string | null };
@@ -197,44 +189,53 @@ interface ModalHostLayerProps {
 }
 
 /**
+ * One plugin prompt dialog's boundary. Keyed on the prompt in front only while
+ * it is this dialog's kind, so a dialog whose chunk failed retries on its own
+ * next prompt and dismisses only that one, never a prompt another dialog owns.
+ */
+function PluginPromptHost({
+  kind,
+  componentName,
+  children,
+}: {
+  kind: PluginUiPromptParams["kind"];
+  componentName: string;
+  children: ReactNode;
+}) {
+  const promptId = usePluginPromptStore((s) =>
+    s.current?.params.kind === kind ? s.current.promptId : ""
+  );
+  return (
+    <ErrorBoundary
+      variant="component"
+      componentName={componentName}
+      resetKeys={[promptId]}
+      onError={afterCatch(() => dismissFailedUiPrompt(promptId))}
+    >
+      <Suspense fallback={null}>{children}</Suspense>
+    </ErrorBoundary>
+  );
+}
+
+/**
  * Every always-mounted or conditionally-lazy palette, dialog, and overlay
  * host in the app shell — one `ErrorBoundary` + `Suspense` pair per lazy
  * child, matching the original inline structure 1:1 so each host's fault
  * isolation and reset-key behavior is unchanged by the move out of AppInner.
+ *
+ * A host whose dialog answers a waiting request also settles, on failure, the
+ * request its reset key names, so a dialog that can't load or render declines
+ * its caller, and the queue behind it moves on, instead of waiting for good.
  */
 export function ModalHostLayer({
-  quickSwitcher,
-  shouldMountQuickSwitcher,
-  sendToAgentPalette,
-  shouldMountSendToAgentPalette,
-  worktreePalette,
-  shouldMountWorktreePalette,
-  quickCreatePalette,
-  shouldMountQuickCreatePalette,
-  panelPalette,
-  shouldMountPanelPalette,
   resumeSession,
   handleLaunchAgent,
   defaultTerminalCwd,
   activeWorktreeId,
   isProjectSwitcherModalOpen,
   projectSwitcherPalette,
-  isThemePaletteOpen,
-  shouldMountThemePalette,
-  closeThemePalette,
-  isResumeSessionsPaletteOpen,
-  shouldMountResumeSessionsPalette,
-  isRecentDictationsPaletteOpen,
-  shouldMountRecentDictationsPalette,
-  isLogLevelPaletteOpen,
-  shouldMountLogLevelPalette,
-  closeLogLevelPalette,
-  actionPalette,
-  shouldMountActionPalette,
   isWorktreeOverviewOpen,
   closeWorktreeOverview,
-  worktrees,
-  isLoading,
   selectWorktree,
   availability,
   crossDiffDialog,
@@ -301,270 +302,27 @@ export function ModalHostLayer({
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
   // Each Run now question retries a dialog that failed, so none waits on a fallback.
   const scheduleRunConfirmKey = useScheduleRunConfirmStore((s) => s.current?.requestId ?? "");
-
-  // Both palette activation paths (click and Enter) launch the same way, and
-  // through the same seam the dock uses, so a kind can't behave differently
-  // depending on which launcher opened it (#11668). The palette closes on
-  // select, so a refusal has to be reported or it leaves no trace.
-  const launchPanelFromPalette = (kindId: string, name: string) => {
-    void launchPanelKind({
-      kindId,
-      location: "grid",
-      cwd: defaultTerminalCwd,
-      worktreeId: activeWorktreeId,
-      source: "user",
-    })
-      .then((outcome) => {
-        if (outcome.route !== "action" || outcome.result.ok) return;
-        // A full grid is already reported by `addPanel` with the real recovery.
-        if (isPanelLimitError(outcome.result.error.message)) return;
-        logError("Panel launch from palette refused", outcome.result.error);
-        notify({
-          type: "error",
-          title: `Couldn't open ${name}`,
-          // Purpose-written, and general enough to stay true across every kind
-          // the palette offers — the action's own messages name internal ids
-          // and carry no fix.
-          message:
-            "No project folder or worktree resolved for this launch. Open a project or select a worktree, then try again.",
-          // `uiFeedback` is passive; without this the palette's only signal
-          // would be an inbox row.
-          priority: "high",
-          context: { eventKind: "uiFeedback" },
-          action: { label: "Retry", onClick: () => launchPanelFromPalette(kindId, name) },
-        });
-      })
-      .catch((error) => logError("Panel launch from palette failed", error));
-  };
+  const resourceTeardownConfirmKey = useWorktreeResourceTeardownConfirmStore((s) => s.requestSeq);
+  const layoutApplyConfirmKey = useLayoutApplyConfirmStore((s) => s.current?.requestId ?? "");
+  // Mounted only once a plugin has asked, so a view no plugin asks loads nothing.
+  const globalReplaceRequestSeq = useGlobalAssistantReplaceConfirmStore((s) => s.requestSeq);
 
   return (
     <>
-      <ErrorBoundary
-        variant="component"
-        componentName="QuickSwitcher"
-        resetKeys={[Number(quickSwitcher.isOpen)]}
-      >
-        {shouldMountQuickSwitcher && (
-          <Suspense fallback={null}>
-            <LazyQuickSwitcher
-              isOpen={quickSwitcher.isOpen}
-              query={quickSwitcher.query}
-              results={quickSwitcher.results}
-              totalResults={quickSwitcher.totalResults}
-              selectedIndex={quickSwitcher.selectedIndex}
-              matchesById={quickSwitcher.matchesById}
-              isLoading={quickSwitcher.isLoading}
-              close={quickSwitcher.close}
-              setQuery={quickSwitcher.setQuery}
-              setSelectedIndex={quickSwitcher.setSelectedIndex}
-              selectPrevious={quickSwitcher.selectPrevious}
-              selectNext={quickSwitcher.selectNext}
-              selectItem={quickSwitcher.selectItem}
-              confirmSelection={quickSwitcher.confirmSelection}
-              scopedProvider={quickSwitcher.scopedProvider}
-              keywordProvider={quickSwitcher.keywordProvider}
-              scopedStatus={quickSwitcher.scopedStatus}
-              enterScope={quickSwitcher.enterScope}
-              exitScope={quickSwitcher.exitScope}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="SendToAgentPalette"
-        resetKeys={[Number(sendToAgentPalette.isOpen)]}
-      >
-        {shouldMountSendToAgentPalette && (
-          <Suspense fallback={null}>
-            <LazySendToAgentPalette
-              isOpen={sendToAgentPalette.isOpen}
-              query={sendToAgentPalette.query}
-              results={sendToAgentPalette.results}
-              totalResults={sendToAgentPalette.totalResults}
-              selectedIndex={sendToAgentPalette.selectedIndex}
-              close={sendToAgentPalette.close}
-              setQuery={sendToAgentPalette.setQuery}
-              selectPrevious={sendToAgentPalette.selectPrevious}
-              selectNext={sendToAgentPalette.selectNext}
-              selectItem={sendToAgentPalette.selectItem}
-              confirmSelection={sendToAgentPalette.confirmSelection}
-              setSelectedIndex={sendToAgentPalette.setSelectedIndex}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="WorktreePalette"
-        resetKeys={[Number(worktreePalette.isOpen)]}
-      >
-        {shouldMountWorktreePalette && (
-          <Suspense fallback={null}>
-            <LazyWorktreePalette
-              isOpen={worktreePalette.isOpen}
-              query={worktreePalette.query}
-              results={worktreePalette.results}
-              totalResults={worktreePalette.totalResults}
-              activeWorktreeId={worktreePalette.activeWorktreeId}
-              selectedIndex={worktreePalette.selectedIndex}
-              isStale={worktreePalette.isStale}
-              onQueryChange={worktreePalette.setQuery}
-              onSelectPrevious={worktreePalette.selectPrevious}
-              onSelectNext={worktreePalette.selectNext}
-              onSelect={worktreePalette.selectWorktree}
-              onConfirm={worktreePalette.confirmSelection}
-              onClose={worktreePalette.close}
-              onSelectIndex={worktreePalette.setSelectedIndex}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="QuickCreatePalette"
-        resetKeys={[Number(quickCreatePalette.isOpen)]}
-      >
-        {shouldMountQuickCreatePalette && (
-          <Suspense fallback={null}>
-            <LazyQuickCreatePalette palette={quickCreatePalette} />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="PanelPalette"
-        resetKeys={[Number(panelPalette.isOpen)]}
-      >
-        {shouldMountPanelPalette && (
-          <Suspense fallback={null}>
-            <LazyPanelPalette
-              isOpen={panelPalette.isOpen}
-              query={panelPalette.query}
-              results={panelPalette.results}
-              totalResults={panelPalette.totalResults}
-              selectedIndex={panelPalette.selectedIndex}
-              matchesById={panelPalette.matchesById}
-              onQueryChange={panelPalette.setQuery}
-              onSelectPrevious={panelPalette.selectPrevious}
-              onSelectNext={panelPalette.selectNext}
-              onHoverIndex={panelPalette.setSelectedIndex}
-              onSelect={(kind) => {
-                const result = panelPalette.handleSelect(kind);
-                if (!result) return;
-                if (result.resumeSession) {
-                  void resumeSession(result.resumeSession);
-                } else if (result.id.startsWith("agent:")) {
-                  const agentId = result.id.slice("agent:".length);
-                  if (agentId) {
-                    void handleLaunchAgent(agentId);
-                  }
-                } else {
-                  launchPanelFromPalette(result.id, result.name);
-                }
-              }}
-              onConfirm={() => {
-                const selected = panelPalette.confirmSelection();
-                if (!selected) return;
-                if (selected.id === MORE_AGENTS_PANEL_ID) return;
-                if (selected.resumeSession) {
-                  void resumeSession(selected.resumeSession);
-                } else if (selected.id.startsWith("agent:")) {
-                  const agentId = selected.id.slice("agent:".length);
-                  if (agentId) {
-                    void handleLaunchAgent(agentId);
-                  }
-                } else {
-                  launchPanelFromPalette(selected.id, selected.name);
-                }
-              }}
-              onClose={panelPalette.close}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="ProjectSwitcherPalette"
-        resetKeys={[Number(isProjectSwitcherModalOpen)]}
-      >
-        {isProjectSwitcherModalOpen && (
-          <Suspense fallback={null}>
-            <LazyProjectSwitcherPalette
-              isOpen={isProjectSwitcherModalOpen}
-              query={projectSwitcherPalette.query}
-              results={projectSwitcherPalette.results}
-              browseBands={projectSwitcherPalette.browseBands}
-              selectedIndex={projectSwitcherPalette.selectedIndex}
-              cycleRequest={projectSwitcherPalette.cycleRequest}
-              onQueryChange={projectSwitcherPalette.setQuery}
-              onSelectPrevious={projectSwitcherPalette.selectPrevious}
-              onSelectNext={projectSwitcherPalette.selectNext}
-              onSelect={projectSwitcherPalette.selectRow}
-              onHoverProject={projectSwitcherPalette.onHoverProject}
-              onHoverProjectEnd={projectSwitcherPalette.onHoverProjectEnd}
-              onHoverRow={projectSwitcherPalette.hoverRow}
-              fleetLiveness={projectSwitcherPalette.fleetLiveness}
-              onClose={projectSwitcherPalette.close}
-              onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
-              onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
-              onSleepProject={(projectId) => void projectSwitcherPalette.sleepProject(projectId)}
-              onRestartProject={(projectId) => projectSwitcherPalette.restartProject(projectId)}
-              onLocateProject={(projectId) => {
-                projectSwitcherPalette.locateProject(projectId);
-              }}
-              onMoveOrRenameProject={(projectId) => {
-                projectSwitcherPalette.moveOrRenameProject(projectId);
-              }}
-              onTogglePinProject={(projectId) =>
-                void projectSwitcherPalette.togglePinProject(projectId)
-              }
-              onCopyPath={projectSwitcherPalette.copyPath}
-              removeConfirmProject={projectSwitcherPalette.removeConfirmProject}
-              onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
-              onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
-              isRemovingProject={projectSwitcherPalette.isRemovingProject}
-              sleepConfirmProject={projectSwitcherPalette.sleepConfirmProject}
-              onSleepConfirmClose={() => projectSwitcherPalette.setSleepConfirmProject(null)}
-              onConfirmSleep={projectSwitcherPalette.confirmSleep}
-              isSleepingProject={projectSwitcherPalette.isSleepingProject}
-              onSelectNewWindow={(project) => {
-                projectSwitcherPalette.close();
-                void actionService.dispatch(
-                  "app.newWindow",
-                  { projectPath: project.path },
-                  { source: "user" }
-                );
-              }}
-              rankedSearch={projectSwitcherPalette.isRankedSearch}
-              scratchResults={projectSwitcherPalette.scratchResults}
-              onCreateScratch={(name) => void projectSwitcherPalette.createScratch(name)}
-              onSelectScratch={(scratch) => void projectSwitcherPalette.selectScratch(scratch)}
-              onRequestDeleteScratch={projectSwitcherPalette.requestDeleteScratch}
-              deleteScratchConfirm={projectSwitcherPalette.deleteScratchConfirm}
-              onDismissDeleteScratchConfirm={projectSwitcherPalette.dismissDeleteScratchConfirm}
-              onConfirmDeleteScratch={() => void projectSwitcherPalette.confirmDeleteScratch()}
-              isDeletingScratch={projectSwitcherPalette.isDeletingScratch}
-              onRequestDeleteAllScratches={projectSwitcherPalette.requestDeleteAllScratches}
-              deleteAllScratchesConfirm={projectSwitcherPalette.deleteAllScratchesConfirm}
-              onDismissDeleteAllScratchesConfirm={
-                projectSwitcherPalette.dismissDeleteAllScratchesConfirm
-              }
-              onConfirmDeleteAllScratches={() =>
-                void projectSwitcherPalette.confirmDeleteAllScratches()
-              }
-              isDeletingAllScratches={projectSwitcherPalette.isDeletingAllScratches}
-              onRenameScratch={(scratchId, name) =>
-                void projectSwitcherPalette.renameScratch(scratchId, name)
-              }
-              onSaveAsProject={(scratchId) => void projectSwitcherPalette.saveAsProject(scratchId)}
-              saveAsProjectConfirm={projectSwitcherPalette.saveAsProjectConfirm}
-              onDismissSaveAsProjectConfirm={projectSwitcherPalette.dismissSaveAsProjectConfirm}
-              onOpenSavedProject={projectSwitcherPalette.openSavedProject}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <QuickSwitcherHost />
+      <SendToAgentPaletteHost />
+      <WorktreePaletteHost />
+      <QuickCreatePaletteHost />
+      <PanelPaletteHost
+        resumeSession={resumeSession}
+        handleLaunchAgent={handleLaunchAgent}
+        defaultTerminalCwd={defaultTerminalCwd}
+        activeWorktreeId={activeWorktreeId}
+      />
+      <ProjectSwitcherModalLayer
+        isProjectSwitcherModalOpen={isProjectSwitcherModalOpen}
+        projectSwitcherPalette={projectSwitcherPalette}
+      />
       {/*
         Mounted here, once per view, rather than inside the switcher: the
         switcher renders in more than one place, and its menus open these from
@@ -582,105 +340,24 @@ export function ModalHostLayer({
         onConfirm={projectSwitcherPalette.confirmStopProject}
       />
 
-      <ErrorBoundary
-        variant="component"
-        componentName="ThemePalette"
-        resetKeys={[Number(isThemePaletteOpen)]}
-      >
-        {shouldMountThemePalette && (
-          <Suspense fallback={null}>
-            <LazyThemePalette isOpen={isThemePaletteOpen} onClose={closeThemePalette} />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <ThemePaletteHost />
 
-      <ErrorBoundary
-        variant="component"
-        componentName="ResumeSessionsPalette"
-        resetKeys={[Number(isResumeSessionsPaletteOpen)]}
-      >
-        {shouldMountResumeSessionsPalette && (
-          <Suspense fallback={null}>
-            <LazyResumeSessionsPalette />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <ResumeSessionsPaletteHost />
 
-      <ErrorBoundary
-        variant="component"
-        componentName="RecentDictationsPalette"
-        resetKeys={[Number(isRecentDictationsPaletteOpen)]}
-      >
-        {shouldMountRecentDictationsPalette && (
-          <Suspense fallback={null}>
-            <LazyRecentDictationsPalette />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <RecentDictationsPaletteHost />
 
-      <ErrorBoundary
-        variant="component"
-        componentName="LogLevelPalette"
-        resetKeys={[Number(isLogLevelPaletteOpen)]}
-      >
-        {shouldMountLogLevelPalette && (
-          <Suspense fallback={null}>
-            <LazyLogLevelPalette isOpen={isLogLevelPaletteOpen} onClose={closeLogLevelPalette} />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <LogLevelPaletteHost />
 
-      <ErrorBoundary
-        variant="component"
-        componentName="ActionPalette"
-        resetKeys={[Number(actionPalette.isOpen)]}
-      >
-        {shouldMountActionPalette && (
-          <Suspense fallback={null}>
-            <LazyActionPalette
-              isOpen={actionPalette.isOpen}
-              query={actionPalette.query}
-              results={actionPalette.results}
-              totalResults={actionPalette.totalResults}
-              selectedIndex={actionPalette.selectedIndex}
-              isStale={actionPalette.isStale}
-              sections={actionPalette.sections}
-              close={actionPalette.close}
-              setQuery={actionPalette.setQuery}
-              setSelectedIndex={actionPalette.setSelectedIndex}
-              selectPrevious={actionPalette.selectPrevious}
-              selectNext={actionPalette.selectNext}
-              executeAction={actionPalette.executeAction}
-              confirmSelection={actionPalette.confirmSelection}
-              pinAction={actionPalette.pinAction}
-              unpinAction={actionPalette.unpinAction}
-              hideAction={actionPalette.hideAction}
-              argPrompt={actionPalette.argPrompt}
-              argBack={actionPalette.argBack}
-              onSearchProjects={(query) => projectSwitcherPalette.open("modal", { query })}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <ActionPaletteHost
+        onSearchProjects={(query) => projectSwitcherPalette.open("modal", { query })}
+      />
 
-      <ErrorBoundary
-        variant="component"
-        componentName="WorktreeOverviewModal"
-        resetKeys={[Number(isWorktreeOverviewOpen)]}
-      >
-        {isWorktreeOverviewOpen && (
-          <Suspense fallback={null}>
-            <LazyWorktreeOverviewModal
-              isOpen={isWorktreeOverviewOpen}
-              onClose={closeWorktreeOverview}
-              worktrees={worktrees}
-              isLoading={isLoading}
-              activeWorktreeId={activeWorktreeId}
-              onSelectWorktree={selectWorktree}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
+      <WorktreeOverviewHost
+        isOpen={isWorktreeOverviewOpen}
+        onClose={closeWorktreeOverview}
+        activeWorktreeId={activeWorktreeId}
+        onSelectWorktree={selectWorktree}
+      />
 
       <ErrorBoundary
         variant="component"
@@ -762,6 +439,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="McpConfirmDialog"
           resetKeys={[mcpConfirmResetKey]}
+          onError={afterCatch(() => declineFailedMcpConfirmation(mcpConfirmResetKey))}
         >
           <Suspense fallback={null}>
             <LazyMcpConfirmDialog />
@@ -773,6 +451,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginConfirmDialog"
           resetKeys={[pluginConfirmResetKey]}
+          onError={afterCatch(() => usePluginConfirmStore.getState().drop(pluginConfirmResetKey))}
         >
           <Suspense fallback={null}>
             <LazyPluginConfirmDialog />
@@ -784,6 +463,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginMcpConfirmDialog"
           resetKeys={[pluginMcpConfirmResetKey]}
+          onError={afterCatch(() =>
+            usePluginMcpConfirmStore.getState().drop(pluginMcpConfirmResetKey)
+          )}
         >
           <Suspense fallback={null}>
             <LazyPluginMcpConfirmDialog />
@@ -795,6 +477,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="PluginArchiveInstallConfirmDialog"
           resetKeys={[pluginArchiveInstallResetKey]}
+          onError={afterCatch(() =>
+            usePluginArchiveInstallStore.getState().drop(pluginArchiveInstallResetKey)
+          )}
         >
           <Suspense fallback={null}>
             <LazyPluginArchiveInstallConfirmDialog />
@@ -802,28 +487,27 @@ export function ModalHostLayer({
         </ErrorBoundary>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginQuickPickDialog">
-          <Suspense fallback={null}>
-            <LazyPluginQuickPickDialog />
-          </Suspense>
-        </ErrorBoundary>
+        <PluginPromptHost kind="quickPick" componentName="PluginQuickPickDialog">
+          <LazyPluginQuickPickDialog />
+        </PluginPromptHost>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginSendToAgentDialog">
-          <Suspense fallback={null}>
-            <LazyPluginSendToAgentDialog />
-          </Suspense>
-        </ErrorBoundary>
+        <PluginPromptHost kind="sendToAgent" componentName="PluginSendToAgentDialog">
+          <LazyPluginSendToAgentDialog />
+        </PluginPromptHost>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginInputBoxDialog">
-          <Suspense fallback={null}>
-            <LazyPluginInputBoxDialog />
-          </Suspense>
-        </ErrorBoundary>
+        <PluginPromptHost kind="inputBox" componentName="PluginInputBoxDialog">
+          <LazyPluginInputBoxDialog />
+        </PluginPromptHost>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="LayoutApplyConfirmDialog">
+        <ErrorBoundary
+          variant="component"
+          componentName="LayoutApplyConfirmDialog"
+          resetKeys={[layoutApplyConfirmKey]}
+          onError={afterCatch(() => declineFailedLayoutApplyConfirmation(layoutApplyConfirmKey))}
+        >
           <Suspense fallback={null}>
             <LazyLayoutApplyConfirmDialog />
           </Suspense>
@@ -856,25 +540,37 @@ export function ModalHostLayer({
           </Suspense>
         </ErrorBoundary>
       )}
-      {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginConfirmPromptDialog">
+      {isStateLoaded && globalReplaceRequestSeq > 0 && (
+        <ErrorBoundary
+          variant="component"
+          componentName="GlobalAssistantReplaceConfirmDialog"
+          resetKeys={[globalReplaceRequestSeq]}
+          // A hand-off nobody can be asked about replaces nothing.
+          onError={() => declineGlobalAssistantReplacement()}
+        >
           <Suspense fallback={null}>
-            <LazyPluginConfirmPromptDialog />
+            <LazyGlobalAssistantReplaceConfirmDialog />
           </Suspense>
         </ErrorBoundary>
       )}
       {isStateLoaded && (
-        <ErrorBoundary variant="component" componentName="PluginRunRecipeDialog">
-          <Suspense fallback={null}>
-            <LazyPluginRunRecipeDialog />
-          </Suspense>
-        </ErrorBoundary>
+        <PluginPromptHost kind="confirm" componentName="PluginConfirmPromptDialog">
+          <LazyPluginConfirmPromptDialog />
+        </PluginPromptHost>
+      )}
+      {isStateLoaded && (
+        <PluginPromptHost kind="runRecipe" componentName="PluginRunRecipeDialog">
+          <LazyPluginRunRecipeDialog />
+        </PluginPromptHost>
       )}
       {isStateLoaded && (
         <ErrorBoundary
           variant="component"
           componentName="PluginCapabilityConfirmDialog"
           resetKeys={[pluginCapabilityConfirmResetKey]}
+          onError={afterCatch(() =>
+            usePluginCapabilityConfirmStore.getState().drop(pluginCapabilityConfirmResetKey)
+          )}
         >
           <Suspense fallback={null}>
             <LazyPluginCapabilityConfirmDialog />
@@ -949,6 +645,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="PanelLimitConfirmDialog"
           resetKeys={[panelLimitResetKey]}
+          onError={() => declineFailedPanelLimitConfirmation(panelLimitResetKey)}
         >
           <Suspense fallback={null}>
             <LazyPanelLimitConfirmDialog />
@@ -977,6 +674,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="GitPushConfirmDialog"
           resetKeys={[gitPushResetKey]}
+          onError={() => declineFailedGitPushConfirmation(gitPushResetKey)}
         >
           <Suspense fallback={null}>
             <LazyGitPushConfirmDialog />
@@ -989,6 +687,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="GitPullRebaseConfirmDialog"
           resetKeys={[gitPullRebaseResetKey]}
+          onError={() => declineFailedGitPullRebaseConfirmation(gitPullRebaseResetKey)}
         >
           <Suspense fallback={null}>
             <LazyGitPullRebaseConfirmDialog />
@@ -1001,6 +700,7 @@ export function ModalHostLayer({
           variant="component"
           componentName="FileMutationConfirmDialog"
           resetKeys={[fileMutationResetKey]}
+          onError={() => declineFailedFileMutationConfirmation(fileMutationResetKey)}
         >
           <Suspense fallback={null}>
             <LazyFileMutationConfirmDialog />
@@ -1013,6 +713,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="GitWorktreeOperationConfirmDialog"
           resetKeys={[gitWorktreeOperationResetKey]}
+          onError={() =>
+            declineFailedGitWorktreeOperationConfirmation(gitWorktreeOperationResetKey)
+          }
         >
           <Suspense fallback={null}>
             <LazyGitWorktreeOperationConfirmDialog />
@@ -1025,6 +728,9 @@ export function ModalHostLayer({
           variant="component"
           componentName="GitForcePushConfirmDialog"
           resetKeys={[gitForcePushResetKey]}
+          onError={() =>
+            useGitForcePushStore.getState().resolveConfirmation(gitForcePushResetKey, false)
+          }
         >
           <Suspense fallback={null}>
             <LazyGitForcePushConfirmDialog />
@@ -1050,8 +756,26 @@ export function ModalHostLayer({
       {isStateLoaded && (
         <ErrorBoundary
           variant="component"
+          componentName="WorktreeResourceTeardownConfirmDialog"
+          resetKeys={[resourceTeardownConfirmKey]}
+          // A failed lazy import never reaches the dialog's own boundary; settle
+          // the request the action is awaiting rather than leave it to hang.
+          onError={() =>
+            useWorktreeResourceTeardownConfirmStore.getState().resolveConfirmation(false)
+          }
+        >
+          <Suspense fallback={null}>
+            <LazyWorktreeResourceTeardownConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+
+      {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
           componentName="RecipeConflictDialog"
           resetKeys={[recipeConflictResetKey]}
+          onError={() => cancelFailedRecipeConflict(recipeConflictResetKey)}
         >
           <Suspense fallback={null}>
             <LazyRecipeConflictDialog />

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type {
   DecisionsExportResult,
+  DecisionsHistoryRemoveResult,
   DecisionsLocalDeleteResult,
   DecisionsRelayDeleteResult,
   DecisionsStatus,
@@ -10,7 +11,12 @@ import type {
   ExportDecisionsDataPayload,
 } from "@shared/types/decisions";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  SettingsDeepLinkProvider,
+  type SettingsDeepLink,
+} from "@/components/Settings/settingsDeepLink";
 import { DecisionsDataSection } from "../DecisionsDataSection";
+import { DecisionsExportDialog } from "../DecisionsExportDialog";
 
 const ORIGIN = "https://decisions.example.workers.dev";
 const HOST = "decisions.example.workers.dev";
@@ -20,6 +26,7 @@ const exportData = vi.fn<(payload: ExportDecisionsDataPayload) => Promise<Decisi
 const deleteRelayData =
   vi.fn<(payload: DeleteDecisionsRelayDataPayload) => Promise<DecisionsRelayDeleteResult>>();
 const deleteLocalData = vi.fn<() => Promise<DecisionsLocalDeleteResult>>();
+const removeSettledQuestions = vi.fn<() => Promise<DecisionsHistoryRemoveResult>>();
 
 function renderSection(
   status: DecisionsStatus,
@@ -69,8 +76,11 @@ describe("DecisionsDataSection", () => {
     exportData.mockReset();
     deleteRelayData.mockReset();
     deleteLocalData.mockReset();
+    removeSettledQuestions.mockReset();
     Object.defineProperty(window, "electron", {
-      value: { decisions: { exportData, deleteRelayData, deleteLocalData } },
+      value: {
+        decisions: { exportData, deleteRelayData, deleteLocalData, removeSettledQuestions },
+      },
       configurable: true,
       writable: true,
     });
@@ -117,6 +127,114 @@ describe("DecisionsDataSection", () => {
 
     fireEvent.click(button("Export…"));
     expect(passphraseFields().map((field) => field.value)).toEqual(["", ""]);
+  });
+
+  it("exports on Enter once both passphrases match, never for an IME's or a held Enter", async () => {
+    const reply = deferred<DecisionsExportResult>();
+    exportData.mockReturnValue(reply.promise);
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN });
+
+    fireEvent.click(button("Export…"));
+    const [first, second] = passphraseFields();
+    fireEvent.change(first, { target: { value: PASSPHRASE } });
+    fireEvent.keyDown(first, { key: "Enter" });
+    fireEvent.change(second, { target: { value: `${PASSPHRASE}!` } });
+    fireEvent.keyDown(second, { key: "Enter" });
+    // An IME's Enter commits its candidate, not the export.
+    fireEvent.change(second, { target: { value: PASSPHRASE } });
+    fireEvent.keyDown(second, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(second, { key: "Enter", keyCode: 229 });
+    // Nor a held Enter's repeats.
+    fireEvent.keyDown(second, { key: "Enter", repeat: true });
+    expect(exportData).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.keyDown(second, { key: "Enter" });
+    });
+    expect(exportData).toHaveBeenCalledExactlyOnceWith({ passphrase: PASSPHRASE });
+    expect(passphraseFields().map((field) => field.value)).toEqual(["", ""]);
+
+    await act(async () => {
+      reply.resolve({ result: "cancelled" });
+    });
+    await gone("dialog");
+  });
+
+  it("exports on Enter from the first passphrase field too, and on the form's own submit", async () => {
+    exportData.mockResolvedValue({ result: "cancelled" });
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN });
+    const fill = () => {
+      const [first, second] = passphraseFields();
+      fireEvent.change(first, { target: { value: PASSPHRASE } });
+      fireEvent.change(second, { target: { value: PASSPHRASE } });
+      return first;
+    };
+
+    fireEvent.click(button("Export…"));
+    const first = fill();
+    await act(async () => {
+      fireEvent.keyDown(first, { key: "Enter" });
+    });
+    expect(exportData).toHaveBeenCalledOnce();
+    await gone("dialog");
+
+    fireEvent.click(button("Export…"));
+    const again = fill();
+    await act(async () => {
+      fireEvent.submit(again.form!);
+    });
+    expect(exportData).toHaveBeenCalledTimes(2);
+    expect(exportData).toHaveBeenLastCalledWith({ passphrase: PASSPHRASE });
+  });
+
+  it("sends nothing from the keyboard or the form while an export is running", () => {
+    const onExport = vi.fn<(passphrase: string) => void>();
+    const dialogWhile = (exporting: boolean) => (
+      <TooltipProvider>
+        <DecisionsExportDialog
+          isOpen
+          exporting={exporting}
+          error={null}
+          onCancel={() => {}}
+          onExport={onExport}
+        />
+      </TooltipProvider>
+    );
+    const view = render(dialogWhile(false));
+    const [first, second] = passphraseFields();
+    fireEvent.change(first, { target: { value: PASSPHRASE } });
+    fireEvent.change(second, { target: { value: PASSPHRASE } });
+
+    view.rerender(dialogWhile(true));
+    fireEvent.keyDown(second, { key: "Enter" });
+    fireEvent.submit(second.form!);
+    expect(onExport).not.toHaveBeenCalled();
+
+    view.rerender(dialogWhile(false));
+    fireEvent.keyDown(second, { key: "Enter" });
+    expect(onExport).toHaveBeenCalledExactlyOnceWith(PASSPHRASE);
+  });
+
+  it("ties the mismatch to the repeated passphrase for assistive tech, and lets go of it once fixed", () => {
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN });
+
+    fireEvent.click(button("Export…"));
+    const [first, second] = passphraseFields();
+    const describedBy = (field: HTMLInputElement) =>
+      (field.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+    fireEvent.change(first, { target: { value: PASSPHRASE } });
+    fireEvent.change(second, { target: { value: `${PASSPHRASE}!` } });
+    expect(second.getAttribute("aria-invalid")).toBe("true");
+    const errorId = describedBy(second).find((id) =>
+      document.getElementById(id)?.textContent?.includes("The passphrases don't match")
+    );
+    expect(errorId).toBeTruthy();
+    expect(first.getAttribute("aria-invalid")).toBeNull();
+    expect(describedBy(first)).not.toContain(errorId);
+
+    fireEvent.change(second, { target: { value: PASSPHRASE } });
+    expect(second.getAttribute("aria-invalid")).toBeNull();
+    expect(describedBy(second)).not.toContain(errorId);
   });
 
   it("keeps the export open with the reason when main couldn't export, and shows nothing for a cancel", async () => {
@@ -227,22 +345,113 @@ describe("DecisionsDataSection", () => {
     const status: DecisionsStatus = { state: "not-connected", consentedAt: 5 };
     deleteLocalData.mockResolvedValue({ result: "deleted", status });
     const onChanged = vi.fn();
-    renderSection({ state: "not-connected", relayOrigin: ORIGIN, keysStored: true }, { onChanged });
+    renderSection(
+      {
+        state: "not-connected",
+        relayOrigin: ORIGIN,
+        keysStored: true,
+        recoveryKitVerifiedAt: 1,
+        recoveryKitCurrent: true,
+        keysVersion: "current.none",
+      },
+      { onChanged }
+    );
 
     fireEvent.click(button("Delete local data"));
     const confirmDialog = screen.getByRole("alertdialog");
     expect(confirmDialog.textContent).toContain(`Nothing on ${HOST} changes`);
     expect(confirmDialog.textContent).toContain("recovery kit");
+    // A current kit holds the keys, so a click is enough.
+    expect(within(confirmDialog).queryByRole("textbox")).toBeNull();
     await act(async () => {
       fireEvent.click(within(confirmDialog).getByRole("button", { name: "Delete local data" }));
     });
 
-    expect(deleteLocalData).toHaveBeenCalledOnce();
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
+      oneClick: true,
+      relayOrigin: ORIGIN,
+      keys: "current.none",
+    });
     expect(onChanged).toHaveBeenCalledExactlyOnceWith(status);
     await gone("alertdialog");
     expect(
       within(document.getElementById("decisions-data-outcome")!).getByText("Local data deleted")
     ).toBeTruthy();
+  });
+
+  it.each<[string, DecisionsStatus, string, string]>([
+    [
+      "a relay's keys no current kit holds",
+      { state: "not-connected", relayOrigin: ORIGIN, keysStored: true, recoveryKitVerifiedAt: 1 },
+      HOST,
+      `only copy of ${HOST}'s owner keys`,
+    ],
+    [
+      "keys no relay is recorded for",
+      { state: "not-connected", keysStored: true },
+      "Decisions keys",
+      "only copy of a relay's owner keys",
+    ],
+    [
+      "only keys an interrupted deletion set aside",
+      { state: "not-connected", relayOrigin: ORIGIN, keysVersion: "none.set-aside" },
+      HOST,
+      `only copy of ${HOST}'s owner keys`,
+    ],
+  ])(
+    "deletes local data holding %s only once the gate is typed (#18064)",
+    async (_, status, typed, preamble) => {
+      deleteLocalData.mockResolvedValue({ result: "deleted", status: { state: "not-connected" } });
+      renderSection(status);
+
+      fireEvent.click(button("Delete local data"));
+      const confirmDialog = screen.getByRole("alertdialog");
+      const confirm = () =>
+        within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete local data" });
+      expect(confirmDialog.textContent).toContain(preamble);
+      expect(confirmDialog.textContent).toContain(
+        "No recovery kit verified here holds every key this computer has now"
+      );
+      expect(unavailable(confirm())).toBe(true);
+      fireEvent.click(confirm());
+      expect(deleteLocalData).not.toHaveBeenCalled();
+
+      fireEvent.change(within(confirmDialog).getByRole("textbox"), { target: { value: typed } });
+      expect(unavailable(confirm())).toBe(false);
+      await act(async () => {
+        fireEvent.click(confirm());
+      });
+
+      expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
+        oneClick: false,
+        relayOrigin: status.relayOrigin ?? null,
+        keys: status.keysVersion ?? null,
+      });
+    }
+  );
+
+  it("says nothing was deleted when main found keys the one-click confirm didn't cover (#18064)", async () => {
+    deleteLocalData.mockResolvedValue({ result: "failed", reason: "keys-changed" });
+    const onChanged = vi.fn();
+    renderSection({ state: "not-connected" }, { onChanged });
+
+    fireEvent.click(button("Delete local data"));
+    await act(async () => {
+      fireEvent.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete local data" })
+      );
+    });
+
+    expect(deleteLocalData).toHaveBeenCalledExactlyOnceWith({
+      oneClick: true,
+      relayOrigin: null,
+      keys: null,
+    });
+    // Main's status is read afresh, so the next confirm shows the keys and the gate.
+    expect(onChanged).toHaveBeenCalledExactlyOnceWith(null);
+    const row = document.getElementById("decisions-data-outcome")!;
+    expect(within(row).getByText(/no recovery kit verified here covers/)).toBeTruthy();
+    expect(within(row).getByText(/Nothing was deleted/)).toBeTruthy();
   });
 
   it("asks for main's status afresh when a local deletion failed", async () => {
@@ -263,11 +472,191 @@ describe("DecisionsDataSection", () => {
     expect(within(row).getByText(/Nothing was deleted/)).toBeTruthy();
   });
 
+  it("removes settled questions only after the confirm says what goes and stays, and gives the count (#18033)", async () => {
+    const removal = deferred<DecisionsHistoryRemoveResult>();
+    removeSettledQuestions.mockReturnValue(removal.promise);
+    const onChanged = vi.fn();
+    renderSection({ state: "not-connected", relayOrigin: ORIGIN, keysStored: true }, { onChanged });
+
+    fireEvent.click(button("Remove settled questions"));
+    const confirmDialog = screen.getByRole("alertdialog");
+    const body = confirmDialog.textContent ?? "";
+    expect(body).toContain("export");
+    expect(body).toContain("audit log");
+    expect(body).toContain("Open questions, stopped deliveries");
+    expect(body).toContain("Nothing is sent to the relay");
+    expect(removeSettledQuestions).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      within(confirmDialog).getByRole("button", { name: "Remove settled questions" })
+    );
+    // Held while main removes: nothing else starts, and one request is sent.
+    expect(button("Delete local data").disabled).toBe(true);
+    fireEvent.click(
+      within(confirmDialog).getByRole("button", { name: "Remove settled questions" })
+    );
+    await act(async () => {
+      removal.resolve({ result: "removed", count: 12 });
+    });
+
+    expect(removeSettledQuestions).toHaveBeenCalledOnce();
+    expect(deleteLocalData).not.toHaveBeenCalled();
+    // Only a local deletion changes the status Settings shows.
+    expect(onChanged).not.toHaveBeenCalled();
+    await gone("alertdialog");
+    expect(
+      within(document.getElementById("decisions-data-outcome")!).getByText(
+        "Removed 12 settled questions"
+      )
+    ).toBeTruthy();
+  });
+
+  it("says nothing was removed when nothing was ready, or the removal failed", async () => {
+    removeSettledQuestions.mockResolvedValueOnce({ result: "removed", count: 0 });
+    renderSection({ state: "not-connected" });
+
+    const remove = async () => {
+      fireEvent.click(button("Remove settled questions"));
+      await act(async () => {
+        fireEvent.click(
+          within(screen.getByRole("alertdialog")).getByRole("button", {
+            name: "Remove settled questions",
+          })
+        );
+      });
+      await gone("alertdialog");
+    };
+    await remove();
+    expect(
+      within(document.getElementById("decisions-data-outcome")!).getByText(
+        "No settled questions to remove"
+      )
+    ).toBeTruthy();
+
+    removeSettledQuestions.mockResolvedValueOnce({ result: "failed", reason: "disk-pressure" });
+    await remove();
+    const row = document.getElementById("decisions-data-outcome")!;
+    expect(within(row).getByText("Couldn't remove settled questions")).toBeTruthy();
+    expect(within(row).getByText(/Nothing was removed/)).toBeTruthy();
+  });
+
   it("starts nothing while the switch is changing", () => {
     renderSection({ state: "not-connected", relayOrigin: ORIGIN }, { locked: true });
 
-    for (const name of ["Export…", "Delete relay data", "Delete local data"]) {
+    for (const name of [
+      "Export…",
+      "Remove settled questions",
+      "Delete relay data",
+      "Delete local data",
+    ]) {
       expect(button(name).disabled).toBe(true);
     }
+  });
+});
+
+describe("DecisionsDataSection folded away", () => {
+  const STATUS: DecisionsStatus = {
+    state: "connected",
+    relayOrigin: ORIGIN,
+    keysStored: true,
+    recoveryKitVerifiedAt: 7,
+  };
+
+  beforeEach(() => {
+    Object.defineProperty(window, "electron", {
+      value: { decisions: { exportData, deleteRelayData, deleteLocalData } },
+      configurable: true,
+      writable: true,
+    });
+  });
+  afterEach(() => {
+    cleanup();
+  });
+
+  const details = () => screen.getByRole("button", { name: /What's sent, and where/ });
+  const listShown = () =>
+    (document.getElementById("decisions-data-sent")?.textContent ?? "").includes(
+      "Questions and answers, end-to-end encrypted."
+    );
+
+  function renderLinked(deepLink: SettingsDeepLink) {
+    const tree = (value: SettingsDeepLink) => (
+      <SettingsDeepLinkProvider value={value}>
+        <TooltipProvider>
+          <DecisionsDataSection status={STATUS} />
+        </TooltipProvider>
+      </SettingsDeepLinkProvider>
+    );
+    const view = render(tree(deepLink));
+    return {
+      clear: () =>
+        view.rerender(tree({ sectionId: null, query: null, request: null, holds: null })),
+    };
+  }
+
+  const link = (query: string | null): SettingsDeepLink => ({
+    sectionId: "decisions-data",
+    query,
+    request: {},
+    holds: null,
+  });
+
+  it("starts with the list of what's sent closed, behind a button", () => {
+    renderSection(STATUS);
+
+    expect(listShown()).toBe(false);
+    expect(details().getAttribute("aria-expanded")).toBe("false");
+    expect(document.querySelector("#decisions-data-sent")?.textContent ?? "").toContain(
+      "What's sent, and where"
+    );
+  });
+
+  it("opens and closes the list from the button, which keeps its words", () => {
+    renderSection(STATUS);
+
+    fireEvent.click(details());
+    expect(listShown()).toBe(true);
+    expect(details().getAttribute("aria-expanded")).toBe("true");
+    const panel = document.getElementById(details().getAttribute("aria-controls") ?? "");
+    expect(panel?.textContent ?? "").toContain("Voice dictation isn't end-to-end encrypted.");
+    expect(details().textContent).toBe("Details");
+
+    fireEvent.click(details());
+    expect(listShown()).toBe(false);
+    expect(details().getAttribute("aria-expanded")).toBe("false");
+    expect(details().textContent).toBe("Details");
+  });
+
+  it.each(["privacy", "metadata"])(
+    "opens the list for a settings search (%s) that names it, and keeps it open once the link clears",
+    (query) => {
+      const { clear } = renderLinked(link(query));
+
+      expect(listShown()).toBe(true);
+      clear();
+      expect(listShown()).toBe(true);
+    }
+  );
+
+  it("leaves it closed for a search that names something else in the tab", () => {
+    renderLinked({ sectionId: "decisions-policy", query: "gates", request: {}, holds: null });
+
+    expect(listShown()).toBe(false);
+  });
+
+  it("leaves it closed for a link that didn't come from search, such as the relay-removal banner's", () => {
+    renderLinked(link(null));
+
+    expect(listShown()).toBe(false);
+  });
+
+  it("holds the note on dictating answers as a row of its own, where search lands on it", () => {
+    renderSection(STATUS);
+
+    const row = document.getElementById("decisions-voice");
+    expect(row?.textContent ?? "").toContain("Dictating answers");
+    expect(row?.textContent ?? "").toContain("isn't end-to-end encrypted");
+    expect(document.getElementById("decisions-data")?.contains(row ?? null)).toBe(true);
+    expect(screen.queryByRole("group", { name: "Voice" })).toBeNull();
   });
 });

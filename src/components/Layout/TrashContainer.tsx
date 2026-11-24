@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { useState, useMemo, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { Trash2 } from "lucide-react";
 import { useDroppable } from "@dnd-kit/core";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -34,10 +34,31 @@ import {
   dockStatusScopeDescription,
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
+import { openPopoverContent, useDockFocusLandmark, useFocusOwner } from "./dockFocusHandoff";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { pluralize } from "@/lib/pluralize";
+import { keybindingService } from "@/services/KeybindingService";
+import { peekUndoCloseStep } from "@/services/terminal/panelCloseHistory";
 
 const MOVED_HINT_MAX_SHOWS = 3;
+
+/**
+ * The key that brings back the close just made. On the Mac the person's own
+ * close comes back with the undo-close key (#17107); a close by anything else,
+ * and every close off the Mac, with reopen-last.
+ */
+function reopenShortcut(userClose: boolean): { spoken: string; shown: string } {
+  const mac = isMac();
+  const undoCombo =
+    mac && userClose ? keybindingService.getEffectiveCombo("panel.undoClose") : undefined;
+  if (undoCombo) {
+    return { spoken: undoCombo, shown: keybindingService.formatComboForDisplay(undoCombo) };
+  }
+  return {
+    spoken: mac ? "Cmd+Shift+T" : "Ctrl+Shift+T",
+    shown: keybindingService.formatComboForDisplay("Cmd+Shift+T"),
+  };
+}
 
 interface TrashContainerProps {
   trashedTerminals: Array<{
@@ -45,13 +66,6 @@ interface TrashContainerProps {
     trashedInfo: TrashedTerminal;
   }>;
   compact?: boolean;
-  /**
-   * Called when the last entry expires while the keyboard was inside this
-   * surface. Both the popover and the trigger unmount at that moment, so there
-   * is no destination left in here to hand focus to — only the dock that owns
-   * the row this control sits in.
-   */
-  onFocusHandoff?: () => void;
 }
 
 interface GroupedTrashItem {
@@ -78,19 +92,15 @@ type TrashDisplayItem = GroupedTrashItem | GroupedTrashGroup;
 
 const TRASH_POPOVER_ID = "trash-container-popover";
 
-// The opener unmounted with the popover, so a cancelled dialog would drop
-// focus on the app shell, outside the reopened popover and dismissing it.
-const restorePopoverFocus = () => document.getElementById(TRASH_POPOVER_ID);
-
-export function TrashContainer({
-  trashedTerminals,
-  compact = false,
-  onFocusHandoff,
-}: TrashContainerProps) {
+export function TrashContainer({ trashedTerminals, compact = false }: TrashContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isTrashPulsing, setIsTrashPulsing] = useState(false);
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
   const [showMovedHint, setShowMovedHint] = useState(false);
+  const [movedHintShortcut, setMovedHintShortcut] = useState("");
+  // The newest of the person's closes already announced, so the next one is
+  // told apart from a close an agent or plugin made.
+  const announcedCloseSeqRef = useRef(peekUndoCloseStep()?.seq ?? 0);
   // Hover and focus open the scope tooltip; the moved hint borrows the same one.
   const [scopeTooltipOpen, setScopeTooltipOpen] = useState(false);
   const [emptyTrashConfirmOpen, setEmptyTrashConfirmOpen] = useState(false);
@@ -165,14 +175,24 @@ export function TrashContainer({
   // when the remaining opportunities are shortest.
   const focusedRowRef = useRef<{ id: string; index: number } | null>(null);
 
-  // Whether the keyboard is anywhere in this control at all. The row ref only
-  // knows about rows, so opening from the pill and tabbing no further than
-  // Empty trash would leave it null — and the handoff below would then skip
-  // someone who is very much standing here.
-  const hasFocusRef = useRef(false);
-  const noteFocusEntered = useCallback(() => {
-    hasFocusRef.current = true;
-  }, []);
+  // Whether focus is anywhere in this control at all. The row ref only knows
+  // about rows, so opening from the pill and tabbing no further than Empty trash
+  // would leave it null — and the handoff below would then skip someone who is
+  // very much standing here. It also lets go when focus leaves, so an expiry
+  // long after the user moved on does not reach into wherever they went.
+  const { takeOwner: takeFocusOwner, handlers: focusOwnerHandlers } = useFocusOwner();
+  const landmark = useDockFocusLandmark();
+
+  // The opener unmounted with the popover, so a cancelled dialog would drop
+  // focus on the app shell, outside the reopened popover and dismissing it.
+  // Once the last entry is gone there is no popover either, and the dock's own
+  // landmark is where the handoff below sent focus: the dialog's restore must
+  // agree with it, or it would move focus again on its way out.
+  const { resolve: resolveLandmark } = landmark;
+  const restorePopoverFocus = useCallback(
+    () => openPopoverContent(TRASH_POPOVER_ID) ?? resolveLandmark(),
+    [resolveLandmark]
+  );
 
   // Removing a trashed pane ends it for good, and Restore is the inverse of
   // *closing* a pane, not of destroying one — so this is a D1 action and takes
@@ -197,7 +217,6 @@ export function TrashContainer({
   }, []);
 
   const handleListFocus = useCallback((event: React.FocusEvent<HTMLDivElement>) => {
-    hasFocusRef.current = true;
     const row = (event.target as HTMLElement).closest<HTMLElement>("[data-row-id]");
     const list = event.currentTarget;
     if (!row) {
@@ -216,18 +235,23 @@ export function TrashContainer({
       return;
     }
     setIsTrashPulsing(true);
+    const newestCloseSeq = peekUndoCloseStep()?.seq ?? 0;
+    const shortcut = reopenShortcut(newestCloseSeq > announcedCloseSeqRef.current);
+    announcedCloseSeqRef.current = Math.max(announcedCloseSeqRef.current, newestCloseSeq);
     // Cap the visual coachmark; aria-live still fires below on every close.
     // Session-scoped — restart gives a fresh teaching window without persistence.
     if (hintShowCountRef.current < MOVED_HINT_MAX_SHOWS) {
       hintShowCountRef.current += 1;
+      setMovedHintShortcut(shortcut.shown);
       setShowMovedHint(true);
     }
-    const shortcut = isMac() ? "Cmd+Shift+T" : "Ctrl+Shift+T";
     // The window is the whole point of the announcement: "press this to
     // restore" without it invites someone to come back to a pane that is gone.
     useAnnouncerStore
       .getState()
-      .announce(`Panel closed — press ${shortcut} to restore within ${TRASH_TTL_SECONDS} seconds`);
+      .announce(
+        `Panel closed — press ${shortcut.spoken} to restore within ${TRASH_TTL_SECONDS} seconds`
+      );
   }, [trashedTerminals.length]);
 
   const handleTrashAnimationEnd = useCallback(() => {
@@ -397,20 +421,22 @@ export function TrashContainer({
 
   // The last row going takes the whole control with it, so the handoff has to
   // leave the component. Fires once per emptying, and only if focus actually
-  // ended up on the body — a restore moves it somewhere real on purpose.
+  // ended up on the body — a restore moves it somewhere real on purpose. A
+  // layout effect, so it reads focus before the removal's blur is processed.
   const handedOffRef = useRef(false);
-  useEffect(() => {
+  const { handoff: handOffToDock } = landmark;
+  useLayoutEffect(() => {
     if (trashedTerminals.length > 0) {
       handedOffRef.current = false;
       return;
     }
-    if (!hasFocusRef.current || handedOffRef.current) return;
+    const owner = takeFocusOwner();
+    if (!owner || handedOffRef.current) return;
     focusedRowRef.current = null;
-    hasFocusRef.current = false;
     handedOffRef.current = true;
     if (document.activeElement && document.activeElement !== document.body) return;
-    onFocusHandoff?.();
-  }, [trashedTerminals.length, onFocusHandoff]);
+    handOffToDock({ focusVisible: owner.focusVisible });
+  }, [trashedTerminals.length, handOffToDock, takeFocusOwner]);
 
   // Hand focus on when the row holding it disappears. Only when focus actually
   // fell on the body: a restore moves focus deliberately, and stealing it back
@@ -500,7 +526,7 @@ export function TrashContainer({
   return (
     <div
       ref={setNodeRef}
-      onFocusCapture={noteFocusEntered}
+      {...focusOwnerHandlers}
       className="dock-status-pill shrink-0"
       data-visible="true"
     >
@@ -550,7 +576,7 @@ export function TrashContainer({
           </TooltipTrigger>
           <TooltipContent side="top" align="center">
             {hintOpen
-              ? "Moved to trash"
+              ? `Moved to trash — ${movedHintShortcut} to reopen`
               : `Recently closed ${dockStatusScopeDescription(count, hereCount)}`}
           </TooltipContent>
         </Tooltip>
@@ -562,7 +588,6 @@ export function TrashContainer({
           className="w-96 p-0"
           side="top"
           align="end"
-          onFocusCapture={noteFocusEntered}
           onOpenAutoFocus={focusHandoff.onOpenAutoFocus}
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
           onKeyDown={focusHandoff.onContentKeyDown}

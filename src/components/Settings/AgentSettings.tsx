@@ -19,17 +19,14 @@ import { useStaleAgentPresetCleanup } from "./useStaleAgentPresetCleanup";
 import { logError } from "@/utils/logger";
 
 import { Button } from "@/components/ui/button";
-import {
-  DEFAULT_AGENT_SETTINGS,
-  getAgentSettingsEntry,
-  DEFAULT_DANGEROUS_ARGS,
-} from "@shared/types";
+import { DEFAULT_AGENT_SETTINGS, getAgentSettingsEntry } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
 import { ExternalLink } from "lucide-react";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSection } from "./SettingsSection";
+import { AgentUsageTrackingSection } from "./AgentUsageTrackingSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSelect } from "./SettingsSelect";
 import { AddPresetDialog } from "./AddPresetDialog";
@@ -396,7 +393,6 @@ export function AgentSettings({
     ? getAgentSettingsEntry(effectiveSettings, activeAgent.id)
     : { customFlags: "", dangerousArgs: "", dangerousEnabled: false };
 
-  const defaultDangerousArg = activeAgent ? (DEFAULT_DANGEROUS_ARGS[activeAgent.id] ?? "") : "";
   const activeDecorations = activeAgent
     ? getAgentConfig(activeAgent.id)?.capabilities?.decorations
     : undefined;
@@ -460,7 +456,7 @@ export function AgentSettings({
         />
       </div>
 
-      {activeAgentId && <AgentQuotaSection agentId={activeAgentId} />}
+      {activeAgentId && <AgentQuotaSection agentId={activeAgentId} isActive={isActive} />}
 
       {isGeneralActive && (
         <AgentInventorySection
@@ -471,9 +467,12 @@ export function AgentSettings({
           isRefreshing={isRefreshingCli}
           onRefresh={() => void handleRefreshCliAvailability()}
           onOpenAgent={onSubtabChange}
-          onRunSetupWizard={() =>
-            window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
-          }
+          onRunSetupWizard={() => {
+            const open = () =>
+              window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
+            if (onClose) void onClose((closed) => closed && open());
+            else open();
+          }}
         />
       )}
 
@@ -490,8 +489,7 @@ export function AgentSettings({
               description={
                 <>
                   Used by the Daintree Assistant{helpShortcut && ` (${helpShortcut})`} and automated
-                  workflows such as "What's next?", onboarding and project explanations. The
-                  portal's default new tab agent is set separately
+                  workflows such as "What's next?", onboarding and project explanations
                 </>
               }
               value={defaultAgent ?? NO_DEFAULT_AGENT}
@@ -507,7 +505,7 @@ export function AgentSettings({
             <SettingsSwitchCard
               id="agents-skip-permissions"
               title="Skip permission prompts"
-              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it. The assistant follows it for Daintree's own confirmations unless they're set to always ask or never ask."
+              subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Applies to every agent that supports it unless its own setting overrides it. Codex's default bypass flag turns off its sandbox too; Codex's Auto setting keeps it. The assistant follows it for Daintree's own confirmations unless they're set to always ask or never ask."
               isEnabled={settings?.globalSkipPermissions ?? false}
               onChange={() => {
                 void (async () => {
@@ -531,6 +529,8 @@ export function AgentSettings({
           </SettingsGroup>
         </SettingsSection>
       )}
+
+      {isGeneralActive && <AgentUsageTrackingSection />}
 
       {isGeneralActive && <AgentInputSettings />}
 
@@ -696,7 +696,6 @@ export function AgentSettings({
             ccrPresets={ccrPresetsByAgent[activeAgent.id]}
             projectPresets={projectPresetsByAgent[activeAgent.id]}
             presetInventory={presetInventory}
-            defaultDangerousArg={defaultDangerousArg}
             editingPresetId={editingPresetId}
             setEditingPresetId={setEditingPresetId}
             editName={editName}

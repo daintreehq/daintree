@@ -30,13 +30,18 @@ vi.mock("../GitHubStats.js", () => ({
   fetchActivityProbe: (...args: unknown[]) => mockFetchActivityProbe(...args),
 }));
 
-vi.mock("../GitHubRateLimitService.js", () => ({
-  gitHubRateLimitService: {
+vi.mock("../GitHubRateLimitService.js", () => {
+  const gitHubRateLimitService = {
     updateFromGraphQL: vi.fn(),
     getState: vi.fn(() => ({ blocked: false })),
     shouldBlockRequest: (resource?: string) => mockShouldBlockRequest(resource),
-  },
-}));
+  };
+  return {
+    gitHubRateLimitService,
+    rateLimitServiceForHost: () => gitHubRateLimitService,
+    releaseRateLimitServiceForHost: () => {},
+  };
+});
 
 vi.mock("../GitHubErrors.js", () => ({
   parseGitHubError: (e: unknown) => formatErrorMessage(e, "unknown error"),

@@ -60,6 +60,11 @@ vi.mock("../../../../services/AgentAvailabilityStore.js", () => ({
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalSnapshotHandlers } from "../snapshots.js";
+import {
+  _resetTerminalInventoryPrefetchForTests,
+  buildTerminalInventory,
+  prefetchTerminalInventory,
+} from "../../../../services/terminalInventoryPrefetch.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../../../ipcGuard.js";
 import type { HandlerDependencies } from "../../../types.js";
 import { getIpcDispatcher } from "../../../dispatcher.js";
@@ -512,32 +517,53 @@ describe("terminal:reconnect-bulk handler", () => {
 describe("terminal:get-for-project handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetTerminalInventoryPrefetchForTests();
+  });
+  afterEach(() => _resetTerminalInventoryPrefetchForTests());
+
+  function getForProjectHandler() {
+    const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
+      .calls;
+    return calls.find((c) => c[0] === CHANNELS.TERMINAL_GET_FOR_PROJECT)?.[1] as unknown as (
+      event: unknown,
+      projectId: string
+    ) => Promise<{ id: string }[]>;
+  }
+
+  // #17776: a cold switch's prefetch is the restore's only inventory read.
+  it("serves a cold switch's prefetched inventory without reading the host again", async () => {
+    const ptyClient = {
+      getProjectTerminalsAsync: vi.fn(async () => [
+        { id: "t2", kind: "terminal", cwd: "/tmp", spawnedAt: 1 },
+        { id: "t1", kind: "terminal", cwd: "/tmp", spawnedAt: 1 },
+      ]),
+    };
+    registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+    void prefetchTerminalInventory("project-1", (id) =>
+      buildTerminalInventory(ptyClient as never, id)
+    );
+
+    const result = await getForProjectHandler()(
+      { senderFrame: { url: "http://localhost:5173" } },
+      "project-1"
+    );
+
+    expect(result.map((t) => t.id)).toEqual(["t2", "t1"]);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
   });
 
   it("excludes dev-preview PTYs from getForProject results", async () => {
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-visible", "t-dev-preview"]),
-      getTerminalAsync: vi.fn(async (id: string) => {
-        if (id === "t-visible") {
-          return {
-            id,
-            kind: "terminal",
-            type: "terminal",
-            cwd: "/tmp",
-            spawnedAt: Date.now(),
-          };
-        }
-        if (id === "t-dev-preview") {
-          return {
-            id,
-            kind: "dev-preview",
-            type: "terminal",
-            cwd: "/tmp",
-            spawnedAt: Date.now(),
-          };
-        }
-        return null;
-      }),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        { id: "t-visible", kind: "terminal", type: "terminal", cwd: "/tmp", spawnedAt: Date.now() },
+        {
+          id: "t-dev-preview",
+          kind: "dev-preview",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: Date.now(),
+        },
+      ]),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -558,8 +584,8 @@ describe("terminal:get-for-project handler", () => {
     expect(Array.isArray(result)).toBe(true);
     expect(result).toHaveLength(1);
     expect((result[0] as { id: string }).id).toBe("t-visible");
-    expect(ptyClient.getTerminalsForProjectAsync).toHaveBeenCalledWith("project-1");
-    expect(ptyClient.getTerminalAsync).toHaveBeenCalledTimes(2);
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledWith("project-1");
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledTimes(1);
   });
 
   it("passes through trash metadata when present", async () => {
@@ -567,31 +593,25 @@ describe("terminal:get-for-project handler", () => {
     const expiresAt = now + 120000;
 
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-active", "t-will-expire"]),
-      getTerminalAsync: vi.fn(async (id: string) => {
-        if (id === "t-active") {
-          return {
-            id,
-            kind: "terminal",
-            type: "terminal",
-            cwd: "/tmp",
-            spawnedAt: now,
-            isTrashed: false,
-          };
-        }
-        if (id === "t-will-expire") {
-          return {
-            id,
-            kind: "terminal",
-            type: "terminal",
-            cwd: "/tmp",
-            spawnedAt: now,
-            isTrashed: false,
-            trashExpiresAt: expiresAt,
-          };
-        }
-        return null;
-      }),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        {
+          id: "t-active",
+          kind: "terminal",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: now,
+          isTrashed: false,
+        },
+        {
+          id: "t-will-expire",
+          kind: "terminal",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: now,
+          isTrashed: false,
+          trashExpiresAt: expiresAt,
+        },
+      ]),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -637,14 +657,15 @@ describe("terminal:get-for-project handler", () => {
     mockIsHelpTerminal.mockImplementation((id: string) => id === "t-help");
 
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-visible", "t-help", "t-dev-preview"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        kind: id === "t-dev-preview" ? "dev-preview" : "agent",
-        type: "terminal",
-        cwd: "/tmp",
-        spawnedAt: Date.now(),
-      })),
+      getProjectTerminalsAsync: vi.fn(async () =>
+        ["t-visible", "t-help", "t-dev-preview"].map((id) => ({
+          id,
+          kind: id === "t-dev-preview" ? "dev-preview" : "agent",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: Date.now(),
+        }))
+      ),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -674,15 +695,16 @@ describe("terminal:get-for-project handler", () => {
     // so every other suite stays green while the fix goes inert and restored
     // panes silently fall back to 80×24.
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-sized", "t-unknown"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        kind: "terminal",
-        type: "terminal",
-        cwd: "/tmp",
-        spawnedAt: Date.now(),
-        ...(id === "t-sized" ? { ptyCols: 203, ptyRows: 51 } : {}),
-      })),
+      getProjectTerminalsAsync: vi.fn(async () =>
+        ["t-sized", "t-unknown"].map((id) => ({
+          id,
+          kind: "terminal",
+          type: "terminal",
+          cwd: "/tmp",
+          spawnedAt: Date.now(),
+          ...(id === "t-sized" ? { ptyCols: 203, ptyRows: 51 } : {}),
+        }))
+      ),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -713,15 +735,16 @@ describe("terminal:get-for-project handler", () => {
     // value — a refactor to a spread would now let the backend win a placement
     // decision that belongs to the renderer's saved layout state alone.
     const ptyClient = {
-      getTerminalsForProjectAsync: vi.fn(async () => ["t-worktreed"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        kind: "terminal",
-        type: "terminal",
-        cwd: "/repo/.worktrees/backend",
-        spawnedAt: Date.now(),
-        worktreeId: "/repo/.worktrees/backend",
-      })),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        {
+          id: "t-worktreed",
+          kind: "terminal",
+          type: "terminal",
+          cwd: "/repo/.worktrees/backend",
+          spawnedAt: Date.now(),
+          worktreeId: "/repo/.worktrees/backend",
+        },
+      ]),
     };
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
@@ -1179,8 +1202,16 @@ describe("terminal:search-semantic-buffers", () => {
     { terminalId: "mine", line: "token here", matchStart: 0, matchEnd: 5 },
     { terminalId: "theirs", line: "token there", matchStart: 0, matchEnd: 5 },
     { terminalId: "nobodys", line: "token", matchStart: 0, matchEnd: 5 },
+    { terminalId: "daintree-throwaway-probe", line: "token", matchStart: 0, matchEnd: 5 },
   ];
-  const owners: Record<string, string | null> = { mine: "proj-1", theirs: "proj-2", nobodys: null };
+  const visibleLocally = matches.slice(0, 3);
+  const owners: Record<string, string | null> = {
+    mine: "proj-1",
+    theirs: "proj-2",
+    nobodys: null,
+    "daintree-throwaway-probe": "proj-1",
+    mine2: "proj-1",
+  };
 
   function remoteView(projectId: string | null): ClientEndpoint {
     return {
@@ -1203,12 +1234,23 @@ describe("terminal:search-semantic-buffers", () => {
   };
 
   const ptyClient = {
-    searchSemanticBuffersAsync: vi.fn(async () => matches),
+    searchSemanticBuffersAsync: vi.fn(
+      async (
+        _query: string,
+        _isRegex: boolean,
+        _ids?: readonly string[]
+      ): Promise<{ matches: typeof matches; complete: boolean }> => ({
+        matches,
+        complete: true,
+      })
+    ),
     getTerminalProjectId: (id: string) => owners[id] ?? null,
+    getTrackedTerminalIds: () => ["daintree-throwaway-run", ...Object.keys(owners)],
   };
   let dispose: (() => void) | undefined;
 
   beforeEach(() => {
+    ptyClient.searchSemanticBuffersAsync.mockClear();
     dispose = registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
     // The plain envelope, as security setup installs it for real.
     getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, run) => {
@@ -1232,13 +1274,65 @@ describe("terminal:search-semantic-buffers", () => {
       ["token", false]
     );
     if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
-    expect(envelope.data).toEqual([matches[0]]);
+    expect(envelope.data).toEqual({ matches: [matches[0]], complete: true });
+  });
+
+  it("tells a view that rebound while the search ran that its new project went unsearched", async () => {
+    let answer: (r: { matches: typeof matches; complete: boolean }) => void = () => {};
+    ptyClient.searchSemanticBuffersAsync.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    const endpoint = remoteView("proj-1");
+    const pending = getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    await vi.waitFor(() => expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalled());
+    (endpoint as { projectId: string | null }).projectId = "proj-2";
+    answer({ matches, complete: true });
+
+    const envelope = await pending;
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    // Only proj-1's terminals were asked, so neither project's hits are shown
+    // and "no match" can't be claimed for proj-2.
+    expect(envelope.data).toEqual({ matches: [], complete: false });
+  });
+
+  it("answers a remote view with no project without searching any shard", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockClear();
     const none = await getIpcDispatcher().invokeForEndpoint(
       { endpoint: remoteView(null), client },
       CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
       ["token", false]
     );
-    expect(none.ok && none.data).toEqual([]);
+    expect(none.ok && none.data).toEqual({ matches: [], complete: true });
+    expect(ptyClient.searchSemanticBuffersAsync).not.toHaveBeenCalled();
+  });
+
+  it("keeps a partial answer's matches and passes on that it was incomplete", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockResolvedValueOnce({ matches, complete: false });
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    expect(envelope.data).toEqual({ matches: [matches[0]], complete: false });
+  });
+
+  it("reports a search that threw as incomplete rather than as no matches", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockRejectedValueOnce(new Error("host gone"));
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["token", false]
+    );
+    if (!envelope.ok) throw new Error(JSON.stringify(envelope.error));
+    expect(envelope.data).toEqual({ matches: [], complete: false });
   });
 
   it("finds every terminal for this machine's own window", async () => {
@@ -1255,7 +1349,145 @@ describe("terminal:search-semantic-buffers", () => {
       (result as { ok?: boolean; data?: unknown }).ok !== undefined
         ? (result as { data: unknown }).data
         : result;
-    expect(data).toEqual(matches);
+    expect(data).toEqual({ matches: visibleLocally, complete: true });
+    // No scope from the caller means no scope to the shards: every terminal is scanned.
+    expect(ptyClient.searchSemanticBuffersAsync.mock.calls.map((c) => c[2])).toEqual([undefined]);
+  });
+
+  it("searches a 500-character query but refuses a longer one without fanning out", async () => {
+    ptyClient.searchSemanticBuffersAsync.mockClear();
+    const atCap = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["t".repeat(500), false]
+    );
+    expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalledTimes(1);
+    expect(atCap.ok && atCap.data).toEqual({ matches: [matches[0]], complete: true });
+
+    const overCap = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint: remoteView("proj-1"), client },
+      CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+      ["t".repeat(501), false]
+    );
+    expect(ptyClient.searchSemanticBuffersAsync).toHaveBeenCalledTimes(1);
+    expect(overCap.ok && overCap.data).toEqual({ matches: [], complete: true });
+  });
+
+  describe("terminal scope (#17516)", () => {
+    async function remote(projectId: string | null, ...args: unknown[]) {
+      return getIpcDispatcher().invokeForEndpoint(
+        { endpoint: remoteView(projectId), client },
+        CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+        args
+      );
+    }
+
+    async function local(...args: unknown[]) {
+      const call = (
+        ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }
+      ).mock.calls.find((c) => c[0] === CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS);
+      const handler = call?.[1] as (event: unknown, ...args: unknown[]) => Promise<unknown>;
+      return handler({ sender: { id: 7 }, senderFrame: { url: "app://daintree" } }, ...args);
+    }
+
+    const scopeSent = () => ptyClient.searchSemanticBuffersAsync.mock.calls.map((c) => c[2]);
+
+    it("scopes an older remote peer that sends no ids to its project before scanning", async () => {
+      const envelope = await remote("proj-1", "token", false);
+      expect(envelope.ok && envelope.data).toEqual({ matches: [matches[0]], complete: true });
+      expect(scopeSent()).toEqual([["mine", "mine2"]]);
+    });
+
+    it("narrows a remote view's ids to its own project before scanning", async () => {
+      const envelope = await remote("proj-1", "token", false, ["theirs", "mine", "nobodys"]);
+      expect(envelope.ok && envelope.data).toEqual({ matches: [matches[0]], complete: true });
+      expect(scopeSent()).toEqual([["mine"]]);
+    });
+
+    it("drops a match whose terminal left the remote view's project mid-scan", async () => {
+      ptyClient.searchSemanticBuffersAsync.mockImplementationOnce(async () => {
+        owners.mine = "proj-2";
+        return { matches, complete: true };
+      });
+      try {
+        const envelope = await remote("proj-1", "token", false, ["mine"]);
+        expect(envelope.ok && envelope.data).toEqual({ matches: [], complete: true });
+      } finally {
+        owners.mine = "proj-1";
+      }
+    });
+
+    it("drops the answer when the remote view closes mid-scan", async () => {
+      const endpoint = remoteView("proj-1");
+      ptyClient.searchSemanticBuffersAsync.mockImplementationOnce(async () => {
+        (endpoint as { isClosed: () => boolean }).isClosed = () => true;
+        return { matches, complete: true };
+      });
+      const envelope = await getIpcDispatcher().invokeForEndpoint(
+        { endpoint, client },
+        CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+        ["token", false, ["mine"]]
+      );
+      expect(envelope.ok && envelope.data).toEqual({ matches: [], complete: false });
+    });
+
+    it("never scans when none of a remote view's ids are its own", async () => {
+      const envelope = await remote("proj-1", "token", false, ["theirs", "nobodys"]);
+      // Nothing of its own to search, so nothing of its own went unsearched.
+      expect(envelope.ok && envelope.data).toEqual({ matches: [], complete: true });
+      expect(scopeSent()).toEqual([]);
+    });
+
+    it("drops the answer when the remote view rebinds to another project mid-scan", async () => {
+      const endpoint = remoteView("proj-1");
+      ptyClient.searchSemanticBuffersAsync.mockImplementationOnce(async () => {
+        (endpoint as { projectId: string | null }).projectId = "proj-2";
+        return { matches, complete: true };
+      });
+      const envelope = await getIpcDispatcher().invokeForEndpoint(
+        { endpoint, client },
+        CHANNELS.TERMINAL_SEARCH_SEMANTIC_BUFFERS,
+        ["token", false, ["mine"]]
+      );
+      expect(envelope.ok && envelope.data).toEqual({ matches: [], complete: false });
+    });
+
+    it("searches exactly a local window's ids, whatever project they report", async () => {
+      const result = await local("token", false, [
+        "theirs",
+        "mine",
+        "theirs",
+        "daintree-throwaway-run",
+      ]);
+      expect(scopeSent()).toEqual([["theirs", "mine"]]);
+      // The shards' answer is trusted only for the ids that were asked about.
+      expect(result).toEqual({ matches: [matches[0], matches[1]], complete: true });
+    });
+
+    it("answers an empty local scope without scanning", async () => {
+      await expect(local("token", false, [])).resolves.toEqual({ matches: [], complete: true });
+      expect(scopeSent()).toEqual([]);
+    });
+
+    it("accepts a scope at the id cap", async () => {
+      const ids = Array.from({ length: 256 }, (_, i) => `t${i}`);
+      await expect(local("token", false, ids)).resolves.toEqual({ matches: [], complete: true });
+      expect(scopeSent()).toEqual([ids]);
+    });
+
+    const sparse: string[] = [];
+    sparse[1] = "mine";
+
+    it.each([
+      ["a non-array", "mine"],
+      ["a non-string id", ["mine", 7]],
+      ["an empty id", [""]],
+      ["a sparse", sparse],
+      ["too many ids", Array.from({ length: 257 }, (_, i) => `t${i}`)],
+    ])("rejects %s scope", async (_label, ids) => {
+      await expect(local("token", false, ids)).rejects.toThrow(/Invalid terminal IDs/);
+      expect(scopeSent()).toEqual([]);
+    });
   });
 });
 

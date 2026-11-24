@@ -53,6 +53,11 @@ export class OutputVolumeDetector {
     return this.activationThreshold / this.leakRatePerMs;
   }
 
+  // The most one update can credit; a caller may stop measuring a chunk there.
+  get maxContributionBytes(): number {
+    return this.maxBytesPerFrame;
+  }
+
   update(dataLength: number, now: number): boolean {
     if (!this.enabled) {
       return false;

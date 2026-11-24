@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useMemo } from "react";
 import type * as React from "react";
 import type { WorktreeState } from "../../types";
 import type { WorktreeAttachment } from "@shared/types/worktree";
@@ -47,13 +47,13 @@ import {
   PinOff,
   Play,
   Plug,
-  Puzzle,
   RefreshCw,
   RotateCw,
   Save,
   Scissors,
   Server,
   SquareTerminal,
+  Timer,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -81,7 +81,7 @@ import {
 } from "@shared/theme/worktreeColors";
 import { worktreeLabelColorStyle } from "./worktreeLabelColorStyle";
 import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
-import { hostFileManagerRevealLabel, isRemoteWindow } from "@/hooks/useHostPlatform";
+import { hostFileManagerRevealLabel, revealCopiesHostPath } from "@/hooks/useHostPlatform";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { isReservedEnvironmentKey } from "@/lib/resourceEnvironments";
@@ -90,7 +90,12 @@ import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
 import { OPERATION_LABEL, toRepoOperationState } from "@/components/Git/repoOperationCopy";
 import { resourceLifecycleVisibility } from "./utils/resourceLifecycle";
-import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
+import {
+  usePluginContextMenuItems,
+  type PluginContextMenuItemEntry,
+} from "@/hooks/usePluginContextMenuItems";
+import type { WhenClauseContext } from "@shared/utils/whenClause";
+import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 
@@ -256,6 +261,8 @@ export interface WorktreeMenuItemsProps {
   onResourceProvision?: () => void;
   onResourceResume?: () => void;
   onResourcePause?: () => void;
+  /** Opens idle pause for the worktree's environment on this device (#17925). */
+  onIdlePause?: () => void;
   onResourceConnect?: () => void;
   onResourceStatus?: () => void;
   onResourceTeardown?: () => void;
@@ -288,8 +295,23 @@ export interface WorktreeMenuItemsProps {
  */
 export type WorktreeMenuActions = Omit<
   WorktreeMenuItemsProps,
-  "components" | "worktree" | "isPinned"
+  "components" | "worktree" | "isPinned" | "pluginItems"
 >;
+
+/**
+ * A worktree card's own menu body, with the worktree's plugin contributions
+ * read here rather than by the card. It mounts only with the open menu, so the
+ * closed menu every card carries evaluates no `when` clause and subscribes to
+ * nothing (#17072).
+ */
+export function WorktreeCardMenuItems(
+  props: Omit<WorktreeMenuItemsProps, "pluginItems"> & { worktree: WorktreeState }
+) {
+  const worktreeId = props.worktree.id;
+  const pluginMenuContext = useMemo<WhenClauseContext>(() => ({ worktreeId }), [worktreeId]);
+  const pluginItems = usePluginContextMenuItems("worktree", pluginMenuContext);
+  return <WorktreeMenuItems {...props} pluginItems={pluginItems} />;
+}
 
 /** Drops the `false`/`undefined` slots a conditional row leaves behind. */
 function compact(...nodes: Array<React.ReactNode | false | undefined>): React.ReactNode[] {
@@ -375,6 +397,7 @@ export function WorktreeMenuItems({
   onResourceProvision,
   onResourceResume,
   onResourcePause,
+  onIdlePause,
   onResourceConnect,
   onResourceStatus,
   onResourceTeardown,
@@ -482,7 +505,7 @@ export function WorktreeMenuItems({
             Open in editor
           </C.Item>
         )}
-        <C.Item onSelect={isRemoteWindow() ? onCopyPath : onRevealInFinder}>
+        <C.Item onSelect={revealCopiesHostPath() ? onCopyPath : onRevealInFinder}>
           <FolderOpen className={ICON} />
           {hostFileManagerRevealLabel()}
         </C.Item>
@@ -503,7 +526,7 @@ export function WorktreeMenuItems({
   const reviewRows = !worktree
     ? []
     : [
-        // "Review worktree" itself sits at the top of the menu as a direct
+        // "Open Review Hub" itself sits at the top of the menu as a direct
         // item; repeating it here gave the menu two items of one name.
         onOpenChanges && (
           <C.Item
@@ -527,7 +550,7 @@ export function WorktreeMenuItems({
   const reviewSub = reviewRows.length > 0 && (
     <C.Sub key="review">
       <C.SubTrigger>
-        {/* The commit glyph belongs to the direct "Review worktree" row a few
+        {/* The commit glyph belongs to the direct "Open Review Hub" row a few
             rows up; this submenu holds the diff views, so it wears theirs. */}
         <FileDiff className={ICON} />
         Review
@@ -684,12 +707,14 @@ export function WorktreeMenuItems({
         </C.Item>,
         ...(baseOperation
           ? [
-              <C.Item
-                key="git-continue"
-                onSelect={() => dispatchGit("git.continueRepositoryOperation", {})}
-              >
+              // Opens Review Hub rather than continuing from here (#17559). This
+              // row names only the kind, from the last poll, so a one-click
+              // continue would advance whichever operation is there by the
+              // time it lands, a replacement included. Review Hub reads the
+              // operation, shows it, and pins its Continue to that one.
+              <C.Item key="git-continue" onSelect={() => dispatchGit("worktree.openReviewHub", {})}>
                 <Play className={ICON} />
-                Continue {OPERATION_LABEL[baseOperation].toLowerCase()}
+                Continue {OPERATION_LABEL[baseOperation].toLowerCase()} in Review Hub
               </C.Item>,
               <C.Item
                 key="git-abort"
@@ -1020,6 +1045,12 @@ export function WorktreeMenuItems({
               Pause
             </C.Item>
           ),
+          !isLocalEnvironment && onIdlePause && (
+            <C.Item key="idle-pause" onSelect={onIdlePause}>
+              <Timer className={ICON} />
+              Idle pause…
+            </C.Item>
+          ),
         ].filter(Boolean)
       : [];
 
@@ -1337,6 +1368,7 @@ export function WorktreeMenuItems({
   // Contributions register against the worktree menu location; whether any of
   // them works on a bare workspace root is unverified, so a root shows none.
   const pluginGroups = worktree ? [...pluginsById.entries()] : [];
+  const pluginDispatchArgs = worktree ? { worktreeId: worktree.id } : undefined;
   const extensionsSub = pluginGroups.length > 0 && (
     <C.Sub key="extensions">
       <C.SubTrigger>
@@ -1353,21 +1385,15 @@ export function WorktreeMenuItems({
                   pluginManifestIdFromInstanceKey(pluginId)}
               </C.Label>
             )}
-            {entries.map((entry) => (
-              <C.Item
-                key={`${entry.pluginId}:${entry.item.actionId}`}
-                onSelect={() =>
-                  void actionService.dispatch(
-                    entry.item.actionId,
-                    worktree ? { worktreeId: worktree.id } : undefined,
-                    { source }
-                  )
-                }
-              >
-                <Puzzle className={ICON} />
-                <span className="truncate">{entry.item.label}</span>
-              </C.Item>
-            ))}
+            {/* The shared section owns the row, the dispatch and an
+                availability check's disabled state, so the worktree's
+                Extensions rows can't drift from every other surface's. */}
+            <PluginContextMenuSection
+              items={entries}
+              leadingSeparator={false}
+              components={{ Item: C.Item, Separator: C.Separator, Meta: C.Meta }}
+              dispatchArgs={pluginDispatchArgs}
+            />
           </Fragment>
         ))}
       </C.SubContent>
@@ -1399,7 +1425,7 @@ export function WorktreeMenuItems({
     worktree && onOpenReviewHub && (
       <C.Item key="review-direct" onSelect={onOpenReviewHub}>
         <GitCommitHorizontal className={ICON} />
-        Review worktree
+        Open Review Hub
       </C.Item>
     )
   );

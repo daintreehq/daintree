@@ -69,6 +69,35 @@ describe("deriveWorktreeAgentBuckets", () => {
     );
   });
 
+  it("puts a worktree whose agent asked through Decisions in Attention, never Finished or cleanup", () => {
+    const handedBack = { handBack: { stoppedAt: NOW - 1000, seenAt: NOW } };
+    expect(buckets([atPrompt("a", handedBack)], { merged: true })).toMatchObject({
+      finished: true,
+      cleanup: true,
+    });
+    for (const held of [{ questionAttention: 1 }, { answerAttention: 1 }]) {
+      expect(buckets([atPrompt("a", { ...handedBack, ...held })], { merged: true })).toEqual({
+        working: false,
+        attention: true,
+        finished: false,
+        finishedUnseen: false,
+        cleanup: false,
+      });
+      // Carrying on after asking, it is at work and still waiting on the user.
+      expect(buckets([working("a"), run("b", { agentState: "working", ...held })])).toMatchObject({
+        working: true,
+        attention: true,
+      });
+      for (const agentState of ["working", "directing"] as const) {
+        expect(buckets([run("a", { agentState, ...held })]), agentState).toMatchObject({
+          working: true,
+          attention: true,
+          finished: false,
+        });
+      }
+    }
+  });
+
   it("lets Working and Attention overlap", () => {
     expect(buckets([working("a"), asking("b")])).toMatchObject({
       working: true,

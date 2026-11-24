@@ -6,13 +6,15 @@ import { describe, expect, it } from "vitest";
 interface WorkletPort {
   onmessage: ((event: { data: unknown }) => void) | null;
   posted: unknown[];
+  transferred: unknown[][];
   closed: boolean;
-  postMessage: (message: unknown) => void;
+  postMessage: (message: unknown, transfer?: unknown[]) => void;
   close: () => void;
 }
 
 interface Processor {
   port: WorkletPort;
+  outBuf: Int16Array;
   process: (inputs: Float32Array[][]) => boolean;
 }
 
@@ -26,9 +28,11 @@ function loadProcessor(sampleRate = 24000): Processor {
     port: WorkletPort = {
       onmessage: null,
       posted: [],
+      transferred: [],
       closed: false,
-      postMessage(message: unknown) {
+      postMessage(message: unknown, transfer: unknown[] = []) {
         this.posted.push(message);
+        this.transferred.push(transfer);
       },
       close() {
         this.closed = true;
@@ -137,6 +141,27 @@ describe("pcm-processor worklet", () => {
     feed(processor, 2400);
     send(processor, { type: "flush" });
     expect(chunkLengths(processor.port.posted)).toEqual([300]);
+  });
+
+  // process() runs on the real-time audio thread, so a full chunk is handed
+  // over as the buffer it was written into, never cloned first.
+  it("transfers each full chunk's own buffer and fills a fresh one next", () => {
+    const processor = loadProcessor();
+    const first = processor.outBuf.buffer;
+    feed(processor, 2400, 0.5);
+    const second = processor.outBuf.buffer;
+    feed(processor, 2400, 0.25);
+
+    const { posted, transferred } = processor.port;
+    expect(posted).toHaveLength(2);
+    expect(posted[0]).toBe(first);
+    expect(posted[1]).toBe(second);
+    expect(transferred.map((list) => list.length)).toEqual([1, 1]);
+    expect(transferred[0]![0]).toBe(first);
+    expect(transferred[1]![0]).toBe(second);
+    expect(processor.outBuf.buffer).not.toBe(second);
+    expect(new Set(new Int16Array(first))).toEqual(new Set([16384]));
+    expect(new Set(new Int16Array(second))).toEqual(new Set([8192]));
   });
 
   it("downsamples to 24kHz before chunking", () => {

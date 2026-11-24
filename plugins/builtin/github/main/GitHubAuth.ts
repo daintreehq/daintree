@@ -1,6 +1,14 @@
 import { graphql } from "@octokit/graphql";
-import { gitHubRateLimitService, GitHubRateLimitError } from "./GitHubRateLimitService.js";
+import { GitHubRateLimitError, rateLimitServiceForHost } from "./GitHubRateLimitService.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import {
+  GITHUB_COM_HOST,
+  apiHostOf,
+  githubApiBase,
+  githubGraphqlBase,
+  isApiUrlFor,
+  isServedGitHubHost,
+} from "./GitHubHost.js";
 
 export const GITHUB_API_TIMEOUT_MS = 15_000;
 export const GITHUB_AUTH_TIMEOUT_MS = 10_000;
@@ -175,13 +183,50 @@ class MemoryTokenStorage implements TokenStorage {
   }
 }
 
+/**
+ * One host's authentication state. github.com and a GitHub Enterprise Server
+ * host each hold their own token and identity, so a repository on one is never
+ * read with — and never sends — the other's credential.
+ */
+interface HostSession {
+  memoryToken: string | null;
+  cachedUsername: string | null;
+  cachedAvatarUrl: string | null;
+  cachedScopes: string[];
+  tokenVersion: number;
+  pendingValidation: Promise<void> | null;
+}
+
+function newSession(): HostSession {
+  return {
+    memoryToken: null,
+    cachedUsername: null,
+    cachedAvatarUrl: null,
+    cachedScopes: [],
+    tokenVersion: 0,
+    pendingValidation: null,
+  };
+}
+
+function normalizeHost(host: string): string {
+  return host.toLowerCase();
+}
+
 export class GitHubAuth {
+  // Durable storage backs github.com only; an enterprise token is persisted by
+  // its own credential module and arrives here through setMemoryToken.
   private static storage: TokenStorage = new MemoryTokenStorage();
-  private static memoryToken: string | null = null;
-  private static cachedUsername: string | null = null;
-  private static cachedAvatarUrl: string | null = null;
-  private static cachedScopes: string[] = [];
-  private static tokenVersion = 0;
+  private static readonly sessions = new Map<string, HostSession>();
+
+  private static session(host: string = GITHUB_COM_HOST): HostSession {
+    const key = normalizeHost(host);
+    let session = this.sessions.get(key);
+    if (!session) {
+      session = newSession();
+      this.sessions.set(key, session);
+    }
+    return session;
+  }
 
   /**
    * Initialize with secure storage (call from main process only).
@@ -191,71 +236,86 @@ export class GitHubAuth {
     this.storage = storage;
     const storedToken = storage.get();
     if (storedToken) {
-      this.memoryToken = storedToken;
+      this.session().memoryToken = storedToken;
     }
   }
 
-  static getToken(): string | undefined {
+  /**
+   * The token for `host`, or undefined. Never falls back to another host's:
+   * an Enterprise Server repository with no token of its own stays
+   * unauthenticated rather than borrowing github.com's.
+   */
+  static getToken(host: string = GITHUB_COM_HOST): string | undefined {
+    const key = normalizeHost(host);
+    if (key !== GITHUB_COM_HOST) {
+      if (!isServedGitHubHost(key)) return undefined;
+      return this.sessions.get(key)?.memoryToken ?? undefined;
+    }
     // Prefer memory token (set via IPC in utility process)
-    if (this.memoryToken) {
-      return this.memoryToken;
+    const memoryToken = this.sessions.get(key)?.memoryToken;
+    if (memoryToken) {
+      return memoryToken;
     }
     return this.storage.get();
   }
 
-  static setMemoryToken(token: string | null): void {
+  /** The host whose session holds `token`, or null for a token none holds (a candidate under validation). */
+  static hostHoldingToken(token: string): string | null {
+    for (const [host, session] of this.sessions) {
+      if (session.memoryToken === token) return host;
+    }
+    if (this.storage.get() === token) return GITHUB_COM_HOST;
+    return null;
+  }
+
+  private static resetSession(session: HostSession, host: string): void {
+    session.tokenVersion++;
+    session.pendingValidation = null;
+    session.cachedUsername = null;
+    session.cachedAvatarUrl = null;
+    session.cachedScopes = [];
+    rateLimitServiceForHost(host).clear();
+    if (normalizeHost(host) === GITHUB_COM_HOST) clearAuthMetadata();
+  }
+
+  static setMemoryToken(token: string | null, host: string = GITHUB_COM_HOST): void {
     const normalized = token?.trim() ?? null;
-    this.memoryToken = normalized && normalized.length > 0 ? normalized : null;
-    this.tokenVersion++;
-    this.pendingValidation = null;
-    this.cachedUsername = null;
-    this.cachedAvatarUrl = null;
-    this.cachedScopes = [];
-    gitHubRateLimitService.clear();
-    clearAuthMetadata();
+    const session = this.session(host);
+    session.memoryToken = normalized && normalized.length > 0 ? normalized : null;
+    this.resetSession(session, host);
   }
 
-  static hasToken(): boolean {
-    return !!GitHubAuth.getToken();
+  static hasToken(host: string = GITHUB_COM_HOST): boolean {
+    return !!GitHubAuth.getToken(host);
   }
 
-  static getTokenVersion(): number {
-    return this.tokenVersion;
+  static getTokenVersion(host: string = GITHUB_COM_HOST): number {
+    return this.sessions.get(normalizeHost(host))?.tokenVersion ?? 0;
   }
 
   static setToken(token: string): void {
-    this.memoryToken = token.trim();
+    const session = this.session();
+    session.memoryToken = token.trim();
     this.storage.set(token.trim());
-    this.tokenVersion++;
-    this.pendingValidation = null;
-    this.cachedUsername = null;
-    this.cachedAvatarUrl = null;
-    this.cachedScopes = [];
-    gitHubRateLimitService.clear();
-    clearAuthMetadata();
+    this.resetSession(session, GITHUB_COM_HOST);
   }
 
   static clearToken(): void {
-    this.memoryToken = null;
-    this.cachedUsername = null;
-    this.cachedAvatarUrl = null;
-    this.cachedScopes = [];
-    this.tokenVersion++;
-    this.pendingValidation = null;
+    const session = this.session();
+    session.memoryToken = null;
     this.storage.delete();
-    gitHubRateLimitService.clear();
-    clearAuthMetadata();
+    this.resetSession(session, GITHUB_COM_HOST);
   }
 
-  private static pendingValidation: Promise<void> | null = null;
-
-  static getConfig(): GitHubTokenConfig {
-    const hasToken = GitHubAuth.hasToken();
+  static getConfig(host: string = GITHUB_COM_HOST): GitHubTokenConfig {
+    const hasToken = GitHubAuth.hasToken(host);
+    const session = this.sessions.get(normalizeHost(host));
     return {
       hasToken,
-      username: hasToken ? (this.cachedUsername ?? undefined) : undefined,
-      avatarUrl: hasToken ? (this.cachedAvatarUrl ?? undefined) : undefined,
-      scopes: hasToken && this.cachedScopes.length > 0 ? this.cachedScopes : undefined,
+      username: hasToken ? (session?.cachedUsername ?? undefined) : undefined,
+      avatarUrl: hasToken ? (session?.cachedAvatarUrl ?? undefined) : undefined,
+      scopes:
+        hasToken && session && session.cachedScopes.length > 0 ? session.cachedScopes : undefined,
     };
   }
 
@@ -263,22 +323,24 @@ export class GitHubAuth {
    * Get config, ensuring user info is fetched if token exists but info is missing.
    * Use this instead of getConfig() when you need guaranteed user info.
    */
-  static async getConfigAsync(): Promise<GitHubTokenConfig> {
+  static async getConfigAsync(host: string = GITHUB_COM_HOST): Promise<GitHubTokenConfig> {
     // If we have a token but no cached username, validate to get user info
-    if (this.hasToken() && !this.cachedUsername) {
+    const session = this.session(host);
+    if (this.hasToken(host) && !session.cachedUsername) {
       // Reuse pending validation to avoid duplicate requests
-      if (!this.pendingValidation) {
-        const token = this.getToken();
+      if (!session.pendingValidation) {
+        const token = this.getToken(host);
         if (token) {
-          const versionAtStart = this.tokenVersion;
-          this.pendingValidation = this.validate(token)
+          const versionAtStart = session.tokenVersion;
+          const pending = this.validate(token, { host })
             .then((validation) => {
               if (validation.valid && validation.username) {
                 this.setValidatedUserInfo(
                   validation.username,
                   validation.avatarUrl,
                   validation.scopes,
-                  versionAtStart
+                  versionAtStart,
+                  host
                 );
               }
             })
@@ -286,36 +348,44 @@ export class GitHubAuth {
               // Ignore validation errors - user info will remain undefined
             })
             .finally(() => {
-              this.pendingValidation = null;
+              if (session.pendingValidation === pending) session.pendingValidation = null;
             });
+          session.pendingValidation = pending;
         }
       }
-      if (this.pendingValidation) {
-        await this.pendingValidation;
+      if (session.pendingValidation) {
+        await session.pendingValidation;
       }
     }
-    return this.getConfig();
+    return this.getConfig(host);
   }
 
   static setValidatedUserInfo(
     username: string,
     avatarUrl: string | undefined,
     scopes: string[],
-    expectedVersion?: number
+    expectedVersion?: number,
+    host: string = GITHUB_COM_HOST
   ): void {
-    if (expectedVersion !== undefined && this.tokenVersion !== expectedVersion) {
+    const session = this.session(host);
+    if (expectedVersion !== undefined && session.tokenVersion !== expectedVersion) {
       return;
     }
-    this.cachedUsername = username;
-    this.cachedAvatarUrl = avatarUrl ?? null;
-    this.cachedScopes = scopes;
+    session.cachedUsername = username;
+    session.cachedAvatarUrl = avatarUrl ?? null;
+    session.cachedScopes = scopes;
   }
 
-  static createClient(): typeof graphql | null {
-    const token = GitHubAuth.getToken();
+  /**
+   * A GraphQL client for `host`, authenticated with that host's own token and
+   * pointed at that host's endpoint, or null when the host has no token.
+   */
+  static createClient(host: string = GITHUB_COM_HOST): typeof graphql | null {
+    const token = GitHubAuth.getToken(host);
     if (!token) return null;
 
     return graphql.defaults({
+      baseUrl: githubGraphqlBase(host),
       headers: {
         authorization: `Bearer ${token}`,
       },
@@ -323,6 +393,12 @@ export class GitHubAuth {
         fetch: rateLimitAwareFetch,
       },
     });
+  }
+
+  /** Test-only reset of every host session. */
+  static _resetSessionsForTests(): void {
+    this.sessions.clear();
+    this.storage = new MemoryTokenStorage();
   }
 
   /**
@@ -334,6 +410,7 @@ export class GitHubAuth {
     options: GitHubValidateOptions = {}
   ): Promise<GitHubTokenValidation> {
     const { signal, detached = false } = options;
+    const host = options.host ?? GITHUB_COM_HOST;
     if (!token || token.trim() === "") {
       return { valid: false, scopes: [], error: "Token is empty" };
     }
@@ -348,8 +425,15 @@ export class GitHubAuth {
       }
     }
 
+    let userUrl: string;
     try {
-      const response = await rateLimitAwareFetch("https://api.github.com/user", {
+      userUrl = `${githubApiBase(host)}/user`;
+    } catch (error) {
+      return { valid: false, scopes: [], error: formatErrorMessage(error, "Unknown GitHub host") };
+    }
+
+    try {
+      const response = await rateLimitAwareFetch(userUrl, {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: "application/vnd.github.v3+json",
@@ -462,7 +546,10 @@ export class GitHubAuth {
         return {
           valid: false,
           scopes: [],
-          error: "Cannot reach GitHub. Check your internet connection.",
+          error:
+            host === GITHUB_COM_HOST
+              ? "Cannot reach GitHub. Check your internet connection."
+              : `Cannot reach ${host}. Check your network connection.`,
         };
       }
       return { valid: false, scopes: [], error: message };
@@ -572,6 +659,8 @@ export function _resetGithubFetchSemaphoreForTests(): void {
  */
 export interface GitHubValidateOptions {
   signal?: AbortSignal;
+  /** The GitHub host to validate against: github.com unless named. */
+  host?: string;
   /**
    * The token may not be the configured one (e.g. a credential being
    * previewed for import), so its response must not touch the configured
@@ -597,15 +686,75 @@ export interface RateLimitAwareFetchInit extends RequestInit {
   daintreeDetached?: boolean;
 }
 
+function requestUrlOf(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+function bearerTokenOf(headers: HeadersInit | undefined): string | null {
+  if (!headers) return null;
+  let value: string | null | undefined;
+  if (headers instanceof Headers) {
+    value = headers.get("authorization");
+  } else if (Array.isArray(headers)) {
+    value = headers.find(([name]) => name.toLowerCase() === "authorization")?.[1];
+  } else {
+    for (const [name, headerValue] of Object.entries(headers)) {
+      if (name.toLowerCase() === "authorization") value = headerValue;
+    }
+  }
+  const match = typeof value === "string" ? /^(?:bearer|token)\s+(\S+)$/i.exec(value.trim()) : null;
+  return match?.[1] ?? null;
+}
+
+/**
+ * Refuse to send a token one host's session holds to any other host. Every
+ * caller builds the URL and picks the token from the same repository host, so
+ * this never fires in a correct path; it turns a missed call site into an
+ * error instead of a credential sent to the wrong server.
+ */
+function assertTokenBoundToHost(input: RequestInfo | URL, init: RequestInit | undefined): void {
+  const tokens = [bearerTokenOf(init?.headers)];
+  // A Request carries headers of its own, which fetch sends unless `init` overrides them.
+  if (typeof input === "object" && !(input instanceof URL))
+    tokens.push(bearerTokenOf(input.headers));
+  const url = requestUrlOf(input);
+  for (const token of tokens) {
+    if (!token) continue;
+    const holder = GitHubAuth.hostHoldingToken(token);
+    // A held token goes only to its own host's exact API origin; anything
+    // else, including a lookalike path or port on another server, is refused.
+    if (holder !== null && !isApiUrlFor(url, holder)) {
+      throw new Error(`Refused to send the ${holder} GitHub token to ${safeOrigin(url)}`);
+    }
+  }
+}
+
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "an unparseable URL";
+  }
+}
+
 export async function rateLimitAwareFetch(
   input: RequestInfo | URL,
   init?: RateLimitAwareFetchInit
 ): Promise<Response> {
   const skipPreflight = init?.daintreeSkipRateLimitPreflight === true;
   const detached = init?.daintreeDetached === true;
+  // Anything that isn't recognisably an Enterprise Server API URL is
+  // github.com's, as it was before there was more than one host.
+  const requestHost = apiHostOf(requestUrlOf(input)) ?? GITHUB_COM_HOST;
+  assertTokenBoundToHost(input, init);
+  // A detached check that skips the breaker never touches it, so validating a
+  // token for a host that's never saved one allocates nothing for it.
+  const rateLimits = detached && skipPreflight ? null : rateLimitServiceForHost(requestHost);
 
-  if (!skipPreflight) {
-    const block = gitHubRateLimitService.shouldBlockRequest();
+  if (!skipPreflight && rateLimits) {
+    const block = rateLimits.shouldBlockRequest();
     if (block.blocked && block.reason && block.resumeAt) {
       throw new GitHubRateLimitError(block.reason, block.resumeAt);
     }
@@ -626,28 +775,28 @@ export async function rateLimitAwareFetch(
   }
 
   const release = await githubFetchSemaphore.acquire();
-  const versionAtStart = GitHubAuth.getTokenVersion();
+  const versionAtStart = GitHubAuth.getTokenVersion(requestHost);
   try {
     // Post-acquire re-check: while this request was queued in the semaphore,
     // another request may have completed and registered a block. Without
     // this re-check, queued waiters would dispatch into an active block and
     // amplify the rate-limit violation instead of stopping at the gate.
-    if (!skipPreflight) {
-      const reblock = gitHubRateLimitService.shouldBlockRequest();
+    if (!skipPreflight && rateLimits) {
+      const reblock = rateLimits.shouldBlockRequest();
       if (reblock.blocked && reblock.reason && reblock.resumeAt) {
         throw new GitHubRateLimitError(reblock.reason, reblock.resumeAt);
       }
     }
 
     const response = await globalThis.fetch(input, fetchInit);
-    if (detached) return response;
+    if (detached || !rateLimits) return response;
 
     const requestId = response.headers.get("x-github-request-id") ?? undefined;
 
     // Phase 1 — header-only classification runs immediately. Catches the
     // retry-after path, the primary-limit path, and the 2xx clear path.
     try {
-      gitHubRateLimitService.update(response.headers, response.status, undefined, requestId);
+      rateLimits.update(response.headers, response.status, undefined, requestId);
     } catch {
       // Rate-limit bookkeeping must never break the underlying request.
     }
@@ -655,7 +804,12 @@ export async function rateLimitAwareFetch(
     // Late-arriving response from a previous token: discard so it can't
     // clobber `lastAuthMetadata` set by the currently-configured token.
     // Mirrors the same guard in `GitHubTokenHealthService.runCheck()`.
-    if (GitHubAuth.getTokenVersion() === versionAtStart) {
+    // SSO re-authorization and token-expiry metadata describe the github.com
+    // account; parseSsoHeader only trusts github.com URLs.
+    if (
+      requestHost === GITHUB_COM_HOST &&
+      GitHubAuth.getTokenVersion(requestHost) === versionAtStart
+    ) {
       try {
         captureAuthMetadata(response.headers);
       } catch {
@@ -672,7 +826,7 @@ export async function rateLimitAwareFetch(
     if (!response.ok && (response.status === 403 || response.status === 429)) {
       try {
         const bodyText = await response.clone().text();
-        gitHubRateLimitService.update(response.headers, response.status, bodyText, requestId);
+        rateLimits.update(response.headers, response.status, bodyText, requestId);
       } catch {
         // Cloning can fail on aborted streams; header-only classification
         // already covered the headered case.

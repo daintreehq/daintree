@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
 import { CrossWorktreeDiff } from "../CrossWorktreeDiff";
@@ -12,6 +12,7 @@ type Snapshot = {
   name: string;
   path: string;
   branch: string | undefined;
+  isDetached?: boolean;
   isMainWorktree: boolean;
   worktreeChanges: { headOid: string };
 };
@@ -158,6 +159,35 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     expectNothingStale();
   });
 
+  it.each([
+    ["compare", "Compare", "Choose a compare worktree on a branch", "wt-right"],
+    ["base", "Base", "Choose a base worktree on a branch", "wt-left"],
+  ])(
+    "clears the comparison when the %s side detaches but still carries its last branch name",
+    async (_side, pickerLabel, title, detachedId) => {
+      const view = await openComparison();
+      const calls = mockCompareWorktrees.mock.calls.length;
+
+      // A new head, as a checkout to another commit brings: with the retained
+      // branch still accepted, this would refresh the comparison.
+      const retained = (wt: Snapshot) =>
+        wt.id === detachedId
+          ? { ...wt, isDetached: true, worktreeChanges: { headOid: "bbb" } }
+          : wt;
+      setWorktrees(retained(LEFT()), retained(RIGHT()));
+      view.rerender(tree());
+
+      expect(await screen.findByText(title)).toBeTruthy();
+      expect(screen.getByText(new RegExp(`${detachedId} has a detached HEAD`))).toBeTruthy();
+      expectNothingStale();
+      const option = within(screen.getByLabelText(pickerLabel)).getByRole("option", {
+        name: `${detachedId} (detached)`,
+      });
+      expect((option as HTMLOptionElement).disabled).toBe(true);
+      expect(mockCompareWorktrees.mock.calls.length).toBe(calls);
+    }
+  );
+
   it("says why when the base leaves the list before a compare side is chosen", () => {
     const view = render(tree());
     expect(screen.getByText("Choose a worktree to compare")).toBeTruthy();
@@ -272,7 +302,7 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
     expect(fileRow("b.ts")?.getAttribute("aria-current")).toBeNull();
   });
 
-  it("drops the previous pair's file diff and source once another pair is chosen", async () => {
+  it("drops the previous pair's source that lands once another pair is chosen", async () => {
     setWorktrees(LEFT(), RIGHT(), snapshot("wt-other", "other"));
     render(tree());
     const stalePatch = deferred<string>();
@@ -295,23 +325,64 @@ describe("CrossWorktreeDiff when the chosen pair can no longer be compared", () 
         );
       }
     );
+    const featureFileCalls = () =>
+      mockCompareWorktrees.mock.calls.filter((c) => c[2] === "feature" && c[3] !== undefined);
     fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
-    await waitFor(() =>
-      expect(
-        mockCompareWorktrees.mock.calls.filter((c) => c[2] === "feature" && c[3] !== undefined)
-          .length
-      ).toBe(2)
-    );
+    // The whole-file read waits for the patch, so the old pair's patch lands
+    // first and its source is still out when the pair changes.
+    await waitFor(() => expect(featureFileCalls().length).toBe(1));
+    await act(async () => stalePatch.resolve("stale diff"));
+    await waitFor(() => expect(featureFileCalls().length).toBe(2));
+    await waitFor(() => expect(screen.getByTestId("diff-viewer").textContent).toBe("stale diff"));
 
     fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-other" } });
     await waitFor(() => expect(screen.getByTestId("diff-viewer").textContent).toBe("diff other"));
-    expect(screen.getByTestId("diff-viewer").dataset.source).toBe("source other");
+    await waitFor(() =>
+      expect(screen.getByTestId("diff-viewer").dataset.source).toBe("source other")
+    );
 
     await act(async () => staleSource.resolve("@@ -1 +1 @@\n-old\n+stale source"));
+
+    expect(screen.getByTestId("diff-viewer").textContent).toBe("diff other");
+    expect(screen.getByTestId("diff-viewer").dataset.source).toBe("source other");
+  });
+
+  it("drops the previous pair's file diff that lands once another pair is chosen", async () => {
+    setWorktrees(LEFT(), RIGHT(), snapshot("wt-other", "other"));
+    render(tree());
+    const stalePatch = deferred<string>();
+    mockCompareWorktrees.mockImplementation(
+      (
+        _path,
+        _b1,
+        b2: string,
+        filePath?: string,
+        _mergeBase?: boolean,
+        _ws?: boolean,
+        context?: number
+      ) => {
+        if (filePath === undefined) return Promise.resolve(listResponse());
+        if (b2 === "feature") return stalePatch.promise;
+        return Promise.resolve(
+          context === undefined ? "diff other" : "@@ -1 +1 @@\n-old\n+source other"
+        );
+      }
+    );
+    const featureFileCalls = () =>
+      mockCompareWorktrees.mock.calls.filter((c) => c[2] === "feature" && c[3] !== undefined);
+    fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
+    await waitFor(() => expect(featureFileCalls().length).toBe(1));
+
+    fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-other" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("diff-viewer").dataset.source).toBe("source other")
+    );
+
     await act(async () => stalePatch.resolve("stale diff"));
 
     expect(screen.getByTestId("diff-viewer").textContent).toBe("diff other");
     expect(screen.getByTestId("diff-viewer").dataset.source).toBe("source other");
+    expect(featureFileCalls().length).toBe(1);
   });
 });
 

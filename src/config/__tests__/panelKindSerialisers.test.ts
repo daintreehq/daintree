@@ -11,6 +11,26 @@ import { createFileBrowserDefaults } from "@/panels/file-browser/defaults";
 import { getDeserializer } from "../panelKindSerialisers";
 
 describe("panelKindSerialisers", () => {
+  describe("file", () => {
+    // An unset mode can open a built-in viewer (#17336); Edit is never
+    // restored and keeps coming back as Source, while a mode never saved stays
+    // unset.
+    it.each([
+      ["edit", "source"],
+      ["rendered", "rendered"],
+      ["source", "source"],
+      [undefined, undefined],
+      ["bogus", undefined],
+    ])("restores a saved %s mode as %s", (saved, restored) => {
+      const result = getDeserializer("file")!({
+        id: "f1",
+        filePath: "/repo/users.csv",
+        ...(saved !== undefined && { fileViewMode: saved }),
+      });
+      expect(result).toEqual({ filePath: "/repo/users.csv", fileViewMode: restored });
+    });
+  });
+
   describe("browser", () => {
     it("extracts browser fields", () => {
       const deserialize = getDeserializer("browser");

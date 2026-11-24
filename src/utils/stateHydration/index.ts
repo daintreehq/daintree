@@ -19,7 +19,7 @@ import type { WaitingReason } from "@shared/types/agent";
 import type { PanelRestoreRecovery, SessionLostReason } from "@shared/types/panel";
 import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types/ipc/terminal";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isGitBackedProject } from "@shared/types";
+import { isGitBackedProject, type WorktreeState } from "@shared/types";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { inferKind } from "./statePatcher";
 import { RECONNECT_TIMEOUT_MS } from "./reconnectManager";
@@ -49,9 +49,11 @@ import { ensureHydrationBootstrap } from "./bootstrapGuard";
 import { dispatchRecoveryNotifications } from "./recoveryNotifications";
 import { scheduleScrollbackRestore } from "./scrollbackRestoreScheduler";
 import { resolveVisiblePanelId, restorePanelsPhase } from "./panelRestorePhase";
+import { rereadWorktreeList } from "./coldLaunchTarget";
 import { isRemoteWindow, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
+import { publishWakeCandidates } from "@/services/wakeContinue/wakeContinue";
 
 /**
  * Record which machine this view's project lives on. A remote view also asks
@@ -364,6 +366,11 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     });
 
     const worktreesPromise = statusPromise.then((status) => status?.worktrees ?? null);
+    // A second look, only for panes the first answer couldn't place (#18009),
+    // and only once per pass however many ask.
+    let worktreeReread: Promise<WorktreeState[] | null> | null = null;
+    const rereadWorktrees = () =>
+      (worktreeReread ??= rereadWorktreeList(() => worktreeClient.getAllWithStatus()));
 
     // Resolved rather than synchronous, because the host is the only party that
     // can distinguish "no repository" from "not reported yet". `restorePanelsPhase`
@@ -616,6 +623,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           clipboardDirectory,
           projectPresetsByAgent,
           worktreesPromise,
+          rereadWorktrees,
           restoreTerminalOrder: options.restoreTerminalOrder,
           safeMode: hydrateResult.safeMode,
           visiblePanelId,
@@ -628,6 +636,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
           logHydrationInfo,
         });
         const { restoreTasks } = restoreResult;
+        // The agents this restore started again with their conversations get
+        // a continue-note offer; nothing is sent unless the user asks (#17883).
+        publishWakeCandidates(currentWorkspaceId, restoreResult.wakeCandidates ?? []);
         // Capture the saved→restored panel id remap so the tab-group block
         // below (outside this try) can keep group membership intact when a
         // panel respawned with a fresh id (#10440).

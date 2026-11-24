@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BUILT_IN_ACTION_ID_SET, DENY_PLUGIN_DISPATCH_SET } from "../actions.js";
+import { isRetiredBuiltInActionId } from "../../../../shared/config/retiredActionIds.js";
 import type { ManifestValidationContext } from "./context.js";
 import type { ParsedPluginManifest } from "../manifestShape.js";
 
@@ -62,7 +63,8 @@ export function validateEventRoutes(
 //     the host refuses plugin dispatch for it, so the button is dead even
 //     though the id exists (#10580). This precedes the allowlist check
 //     because these ids ARE in `BUILT_IN_ACTION_ID_SET`.
-//  2. Any other built-in action id resolves.
+//  2. Any other built-in action id resolves, and so does a retired one, which
+//     loads inert (the registrar drops the contribution).
 //  3. An id in the plugin's own namespace is cross-checked against the
 //     declared `contributes.commands` (namespaced `{name}.{id}` at load).
 //     If commands are declared, an own-namespace id that matches none of
@@ -101,7 +103,12 @@ export function validateContributedActionIds(
         return;
       }
 
-      if (BUILT_IN_ACTION_ID_SET.has(actionId)) {
+      // A retired built-in loads inert: the registrar drops the contribution
+      // and the advisories say why, rather than failing the whole manifest.
+      if (
+        BUILT_IN_ACTION_ID_SET.has(actionId) ||
+        isRetiredBuiltInActionId(actionId, ownNamespacePrefix)
+      ) {
         return;
       }
 

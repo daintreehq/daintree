@@ -8,6 +8,7 @@ import { isAccountId } from "./agentAccountId.js";
 import { isPresetHexColor } from "./presetColor.js";
 import {
   combineDangerousModes,
+  isDangerousMode,
   resolveDangerousMode,
   resolveEffectivePresetId,
   type AgentSettingsEntry,
@@ -136,12 +137,7 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
     args: sanitizeArgs(preset.args),
     dangerousEnabled:
       typeof preset.dangerousEnabled === "boolean" ? preset.dangerousEnabled : undefined,
-    dangerousMode:
-      preset.dangerousMode === "inherit" ||
-      preset.dangerousMode === "on" ||
-      preset.dangerousMode === "off"
-        ? preset.dangerousMode
-        : undefined,
+    dangerousMode: isDangerousMode(preset.dangerousMode) ? preset.dangerousMode : undefined,
     customFlags:
       typeof preset.customFlags === "string" && !hasShellMetachar(preset.customFlags)
         ? preset.customFlags.slice(0, 10000)
@@ -151,10 +147,39 @@ export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
     fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true ? true : undefined,
     keepConversationOnRateLimit: preset.keepConversationOnRateLimit === true ? true : undefined,
+    continueAtLimitReset: preset.continueAtLimitReset === true ? true : undefined,
     // Kept even when no account answers to it any more: a launch refuses a
     // pin it can't find rather than running on another login.
     accountId: isAccountId(preset.accountId) ? preset.accountId : undefined,
   };
+}
+
+/**
+ * A preset list from a writer that may not change whether a preset's panes
+ * continue at their usage limit's reset (#17912): each preset keeps what the
+ * stored preset with its id holds and its own value is dropped, so a new id
+ * starts off and replacing a preset wholesale turns it neither on nor off.
+ * Read as a launch reads presets: the first valid stored preset of an id wins.
+ */
+export function keepStoredLimitResets(incoming: unknown[], stored: unknown): unknown[] {
+  const on = new Map<string, boolean>();
+  for (const preset of Array.isArray(stored) ? stored : []) {
+    if (preset === null || typeof preset !== "object") continue;
+    // An entry an import let through malformed answers nothing, and mustn't
+    // stop the write that replaces it.
+    const { id, name } = preset as Record<string, unknown>;
+    if (typeof id !== "string" || typeof name !== "string") continue;
+    const valid = sanitizePreset(preset as AgentPreset);
+    if (!valid || on.has(valid.id)) continue;
+    on.set(valid.id, valid.continueAtLimitReset === true);
+  }
+  return incoming.map((preset) => {
+    if (preset === null || typeof preset !== "object" || Array.isArray(preset)) return preset;
+    const { continueAtLimitReset: _written, ...rest } = preset as Record<string, unknown>;
+    return typeof rest.id === "string" && on.get(rest.id) === true
+      ? { ...rest, continueAtLimitReset: true }
+      : rest;
+  });
 }
 
 /**
@@ -403,6 +428,78 @@ export function getMergedPreset(
 }
 
 /**
+ * The preset id a launch asks for before any lookup: the caller's, else the
+ * worktree's pick, else the agent's default. `undefined` when the caller or
+ * the worktree asked for the bare CLI with `null`, or nothing is saved.
+ */
+export function resolveRequestedPresetId(
+  entry: AgentSettingsEntry,
+  worktreeId: string | null | undefined,
+  requestedPresetId: string | null | undefined
+): string | undefined {
+  const scopedId =
+    worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
+  if (requestedPresetId === null || (requestedPresetId === undefined && scopedId === null)) {
+    return undefined;
+  }
+  return requestedPresetId ?? resolveEffectivePresetId(entry, worktreeId);
+}
+
+export interface SettledLaunchPreset {
+  /** The preset the launch runs, fallback included. `undefined` is the bare CLI. */
+  preset: AgentPreset | undefined;
+  /** The id the launch asked for before any fallback: the caller's, else the saved one. */
+  resolvedPresetId: string | undefined;
+  /** Whether `resolvedPresetId` itself was found, so a vanished saved id can be cleared. */
+  primaryFound: boolean;
+}
+
+/**
+ * The preset one launch of `agentId` runs: the requested one, else the
+ * worktree's pick, else the agent's default, else the registry's own; a
+ * worktree pick that's gone falls back to the agent's default. `null`, asked
+ * or saved for the worktree, is the bare CLI. Shared by the launch plan and
+ * the account listing (#17079), so the account a listing says a launch lands
+ * on is the one a launch reads off this preset.
+ */
+export function settleLaunchPreset(
+  agentId: string,
+  entry: AgentSettingsEntry,
+  worktreeId: string | null | undefined,
+  requestedPresetId: string | null | undefined,
+  ccrPresets?: AgentPreset[],
+  projectPresets?: AgentPreset[]
+): SettledLaunchPreset {
+  const scopedId =
+    worktreeId && entry.worktreePresets ? entry.worktreePresets[worktreeId] : undefined;
+  // `null`, asked or saved for the worktree, is the bare CLI. Nothing saved
+  // still looks up the registry's own default below.
+  if (requestedPresetId === null || (requestedPresetId === undefined && scopedId === null)) {
+    return { preset: undefined, resolvedPresetId: undefined, primaryFound: false };
+  }
+  const resolvedPresetId = resolveRequestedPresetId(entry, worktreeId, requestedPresetId);
+  const primary = getMergedPreset(
+    agentId,
+    resolvedPresetId,
+    entry.customPresets,
+    ccrPresets,
+    projectPresets
+  );
+  if (primary) return { preset: primary, resolvedPresetId, primaryFound: true };
+  // A worktree pick that's gone launches on the agent's default now; the
+  // stale slot is still reported, so the next launch reads the default.
+  const fallback =
+    requestedPresetId === undefined &&
+    scopedId &&
+    scopedId === resolvedPresetId &&
+    entry.presetId &&
+    entry.presetId !== scopedId
+      ? getMergedPreset(agentId, entry.presetId, entry.customPresets, ccrPresets, projectPresets)
+      : undefined;
+  return { preset: fallback, resolvedPresetId, primaryFound: false };
+}
+
+/**
  * The saved preset a plain launch settles on, from an agent's merged presets:
  * the worktree's pick, else the agent's default, which also stands in for a
  * worktree pick that's gone, as `buildAgentLaunchPlan` falls back. Lets a
@@ -428,10 +525,10 @@ export function applyPresetBehaviorOverrides(
   preset: AgentPreset | undefined
 ): AgentSettingsEntry {
   if (!preset) return entry;
-  // Layer the preset's tri-state bypass mode on top of the agent's resolved
-  // mode and bake the combined result onto the effective entry, so the single
-  // `resolveEffectiveBypass` chokepoint sees the final intent (a preset "off"
-  // vetoes an agent/global "on"). `dangerousEnabled` is mirrored for any
+  // Layer the preset's permission mode on top of the agent's resolved mode and
+  // bake the combined result onto the effective entry, so the single
+  // `resolveEffectivePermissionLevel` chokepoint sees the final intent (a
+  // preset "off" or "auto" beats an agent/global "on"). `dangerousEnabled` is mirrored for any
   // legacy boolean reader of the merged entry.
   const combinedMode = combineDangerousModes(
     resolveDangerousMode(entry),

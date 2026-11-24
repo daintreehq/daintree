@@ -2,10 +2,12 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { app, type BrowserWindow, type Event, type WebContents } from "electron";
 import type { HostRestartImpact, RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
+import type { HostSettingLeaf } from "../../../shared/types/hostSettings.js";
 import { MetricsLinkMethod, RestartImpactSchema } from "../metrics/linkMethods.js";
 import {
   isLocalHostId,
   parseHostScopedKey,
+  sameHostConnection,
   toHostScopedKey,
   type HostConnection,
   type HostDescriptor,
@@ -14,6 +16,7 @@ import {
 import { CHANNELS } from "../../ipc/channels.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { store } from "../../store.js";
+import { isAgentUsageTrackingEnabled } from "../../services/agentUsage/AgentUsageTracking.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import {
   discardFromAllProjectHistories,
@@ -44,10 +47,19 @@ import {
   revealWindow,
   type ProjectOwner,
 } from "../../window/projectOwnership.js";
+import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
+import { CloudGuestPowerOff } from "../cloud/CloudGuestPowerOff.js";
+import { CloudKeepAwakeLinks } from "../cloud/CloudKeepAwakeLinks.js";
+import { CloudMachineKeys } from "../cloud/CloudMachineKeys.js";
+import { CloudSshFiles } from "../cloud/CloudSshFiles.js";
+import { initCloudHosts } from "../cloud/initCloudHosts.js";
+import { createCloudTransports } from "../cloud/cloudTransport.js";
+import type { CloudHostsStoreBackend } from "../cloud/CloudHostStore.js";
 import { hasPendingActivation } from "../../window/projectActivationClaims.js";
 import { confirmColdOpenAtMemoryPressure } from "../../services/projectOpenMemoryPressure.js";
 import { checkKernelPressureCritical } from "../../services/SystemMemoryPressureMonitor.js";
 import { activateScratchInWindow } from "../../ipc/handlers/scratch/activation.js";
+import { currentWindowSwitch } from "../../window/windowSwitchEpochs.js";
 import {
   getPtyClient,
   getWorkspaceClientRef,
@@ -56,7 +68,7 @@ import {
 import { toDisposable } from "../../utils/lifecycle.js";
 import { getLocalHandshakeInfo } from "../handshakeInfo.js";
 import type { LinkSession } from "../link/session.js";
-import { registerRemoteService } from "../runtime.js";
+import { getRemoteService, registerRemoteService } from "../runtime.js";
 import {
   forgetRemoteWorkspaceTitles,
   setRemoteHostNameResolver,
@@ -76,11 +88,16 @@ import {
   type ViewSink,
 } from "./RemoteHostManager.js";
 import { RemoteHostsClient, type WindowControl } from "./RemoteHostsClient.js";
-import { watchOwnedHostCleanup } from "./ownedHostCleanup.js";
+import {
+  onWorktreeMonitorRemoved,
+  watchOwnedHostCleanup,
+  worktreeRootGone,
+} from "./ownedHostCleanup.js";
 import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
-import { requireSupportedConnection } from "./connection.js";
-import { SshTransport } from "./sshTransport.js";
+import { requireSupportedConnection, sshTargetOf } from "./connection.js";
+import { SshTransport, controlPathFor } from "./sshTransport.js";
+import { createCloudCommandChannel } from "./remoteShell.js";
 import { HostStarts } from "./hostStarts.js";
 import { WslKeepalive } from "./wslKeepalive.js";
 import { WslTransport } from "./wslTransport.js";
@@ -92,6 +109,7 @@ import { machineDisplayName } from "../../utils/machineName.js";
 import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
 import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
 import { HostBringBackService } from "./HostBringBackService.js";
+import { SshSignInService } from "./SshSignInService.js";
 import { sendWakePacket, wakeRouteFor } from "./wakeOnLan.js";
 import { markEnteringFullScreen } from "../../window/fullScreenEntry.js";
 
@@ -100,6 +118,7 @@ declare module "../runtime.js" {
     remoteHostsClient: RemoteHostsClient;
     hostSetup: HostSetupService;
     hostBringBack: HostBringBackService;
+    sshSignIn: SshSignInService;
   }
 }
 
@@ -125,6 +144,8 @@ export function setHostAgentsSource(source: AgentsSource | null): void {
 
 /** How long an update waits for a host it has to dial before asking it what a restart ends. */
 const RESTART_IMPACT_CONNECT_MS = 15_000;
+/** How long Remove waits on stopping a host started on connect: a check, then its quit. */
+const REMOVE_STOP_MS = 120_000;
 
 /** How often the network is compared while an ssh host's connection is wanted. */
 const HOST_NETWORK_POLL_MS = 1_000;
@@ -406,6 +427,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       await inTurn(windowId, async () => {
         const pvm = managerFor(windowId);
         const from = pvm.getActiveProjectId();
+        const switchEpoch = currentWindowSwitch(windowId);
         if (focusIntent) pvm.setPendingFocusIntent(workspace.id, focusIntent);
         const { view, isNew } = await pvm.switchTo(workspace.id, workspace.path, undefined, {
           ...request,
@@ -414,6 +436,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
         recordWindowSwitch(windowId, from, workspace.id);
         const registry = getWindowRegistry();
         const win = registry?.getByWindowId(windowId)?.browserWindow;
+        const outgoingProjectId = from !== null && isLocalProjectKey(from) ? from : null;
         if (scratch && win && !win.isDestroyed()) {
           activateScratchInWindow({
             scratch,
@@ -422,6 +445,9 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
             view: view.webContents,
             windowRegistry: registry,
             ptyClient: getPtyClient(),
+            workspaceClient: getWorkspaceClientRef(),
+            outgoingWorkspaceId: outgoingProjectId,
+            switchEpoch,
           });
         } else if (project && win && !win.isDestroyed()) {
           await completeLocalProjectActivation({
@@ -429,7 +455,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
             project,
             view,
             isNew,
-            outgoingProjectId: from !== null && isLocalProjectKey(from) ? from : null,
+            outgoingProjectId,
             switchId: crypto.randomUUID(),
             clients: {
               workspace: getWorkspaceClientRef(),
@@ -661,7 +687,7 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
 
 /**
  * Everything this device keeps under a host's id, cleared when the host is
- * removed. Its windows are already back on this machine by then, so its views
+ * removed or re-pointed. Its windows are already back on this machine by then, so its views
  * here are cached ones, discarded before the storage they could write back to
  * is cleared.
  */
@@ -718,11 +744,22 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
       }
     },
   },
+  // Before the views hear: whatever they read after that is the new machine's.
+  { name: "load history", run: (hostId) => getRemoteService("hostMetrics")?.forgetHistory(hostId) },
   {
     name: "view storage",
     run: (hostId) => broadcastLocal({ type: "host-forgotten", hostId }),
   },
   { name: "browser data", run: clearHostPartitions },
+  // Re-pointing keeps the id, so these go by it rather than by the host list (#17207).
+  {
+    name: "port forwards and previews",
+    run: (hostId) => getRemoteService("portForwards")?.forgetHost(hostId),
+  },
+  {
+    name: "assistant sender credential",
+    run: (hostId) => getRemoteService("hostControlLinkClient")?.forgetHost(hostId),
+  },
 ];
 
 /**
@@ -740,7 +777,11 @@ function transportFor(
     /** The host is being removed or re-pointed: its old distro must not be held again. */
     isRetiring(connection: HostConnection): boolean;
   },
-  ensureRunning?: (signal: AbortSignal) => Promise<boolean>
+  ensureRunning?: (signal: AbortSignal) => Promise<boolean>,
+  cloud?: (
+    bindingId: string,
+    ensureRunning?: (signal: AbortSignal) => Promise<boolean>
+  ) => LinkTransport
 ): LinkTransport {
   let supported: HostConnection;
   try {
@@ -767,6 +808,15 @@ function transportFor(
         ensureRunning,
         runtimeDirNames: WSL_RUNTIME_DIR_NAMES,
       });
+    case "cloud":
+      return cloud
+        ? cloud(supported.bindingId, ensureRunning)
+        : {
+            open: () =>
+              Promise.reject(
+                new UnusableConnectionError("Cloud hosts aren't available here", null)
+              ),
+          };
   }
 }
 
@@ -789,11 +839,15 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   router: RemoteRouterImpl;
   /** The host's open session, whether or not a local view has an endpoint on it. */
   sessionFor(hostId: HostId): LinkSession | null;
+  /** The windows on this machine bound to the host now, by their live binding. */
+  windowsOn(hostId: HostId): number[];
   /** Per-host links and the host list, for session-level services such as host summaries. */
   manager: RemoteHostManager;
   /** Sends a Remote Hosts event to every view on this machine. */
   emitLocal(event: RemoteHostsEvent): void;
   registry: HostRegistry;
+  /** A change that landed on a host's settings: a new idle time becomes its cloud machine's own (#17916). */
+  idleTimePicked(hostId: HostId, settings: readonly HostSettingLeaf[]): void;
   dispose(): Promise<void>;
 } {
   const registry = new HostRegistry(store as unknown as RemoteHostsStore);
@@ -801,12 +855,53 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   setRemoteHostNameResolver((hostId) => registry.get(hostId)?.name ?? null);
   const stopTitleRefresh = registry.onChange(refreshWindowTitles);
   const clientDir = path.join(app.getPath("userData"), "rh");
+  const cloudFiles = new CloudSshFiles(path.join(clientDir, "cloud"), defaultCommandRunner);
+  // `client` is made below; a sign-in only starts once the app is up.
+  const signIn: SshSignInService = new SshSignInService({
+    clientDir,
+    run: defaultCommandRunner,
+    isRetiring: (connection) => client.isRetiring(connection),
+    // The askpass helper is this build run again: an unpackaged one needs its app folder.
+    helperCommand: () =>
+      app.isPackaged ? [process.execPath] : [process.execPath, app.getAppPath()],
+  });
+  // A sign-in to a host's old target stops once the host is removed or re-pointed.
+  const stopSignIn = (connection: HostConnection) => {
+    const target = sshTargetOf(connection);
+    if (target !== null) signIn.cancelTarget(target);
+  };
+  const cloud = initCloudHosts({
+    backend: store as unknown as CloudHostsStoreBackend,
+    emit: broadcastLocal,
+    onAccountRemoved: (accountId) => cloudFiles.forgetAccount(accountId),
+    beforeAccountRemoved: async (accountId) => machineKeys?.settleAccount(accountId),
+  });
+  // Bound once the host list and links exist (below).
+  let machineKeys: CloudMachineKeys | null = null;
+  // Bound once the host list and client exist (below); a dial before then is refused.
+  let cloudLifecycle: CloudHostLifecycle | null = null;
+  const requireCloudLifecycle = (): CloudHostLifecycle => {
+    if (!cloudLifecycle) throw new UnusableConnectionError("Cloud hosts aren't ready yet", null);
+    return cloudLifecycle;
+  };
+  const cloudTransports = createCloudTransports({
+    access: requireCloudLifecycle,
+    ssh: (route, ensureRunning) =>
+      new SshTransport({
+        target: route.target,
+        clientDir,
+        ensureRunning,
+        sshPath: route.sshPath,
+        sshConfigFiles: [route.configPath],
+      }),
+  });
   const wslKeepalive = new WslKeepalive();
   // Bound below: the sink needs the router's answer, the router needs the manager.
   let router: RemoteRouterImpl | null = null;
   const hostForView = (webContentsId: number) => router?.hostForSender(webContentsId) ?? null;
   const sleep = getSystemSleepService();
   const awakeSince = (since: number) => sleep.getAwakeTimeSince(since);
+  let clientName: string | null = null;
   const manager = new RemoteHostManager({
     registry,
     createTransport: (descriptor) => {
@@ -822,7 +917,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
             // A dial while the host is removed or re-pointed (a notification, an
             // update's reconnect) would hold the old distro after its release.
             { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
-            ensureRunning
+            ensureRunning,
+            cloudTransports.transportFor
           )
       );
     },
@@ -830,11 +926,21 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     client: {
       // Per launch: a session only resumes within one run of this app.
       clientId: crypto.randomUUID(),
-      clientName: machineDisplayName(),
+      // Read when a host first needs it, not at launch: on a Mac it is a
+      // synchronous subprocess, and a launch with no hosts never needs it (#17027).
+      get clientName() {
+        return (clientName ??= machineDisplayName());
+      },
       deviceId: readOrCreateDeviceId(clientDir),
       platform:
         process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
       assistantSlots: MAX_ASSISTANT_SLOTS,
+      // Read for each HELLO: present, it tells a host to wait for this Shell's word on open (#17981).
+      get agentUsage() {
+        return isAgentUsageTrackingEnabled();
+      },
+      // Always: whether anything here wants a host's stops is this Shell's to decide.
+      agentStopChanges: true,
     },
     views: createViewSink(hostForView),
     reverseRequests: answerReverseRequest,
@@ -866,12 +972,20 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emit: broadcastLocal,
     listViews: () => getAllAppWebContents().map((wc) => wc.id),
     onFirstUse: hooks.onFirstUse,
+    // Daintree there runs until stopped and nothing else would stop it; one
+    // kept running by a service or login item is left as it is.
+    onRemoving: async (descriptor): Promise<void> => {
+      if (descriptor.startsOnConnect !== true) return;
+      await setup.stopStartedOnConnect(descriptor.connection, AbortSignal.timeout(REMOVE_STOP_MS));
+    },
     onForget: async (descriptor): Promise<void> => {
+      stopSignIn(descriptor.connection);
       await forgetHostState(descriptor.id, HOST_STATE_CLEANUPS);
       await setup.forgetArtifacts(descriptor);
     },
     // The id stays, so everything kept under it about the old machine goes, as on removal.
     onRetarget: async (before): Promise<void> => {
+      stopSignIn(before.connection);
       await forgetHostState(before.id, HOST_STATE_CLEANUPS);
       await setup.forgetArtifacts(before);
     },
@@ -913,6 +1027,16 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const setup: HostSetupService = new HostSetupService({
     run: defaultCommandRunner,
     clientDir,
+    cloudChannel: (bindingId) =>
+      createCloudCommandChannel({
+        resolve: (signal) => requireCloudLifecycle().ensureAccess(bindingId, signal),
+        controlPathFor: (target) => controlPathFor(clientDir, target),
+        run: defaultCommandRunner,
+      }),
+    forgetCloud: async (bindingId) => {
+      cloudTransports.forget(bindingId);
+      await cloudFiles.forget(clientDir, bindingId);
+    },
     platform: process.platform,
     knownConnections: () => registry.list().map((host) => host.connection),
     clientBuild: () => {
@@ -989,6 +1113,15 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     emit: broadcastLocal,
     isRetiring: (connection) => client.isRetiring(connection),
     wslKeepalive,
+    onProbed: (connection, result) => {
+      // PID 1 unread says nothing either way: what was seen before stands.
+      if (result.platform === "linux" && result.advice.systemd == null) return;
+      for (const host of registry.list()) {
+        if (sameHostConnection(host.connection, connection)) {
+          registry.recordStartsOnConnect(host.id, result.startsOnConnect === true);
+        }
+      }
+    },
   });
   // A host whose Daintree answered is checked afresh the next time it isn't serving.
   const stopStartRechecks = manager.onStateChange((hostId, state) => {
@@ -997,11 +1130,109 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopOwnedHostCleanup = watchOwnedHostCleanup({
     list: () => registry.list(),
     forget: (hostId) => client.forget({ hostId }),
+    clearPlacement: async (hostId) => {
+      await client.update({ hostId, pendingPlacement: null });
+    },
   });
+  machineKeys = new CloudMachineKeys({
+    store: cloud.store,
+    accounts: cloud.accounts,
+    hosts: { get: (hostId) => registry.get(hostId) },
+    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    changed: () => cloud.cloudHosts.changed(),
+  });
+  const keysForMachines = machineKeys;
+  const stopArmingMachines = manager.onSessionOpened((hostId, session) =>
+    keysForMachines.sessionOpened(hostId, session)
+  );
+  const guestPowerOff = new CloudGuestPowerOff({
+    store: cloud.store,
+    accounts: cloud.accounts,
+    hosts: { get: (hostId) => registry.get(hostId) },
+    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    changed: () => cloud.cloudHosts.changed(),
+  });
+  const stopGuestPowerOff = manager.onSessionOpened((hostId, session) =>
+    guestPowerOff.sessionOpened(hostId, session)
+  );
+  const keepAwake = new CloudKeepAwakeLinks({
+    store: cloud.store,
+    accounts: cloud.accounts,
+    hosts: { get: (hostId) => registry.get(hostId) },
+    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    changed: () => cloud.cloudHosts.changed(),
+  });
+  const stopKeepAwake = manager.onSessionOpened((hostId, session) =>
+    keepAwake.sessionOpened(hostId, session)
+  );
+  cloudLifecycle = new CloudHostLifecycle({
+    store: cloud.store,
+    accounts: cloud.accounts,
+    files: cloudFiles,
+    clientDir,
+    machineKeys,
+    guestPowerOff,
+    keepAwake,
+    idleClaims: {
+      sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+      idleOn: (hostId, session) =>
+        getRemoteService("hostMetrics")?.idleOn(hostId, session, 60_000) ?? null,
+      release: (hostId, session) => {
+        const current = manager.get(hostId)?.currentSession ?? null;
+        if (current !== null && current !== session) return;
+        // Not a person's disconnect: anything that dials it later reads it asleep and stops there.
+        void manager.disconnect(hostId).catch(() => {});
+      },
+      reconnect: (hostId) => {
+        // Only a link the sleep let go: one a person disconnected, or one up again, is left be.
+        if (!registry.get(hostId) || manager.get(hostId) || client.isDisconnectedByPerson(hostId)) {
+          return;
+        }
+        manager.connect(hostId);
+      },
+    },
+    hosts: {
+      add: (name, connection, pendingPlacement) =>
+        client.add({ name, connection, ...(pendingPlacement ? { pendingPlacement } : {}) }),
+      get: (hostId) => registry.get(hostId),
+      list: () => registry.list(),
+      forget: (hostId) => client.forget({ hostId }),
+      disconnect: (hostId) => client.disconnect({ hostId }),
+      onChange: (listener) => registry.onChange(listener),
+    },
+    changed: () => cloud.cloudHosts.changed(),
+    // The dials a start prompts nudge the link, which leaves the hold a person's Retry would clear.
+    onMachineStarted: (hostId) => recheckStart(hostId),
+    worktreeGone: (worktreePath) => worktreeRootGone(worktreePath),
+    onWorktreeRemoved: onWorktreeMonitorRemoved,
+    activity: (hostId) => {
+      const state = manager.connectionState(hostId);
+      // Only a summary that came on this link, and lately: one kept from before
+      // a drop or a sleep says nothing about agents now.
+      const metrics = getRemoteService("hostMetrics");
+      const summary = metrics?.latest(hostId) ?? null;
+      const session = manager.get(hostId)?.currentSession ?? null;
+      const receipt = summary ? metrics?.receiptOf(summary) : null;
+      const current =
+        summary !== null &&
+        metrics?.cameOn(summary, session) === true &&
+        receipt != null &&
+        Date.now() - receipt.receivedAt < 60_000;
+      const observed = current ? summary.agentsObserved : null;
+      return {
+        connected: state.status === "connected" || state.status === "driven-elsewhere",
+        busy: observed !== null && observed.working + observed.waiting > 0,
+        shown: bindings.windowsOn(hostId).length > 0,
+      };
+    },
+  });
+  cloud.cloudHosts.attachLifecycle(cloudLifecycle);
+  cloudLifecycle.start();
   const unregister = registerRemoteService("remoteHostsClient", client);
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);
   const unregisterSetup = registerRemoteService("hostSetup", setup);
   const unregisterBringBack = registerRemoteService("hostBringBack", bringBack);
+  const unregisterSignIn = registerRemoteService("sshSignIn", signIn);
   // Views restored before Remote Hosts started read an empty list, and nothing
   // else tells them the configured hosts until one is dialled or edited.
   broadcastLocal({ type: "hosts-changed", hosts: client.list() });
@@ -1012,9 +1243,11 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     hostForView,
     router: remoteRouter,
     sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    windowsOn: (hostId) => bindings.windowsOn(hostId),
     manager,
     emitLocal: broadcastLocal,
     registry,
+    idleTimePicked: (hostId, settings) => cloudLifecycle?.idleTimePicked(hostId, settings),
     async dispose() {
       stopWakeWatch();
       app.off("browser-window-focus", onWindowFocus);
@@ -1024,6 +1257,17 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       unregisterWindowHosts();
       unregisterSetup();
       unregisterBringBack();
+      unregisterSignIn();
+      // Before the masters close at quit: one it was starting is then among them.
+      await signIn.dispose();
+      stopArmingMachines();
+      machineKeys?.dispose();
+      stopGuestPowerOff();
+      guestPowerOff.dispose();
+      stopKeepAwake();
+      keepAwake.dispose();
+      cloudLifecycle?.dispose();
+      cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.
       bringBack.dispose();
       stopTitleRefresh();

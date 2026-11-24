@@ -12,27 +12,45 @@ import { render, screen, cleanup, fireEvent, act } from "@testing-library/react"
 import type React from "react";
 import { Terminal as HeadlessTerminal } from "@xterm/headless";
 
+const menuCloseHook = vi.hoisted(() => ({
+  current: undefined as ((event: Event) => void) | undefined,
+}));
+
 vi.mock("@/components/ui/context-menu", () => {
   const Passthrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
   const Item = ({
     children,
     onSelect,
     disabled,
+    keybinding,
   }: {
     children?: React.ReactNode;
     onSelect?: () => void;
     disabled?: boolean;
+    keybinding?: string;
   }) => (
-    <button aria-disabled={disabled || undefined} onClick={() => onSelect?.()}>
+    <button
+      aria-disabled={disabled || undefined}
+      data-keybinding={keybinding}
+      onClick={() => onSelect?.()}
+    >
       {children}
     </button>
   );
   return {
     ContextMenu: Passthrough,
     ContextMenuTrigger: Passthrough,
-    ContextMenuContent: ({ children }: { children?: React.ReactNode }) => (
-      <div data-testid="context-menu-content">{children}</div>
-    ),
+    ContextMenuContent: ({
+      children,
+      onCloseAutoFocus,
+    }: {
+      children?: React.ReactNode;
+      onCloseAutoFocus?: (event: Event) => void;
+    }) => {
+      // Captured so a test can play the close Radix runs once the menu is gone.
+      menuCloseHook.current = onCloseAutoFocus;
+      return <div data-testid="context-menu-content">{children}</div>;
+    },
     ContextMenuItem: Item,
     ContextMenuActionItem: Item,
     ContextMenuCheckboxItem: ({
@@ -132,6 +150,7 @@ const {
   },
   armed: {
     armedIds: new Set<string>(),
+    crossHostTargets: [] as unknown[],
     armId: vi.fn(),
     armIds: vi.fn(),
     toggleId: vi.fn(),
@@ -148,6 +167,14 @@ const {
   findReplySpan: vi.fn(
     async (_payload: { terminalId: string; selection: string }) => null as string | null
   ),
+}));
+
+const continueClient = vi.hoisted(() => ({
+  set: vi.fn(async (_terminalId: string, _enabled: boolean) => {}),
+  list: vi.fn(async () => []),
+}));
+vi.mock("@/clients/codexLimitContinueClient", () => ({
+  codexLimitContinueClient: continueClient,
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -209,11 +236,14 @@ vi.mock("@/store/voiceRecordingStore", () => ({
 // Snooze need the run on the snapshot as well.
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: Object.assign(
-    (selector: (s: { armedIds: Set<string> }) => unknown) => selector(armed),
+    (selector: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) => unknown) =>
+      selector(armed),
     { getState: () => armed }
   ),
   isFleetArmEligible: () => fleetEligible.current,
   collectEligibleIds,
+  selectFleetMemberCount: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) =>
+    s.armedIds.size + s.crossHostTargets.length,
 }));
 
 vi.mock("@/store/fleetSnapshotStore", () => ({
@@ -246,6 +276,11 @@ vi.mock("@/store", () => {
   return { usePanelStore };
 });
 
+// The clean-copy action reads the store by its own path.
+vi.mock("@/store/panelStore", async () => ({
+  usePanelStore: (await import("@/store")).usePanelStore,
+}));
+
 // The real choices come from the agent's saved presets; these tests only ask
 // where the submenu lands when there are some.
 vi.mock("@/components/Terminal/restartOnPresetChoices", async (importOriginal) => ({
@@ -264,6 +299,7 @@ vi.mock("@/components/Terminal/TerminalHandOver", async (importOriginal) => ({
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
+import { useCodexLimitContinueStore } from "@/store/codexLimitContinueStore";
 import {
   claimComposerSendSeq,
   noteLastComposerSend,
@@ -272,6 +308,12 @@ import {
 import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { AGENT_SNOOZE_LABEL } from "@shared/utils/agentSnoozeDurations";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { registerTerminalInputActions } from "@/services/actions/definitions/terminalInputActions";
+import type {
+  ActionCallbacks,
+  ActionRegistry,
+  AnyActionDefinition,
+} from "@/services/actions/actionTypes";
 
 const agentPanel = {
   id: "panel-1",
@@ -762,9 +804,20 @@ describe("TerminalContextMenu — open in file browser (#11483)", () => {
 describe("TerminalContextMenu — clean copy (#15525)", () => {
   const writeText = vi.fn<(text: string) => Promise<void>>();
 
+  // The row dispatches `terminal.copyClean`, the action its shortcut runs too
+  // (#18132), so the copy these tests read is the real action's.
+  const copyClean = (() => {
+    const actions: ActionRegistry = new Map();
+    registerTerminalInputActions(actions, {} as ActionCallbacks);
+    return actions.get("terminal.copyClean")!() as AnyActionDefinition;
+  })();
+
   beforeEach(() => {
     writeText.mockReset().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    dispatch.mockImplementation(async (id, args) =>
+      id === "terminal.copyClean" ? copyClean.run(args, {} as never) : undefined
+    );
   });
 
   afterEach(() => {
@@ -830,6 +883,13 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
     expect(writeText).toHaveBeenCalledWith(
       "Release notes:\n- Added a clean copy\n  - next to Copy"
     );
+    // The menu's own panel, never whichever one has focus, under the menu's own
+    // source (no provider here, so its default): never an agent's or a plugin's.
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.copyClean",
+      { terminalId: "panel-1" },
+      { source: "user" }
+    );
     expect(dispatch).not.toHaveBeenCalledWith(
       "terminal.copy",
       expect.anything(),
@@ -847,6 +907,11 @@ describe("TerminalContextMenu — clean copy (#15525)", () => {
       expect.anything()
     );
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("shows the shortcut its action is bound to (#18132)", () => {
+    openMenu({ hovered: null });
+    expect(cleanRow().getAttribute("data-keybinding")).toBe("terminal.copyClean");
   });
 
   it("is disabled with Copy when nothing is selected", () => {
@@ -1277,6 +1342,7 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
     voiceState.lockedTarget = null;
     voiceState.recentTargets = [];
     armed.armedIds = new Set();
+    armed.crossHostTargets = [];
     useTerminalInputStore.setState({ hybridInputEnabled: true });
   });
 
@@ -1362,6 +1428,17 @@ describe("TerminalContextMenu — dictation lock and recent targets (#14955)", (
     armed.armedIds = new Set(["agent-2", "agent-3"]);
     openOn(shell);
     expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
+  });
+
+  it("offers the lock on a plain shell armed beside another host's agent (#17182)", () => {
+    armed.armedIds = new Set(["shell-1"]);
+    openOn(shell);
+    expect(screen.queryByText("Lock dictation to this panel")).toBeNull();
+    cleanup();
+
+    armed.crossHostTargets = [{ key: "host-fleet:studio:r-1" }];
+    openOn(shell);
+    expect(screen.queryByText("Lock dictation to this panel")).not.toBeNull();
   });
 
   it("lists a recent shell target only while it is armed in the fleet", () => {
@@ -1495,6 +1572,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     ]);
     expect(level(submenu(tree, "Session"))).toEqual([
       "Redraw",
+      "Reset terminal modes",
       "---",
       // Disabled, with its reason beside it, until something is sent (#16746).
       "Resend last messageNothing sent to this panel yet",
@@ -1528,6 +1606,7 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     const tree = menuTree();
     expect(level(submenu(tree, "Session"))).toEqual([
       "Redraw",
+      "Reset terminal modes",
       "Restart on preset ›",
       "---",
       "Resend last messageNothing sent to this panel yet",
@@ -1582,13 +1661,75 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
   });
 
   it.each([
-    ["no live agent", { detectedAgentId: undefined }],
+    ["no agent identity", { detectedAgentId: undefined, launchAgentId: undefined }],
     ["the Assistant's own terminal", { excludeFromPersistence: true }],
     ["a dialog pane", { location: "dialog" }],
   ])("offers no When done on a pane with %s", (_name, overrides) => {
     renderMenu({ ...agentPane, ...overrides });
     expect(screen.queryByText("When done")).toBeNull();
     expect(screen.queryByText("Keep open")).toBeNull();
+  });
+
+  it("keeps Watch and When done on a configured agent pane before detection settles (#16880)", () => {
+    renderMenu({ ...agentPane, detectedAgentId: undefined, launchAgentId: "claude" });
+    expect(screen.getByText("Watch")).toBeTruthy();
+    expect(screen.getByText("When done")).toBeTruthy();
+  });
+
+  it("keeps When done reachable while a non-keep choice is armed on a non-agent pane (#16880)", () => {
+    useTerminalWhenDoneStore.setState({ choices: { "panel-1": "close" } });
+    renderMenu({ ...agentPane, detectedAgentId: undefined, launchAgentId: undefined });
+    expect(screen.getByText("When done")).toBeTruthy();
+    expect(screen.queryByText("Watch")).toBeNull();
+    useTerminalWhenDoneStore.setState({ choices: {} });
+  });
+
+  it("offers Continue when usage limit resets on a Codex pane and arms it straight through main (#17909)", () => {
+    const codexPane = {
+      ...agentPane,
+      title: "Codex",
+      launchAgentId: "codex",
+      detectedAgentId: "codex",
+    };
+    renderMenu(codexPane);
+    const row = () =>
+      screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" });
+    expect(row().getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(row());
+    expect(continueClient.set).toHaveBeenLastCalledWith("panel-1", true);
+    // No action carries it, so nothing reaches MCP.
+    expect(dispatch).not.toHaveBeenCalled();
+
+    cleanup();
+    useCodexLimitContinueStore.setState({
+      panes: { "panel-1": { revision: 2, state: { status: "armed" } } },
+    });
+    renderMenu(codexPane);
+    expect(row().getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(row());
+    expect(continueClient.set).toHaveBeenLastCalledWith("panel-1", false);
+    useCodexLimitContinueStore.setState({ panes: {} });
+  });
+
+  it.each([
+    ["an agent whose CLI waits on its own", { launchAgentId: "claude", detectedAgentId: "claude" }],
+    ["a plain shell", { launchAgentId: undefined, detectedAgentId: undefined }],
+    ["a dialog pane", { launchAgentId: "codex", detectedAgentId: "codex", location: "dialog" }],
+  ])("offers no Continue when usage limit resets on %s (#17909)", (_name, overrides) => {
+    renderMenu({ ...agentPane, ...overrides });
+    expect(screen.queryByText("Continue when usage limit resets")).toBeNull();
+  });
+
+  it("keeps the checked item on a pane armed while Codex ran in it, once Codex has left (#17911)", () => {
+    useCodexLimitContinueStore.setState({
+      panes: { "panel-1": { revision: 2, state: { status: "armed" } } },
+    });
+    renderMenu({ ...agentPane, launchAgentId: undefined, detectedAgentId: undefined });
+    const row = screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" });
+    expect(row.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(row);
+    expect(continueClient.set).toHaveBeenLastCalledWith("panel-1", false);
+    useCodexLimitContinueStore.setState({ panes: {} });
   });
 
   it("runs the watch and fleet rows from where they now sit", () => {
@@ -1720,6 +1861,45 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
       { terminalId: "panel-1" },
       expect.anything()
     );
+  });
+
+  // Deferred to the close, unlike Redraw: with an agent in the pane the action
+  // stages a confirm, whose own close must hand focus back to the pane (#17328).
+  it("resets a terminal's modes once the menu has handed focus back", async () => {
+    renderMenu(terminal);
+
+    fireEvent.click(screen.getByText("Reset terminal modes"));
+    expect(dispatch).not.toHaveBeenCalled();
+    act(() => menuCloseHook.current?.(new Event("closeAutoFocus", { cancelable: true })));
+    // Not inside the close either: the primitive restores focus first.
+    expect(dispatch).not.toHaveBeenCalled();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.resetModes",
+      { terminalId: "panel-1" },
+      { source: "user" }
+    );
+  });
+
+  it("keeps the mode reset on a shell its agent crashed back to", () => {
+    renderMenu({ ...agentPanel, everDetectedAgent: true, agentState: "exited" });
+
+    expect(level(submenu(menuTree(), "Session"))).toContain("Reset terminal modes");
+  });
+
+  it.each([
+    ["has exited", { exitCode: 0 }],
+    ["has exited, by its runtime status alone", { runtimeStatus: "exited" }],
+    ["is held for recovery", { restoreRecovery: { reason: "held" } }],
+  ])("offers no mode reset on a pane that %s", (_name, ended) => {
+    renderMenu({ ...terminal, ...ended });
+
+    expect(level(submenu(menuTree(), "Session"))).toContain("Redraw");
+    expect(screen.queryByText("Reset terminal modes")).toBeNull();
   });
 
   it("puts a paused session's Force resume beside Restart, not inside Session", () => {

@@ -112,7 +112,7 @@ import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { LazyProjectIdentityEditor, LazyProjectSwitcherPalette } from "@/lazyPanels";
-import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
+import { VoiceRecordingToolbarSlot } from "./VoiceRecordingToolbarSlot";
 import { ToolbarProjectPillTooltipBody } from "./ToolbarProjectPill";
 import { HostChip } from "@/components/Hosts/HostChip";
 import { AttachedMachinesIndicator } from "@/components/Hosts/AttachedMachinesIndicator";
@@ -121,6 +121,12 @@ import { ForgeStatsToolbarButton, type ForgeStatsHandle } from "./ForgeStatsTool
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { NotificationCenterToolbarButton } from "./NotificationCenterToolbarButton";
 import { CanopyToolbarButton, useCanopyUrgentCount } from "./CanopyToolbarButton";
+import { DecisionsToolbarButton } from "./DecisionsToolbarButton";
+import { useDecisionsSwitch } from "@/hooks/useDecisionsOn";
+import {
+  useDecisionsStoppedCount,
+  useDecisionsWaitingCount,
+} from "@/hooks/useDecisionsWaitingCount";
 import { AppMenuButton } from "./AppMenuButton";
 import { ToolbarLauncherButton } from "./ToolbarLauncherButton";
 import { ToolbarCommandPaletteButton } from "./ToolbarCommandPaletteButton";
@@ -128,8 +134,8 @@ import { ResumeSessionsToolbarButton } from "./ResumeSessionsToolbarButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
+import { BulkWorktreeRunIndicator } from "./BulkWorktreeRunIndicator";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
-import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
 import { type OverflowBadgeSeverity } from "./useOverflowBadgeSeverity";
 import { CopyTreeMenuContent } from "@/components/CopyTree/CopyTreeRecentsPanel";
@@ -151,6 +157,14 @@ import { useToolbarOverflowEviction } from "./useToolbarOverflowEviction";
 import { useToolbarCustomization } from "./useToolbarCustomization";
 import { useToolbarProjectPill } from "./useToolbarProjectPill";
 import { ForgeStatsPlaceholder } from "./ForgeStatsPlaceholder";
+import { LinksLauncherDetachedHost, LinksLauncherToolbarButton } from "./LinksLauncher";
+import {
+  hasLauncherLinks,
+  useHasLiveDevServer,
+  useLinksLauncherLinks,
+  useLinksLauncherPullRequest,
+  useLinksLauncherRefresh,
+} from "@/hooks/useLinksLauncher";
 
 export { OVERFLOW_MENU_META } from "./ToolbarOverflowMenu";
 
@@ -163,6 +177,36 @@ function DevServerPlaceholder() {
       aria-hidden="true"
     />
   );
+}
+
+// The one launcher button whose action can legitimately refuse: it resolves
+// its own target (focused worktree, else the project or scratch root), and a
+// workspace with nothing to browse makes it throw. `dispatch` turns that into
+// `ok: false` rather than a rejection, so without this the press would do
+// nothing at all. Mirrors `LauncherQuickActions`, which offers the same action.
+// At module scope so the Retry can name it: React Compiler can't hoist a named
+// function expression inside a component, and gives up on the whole toolbar.
+function openFileBrowser() {
+  void actionService
+    .dispatch("worktree.openFileBrowserPanel", undefined, { source: "user" })
+    .then((result) => {
+      if (result.ok) return;
+      // A full grid is the one refusal `addPanel` has already reported, with
+      // an accurate message and the actual recovery. Saying "no folder
+      // resolved" on top of it would name the wrong cause (#11666).
+      if (isPanelLimitError(result.error.message)) return;
+      notify({
+        type: "error",
+        title: "Couldn't open the file browser",
+        message: "No folder resolved for this workspace. Select a worktree and try again.",
+        // `uiFeedback` is a passive kind that resolves to `priority: "low"`
+        // (inbox only), which would leave this refusal — and its Retry — with
+        // no visible signal at all.
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+        action: { label: "Retry", onClick: openFileBrowser },
+      });
+    });
 }
 
 interface ToolbarProps {
@@ -315,6 +359,11 @@ export function Toolbar({
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
   const canopyHidden = useCanopyStore((s) => s.mode === "hidden");
+  // The inbox lists this computer's questions and every enrolled Host's
+  // (#18049), so a Remote Host's window shows it too. The toolbar holds the
+  // switch for the view, so the Decisions actions can read it whether or not
+  // the button is placed.
+  const decisionsOn = useDecisionsSwitch() === "on";
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
   const positionAgentButton = useToolbarPreferencesStore((state) => state.positionAgentButton);
   // This machine's pins (#14702), live, so a pin from the launcher or another
@@ -408,35 +457,6 @@ export function Toolbar({
   // completion toast in the same corner. The tooltip still shows the shortcut.
   const fileBrowserHintHover = useShortcutHintHover("worktree.openFileBrowserPanel");
 
-  // The one launcher button whose action can legitimately refuse: it resolves
-  // its own target (focused worktree, else the project or scratch root), and a
-  // workspace with nothing to browse makes it throw. `dispatch` turns that into
-  // `ok: false` rather than a rejection, so without this the press would do
-  // nothing at all. Mirrors `LauncherQuickActions`, which offers the same action.
-  // A named function expression so the retry action can name itself.
-  const openFileBrowser = useCallback(function openFileBrowser() {
-    void actionService
-      .dispatch("worktree.openFileBrowserPanel", undefined, { source: "user" })
-      .then((result) => {
-        if (result.ok) return;
-        // A full grid is the one refusal `addPanel` has already reported, with
-        // an accurate message and the actual recovery. Saying "no folder
-        // resolved" on top of it would name the wrong cause (#11666).
-        if (isPanelLimitError(result.error.message)) return;
-        notify({
-          type: "error",
-          title: "Couldn't open the file browser",
-          message: "No folder resolved for this workspace. Select a worktree and try again.",
-          // `uiFeedback` is a passive kind that resolves to `priority: "low"`
-          // (inbox only), which would leave this refusal — and its Retry — with
-          // no visible signal at all.
-          priority: "high",
-          context: { eventKind: "uiFeedback" },
-          action: { label: "Retry", onClick: openFileBrowser },
-        });
-      });
-  }, []);
-
   // The shared launcher's own inventory and workspace context (#11691). The
   // toolbar had none of this before — its launcher owned every store read
   // itself — so it comes from the same hook the dock uses.
@@ -476,7 +496,6 @@ export function Toolbar({
     handleRestartProject,
     handleLocateProject,
     handleMoveOrRenameProject,
-    handleRemoveConfirmClose,
     handleSelectNewWindow,
     isDropdownOpen,
     shouldMountProjectSwitcherDropdown,
@@ -841,6 +860,10 @@ export function Toolbar({
     ]
   );
   const pluginMetaById = usePluginRuntimeStore((s) => s.pluginMetaById);
+  useLinksLauncherRefresh();
+  const hasLinks = hasLauncherLinks(useLinksLauncherLinks());
+  const hasLiveDevServer = useHasLiveDevServer();
+  const hasPullRequest = useLinksLauncherPullRequest() !== null;
 
   const buttonRegistry = useMemo<
     Record<string, { render: () => React.ReactNode; isAvailable: boolean }>
@@ -1034,9 +1057,9 @@ export function Toolbar({
       },
       "voice-recording": {
         // Slot is always available so the right-aligned items keep a stable
-        // footprint when a session starts/stops (#8176). The button itself returns
-        // an invisible placeholder when inactive (mirrors DevServerPlaceholder).
-        render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
+        // footprint when a session starts/stops (#8176). The slot returns an
+        // invisible placeholder when inactive (mirrors DevServerPlaceholder).
+        render: () => <VoiceRecordingToolbarSlot key="voice-recording" data-toolbar-item="" />,
         isAvailable: true,
       },
       "forge-stats": {
@@ -1068,6 +1091,11 @@ export function Toolbar({
         // Hidden, the slot goes and the pin stays: showing Canopy again puts
         // the button back where it was.
         isAvailable: !canopyHidden,
+      },
+      "decisions-inbox": {
+        render: () => <DecisionsToolbarButton key="decisions-inbox" data-toolbar-item="" />,
+        // Off, the slot goes and its place in the layout stays for when it is back on.
+        isAvailable: decisionsOn,
       },
       "notification-center": {
         render: () => (
@@ -1218,12 +1246,15 @@ export function Toolbar({
         // haven't enabled developer tools (the default).
         isAvailable: showDeveloperTools || watcherDegraded || topologyWatcherDark,
       },
+      // Shown only with a link to open, the active worktree's pull request,
+      // or a dev server live somewhere; the palette's `links.open` still opens
+      // the launcher without any (`LinksLauncherDetachedHost`).
+      "links-launcher": {
+        render: () => <LinksLauncherToolbarButton key="links-launcher" data-toolbar-item="" />,
+        isAvailable: hasLinks || hasPullRequest || hasLiveDevServer,
+      },
       "assistant-toggle": {
         render: () => <ToolbarAssistantButton key="assistant-toggle" data-toolbar-item="" />,
-        isAvailable: true,
-      },
-      "portal-toggle": {
-        render: () => <ToolbarPortalButton key="portal-toggle" data-toolbar-item="" />,
         isAvailable: true,
       },
       "plugin-tray": {
@@ -1325,14 +1356,17 @@ export function Toolbar({
       showDeveloperTools,
       notificationsEnabled,
       canopyHidden,
+      decisionsOn,
       pluginButtonIds,
       pluginConfigs,
       devServerCombo,
       devServerHintHover,
-      openFileBrowser,
       fileBrowserCombo,
       fileBrowserAriaShortcut,
       fileBrowserHintHover,
+      hasLinks,
+      hasPullRequest,
+      hasLiveDevServer,
     ]
   );
 
@@ -1374,6 +1408,12 @@ export function Toolbar({
   // 32px plus the 4px margin and 2px row gap that put it 6px clear, as the
   // right side's trigger sits. A demoted button or the branch row keeps it up
   // whatever the width.
+  // Watched only while the button has a place, on the strip or folded into a `…` menu.
+  const decisionsPlaced =
+    availableLeftIds.includes("decisions-inbox") || availableRightIds.includes("decisions-inbox");
+  const decisionsWaitingCount = useDecisionsWaitingCount(decisionsPlaced);
+  const decisionsStoppedCount = useDecisionsStoppedCount(decisionsPlaced);
+
   const leftTriggerPinned =
     branchOverflowRow !== null || availableLeftIds.some((id) => demotedIds.has(id));
   const leftOverflowTrigger = useMemo(
@@ -1398,11 +1438,20 @@ export function Toolbar({
       withLitSignalPriorities({
         problems: errorCount > 0 || watcherDegraded || topologyWatcherDark,
         canopy: canopyUrgentCount > 0,
+        "decisions-inbox": decisionsWaitingCount > 0 || decisionsStoppedCount > 0,
         ...Object.fromEntries(
           [...agentAttentionStates].map(([agentId, state]) => [agentId, state === "waiting"])
         ),
       }),
-    [errorCount, watcherDegraded, topologyWatcherDark, canopyUrgentCount, agentAttentionStates]
+    [
+      errorCount,
+      watcherDegraded,
+      topologyWatcherDark,
+      canopyUrgentCount,
+      decisionsWaitingCount,
+      decisionsStoppedCount,
+      agentAttentionStates,
+    ]
   );
 
   const {
@@ -1443,6 +1492,8 @@ export function Toolbar({
     hasProject: currentProject !== null,
     errorCount,
     canopyUrgentCount,
+    decisionsWaitingCount,
+    decisionsStoppedCount,
     watcherStatus,
     forgeUnavailableObservation:
       forgeDataUnavailable && forgeStatsLevel !== "hidden"
@@ -1566,6 +1617,9 @@ export function Toolbar({
       canopy: () => {
         void actionService.dispatch("canopy.toggle", undefined, { source: "user" });
       },
+      "decisions-inbox": () => {
+        void actionService.dispatch("decisions.openInbox", undefined, { source: "user" });
+      },
       "copy-tree": () => {
         void handleCopyTreeClick();
       },
@@ -1607,7 +1661,6 @@ export function Toolbar({
     }),
     [
       onLaunchAgent,
-      openFileBrowser,
       handleCopyTreeClick,
       onSettings,
       onToggleProblems,
@@ -1673,6 +1726,8 @@ export function Toolbar({
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
       canopyUrgentCount={canopyUrgentCount}
+      decisionsWaitingCount={decisionsWaitingCount}
+      decisionsStoppedCount={decisionsStoppedCount}
       watcherStatus={watcherStatus}
       agentObservations={agentObservations}
       agentAttentionStates={agentAttentionStates}
@@ -1842,41 +1897,18 @@ export function Toolbar({
                         }
                         onSelectNewWindow={handleSelectNewWindow}
                         dropdownAlign="center"
-                        removeConfirmProject={projectSwitcher.removeConfirmProject}
-                        onRemoveConfirmClose={handleRemoveConfirmClose}
-                        onConfirmRemove={projectSwitcher.confirmRemoveProject}
-                        isRemovingProject={projectSwitcher.isRemovingProject}
-                        sleepConfirmProject={projectSwitcher.sleepConfirmProject}
-                        onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
-                        onConfirmSleep={projectSwitcher.confirmSleep}
-                        isSleepingProject={projectSwitcher.isSleepingProject}
                         rankedSearch={projectSwitcher.isRankedSearch}
                         scratchResults={projectSwitcher.scratchResults}
                         onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
                         onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
                         onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
-                        deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
-                        onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
-                        onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
-                        isDeletingScratch={projectSwitcher.isDeletingScratch}
                         onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
-                        deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
-                        onDismissDeleteAllScratchesConfirm={
-                          projectSwitcher.dismissDeleteAllScratchesConfirm
-                        }
-                        onConfirmDeleteAllScratches={() =>
-                          void projectSwitcher.confirmDeleteAllScratches()
-                        }
-                        isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
                         onRenameScratch={(scratchId, name) =>
                           void projectSwitcher.renameScratch(scratchId, name)
                         }
                         onSaveAsProject={(scratchId) =>
                           void projectSwitcher.saveAsProject(scratchId)
                         }
-                        saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
-                        onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
-                        onOpenSavedProject={projectSwitcher.openSavedProject}
                       >
                         {projectSwitcherTrigger}
                       </LazyProjectSwitcherPalette>
@@ -1973,6 +2005,12 @@ export function Toolbar({
               aria-label="Tools and settings"
               className="flex items-center justify-end gap-1.5 z-20"
             >
+              {/* Fixed chrome outside the measured button row, like the memory
+                  pause below: it exists only while a bulk worktree run is worth
+                  showing (#17086), in every project view. First in the group so
+                  its width changing as the batch moves on never shifts the
+                  buttons, which stay pinned to the right. */}
+              <BulkWorktreeRunIndicator />
               <div
                 ref={rightGroupRef}
                 className="toolbar-measured-row flex flex-1 min-w-0 items-center gap-0.5 justify-end"
@@ -1985,6 +2023,7 @@ export function Toolbar({
                 rightMenuSeverity,
                 rightObservations
               )}
+              <LinksLauncherDetachedHost />
 
               {/* Fixed chrome outside the measured button row: it exists only
                   while a terminal host has output paused for memory (#12375),
@@ -1999,7 +2038,6 @@ export function Toolbar({
 
               <div className="app-no-drag flex items-center gap-0.5">
                 {buttonRegistry["assistant-toggle"]!.render()}
-                {buttonRegistry["portal-toggle"]!.render()}
               </div>
 
               {isWindows() && (

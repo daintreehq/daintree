@@ -5,9 +5,27 @@ import {
   type PaneAuthenticator,
 } from "@daintreehq/decisions-client";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import type {
+  AnswerDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
+  DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
+  DecisionQuestionAnswerResult,
+  DecisionQuestionCancelResult,
+  DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
+  SendDecisionFollowUpPayload,
+} from "../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "../../../shared/types/decisionsInvolvement.js";
 import type { ListenerRoute } from "../mcp-server/listenerHold.js";
 import { createPaneAccess, type PaneAccessSources } from "./paneAccess.js";
 import { QuestionBridge } from "./questionBridge.js";
+import type { QuestionReadScope } from "./questionContent.js";
 import type { QuestionSource } from "./relayConnection.js";
 
 export const DECISIONS_MCP_PATH = "/mcp/decisions";
@@ -117,6 +135,55 @@ export interface DecisionsMcpRouteSources extends PaneAccessSources {
 export interface DecisionsQuestions {
   /** The listener port the route is served on; null while it has none (#16012). */
   listenerPort(): Promise<number | null>;
+  /**
+   * A person withdrawing one of a pane's questions from its view (#17099),
+   * through the bridge agents ask on, so it takes its turn with their posts.
+   */
+  cancelForPerson(
+    questionId: string,
+    scope: QuestionReadScope
+  ): Promise<DecisionQuestionCancelResult>;
+  /**
+   * The person's answer from Daintree's own view (#17101), signed with this
+   * computer's key on the bridge agents ask on, which itself refuses an
+   * agent's: `hostId` is this computer's.
+   */
+  answerForPerson(
+    payload: AnswerDecisionQuestionPayload,
+    hostId: string | null
+  ): Promise<DecisionQuestionAnswerResult>;
+  /** Where a person's answer stands, by its id. */
+  answerResultForPerson(answerId: string): Promise<DecisionAnswerResultRead>;
+  /**
+   * The person's decline from Daintree's own view (#17239), signed with this
+   * computer's key like their answer, on the same bridge.
+   */
+  declineForPerson(
+    payload: DeclineDecisionQuestionPayload,
+    hostId: string | null
+  ): Promise<DecisionQuestionDeclineResult>;
+  /** Where a person's decline stands, by its id. */
+  declineResultForPerson(declineId: string): Promise<DecisionDeclineResultRead>;
+  /**
+   * The person's follow-up from Daintree's own view (#17238), signed as
+   * their answer is, on the bridge that refuses an agent's.
+   */
+  followUpForPerson(
+    payload: SendDecisionFollowUpPayload,
+    hostId: string | null
+  ): Promise<DecisionQuestionFollowUpResult>;
+  /** Where a person's follow-up stands, by its id. */
+  followUpResultForPerson(messageId: string): Promise<DecisionFollowUpResultRead>;
+
+  /**
+   * The person's involvement preference for Daintree's own view (#17237),
+   * read and changed on the bridge agents ask on, which refuses both to an
+   * agent.
+   */
+  involvementForPerson(): Promise<DecisionsInvolvementRead>;
+  setInvolvementForPerson(
+    payload: SetDecisionsInvolvementPayload
+  ): Promise<DecisionsInvolvementSaveResult>;
   close(): Promise<void>;
 }
 
@@ -137,5 +204,17 @@ export function openDecisionsMcpRoute(
       `[Decisions] /mcp/decisions couldn't hold the MCP listener: ${formatErrorMessage(error, "unknown error")}`
     );
   });
-  return route;
+  return {
+    listenerPort: () => route.listenerPort(),
+    cancelForPerson: (questionId, scope) => bridge.cancelForPerson(questionId, scope),
+    answerForPerson: (payload, hostId) => bridge.answerForPerson(payload, hostId),
+    answerResultForPerson: (answerId) => bridge.answerResultForPerson(answerId),
+    declineForPerson: (payload, hostId) => bridge.declineForPerson(payload, hostId),
+    declineResultForPerson: (declineId) => bridge.declineResultForPerson(declineId),
+    followUpForPerson: (payload, hostId) => bridge.followUpForPerson(payload, hostId),
+    followUpResultForPerson: (messageId) => bridge.followUpResultForPerson(messageId),
+    involvementForPerson: () => bridge.involvementForPerson(),
+    setInvolvementForPerson: (payload) => bridge.setInvolvementForPerson(payload),
+    close: () => route.close(),
+  };
 }

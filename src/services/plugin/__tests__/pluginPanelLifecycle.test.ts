@@ -9,6 +9,7 @@ import {
   hasViewUnsavedChanges,
   isViewReloadBlocked,
   registerUserViewReload,
+  replayPluginPanelLifecycle,
   reportViewMounted,
   reportViewRenderFailed,
   resetPluginPanelLifecycleForTests,
@@ -28,7 +29,12 @@ function panel(overrides: Partial<PluginPanelSnapshotEntry> = {}): PluginPanelSn
   return { panelId: "p1", kindId: "acme.dash", pluginId: "acme", location: "grid", ...overrides };
 }
 
-let report: ReturnType<typeof vi.fn<(events: PluginPanelLifecycleEvent[]) => Promise<void>>>;
+type ReportLifecycle = (
+  events: PluginPanelLifecycleEvent[],
+  options?: { replay?: boolean }
+) => Promise<void>;
+
+let report: ReturnType<typeof vi.fn<ReportLifecycle>>;
 
 /** Drain the microtask-coalesced flush and return every phase reported so far. */
 async function drainPhases(): Promise<string[]> {
@@ -38,7 +44,7 @@ async function drainPhases(): Promise<string[]> {
 
 beforeEach(() => {
   resetPluginPanelLifecycleForTests();
-  report = vi.fn<(events: PluginPanelLifecycleEvent[]) => Promise<void>>(() => Promise.resolve());
+  report = vi.fn<ReportLifecycle>(() => Promise.resolve());
   vi.stubGlobal("window", { electron: { plugin: { reportPanelLifecycle: report } } });
 });
 
@@ -234,6 +240,45 @@ describe("reporting", () => {
     vi.stubGlobal("window", {});
     expect(() => syncPluginPanels([panel()])).not.toThrow();
     await Promise.resolve();
+  });
+
+  it("replays every live panel's resting phase to a host that lost them, as a replay (#17068)", async () => {
+    syncPluginPanels([
+      panel({ panelId: "shown" }),
+      panel({ panelId: "unmounted" }),
+      panel({ panelId: "away", location: "background" }),
+      panel({ panelId: "binned", location: "trash" }),
+      panel({ panelId: "broken" }),
+      panel({ panelId: "gone" }),
+    ]);
+    reportViewMounted("shown", IDENTITY);
+    reportViewRenderFailed("broken", IDENTITY);
+    await drainPhases();
+    // Closed just before the replay: its removal is a transition, not a resting phase.
+    syncPluginPanels([
+      panel({ panelId: "shown" }),
+      panel({ panelId: "unmounted" }),
+      panel({ panelId: "away", location: "background" }),
+      panel({ panelId: "binned", location: "trash" }),
+      panel({ panelId: "broken" }),
+    ]);
+    report.mockClear();
+
+    replayPluginPanelLifecycle();
+    expect(report).toHaveBeenCalledTimes(1);
+    const [batch, options] = report.mock.calls[0]!;
+    expect(options).toEqual({ replay: true });
+    expect(batch.map((e) => [e.panelId, e.phase])).toEqual([
+      ["shown", "mounted"],
+      ["unmounted", "hidden"],
+      ["away", "backgrounded"],
+      ["binned", "trashed"],
+      ["broken", "render-failed"],
+    ]);
+
+    // The transition queue is untouched: the removal still ships as itself.
+    report.mockClear();
+    expect(await drainPhases()).toEqual(["removed"]);
   });
 });
 

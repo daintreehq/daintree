@@ -36,3 +36,12 @@ export type RemoteConnectionKind = "ssh" | "wsl";
 export function remoteConnectionKindOn(platform: string): RemoteConnectionKind {
   return platform === "win32" ? "wsl" : "ssh";
 }
+
+/**
+ * Whether this platform's Shell can use a connection kind. A cloud machine is
+ * reached over the same ssh transport, so it goes wherever ssh does.
+ */
+export function isConnectionKindSupportedOn(kind: string, platform: string): boolean {
+  const native = remoteConnectionKindOn(platform);
+  return kind === native || (kind === "cloud" && native === "ssh");
+}

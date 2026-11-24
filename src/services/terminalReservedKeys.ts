@@ -21,10 +21,11 @@ type Keystroke = Pick<
 // handler already consumed. j/l/t/y are as load-bearing as the rest
 // (accept-line, clear-screen, transpose, yank) and collide with the global
 // Cmd+J/L/T/Y defaults (fleet.armFocused, help.togglePanel,
-// terminal.duplicate, fleet.accept).
+// terminal.duplicate, fleet.accept). z is the shell's suspend, and collides
+// with Cmd+Z (panel.undoClose).
 export const TUI_KEYBINDS = new Set([
   ...["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"],
-  ...["j", "l", "t", "y"],
+  ...["j", "l", "t", "y", "z"],
 ]);
 
 export function isTuiReservedKey(event: Keystroke): boolean {

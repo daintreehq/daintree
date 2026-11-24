@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PluginMcpConfirmDialog,
@@ -22,8 +22,6 @@ vi.mock("zustand/react/shallow", () => ({
 vi.mock("@/store", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, useOverlayState: () => {} };
@@ -200,6 +198,37 @@ describe("PluginMcpConfirmDialog title bounds", () => {
   });
 });
 
+describe("PluginMcpConfirmDialog design contract", () => {
+  it("renders no native title tooltip on the identity rows", () => {
+    enqueue({});
+    const { baseElement } = render(<PluginMcpConfirmDialog />);
+    const flightdeck = screen.getByText("flightdeck-mcp");
+    expect(flightdeck.hasAttribute("title")).toBe(false);
+    expect(baseElement.querySelector("[role=dialog] span[title]")).toBeNull();
+  });
+
+  it.each([
+    ["annotation-changed", "danger"],
+    ["raw-changed", "warning"],
+  ] as const)(
+    "puts the %s heading in Callout's neutral title, not status ink",
+    (reason, severity) => {
+      enqueue({ reason });
+      render(<PluginMcpConfirmDialog />);
+      const callout = document.querySelector(`[data-callout="${severity}"]`) as HTMLElement;
+      expect(callout).not.toBeNull();
+      const heading = within(callout).getByText(changeHeadingFor(reason) as string);
+      // Callout's own title element, not a heading the dialog styled itself.
+      expect(heading.tagName).toBe("P");
+      // The glyph carries the severity; no text may.
+      const statusInk = Array.from(callout.querySelectorAll("[class*='text-status-']")).filter(
+        (el) => !el.hasAttribute("data-severity-glyph")
+      );
+      expect(statusInk).toEqual([]);
+    }
+  );
+});
+
 describe("PluginMcpConfirmDialog structure", () => {
   it("is a dialog rather than an alertdialog once it carries capability or argument content", () => {
     // APG reserves alertdialog for a brief, important message read out whole.
@@ -249,6 +278,51 @@ describe("PluginMcpConfirmDialog structure", () => {
     // "queue is invisible" defect the hint exists to fix.
     expect(text).toContain("remembered until this tool changes");
     expect(text.indexOf("1 more request")).toBeLessThan(text.indexOf("remembered"));
+    // A standalone block line starts a sentence, the same as the unqueued hint.
+    expect(region?.textContent).toContain("Remembered until this tool changes");
+  });
+
+  it("moves focus off the button that approved the last request when the next is promoted", async () => {
+    vi.useFakeTimers();
+    try {
+      enqueue({ requestId: "req-a", dangerTier: "D2" });
+      act(() => {
+        usePluginMcpConfirmStore
+          .getState()
+          .enqueue(pending({ requestId: "req-b", toolName: "other_tool", dangerTier: "D3" }));
+      });
+      render(<PluginMcpConfirmDialog />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_200);
+      });
+
+      const allow = screen.getByRole("button", { name: "Allow and remember" });
+      act(() => {
+        allow.focus();
+      });
+      expect(document.activeElement).toBe(allow);
+      act(() => {
+        allow.click();
+      });
+      expect(screen.getByText("other_tool")).toBeTruthy();
+      expect(allow.getAttribute("aria-disabled")).toBe("true");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(16);
+      });
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+
+      // Still there once the promoted request's cooldown clears, so an Enter
+      // meant for the last request can't approve this one.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_200);
+      });
+      expect(allow.hasAttribute("aria-disabled")).toBe(false);
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+    } finally {
+      act(() => usePluginMcpConfirmStore.getState().reset());
+      cleanup();
+      vi.useRealTimers();
+    }
   });
 
   it("does not carry an expanded disclosure over to the next queued request", () => {

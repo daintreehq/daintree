@@ -474,6 +474,8 @@ describe("CanopyView Trash", () => {
       await act(async () => {
         fireEvent.click(item);
       });
+      // The confirm opens once the menu has closed.
+      await frames();
     };
     await ask();
     expect(within(document.body).getByText("Remove 'Fix newer'?")).toBeTruthy();
@@ -489,6 +491,85 @@ describe("CanopyView Trash", () => {
     expect(canopy.removeTrashed).toHaveBeenCalledWith("newer", {
       spawnedAt: NOW - 3_600_000,
       expiresAt: TRASH[0]!.expiresAt,
+    });
+  });
+
+  // The menu hands focus back as it closes: a confirm opened before then
+  // loses the keyboard to it, and its own close has nothing to return to.
+  describe("a confirm opened from a menu keeps the keyboard", () => {
+    /** The menu's close-time focus return, and the frames after it. */
+    const settle = async () => {
+      for (let i = 0; i < 3; i++) {
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        await frames();
+      }
+    };
+    const confirmDialog = () =>
+      document.querySelector<HTMLElement>("[role=alertdialog], [role=dialog]");
+    /**
+     * Chooses `item` and runs frames before the menu has handed the keyboard
+     * back, as a real menu's exit animation does: no confirm may open before
+     * then. jsdom has no exit, so its hand-back would otherwise always land
+     * before a confirm's first frame.
+     */
+    const chooseWhileMenuCloses = (item: HTMLElement) => {
+      vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+      try {
+        act(() => {
+          fireEvent.keyDown(item, { key: "Enter" });
+          vi.advanceTimersToNextFrame();
+          vi.advanceTimersToNextFrame();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(confirmDialog()).toBeNull();
+    };
+
+    it("for Remove now, back on the row when cancelled", async () => {
+      await open(TRASH);
+      fireEvent.click(trashBar()!);
+      const row = trashRows()[0]!;
+      act(() => row.focus());
+      fireEvent.keyDown(row, { key: "ContextMenu" });
+      const item = await within(document.body).findByRole("menuitem", {
+        name: "Remove now…",
+        hidden: true,
+      });
+      chooseWhileMenuCloses(item);
+      await settle();
+      expect(confirmDialog()?.textContent).toContain("Remove 'Fix newer'?");
+      expect(confirmDialog()!.contains(document.activeElement)).toBe(true);
+      await act(async () => {
+        fireEvent.click(dialogButton("Cancel"));
+      });
+      await vi.waitFor(() => expect(document.activeElement).toBe(trashRows()[0]));
+    });
+
+    it("for Empty trash, back on Trash options when cancelled", async () => {
+      await open(TRASH);
+      const options = within(document.body).getByRole("button", {
+        name: "Trash options",
+        hidden: true,
+      });
+      act(() => options.focus());
+      await act(async () => {
+        fireEvent.keyDown(options, { key: "Enter" });
+      });
+      const item = await within(document.body).findByRole("menuitem", {
+        name: "Empty trash…",
+        hidden: true,
+      });
+      chooseWhileMenuCloses(item);
+      await settle();
+      expect(confirmDialog()?.textContent).toContain("Empty trash?");
+      expect(confirmDialog()!.contains(document.activeElement)).toBe(true);
+      await act(async () => {
+        fireEvent.click(dialogButton("Cancel"));
+      });
+      await vi.waitFor(() => expect(document.activeElement).toBe(options));
     });
   });
 
@@ -509,6 +590,7 @@ describe("CanopyView Trash", () => {
       await act(async () => {
         fireEvent.click(item);
       });
+      await frames();
     };
     await ask();
     expect(within(document.body).getByText("2 panels will be permanently removed.")).toBeTruthy();
@@ -680,6 +762,7 @@ describe("CanopyView Trash", () => {
         await act(async () => {
           fireEvent.click(item);
         });
+        await frames();
       };
       await ask();
       expect(within(document.body).getByText("Empty trash?")).toBeTruthy();

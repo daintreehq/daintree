@@ -2,7 +2,7 @@
 import type { ComponentProps, ReactNode } from "react";
 import { act, render, fireEvent } from "@testing-library/react";
 import { dispatchEscape, registerEscape } from "@/lib/escapeStack";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The app root supplies the TooltipProvider. The trigger renders its child
 // as-is; the content is dropped so tooltip text can't collide with queries.
@@ -12,6 +12,8 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
+
+const { order } = vi.hoisted(() => ({ order: [] as string[] }));
 
 vi.mock("@/lib/utils", () => ({ cn: (...args: unknown[]) => args.filter(Boolean).join(" ") }));
 
@@ -42,16 +44,22 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     onSelect,
     destructive,
     disabled,
+    focusHandoff,
   }: {
     children: ReactNode;
     onSelect?: (e: Event) => void;
     destructive?: boolean;
     disabled?: boolean;
+    focusHandoff?: boolean;
   }) => (
     <button
       data-destructive={destructive || undefined}
       disabled={disabled}
-      onClick={() => onSelect?.(new Event("select"))}
+      onClick={() => {
+        // The real item arms the handoff before running the consumer's onSelect.
+        if (focusHandoff) order.push("handoff");
+        onSelect?.(new Event("select"));
+      }}
     >
       {children}
     </button>
@@ -105,6 +113,32 @@ function renderHeader(overrides: Partial<ComponentProps<typeof HelpPanelHeader>>
 }
 
 describe("HelpPanelHeader", () => {
+  beforeEach(() => {
+    order.length = 0;
+  });
+
+  it.each([
+    ["Clear conversation", "onRestartConversation"],
+    ["Resume a past session…", "onResumePastSession"],
+    ["Stop assistant", "onEndSession"],
+  ] as const)("hands focus off before %s opens its dialog", (label, prop) => {
+    const callback = vi.fn(() => order.push("action"));
+    const { getByText } = renderHeader({
+      canRestartConversation: true,
+      canEndSession: true,
+      [prop]: callback,
+    });
+    fireEvent.click(getByText(label));
+    expect(order).toEqual(["handoff", "action"]);
+  });
+
+  it("leaves a plain item without a handoff", () => {
+    const onOpenDocs = vi.fn(() => order.push("action"));
+    const { getByText } = renderHeader({ onOpenDocs });
+    fireEvent.click(getByText("Open docs"));
+    expect(order).toEqual(["action"]);
+  });
+
   it("switches scope from a named radio group in place of a title", () => {
     const onScopeChange = vi.fn();
     const { getByRole } = renderHeader({ onScopeChange });

@@ -43,6 +43,11 @@ export interface PickedSelection {
   results: Readonly<Record<string, readonly ResolutionResult[]>>;
   scope: SelectionScope;
   capturedAt: string;
+  /**
+   * Another worktree main saw serving the page when this was picked, by the
+   * working directory of the process listening on its port; absent otherwise.
+   */
+  servedFrom?: string;
 }
 
 export interface Viewport {
@@ -574,6 +579,7 @@ export function promptInputFor(request: PromptRequest): AgentPromptInput {
   return {
     instruction: request.instruction,
     worktreePath: request.worktreePath,
+    servedFrom: selection.servedFrom ?? null,
     page: {
       displayedUrl: selection.displayedUrl,
       reportedRouteId: null,

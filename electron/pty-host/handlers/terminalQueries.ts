@@ -2,7 +2,9 @@ import { stripAnsi } from "../../services/pty/AgentPatternDetector.js";
 import { toHostSnapshot } from "../index.js";
 import type { SemanticSearchMatch } from "../../../shared/types/ipc/terminal.js";
 import type { HandlerMap, HostContext } from "./types.js";
-import { mapTerminalInfo } from "./terminalInfo.js";
+import type { PtyHostTerminalStatusFields } from "../../../shared/types/pty-host.js";
+import { mapTerminalInfo, mapTerminalStatusFields } from "./terminalInfo.js";
+import { findCaseInsensitiveLiteral } from "./caseInsensitiveLiteralMatch.js";
 
 export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
   const { ptyManager, sendEvent } = ctx;
@@ -45,8 +47,25 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
         // one `get-terminal` per id, so correlating a submission costs it no
         // extra round trip. Only this query passes it — the bulk families keep
         // the unconditional projection.
-        terminal: terminal ? mapTerminalInfo(terminal, ctx, msg.submissionToken) : null,
+        terminal: terminal
+          ? mapTerminalInfo(terminal, ctx, msg.submissionToken, msg.codexLimit)
+          : null,
       });
+    },
+
+    "get-terminal-status-fields": (msg) => {
+      // A malformed list reads nothing rather than throwing the whole query away.
+      const ids: unknown[] = Array.isArray(msg.ids) ? msg.ids : [];
+      const token = typeof msg.submissionToken === "string" ? msg.submissionToken : undefined;
+      const seen = new Set<string>();
+      const terminals: PtyHostTerminalStatusFields[] = [];
+      for (const id of ids) {
+        if (typeof id !== "string" || seen.has(id)) continue;
+        seen.add(id);
+        const terminal = ptyManager.getTerminal(id);
+        if (terminal) terminals.push(mapTerminalStatusFields(terminal, ctx, token));
+      }
+      sendEvent({ type: "terminal-status-fields", requestId: msg.requestId, terminals });
     },
 
     "get-available-terminals": (msg) => {
@@ -84,12 +103,35 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
       });
     },
 
+    // Restore's whole inventory in one reply (#17776), in the registry's id
+    // order. An id whose record is gone by the time it is read is skipped,
+    // the same answer a per-id `get-terminal` would have given it.
+    "get-project-terminals": (msg) => {
+      sendEvent({
+        type: "project-terminals",
+        requestId: msg.requestId,
+        terminals: ptyManager
+          .getTerminalsForProject(msg.projectId)
+          .map((id) => ptyManager.getTerminal(id))
+          .filter((terminal) => terminal !== undefined)
+          .map((terminal) => mapTerminalInfo(terminal, ctx)),
+      });
+    },
+
     "get-terminal-info": (msg) => {
       const info = ptyManager.getTerminalInfo(msg.id);
       sendEvent({
         type: "terminal-diagnostic-info",
         requestId: msg.requestId,
         info,
+      });
+    },
+
+    "reset-terminal-modes": (msg) => {
+      sendEvent({
+        type: "reset-terminal-modes-result",
+        requestId: msg.requestId,
+        reset: ptyManager.resetTerminalModes(msg.id),
       });
     },
 
@@ -148,8 +190,17 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
           return;
         }
       }
-      const needle = msg.isRegex ? null : msg.query.toLowerCase();
-      for (const t of ptyManager.getAll()) {
+      // Only an omitted scope scans the whole shard; a malformed one scans nothing.
+      const terminals =
+        msg.terminalIds === undefined
+          ? ptyManager.getAll()
+          : Array.isArray(msg.terminalIds)
+            ? msg.terminalIds.map((id: unknown) =>
+                typeof id === "string" ? ptyManager.getTerminal(id) : undefined
+              )
+            : [];
+      for (const t of terminals) {
+        if (!t) continue;
         const buffer = t.semanticBuffer;
         if (!buffer || buffer.length === 0) continue;
         for (let i = buffer.length - 1; i >= 0; i--) {
@@ -163,11 +214,11 @@ export function createTerminalQueryHandlers(ctx: HostContext): HandlerMap {
               start = m.index;
               end = m.index + m[0].length;
             }
-          } else if (needle !== null && needle.length > 0) {
-            const idx = cleaned.toLowerCase().indexOf(needle);
-            if (idx !== -1) {
-              start = idx;
-              end = idx + needle.length;
+          } else {
+            const range = findCaseInsensitiveLiteral(cleaned, msg.query);
+            if (range) {
+              start = range.start;
+              end = range.end;
             }
           }
           if (start !== -1 && end !== -1) {

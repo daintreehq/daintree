@@ -5,6 +5,7 @@ import {
   ZERO_COUNTS,
 } from "../consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
+import { MAX_CONSOLE_ROWS, MAX_LIVE_OBJECT_ROWS } from "@shared/config/devPreviewConsole";
 
 function makeRow(overrides: Partial<SerializedConsoleRow> = {}): SerializedConsoleRow {
   return {
@@ -359,5 +360,143 @@ describe("consoleCaptureStore", () => {
       flushConsoleCaptureBuffer();
       expect(useConsoleCaptureStore.getState().getMessages("pane1")).toHaveLength(0);
     });
+  });
+});
+
+describe("consoleCaptureStore live object window (#17067)", () => {
+  function objectRow(id: number, paneId = "pane1"): SerializedConsoleRow {
+    return makeRow({
+      id,
+      paneId,
+      args: [
+        { type: "object", objectId: `obj-${id}`, preview: `{id: ${id}}` },
+        { type: "primitive", kind: "number", value: id },
+      ],
+      summaryText: `{id: ${id}}`,
+    });
+  }
+
+  function objectIdOf(paneId: string, rowId: number): string | undefined {
+    const row = useConsoleCaptureStore
+      .getState()
+      .getMessages(paneId)
+      .find((msg) => msg.id === rowId);
+    const arg = row?.args[0];
+    return arg && arg.type === "object" ? arg.objectId : undefined;
+  }
+
+  beforeEach(() => {
+    useConsoleCaptureStore.getState().removePane("pane1");
+    useConsoleCaptureStore.getState().removePane("pane2");
+    useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
+  });
+
+  it("blanks the object ids of rows that age out of the live window, keeping their previews", () => {
+    for (let id = 0; id < MAX_LIVE_OBJECT_ROWS + 2; id++) addRow(objectRow(id));
+
+    const messages = useConsoleCaptureStore.getState().getMessages("pane1");
+    expect(messages).toHaveLength(MAX_LIVE_OBJECT_ROWS + 2);
+    expect(objectIdOf("pane1", 0)).toBe("");
+    expect(objectIdOf("pane1", 1)).toBe("");
+    expect(objectIdOf("pane1", 2)).toBe("obj-2");
+    expect(messages[0]!.args[0]).toMatchObject({ preview: "{id: 0}" });
+    expect(messages[0]!.args[1]).toEqual({ type: "primitive", kind: "number", value: 0 });
+  });
+
+  it("applies the window once per row however rows are batched into frames", () => {
+    // The node setup runs rAF inline, which would flush per add; hold the frame
+    // so one flush takes the whole burst, as a log storm's frame does.
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    try {
+      for (let id = 0; id < 10; id++) addRow(objectRow(id));
+      // More than the row cap in one frame: the rows that never got to be live
+      // in the store still lost their handles in main.
+      const burst = MAX_CONSOLE_ROWS + MAX_LIVE_OBJECT_ROWS;
+      for (let id = 10; id < 10 + burst; id++) {
+        useConsoleCaptureStore.getState().addStructuredMessage(objectRow(id));
+      }
+      expect(useConsoleCaptureStore.getState().getMessages("pane1")).toHaveLength(10);
+      flushConsoleCaptureBuffer();
+    } finally {
+      vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback): number => {
+        cb(0);
+        return 0;
+      });
+    }
+
+    const messages = useConsoleCaptureStore.getState().getMessages("pane1");
+    const live = messages.filter(
+      (msg) => msg.args[0]?.type === "object" && msg.args[0].objectId !== ""
+    );
+    expect(messages).toHaveLength(MAX_CONSOLE_ROWS);
+    expect(live).toHaveLength(MAX_LIVE_OBJECT_ROWS);
+    expect(live[0]!.id).toBe(messages.at(-MAX_LIVE_OBJECT_ROWS)!.id);
+  });
+
+  it("keeps an expanded row's object ids past the window until the row is dropped", () => {
+    addRow(objectRow(0));
+    useConsoleCaptureStore.getState().markInspected("pane1", 0);
+    for (let id = 1; id <= MAX_LIVE_OBJECT_ROWS + 5; id++) addRow(objectRow(id));
+
+    expect(objectIdOf("pane1", 0)).toBe("obj-0");
+    expect(objectIdOf("pane1", 1)).toBe("");
+
+    for (let id = 1000; id < 1000 + MAX_CONSOLE_ROWS; id++) addRow(objectRow(id));
+    expect(objectIdOf("pane1", 0)).toBeUndefined();
+  });
+
+  it("blanks one row's object ids when main reports them released", () => {
+    addRow(objectRow(0));
+    addRow(objectRow(1));
+    useConsoleCaptureStore.getState().markInspected("pane1", 0);
+
+    useConsoleCaptureStore.getState().releaseRowHandles("pane1", 0);
+
+    expect(objectIdOf("pane1", 0)).toBe("");
+    expect(objectIdOf("pane1", 1)).toBe("obj-1");
+  });
+
+  it("blanks the rows a stopped capture delivered, and no other pane's", () => {
+    addRow(objectRow(0, "pane1"));
+    addRow(objectRow(1, "pane2"));
+    useConsoleCaptureStore.getState().markInspected("pane1", 0);
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    try {
+      // Still in the ingest buffer when capture stops.
+      useConsoleCaptureStore.getState().addStructuredMessage(objectRow(2, "pane1"));
+      useConsoleCaptureStore.getState().releaseHandles("pane1", 2);
+    } finally {
+      vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback): number => {
+        cb(0);
+        return 0;
+      });
+    }
+
+    expect(objectIdOf("pane1", 0)).toBe("");
+    expect(objectIdOf("pane1", 2)).toBe("");
+    expect(objectIdOf("pane2", 1)).toBe("obj-1");
+    expect(useConsoleCaptureStore.getState().getMessages("pane1")).toHaveLength(2);
+  });
+
+  it("leaves the rows a later capture of the pane delivered as they are", () => {
+    addRow(objectRow(0));
+    addRow(objectRow(5));
+    useConsoleCaptureStore.getState().markInspected("pane1", 5);
+
+    useConsoleCaptureStore.getState().releaseHandles("pane1", 0);
+    for (let id = 6; id < 6 + MAX_LIVE_OBJECT_ROWS + 1; id++) addRow(objectRow(id));
+
+    expect(objectIdOf("pane1", 0)).toBe("");
+    // Still the later capture's, and still pinned.
+    expect(objectIdOf("pane1", 5)).toBe("obj-5");
+  });
+
+  it("leaves the pane's array untouched when nothing it holds has a handle", () => {
+    addRow(makeRow({ id: 0 }));
+    const before = useConsoleCaptureStore.getState().getMessages("pane1");
+
+    useConsoleCaptureStore.getState().releaseHandles("pane1", 0);
+
+    expect(useConsoleCaptureStore.getState().getMessages("pane1")).toBe(before);
   });
 });

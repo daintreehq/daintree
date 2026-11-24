@@ -3,6 +3,7 @@ import type {
   HandshakeMismatch,
   HostArch,
   HostConnection,
+  HostConnectionBlocker,
   HostConnectionState,
   HostDescriptor,
   HostPlatform,
@@ -15,6 +16,11 @@ import type {
   StagedHostUpdate,
 } from "@shared/types/ipc/remoteHosts";
 import { pluralize } from "@/lib/pluralize";
+
+import { sshRefusalAdvice } from "@shared/utils/sshRefusal";
+
+export { sshRefusalAdvice };
+export type { SshRefusalAdvice } from "@shared/utils/sshRefusal";
 
 export function platformLabel(platform: HostPlatform | null, arch: HostArch | null): string {
   if (!platform) return "Platform not seen yet";
@@ -71,6 +77,17 @@ export function stagedUpdateLabel(staged: StagedHostUpdate): string {
     : `Daintree ${staged.version}`;
 }
 
+/** What stopped the retries, as the label's lead; null for an ssh refusal, said by its detail. */
+function parkedLead(blocker: HostConnectionBlocker | undefined): string | null {
+  if (blocker?.kind === "wsl-distro-missing") return `WSL couldn't find ${blocker.distro}`;
+  if (blocker?.kind === "unusable") return withoutStop(blocker.message) || null;
+  return null;
+}
+
+function withoutStop(text: string): string {
+  return text.trim().replace(/\.$/, "");
+}
+
 function formatSeen(at: number | null, now: number): string {
   if (at === null) return "never seen";
   return `last seen ${formatRelativeTime(at, now)}`;
@@ -93,17 +110,20 @@ export function connectionLabel(state: HostConnectionState, now: number = Date.n
       // A build that differs but connected is the Build row's to say, not the link's.
       return state.rttMs === null ? "Connected" : `Connected · ${Math.round(state.rttMs)} ms`;
     }
-    case "unreachable":
+    case "unreachable": {
       if (state.restarting) return "Restarting…";
       // The host menus' word for the same state.
       if (state.hostModeOff) return `Not listening · ${formatSeen(state.lastSeenAt, now)}`;
-      // What was seen, when there is something: ssh's own words for why it couldn't reach it.
+      // What was seen, when there is something: the transport's words for why it couldn't reach it.
+      const lead = parkedLead(state.blocker);
       return [
-        "Unreachable",
+        lead ?? "Unreachable",
         formatSeen(state.lastSeenAt, now),
         ...(state.stoppedRetrying ? ["not retrying until you connect"] : []),
-        ...(state.detail ? [state.detail] : []),
+        // A transport that said the same thing twice (cloud hosts do) is said once.
+        ...(state.detail && withoutStop(state.detail) !== lead ? [state.detail] : []),
       ].join(" · ");
+    }
     case "version-mismatch":
       // Exact builds are the Build row's; here, what it means for connecting.
       return "Can't connect · needs a compatible build";
@@ -247,7 +267,9 @@ export function verdictCopy(
     case "host-mode-temporary":
       return {
         title: `Host mode on ${host} stops when Daintree quits there`,
-        detail: `It runs the same build as this machine. Switch Host mode on for good so it starts at login.`,
+        detail: probe.startsOnConnect
+          ? `It runs the same build as this machine. Switch Host mode on for good so connecting from Daintree starts it again.`
+          : `It runs the same build as this machine. Switch Host mode on for good so it starts at login.`,
       };
     case "up-to-date":
       return {
@@ -291,36 +313,38 @@ export function shellWord(target: string): string {
   return /^[\w@.%+-]+$/.test(target) ? target : `'${target.replace(/'/g, "'\\''")}'`;
 }
 
-export type SshRefusalAdvice = "untrusted-host-key" | "changed-host-key" | "login-refused";
-
 /**
- * What ssh's own words say stopped a probe that BatchMode refused, so the
- * dialog can name the next step. The probe keeps only the last lines of
- * stderr, so a changed key is told apart by its "has changed" or "Offending"
- * line rather than the banner above them.
+ * A link that stopped because ssh reached the login and was refused: it waits
+ * for a person, and a Sign in can pass ssh's own prompts (a passphrase, a
+ * code) to them.
  */
-export function sshRefusalAdvice(sshError: string | null): SshRefusalAdvice | null {
-  if (!sshError) return null;
-  if (
-    /^Host key for \S+ has changed\b|REMOTE HOST IDENTIFICATION HAS CHANGED|^Offending \S+ key in /im.test(
-      sshError
-    )
-  ) {
-    return "changed-host-key";
-  }
-  if (/Host key verification failed|No \S+ host key is known/i.test(sshError)) {
-    return "untrusted-host-key";
-  }
-  if (/Permission denied \(/i.test(sshError)) return "login-refused";
-  return null;
+export function isLoginRefused(connection: HostConnectionState): boolean {
+  return (
+    connection.status === "unreachable" &&
+    connection.stoppedRetrying === true &&
+    sshRefusalAdvice(connection.detail) === "login-refused"
+  );
 }
 
 /**
+ * How a host started on connect is kept running, and what that doesn't
+ * cover: said wherever setup or the host's details describe it.
+ */
+export const STARTS_ON_CONNECT_COVERAGE =
+  "It keeps running after you disconnect, but doesn't come back by itself after the machine reboots, stops or is rebuilt. Connecting from Daintree starts it again.";
+
+/**
  * Host mode is on for good there: listening, saved as on and set to start at
- * login, as the host's own Daintree recorded it and the probe saw it.
+ * login, as the host's own Daintree recorded it and the probe saw it. Where
+ * nothing can start it at login, recorded as started on connect instead.
  */
 export function hostModeSwitchedOn(probe: HostProbeResult | null): boolean {
   const state = probe?.hostModeState;
+  if (probe?.startsOnConnect === true) {
+    return (
+      probe.hostModeListening && !!state && state.enabled && state.startMethod === "on-connect"
+    );
+  }
   return (
     probe?.hostModeListening === true &&
     !!state &&
@@ -407,15 +431,23 @@ export function canWaitForIdle(impact: HostRestartImpact): boolean {
 /**
  * What removing a host from this device does to it. A remote machine runs on;
  * a WSL distro is only kept running by this app, so its terminals and agents
- * end once WSL stops it.
+ * end once WSL stops it; and Daintree on a machine where it was started on
+ * connect is stopped, since nothing else ever would.
  */
 export function removeHostOutcome(
   connection: HostConnection | undefined,
-  hostName: string
+  hostName: string,
+  startsOnConnect = false
 ): {
   label: string;
   sentence: string;
 } {
+  if (startsOnConnect && connection?.kind !== "wsl") {
+    return {
+      label: `Daintree on ${hostName} stops, with its terminals and agents`,
+      sentence: `Daintree on ${hostName} is stopped if it can be reached there, ending its terminals and agents. Its projects and the Daintree install stay there.`,
+    };
+  }
   if (connection?.kind === "wsl") {
     return {
       label: `Terminals and agents in ${hostName} end once WSL stops it`,

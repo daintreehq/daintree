@@ -11,6 +11,10 @@ const LazyWorktreeDeleteDialog = lazy(() =>
   import("../WorktreeDeleteDialog").then((m) => ({ default: m.WorktreeDeleteDialog }))
 );
 
+const LazyIdlePauseDialog = lazy(() =>
+  import("../IdlePauseDialog").then((m) => ({ default: m.IdlePauseDialog }))
+);
+
 const LazyIssuePickerDialog = lazy(() =>
   import("../IssuePickerDialog").then((m) => ({ default: m.IssuePickerDialog }))
 );
@@ -29,6 +33,8 @@ export interface WorktreeDialogsProps {
   onCloseTitleDialog: () => void;
   customTitle: string | undefined;
   restoreTitleDialogFocusTo?: RestoreFocusTarget;
+  showIdlePauseDialog?: boolean;
+  onCloseIdlePauseDialog?: () => void;
 }
 
 export function WorktreeDialogs({
@@ -45,32 +51,44 @@ export function WorktreeDialogs({
   onCloseTitleDialog,
   customTitle,
   restoreTitleDialogFocusTo,
+  showIdlePauseDialog = false,
+  onCloseIdlePauseDialog,
 }: WorktreeDialogsProps) {
   // Keep-mounted is NOT for a close animation — it avoids re-suspending on
   // reopen of a lazily-loaded dialog.
   const deleteDialogMounted = useKeepMounted(showDeleteDialog);
   const issuePickerMounted = useKeepMounted(showIssuePicker);
+  // Every sidebar card holds these, so a closed dialog is never mounted until
+  // its first open. Latched open after that, so the dialog's own presence gate
+  // still plays the exit.
+  const confirmDialogMounted = useKeepMounted(confirmDialog.isOpen);
+  const titleDialogMounted = useKeepMounted(showTitleDialog);
+  const idlePauseDialogMounted = useKeepMounted(showIdlePauseDialog);
   return (
     <>
-      <ConfirmDialog
-        isOpen={confirmDialog.isOpen}
-        title={confirmDialog.isOpen ? confirmDialog.title : ""}
-        description={confirmDialog.isOpen ? confirmDialog.description : undefined}
-        confirmLabel={confirmDialog.isOpen ? confirmDialog.confirmLabel : ""}
-        variant={confirmDialog.isOpen ? confirmDialog.variant : "default"}
-        onConfirm={confirmDialog.isOpen ? confirmDialog.onConfirm : () => {}}
-        onClose={onCloseConfirm}
-      >
-        {confirmDialog.isOpen ? confirmDialog.children : undefined}
-      </ConfirmDialog>
+      {confirmDialogMounted && (
+        <ConfirmDialog
+          isOpen={confirmDialog.isOpen}
+          title={confirmDialog.isOpen ? confirmDialog.title : ""}
+          description={confirmDialog.isOpen ? confirmDialog.description : undefined}
+          confirmLabel={confirmDialog.isOpen ? confirmDialog.confirmLabel : ""}
+          variant={confirmDialog.isOpen ? confirmDialog.variant : "default"}
+          onConfirm={confirmDialog.isOpen ? confirmDialog.onConfirm : () => {}}
+          onClose={onCloseConfirm}
+        >
+          {confirmDialog.isOpen ? confirmDialog.children : undefined}
+        </ConfirmDialog>
+      )}
 
-      <EditWorktreeTitleDialog
-        isOpen={showTitleDialog}
-        onClose={onCloseTitleDialog}
-        worktreeId={worktree.id}
-        currentTitle={customTitle}
-        restoreFocusTo={restoreTitleDialogFocusTo}
-      />
+      {titleDialogMounted && (
+        <EditWorktreeTitleDialog
+          isOpen={showTitleDialog}
+          onClose={onCloseTitleDialog}
+          worktreeId={worktree.id}
+          currentTitle={customTitle}
+          restoreFocusTo={restoreTitleDialogFocusTo}
+        />
+      )}
 
       {deleteDialogMounted && (
         <Suspense fallback={null}>
@@ -78,6 +96,17 @@ export function WorktreeDialogs({
             isOpen={showDeleteDialog}
             onClose={onCloseDeleteDialog}
             worktree={worktree}
+          />
+        </Suspense>
+      )}
+
+      {idlePauseDialogMounted && onCloseIdlePauseDialog && (
+        <Suspense fallback={null}>
+          <LazyIdlePauseDialog
+            isOpen={showIdlePauseDialog}
+            onClose={onCloseIdlePauseDialog}
+            worktreeId={worktree.id}
+            restoreFocusTo={restoreTitleDialogFocusTo}
           />
         </Suspense>
       )}

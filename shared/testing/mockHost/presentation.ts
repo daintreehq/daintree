@@ -37,7 +37,7 @@ import type {
   PluginNotifyResult,
   PluginTaskHandle,
   PluginWorktreesResult,
-  PluginAgentPane,
+  PluginAgentPaneObservation,
   PluginPanelLifecycleEvent,
   WorkerRestartResult,
   PluginPanelBadge,
@@ -177,6 +177,7 @@ const NOTIFY_OPTION_KEYS = new Set([
   "actions",
   "os",
   "dedupeKey",
+  "audience",
 ]);
 const NOTIFY_SEVERITIES = new Set(["info", "warning", "error"]);
 const NOTIFY_DELIVERIES = new Set(["active", "passive"]);
@@ -266,6 +267,9 @@ function validateNotifyOptions(
   }
   if (opts.os !== undefined && typeof opts.os !== "boolean") issues.push("os: must be a boolean");
   if (opts.dedupeKey !== undefined) text("dedupeKey", opts.dedupeKey, 200);
+  if (opts.audience !== undefined && opts.audience !== "assistant") {
+    issues.push('audience: must be "assistant"');
+  }
   if (opts.severity !== undefined && !NOTIFY_SEVERITIES.has(opts.severity)) {
     issues.push('severity: must be "info", "warning" or "error"');
   }
@@ -476,7 +480,7 @@ export function createPresentationFacet(
   options: CreateMockHostOptions,
   collaborators: {
     resolveWorktreesResult(): PluginWorktreesResult;
-    agentPanes(): readonly PluginAgentPane[];
+    agentPanes(): readonly PluginAgentPaneObservation[];
     panelPhases: ReadonlyMap<string, PluginPanelLifecycleEvent>;
     /** The composed host's `notify`, so a task's notification goes through it. */
     notify(options: PluginNotifyOptions): Promise<PluginNotifyResult>;

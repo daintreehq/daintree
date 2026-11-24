@@ -78,7 +78,7 @@ describe("useEditorKeymap", () => {
       isComposingRef: { current: false },
       handledEnterRef: { current: false },
       editableCompartmentRef: { current: new Compartment() },
-      historyPaletteOpenRef: { current: null },
+      requestHistorySearch: vi.fn(),
       applyAutocompleteSelection,
       handleHistoryNavigation,
       sendFromEditor,
@@ -150,6 +150,15 @@ describe("useEditorKeymap", () => {
 
     it("falls through to the normal send when the selected item is stale", () => {
       const { handlers } = renderKeymap(makeLatest({ staleItemKeys: new Set(["src/a.ts"]) }));
+      expect(handlers.onEnter()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls through to the normal send when the selected item is disabled", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ autocompleteItems: [{ ...fileItem, disabled: true }] })
+      );
       expect(handlers.onEnter()).toBe(true);
       expect(applyAutocompleteSelection).not.toHaveBeenCalled();
       expect(sendFromEditor).toHaveBeenCalledTimes(1);
@@ -268,6 +277,22 @@ describe("useEditorKeymap", () => {
       expect(applyAutocompleteSelection).not.toHaveBeenCalled();
     });
 
+    it("swallows Tab without completing when the selected item is disabled", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ autocompleteItems: [{ ...fileItem, disabled: true }] })
+      );
+      expect(handlers.onTab()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
+    });
+
+    it("swallows Tab when nothing is selected and the first row is disabled", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ selectedIndex: -1, autocompleteItems: [{ ...fileItem, disabled: true }] })
+      );
+      expect(handlers.onTab()).toBe(true);
+      expect(applyAutocompleteSelection).not.toHaveBeenCalled();
+    });
+
     it("swallows Tab without completing when the selected item is stale", () => {
       const { handlers } = renderKeymap(makeLatest({ staleItemKeys: new Set(["src/a.ts"]) }));
       expect(handlers.onTab()).toBe(true);
@@ -280,6 +305,25 @@ describe("useEditorKeymap", () => {
       const { handlers } = renderKeymap(makeLatest());
       expect(handlers.onEscape()).toBe(true);
       expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+    });
+
+    // A dialog around the composer closes on any Escape that reaches it.
+    it("keeps the Escape that closed the menu from going any further", () => {
+      const { handlers } = renderKeymap(makeLatest({ isExpanded: true }));
+      const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+      const stop = vi.spyOn(event, "stopPropagation");
+      expect(handlers.onEscape(event)).toBe(true);
+      expect(stop).toHaveBeenCalledOnce();
+    });
+
+    it("lets an Escape that closes the Expanded Editor carry on to its dialog", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, isExpanded: true })
+      );
+      const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+      const stop = vi.spyOn(event, "stopPropagation");
+      expect(handlers.onEscape(event)).toBe(true);
+      expect(stop).not.toHaveBeenCalled();
     });
 
     it("dismisses a menu still waiting on its rows and carries on to the agent", () => {
@@ -475,6 +519,23 @@ describe("useEditorKeymap", () => {
       );
       expect(down).toBe(0);
       expect(up).toBe(2);
+    });
+
+    it("hands the arrows to the step that skips disabled rows", () => {
+      const rows = ["a", "b", "c", "d", "e"].map((key) => ({
+        ...fileItem,
+        key,
+        disabled: key === "b" || key === "d",
+      }));
+      const { handlers } = renderKeymap(makeLatest({ autocompleteItems: rows, selectedIndex: 2 }));
+      const landed = () => {
+        const [update] = setSelectedIndex.mock.calls.at(-1)!;
+        return typeof update === "function" ? update(2) : update;
+      };
+      expect(handlers.onArrowDown()).toBe(true);
+      expect(landed()).toBe(4);
+      expect(handlers.onArrowUp()).toBe(true);
+      expect(landed()).toBe(0);
     });
 
     it("agent terminal: non-empty input outside history mode is left to CodeMirror", () => {

@@ -51,7 +51,7 @@ const hibernationMock = vi.hoisted(() => ({
 vi.mock("../HibernationService.js", () => ({ getHibernationService: () => hibernationMock }));
 
 const persistenceMock = vi.hoisted(() => ({
-  writeHibernatedMarker: vi.fn<(terminalId: string) => void>(),
+  writeHibernatedMarker: vi.fn<(terminalId: string) => Promise<void>>(async () => {}),
 }));
 vi.mock("../pty/terminalSessionPersistence.js", () => persistenceMock);
 
@@ -118,6 +118,7 @@ function backgroundWindow(): ProjectViewManager {
     isMcpDispatchProtected: (projectId: string) => leased.has(projectId),
     isDictationHeld: (projectId: string) =>
       projectId === PROJECT.id && isDictationViewHeld(cachedView),
+    isBulkWorktreeRunHeld: () => false,
   } as unknown as ProjectViewManager;
 }
 
@@ -134,6 +135,7 @@ function policy(overrides: Partial<Extract<SleepProjectOptions, { initiator: "po
 describe("sleepProject", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    persistenceMock.writeHibernatedMarker.mockReset().mockResolvedValue(undefined);
     leased = new Set();
     _resetDictationViewHoldsForTests();
     panelRecoveryMock.readPanelRecoveryHold.mockReset().mockResolvedValue(null);
@@ -191,6 +193,39 @@ describe("sleepProject", () => {
       // outlived the eviction must not be blanked by it.
       expect(broadcastMock).not.toHaveBeenCalledWith(CHANNELS.PROJECT_SLEPT, "proj-1");
     });
+
+    it.each([
+      ["t1", "t2"],
+      ["t2", "t1"],
+    ] as const)(
+      "evicts nothing until every terminal's restore marker is on disk (%s first)",
+      async (first, last) => {
+        teardownMock.gracefulTeardownAndJournalProject.mockResolvedValueOnce({
+          confirmed: true,
+          aborted: false,
+          terminalsKilled: 2,
+          sessions: [
+            { id: "t1", agentSessionId: "s1" },
+            { id: "t2", agentSessionId: "s2" },
+          ],
+        });
+        const release = new Map<string, () => void>();
+        persistenceMock.writeHibernatedMarker.mockImplementation(
+          (terminalId) => new Promise<void>((resolve) => release.set(terminalId, resolve))
+        );
+
+        const sleeping = sleepProject("proj-1", policy(), makeDeps());
+        await vi.waitFor(() => expect(release.size).toBe(2));
+        release.get(first)!();
+        await flushMicrotasks();
+        expect(hibernationMock.evictProjectRenderer).not.toHaveBeenCalled();
+        expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+
+        release.get(last)!();
+        expect(await sleeping).toMatchObject({ status: "slept", terminalsKilled: 2 });
+        expect(hibernationMock.evictProjectRenderer).toHaveBeenCalled();
+      }
+    );
 
     it("refuses when a dispatch starts while the kill's snapshot is in flight", async () => {
       teardownMock.gracefulTeardownAndJournalProject.mockImplementationOnce(
@@ -279,6 +314,7 @@ describe("sleepProject", () => {
         win: { id: 2, isDestroyed: () => false },
         isMcpDispatchProtected: () => false,
         isDictationHeld: () => false,
+        isBulkWorktreeRunHeld: () => false,
       } as unknown as ProjectViewManager;
 
       const outcome = await sleepProject(

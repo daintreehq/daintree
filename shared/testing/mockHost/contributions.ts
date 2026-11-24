@@ -33,6 +33,7 @@ import type {
   RegisteredContextProviderRecord,
   RegisteredWorktreeSetupStepRecord,
   RegisteredWorktreeDeleteNotesProviderRecord,
+  RegisteredCloudProviderRecord,
   RegisteredMcpToolsRecord,
   InvalidationRecord,
   CreateMockHostOptions,
@@ -57,6 +58,7 @@ export type ContributionsMembers = Pick<
   | "registerContextProvider"
   | "registerService"
   | "registerWorktreeDeleteNotesProvider"
+  | "registerCloudProvider"
   | "mcp"
   | "invalidateFileDecorations"
   | "dispatch"
@@ -73,6 +75,7 @@ export type ContributionsMembers = Pick<
   | "registeredContextProviders"
   | "registeredServices"
   | "registeredWorktreeDeleteNotesProviders"
+  | "registeredCloudProviders"
   | "registeredMcpTools"
   | "invalidationCalls"
   | "simulateListenersChange"
@@ -137,6 +140,7 @@ export function createContributionsFacet(
   const registeredContextProviders: RegisteredContextProviderRecord[] = [];
   const registeredServices: RegisteredServiceRecord[] = [];
   const registeredWorktreeDeleteNotesProviders: RegisteredWorktreeDeleteNotesProviderRecord[] = [];
+  const registeredCloudProviders: RegisteredCloudProviderRecord[] = [];
   const registeredMcpTools: RegisteredMcpToolsRecord[] = [];
   const invalidationCalls: InvalidationRecord[] = [];
   /** Channels a test marked as having no listener; every other channel has one. */
@@ -553,6 +557,29 @@ export function createContributionsFacet(
       };
       return Promise.resolve(dispose);
     },
+    registerCloudProvider(descriptor, impl) {
+      // Structural checks only: the mock has no manifest model (#9878), so the
+      // declared-id and declared-capability method checks are skipped.
+      if (
+        !descriptor ||
+        typeof descriptor !== "object" ||
+        typeof descriptor.id !== "string" ||
+        descriptor.id.length === 0
+      ) {
+        throw new Error("registerCloudProvider: descriptor.id must be a non-empty string");
+      }
+      if (!impl || typeof impl !== "object") {
+        throw new Error("registerCloudProvider: impl must be an object");
+      }
+      const record: RegisteredCloudProviderRecord = { descriptor, impl };
+      const existing = registeredCloudProviders.findIndex((r) => r.descriptor.id === descriptor.id);
+      if (existing >= 0) registeredCloudProviders[existing] = record;
+      else registeredCloudProviders.push(record);
+      return Promise.resolve(() => {
+        const i = registeredCloudProviders.indexOf(record);
+        if (i >= 0) registeredCloudProviders.splice(i, 1);
+      });
+    },
     mcp: {
       registerTools(endpointId, tools) {
         // Structural checks only. The mock has no manifest model (#9878), so the
@@ -684,6 +711,7 @@ export function createContributionsFacet(
     registeredContextProviders,
     registeredServices,
     registeredWorktreeDeleteNotesProviders,
+    registeredCloudProviders,
     registeredMcpTools,
     invalidationCalls,
     simulateListenersChange(channel, hasListeners) {

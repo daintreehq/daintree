@@ -309,6 +309,17 @@ describe("invokeForEndpoint", () => {
     UNCLASSIFIED_CHANNEL,
     "user-prompt-templates:list",
     "user-prompt-templates:open-folder",
+    // A Host can never have its owner sign the person's answer (#17101) or follow-up (#17238).
+    "decisions:answer-question",
+    "decisions:get-answer-result",
+    "decisions:send-follow-up",
+    "decisions:get-follow-up-result",
+    // Nor their decline (#17239).
+    "decisions:decline-question",
+    "decisions:get-decline-result",
+    // Nor their involvement preference (#17237).
+    "decisions:get-involvement",
+    "decisions:set-involvement",
   ])("refuses %s over a link even with a context handler", async (channel) => {
     const handler = vi.fn(() => "ran");
     getIpcDispatcher().registerInvoke(channel, handler);
@@ -450,22 +461,34 @@ describe("remote router", () => {
   });
 
   // A person's prompt templates are this machine's, even in a window on a host
-  // (#16398), while the plugin templates beside them come from that host.
-  it.each(["user-prompt-templates:list", "user-prompt-templates:open-folder"])(
-    "answers %s from this machine for a window driving a host",
-    async (channel) => {
-      const router = installRouter();
-      const handler = vi.fn(() => "from-this-machine");
-      cleanups.push(typedHandle(channel as never, handler as never));
+  // (#16398), while the plugin templates beside them come from that host. The
+  // person's Decisions answer, decline and follow-up are signed by this
+  // computer's owner key, even for a question a Host asked, whose own key never
+  // signs one (#17101, #17239, #17238), and so is their involvement preference
+  // (#17237).
+  it.each([
+    "user-prompt-templates:list",
+    "user-prompt-templates:open-folder",
+    "decisions:answer-question",
+    "decisions:get-answer-result",
+    "decisions:decline-question",
+    "decisions:get-decline-result",
+    "decisions:send-follow-up",
+    "decisions:get-follow-up-result",
+    "decisions:get-involvement",
+    "decisions:set-involvement",
+  ])("answers %s from this machine for a window driving a host", async (channel) => {
+    const router = installRouter();
+    const handler = vi.fn(() => "from-this-machine");
+    cleanups.push(typedHandle(channel as never, handler as never));
 
-      await expect(invokeLocal(channel, makeEvent())).resolves.toEqual(
-        wrapSuccess("from-this-machine")
-      );
+    await expect(invokeLocal(channel, makeEvent())).resolves.toEqual(
+      wrapSuccess("from-this-machine")
+    );
 
-      expect(handler).toHaveBeenCalledTimes(1);
-      expect(router.forwardInvoke).not.toHaveBeenCalled();
-    }
-  );
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(router.forwardInvoke).not.toHaveBeenCalled();
+  });
 
   it("sends a window driving a host to that host for its plugins, templates included", async () => {
     const router = installRouter();
@@ -637,7 +660,6 @@ describe("drive-lease gate", () => {
         projectsForOperation: () => [],
         projectsForDevPreviewPanel: () => [],
         projectsForHelpSession: () => [],
-        currentProjectId: () => null,
         ...resolvers,
       }
     );
@@ -690,6 +712,60 @@ describe("drive-lease gate", () => {
     ).resolves.toEqual(wrapSuccess("ran"));
     expect(driver).toHaveBeenCalledTimes(1);
     expect(free).toHaveBeenCalledTimes(1);
+  });
+
+  // #17926: the window shows no project, so nothing anyone holds is its to take.
+  it("lets a window with no project open a terminal while another screen holds a project here", async () => {
+    const spawn = handle("terminal:spawn");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]));
+    const ask = (projectId: string | null, args: unknown[]) =>
+      getIpcDispatcher().invokeForEndpoint(
+        { endpoint: makeRemoteEndpoint(-4, projectId).endpoint, client: REMOTE_CLIENT },
+        "terminal:spawn",
+        args
+      );
+
+    await expect(ask(null, [{ cols: 80, rows: 24 }])).resolves.toEqual(wrapSuccess("ran"));
+    await expect(ask(null, [{ cols: 80, rows: 24, cwd: "/home/u" }])).resolves.toEqual(
+      wrapSuccess("ran")
+    );
+    for (const [projectId, args] of [
+      // A window showing the held project is still refused, named or not.
+      ["proj-1", [{ cols: 80, rows: 24 }]],
+      ["proj-1", [{ cols: 80, rows: 24, projectId: "proj-1" }]],
+      // A no-project window can't spawn into the held project by naming it or its folder.
+      [null, [{ cols: 80, rows: 24, projectId: "proj-1" }]],
+      [null, [{ cols: 80, rows: 24, cwd: P1 }]],
+    ] as const) {
+      const refused = await ask(projectId, [...args]);
+      expect(refused.ok ? null : refused.error.code, JSON.stringify([projectId, args])).toBe(
+        "DRIVEN_ELSEWHERE"
+      );
+    }
+    expect(spawn).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a window close a terminal main placed in no project while another screen holds a project here", async () => {
+    const kill = handle("terminal:kill");
+    const trash = handle("terminal:trash");
+    installGate(new Map([["proj-1", { endpointId: "remote:-9", clientId: "client-c" }]]), {
+      describeTerminal: (id) =>
+        id === "picker-shell"
+          ? { projectId: null, unplaced: true }
+          : id === "host-shell"
+            ? { projectId: null }
+            : "missing",
+    });
+    const { endpoint } = makeRemoteEndpoint(-4, null);
+    const ask = (channel: string, id: string) =>
+      getIpcDispatcher().invokeForEndpoint({ endpoint, client: REMOTE_CLIENT }, channel, [id]);
+
+    await expect(ask("terminal:trash", "picker-shell")).resolves.toEqual(wrapSuccess("ran"));
+    await expect(ask("terminal:kill", "picker-shell")).resolves.toEqual(wrapSuccess("ran"));
+    const refused = await ask("terminal:kill", "host-shell");
+    expect(refused.ok ? null : refused.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(trash).toHaveBeenCalledTimes(1);
   });
 
   it("traces where a call lands while a tenure is kept for a project nobody holds (#15918)", async () => {
@@ -1061,7 +1137,6 @@ describe("remote scope gate", () => {
           projectsForOperation: () => [],
           projectsForDevPreviewPanel: () => [],
           projectsForHelpSession: () => [],
-          currentProjectId: () => null,
         })
       )
     );
@@ -1091,6 +1166,19 @@ describe("remote scope gate", () => {
     expect((await ask(endpoint, "git:get-staging-status", [P2])).ok).toBe(false);
     expect((await ask(endpoint, "git:get-staging-status", ["/etc"])).ok).toBe(false);
     expect(status).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a remote view read only its own project's package.json links (#17252)", async () => {
+    installScope();
+    const declared = handle("project-links:get-declared");
+    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+
+    expect((await ask(endpoint, "project-links:get-declared", [{ projectId: "proj-1" }])).ok).toBe(
+      true
+    );
+    const other = await ask(endpoint, "project-links:get-declared", [{ projectId: "proj-2" }]);
+    expect(other.ok ? null : other.error.code).toBe("PERMISSION");
+    expect(declared).toHaveBeenCalledTimes(1);
   });
 
   it("keeps a remote view's review marks to its own project's worktrees", async () => {

@@ -1,4 +1,4 @@
-import type { GitStatus, DiffChangeSetEntry } from "@shared/types/git";
+import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "@shared/types/git";
 import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
 import { saveNormalized } from "./persistence";
 
@@ -14,7 +14,8 @@ function sameChangeSet(a: DiffChangeSetEntry[] | undefined, b: DiffChangeSetEntr
       entry.status === next.status &&
       entry.insertions === next.insertions &&
       entry.deletions === next.deletions &&
-      entry.viewedKey === next.viewedKey
+      entry.viewedKey === next.viewedKey &&
+      entry.side === next.side
     );
   });
 }
@@ -24,11 +25,18 @@ export const createDiffPanelActions = (
 ): Pick<PanelRegistrySlice, "setDiffPanelFile" | "setDiffPanelChangeSet"> => ({
   // Path and status move together: a diff fetched for one file under another
   // file's status would ask git for a diff that doesn't exist, so the two must
-  // never be observable apart. `viewedKey` joins them because path+status is
-  // not unique under partial staging — without it in the comparison, selecting
-  // the unstaged twin of a staged file bails as "unchanged" and the selection
+  // never be observable apart. The cursor (`viewedKey`, `fileSide`) joins them
+  // because path+status is not unique under partial staging, and the twins
+  // share a Viewed key too: without the side in the comparison, selecting the
+  // unstaged twin of a staged file bails as "unchanged" and the selection
   // sticks on the wrong entry.
-  setDiffPanelFile: (id: string, filePath: string, fileStatus: GitStatus, viewedKey?: string) => {
+  setDiffPanelFile: (
+    id: string,
+    filePath: string,
+    fileStatus: GitStatus,
+    viewedKey?: string,
+    fileSide?: GitDiffSide
+  ) => {
     set((state) => {
       const panel = state.panelsById[id];
       if (!panel) return state;
@@ -36,7 +44,8 @@ export const createDiffPanelActions = (
       if (
         panel.filePath === filePath &&
         panel.fileStatus === fileStatus &&
-        panel.viewedKey === viewedKey
+        panel.viewedKey === viewedKey &&
+        panel.fileSide === fileSide
       ) {
         return state;
       }
@@ -46,6 +55,8 @@ export const createDiffPanelActions = (
       // caller has none (a restored panel, or an opener with no keyed set).
       if (viewedKey === undefined) delete nextPanel.viewedKey;
       else nextPanel.viewedKey = viewedKey;
+      if (fileSide === undefined) delete nextPanel.fileSide;
+      else nextPanel.fileSide = fileSide;
 
       const newById = { ...state.panelsById, [id]: nextPanel };
       saveNormalized(newById, state.panelIds);

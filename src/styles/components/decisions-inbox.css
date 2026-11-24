@@ -1,0 +1,99 @@
+/* The Decisions inbox list borrows Canopy's row language (canopy.css), itself
+   the worktree sidebar's: the list sits on the sidebar colour, each question is
+   a full-bleed plane of the sidebar card material cut apart by a 2px gutter,
+   hover is a lighter step, and the question shown beside the list is a lift
+   plus one accent mark on the RIGHT edge, facing the pane it opens. Once the
+   keyboard leaves that row the mark turns secondary, which still clears
+   WCAG 1.4.11's 3:1 on every theme, and the row the keyboard is on wears the
+   ring instead: one accent in the list at a time. Its own rules rather than a
+   selector added to canopy.css, whose rules a contract test reads one by one. */
+.decisions-inbox-list {
+  background-color: var(--theme-surface-sidebar);
+  /* A row the keyboard reaches is never left under its group's sticky bar (h-9). */
+  scroll-padding-top: 2.25rem;
+}
+
+/* Clearing Needs you sits under the list, on the list's own colour. */
+.decisions-inbox-list-footer {
+  background-color: var(--theme-surface-sidebar);
+}
+
+/* Each group's bar stays at the top while its rows scroll beneath it. */
+.decisions-inbox-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: var(--theme-surface-sidebar);
+}
+
+/* History's and Cleared's bars fold (#18023): hover lifts them as it does
+   Canopy's folding bars, over the opaque bar so no row shows through. */
+.decisions-inbox-fold:hover {
+  background-color: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
+}
+
+.decisions-inbox-row {
+  position: relative;
+  background: var(--sidebar-card-bg, rgba(255, 255, 255, 0.03));
+  border-bottom: 2px solid var(--theme-surface-sidebar);
+  /* Transparent rather than none, so forced colours still draw an outline. */
+  outline: 2px solid transparent;
+  outline-offset: -2px;
+  transition: background-color var(--duration-150) var(--ease-out-expo);
+}
+
+.decisions-inbox-row::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: var(--decisions-row-edge, 0 0 #0000);
+  transition: box-shadow var(--duration-150) var(--ease-out-expo);
+}
+
+.decisions-inbox-row:not([data-selected="true"]):hover {
+  background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.048));
+}
+
+.decisions-inbox-row:focus-visible {
+  outline-color: var(--theme-accent-primary);
+}
+
+.decisions-inbox-row[data-selected="true"] {
+  background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.065));
+  --decisions-row-edge: inset -2px 0 0 var(--theme-accent-primary);
+}
+
+/* The shown row is the keyboard's row: its edge is the one accent, so no ring on top. */
+.decisions-inbox-row[data-selected="true"]:focus-visible {
+  outline-color: transparent;
+}
+
+.decisions-inbox-row[data-selected="true"]:not(:focus-within) {
+  --decisions-row-edge: inset -2px 0 0 var(--theme-text-secondary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .decisions-inbox-row,
+  .decisions-inbox-row::after {
+    transition: none;
+  }
+}
+
+/* Forced colours drop box-shadow and repaint backgrounds: the edge becomes a
+   real border in the system highlight colour, so the shown row still reads. */
+@media (forced-colors: active) {
+  .decisions-inbox-row[data-selected="true"]::after {
+    box-shadow: none;
+    border-right: 2px solid Highlight;
+  }
+  .decisions-inbox-row[data-selected="true"]:focus-visible {
+    outline-color: Highlight;
+  }
+  /* Inset: the rows are full-bleed inside a scroller, so an outline drawn
+     outside them loses its sides (the host rule sets 2px !important). */
+  .decisions-inbox-row:focus-visible,
+  .decisions-inbox-fold:focus-visible {
+    outline-offset: -2px !important;
+  }
+}

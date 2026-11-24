@@ -6,6 +6,7 @@ import type { IdleTerminalNotifyPayload } from "@shared/types";
 interface NotifyArg {
   priority?: string;
   supersedeKey?: string;
+  historyId?: string;
   context?: { projectId?: string };
   coalesce?: unknown;
   actions?: Array<{ actionId?: string; actionArgs?: Record<string, unknown> }>;
@@ -60,6 +61,43 @@ describe("useIdleTerminalNotifications", () => {
   afterEach(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     delete (window as any).electron;
+    delete window.__DAINTREE_HOST_ID__;
+  });
+
+  // Every project view hears the broadcast and files its rows under the same
+  // ids, so their writes merge into one row per project per check (#17191).
+  it("files each project's row under one id per check, the same in every view", async () => {
+    const acme = { projectId: "p1", projectName: "Acme", terminalCount: 2, idleMinutes: 5 };
+    const beta = { projectId: "p2", projectName: "Beta", terminalCount: 1, idleMinutes: 5 };
+    const heardIn = async (payload: IdleTerminalNotifyPayload): Promise<Map<string, string>> => {
+      vi.resetModules();
+      notifyCalls.length = 0;
+      const { useIdleTerminalNotifications } = await load();
+      renderHook(() => useIdleTerminalNotifications());
+      act(() => captured!(payload));
+      return new Map(
+        notifyCalls.map((call) => [call.context?.projectId ?? "", call.historyId ?? ""])
+      );
+    };
+
+    const viewA = await heardIn({ projects: [acme, beta], timestamp: 1_000 });
+    // Another view: same check, its projects listed in another order and renamed since.
+    const viewB = await heardIn({
+      projects: [{ ...beta, projectName: "Beta (renamed)" }, acme],
+      timestamp: 1_000,
+    });
+    const nextCheck = await heardIn({ projects: [acme, beta], timestamp: 2_000 });
+    window.__DAINTREE_HOST_ID__ = { id: "build-box" };
+    const remoteView = await heardIn({ projects: [acme, beta], timestamp: 1_000 });
+
+    const ids = [...viewA.values()];
+    expect(viewB).toEqual(viewA);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.every((id) => id.length > 0)).toBe(true);
+    expect(nextCheck.size).toBe(2);
+    expect([...nextCheck.values()].some((id) => ids.includes(id))).toBe(false);
+    expect(remoteView.size).toBe(2);
+    expect([...remoteView.values()].some((id) => ids.includes(id))).toBe(false);
   });
 
   // #10455: a PostHydrationListeners remount must not register a second IPC

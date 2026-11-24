@@ -1,18 +1,17 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { Issue } from "@shared/types/forge";
 import { logError } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
+import { selectPtyPanels, useWorktreeTerminalSummary } from "../../hooks/useWorktreeTerminals";
 
 import { useDroppable } from "@dnd-kit/core";
 import { useBuiltInSidebarViewHidden } from "@/components/Sidebar/sidebarViewContext";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import type { WorktreeDragData } from "../DragDrop/DndProvider";
 import { useDndPlaceholder, useIsWorktreeSortDragging } from "../DragDrop/dndPlaceholderContext";
-import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
-import { isPanelDragMovableToWorktree } from "../DragDrop/dropResolution";
+import { isPanelDragOverWorktreeCard } from "../DragDrop/dropResolution";
 import { GripVertical } from "lucide-react";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
@@ -67,10 +66,11 @@ import {
 import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
-import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
+import { LiveWorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { deriveSetupAlarm } from "./WorktreeCard/setupAlarm";
 import { syncLineHasNews } from "./WorktreeCard/syncLineNews";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
+import { PendingPlacementNotice } from "./WorktreeCard/PendingPlacementNotice";
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
@@ -79,12 +79,10 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { WorktreeDensitySubmenu } from "./WorktreeDensitySubmenu";
 import {
   CONTEXT_COMPONENTS,
-  WorktreeMenuItems,
+  WorktreeCardMenuItems,
   type WorktreeMenuActions,
 } from "./WorktreeMenuItems";
 import type { MenuActionSourceValue } from "@/components/ui/menu-source";
-import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
-import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { isAgentTerminalFleetEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
@@ -103,7 +101,10 @@ import {
 import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
-import { canOpenResourceBoxOnHost } from "@/components/Hosts/resourceHostHandoff";
+import {
+  canOfferResourceBoxHandoff,
+  canOpenResourceBoxOnHost,
+} from "@/components/Hosts/resourceHostHandoff";
 
 const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
@@ -281,11 +282,15 @@ export function WorktreeCard({
     }
   };
 
+  // The summary, not the panels: a panel object is replaced on every activity
+  // write, and holding the panels re-rendered this whole card with each one
+  // (#17051). What the card needs from them is selected below as values; the
+  // terminal rows subscribe to the panels themselves.
   const {
     counts: terminalCounts,
-    terminals: worktreeTerminals,
+    terminalIds: worktreeTerminalIds,
     dominantAgentState,
-  } = useWorktreeTerminals(worktree.id);
+  } = useWorktreeTerminalSummary(worktree.id);
 
   const devServerSession = useWorktreeDevServerSession(worktree.id);
 
@@ -298,11 +303,6 @@ export function WorktreeCard({
   );
   const devServerState = devServerMenuState(devServerSession, devServerPanelExists);
 
-  const pluginMenuContext = useMemo<WhenClauseContext>(
-    () => ({ worktreeId: worktree.id }),
-    [worktree.id]
-  );
-  const pluginItems = usePluginContextMenuItems("worktree", pluginMenuContext);
   // Only an explicit quiet: a folder without a repository resolves to hidden,
   // and its cards already have no git detail to move.
   const presentation = useResolvedPresentation();
@@ -349,10 +349,6 @@ export function WorktreeCard({
   // input itself, not its outcome, so any agent-state staleness is irrelevant.
   // The hook watches the ping through a store subscription so only the card
   // that owns the pinged terminal re-renders.
-  const worktreeTerminalIds = useMemo(
-    () => worktreeTerminals.map((t) => t.id),
-    [worktreeTerminals]
-  );
   const receiptKey = useInputReceiptKey(worktreeTerminalIds);
   // Parking reads the fleet snapshot, not the panels: only a run the snapshot
   // carries can be parked, and a plain shell never appears there.
@@ -375,21 +371,28 @@ export function WorktreeCard({
   const openDockTerminal = usePanelStore((state) => state.openDockTerminal);
   const completedCount = terminalCounts.byState.completed + terminalCounts.byState.exited;
   const totalTerminalCount = terminalCounts.total;
-  const gridCount = worktreeTerminals.filter(
-    (t) => t.location === "grid" || t.location === undefined
-  ).length;
-  const dockCount = worktreeTerminals.filter((t) => t.location === "dock").length;
   // Counts for the Sessions submenu's Select * items. "All" follows Fleet
   // broadcast membership (any live PTY); state-specific items are meaningful
   // only for terminals with agent state.
-  const eligibleTerminals = worktreeTerminals.filter(isFleetArmEligible);
-  const eligibleTerminalCount = eligibleTerminals.length;
-  const waitingAgentCount = eligibleTerminals.filter(
-    (t) => isAgentTerminalFleetEligible(t) && t.agentState === "waiting"
-  ).length;
-  const workingAgentCount = eligibleTerminals.filter(
-    (t) => isAgentTerminalFleetEligible(t) && t.agentState === "working"
-  ).length;
+  const { gridCount, dockCount, eligibleTerminalCount, waitingAgentCount, workingAgentCount } =
+    usePanelStore(
+      useShallow((state) => {
+        const terminals = selectPtyPanels(state, worktreeTerminalIds);
+        const eligible = terminals.filter(isFleetArmEligible);
+        return {
+          gridCount: terminals.filter((t) => t.location === "grid" || t.location === undefined)
+            .length,
+          dockCount: terminals.filter((t) => t.location === "dock").length,
+          eligibleTerminalCount: eligible.length,
+          waitingAgentCount: eligible.filter(
+            (t) => isAgentTerminalFleetEligible(t) && t.agentState === "waiting"
+          ).length,
+          workingAgentCount: eligible.filter(
+            (t) => isAgentTerminalFleetEligible(t) && t.agentState === "working"
+          ).length,
+        };
+      })
+    );
 
   const worktreeErrors = useErrorStore(
     useShallow((state) =>
@@ -451,10 +454,6 @@ export function WorktreeCard({
   const hasPauseCommand = !!worktree.hasPauseCommand;
   const hasResumeCommand = !!worktree.hasResumeCommand;
   const hasTeardownCommand = !!worktree.hasTeardownCommand;
-  const teardownCommands =
-    worktree.worktreeMode && worktree.worktreeMode !== "local"
-      ? (resourceEnvironments?.[worktree.worktreeMode]?.teardown ?? [])
-      : [];
   const hasStatusCommand = !!worktree.hasStatusCommand;
   const hasProvisionCommand = !!worktree.hasProvisionCommand;
 
@@ -477,10 +476,7 @@ export function WorktreeCard({
     handleResourceTeardown,
     handleResourceOpenOnHost,
     confirmAttachmentMove,
-  } = useWorktreeActions({
-    worktree,
-    teardownCommands,
-  });
+  } = useWorktreeActions({ worktree });
 
   const handleRetryDelete = () => {
     // A retry that has to see the tree again goes back through the dialog,
@@ -670,6 +666,7 @@ export function WorktreeCard({
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
   const [showTitleDialog, setShowTitleDialog] = useState(false);
+  const [showIdlePauseDialog, setShowIdlePauseDialog] = useState(false);
   // The dialog returns focus to the ⋯ trigger it was opened from on its own;
   // these are where it lands when the opener was the right-click menu, which
   // has no trigger: the sidebar card's select button, or the grid cell.
@@ -816,11 +813,15 @@ export function WorktreeCard({
   // cycling: a backgrounded agent is not counted there, so it must not mark
   // the card either. Every terminal here already belongs to this (existing)
   // worktree, so the orphan check has nothing to do.
-  const isInTrash = usePanelStore((state) => state.isInTrash);
+  const visibleAgentTerminalIds = usePanelStore(
+    useShallow((state) =>
+      selectPtyPanels(state, worktreeTerminalIds)
+        .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, state.isInTrash, NO_WORKTREE_IDS))
+        .map((t) => t.id)
+    )
+  );
   const agentBuckets = useWorktreeAgentBuckets(
-    worktreeTerminals
-      .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
-      .map((t) => t.id),
+    visibleAgentTerminalIds,
     isWorktreeMergedForCleanup(worktree),
     worktree.id
   );
@@ -839,7 +840,7 @@ export function WorktreeCard({
   // catch a terminal dropped onto the view in front of it.
   const isHiddenInSidebar = useBuiltInSidebarViewHidden();
 
-  const { setNodeRef, isOver, over, active } = useDroppable({
+  const { setNodeRef, over, active } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
     data: {
       type: "worktree",
@@ -854,18 +855,16 @@ export function WorktreeCard({
     cardRootRef.current = node;
   };
 
-  const isMovablePanelDrag = isPanelDragMovableToWorktree(
-    active?.data.current as Partial<WorktreeDragData> | undefined,
-    worktree.id
-  );
-  // The sidebar row stacks two same-size droppables (this drop target inside
-  // the SortableWorktreeCard sortable), and pointerWithin resolves their tie
-  // by registration order — `over` can be either id, so match both. Mirrors
-  // the dual-id handling in DndProvider's handleDragEnd.
+  // `over` can be this drop target, the same-size SortableWorktreeCard sortable
+  // around it, or a session row in its expanded list (#16920); handleDragEnd
+  // moves the panel here from all three, so all three light the card.
   const isPanelDropTarget =
     (!isActive || isCrossWorktreePanelDrag) &&
-    isMovablePanelDrag &&
-    (isOver || over?.id === getWorktreeSortDragId(worktree.id));
+    isPanelDragOverWorktreeCard(
+      active?.data.current as Partial<WorktreeDragData> | undefined,
+      over,
+      worktree.id
+    );
 
   const isMuted =
     (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isPanelDropTarget;
@@ -1032,6 +1031,11 @@ export function WorktreeCard({
     onResourceProvision: hasProvisionCommand ? handleResourceProvision : undefined,
     onResourceResume: hasResumeCommand ? handleResourceResume : undefined,
     onResourcePause: hasPauseCommand ? handleResourcePause : undefined,
+    // Only where this window can open the box as a host: that host's idleness is what it acts on.
+    onIdlePause:
+      hasPauseCommand && canOfferResourceBoxHandoff()
+        ? () => setShowIdlePauseDialog(true)
+        : undefined,
     onResourceConnect: worktree.resourceConnectCommand ? handleResourceConnect : undefined,
     onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
     onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
@@ -1041,7 +1045,6 @@ export function WorktreeCard({
     onStartDevServer: handleStartDevServer,
     onStopDevServer: handleStopDevServer,
     onRestartDevServer: handleRestartDevServer,
-    pluginItems,
     quietGit,
     hideDevPreview,
   };
@@ -1444,7 +1447,7 @@ export function WorktreeCard({
                         // that; painting it on card hover ran a lit bar down
                         // the whole card for a control most hovers never
                         // wanted.
-                        "opacity-0 text-text-muted group-hover/card:opacity-100 hover:bg-overlay-soft hover:text-text-secondary hover:opacity-100"
+                        "opacity-0 text-text-secondary group-hover/card:opacity-100 hover:bg-overlay-soft hover:text-text-primary hover:opacity-100"
                   )}
                   // Pointer-only affordance: the grip is non-focusable (the row
                   // strips dnd-kit's role/tabIndex), so an aria-label here is
@@ -1710,8 +1713,6 @@ export function WorktreeCard({
                         onResourceProvision={
                           hasProvisionCommand ? handleResourceProvision : undefined
                         }
-                        onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
-                        onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
                         syncDetail={
                           variant === "sidebar" &&
                           !quietGit &&
@@ -1728,7 +1729,7 @@ export function WorktreeCard({
                       />
                     </div>
 
-                    <WorktreeTerminalSection
+                    <LiveWorktreeTerminalSection
                       variant={variant}
                       worktreeId={worktree.id}
                       worktreeLabel={ariaName}
@@ -1737,7 +1738,7 @@ export function WorktreeCard({
                       inline={isSessionsFooterInline}
                       stateGlyphsElsewhere={variant === "sidebar"}
                       counts={terminalCounts}
-                      terminals={worktreeTerminals}
+                      terminalIds={worktreeTerminalIds}
                       onToggle={handleToggleTerminals}
                       onTerminalSelect={handleTerminalSelect}
                     />
@@ -1778,6 +1779,8 @@ export function WorktreeCard({
             </div>
           )}
 
+          <PendingPlacementNotice worktreeId={worktree.id} inGutter={variant === "sidebar"} />
+
           <WorktreeDialogs
             worktree={worktree}
             confirmDialog={confirmDialog}
@@ -1792,11 +1795,13 @@ export function WorktreeCard({
             onCloseTitleDialog={() => setShowTitleDialog(false)}
             customTitle={customTitle}
             restoreTitleDialogFocusTo={resolveTitleDialogRestore}
+            showIdlePauseDialog={showIdlePauseDialog}
+            onCloseIdlePauseDialog={() => setShowIdlePauseDialog(false)}
           />
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-64">
-        <WorktreeMenuItems
+        <WorktreeCardMenuItems
           worktree={worktree}
           components={CONTEXT_COMPONENTS}
           isPinned={isPinned}

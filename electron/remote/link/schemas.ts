@@ -2,6 +2,15 @@ import { z } from "zod";
 import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../../shared/types/terminal.js";
 import { MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
+import {
+  CLAUDE_USAGE_STATEMENTS,
+  CLAUDE_USAGE_WINDOWS,
+} from "../../../shared/types/ipc/agentQuota.js";
+import {
+  MAX_AGENT_USAGE_ACCOUNT_NAMES,
+  MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS,
+  type AgentUsageReading,
+} from "../../../shared/types/ipc/agentUsage.js";
 import { BULK_CHUNK_BYTES, Lane, type LinkFrame } from "./frames.js";
 import {
   BulkKind,
@@ -47,6 +56,11 @@ const ClientInfoSchema = z.object({
   // One this side cannot read is dropped rather than refusing the HELLO: the
   // host then sends the lanes every Shell reads.
   assistantSlots: z.number().int().min(1).max(1024).optional().catch(undefined),
+  // One this side cannot read is dropped too: the host then treats the Shell
+  // as one from before it, which wants usage.
+  agentUsage: z.boolean().optional().catch(undefined),
+  // One this side cannot read is dropped too: the host then sends it no stops.
+  agentStopChanges: z.boolean().optional().catch(undefined),
 });
 
 export const HelloSchema = z.object({
@@ -140,6 +154,61 @@ const count = z.number().int().min(0);
 const coreCount = z.number().int().min(1);
 const percent = z.number().finite().min(0).max(100);
 
+const usageAccountNames = z
+  .array(z.string().max(MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS))
+  .max(MAX_AGENT_USAGE_ACCOUNT_NAMES);
+
+// Optional, so a host from before #17080 still sends a reading this accepts,
+// and a name this can't take drops the name, never the reading it labels.
+const usageDefaultLoginName = z
+  .string()
+  .max(MAX_AGENT_USAGE_ACCOUNT_NAME_CHARS)
+  .optional()
+  .catch(undefined);
+
+const AgentUsageReadingSchema = z.discriminatedUnion("agentId", [
+  z.object({
+    agentId: z.literal("codex"),
+    accountNames: usageAccountNames,
+    isDefault: z.boolean(),
+    defaultLoginName: usageDefaultLoginName,
+    windowDurationMins: z.number().int().positive(),
+    usedPercent: percent,
+    resetsAt: epochMs.nullable(),
+    observedAt: epochMs,
+  }),
+  z.object({
+    agentId: z.literal("claude"),
+    accountNames: usageAccountNames,
+    isDefault: z.boolean(),
+    defaultLoginName: usageDefaultLoginName,
+    window: z.enum(CLAUDE_USAGE_WINDOWS),
+    statement: z.enum(CLAUDE_USAGE_STATEMENTS),
+    usedPercent: percent.nullable(),
+    resetsAt: epochMs.nullable(),
+    observedAt: epochMs,
+  }),
+]);
+
+/** `used` names a percent and `over` a floor; a message that gave no figure never ranks as one. */
+function figureMatchesStatement(reading: AgentUsageReading): boolean {
+  if (reading.agentId !== "claude") return true;
+  const figured = reading.statement === "used" || reading.statement === "over";
+  return figured === (reading.usedPercent !== null);
+}
+
+// Each reading on its own: an agent or a limit a later build reports is left
+// out rather than failing this Shell's whole summary.
+const AgentUsageSchema = z
+  .array(z.unknown())
+  .max(16)
+  .transform((items) =>
+    items.flatMap((item): AgentUsageReading[] => {
+      const parsed = AgentUsageReadingSchema.safeParse(item);
+      return parsed.success && figureMatchesStatement(parsed.data) ? [parsed.data] : [];
+    })
+  );
+
 const HostSummarySchema = z.object({
   hostId: id,
   sampledAt: epochMs,
@@ -190,6 +259,18 @@ const HostSummarySchema = z.object({
     .max(64)
     .nullable()
     .optional(),
+  // Unbounded above, so a later build may widen what a host stores without
+  // failing this Shell's whole summary.
+  idle: z
+    .object({
+      idleAfterMinutes: z.number().int().positive(),
+      lastWorkAt: epochMs,
+      busy: z.boolean(),
+      idleEndsAt: epochMs.nullable(),
+      stopsWhenIdle: z.boolean().optional(),
+    })
+    .optional(),
+  agentUsage: AgentUsageSchema.optional(),
 });
 
 const GoodbyeSchema = z.object({ reason: shortText });

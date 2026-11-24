@@ -62,6 +62,87 @@ describe("runValidate", () => {
     expect(result.warnings.join("\n")).toMatch(/engines\.daintree omitted/);
   });
 
+  it("accepts a keybinding in the retired portal scope but warns it never fires (#17245)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      contributes: {
+        keybindings: [
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+8", scope: "global" },
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+7", scope: "portal" },
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+6" },
+        ],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    const retired = result.warnings.filter((w) => w.includes("retired"));
+    expect(retired).toHaveLength(1);
+    expect(retired[0]).toMatch(/^keybindings\[1\] \("Cmd\+Shift\+7"\) uses the retired "portal"/);
+    expect(retired[0]).toMatch(/never fires/);
+    expect(result.warnings.indexOf(retired[0]!)).toBeLessThan(
+      result.warnings.findIndex((w) => w.startsWith("engines.daintree omitted"))
+    );
+  });
+
+  it("accepts a contribution naming a retired built-in action but warns it is dropped (#17256)", async () => {
+    await writeManifest({
+      name: "acme.demo",
+      version: "1.0.0",
+      contributes: {
+        keybindings: [
+          { actionId: "nav.quickSwitcher", combo: "Cmd+Shift+6" },
+          { actionId: "panel.togglePortal", combo: "Cmd+Shift+7" },
+        ],
+        menuItems: [{ label: "Open chat", actionId: "portal.openUrl", location: "view" }],
+      },
+    });
+    const result = await runValidate({ dir: tmpDir });
+    expect(result.ok).toBe(true);
+    expect(result.errors).toEqual([]);
+    const retired = result.warnings.filter((w) => w.includes("no longer has"));
+    expect(retired).toEqual([
+      expect.stringMatching(/^menuItems\[0\] names "portal\.openUrl"/),
+      expect.stringMatching(/^keybindings\[1\] names "panel\.togglePortal"/),
+    ]);
+  });
+
+  it("reads an id in the plugin's own namespace as its own command, even one spelled like a retired built-in", async () => {
+    const command = {
+      id: "add",
+      title: "Add",
+      description: "Add a link",
+      category: "Links",
+      kind: "command",
+      danger: "safe",
+      keywords: ["add"],
+    };
+    await writeManifest({
+      name: "portal.links",
+      version: "1.0.0",
+      contributes: {
+        commands: [command],
+        keybindings: [{ actionId: "portal.links.add", combo: "Cmd+Shift+7" }],
+      },
+    });
+    const own = await runValidate({ dir: tmpDir });
+    expect(own.ok).toBe(true);
+    expect(own.warnings.filter((w) => w.includes("no longer has"))).toEqual([]);
+
+    await writeManifest({
+      name: "portal.links",
+      version: "1.0.0",
+      contributes: {
+        commands: [command],
+        keybindings: [{ actionId: "portal.links.remove", combo: "Cmd+Shift+7" }],
+      },
+    });
+    const undeclared = await runValidate({ dir: tmpDir });
+    expect(undeclared.ok).toBe(false);
+    expect(undeclared.errors.join("\n")).toMatch(/matches no entry in contributes\.commands/);
+  });
+
   it("accepts a deprecated experimental_* alias but warns to rename it (#10466)", async () => {
     await writeManifest({
       name: "acme.demo",

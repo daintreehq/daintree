@@ -109,11 +109,21 @@ export function hostScopedKey(id: string): string {
 
 /**
  * A file manager on a remote host's screen is no use to the person driving,
- * so for a remote window the reveal action copies the host path instead. The
- * other names match `fileManagerRevealLabel`, asked of the host's platform.
+ * so a remote window's reveal copies the host path instead, except a WSL
+ * distro's, which Explorer on this PC shows. A row's label and its handler both
+ * ask this, so a row named for Explorer can never copy.
+ */
+export function revealCopiesHostPath(): boolean {
+  return isRemoteWindow() && !isWslWindow();
+}
+
+/**
+ * The reveal row's name: "Copy host path" where {@link revealCopiesHostPath},
+ * otherwise `fileManagerRevealLabel`'s, asked of the host's platform.
  */
 export function hostFileManagerRevealLabel(): string {
-  if (isRemoteWindow()) return isWslWindow() ? "Show in Explorer" : "Copy host path";
+  if (revealCopiesHostPath()) return "Copy host path";
+  if (isWslWindow()) return "Show in Explorer";
   if (isHostMac()) return "Show in Finder";
   if (isHostWindows()) return "Show in Explorer";
   return "Show in file manager";

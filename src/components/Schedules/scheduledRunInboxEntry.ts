@@ -5,7 +5,7 @@ import { machineTimeZone } from "@shared/utils/cron";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { lastRunWords } from "./lastRunWords";
 import { runDetail, runStartedAt } from "./runWords";
-import { formatRunInstant } from "./scheduleWords";
+import { formatRunInstant } from "./runTime";
 
 /** The inbox entry a run is filed under: one per run, whichever view writes it. */
 export function scheduledRunInboxEntryId(runId: string): string {

@@ -19,6 +19,7 @@ import type {
 import type { WorktreeChanges } from "./git.js";
 import type { LifecycleCommandReview, WorktreeTeardownPreview } from "./worktree.js";
 import type { SubmoduleDeleteRisk } from "./submodule.js";
+import type { IdlePausePolicy } from "./idlePause.js";
 
 export type WorktreePortResourceAction = "provision" | "teardown" | "resume" | "pause" | "status";
 
@@ -156,13 +157,29 @@ export interface WorktreePortProtocol {
     payload: { worktreeId: string; fingerprint: string };
     result: { ok: true };
   };
+  // Idle pause for the worktree's environment on this device (#17925): read
+  // fresh by the host, and turned on only for the commands the person was
+  // shown (`fingerprint`). Never accepted from a remote endpoint: it is this
+  // device's choice to run a pause unattended.
+  "get-idle-pause": {
+    payload: { worktreeId: string };
+    result: { policy: IdlePausePolicy };
+  };
+  "set-idle-pause": {
+    payload: { worktreeId: string; enabled: boolean; fingerprint?: string };
+    result: { ok: true };
+  };
   "switch-worktree-environment": {
     payload: { worktreeId: string; envKey: string };
     result: { ok: true };
   };
   "has-resource-config": {
     payload: { rootPath: string };
-    result: { hasConfig: boolean };
+    /**
+     * `environmentKeys`: the environments the host resolves a worktree's mode
+     * against from its settings files, in its own order. Absent from an older host.
+     */
+    result: { hasConfig: boolean; environmentKeys?: string[] };
   };
   // On-demand FRESH git-status read for a single worktree. Forces the monitor
   // to re-run `git status` (bypassing the adaptive-poll cache) and returns the
@@ -240,3 +257,12 @@ export type WorktreePortRequestArgs<K extends WorktreePortAction> =
   Record<string, never> extends WorktreePortPayload<K>
     ? [payload?: WorktreePortPayload<K>]
     : [payload: WorktreePortPayload<K>];
+
+/**
+ * The workspace host's last message on a port main retired (its view was
+ * cached, given a fresh port, or torn down), sent just before the host closes
+ * it. A close after this notice is planned, not the host going away (#17037).
+ */
+export interface WorktreePortRetiredNotice {
+  type: "port-retired";
+}

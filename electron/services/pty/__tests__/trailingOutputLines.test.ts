@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../AgentPatternDetector.js";
-import { getTrailingNonBlankLines } from "../trailingOutputLines.js";
+import { getTrailingNonBlankLines, trailingLinesStart } from "../trailingOutputLines.js";
+import {
+  CMD_PROMPT_PATTERN,
+  DECORATED_SHELL_PROMPT_PATTERN_NO_AGENT_GLYPHS,
+  MAC_BASH_PROMPT_PATTERN,
+  POSIX_USER_HOST_PROMPT_PATTERN,
+  POWERSHELL_PROMPT_PATTERN,
+  SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN,
+} from "../../../../shared/utils/shellPrompt.js";
 
 vi.mock("../AgentPatternDetector.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../AgentPatternDetector.js")>();
@@ -273,5 +281,185 @@ describe("getTrailingNonBlankLines", () => {
     expect(getTrailingNonBlankLines("\r\n\r\n", 4)).toEqual([]);
     expect(getTrailingNonBlankLines("\x1b[2Kuser@host:~$ ", 4)).toEqual(["user@host:~$"]);
     expect(getTrailingNonBlankLines("a\r\n\r\nb\rc", 4)).toEqual(["a", "b", "c"]);
+  });
+});
+
+// The committed-agent prompt shapes IdentityWatcher reads, and the edges it
+// hands getTrailingNonBlankLines for them.
+const PROMPT_SHAPES = [
+  SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN,
+  POSIX_USER_HOST_PROMPT_PATTERN,
+  MAC_BASH_PROMPT_PATTERN,
+  POWERSHELL_PROMPT_PATTERN,
+  CMD_PROMPT_PATTERN,
+  DECORATED_SHELL_PROMPT_PATTERN_NO_AGENT_GLYPHS,
+];
+const isPromptLine = (line: string) => PROMPT_SHAPES.some((pattern) => pattern.test(line));
+const promptEdges = (head: string, tail: string) =>
+  /[#$%>](?:\^C)*\s*$/.test(tail) || /^\s*[➜➤➟➔]/.test(head);
+
+// A cursor-addressed frame: cells placed by CUP with SGR around them, marker
+// characters in the text, and no line break to window on.
+function cursorAddressedFrame(cells: number, last = ""): string {
+  let frame = "\x1b[?2026h";
+  for (let cell = 0; cell < cells; cell++) {
+    frame += `\x1b[${(cell % 40) + 1};3H\x1b[2K\x1b[38;2;200;120;50m│\x1b[0m Task ${cell}: 45% of $0.12 > next`;
+  }
+  return `${frame}${last}\x1b[?2026l`;
+}
+
+// Repaint cells; OSCs and lone ESCs are in a rarer pool of their own, since
+// any one of them sends the whole line down the full-strip path.
+const LONG_LINE_FRAGMENTS = [
+  ...COMMON_FRAGMENTS.filter((fragment) => !fragment.includes("\x1b]")),
+  "\x1b[12;33H",
+  "\x1b[38;2;80;80;80m",
+  "\x1b[?2026h",
+  "C:\\repo>^C",
+  "^C",
+  "PS C:\\> ",
+  "➜ ",
+  "zz",
+  "é",
+];
+const LONG_LINE_HAZARDS = ["\x1b]0;t\x07", "\x1b\x1b", "\x1b]", "\x1b]8;;file:///x\x1b\\"];
+
+describe("getTrailingNonBlankLines with prompt edges", () => {
+  beforeEach(() => {
+    strip.mockClear();
+  });
+
+  it("answers the prompt question as the whole-chunk strip does, abbreviating only ruled-out lines", () => {
+    const random = mulberry32(17042);
+    const pick = (pool: readonly string[]) => pool[Math.floor(random() * pool.length)];
+    let abbreviated = 0;
+    for (let iteration = 0; iteration < 3_000; iteration++) {
+      let text = "";
+      const lines = 1 + Math.floor(random() * 7);
+      for (let line = 0; line < lines; line++) {
+        if (random() < 0.5) {
+          // Past the long-line threshold, as a cursor-addressed repaint is.
+          const target = text.length + 1_100 + Math.floor(random() * 600);
+          while (text.length < target) {
+            text += random() < 0.002 ? pick(LONG_LINE_HAZARDS) : pick(LONG_LINE_FRAGMENTS);
+          }
+        } else {
+          const fragments = Math.floor(random() * 6);
+          for (let i = 0; i < fragments; i++) text += pick(COMMON_FRAGMENTS);
+        }
+        if (random() < 0.3) text += pick(["user@host:~/repo$ ", "$ ", "➜  repo", "C:\\x>^C"]);
+        if (line < lines - 1 || random() < 0.3) text += pick(LINE_BREAKS);
+      }
+      const expected = wholeChunkTailLines(text, 4);
+      const actual = getTrailingNonBlankLines(text, 4, /[#$%>➜➤➟➔]/, promptEdges);
+      const input = JSON.stringify(text);
+      expect({ input, prompt: actual.some(isPromptLine) }).toEqual({
+        input,
+        prompt: expected.some(isPromptLine),
+      });
+      if (actual.length === 0 && !/[#$%>➜➤➟➔]/.test(text)) continue;
+      expect({ input, lines: actual.length }).toEqual({ input, lines: expected.length });
+      actual.forEach((line, index) => {
+        const whole = expected[index];
+        if (line === whole) return;
+        abbreviated++;
+        expect({ input, line, ruledOut: !isPromptLine(whole) && !isPromptLine(line) }).toEqual({
+          input,
+          line,
+          ruledOut: true,
+        });
+        expect(line.trim()[0]).toBe(whole.trim()[0]);
+        expect(line.trimEnd().at(-1)).toBe(whole.trimEnd().at(-1));
+      });
+    }
+    // Most long lines must be abbreviated, or this only proves the fallback.
+    expect(abbreviated).toBeGreaterThan(500);
+  });
+
+  it("reads a marker-rich cursor-addressed repaint by its ends", () => {
+    const frame = cursorAddressedFrame(1_500);
+
+    expect(getTrailingNonBlankLines(frame, 4, /[#$%>➜➤➟➔]/, promptEdges)).toHaveLength(1);
+    expect(longestStripInput()).toBeLessThan(200);
+  });
+
+  it("finds a prompt on the line after a long repaint", () => {
+    const frame = cursorAddressedFrame(100, "\r\n\x1b[01;32muser@host\x1b[00m:~/repo$ ");
+
+    expect(getTrailingNonBlankLines(frame, 4, /[#$%>➜➤➟➔]/, promptEdges).at(-1)).toBe(
+      "user@host:~/repo$"
+    );
+  });
+
+  it("strips a long line whole when its end looks like a prompt", () => {
+    const frame = cursorAddressedFrame(100, "\x1b[24;1Huser@host:~/repo$ ");
+    const expected = wholeChunkTailLines(frame, 4);
+    strip.mockClear();
+
+    expect(getTrailingNonBlankLines(frame, 4, /[#$%>➜➤➟➔]/, promptEdges)).toEqual(expected);
+    expect(longestStripInput()).toBe(frame.length);
+  });
+
+  it("strips a long line whole when an OSC could reach into it", () => {
+    const frame = `\x1b]0;open${cursorAddressedFrame(100)}`;
+    const expected = wholeChunkTailLines(frame, 4);
+    strip.mockClear();
+
+    expect(getTrailingNonBlankLines(frame, 4, /[#$%>➜➤➟➔]/, promptEdges)).toEqual(expected);
+    expect(longestStripInput()).toBe(frame.length);
+  });
+});
+
+describe("trailingLinesStart", () => {
+  // The character-at-a-time walk it replaced for text with few breaks.
+  function walkBack(text: string, breaks: number): number {
+    let crossed = 0;
+    for (let i = text.length - 1; i >= 0; i--) {
+      const code = text.charCodeAt(i);
+      if (code !== 13 && code !== 10) continue;
+      if (++crossed === breaks) return i + 1;
+      if (code === 10 && i > 0 && text.charCodeAt(i - 1) === 13) i--;
+    }
+    return 0;
+  }
+
+  it("finds a line-dense tail's breaks without searching the rest", () => {
+    const text = "line\n".repeat(20_000);
+    const indexOf = vi.spyOn(String.prototype, "indexOf");
+    try {
+      // The text ends on a break, so the eighth from the end is 7 lines back.
+      expect(trailingLinesStart(text, 8)).toBe(text.length - 7 * 5);
+      expect(indexOf).not.toHaveBeenCalled();
+    } finally {
+      indexOf.mockRestore();
+    }
+  });
+
+  it("finds the same window start as walking back a character at a time", () => {
+    const random = mulberry32(4096);
+    const pieces = ["\r", "\n", "\r\n", "\r\r\n", "\n\r", "x", "abc", "\x1b[12;3H", "│"];
+    for (let iteration = 0; iteration < 4_000; iteration++) {
+      let text = "";
+      const sparse = iteration % 2 === 0;
+      const target = Math.floor(random() * 12_000);
+      while (text.length < target) {
+        text +=
+          sparse && random() < 0.97
+            ? "y".repeat(1 + Math.floor(random() * 400))
+            : pieces[Math.floor(random() * pieces.length)];
+      }
+      // Put a CRLF across the boundary the tail walk stops at.
+      if (iteration % 7 === 0 && text.length > 4_200) {
+        const at = text.length - 4_096 - 1;
+        text = `${text.slice(0, at)}\r\n${text.slice(at + 2)}`;
+      }
+      for (const breaks of [1, 2, 8]) {
+        expect({ iteration, breaks, start: trailingLinesStart(text, breaks) }).toEqual({
+          iteration,
+          breaks,
+          start: walkBack(text, breaks),
+        });
+      }
+    }
   });
 });

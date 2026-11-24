@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The switcher hook lives at the app root (via `usePaletteWiring`), and its
+ * The switcher hook lives at the app root (in `AppInner`), and its
  * return value is handed to the unmemoized shell. Every project-stats push —
  * one per agent state change — used to re-render that whole shell even while
  * the switcher was closed. These specs pin the closed palette to zero shell
@@ -296,7 +296,7 @@ describe("useProjectSwitcherPalette shell re-renders", () => {
     }
   });
 
-  it("snapshots current counts when sleep or remove is asked for while closed", async () => {
+  it("snapshots current counts when remove is asked for while closed", async () => {
     mount();
     await act(async () => {});
     await act(async () => {
@@ -304,12 +304,6 @@ describe("useProjectSwitcherPalette shell re-renders", () => {
         .getState()
         .setStats(withEntry(statsFor(1), "project-4", { processCount: 7, activeAgentCount: 3 }));
     });
-
-    await act(async () => {
-      await latest!.sleepProject("project-4");
-    });
-    expect(latest!.sleepConfirmProject?.processCount).toBe(7);
-    expect(latest!.sleepConfirmProject?.activeAgentCount).toBe(3);
 
     await act(async () => {
       await latest!.removeProject("project-4");

@@ -66,7 +66,12 @@ const SPLIT_SEQUENCE_TAIL = /^(?:\[[0-9;:?]{0,32}|[0-9:?]{0,16};[0-9;:?]{0,32})?
 // eslint-disable-next-line no-control-regex
 const SPLIT_SEQUENCE_HEAD = /\x1b(?:\[[0-9;:?]{0,32})?$/u;
 
-export function stripIdleTerminalSequences(data: string): string {
+/**
+ * `withoutParticles`, when given, must be `stripCosmeticParticles(data)`: a
+ * caller that already ran that pass for another gate hands it over rather
+ * than paying for it twice on the same chunk.
+ */
+export function stripIdleTerminalSequences(data: string, withoutParticles?: string): string {
   // Every pattern below requires a literal ESC; skip all passes when absent.
   if (!data.includes("\x1b")) {
     return data;
@@ -74,7 +79,7 @@ export function stripIdleTerminalSequences(data: string): string {
   // Ambient particle animations (Codex's composer sparkles) are cosmetic in the
   // same sense as the protocol noise below: emitted every frame regardless of
   // work progress. See CosmeticParticleFilter for why spinners are unaffected.
-  return stripCosmeticParticles(data)
+  return (withoutParticles ?? stripCosmeticParticles(data))
     .replace(OSC_NOISE, "")
     .replace(DECSET_NOISE, "")
     .replace(CPR_NOISE, "")

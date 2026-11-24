@@ -9,18 +9,18 @@ import {
 } from "@/store/fleetArmingStore";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
+import { codexLimitContinueClient } from "@/clients/codexLimitContinueClient";
+import { isArmedToContinue } from "@/store/codexLimitContinueStore";
+import { logWarn } from "@/utils/logger";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
 import {
   consultPanelCloseGuards,
   hasPanelCloseGuard,
   isPanelClosePending,
 } from "@/services/panelCloseGuard";
-import { isBrowserPanel, isPtyPanel } from "@shared/types/panel";
+import { isBrowserPanel } from "@shared/types/panel";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { TerminalLink } from "@/services/terminal/types";
-import { cleanTerminalSelection } from "@/services/terminal/cleanTerminalCopy";
-import { copyCleanSelection } from "@/services/terminal/copyCleanSelection";
-import { getBuiltInRuntimeAgentId } from "@/utils/terminalType";
 import type { WorktreeScope } from "@shared/utils/path";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -193,18 +193,13 @@ export function useTerminalMenuCommands({
             { source: sourceRef.current }
           );
           break;
-        case "copy-clean": {
-          const managed = peekTerminalService()?.get(terminalId);
-          if (!managed?.terminal) break;
-          copyCleanSelection(
-            managed.terminal.getSelection(),
-            cleanTerminalSelection(managed.terminal, managed.commandLinksDisposable),
-            terminal && isPtyPanel(terminal) && getBuiltInRuntimeAgentId(terminal) === "claude"
-              ? terminalId
-              : null
+        case "copy-clean":
+          void actionService.dispatch(
+            "terminal.copyClean",
+            { terminalId },
+            { source: sourceRef.current }
           );
           break;
-        }
         case "paste":
           void actionService.dispatch(
             "terminal.paste",
@@ -250,6 +245,15 @@ export function useTerminalMenuCommands({
             { terminalId },
             { source: sourceRef.current }
           );
+          break;
+        case "reset-modes":
+          // Deferred like the plugin rows: with an agent running, the action
+          // stages a confirm, which must record the pane as where focus returns.
+          deferMenuDispatch({
+            actionId: "terminal.resetModes",
+            args: { terminalId },
+            source: sourceRef.current,
+          });
           break;
         case "restart":
           if (terminalHasRunningAgentSession(terminal)) {
@@ -297,6 +301,17 @@ export function useTerminalMenuCommands({
             { terminalId },
             { source: sourceRef.current }
           );
+          break;
+        // Straight to main, never an action: nothing here reaches MCP (#17909).
+        case "toggle-continue-at-limit-reset":
+          void codexLimitContinueClient
+            .set(terminalId, !isArmedToContinue(terminalId))
+            .catch((error: unknown) => {
+              logWarn("[TerminalMenu] Continue when usage limit resets wasn't changed", {
+                terminalId,
+                error,
+              });
+            });
           break;
         case "duplicate":
           void actionService.dispatch(

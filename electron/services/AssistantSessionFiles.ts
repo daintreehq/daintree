@@ -110,6 +110,19 @@ const USER_INSTRUCTIONS_SIDECAR_PATTERN = /^assistant-instructions-[0-9a-f]{12}\
 function userInstructionsSidecarName(content: string): string {
   return `assistant-instructions-${createHash("sha256").update(content).digest("hex").slice(0, 12)}.md`;
 }
+
+/** Removes every instructions sidecar but `keep`, the one AGENTS.md now names. */
+async function retireUserInstructionSidecars(
+  sessionPath: string,
+  keep: string | null
+): Promise<void> {
+  const entries = await fs.readdir(sessionPath);
+  await Promise.all(
+    entries
+      .filter((entry) => USER_INSTRUCTIONS_SIDECAR_PATTERN.test(entry) && entry !== keep)
+      .map((entry) => fs.rm(path.join(sessionPath, entry), { force: true }))
+  );
+}
 /**
  * Runbooks are procedures for Daintree's own tools, so they ride on Daintree
  * control: with it off there is nothing for a runbook to drive.
@@ -243,6 +256,117 @@ function spliceManagedBlock(
   }
   const separator = existing.endsWith("\n") ? "\n" : "\n\n";
   return `${existing}${separator}${block}`;
+}
+
+/** Atomically writes `text` unless a regular file there already holds exactly that. */
+async function writeFileIfChanged(filePath: string, text: string): Promise<void> {
+  try {
+    const stats = await fs.lstat(filePath);
+    if (stats.isFile() && (await fs.readFile(filePath, "utf-8")) === text) {
+      // The mode a write would have given it.
+      if (process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) {
+        await fs.chmod(filePath, 0o600);
+      }
+      return;
+    }
+  } catch {
+    // Missing or unreadable: the write decides.
+  }
+  await resilientAtomicWriteFile(filePath, text, "utf-8", { mode: 0o600 });
+}
+
+interface PromptFile {
+  onDisk: string | null;
+  text: string | null;
+}
+
+/**
+ * The session's prompt files while a provision composes them. Each is read
+ * once, every managed block is spliced in memory, and `flush` writes a file
+ * only when its text changed: a relaunch with nothing new rewrites neither,
+ * where writing block by block cost an atomic, fsynced write per block.
+ */
+class PromptFiles {
+  private readonly files = new Map<string, Promise<PromptFile>>();
+
+  constructor(private readonly sessionPath: string) {}
+
+  private file(name: string): Promise<PromptFile> {
+    let file = this.files.get(name);
+    if (!file) {
+      file = fs.readFile(path.join(this.sessionPath, name), "utf-8").then(
+        (text): PromptFile => ({ onDisk: text, text }),
+        (err: unknown): PromptFile => {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") return { onDisk: null, text: null };
+          throw err;
+        }
+      );
+      this.files.set(name, file);
+    }
+    return file;
+  }
+
+  /** The file as composed so far; null when it doesn't exist. */
+  async read(name: string): Promise<string | null> {
+    return (await this.file(name)).text;
+  }
+
+  /**
+   * Replaces the file's whole text, creating it if it is absent. The old text
+   * is only compared against, so one that can't be read is simply rewritten.
+   */
+  async replace(name: string, text: string): Promise<void> {
+    const onDisk = await this.file(name).then(
+      (file) => file.onDisk,
+      () => null
+    );
+    this.files.set(name, Promise.resolve({ onDisk, text }));
+  }
+
+  /**
+   * Replaces the marker-delimited block in place, appends it when absent, or
+   * removes it when `body` is null. A missing file is the template's to
+   * provide, never fabricated here: skipped, or refused when `required`.
+   */
+  async splice(
+    name: string,
+    markers: { start: string; end: string },
+    body: string | null,
+    options: { required?: boolean } = {}
+  ): Promise<void> {
+    const file = await this.file(name);
+    if (file.text === null) {
+      const filePath = path.join(this.sessionPath, name);
+      if (options.required && body !== null) {
+        throw new Error(
+          `${filePath} is missing, so there is nowhere to put the content it should carry`
+        );
+      }
+      console.warn("[HelpSessionService] Managed block target missing; skipping:", filePath);
+      return;
+    }
+    file.text = spliceManagedBlock(file.text, markers, body);
+  }
+
+  /**
+   * Writes every file whose composed text differs from what is on disk. Every
+   * write settles before a failure is thrown, so none lands after the caller
+   * has released the directory to the next provision.
+   */
+  async flush(): Promise<void> {
+    const results = await Promise.allSettled(
+      [...this.files].map(async ([name, pending]) => {
+        const file = await pending;
+        if (file.text === null || file.text === file.onDisk) return;
+        await resilientAtomicWriteFile(path.join(this.sessionPath, name), file.text, "utf-8", {
+          mode: 0o600,
+        });
+        file.onDisk = file.text;
+      })
+    );
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed) throw failed.reason;
+  }
 }
 
 /**
@@ -385,6 +509,37 @@ function buildUserInstructionsPointer(
  * subdirs hash deterministically across runs.
  */
 async function computeTemplateHash(helpFolder: string): Promise<string> {
+  const files = await listTemplateFiles(helpFolder);
+  // The bundled template only changes with the app, so a launch hashes it
+  // again only when a file's size or times say it might have (a dev build).
+  // ctime too: an edit can put mtime back, but nothing can set ctime.
+  const stats = await Promise.all(files.map((file) => fs.stat(file.absolute)));
+  const fingerprint = files
+    .map((file, i) => {
+      const { size, mtimeMs, ctimeMs } = stats[i]!;
+      return `${file.relative}\0${size}\0${mtimeMs}\0${ctimeMs}`;
+    })
+    .join("\n");
+  const cached = templateHashCache.get(helpFolder);
+  if (cached?.fingerprint === fingerprint) return cached.hash;
+
+  const hash = createHash("sha256");
+  for (const file of files) {
+    hash.update(file.relative);
+    hash.update("\0");
+    hash.update(await fs.readFile(file.absolute));
+  }
+  const digest = hash.digest("hex");
+  templateHashCache.set(helpFolder, { fingerprint, hash: digest });
+  return digest;
+}
+
+/** Template folder → its last hash and the file sizes and times it was taken at. */
+const templateHashCache = new Map<string, { fingerprint: string; hash: string }>();
+
+async function listTemplateFiles(
+  helpFolder: string
+): Promise<Array<{ absolute: string; relative: string }>> {
   const entries = await fs.readdir(helpFolder, { recursive: true, withFileTypes: true });
   const files = entries
     .filter(
@@ -399,14 +554,7 @@ async function computeTemplateHash(helpFolder: string): Promise<string> {
         .join("/"),
     }))
     .sort((a, b) => (a.relative < b.relative ? -1 : a.relative > b.relative ? 1 : 0));
-
-  const hash = createHash("sha256");
-  for (const file of files) {
-    hash.update(file.relative);
-    hash.update("\0");
-    hash.update(await fs.readFile(file.absolute));
-  }
-  return hash.digest("hex");
+  return files;
 }
 
 /**
@@ -579,10 +727,13 @@ export class AssistantSessionFiles {
           );
         }
         await fs.chmod(sessionPath, 0o700).catch(() => {});
+        // CLAUDE.md and AGENTS.md from here on are composed in memory and
+        // written once, below, after every block is in.
+        const prompts = new PromptFiles(sessionPath);
         // Unconditional, outside the hash gate: a folder an older build
         // provisioned holds the project assistant's text, and the stamp says
         // it is current.
-        if (input.global) await this.overlayGlobalInstructions(helpFolder, sessionPath);
+        if (input.global) await this.overlayGlobalInstructions(helpFolder, prompts);
 
         // Instructions and (behind the opt-in) the user's MCP servers and Claude
         // hooks. Same fail-closed policy as the mirror: an existing file that
@@ -693,34 +844,30 @@ export class AssistantSessionFiles {
         // persist (`scratchPath` changes every provision because `sessionId` does).
         // Uses managed markers so re-provision replaces the block in place instead
         // of accumulating duplicate stanzas.
-        await this.writeScratchAddendum(sessionPath, scratchPath);
+        await this.writeScratchAddendum(prompts, scratchPath);
 
         // The durable counterpart: kept across launches, so it is provisioned and
         // announced on every provision (including template-hash-gate skips) and a
         // failure fails the provision rather than launching with a phantom store.
         const runCheckpointPath = await provisionRunCheckpointBucket(input.runCheckpointKey);
         await Promise.all(
-          ["CLAUDE.md", "AGENTS.md"].map((name) =>
-            this.writeManagedBlock(
-              path.join(sessionPath, name),
-              RUN_CHECKPOINT_BLOCK_MARKERS,
-              buildRunCheckpointAddendum()
-            )
+          PROMPT_FILES.map((name) =>
+            prompts.splice(name, RUN_CHECKPOINT_BLOCK_MARKERS, buildRunCheckpointAddendum())
           )
         );
-        await this.writeRunbooksAddendum(sessionPath, runbooksEnabled(settings), {
+        await this.writeRunbooksAddendum(prompts, runbooksEnabled(settings), {
           global: input.global === true,
         });
         // Its project calls are relayed with `external` origin, which never take
         // the skip preference, so the note would promise what it can't get.
         // Calls handed over one by one do reach it, relayed or not (#16752).
-        await this.writeConfirmationsAddendum(sessionPath, input.confirmations(), input.global);
-        await this.stripMessagingAddendum(sessionPath);
+        await this.writeConfirmationsAddendum(prompts, input.confirmations(), input.global);
+        await this.stripMessagingAddendum(prompts);
         // Same unconditional placement, for the same reason: the facts change
         // independently of the template, and every lane shares these files, so
         // only project-level observations go in — never a lane's focus.
         await this.writeProjectMetadataAddendum(
-          sessionPath,
+          prompts,
           input.global
             ? null
             : buildProjectMetadataAddendum({
@@ -733,18 +880,22 @@ export class AssistantSessionFiles {
         );
         await this.writeHostInventory(
           sessionPath,
+          prompts,
           input.global === true ? (input.hostInventory ?? { takenAt: Date.now(), hosts: [] }) : null
         );
         const siblingLaneLive = input.siblingLaneLive();
-        await this.runContentStep(sessionPath, "write the assistant's instructions", () =>
-          this.writeUserInstructions(
+        await this.runContentStep(sessionPath, "write the assistant's instructions", async () => {
+          const sidecarName = await this.writeUserInstructions(
             sessionPath,
+            prompts,
             userConfig.instructions,
             (syncResult?.referenceFiles ?? 0) > 0,
-            !siblingLaneLive,
             launchKnowledge.filter((knowledge) => syncResult?.pluginContent.includes(knowledge.key))
-          )
-        );
+          );
+          await prompts.flush();
+          // Only once AGENTS.md on disk points at the current sidecar.
+          if (!siblingLaneLive) await retireUserInstructionSidecars(sessionPath, sidecarName);
+        });
 
         const port = await input.mcpPort();
         let laneMcpConfigPath: string | undefined;
@@ -973,11 +1124,9 @@ export class AssistantSessionFiles {
     // The shared project file. The bundled template ships one with the docs
     // server in it; that is what the approval prompt was for, so it is
     // overwritten with nothing rather than left to prompt.
-    await resilientAtomicWriteFile(
+    await writeFileIfChanged(
       path.join(sessionPath, ".mcp.json"),
-      JSON.stringify({ mcpServers: {} }, null, 2) + "\n",
-      "utf-8",
-      { mode: 0o600 }
+      JSON.stringify({ mcpServers: {} }, null, 2) + "\n"
     );
     return lanePath;
   }
@@ -1238,9 +1387,7 @@ export class AssistantSessionFiles {
 
     const target = path.join(sessionPath, ".claude", "settings.json");
     await fs.mkdir(path.dirname(target), { recursive: true });
-    await resilientAtomicWriteFile(target, JSON.stringify(merged, null, 2) + "\n", "utf-8", {
-      mode: 0o600,
-    });
+    await writeFileIfChanged(target, JSON.stringify(merged, null, 2) + "\n");
   }
 
   /**
@@ -1322,13 +1469,10 @@ export class AssistantSessionFiles {
    * If the template hash gate skipped the copy but the file is somehow
    * missing (manual deletion), we log and skip rather than fabricating one.
    */
-  private async writeScratchAddendum(sessionPath: string, scratchPath: string): Promise<void> {
+  private async writeScratchAddendum(prompts: PromptFiles, scratchPath: string): Promise<void> {
     const addendum = this.buildScratchAddendum(scratchPath);
-    const targets = ["CLAUDE.md", "AGENTS.md"];
     await Promise.all(
-      targets.map((name) =>
-        this.replaceOrAppendScratchBlock(path.join(sessionPath, name), addendum)
-      )
+      PROMPT_FILES.map((name) => prompts.splice(name, SCRATCH_BLOCK_MARKERS, addendum))
     );
   }
 
@@ -1339,17 +1483,13 @@ export class AssistantSessionFiles {
    * removed slot would put a later rule at the end of the file.
    */
   private async writeRunbooksAddendum(
-    sessionPath: string,
+    prompts: PromptFiles,
     enabled: boolean,
     caller: { global: boolean }
   ): Promise<void> {
     const markers = { start: RUNBOOKS_BLOCK_START, end: RUNBOOKS_BLOCK_END };
     const body = enabled ? buildRunbooksAddendum(caller) : "";
-    await Promise.all(
-      ["CLAUDE.md", "AGENTS.md"].map((name) =>
-        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
-      )
-    );
+    await Promise.all(PROMPT_FILES.map((name) => prompts.splice(name, markers, body)));
   }
 
   /**
@@ -1359,7 +1499,7 @@ export class AssistantSessionFiles {
    * what it says, not where.
    */
   private async writeConfirmationsAddendum(
-    sessionPath: string,
+    prompts: PromptFiles,
     policy: AssistantConfirmationPolicy,
     global: boolean
   ): Promise<void> {
@@ -1370,31 +1510,25 @@ export class AssistantSessionFiles {
         : policy.delegated.size > 0
           ? buildDelegatedConfirmationsAddendum([...policy.delegated])
           : null;
-    await Promise.all(
-      ["CLAUDE.md", "AGENTS.md"].map((name) =>
-        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
-      )
-    );
+    await Promise.all(PROMPT_FILES.map((name) => prompts.splice(name, markers, body)));
   }
 
   /** An older build's rules for the retired inbox (#13496), gone from a reused session folder. */
-  private async stripMessagingAddendum(sessionPath: string): Promise<void> {
+  private async stripMessagingAddendum(prompts: PromptFiles): Promise<void> {
     const markers = { start: MESSAGING_BLOCK_START, end: MESSAGING_BLOCK_END };
-    await Promise.all(
-      ["CLAUDE.md", "AGENTS.md"].map((name) =>
-        this.writeManagedBlock(path.join(sessionPath, name), markers, null)
-      )
-    );
+    await Promise.all(PROMPT_FILES.map((name) => prompts.splice(name, markers, null)));
   }
 
-  /** Replaces the session's prompt files with the global assistant's own, before any managed block is written into them. */
-  private async overlayGlobalInstructions(helpFolder: string, sessionPath: string): Promise<void> {
+  /**
+   * Starts the session's prompt files from the global assistant's own, before
+   * any managed block goes in. Composed like every block, so a relaunch whose
+   * result matches what is on disk writes nothing.
+   */
+  private async overlayGlobalInstructions(helpFolder: string, prompts: PromptFiles): Promise<void> {
     await Promise.all(
       PROMPT_FILES.map(async (name) => {
         const body = await fs.readFile(path.join(helpFolder, GLOBAL_TEMPLATE_DIR, name), "utf-8");
-        await resilientAtomicWriteFile(path.join(sessionPath, name), body, "utf-8", {
-          mode: 0o600,
-        });
+        await prompts.replace(name, body);
       })
     );
   }
@@ -1407,6 +1541,7 @@ export class AssistantSessionFiles {
    */
   private async writeHostInventory(
     sessionPath: string,
+    prompts: PromptFiles,
     snapshot: HostInventorySnapshot | null
   ): Promise<void> {
     const sidecar = path.join(sessionPath, HOST_INVENTORY_FILE);
@@ -1419,22 +1554,15 @@ export class AssistantSessionFiles {
     }
     const body = snapshot ? buildHostInventoryBlock(snapshot) : null;
     const markers = { start: HOST_INVENTORY_START, end: HOST_INVENTORY_END };
-    await Promise.all(
-      PROMPT_FILES.map((name) =>
-        this.writeManagedBlock(path.join(sessionPath, name), markers, body)
-      )
-    );
+    await Promise.all(PROMPT_FILES.map((name) => prompts.splice(name, markers, body)));
   }
 
   private async writeProjectMetadataAddendum(
-    sessionPath: string,
+    prompts: PromptFiles,
     addendum: string | null
   ): Promise<void> {
     const markers = { start: PROJECT_METADATA_START, end: PROJECT_METADATA_END };
-    const targets = ["CLAUDE.md", "AGENTS.md"];
-    await Promise.all(
-      targets.map((name) => this.writeManagedBlock(path.join(sessionPath, name), markers, addendum))
-    );
+    await Promise.all(PROMPT_FILES.map((name) => prompts.splice(name, markers, addendum)));
   }
 
   private buildScratchAddendum(_scratchPath: string): string {
@@ -1449,45 +1577,6 @@ export class AssistantSessionFiles {
       `Put temporary notes and drafts in the folder named by \`${ASSISTANT_SCRATCH_ENV_VAR}\` (read the variable; don't assume a path), not the system temp dir. It is cleared on every Daintree launch.`,
       "",
     ].join("\n");
-  }
-
-  private async replaceOrAppendScratchBlock(filePath: string, addendum: string): Promise<void> {
-    await this.writeManagedBlock(filePath, SCRATCH_BLOCK_MARKERS, addendum);
-  }
-
-  /**
-   * Replaces the marker-delimited block in `filePath` in place, appends it
-   * when absent, or removes it when `body` is null. Returns the file's new
-   * contents, or null when the target doesn't exist (it is the template's; we
-   * never fabricate one).
-   */
-  private async writeManagedBlock(
-    filePath: string,
-    markers: { start: string; end: string },
-    body: string | null,
-    options: { required?: boolean } = {}
-  ): Promise<string | null> {
-    let existing: string;
-    try {
-      existing = await fs.readFile(filePath, "utf-8");
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        if (options.required && body !== null) {
-          throw new Error(
-            `${filePath} is missing, so there is nowhere to put the content it should carry`,
-            { cause: err }
-          );
-        }
-        console.warn("[HelpSessionService] Managed block target missing; skipping:", filePath);
-        return null;
-      }
-      throw err;
-    }
-    const next = spliceManagedBlock(existing, markers, body);
-    if (next !== existing) {
-      await resilientAtomicWriteFile(filePath, next, "utf-8", { mode: 0o600 });
-    }
-    return next;
   }
 
   /**
@@ -1532,36 +1621,27 @@ export class AssistantSessionFiles {
    */
   private async writeUserInstructions(
     sessionPath: string,
+    prompts: PromptFiles,
     instructions: AssistantUserInstructions[],
     hasReferenceFiles: boolean,
-    retireOldSidecars: boolean,
     plugins: readonly AssistantPluginKnowledge[] = []
-  ): Promise<void> {
+  ): Promise<string | null> {
     const inline = buildUserInstructionsBlock(instructions, hasReferenceFiles, plugins);
 
-    await this.writeManagedBlock(
-      path.join(sessionPath, "CLAUDE.md"),
-      USER_INSTRUCTIONS_BLOCK_MARKERS,
-      inline,
-      { required: true }
-    );
+    await prompts.splice("CLAUDE.md", USER_INSTRUCTIONS_BLOCK_MARKERS, inline, { required: true });
 
-    const agentsPath = path.join(sessionPath, "AGENTS.md");
     let agentsBody = inline;
     let sidecarName: string | null = null;
     if (inline !== null) {
-      let current: string;
-      try {
-        current = await fs.readFile(agentsPath, "utf-8");
-      } catch (err) {
-        throw new Error(`${agentsPath} is missing or unreadable`, { cause: err });
+      const current = await prompts.read("AGENTS.md");
+      if (current === null) {
+        throw new Error(`${path.join(sessionPath, "AGENTS.md")} is missing or unreadable`);
       }
       const projected = spliceManagedBlock(current, USER_INSTRUCTIONS_BLOCK_MARKERS, inline);
       if (Buffer.byteLength(projected, "utf8") > AGENTS_MD_INLINE_BUDGET_BYTES) {
         sidecarName = userInstructionsSidecarName(inline);
-        await resilientAtomicWriteFile(path.join(sessionPath, sidecarName), inline, "utf-8", {
-          mode: 0o600,
-        });
+        // Content-named, so one already there holds this text unless tampered with.
+        await writeFileIfChanged(path.join(sessionPath, sidecarName), inline);
         agentsBody = buildUserInstructionsPointer(
           sidecarName,
           instructions.length > 0,
@@ -1570,17 +1650,10 @@ export class AssistantSessionFiles {
         );
       }
     }
-    await this.writeManagedBlock(agentsPath, USER_INSTRUCTIONS_BLOCK_MARKERS, agentsBody, {
+    await prompts.splice("AGENTS.md", USER_INSTRUCTIONS_BLOCK_MARKERS, agentsBody, {
       required: true,
     });
-
-    if (!retireOldSidecars) return;
-    const entries = await fs.readdir(sessionPath);
-    await Promise.all(
-      entries
-        .filter((entry) => USER_INSTRUCTIONS_SIDECAR_PATTERN.test(entry) && entry !== sidecarName)
-        .map((entry) => fs.rm(path.join(sessionPath, entry), { force: true }))
-    );
+    return sidecarName;
   }
 
   async writeSessionMeta(sessionPath: string, meta: SessionMeta): Promise<void> {

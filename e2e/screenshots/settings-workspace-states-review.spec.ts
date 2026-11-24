@@ -2,10 +2,10 @@
  * Settings workspace pages — the states a top-to-bottom sweep never reaches.
  *
  * `settings-pages-review.spec.ts` captures every page as a fresh profile renders it.
- * That hides most of what the Panel grid, Worktree and Portal pages are for: the
+ * That hides most of what the Panel grid, Worktree and Links pages are for: the
  * dependents under a switch that is on, the grid strategy that brings its own row,
- * the path pattern while it is invalid, unsaved and just saved, and a portal with
- * custom links, one being edited, and the custom new-tab URL open. This spec drives
+ * the path pattern while it is invalid, unsaved and just saved, and custom links,
+ * one being edited and one refused. This spec drives
  * each one through the real controls — no store seeding — and captures it.
  *
  *   DAINTREE_SHOT_SETTINGS_STATES=1 DAINTREE_SHOT_DIR=/tmp/out \
@@ -227,41 +227,37 @@ test("settings workspace states — dependents, strategies, pattern and link edi
     await capture(page, "toolbar.move-menu");
     await page.keyboard.press("Escape");
 
-    // Portal — populated custom links.
-    await openAt(page, "portal");
-    const custom = page.locator(`${DIALOG} #portal-custom-links`);
+    // Links — the person's own links, populated.
+    await openAt(page, "links");
+    const custom = page.locator(`${DIALOG} #global-links`);
+    const newName = custom.getByRole("textbox", { name: "New link name" });
+    const newUrl = custom.getByRole("textbox", { name: "New link URL" });
     for (const [name, url] of [
       ["Team docs", "https://docs.helios.dev/handbook/engineering"],
       ["Linear", "https://linear.app/helios/team/DASH/active"],
     ]) {
-      await custom.getByRole("textbox").nth(-2).fill(name);
-      await custom.getByRole("textbox").last().fill(url);
+      await newName.fill(name);
+      await newUrl.fill(url);
       await custom.getByRole("button", { name: "Add", exact: true }).click();
       await expect(custom.getByText(name, { exact: true })).toBeVisible();
     }
-    await capture(page, "portal.populated");
-    await capture(page, "portal.custom-links", custom);
+    await capture(page, "links.populated");
+    await capture(page, "links.your-links", custom);
 
-    // Portal — editing one link.
-    await custom.getByRole("button", { name: "Edit" }).first().click();
+    // Links — editing one link.
+    await custom.getByRole("button", { name: "Edit Team docs", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "Link URL", exact: true })).toBeVisible();
-    await capture(page, "portal.editing", custom);
+    await capture(page, "links.editing", custom);
     await custom.getByRole("button", { name: "Cancel", exact: true }).click();
 
-    // Portal — add refused.
-    await custom.getByRole("textbox").nth(-2).fill("Broken");
-    await custom.getByRole("textbox").last().fill("docs.helios.dev");
+    // Links — add refused.
+    await newName.fill("Broken");
+    await newUrl.fill("docs.helios.dev");
     await custom.getByRole("button", { name: "Add", exact: true }).click();
     await expect(custom.locator('[aria-invalid="true"]')).toHaveCount(1);
-    await capture(page, "portal.add-error", custom);
-    await custom.getByRole("textbox").nth(-2).fill("");
-    await custom.getByRole("textbox").last().fill("");
-
-    // Portal — custom new-tab URL.
-    await page.locator(`${DIALOG} #portal-default-agent [role="combobox"]`).click();
-    await page.getByRole("option", { name: /Custom URL/ }).click();
-    await expect(page.getByRole("textbox", { name: "Custom URL" })).toBeVisible();
-    await capture(page, "portal.custom-url");
+    await capture(page, "links.add-error", custom);
+    await newName.fill("");
+    await newUrl.fill("");
   } finally {
     if (ctx) await closeApp(ctx.app).catch(() => {});
     repo.cleanup();
@@ -273,5 +269,5 @@ test("settings workspace states — dependents, strategies, pattern and link edi
   const missing = written.filter((f) => !onDisk.has(f));
   console.log(`[settings-states-shots] ${written.length - missing.length}/${written.length} PNGs`);
   expect(missing).toEqual([]);
-  expect(written.length).toBe(14);
+  expect(written.length).toBe(13);
 });

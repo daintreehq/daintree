@@ -77,6 +77,105 @@
   font-family: var(--font-mono);
 }
 
+/* Front matter (markdownRemarkPlugins.ts): its raw lines, kept as written, in
+   a compact block above the body. A div rather than a <pre>, so the rendered
+   diff can mark a changed value inside it; pre-wrap keeps the lines and their
+   indentation, and long values wrap rather than scroll. */
+.markdown-document :where(.markdown-frontmatter) {
+  margin-block: 0 1.5em;
+  padding: 0.5em 0.75em;
+  border: 1px solid color-mix(in oklab, var(--color-border-default) 50%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--color-surface-sidebar) 60%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* GitHub alerts (markdownAlerts.tsx): a titled box in the tone GitHub gives
+   each type. The tone is the author's markup, not a status Daintree reports,
+   so TIP keeps GitHub's green and IMPORTANT its purple (#17333). As on Callout,
+   the tone paints the edge, the tint and the glyph, and the words stay on the
+   text ramp, where the contrast floor is. */
+.markdown-document :where(.markdown-alert) {
+  --markdown-alert-tone: var(--color-status-info);
+  margin-block: 1.25em;
+  padding: 0.5em 1em;
+  border-inline-start: 0.25em solid var(--markdown-alert-tone);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--markdown-alert-tone) 10%, transparent);
+}
+
+/* The typography plugin's edge exceptions, restated for a box whose own
+   margin outranks them, as the table frame's are. */
+.markdown-document :where(:is(h2, h3, h4, hr) + .markdown-alert) {
+  margin-top: 0;
+}
+
+.markdown-document > :where(.markdown-alert:first-child) {
+  margin-top: 0;
+}
+
+.markdown-document > :where(.markdown-alert:last-child) {
+  margin-bottom: 0;
+}
+
+.markdown-document :where(.markdown-alert[data-markdown-alert="tip"]) {
+  --markdown-alert-tone: var(--color-status-success);
+}
+
+.markdown-document :where(.markdown-alert[data-markdown-alert="important"]) {
+  --markdown-alert-tone: var(--color-category-purple);
+}
+
+.markdown-document :where(.markdown-alert[data-markdown-alert="warning"]) {
+  --markdown-alert-tone: var(--color-status-warning);
+}
+
+.markdown-document :where(.markdown-alert[data-markdown-alert="caution"]) {
+  --markdown-alert-tone: var(--color-status-danger);
+}
+
+.markdown-document :where(.markdown-alert-title) {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.markdown-document :where(.markdown-alert-glyph) {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  color: var(--markdown-alert-tone);
+}
+
+/* Outranks the block rhythm `.markdown-message` sets further down, which
+   would otherwise open a gap above the title. */
+.markdown-document .markdown-alert > * {
+  margin-block: 0.5em;
+}
+
+.markdown-document .markdown-alert > :first-child {
+  margin-top: 0;
+}
+
+.markdown-document .markdown-alert > :last-child {
+  margin-bottom: 0;
+}
+
+/* Chromium forces an inherited `currentColor` but not a colour set on the SVG
+   itself (forced-colors.css), so the glyph would keep its tone on the system
+   canvas. The title names the type; the glyph only has to be seen. */
+@media (forced-colors: active) {
+  .markdown-document :where(.markdown-alert-glyph) {
+    color: CanvasText;
+  }
+}
+
 /* kbd: chip treatment; kills the plugin's --tw-prose-kbd-shadows box-shadow,
    the one prose token that can't take a theme color (it wants an RGB triplet). */
 .markdown-document :where(kbd) {
@@ -238,7 +337,7 @@
   mask-composite: add, exclude;
 }
 
-/* 24px, the width the mask-faded rails use (PortalToolbar, FigureRail). */
+/* 24px, the width the mask-faded rails use (FigureRail). */
 .markdown-document :where(.markdown-table[data-scroll-start]) {
   --markdown-table-fade-start: 1.5rem;
 }
@@ -455,7 +554,7 @@
   font-size: 1em;
 }
 
-.markdown-message :where(p, ul, ol, blockquote) {
+.markdown-message :where(p, ul, ol, blockquote, .markdown-alert) {
   margin-top: 0.75em;
   margin-bottom: 0.75em;
 }
@@ -482,4 +581,22 @@
 
 .markdown-message > :where(:last-child) {
   margin-bottom: 0;
+}
+
+/* A Decisions question's inline code sits in running prose, often against
+   punctuation: on the document chip's sidebar tint it all but vanished on dark
+   themes, so its padding read as a space either side ("( 2a3fc8a )"). The
+   overlay step shows the chip on every theme, and a tighter pad keeps it to its word. */
+.decision-markdown :where(code):not(:where(pre *)) {
+  padding: 0.0625rem 0.25em;
+  background: var(--color-overlay-medium);
+  border-color: transparent;
+}
+
+/* Supporting prose (an agent's notes, an option's description) in secondary
+   ink. An attribute rather than a utility: the document's palette above is
+   declared unlayered on this same element, and a layered utility loses to it. */
+.markdown-document[data-tone="secondary"] {
+  --tw-prose-body: var(--color-text-secondary);
+  --tw-prose-bold: var(--color-text-secondary);
 }

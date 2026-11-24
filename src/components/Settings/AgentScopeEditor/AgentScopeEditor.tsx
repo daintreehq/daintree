@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useRef } from "react";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PresetSelector } from "../PresetSelector";
@@ -23,7 +23,6 @@ interface AgentScopeEditorProps {
   ccrPresets: AgentPreset[] | undefined;
   projectPresets: AgentPreset[] | undefined;
   presetInventory: PresetInventoryState;
-  defaultDangerousArg: string;
   editingPresetId: string | null;
   setEditingPresetId: (id: string | null) => void;
   editName: string;
@@ -44,8 +43,8 @@ interface AgentScopeEditorProps {
  * the picker is the parent the rest depends on.
  */
 export function AgentScopeEditor(props: AgentScopeEditorProps) {
-  const { defaultDangerousArg } = props;
   const scope = useAgentScope(props);
+  const addPresetButtonRef = useRef<HTMLButtonElement>(null);
   const agentName = scope.agentCfg?.name ?? props.agentId;
   const agentColor = scope.agentCfg?.color ?? "var(--theme-text-secondary)";
   // The rows below would edit the agent's own settings, which isn't what a
@@ -61,6 +60,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
       description="A preset bundles environment variables, arguments and permissions under one name"
       action={
         <Button
+          ref={addPresetButtonRef}
           size="sm"
           variant="outline"
           data-testid="preset-add-button"
@@ -168,14 +168,15 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
                 scopeKind={scope.scopeKind}
                 scopeLabel={scope.scopeLabel}
                 dangerousMode={scope.dangerousMode}
-                effectiveSkipPerms={scope.effectiveSkipPerms}
-                inheritResolvesToOn={scope.inheritResolvesToOn}
+                effectiveLevel={scope.effectiveLevel}
+                effectivePermissionArgs={scope.effectivePermissionArgs}
+                autoSupported={scope.autoSupported}
+                inheritLevel={scope.inheritLevel}
                 inheritHint={scope.inheritHint}
                 customArgsValue={scope.customArgsValue}
                 customArgsPlaceholder={scope.customArgsPlaceholder}
                 customArgsDescription={scope.customArgsDescription}
                 customFlagsOverride={scope.customFlagsOverride}
-                defaultDangerousArg={defaultDangerousArg}
                 onDangerousModeChange={scope.handleDangerousModeChange}
                 onCustomFlagsChange={scope.handleCustomFlagsChange}
                 onCustomFlagsOverrideReset={scope.handleCustomFlagsOverrideReset}
@@ -199,7 +200,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
                   selectedPreset={scope.selectedPreset}
                   agentName={agentName}
                   agentCustomFlags={scope.agentDefaultCustomFlags}
-                  effectiveSkipPerms={scope.effectiveSkipPerms}
+                  effectiveLevel={scope.effectiveLevel}
                   onDuplicate={scope.handleDuplicatePreset}
                 />
               )}
@@ -211,7 +212,11 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
           never mixed into a group of ordinary ones. */}
       {scope.scopeKind === "custom" && scope.selectedPreset && (
         <SettingsGroup key={`delete-${scope.selectedPreset.id}`}>
-          <PresetDeleteRow preset={scope.selectedPreset} onDelete={scope.handleDeletePreset} />
+          <PresetDeleteRow
+            preset={scope.selectedPreset}
+            onDelete={scope.handleDeletePreset}
+            restoreFocusTo={addPresetButtonRef}
+          />
         </SettingsGroup>
       )}
     </SettingsSection>

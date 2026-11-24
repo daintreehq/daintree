@@ -30,6 +30,7 @@ import {
 import type { RelayedNotice } from "../../../services/mcp-server/terminalNotify.js";
 import { MAX_CARRIED_DEPTH } from "../mcpRelayExecutor.js";
 import { MAX_RELAY_NOTICES_PER_SENDER } from "../relayNoticeOutbox.js";
+import { RELAY_MAX_PENDING_CANCELS } from "../relayCallLedger.js";
 import { SenderSessions } from "../senderSessions.js";
 import type { HostThrowawayExecutor } from "../throwawayRelay.js";
 
@@ -85,7 +86,13 @@ function fakeLink(sessionId: string): FakeLink {
 interface FakeMcpSession extends RelayMcpSession {
   spec: RelayMcpSessionSpec;
   closed: boolean;
-  calls: Array<{ tool: string; args: Record<string, unknown>; timeoutMs: number; callId: string }>;
+  calls: Array<{
+    tool: string;
+    args: Record<string, unknown>;
+    timeoutMs: number;
+    callId: string;
+    signal?: AbortSignal;
+  }>;
 }
 
 /** The relay over links already attached, each with the sender it proved (null: none). */
@@ -209,7 +216,14 @@ describe("installHostMcpRelay", () => {
       requestApproval: expect.any(Function),
     });
     expect(opened[0]!.calls).toEqual([
-      { tool: "terminal.list", args: { owned: true }, timeoutMs: 90_000, callId: "call-1" },
+      {
+        tool: "terminal.list",
+        args: { owned: true },
+        timeoutMs: 90_000,
+        callId: "call-1",
+        // The call's own stop, which a cancel from its Shell pulls (#17985).
+        signal: expect.any(AbortSignal),
+      },
     ]);
     relay.dispose();
   });
@@ -235,6 +249,47 @@ describe("installHostMcpRelay", () => {
     ]);
     // The caller the host's MCP server admits each as.
     expect(opened.map((session) => relayCallerOf(session.spec).global)).toEqual([true, undefined]);
+    relay.dispose();
+  });
+
+  it("admits a CONVERSATION_MCP_CALL as its sender's, naming the conversation and the global mark (#17919)", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    const base = {
+      helpSessionId: "help-g",
+      projectId: "project-1",
+      tier: "core",
+      callId: "call-g",
+      resend: false,
+      tool: "terminal.list",
+      args: {},
+      runMs: 90_000,
+    };
+    await links[0]!.ask(AssistantLinkMethod.CONVERSATION_MCP_CALL, {
+      ...base,
+      conversationId: "conv-1",
+      global: true,
+    });
+    await links[0]!.ask(AssistantLinkMethod.CONVERSATION_MCP_CALL, {
+      ...base,
+      helpSessionId: "help-p",
+      callId: "call-p",
+      conversationId: "conv-2",
+    });
+
+    expect(
+      opened.map((session) => {
+        const caller = relayCallerOf(session.spec);
+        return [caller.senderId, caller.helpSessionId, caller.conversationId, caller.global];
+      })
+    ).toEqual([
+      ["sender-a", "help-g", "conv-1", true],
+      ["sender-a", "help-p", "conv-2", undefined],
+    ]);
+    // The older methods carry no conversation: their payload check refuses one.
+    await expect(
+      links[0]!.ask(AssistantLinkMethod.MCP_CALL, { ...base, callId: "c3", conversationId: "x" })
+    ).rejects.toThrow();
+    expect(opened).toHaveLength(2);
     relay.dispose();
   });
 
@@ -1948,6 +2003,204 @@ describe("a Shell reading this host's agents' status (#16191)", () => {
     const [first, second] = opened[0]!.calls;
     expect(second).toBeDefined();
     expect(first!.callId).not.toBe(second!.callId);
+    relay.dispose();
+  });
+});
+
+describe("installHostMcpRelay cancels (#17985)", () => {
+  function deferred<T = void>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  /** A tool that runs until its request is aborted, as the SDK's wait ends on a cancel. */
+  function stoppableTool() {
+    const reached = deferred<AbortSignal>();
+    const finish = deferred<CallToolResult>();
+    const callTool = vi.fn(
+      (_tool: string, _args: Record<string, unknown>, options: { signal?: AbortSignal }) =>
+        new Promise<CallToolResult>((resolve, reject) => {
+          reached.resolve(options.signal!);
+          options.signal?.addEventListener("abort", () => reject(new Error("Request aborted")), {
+            once: true,
+          });
+          void finish.promise.then(resolve);
+        })
+    );
+    const openSession: HostMcpRelayDeps["openSession"] = async () => ({
+      isOpen: () => true,
+      callTool,
+      close: () => {},
+    });
+    return { reached: reached.promise, finish: finish.resolve, callTool, openSession };
+  }
+
+  const cancel = (link: FakeLink, payload: { helpSessionId?: string; callId?: string } = {}) =>
+    link.ask(AssistantLinkMethod.MCP_CANCEL, {
+      helpSessionId: "help-1",
+      callId: "call-1",
+      ...payload,
+    });
+
+  it("stops a running call's tool when its Shell cancels it, and answers a resend the same", async () => {
+    const tool = stoppableTool();
+    const { links, relay } = harness([["link-1", "sender-a"]], { openSession: tool.openSession });
+    const answer = links[0]!.call({});
+    const signal = await tool.reached;
+
+    await expect(cancel(links[0]!)).resolves.toEqual({});
+    expect(signal.aborted).toBe(true);
+    await expect(answer).resolves.toEqual({ status: "cancelled", dispatch: "after" });
+    // A second cancel is harmless, and the call's record stands for its resend.
+    await expect(cancel(links[0]!)).resolves.toEqual({});
+    await expect(links[0]!.call({ resend: true })).resolves.toEqual({
+      status: "cancelled",
+      dispatch: "after",
+    });
+    expect(tool.callTool).toHaveBeenCalledTimes(1);
+    relay.dispose();
+  });
+
+  it("takes the cancel over another session the same sender proved", async () => {
+    const tool = stoppableTool();
+    const { links, relay } = harness(
+      [
+        ["link-1", "sender-a"],
+        ["link-2", "sender-a"],
+      ],
+      { openSession: tool.openSession }
+    );
+    const answer = links[0]!.call({});
+    const signal = await tool.reached;
+
+    await cancel(links[1]!);
+    expect(signal.aborted).toBe(true);
+    await expect(answer).resolves.toEqual({ status: "cancelled", dispatch: "after" });
+    relay.dispose();
+  });
+
+  it("never lets another sender or another help session stop a call", async () => {
+    const tool = stoppableTool();
+    const { links, relay } = harness(
+      [
+        ["link-1", "sender-a"],
+        ["link-2", "sender-b"],
+      ],
+      { openSession: tool.openSession }
+    );
+    const answer = links[0]!.call({});
+    const signal = await tool.reached;
+
+    await expect(cancel(links[1]!)).resolves.toEqual({});
+    await expect(cancel(links[0]!, { helpSessionId: "help-2" })).resolves.toEqual({});
+    expect(signal.aborted).toBe(false);
+    tool.finish({ content: [{ type: "text", text: "ok" }] });
+    await expect(answer).resolves.toEqual({
+      status: "done",
+      result: { isError: false, structured: null, text: "ok" },
+    });
+    relay.dispose();
+  });
+
+  it("refuses a cancel from a link that proved no sender", async () => {
+    const { links, relay } = harness([["link-1", null]]);
+    await expect(cancel(links[0]!)).rejects.toMatchObject({ code: "PERMISSION" });
+    relay.dispose();
+  });
+
+  it("runs nothing of a call whose cancel arrived before it", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+
+    await expect(cancel(links[0]!)).resolves.toEqual({});
+    await expect(links[0]!.call({})).resolves.toEqual({ status: "cancelled", dispatch: "before" });
+    expect(opened).toHaveLength(0);
+    relay.dispose();
+  });
+
+  it("stops a call cancelled while it is still being admitted, before its tool", async () => {
+    const project = deferred<boolean>();
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {
+      hasProject: () => project.promise,
+    });
+    const answer = links[0]!.call({});
+    await cancel(links[0]!);
+    project.resolve(true);
+
+    await expect(answer).resolves.toEqual({ status: "cancelled", dispatch: "before" });
+    expect(opened).toHaveLength(0);
+    relay.dispose();
+  });
+
+  it("stops a call cancelled while its session opens, leaving that session to the next call", async () => {
+    const opening = deferred();
+    const entered = deferred();
+    const calls: string[] = [];
+    let opens = 0;
+    const { links, relay } = harness([["link-1", "sender-a"]], {
+      openSession: async () => {
+        opens += 1;
+        entered.resolve();
+        await opening.promise;
+        return {
+          isOpen: () => true,
+          callTool: async (_tool, _args, options) => {
+            calls.push(options.callId);
+            return { content: [{ type: "text", text: "ok" }] };
+          },
+          close: () => {},
+        };
+      },
+    });
+    const answer = links[0]!.call({});
+    // Past admission, and opening its session, when the cancel comes.
+    await entered.promise;
+    await cancel(links[0]!);
+    opening.resolve();
+
+    await expect(answer).resolves.toEqual({ status: "cancelled", dispatch: "before" });
+    await expect(links[0]!.call({ callId: "call-2" })).resolves.toMatchObject({ status: "done" });
+    expect(calls).toEqual(["call-2"]);
+    // The next call took the session the cancelled one opened.
+    expect(opens).toBe(1);
+    relay.dispose();
+  });
+
+  it("answers a call cancelled while admitted as cancelled, whatever admission then found", async () => {
+    const project = deferred<boolean>();
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {
+      hasProject: () => project.promise,
+    });
+    const answer = links[0]!.call({});
+    await cancel(links[0]!);
+    project.resolve(false);
+
+    await expect(answer).resolves.toEqual({ status: "cancelled", dispatch: "before" });
+    await expect(links[0]!.call({ resend: true })).resolves.toEqual({
+      status: "cancelled",
+      dispatch: "before",
+    });
+    expect(opened).toHaveLength(0);
+    relay.dispose();
+  });
+
+  it("refuses an early cancel past what one sender may have waiting, still stopping a running call", async () => {
+    const tool = stoppableTool();
+    const { links, relay } = harness([["link-1", "sender-a"]], { openSession: tool.openSession });
+    const answer = links[0]!.call({ callId: "running" });
+    const signal = await tool.reached;
+    for (let index = 0; index < RELAY_MAX_PENDING_CANCELS; index += 1) {
+      await cancel(links[0]!, { callId: `early-${index}` });
+    }
+
+    await expect(cancel(links[0]!, { callId: "one-more" })).rejects.toMatchObject({
+      code: "RATE_LIMITED",
+    });
+    await cancel(links[0]!, { callId: "running" });
+    expect(signal.aborted).toBe(true);
+    await expect(answer).resolves.toEqual({ status: "cancelled", dispatch: "after" });
     relay.dispose();
   });
 });

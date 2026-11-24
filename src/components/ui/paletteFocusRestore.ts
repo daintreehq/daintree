@@ -48,3 +48,27 @@ export function consumeDeferredPaletteFocusRestore(): ((restore: () => void) => 
   deferredRestore = null;
   return receive;
 }
+
+/**
+ * Palette openings so far. A palette opening owns the keyboard, so a palette
+ * still on its way out compares this with the count when it closed, and a
+ * restore handed to a caller with the count when it was handed over: either
+ * one that has seen a newer opening leaves focus to that palette, even after
+ * it has closed again.
+ */
+let openings = 0;
+
+/**
+ * Records a palette opening. Hand-offs still pending were armed for a close
+ * this opening has overtaken, so they are dropped rather than left for
+ * whichever palette closes next.
+ */
+export function notePaletteOpening(): void {
+  openings += 1;
+  suppressNextRestore = false;
+  deferredRestore = null;
+}
+
+export function paletteOpeningCount(): number {
+  return openings;
+}

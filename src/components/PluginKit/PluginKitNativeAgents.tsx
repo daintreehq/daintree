@@ -14,7 +14,10 @@ import {
 import Anser from "anser";
 import { ChevronDown, GripVertical, Send } from "lucide-react";
 import type { ActionDanger, ActionId } from "@shared/types/actions";
-import type { PluginAgentPane, PluginSendToAgentRefusalReason } from "@shared/types/plugin";
+import type {
+  PluginAgentPaneObservation,
+  PluginSendToAgentRefusalReason,
+} from "@shared/types/plugin";
 import type {
   PluginActionButtonProps,
   PluginActionDispatchOutcome,
@@ -750,10 +753,10 @@ const REFUSAL_REASONS = Object.keys(ROW_REFUSAL_LABEL).filter(
 );
 
 /** The panes a plugin passed, narrowed to what `host.agents.list()` would have resolved. */
-function readPanes(value: unknown): PluginAgentPane[] {
+function readPanes(value: unknown): PluginAgentPaneObservation[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
-  const panes: PluginAgentPane[] = [];
+  const panes: PluginAgentPaneObservation[] = [];
   for (const item of value) {
     if (typeof item !== "object" || item === null) continue;
     const terminalId = nonEmpty(field(item, "terminalId"));
@@ -761,7 +764,7 @@ function readPanes(value: unknown): PluginAgentPane[] {
     if (!terminalId || !agentId || seen.has(terminalId)) continue;
     seen.add(terminalId);
     const rawWorktree = field(item, "worktree");
-    let worktree: PluginAgentPane["worktree"] = null;
+    let worktree: PluginAgentPaneObservation["worktree"] = null;
     if (typeof rawWorktree === "object" && rawWorktree !== null) {
       const id = nonEmpty(field(rawWorktree, "id"));
       const name = nonEmpty(field(rawWorktree, "name"));
@@ -785,7 +788,7 @@ function readPanes(value: unknown): PluginAgentPane[] {
 }
 
 type PickerRow =
-  | { kind: "agent"; id: string; pane: PluginAgentPane }
+  | { kind: "agent"; id: string; pane: PluginAgentPaneObservation }
   | { kind: "launch"; id: string; agentId: string };
 
 /** The picker badge's wording, as the host's own Send to agent picker draws it. */

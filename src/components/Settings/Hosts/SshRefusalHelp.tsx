@@ -1,21 +1,28 @@
+import { Button } from "@/components/ui/button";
 import { HostCommand } from "./HostCommand";
 import { shellWord, type SshRefusalAdvice } from "./hostLabels";
 
-/** What to do when ssh didn't connect: the fix for a refusal it named, else the general advice. */
+/**
+ * What to do when ssh didn't connect: the fix for a refusal it named, else the
+ * general advice. `onSignIn` offers a sign-in for a refused login, where ssh's
+ * own prompts (a key passphrase, a code) are passed to the person.
+ */
 export function SshRefusalHelp({
   refusal,
   target,
   testId,
+  onSignIn,
 }: {
   refusal: SshRefusalAdvice | null;
   target: string;
   testId?: string;
+  onSignIn?: () => void;
 }) {
   if (!refusal) {
     return (
       <p className="mt-3 text-xs text-text-secondary">
-        Daintree connects with your own ssh and never asks for a password. On a Mac, turn on Remote
-        Login in System Settings → General → Sharing.
+        Daintree connects with your own ssh and its config. On a Mac, turn on Remote Login in System
+        Settings → General → Sharing.
       </p>
     );
   }
@@ -40,10 +47,24 @@ export function SshRefusalHelp({
       )}
       {refusal === "login-refused" && (
         <>
-          <p className="text-xs text-text-secondary">
-            This machine refused the login, and Daintree can&apos;t type a password. Set up key
-            login so your own ssh gets in, then check again.
-          </p>
+          {onSignIn ? (
+            <>
+              <p className="text-xs text-text-secondary">
+                The login was refused (ssh names the machine above, which may be a jump host). If
+                ssh asks you for a key passphrase, a password or a code there, sign in and Daintree
+                passes its questions to you. Otherwise set up key login so your own ssh gets in,
+                then check again.
+              </p>
+              <Button variant="outline" size="sm" onClick={onSignIn}>
+                Sign in…
+              </Button>
+            </>
+          ) : (
+            <p className="text-xs text-text-secondary">
+              The login was refused (ssh names the machine above). Set up key login so your own ssh
+              gets in, then check again.
+            </p>
+          )}
           <HostCommand
             label="Set up key login"
             command={`ssh-copy-id ${shellWord(target.trim())}`}

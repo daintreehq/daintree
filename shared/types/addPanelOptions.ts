@@ -16,10 +16,16 @@ import type {
   TerminalScratchpad,
   TerminalFirstPrompt,
 } from "./panel.js";
-import type { GitStatus, DiffChangeSetEntry } from "./git.js";
+import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { TerminalSpawnSource, AddPanelFocusPolicy, ScheduledRunRef } from "./panel.js";
+import type { UpdateInstalledObservation } from "./ipc/agent.js";
+import type {
+  ConversationStore,
+  TerminalSpawnSource,
+  AddPanelFocusPolicy,
+  ScheduledRunRef,
+} from "./panel.js";
 import type { ActionContext } from "./actions.js";
 import type { TerminalGeometry } from "./terminal.js";
 
@@ -207,6 +213,8 @@ export interface AddPanelOptionsBase {
    * never read absence as zero.
    */
   agentIncarnation?: number;
+  /** The host's update-installed observation at hydration time (#17905). */
+  updateInstalled?: UpdateInstalledObservation;
   /** Runtime-detected agent identity at hydration time; cleared when the agent exits. Rehydrated from backend reconnect payload. */
   detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.) at hydration time; cleared when the process exits. */
@@ -239,6 +247,11 @@ export interface AddPanelOptionsBase {
   /** PTY-only. Where the conversation began, when the pane runs elsewhere (#12434). */
   conversationCwd?: string;
   /**
+   * PTY-only. The config folder holding the conversation `agentSessionId`
+   * resumes, when the launch env points at another (#17087).
+   */
+  conversationStore?: ConversationStore;
+  /**
    * PTY-only. Commit the pane held for recovery (#12434): no startup slot, no
    * prewarm, no spawn. See `PtyPanelData.restoreRecovery`.
    */
@@ -268,6 +281,8 @@ export interface AddPanelOptionsBase {
   restoreProvenance?: TerminalRestoreProvenance;
   /** PTY-only. See `PtyPanelData.lastAgentObservation`. */
   lastAgentObservation?: TerminalAgentObservation;
+  /** PTY-only, and only for a pane restore holds. See `PtyPanelData.stopObservation`. */
+  stopObservation?: TerminalAgentObservation;
   /** PTY-only. See `PtyPanelData.launchedByPluginId`. */
   launchedByPluginId?: string;
   /** PTY-only. See `PtyPanelData.holdOnRestart`. */
@@ -485,11 +500,13 @@ export interface DiffPanelOptions extends AddPanelOptionsBase {
    */
   changeSet?: DiffChangeSetEntry[];
   /**
-   * `changeSet` entry the panel opens on. Pass it whenever the set can hold
-   * two entries with the same path and status (partial staging) — they differ
-   * only by this key. Runtime-only, like the set itself.
+   * `changeSet` entry the panel opens on, by its Viewed key and, with
+   * `fileSide`, its side. Pass both whenever the set can list one file twice
+   * (partial staging): the twins share path, status and key and differ only by
+   * side. Runtime-only, like the set itself.
    */
   viewedKey?: string;
+  fileSide?: GitDiffSide;
 }
 
 /**

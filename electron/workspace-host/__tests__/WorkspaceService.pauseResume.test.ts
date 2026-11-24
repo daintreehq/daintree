@@ -77,6 +77,7 @@ vi.mock("../../services/worktree/index.js", () => ({
 
 const mockPullRequestService = {
   initialize: vi.fn(),
+  setForgeSettings: vi.fn(),
   start: vi.fn(),
   stop: vi.fn(),
   reset: vi.fn(),
@@ -264,6 +265,250 @@ describe("WorkspaceService.pause/resume", () => {
   });
 });
 
+describe("WorkspaceService PR polling under the power policy (#17060)", () => {
+  const DEEP = { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true };
+  const BLURRED = { statusAllowed: true, backgroundWorkAllowed: false, attenuated: true };
+  const ACTIVE = { statusAllowed: true, backgroundWorkAllowed: true, attenuated: false };
+
+  let service: WorkspaceService;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.spyOn(os, "setPriority").mockImplementation(() => {});
+    const WorkspaceServiceModule = await import("../WorkspaceService.js");
+    service = new WorkspaceServiceModule.WorkspaceService(vi.fn() as any);
+    service["projectRootPath"] = "/test/root";
+    service["projectId"] = "test-project-id";
+    service["git"] = mockSimpleGit as any;
+    // Stands in for a load that initialized PR detection.
+    service["prService"]["initializedForPath"] = "/test/root";
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("stops PR polling when no window is on screen or the machine suspends", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+
+    expect(mockPullRequestService.stop).toHaveBeenCalled();
+  });
+
+  it("keeps PR polling while a window is on screen but unfocused", () => {
+    service.setWorkspacePowerPolicy(BLURRED);
+
+    expect(mockPullRequestService.stop).not.toHaveBeenCalled();
+  });
+
+  it("restarts PR polling without jitter when a window comes back on screen", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.setWorkspacePowerPolicy(BLURRED);
+
+    expect(mockPullRequestService.start).toHaveBeenCalledTimes(1);
+    expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+  });
+
+  it("does not restart PR polling for a policy push that keeps the window off screen", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.setWorkspacePowerPolicy({ ...DEEP, attenuated: false });
+
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+  });
+
+  it("leaves a paused host's PR polling stopped when a window comes back on screen", () => {
+    service.pause();
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.setWorkspacePowerPolicy(ACTIVE);
+
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+  });
+
+  it("does not start PR polling when foregrounded while nothing is on screen", () => {
+    service.pause();
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.resume();
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+
+    service.setWorkspacePowerPolicy(ACTIVE);
+    expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+  });
+
+  it("resetPRState() in a paused host resets PR state without starting polling", () => {
+    service.pause();
+    vi.clearAllMocks();
+
+    service.resetPRState("req-reset");
+
+    expect(mockPullRequestService.reset).toHaveBeenCalled();
+    expect(mockPullRequestService.initialize).toHaveBeenCalledWith("/test/root", "test-project-id");
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+
+    service.resume();
+    expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+  });
+
+  it("resetPRState() while nothing is on screen does not start polling", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.resetPRState("req-reset");
+
+    expect(mockPullRequestService.reset).toHaveBeenCalled();
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+  });
+
+  function holdRestartCheck(): () => void {
+    let finish: () => void = () => {};
+    mockPullRequestService.start.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+    );
+    return () => finish();
+  }
+
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  function changeForgeRemote(): void {
+    service.updateForgeSettings({
+      forgeProviderOverride: null,
+      forgeDefaultProviderId: null,
+      forgeRemote: "upstream",
+    });
+  }
+
+  it("a forge-settings change while nothing is on screen is owed as a full refresh after the restart's own check", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    changeForgeRemote();
+    expect(mockPullRequestService.setForgeSettings).toHaveBeenCalled();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+    const finishCheck = holdRestartCheck();
+    service.setWorkspacePowerPolicy(ACTIVE);
+    expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+    await flush();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+    finishCheck();
+    await flush();
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+
+    // Owed once, not on every return.
+    service.setWorkspacePowerPolicy(DEEP);
+    mockPullRequestService.start.mockResolvedValueOnce(undefined);
+    service.setWorkspacePowerPolicy(ACTIVE);
+    await flush();
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("an owed settings refresh stays owed when the screen locks before the restart's check finishes", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+    changeForgeRemote();
+
+    const finishCheck = holdRestartCheck();
+    service.setWorkspacePowerPolicy(ACTIVE);
+    service.setWorkspacePowerPolicy(DEEP);
+    finishCheck();
+    await flush();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+    mockPullRequestService.start.mockResolvedValueOnce(undefined);
+    service.setWorkspacePowerPolicy(ACTIVE);
+    await flush();
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs an owed settings refresh only after the latest restart's check", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+    changeForgeRemote();
+
+    const finishFirstCheck = holdRestartCheck();
+    service.setWorkspacePowerPolicy(ACTIVE);
+    service.setWorkspacePowerPolicy(DEEP);
+    const finishSecondCheck = holdRestartCheck();
+    service.setWorkspacePowerPolicy(ACTIVE);
+
+    finishFirstCheck();
+    await flush();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+    finishSecondCheck();
+    await flush();
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("teardown drops an owed settings refresh whose restart check is still running", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+    changeForgeRemote();
+
+    const finishCheck = holdRestartCheck();
+    service.setWorkspacePowerPolicy(ACTIVE);
+    service.dispose();
+    finishCheck();
+    await flush();
+
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+  });
+
+  it("holds credential changes while off screen and replays the latest per provider", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.updateForgeCredentials("acme.a", null);
+    service.updateForgeCredentials("acme.a", { kind: "bearer", value: "token" });
+    service.updateForgeCredentials("acme.b", null);
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+    expect(mockPullRequestService.reset).not.toHaveBeenCalled();
+
+    service.setWorkspacePowerPolicy(ACTIVE);
+    // acme.a's latest is a token (one refresh); acme.b's is a sign-out (one reset).
+    expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+    expect(mockPullRequestService.reset).toHaveBeenCalledTimes(1);
+  });
+
+  it("a focus refresh whose discovery outlasts a screen lock skips the PR pass", async () => {
+    vi.spyOn(service as any, "discoverAndSyncWorktrees").mockImplementation(async () => {
+      service.setWorkspacePowerPolicy(DEEP);
+    });
+
+    await service.refresh("req-focus", undefined, "focus");
+
+    expect(service["discoverAndSyncWorktrees"]).toHaveBeenCalled();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+  });
+
+  it("a wake refresh that finds nothing on screen leaves the PR catch-up to the poller", async () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    await service.refreshOnWake("req-wake-deep");
+
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+  });
+
+  it("a credential sign-out while nothing is on screen does not start polling", () => {
+    service.setWorkspacePowerPolicy(DEEP);
+    vi.clearAllMocks();
+
+    service.updateForgeCredentials("daintree.github.github", null);
+
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+  });
+});
+
 describe("WorkspaceService.refreshOnWake", () => {
   let service: WorkspaceService;
   let mockSendEvent: ReturnType<typeof vi.fn>;
@@ -362,6 +607,8 @@ describe("WorkspaceService.refreshOnWake", () => {
     await service.refreshOnWake("req-wake-empty");
 
     expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+    // Waking is not a request to re-ask about issues the forge didn't find.
+    expect(mockPullRequestService.refresh).toHaveBeenCalledWith({ preserveIssueBackoff: true });
     expect(mockSendEvent).toHaveBeenCalledWith({
       type: "refresh-result",
       requestId: "req-wake-empty",

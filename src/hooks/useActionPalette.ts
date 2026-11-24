@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
-import type { ActionDanger, ActionManifestEntry } from "@shared/types/actions";
+import type { ActionDanger, ActionId, ActionManifestEntry } from "@shared/types/actions";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useActionMruStore } from "@/store/actionMruStore";
 import { useActionPrefsStore } from "@/store/actionPrefsStore";
@@ -20,6 +28,7 @@ import { getActionCategoryLabel, orderActionCategories } from "@/config/actionCa
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isPanelLimitError } from "@/services/actions/definitions/panelLimitError";
 import { useSearchablePalette } from "./useSearchablePalette";
+import { deferPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { isStagedConfirmation } from "@/services/actions/confirmationStaged";
 import {
   validateStringField,
@@ -31,6 +40,7 @@ import {
 export interface ActionPaletteItem {
   id: string;
   title: string;
+  /** The entry's `paletteDescription` when it has one, else its `description`. */
   description: string;
   category: string;
   enabled: boolean;
@@ -163,24 +173,48 @@ export const RECENTLY_USED_SECTION_ID = "recently-used";
 const resolveMaxResults = (query: string): number =>
   query.trim() ? MAX_RESULTS : Number.POSITIVE_INFINITY;
 
-export function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
+/**
+ * @param target The entry a redirect row dispatches, when it has one. The row
+ *   keeps the source's name, which is what the user searched for, but whether
+ *   it can run is the target's, since that is what Enter runs.
+ */
+export function toActionPaletteItem(
+  entry: ActionManifestEntry,
+  target?: ActionManifestEntry
+): ActionPaletteItem {
   const title =
     typeof entry.title === "string" && entry.title.trim().length > 0 ? entry.title : entry.id;
-  const description = typeof entry.description === "string" ? entry.description : "";
+  // The palette subtitle stands in for the MCP description everywhere the row
+  // reads it, search included, so agent guidance can't surface as a match excerpt.
+  const description =
+    typeof entry.paletteDescription === "string" && entry.paletteDescription.trim().length > 0
+      ? entry.paletteDescription
+      : typeof entry.description === "string"
+        ? entry.description
+        : "";
   const category = typeof entry.category === "string" ? entry.category : "General";
+  const redirectTo =
+    typeof entry.paletteRedirectTo === "string" ? entry.paletteRedirectTo : undefined;
+  // A redirect whose target is gone stays pickable, as on the command HUD:
+  // dispatch reports NOT_FOUND instead of the row borrowing the source's state.
+  const runs = target ?? (redirectTo ? undefined : entry);
   // A `requireContext` palette action surfaces as disabled-with-reason: fold
   // its palette-only flags into the row's enabled/disabledReason so the
   // existing disabled-row UX (grayed, inline reason, Enter no-ops) applies
   // without touching the manifest's dispatch-facing `enabled`.
-  const enabled = entry.enabled && entry.paletteDisabled !== true;
-  const disabledReason =
-    typeof entry.paletteDisabledReason === "string"
-      ? entry.paletteDisabledReason
-      : typeof entry.disabledReason === "string"
-        ? entry.disabledReason
+  const enabled = runs ? runs.enabled && runs.paletteDisabled !== true : true;
+  const disabledReason = !runs
+    ? undefined
+    : typeof runs.paletteDisabledReason === "string"
+      ? runs.paletteDisabledReason
+      : typeof runs.disabledReason === "string"
+        ? runs.disabledReason
         : undefined;
-  const redirectTo =
-    typeof entry.paletteRedirectTo === "string" ? entry.paletteRedirectTo : undefined;
+  // The source's own binding already runs the target (resolveInteractiveActionId),
+  // so it stays when there is one; otherwise the target's binding is the chord
+  // that does what picking this row does.
+  const shortcutOwner =
+    target && !keybindingService.getEffectiveCombo(entry.id) ? target.id : entry.id;
   const dangerRationale =
     typeof entry.dangerRationale === "string" && entry.dangerRationale.trim().length > 0
       ? entry.dangerRationale.trim()
@@ -201,8 +235,8 @@ export function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteIt
     dangerRationale,
     disabledReason,
     redirectTo,
-    keybinding: keybindingService.getDisplayCombo(entry.id),
-    shortcut: keybindingService.getEffectiveCombo(entry.id) || undefined,
+    keybinding: keybindingService.getDisplayCombo(shortcutOwner),
+    shortcut: keybindingService.getEffectiveCombo(shortcutOwner) || undefined,
     kind: entry.kind,
     pluginId: entry.pluginId,
     titleLower: title.toLowerCase(),
@@ -232,6 +266,12 @@ export function useActionPalette(): UseActionPaletteReturn {
     // Palette rows never read the JSON schemas — skip their compilation and
     // cloning so first open doesn't pay the deferred ~300-action compile.
     const entries = actionService.list(undefined, { includeSchemas: false });
+    // Indexed before filtering: a redirect target is often palette-hidden or
+    // arg-taking itself. `list()` drops actions hidden by `isVisible`, which
+    // dispatch still reaches through `get()`, so a miss falls back to it.
+    const entryById = new Map(entries.map((e) => [e.id, e]));
+    const redirectTarget = (id: ActionId): ActionManifestEntry | undefined =>
+      entryById.get(id) ?? actionService.get(id, undefined, { includeSchemas: false }) ?? undefined;
     return entries
       .filter((e) => {
         if (e.kind !== "command") return false;
@@ -253,10 +293,12 @@ export function useActionPalette(): UseActionPaletteReturn {
         return e.pluginId !== undefined && actionService.getPluginPaletteArgs(e.id) !== null;
       })
       .map((e) => {
-        const item = toActionPaletteItem(e);
+        const target = e.paletteRedirectTo ? redirectTarget(e.paletteRedirectTo) : undefined;
+        const item = toActionPaletteItem(e, target);
         if (e.requiresArgs && !e.paletteRedirectTo) item.promptsForArgs = true;
-        if (e.pluginId !== undefined) {
-          const enablement = pluginGates.get(e.id)?.enablement;
+        const runs = target ?? e;
+        if (runs.pluginId !== undefined) {
+          const enablement = pluginGates.get(runs.id)?.enablement;
           if (enablement && !evaluateWhenClause(enablement, pluginWhenContext)) {
             item.enabled = false;
             item.disabledReason = item.disabledReason ?? PLUGIN_DISABLED_REASON;
@@ -431,6 +473,8 @@ export function useActionPalette(): UseActionPaletteReturn {
     filterFn,
     maxResults: resolveMaxResults,
     paletteId: "action",
+    // Opened from the action registry through the store, not through `open()`.
+    resetOnStoreOpen: true,
   });
 
   // `results` is the browse inventory exactly when it is the array the browse
@@ -462,6 +506,10 @@ export function useActionPalette(): UseActionPaletteReturn {
       if (item.danger !== "confirm") {
         useActionMruStore.getState().recordActionMru(item.id);
       }
+      // The palette refocuses its opener after its exit animation, which would
+      // pull the keyboard out of a dialog or panel the command just opened.
+      // Restore only if nothing took it.
+      deferPaletteFocusRestore((restore) => restore());
       baseClose();
       // A redirect row runs its interactive sibling (e.g. a dialog-opener)
       // instead of the headless action the user searched for. MRU above still
@@ -653,7 +701,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     [argField, query, submitArgValue]
   );
 
-  const executeAction = useCallback(
+  const runAction = useCallback(
     (item: ActionPaletteItem) => {
       // Enter on a disabled row is a silent no-op: palette stays open, no
       // dispatch, no toast. The inline disabled-reason text in the row already
@@ -678,6 +726,16 @@ export function useActionPalette(): UseActionPaletteReturn {
     [argSession, pickArgRow, dispatchAction, query, setQuery]
   );
 
+  // Every row takes this as its click handler, and `runAction` changes with
+  // the query, so handing rows that directly re-rendered the whole memoized
+  // list on each keystroke. The rows get one identity for the palette's
+  // lifetime that runs whatever `runAction` the last commit produced.
+  const runActionRef = useRef(runAction);
+  useLayoutEffect(() => {
+    runActionRef.current = runAction;
+  }, [runAction]);
+  const executeAction = useCallback((item: ActionPaletteItem) => runActionRef.current(item), []);
+
   const confirmSelection = useCallback(() => {
     if (argSession) {
       pickArgRow(argRows[argSelectedIndex]);
@@ -691,7 +749,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     // `selectedIndex` is the clamped read above, so it already names a row that
     // exists whenever there is one.
     if (selectedIndex >= 0) {
-      executeAction(results[selectedIndex]!);
+      runAction(results[selectedIndex]!);
     }
   }, [
     argSession,
@@ -701,7 +759,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     isStale,
     results,
     selectedIndex,
-    executeAction,
+    runAction,
   ]);
 
   const pinAction = useCallback((item: ActionPaletteItem): boolean => {

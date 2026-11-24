@@ -293,15 +293,37 @@ export class WorkspaceHostProcess extends EventEmitter {
   /**
    * Transfer a MessagePort for the new worktree port protocol (Phase 1).
    * Supports request/response correlation and scoped event delivery.
+   * `portId` names it for {@link detachWorktreePort}: the transfer neuters
+   * `port` here, so closing it in this process never reaches the host.
    */
-  attachWorktreePort(port: MessagePortMain): boolean {
+  attachWorktreePort(port: MessagePortMain, portId: number): boolean {
     if (!this.child || this.isDisposed) return false;
     try {
-      this.child.postMessage({ type: "attach-worktree-port" }, [port]);
+      this.child.postMessage(
+        { type: "attach-worktree-port", portId } satisfies WorkspaceHostRequest,
+        [port]
+      );
       return true;
     } catch (error) {
       console.error(`[WorkspaceHost:${this.serviceName}] Failed to attach worktree port:`, error);
       return false;
+    }
+  }
+
+  /**
+   * Have the host close the worktree port attached as `portId`, so it stops
+   * posting into a view that was cached, frozen, or destroyed (#17037). A host
+   * that never held it (its previous process did) ignores the id.
+   */
+  detachWorktreePort(portId: number): void {
+    if (!this.child || this.isDisposed) return;
+    try {
+      this.child.postMessage({
+        type: "detach-worktree-port",
+        portId,
+      } satisfies WorkspaceHostRequest);
+    } catch (error) {
+      console.error(`[WorkspaceHost:${this.serviceName}] Failed to detach worktree port:`, error);
     }
   }
 
@@ -1264,6 +1286,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         break;
 
       case "monitor":
+      case "active-worktree-id":
       case "delete-preview-result":
         this.handleRequestResult(this.toResult(event, true));
         break;
@@ -1297,6 +1320,7 @@ export class WorkspaceHostProcess extends EventEmitter {
         break;
 
       case "git:project-pulse":
+      case "idle-pause-result":
         this.handleRequestResult(this.toResult(event, true));
         break;
 
@@ -1384,9 +1408,14 @@ export class WorkspaceHostProcess extends EventEmitter {
     requestId: string;
     success?: boolean;
     error?: string;
+    gitStarted?: true;
   }): void {
     if (event.success === false || event.error) {
-      this.broker.reject(event.requestId, new Error(event.error || "Operation failed"));
+      const error = new Error(event.error || "Operation failed");
+      // Read by the merged-worktree rule: a failure after git started may
+      // still have removed the checkout.
+      if (event.gitStarted) Object.assign(error, { gitStarted: true });
+      this.broker.reject(event.requestId, error);
     } else {
       this.broker.resolve(event.requestId, event);
     }

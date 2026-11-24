@@ -1,6 +1,6 @@
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
-import { helpSessionService } from "../../services/HelpSessionService.js";
+import { loadedHelpSessionService } from "../../services/helpSessionRuntime.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import type { PtyClient } from "../../services/PtyClient.js";
 import { scratchStore } from "../../services/ScratchStore.js";
@@ -33,11 +33,10 @@ function assistantLiveFor(endpoint: RemoteViewEndpoint): boolean {
   if (endpoint.projectId === null) return false;
   const pty = getPtyClient();
   if (!pty) return false;
-  return helpSessionService
-    .getAssistantBackends(endpoint.projectId)
-    .some(
-      (backend) => backend.webContentsId === endpoint.handle && pty.hasTerminal(backend.terminalId)
-    );
+  // Host mode loads this at launch; an unloaded session service runs no assistant.
+  return (loadedHelpSessionService()?.getAssistantBackends(endpoint.projectId) ?? []).some(
+    (backend) => backend.webContentsId === endpoint.handle && pty.hasTerminal(backend.terminalId)
+  );
 }
 
 /**

@@ -220,6 +220,23 @@ describe("preparing a switch", () => {
     expect(plan.branchState?.kind).toBe("same-tip");
   });
 
+  it("carries the source project's name, emoji and colour", async () => {
+    const r = await rig();
+    const project = sourceProject(r.local, "prep-display-src");
+    r.local.updateProjectDisplay(project.id, {
+      name: "Daintree app",
+      emoji: "🎸",
+      color: "#ff5500",
+    });
+    const prepared = await r.service.prepare(ctx, {
+      fromHostId: "local",
+      toHostId: STUDIO,
+      projectId: project.id,
+      worktreePath: null,
+    });
+    expect(prepared.display).toEqual({ name: "Daintree app", emoji: "🎸", color: "#ff5500" });
+  });
+
   it("only lets a window start from its own host", async () => {
     const r = await rig();
     await expect(
@@ -257,6 +274,30 @@ describe("cloning onto the target", () => {
       worktreePath: path.join(root, "clone-dst-worktrees", "feature-host-chip"),
     });
     expect(r.service.status({ opId: id }).state).toBe("succeeded");
+  });
+
+  it("gives the clone on the host the source's name, emoji and colour", async () => {
+    const r = await rig();
+    const project = sourceProject(r.local, "clone-display-src");
+    const destination = path.join(root, "clone-display-dst");
+    const result = await r.service.execute(ctx, {
+      kind: "clone",
+      opId: opId(),
+      fromHostId: "local",
+      toHostId: STUDIO,
+      projectId: project.id,
+      source: { kind: "remote", url: URL },
+      destination,
+      branch: null,
+      options: { submodules: false, depth: "full" },
+      setupRecipeId: null,
+      display: { name: "Daintree app", emoji: "🎸", color: null },
+    });
+    expect(result).toMatchObject({ kind: "opened", projectName: "Daintree app" });
+    expect(r.studio.projects.find((p) => p.path === destination)).toMatchObject({
+      name: "Daintree app",
+      emoji: "🎸",
+    });
   });
 
   it("keeps following the clone across a dropped link", async () => {
@@ -404,6 +445,39 @@ describe("opening what the target already has", () => {
     });
     expect(result).toMatchObject({ kind: "opened", worktreePath: worktree });
     expect(r.studio.createWorktree).not.toHaveBeenCalled();
+  });
+
+  it("fills the host copy's defaults with the source's identity, and drops a malformed one", async () => {
+    const r = await rig();
+    const existing = path.join(root, "open-display");
+    git(root, ["clone", "-q", URL, existing]);
+    const project = r.studio.addProject(existing, undefined, { name: "Mine" });
+    const open = (display: unknown) =>
+      r.service.execute(ctx, {
+        kind: "open",
+        opId: opId(),
+        toHostId: STUDIO,
+        candidate: { projectId: project.id, path: existing },
+        remoteUrls: [URL],
+        branch: null,
+        branchRemoteUrl: null,
+        navigateOnly: true,
+        display: display as { name: string; emoji: string; color: string | null },
+      });
+
+    await expect(
+      open({ name: "bad\u0000name", emoji: "🎸", color: "#ff5500" })
+    ).resolves.toMatchObject({ kind: "opened", projectName: "Mine" });
+    expect(r.studio.updateProjectDisplay).not.toHaveBeenCalled();
+
+    await expect(
+      open({ name: "Daintree app", emoji: "🎸", color: "#ff5500" })
+    ).resolves.toMatchObject({ kind: "opened", projectName: "Mine" });
+    expect(r.studio.projects.find((p) => p.id === project.id)).toMatchObject({
+      name: "Mine",
+      emoji: "🎸",
+      color: "#ff5500",
+    });
   });
 });
 

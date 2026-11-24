@@ -321,7 +321,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"] },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(read.terminals[0]).toMatchObject({ terminalId: "g", agentState: "waiting" });
 
@@ -334,6 +334,34 @@ describe("buildViewlessTerminalStatus results", () => {
       expect(refused.terminals[0]?.error).toBe("Terminal not found or status unavailable");
     });
 
+    it("reads both global sessions named in one call, and only those admitted (#18142)", async () => {
+      const d = deps([globalRecord(), globalRecord({ id: "g2", agentState: "working" })], {
+        owners: { g: GLOBAL_ASSISTANT_ID, g2: GLOBAL_ASSISTANT_ID },
+      });
+      const both = await buildViewlessTerminalStatus(
+        d,
+        WORKSPACE,
+        { terminalIds: ["g", "g2"] },
+        new Set(["g", "g2"]),
+        new Set(["g", "g2"])
+      );
+      expect(both.terminals.map((t) => [t.terminalId, t.agentState])).toEqual([
+        ["g", "waiting"],
+        ["g2", "working"],
+      ]);
+
+      const one = await buildViewlessTerminalStatus(
+        deps([globalRecord(), globalRecord({ id: "g2" })], {
+          owners: { g: GLOBAL_ASSISTANT_ID, g2: GLOBAL_ASSISTANT_ID },
+        }),
+        WORKSPACE,
+        { terminalIds: ["g", "g2"] },
+        new Set(["g", "g2"]),
+        new Set(["g"])
+      );
+      expect(one.terminals[1]?.error).toBe("Terminal not found or status unavailable");
+    });
+
     it("never discloses a record the backend places elsewhere, whatever the ledger said", async () => {
       const d = deps([globalRecord({ projectId: "ws-other" })], {
         owners: { g: GLOBAL_ASSISTANT_ID },
@@ -343,7 +371,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"] },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledTimes(1);
       expect(result.terminals[0]?.error).toBe("Terminal not found or status unavailable");
@@ -367,7 +395,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"], submissionToken: "mine" },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(result.terminals[0]?.submission).toMatchObject({
         token: "mine",
@@ -383,7 +411,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"] },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(d.ptyClient.getTerminalAsync).not.toHaveBeenCalled();
       expect(result.terminals[0]?.error).toBe("Terminal not found or status unavailable");
@@ -396,7 +424,7 @@ describe("buildViewlessTerminalStatus results", () => {
           WORKSPACE,
           { terminalIds: ["g"], ...(submissionToken ? { submissionToken } : {}) },
           new Set(["g"]),
-          "g"
+          new Set(["g"])
         );
       expect((await read("mine")).terminals[0]?.lastHandback?.message).toBe("Use studio-02");
       expect((await read("theirs")).terminals[0]?.lastHandback).toBeUndefined();
@@ -413,7 +441,7 @@ describe("buildViewlessTerminalStatus results", () => {
         WORKSPACE,
         { terminalIds: ["g"], includeOutput: true },
         new Set(["g"]),
-        "g"
+        new Set(["g"])
       );
       expect(d.ptyClient.getSerializedStateAsync).not.toHaveBeenCalled();
       expect(JSON.stringify(result)).not.toContain("the person's conversation");
@@ -545,6 +573,22 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(result.unavailableFields).not.toContain("lastHandback");
   });
 
+  it("reports a working pane's update footer off the host record (#17905)", async () => {
+    const updateInstalled = { observedAt: 4_000, namesRestart: false };
+    const result = await buildViewlessTerminalStatus(
+      deps([
+        record({ id: "seen", agentState: "working", detectedAgentId: "claude", updateInstalled }),
+        record({ id: "plain" }),
+      ]),
+      WORKSPACE,
+      { terminalIds: ["seen", "plain"] }
+    );
+
+    expect(result.terminals[0]).toMatchObject({ agentState: "working", updateInstalled });
+    expect(result.terminals[0]).not.toHaveProperty("waitingReason");
+    expect(result.terminals[1]).not.toHaveProperty("updateInstalled");
+  });
+
   it("keeps hasPty through the output attachment, in both polarities", async () => {
     // `recentOutput` is assigned onto the entry after `buildEntry` returns, so
     // the two must not clobber each other.
@@ -592,32 +636,32 @@ describe("buildViewlessTerminalStatus results", () => {
       deps(
         [
           // Detection outranks the launch, as the entry's own `agentId` does.
-          record({ id: "detected", launchAgentId: "codex", detectedAgentId: "claude" }),
+          record({ id: "detected", launchAgentId: "gemini", detectedAgentId: "claude" }),
           record({ id: "typed" }),
-          record({ id: "codex", launchAgentId: "codex" }),
+          record({ id: "gemini", launchAgentId: "gemini" }),
           record({ id: "gone" }),
         ],
         {
           serialized: {
             detected: { data: screen },
             typed: { data: typed },
-            codex: { data: screen },
+            gemini: { data: screen },
             gone: null,
           },
         }
       ),
       WORKSPACE,
-      { terminalIds: ["detected", "typed", "codex", "gone"], includeOutput: {} }
+      { terminalIds: ["detected", "typed", "gemini", "gone"], includeOutput: {} }
     );
 
-    const [detected, typedEntry, codex, gone] = result.terminals;
+    const [detected, typedEntry, gemini, gone] = result.terminals;
     expect(detected?.inputLine).toEqual({ state: "suggestion", text: "open the PR" });
     expect(detected?.recentOutput).toContain("\n❯ [suggested by Claude Code: open the PR]\n");
     expect(typedEntry?.inputLine).toEqual({ state: "typed", text: "open the PR" });
     expect(typedEntry?.recentOutput).toContain("\n❯ open the PR\n");
     // An agent with no declared rule reads as unknown, its tail as drawn.
-    expect(codex?.inputLine).toEqual({ state: "unknown", text: "" });
-    expect(codex?.recentOutput).toContain("\n❯ open the PR\n");
+    expect(gemini?.inputLine).toEqual({ state: "unknown", text: "" });
+    expect(gemini?.recentOutput).toContain("\n❯ open the PR\n");
     // No screen was read, so there is no box to report.
     expect(gone?.recentOutput).toBeNull();
     expect(gone).not.toHaveProperty("inputLine");
@@ -739,6 +783,26 @@ describe("buildViewlessTerminalStatus submission correlation (#12337)", () => {
     expect(result.terminals[0]?.submission).toEqual({
       token: "tok-1",
       phase: "pty_written",
+      at: 4242,
+    });
+  });
+
+  it("leaves out where a cancelled line stopped, which only main reads (#18157)", async () => {
+    const d = deps([record()], {
+      owners,
+      submissions: {
+        "t-1": { "tok-1": { token: "tok-1", phase: "cancelled", at: 4242, cancelledAt: "enter" } },
+      },
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["t-1"],
+      submissionToken: "tok-1",
+    });
+
+    expect(result.terminals[0]?.submission).toEqual({
+      token: "tok-1",
+      phase: "cancelled",
       at: 4242,
     });
   });

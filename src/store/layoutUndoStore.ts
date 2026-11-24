@@ -76,20 +76,36 @@ let lastLayoutPanelIds: ReadonlySet<string> = new Set();
  * The panels a snapshot can still restore: live and inside layout history. Read
  * from `panelsById` rather than `panelIds`, the same lookup `applySnapshot`
  * restores through. The orchestrator runs this on every panel-store write, so
- * a write that leaves `panelsById` alone hands back the same set.
+ * a write that leaves `panelsById`, or just which panels are in layout, alone
+ * hands back the same set.
  */
 export function selectLayoutPanelIds(state: {
   panelsById: Record<string, CarrierPanel | undefined>;
 }): ReadonlySet<string> {
   if (state.panelsById === lastPanelsById) return lastLayoutPanelIds;
+  lastPanelsById = state.panelsById;
+  if (holdsLayoutPanelIds(state.panelsById, lastLayoutPanelIds)) return lastLayoutPanelIds;
   const ids = new Set<string>();
   for (const id in state.panelsById) {
     const panel = state.panelsById[id];
     if (panel && !isExcludedFromLayout(panel)) ids.add(id);
   }
-  lastPanelsById = state.panelsById;
   lastLayoutPanelIds = ids;
   return ids;
+}
+
+function holdsLayoutPanelIds(
+  panelsById: Record<string, CarrierPanel | undefined>,
+  ids: ReadonlySet<string>
+): boolean {
+  let count = 0;
+  for (const id in panelsById) {
+    const panel = panelsById[id];
+    if (!panel || isExcludedFromLayout(panel)) continue;
+    if (!ids.has(id)) return false;
+    count++;
+  }
+  return count === ids.size;
 }
 
 export function sameLayoutPanelIds(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {

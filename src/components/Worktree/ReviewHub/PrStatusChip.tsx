@@ -23,6 +23,7 @@ import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 import { PrChecksPopover } from "./PrChecksPopover";
+import { pullRequestWords } from "./prWords";
 import {
   applyMergeOutcome,
   describeMergeOutcome,
@@ -44,11 +45,6 @@ const MERGE_ACK_DWELL_MS = 6_000;
  */
 const MERGE_OUTCOME_HOLD_MS = 30_000;
 
-const NO_PR_WORDS: Record<ForgePullRequestTerm, { badge: string; noun: string }> = {
-  "pull-request": { badge: "No PR", noun: "pull request" },
-  "merge-request": { badge: "No MR", noun: "merge request" },
-};
-
 const NEW_PR_FOCUS_RING =
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
@@ -67,6 +63,8 @@ interface PrStatusChipProps {
   worktreePath: string;
   /** What the chip can offer with no pull request; `null` until that's known. */
   newPRLink: ForgeNewPRLink | null;
+  /** What the forge behind `worktreePR` calls it; omitted reads as "pull-request". */
+  prTerm?: ForgePullRequestTerm;
   onOpenExternal: (url: string) => void;
 }
 
@@ -75,6 +73,7 @@ export function PrStatusChip({
   worktreePR,
   worktreePath,
   newPRLink,
+  prTerm,
   onOpenExternal,
 }: PrStatusChipProps) {
   // Keyed to the PR it was for: a reply about one pull request never paints
@@ -132,9 +131,11 @@ export function PrStatusChip({
     const mergeIntentText = mergeIntent
       ? ` — ${describeMergeIntent(mergeIntent)}${headMoved ? `. ${HEAD_MOVED_WHILE_ARMED_TEXT}` : ""}`
       : "";
+    const words = pullRequestWords(prTerm);
+    const prRef = words.ref(worktreePR.prNumber);
     const triggerDescription = ciVisual
-      ? `Pull request #${worktreePR.prNumber} ${prStateLabel} — CI ${ciVisual.shortLabel}${mergeIntentText}`
-      : `Pull request #${worktreePR.prNumber} ${prStateLabel}${mergeIntentText}`;
+      ? `${words.title} ${prRef} ${prStateLabel} — CI ${ciVisual.shortLabel}${mergeIntentText}`
+      : `${words.title} ${prRef} ${prStateLabel}${mergeIntentText}`;
     return (
       <>
         {/* Available whatever the roll-up says, including when it says nothing:
@@ -148,6 +149,7 @@ export function PrStatusChip({
           worktreePath={worktreePath}
           prNumber={worktreePR.prNumber}
           prUrl={worktreePR.prUrl}
+          prTerm={prTerm}
           triggerDescription={triggerDescription}
           onOpenExternal={onOpenExternal}
           onMergeOutcome={handleMergeOutcome}
@@ -163,13 +165,13 @@ export function PrStatusChip({
               state word beside it, but the glyph is what the eye reaches
               first, and it is shared with the card badge, which does not. */}
             <PrStateGlyph className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
-            <span className="sr-only">Pull request</span>
+            <span className="sr-only">{words.title}</span>
             {/* Words and the number stay neutral; the glyphs carry the state
                 colour. Elsewhere a PR number wears its `pr-*` token, but that
                 token is only contrast-gated on bare panels — on this chip's
                 tinted fill a closed PR's red drops under 4.5:1 for small text,
                 and status tokens only promise the 3:1 non-text floor. */}
-            <span className="text-text-primary">#{worktreePR.prNumber}</span>
+            <span className="text-text-primary">{prRef}</span>
             {/* In a narrow review header the words step down before the branch
                 beside the chip has to: the merge words first, then the state
                 word the glyph already shows, then the CI word beside its
@@ -250,12 +252,14 @@ export function PrStatusChip({
               // 24px target without growing the header row the chip sits in,
               // and never narrower: the branch beside it is what gives way.
               className="-my-1 shrink-0 transition-colors"
-              aria-label={`View pull request #${worktreePR.prNumber}`}
+              aria-label={`View ${words.noun} ${prRef}`}
             >
               <ExternalLink aria-hidden="true" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side="bottom">View pull request #{worktreePR.prNumber}</TooltipContent>
+          <TooltipContent side="bottom">
+            View {words.noun} {prRef}
+          </TooltipContent>
         </Tooltip>
         {ackVisible && outcome && <MergeAck outcome={outcome} prNumber={worktreePR.prNumber} />}
       </>
@@ -278,7 +282,8 @@ function NoPrChip({
   link: ForgeNewPRLink;
   onOpenExternal: (url: string) => void;
 }) {
-  const { badge, noun } = NO_PR_WORDS[link.term];
+  const { short, noun } = pullRequestWords(link.term);
+  const badge = `No ${short}`;
   if (link.state !== "ready") {
     return (
       <Badge tone="outline" className="text-2xs text-text-secondary">
@@ -301,7 +306,9 @@ function NoPrChip({
           data-testid="pr-new-link"
           onClick={() => onOpenExternal(link.url)}
           className={cn(
-            "group/new-pr inline-flex items-center rounded-sm cursor-pointer",
+            // min-h-6 is the 24px target (WCAG 2.5.8); -my-0.5 hands the height back
+            // so the header does not grow.
+            "group/new-pr inline-flex items-center min-h-6 -my-0.5 rounded-sm cursor-pointer",
             NEW_PR_FOCUS_RING
           )}
         >

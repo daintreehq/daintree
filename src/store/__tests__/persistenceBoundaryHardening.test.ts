@@ -172,24 +172,6 @@ describe("persistence boundary hardening", () => {
     expect(useWorktreeFilterStore.getState().pinnedWorktrees).toEqual(["wt-1"]);
   });
 
-  it("portalStore still updates persisted fields when storage writes fail", async () => {
-    installLocalStorage(
-      createStorageMock({
-        setItem: () => {
-          throw new Error("QuotaExceededError");
-        },
-      })
-    );
-
-    const { usePortalStore } = await import("../portalStore");
-
-    expect(() => {
-      usePortalStore.getState().setWidth(600);
-    }).not.toThrow();
-
-    expect(usePortalStore.getState().width).toBe(600);
-  });
-
   it("safeJSONParse returns fallback and logs context on malformed JSON", async () => {
     installLocalStorage(createStorageMock());
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});

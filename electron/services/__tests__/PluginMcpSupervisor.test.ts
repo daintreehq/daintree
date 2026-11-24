@@ -661,11 +661,10 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
     expect(info?.lastError).toBeNull();
   });
 
-  it("kills the previous subprocess when start() is called against a crashed entry", async () => {
-    // Models the real leak: the handshake times out but the child process is
-    // still alive (its streams are open). The state transitions to "crashed"
-    // with state.subprocess still set. A subsequent start() must kill that
-    // lingering subprocess before adopting the new one.
+  it("terminates a server wedged in its handshake instead of leaving it running (#17212)", async () => {
+    // The handshake times out while the child is still alive (its streams are
+    // open). Marking it crashed alone would strand the process until a manual
+    // restart or quit.
     vi.useFakeTimers();
     try {
       const fakes = [makeFakeSubprocess({ pid: 11 }), makeFakeSubprocess({ pid: 22 })];
@@ -685,8 +684,11 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
       // while the (fake) subprocess is still live.
       await vi.advanceTimersByTimeAsync(20_000);
       await start1;
-      expect(supervisor.list()[0]?.status).toBe("crashed");
-      expect(fakes[0]!.killed).toBe(false);
+      const [crashed] = supervisor.list();
+      expect(crashed?.status).toBe("crashed");
+      expect(crashed?.lastError).toContain("handshake timed out");
+      expect(crashed?.pid).toBeNull();
+      expect(fakes[0]!.killed).toBe(true);
 
       vi.useRealTimers();
       const start2 = supervisor.start({
@@ -698,11 +700,99 @@ describe("PluginMcpSupervisor (issue #9233)", () => {
       fakes[1]!.answerInitialize();
       await start2;
 
-      expect(fakes[0]!.killed).toBe(true);
       expect(supervisor.list()[0]?.status).toBe("ready");
       expect(supervisor.list()[0]?.pid).toBe(22);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("terminates a server that answers initialize with an error (#17212)", async () => {
+    const fake = makeFakeSubprocess({ pid: 31 });
+    const supervisor = new PluginMcpSupervisor({
+      spawner: () => fake.handle,
+      killTree: () => {},
+    });
+    const invalidated = vi.fn();
+    supervisor.onDidInvalidateTools(invalidated);
+    const startPromise = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [{ id: "linear", name: "Linear", command: "node" }],
+      resolveSettings: async () => "",
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerLastCallWithError("unsupported protocol version");
+    await startPromise;
+
+    const [info] = supervisor.list();
+    expect(info?.status).toBe("crashed");
+    expect(info?.lastError).toContain("unsupported protocol version");
+    expect(info?.pid).toBeNull();
+    expect(fake.killed).toBe(true);
+    // A failure, not a deliberate stop: the agent endpoint's backoff counts it.
+    expect(invalidated.mock.calls).toEqual([["acme.demo", "linear", "exited"]]);
+  });
+
+  it("terminates a server whose stdin is closed before initialize, leaving no handshake timer (#17212)", async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = makeFakeSubprocess({ pid: 41 });
+      const supervisor = new PluginMcpSupervisor({
+        spawner: () => {
+          fake.subprocess.stdin.end();
+          return fake.handle;
+        },
+        killTree: () => {},
+      });
+      await supervisor.start({
+        pluginId: "acme.demo",
+        contributions: [{ id: "linear", name: "Linear", command: "node" }],
+        resolveSettings: async () => "",
+      });
+
+      const [info] = supervisor.list();
+      expect(info?.status).toBe("crashed");
+      expect(info?.lastError).toContain("stdin is closed");
+      expect(info?.pid).toBeNull();
+      expect(fake.killed).toBe(true);
+      // The init call's timeout would otherwise reject a promise nothing awaits.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("signals a wedged server's process group after a handshake timeout on POSIX (#17212)", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.useFakeTimers();
+
+    try {
+      const fake = makeFakeSubprocess({ pid: 5151 });
+      (fake.subprocess as { ownsProcessTree?: boolean }).ownsProcessTree = true;
+      const supervisor = new PluginMcpSupervisor({
+        spawner: () => fake.handle,
+        killTree: () => {},
+      });
+      const startPromise = supervisor.start({
+        pluginId: "acme.demo",
+        contributions: [{ id: "linear", name: "Linear", command: "node" }],
+        resolveSettings: async () => "",
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await startPromise;
+      expect(killSpy).toHaveBeenCalledWith(-5151, "SIGTERM");
+
+      // Whatever the wrapper left behind in its group gets the escalation.
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(killSpy).toHaveBeenCalledWith(-5151, "SIGKILL");
+    } finally {
+      reapPendingChildTrees();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      killSpy.mockRestore();
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
     }
   });
 
@@ -1418,6 +1508,218 @@ describe("PluginMcpSupervisor.notifySettingChanged (issue #10619)", () => {
     vi.useFakeTimers();
     vi.advanceTimersByTime(5000);
     expect(restart).not.toHaveBeenCalled();
+  });
+});
+
+describe("PluginMcpSupervisor state eviction on uninstall (issue #17212)", () => {
+  const contribution = { id: "linear", name: "Linear", command: "node" };
+
+  function supervisorOver(fakes: Array<ReturnType<typeof makeFakeSubprocess>>) {
+    const queue = [...fakes];
+    return new PluginMcpSupervisor({ spawner: () => queue.shift()!.handle, killTree: () => {} });
+  }
+
+  async function startReady(
+    supervisor: PluginMcpSupervisor,
+    pluginId: string,
+    fake: ReturnType<typeof makeFakeSubprocess>
+  ): Promise<void> {
+    const started = supervisor.start({
+      pluginId,
+      contributions: [contribution],
+      resolveSettings: async () => "",
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await started;
+  }
+
+  it("removeState drops every server of the uninstalled plugin and nothing else", async () => {
+    const linear = makeFakeSubprocess({ pid: 1 });
+    const github = makeFakeSubprocess({ pid: 3 });
+    const kept = makeFakeSubprocess({ pid: 2 });
+    const supervisor = supervisorOver([linear, github, kept]);
+    const started = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [contribution, { id: "github", name: "GitHub", command: "node" }],
+      resolveSettings: async () => "",
+    });
+    await Promise.all([linear.waitForStdinCount(1), github.waitForStdinCount(1)]);
+    linear.answerInitialize();
+    github.answerInitialize();
+    await started;
+    await startReady(supervisor, "acme.demo-extra", kept);
+    linear.emitStderr("token=abc leaked line\n");
+    github.emitStderr("another leaked line\n");
+    await flushMicrotasks();
+    expect(supervisor.list()).toHaveLength(3);
+
+    await supervisor.shutdown({ pluginId: "acme.demo" });
+    supervisor.removeState("acme.demo");
+
+    expect(supervisor.list().map((info) => info.pluginId)).toEqual(["acme.demo-extra"]);
+    for (const serverId of ["linear", "github"]) {
+      expect(supervisor.getStderr("acme.demo", serverId)).toEqual({
+        pluginId: "acme.demo",
+        serverId,
+        lines: [],
+        totalLines: 0,
+      });
+    }
+    expect(supervisor.list()[0]?.status).toBe("ready");
+    expect(kept.killed).toBe(false);
+  });
+
+  it("starts a reinstall of the same plugin id with an empty stderr ring", async () => {
+    const before = makeFakeSubprocess({ pid: 1 });
+    const after = makeFakeSubprocess({ pid: 2 });
+    const supervisor = supervisorOver([before, after]);
+    await startReady(supervisor, "acme.demo", before);
+    before.emitStderr("from the uninstalled build\n");
+    await flushMicrotasks();
+    await supervisor.shutdown({ pluginId: "acme.demo" });
+    supervisor.removeState("acme.demo");
+
+    await startReady(supervisor, "acme.demo", after);
+
+    expect(supervisor.getStderr("acme.demo", "linear").lines).toEqual([]);
+    expect(supervisor.list()).toHaveLength(1);
+    expect(supervisor.list()[0]?.pid).toBe(2);
+  });
+
+  it("evicts per-project instances by owner without touching the global plugin", async () => {
+    const global = makeFakeSubprocess({ pid: 1 });
+    const openProject = makeFakeSubprocess({ pid: 2 });
+    const closedProject = makeFakeSubprocess({ pid: 3 });
+    const supervisor = supervisorOver([global, openProject, closedProject]);
+    const openKey = "project__aaa__installed__acme.demo";
+    const closedKey = "project__bbb__installed__acme.demo";
+    await startReady(supervisor, "acme.other", global);
+    await startReady(supervisor, openKey, openProject);
+    await startReady(supervisor, closedKey, closedProject);
+    await supervisor.shutdown({ pluginId: closedKey });
+
+    supervisor.removeStatesWhere((pluginId) => pluginId.endsWith("__installed__acme.demo"));
+
+    expect(supervisor.list().map((info) => info.pluginId)).toEqual(["acme.other"]);
+    expect(supervisor.getStderr(openKey, "linear").totalLines).toBe(0);
+    // The open project's instance was never shut down: eviction must not strand it.
+    await openProject.handle.exit;
+    expect(openProject.killed).toBe(true);
+    expect(global.killed).toBe(false);
+  });
+
+  it("never spawns a server evicted while its settings were resolving", async () => {
+    const fake = makeFakeSubprocess();
+    const spawner = vi.fn(() => fake.handle);
+    const supervisor = new PluginMcpSupervisor({ spawner, killTree: () => {} });
+    let finishResolve!: (value: string) => void;
+    const started = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [{ ...contribution, env: { TOKEN: "${settings:apiToken}" } }],
+      resolveSettings: () =>
+        new Promise<string>((resolve) => {
+          finishResolve = resolve;
+        }),
+    });
+    await flushMicrotasks();
+
+    supervisor.removeState("acme.demo");
+    finishResolve("secret");
+    await flushMicrotasks();
+
+    expect(spawner).not.toHaveBeenCalled();
+    expect(supervisor.list()).toEqual([]);
+    await started;
+  });
+
+  it("does not resurrect a server evicted while restart() was taking it down", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+    try {
+      const first = makeFakeSubprocess({ pid: 1 });
+      const second = makeFakeSubprocess({ pid: 2 });
+      const handles = [first.handle, second.handle];
+      const spawner = vi.fn(() => handles.shift()!);
+      let finishTree!: () => void;
+      const supervisor = new PluginMcpSupervisor({
+        spawner,
+        killTree: () =>
+          new Promise<void>((resolve) => {
+            finishTree = resolve;
+          }),
+      });
+      await startReady(supervisor, "acme.demo", first);
+
+      const restarted = supervisor.restart({
+        pluginId: "acme.demo",
+        serverId: "linear",
+        contribution,
+        resolveSettings: async () => "",
+      });
+      await flushMicrotasks();
+      supervisor.removeState("acme.demo");
+      finishTree();
+      await flushMicrotasks();
+
+      expect(spawner).toHaveBeenCalledTimes(1);
+      expect(supervisor.list()).toEqual([]);
+      await restarted;
+    } finally {
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
+  it("keeps the same-PID fence for a server reinstalled after eviction (#9235)", async () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    try {
+      const before = makeFakeSubprocess({ pid: 4242 });
+      const after = makeFakeSubprocess({ pid: 4242 });
+      (before.subprocess as { ownsProcessTree?: boolean }).ownsProcessTree = true;
+      (after.subprocess as { ownsProcessTree?: boolean }).ownsProcessTree = true;
+      const supervisor = supervisorOver([before, after]);
+      await startReady(supervisor, "acme.demo", before);
+      await supervisor.shutdown({ pluginId: "acme.demo" });
+      supervisor.removeState("acme.demo");
+      await startReady(supervisor, "acme.demo", after);
+      killSpy.mockClear();
+
+      reapPendingChildTrees();
+      expect(killSpy).not.toHaveBeenCalledWith(-4242, "SIGKILL");
+    } finally {
+      reapPendingChildTrees();
+      killSpy.mockRestore();
+      if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+    }
+  });
+
+  it("cancels a pending settings-change restart for an evicted server", async () => {
+    const fake = makeFakeSubprocess();
+    const supervisor = supervisorOver([fake]);
+    const started = supervisor.start({
+      pluginId: "acme.demo",
+      contributions: [{ ...contribution, env: { TOKEN: "${settings:apiToken}" } }],
+      resolveSettings: async () => "secret",
+    });
+    await fake.waitForStdinCount(1);
+    fake.answerInitialize();
+    await started;
+    const restart = vi.fn();
+    vi.useFakeTimers();
+    try {
+      supervisor.notifySettingChanged("acme.demo", "apiToken", restart);
+      expect(vi.getTimerCount()).toBe(1);
+      supervisor.removeState("acme.demo");
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(5_000);
+      expect(restart).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

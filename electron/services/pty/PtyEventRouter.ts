@@ -135,6 +135,8 @@ export interface PtyEventRouterDeps {
   callbacks: PtyEventRouterCallbacks;
   /** Logger for warnings — keeps the router free of console.* coupling. */
   logWarn: (message: string) => void;
+  /** True for a terminal Main owns on a different shard than this router's. */
+  isForeignTerminal?: (terminalId: string) => boolean;
 }
 
 /**
@@ -163,6 +165,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     onHostThrottled: (payload) => {
       deps.emitter.emit("host-throttled", payload);
     },
+    isForeignTerminal: deps.isForeignTerminal,
   });
 
   if (bridged) {
@@ -315,12 +318,36 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.terminalIds ?? []);
       return true;
 
+    case "project-terminals":
+      broker.resolve(event.requestId, event.terminals ?? []);
+      return true;
+
     case "terminal-info":
       broker.resolve(event.requestId, event.terminal ?? null);
       return true;
 
+    case "terminal-status-fields":
+      broker.resolve(event.requestId, event.terminals ?? []);
+      return true;
+
     case "replay-history-result":
       broker.resolve(event.requestId, event.replayed ?? 0);
+      return true;
+
+    case "reset-terminal-modes-result":
+      broker.resolve(event.requestId, event.reset === true);
+      return true;
+
+    case "continue-codex-limit-result":
+      broker.resolve(event.requestId, event.result);
+      return true;
+
+    case "codex-limit-stopped":
+      emitter.emit("codex-limit-stopped", {
+        terminalId: event.terminalId,
+        run: event.run,
+        seq: event.seq,
+      });
       return true;
 
     case "available-terminals":

@@ -16,8 +16,7 @@ export async function resolveActiveWorktreeIdForProject(projectId: string): Prom
     const { projectStore } = await import("../ProjectStore.js");
     const projectPath = projectStore.getProjectById(projectId)?.path;
     if (!projectPath) return null;
-    const snapshots = await client.getAllStatesForProjectAsync(projectPath, projectId);
-    return snapshots.find((snapshot) => snapshot.isCurrent === true)?.id ?? null;
+    return await client.getActiveWorktreeIdForProjectAsync(projectPath, projectId);
   } catch (error) {
     console.error("[PluginService] Failed to resolve the active worktree for a project:", error);
     return null;

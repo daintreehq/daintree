@@ -4,8 +4,7 @@
  * The `<webview>` in `DevPreviewPane` and any `WebContentsView` that wants to
  * share its session (cookies, localStorage, IndexedDB) must derive the exact
  * same `persist:dev-preview-*` partition string. Keeping the formula here is the
- * single source of truth so the renderer component and the promote-to-portal
- * action can never drift apart.
+ * single source of truth.
  */
 
 /** Normalize a single partition token to the `[a-z0-9_-]` charset. */
@@ -79,20 +78,6 @@ export function partitionProjectKey(
 }
 
 /**
- * The portal's session in a window attached to `hostId`: that host's own,
- * apart from this machine's `persist:portal`. Its `-portal` tail is no form
- * a project id can take, so no project's browser panel can share it.
- */
-export function remotePortalPartition(hostId: string): string {
-  return buildBrowserPartition(`${remotePartitionKeyPrefix(hostId)}-portal`);
-}
-
-/** Whether `partition` is some host's portal session ({@link remotePortalPartition}). */
-export function isRemotePortalPartition(partition: string): boolean {
-  return /^persist:browser-remote__[a-z0-9_-]+__-portal$/.test(partition);
-}
-
-/**
  * Build the stable `persist:dev-preview-*` partition for a dev-preview panel.
  * `worktreeId` defaults to `"main"` to match the renderer's webview formula.
  */
@@ -105,19 +90,6 @@ export function buildDevPreviewPartition(
   const worktreeToken = sanitizePartitionToken(worktreeId ?? "main");
   const panelToken = sanitizePartitionToken(panelId);
   return `persist:dev-preview-${projectToken}-${worktreeToken}-${panelToken}`;
-}
-
-/**
- * Matches a well-formed dev-preview partition. Used by the main-process portal
- * handler to validate a renderer-supplied partition override before reusing it
- * for a `WebContentsView`; non-matching values fall back to `persist:portal`.
- */
-export const DEV_PREVIEW_PARTITION_PATTERN =
-  /^persist:dev-preview-[a-z0-9_-]+-[a-z0-9_-]+-[a-z0-9_-]+$/;
-
-/** True when `value` is a syntactically valid dev-preview partition. */
-export function isDevPreviewPartition(value: unknown): value is string {
-  return typeof value === "string" && DEV_PREVIEW_PARTITION_PATTERN.test(value);
 }
 
 /**

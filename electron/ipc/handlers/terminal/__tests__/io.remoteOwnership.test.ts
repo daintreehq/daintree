@@ -109,6 +109,7 @@ const ptyClient = {
   updateTitle: vi.fn(),
   updateWorktreeId: vi.fn(),
   forceResume: vi.fn(),
+  resetTerminalModesAsync: vi.fn(async () => true),
   getTerminalProjectId: vi.fn((id: string) => OWNERS.get(id) ?? null),
   getTerminalAsync: vi.fn((id: string) =>
     Promise.resolve(OWNERS.has(id) ? { id, projectId: OWNERS.get(id), hasPty: true } : null)
@@ -268,6 +269,33 @@ describe("terminal input from a remote view", () => {
     });
     expect(ptyClient.forceResume).not.toHaveBeenCalled();
   });
+
+  it("resets the modes of a terminal the endpoint's own project owns (#17328)", async () => {
+    await expect(remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a")).resolves.toMatchObject({
+      ok: true,
+      data: true,
+    });
+    expect(ptyClient.resetTerminalModesAsync).toHaveBeenCalledWith("term-a");
+  });
+
+  it("passes on the host's answer when it couldn't reset the modes", async () => {
+    ptyClient.resetTerminalModesAsync.mockResolvedValueOnce(false);
+    await expect(remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a")).resolves.toMatchObject({
+      ok: true,
+      data: false,
+    });
+  });
+
+  it.each([
+    ["a foreign project's terminal", "term-b"],
+    ["a terminal main does not track", "term-unknown"],
+  ])("refuses to reset the modes of %s", async (_label, id) => {
+    await expect(remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, id)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "NOT_FOUND" },
+    });
+    expect(ptyClient.resetTerminalModesAsync).not.toHaveBeenCalled();
+  });
 });
 
 describe("terminal input from a local view", () => {
@@ -306,6 +334,7 @@ describe("terminal input and the drive lease", () => {
     batchDoubleEscape: vi.fn(),
     broadcastWrite: vi.fn(),
     submit: vi.fn(),
+    resetTerminalModesAsync: vi.fn(async () => true),
     getTerminalAsync: vi.fn(async () => ({ hasPty: true })),
     getTerminalProjectId: vi.fn((id: string) => (id.startsWith("term-a") ? "project-a" : null)),
   };
@@ -373,6 +402,21 @@ describe("terminal input and the drive lease", () => {
     expect(envelope.ok).toBe(false);
     expect(envelope.ok ? null : envelope.error.code).toBe("DRIVEN_ELSEWHERE");
     expect(ptyClient.submit).not.toHaveBeenCalled();
+  });
+
+  // The reset changes how the driver's pane reads input, so a watcher can't.
+  it("refuses a non-driver's mode reset as DRIVEN_ELSEWHERE (#17328)", async () => {
+    leaseRef.current = { isDriving: () => false, getHolder: () => null };
+    const envelope = await remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a");
+    expect(envelope.ok ? null : envelope.error.code).toBe("DRIVEN_ELSEWHERE");
+    expect(ptyClient.resetTerminalModesAsync).not.toHaveBeenCalled();
+  });
+
+  it("lets the driver reset its terminal's modes (#17328)", async () => {
+    leaseRef.current = { isDriving: () => true, getHolder: () => null };
+    const envelope = await remoteInvoke(CHANNELS.TERMINAL_RESET_MODES, "term-a");
+    expect(envelope.ok).toBe(true);
+    expect(ptyClient.resetTerminalModesAsync).toHaveBeenCalledWith("term-a");
   });
 
   it("lets the driver type and submit", async () => {
@@ -1019,13 +1063,28 @@ describe("terminal:get-submissions (#12337)", () => {
     ["term-unowned", null],
   ]);
 
-  const getTerminalAsync = vi.fn();
+  // What a shard answers for one id: a record, or null for one it doesn't hold
+  // (or couldn't read). The batched lookup leaves nulls out of its map.
+  const readRecord = vi.fn();
+  const getTerminalStatusFieldsAsync = vi.fn(async (ids: readonly string[], token?: string) => {
+    const fields = new Map<string, unknown>();
+    for (const id of ids) {
+      const record = await readRecord(id, token);
+      if (record) fields.set(id, record);
+    }
+    return fields;
+  });
+  const askedIds = () => getTerminalStatusFieldsAsync.mock.calls.flatMap(([ids]) => [...ids]);
   const getTerminalProjectId = vi.fn((id: string) => TERMINAL_OWNERS.get(id) ?? null);
   const getTerminalsForProjectAsync = vi.fn(async (_projectId: string): Promise<string[]> => []);
 
   function buildDeps(): HandlerDependencies {
     return {
-      ptyClient: { getTerminalAsync, getTerminalProjectId, getTerminalsForProjectAsync },
+      ptyClient: {
+        getTerminalStatusFieldsAsync,
+        getTerminalProjectId,
+        getTerminalsForProjectAsync,
+      },
       windowRegistry: { getByWindowId: () => undefined },
     } as unknown as HandlerDependencies;
   }
@@ -1050,7 +1109,7 @@ describe("terminal:get-submissions (#12337)", () => {
     getProjectForWebContentsMock.mockImplementation((id) => VIEW_TO_PROJECT.get(id) ?? null);
     getTerminalProjectId.mockImplementation((id: string) => TERMINAL_OWNERS.get(id) ?? null);
     getTerminalsForProjectAsync.mockResolvedValue([]);
-    getTerminalAsync.mockImplementation(async (id: string, token?: string) => ({
+    readRecord.mockImplementation(async (id: string, token?: string) => ({
       id,
       projectId: TERMINAL_OWNERS.get(id) ?? undefined,
       submission: token === undefined ? undefined : { token, phase: "pty_written", at: 7 },
@@ -1062,7 +1121,7 @@ describe("terminal:get-submissions (#12337)", () => {
     await expect(getSubmissions(SENDER_A, ["term-a"], "tok-1")).resolves.toEqual({
       "term-a": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
     });
-    expect(getTerminalAsync).toHaveBeenCalledWith("term-a", "tok-1");
+    expect(getTerminalStatusFieldsAsync).toHaveBeenCalledWith(["term-a"], "tok-1");
   });
 
   it("never routes an RPC for a terminal owned by another project", async () => {
@@ -1072,7 +1131,7 @@ describe("terminal:get-submissions (#12337)", () => {
     // the reply shape must not tell a caller which foreign ids exist. The
     // lookup must also never reach that terminal's shard.
     expect(result).toEqual({ "term-b": { status: "unreadable" } });
-    expect(getTerminalAsync).not.toHaveBeenCalled();
+    expect(askedIds()).toEqual([]);
   });
 
   it("never serves an unbound sender a record another project owns once main forgot its owner", async () => {
@@ -1080,7 +1139,7 @@ describe("terminal:get-submissions (#12337)", () => {
     // project; the record's own owner is what refuses it.
     getProjectForWebContentsMock.mockReturnValue(null);
     getTerminalProjectId.mockReturnValue(null);
-    getTerminalAsync.mockResolvedValue({
+    readRecord.mockResolvedValue({
       id: "term-exited",
       projectId: "project-a",
       submission: { token: "tok-1", phase: "pty_written", at: 7 },
@@ -1093,7 +1152,7 @@ describe("terminal:get-submissions (#12337)", () => {
 
   it("tells the three outcomes apart within one batch", async () => {
     getTerminalProjectId.mockReturnValue("project-a");
-    getTerminalAsync.mockImplementation(async (id: string, token?: string) => {
+    readRecord.mockImplementation(async (id: string, token?: string) => {
       if (id === "term-gone") return null;
       if (id === "term-empty") return { id, projectId: "project-a", submission: undefined };
       return { id, projectId: "project-a", submission: { token, phase: "pty_written", at: 7 } };
@@ -1114,12 +1173,12 @@ describe("terminal:get-submissions (#12337)", () => {
     const foreign = await getSubmissions(SENDER_A, ["term-b"], "tok-1");
     // Only the RPC spy is reset — `vi.clearAllMocks()` would also wipe the
     // `ipcMain.handle` call record the helper resolves the handler through.
-    getTerminalAsync.mockClear();
+    getTerminalStatusFieldsAsync.mockClear();
     const unknown = await getSubmissions(SENDER_A, ["term-never-existed"], "tok-1");
 
     expect(foreign).toEqual({ "term-b": { status: "unreadable" } });
     expect(unknown).toEqual({ "term-never-existed": { status: "unreadable" } });
-    expect(getTerminalAsync).not.toHaveBeenCalled();
+    expect(askedIds()).toEqual([]);
   });
 
   it("serves each project its own terminal in the same session", async () => {
@@ -1138,10 +1197,32 @@ describe("terminal:get-submissions (#12337)", () => {
     });
   });
 
-  it("deduplicates repeated ids into one RPC", async () => {
-    await getSubmissions(SENDER_A, ["term-a", "term-a", "term-a"], "tok-1");
+  it("deduplicates repeated ids into one lookup", async () => {
+    await expect(
+      getSubmissions(SENDER_A, ["term-a", "term-a", "term-a"], "tok-1")
+    ).resolves.toEqual({
+      "term-a": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
+    });
 
-    expect(getTerminalAsync).toHaveBeenCalledTimes(1);
+    expect(getTerminalStatusFieldsAsync).toHaveBeenCalledTimes(1);
+    expect(askedIds()).toEqual(["term-a"]);
+  });
+
+  it("refuses a record whose own owner disagrees with main's placement", async () => {
+    // Placed through the project inventory, but the record the shard answers
+    // with names another project: the post-read check has the last word.
+    getTerminalsForProjectAsync.mockResolvedValue(["term-moved"]);
+    readRecord.mockImplementation(async (id: string, token?: string) => ({
+      id,
+      projectId: id === "term-moved" ? "project-b" : "project-a",
+      submission: { token, phase: "pty_written", at: 7 },
+    }));
+
+    await expect(getSubmissions(SENDER_A, ["term-a", "term-moved"], "tok-1")).resolves.toEqual({
+      "term-a": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
+      "term-moved": { status: "unreadable" },
+    });
+    expect(askedIds()).toEqual(["term-a", "term-moved"]);
   });
 
   it.each([
@@ -1155,7 +1236,7 @@ describe("terminal:get-submissions (#12337)", () => {
     await expect(getSubmissions(SENDER_A, ["term-a"], token)).rejects.toMatchObject({
       code: "VALIDATION",
     });
-    expect(getTerminalAsync).not.toHaveBeenCalled();
+    expect(getTerminalStatusFieldsAsync).not.toHaveBeenCalled();
   });
 
   it("accepts a token exactly at the length bound", async () => {
@@ -1169,7 +1250,7 @@ describe("terminal:get-submissions (#12337)", () => {
     await expect(getSubmissions(SENDER_A, "term-a", "tok-1")).rejects.toMatchObject({
       code: "VALIDATION",
     });
-    expect(getTerminalAsync).not.toHaveBeenCalled();
+    expect(getTerminalStatusFieldsAsync).not.toHaveBeenCalled();
   });
 
   it("rejects an oversized id list instead of silently dropping the tail", async () => {
@@ -1181,16 +1262,24 @@ describe("terminal:get-submissions (#12337)", () => {
     await expect(getSubmissions(SENDER_A, ids, "tok-1")).rejects.toMatchObject({
       code: "VALIDATION",
     });
-    expect(getTerminalAsync).not.toHaveBeenCalled();
+    expect(getTerminalStatusFieldsAsync).not.toHaveBeenCalled();
   });
 
-  it("serves a list right at the bound", async () => {
+  it("serves a list right at the bound in one batched lookup (#17809)", async () => {
     const ids = Array.from({ length: 256 }, (_, i) => `term-${i}`);
     getTerminalProjectId.mockReturnValue("project-a");
+    readRecord.mockImplementation(async (id: string, token?: string) => ({
+      id,
+      projectId: "project-a",
+      submission: { token, phase: "pty_written", at: 7 },
+    }));
 
-    await getSubmissions(SENDER_A, ids, "tok-1");
+    const result = (await getSubmissions(SENDER_A, ids, "tok-1")) as Record<string, unknown>;
 
-    expect(getTerminalAsync).toHaveBeenCalledTimes(256);
+    expect(Object.keys(result)).toHaveLength(256);
+    expect(result["term-255"]).toMatchObject({ status: "found" });
+    expect(getTerminalStatusFieldsAsync).toHaveBeenCalledTimes(1);
+    expect(getTerminalStatusFieldsAsync).toHaveBeenCalledWith(ids, "tok-1");
   });
 });
 
@@ -1218,13 +1307,28 @@ describe("terminal:get-output-activity (#12495)", () => {
     ["term-unowned", null],
   ]);
 
-  const getTerminalAsync = vi.fn();
+  // What a shard answers for one id: a record, or null for one it doesn't hold
+  // (or couldn't read). The batched lookup leaves nulls out of its map.
+  const readRecord = vi.fn();
+  const getTerminalStatusFieldsAsync = vi.fn(async (ids: readonly string[], token?: string) => {
+    const fields = new Map<string, unknown>();
+    for (const id of ids) {
+      const record = await readRecord(id, token);
+      if (record) fields.set(id, record);
+    }
+    return fields;
+  });
+  const askedIds = () => getTerminalStatusFieldsAsync.mock.calls.flatMap(([ids]) => [...ids]);
   const getTerminalProjectId = vi.fn((id: string) => TERMINAL_OWNERS.get(id) ?? null);
   const getTerminalsForProjectAsync = vi.fn(async (_projectId: string): Promise<string[]> => []);
 
   function buildDeps(): HandlerDependencies {
     return {
-      ptyClient: { getTerminalAsync, getTerminalProjectId, getTerminalsForProjectAsync },
+      ptyClient: {
+        getTerminalStatusFieldsAsync,
+        getTerminalProjectId,
+        getTerminalsForProjectAsync,
+      },
       windowRegistry: { getByWindowId: () => undefined },
     } as unknown as HandlerDependencies;
   }
@@ -1245,7 +1349,7 @@ describe("terminal:get-output-activity (#12495)", () => {
     getProjectForWebContentsMock.mockImplementation((id) => VIEW_TO_PROJECT.get(id) ?? null);
     getTerminalProjectId.mockImplementation((id: string) => TERMINAL_OWNERS.get(id) ?? null);
     getTerminalsForProjectAsync.mockResolvedValue([]);
-    getTerminalAsync.mockImplementation(async (id: string) => ({
+    readRecord.mockImplementation(async (id: string) => ({
       id,
       projectId: TERMINAL_OWNERS.get(id) ?? undefined,
       lastOutputChangeAt: 5_000,
@@ -1257,12 +1361,12 @@ describe("terminal:get-output-activity (#12495)", () => {
     await expect(getOutputActivity(SENDER_A, ["term-a"])).resolves.toEqual({
       "term-a": { status: "read", lastOutputChangeAt: 5_000 },
     });
-    // No token: this is a plain record read, not a submission lookup.
-    expect(getTerminalAsync).toHaveBeenCalledWith("term-a");
+    // No token: this is a plain status read, not a submission lookup.
+    expect(getTerminalStatusFieldsAsync).toHaveBeenCalledWith(["term-a"]);
   });
 
   it("reports a read terminal with no observed change as read, without a timestamp", async () => {
-    getTerminalAsync.mockResolvedValue({
+    readRecord.mockResolvedValue({
       id: "term-a",
       projectId: "project-a",
       lastOutputChangeAt: undefined,
@@ -1275,7 +1379,7 @@ describe("terminal:get-output-activity (#12495)", () => {
   });
 
   it("projects the typed-input time independently of the output time (#12718)", async () => {
-    getTerminalAsync.mockResolvedValue({
+    readRecord.mockResolvedValue({
       id: "term-a",
       projectId: "project-a",
       lastOutputChangeAt: undefined,
@@ -1286,7 +1390,7 @@ describe("terminal:get-output-activity (#12495)", () => {
       "term-a": { status: "read", lastTypedInputAt: 7_000 },
     });
 
-    getTerminalAsync.mockResolvedValue({
+    readRecord.mockResolvedValue({
       id: "term-a",
       projectId: "project-a",
       lastOutputChangeAt: 5_000,
@@ -1300,7 +1404,7 @@ describe("terminal:get-output-activity (#12495)", () => {
 
   it("tells the outcomes apart within one batch", async () => {
     getTerminalProjectId.mockReturnValue("project-a");
-    getTerminalAsync.mockImplementation(async (id: string) => {
+    readRecord.mockImplementation(async (id: string) => {
       if (id === "term-gone") return null;
       if (id === "term-quiet") return { id, projectId: "project-a" };
       return { id, projectId: "project-a", lastOutputChangeAt: 9 };
@@ -1319,7 +1423,7 @@ describe("terminal:get-output-activity (#12495)", () => {
     const result = await getOutputActivity(SENDER_A, ["term-b"]);
 
     expect(result).toEqual({ "term-b": { status: "unreadable" } });
-    expect(getTerminalAsync).not.toHaveBeenCalled();
+    expect(askedIds()).toEqual([]);
   });
 
   it("reads a terminal main stopped tracking when the project's inventory still holds it", async () => {
@@ -1330,7 +1434,7 @@ describe("terminal:get-output-activity (#12495)", () => {
       id === "term-b" ? "project-b" : id === "term-a" ? "project-a" : null
     );
     getTerminalsForProjectAsync.mockResolvedValue(["term-exited", "term-b"]);
-    getTerminalAsync.mockImplementation(async (id: string) => ({
+    readRecord.mockImplementation(async (id: string) => ({
       id,
       projectId: "project-a",
       lastOutputChangeAt: 5_000,
@@ -1348,7 +1452,8 @@ describe("terminal:get-output-activity (#12495)", () => {
     });
     expect(getTerminalsForProjectAsync).toHaveBeenCalledTimes(1);
     expect(getTerminalsForProjectAsync).toHaveBeenCalledWith("project-a");
-    expect(getTerminalAsync.mock.calls.map(([id]) => id)).toEqual(["term-a", "term-exited"]);
+    expect(getTerminalStatusFieldsAsync).toHaveBeenCalledTimes(1);
+    expect(askedIds()).toEqual(["term-a", "term-exited"]);
   });
 
   it("never serves an unbound sender a record another project owns once main forgot its owner", async () => {
@@ -1356,7 +1461,7 @@ describe("terminal:get-output-activity (#12495)", () => {
     // project; the record's own owner is what refuses it.
     getProjectForWebContentsMock.mockReturnValue(null);
     getTerminalProjectId.mockReturnValue(null);
-    getTerminalAsync.mockResolvedValue({
+    readRecord.mockResolvedValue({
       id: "term-exited",
       projectId: "project-a",
       lastOutputChangeAt: 5_000,
@@ -1378,7 +1483,7 @@ describe("terminal:get-output-activity (#12495)", () => {
     await expect(getOutputActivity(SENDER_A, ["term-unowned"])).resolves.toEqual({
       "term-unowned": { status: "unreadable" },
     });
-    expect(getTerminalAsync).not.toHaveBeenCalled();
+    expect(askedIds()).toEqual([]);
 
     // …and an unbound window reads its own projectless terminal but not a
     // project-owned one.
@@ -1388,8 +1493,7 @@ describe("terminal:get-output-activity (#12495)", () => {
       "term-unowned": { status: "read", lastOutputChangeAt: 5_000 },
       "term-a": { status: "unreadable" },
     });
-    expect(getTerminalAsync).toHaveBeenCalledTimes(1);
-    expect(getTerminalAsync).toHaveBeenCalledWith("term-unowned");
+    expect(askedIds()).toEqual(["term-unowned"]);
     // An unbound sender has no project inventory to consult.
     expect(getTerminalsForProjectAsync).not.toHaveBeenCalled();
   });

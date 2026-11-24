@@ -1176,6 +1176,36 @@ describe("per-project visibility of installed plugins", () => {
       expect(invalidated).toEqual([{ scope: "worktree-diff:*" }, { scope: "file-tree:*" }]);
     });
 
+    function announcedScopes(): unknown[] {
+      return ipcUtilsMock.broadcastToRenderer.mock.calls
+        .map((call) => call[1] as { name: string; payload: unknown })
+        .filter((e) => e.name === "plugin:decorations-changed")
+        .map((e) => e.payload);
+    }
+
+    it("announces a tick's declared scopes once each, after the tick", async () => {
+      const broadcaster = makeBroadcaster();
+      broadcaster.scheduleDecorationScopesAnnouncement(["a:*", "b:*"]);
+      broadcaster.scheduleDecorationScopesAnnouncement(["b:*", "c:*"]);
+      expect(announcedScopes()).toEqual([]);
+
+      await Promise.resolve();
+      expect(announcedScopes()).toEqual([{ scope: "a:*" }, { scope: "b:*" }, { scope: "c:*" }]);
+    });
+
+    it("parks announcements while broadcasts are held", async () => {
+      const broadcaster = makeBroadcaster();
+      const release = broadcaster.holdBroadcasts();
+      broadcaster.scheduleDecorationScopesAnnouncement(["a:*"]);
+      broadcaster.scheduleDecorationScopesAnnouncement(["a:*", "b:*"]);
+      await Promise.resolve();
+      expect(announcedScopes()).toEqual([]);
+
+      release();
+      await Promise.resolve();
+      expect(announcedScopes()).toEqual([{ scope: "a:*" }, { scope: "b:*" }]);
+    });
+
     it("sends no invalidation when no plugin declares a decoration provider", () => {
       makeBroadcaster().broadcastVisibilityChanged();
       expect(

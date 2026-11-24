@@ -7,15 +7,19 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LearnedDecision } from "@daintreehq/decisions-client";
+import { FakeAdapter, type ModelPrompt } from "@daintreehq/decisions-model";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saved = vi.hoisted(() => ({ value: undefined as unknown }));
 // An enrolled Host's record (#16022), the store's `decisionsHost`.
 const savedHost = vi.hoisted(() => ({ value: undefined as unknown }));
+// The store's `notificationSettings`: desktop notifications on, as they are by default.
+const savedNotifications = vi.hoisted(() => ({ value: { enabled: true } as unknown }));
 const loads = vi.hoisted(() => ({
   constructed: 0,
   failNextConstruct: false,
@@ -24,8 +28,16 @@ const loads = vi.hoisted(() => ({
   closing: null as Promise<void> | null,
   // While set, opening a store waits for it, holding a start partway.
   opening: null as Promise<void> | null,
+  // The questions the next removal of settled history takes (#18033).
+  removable: [] as string[],
   // Why the stores stopped writing; null while they write.
   faultReason: null as "disk-pressure" | "disk-full" | "storage-busy" | "storage-fault" | null,
+  // While set, every store opened holds these rows and meta, and a meta write commits (#17895).
+  persisted: null as null | {
+    rows: unknown[];
+    meta: Map<string, string>;
+    commits: Set<(commit: { questions: Set<string>; meta: Set<string> }) => void>;
+  },
 }));
 const broadcast = vi.hoisted(() => vi.fn());
 const toasts = vi.hoisted(() => vi.fn());
@@ -34,10 +46,32 @@ const toastAudience = vi.hoisted(() => ({ present: true }));
 // The relay check's network: Chromium's, which tests answer by hand.
 const netFetch = vi.hoisted(() => vi.fn<(url: string, init: RequestInit) => Promise<Response>>());
 
-vi.mock("electron", () => ({ net: { fetch: netFetch }, app: {}, safeStorage: {} }));
+// Whether the system can show a native notification (#17240).
+const nativeNotifications = vi.hoisted(() => ({ supported: true }));
+// Whether the fake store holds a question notification record the notifier can read (#17240).
+const notificationRecord = vi.hoisted(() => ({
+  readable: false,
+  /** Resolves the record's read; already resolved unless a test holds it. */
+  read: Promise.resolve() as Promise<void>,
+}));
+
+vi.mock("electron", () => ({
+  net: { fetch: netFetch },
+  app: {},
+  safeStorage: {},
+  Notification: { isSupported: () => nativeNotifications.supported },
+}));
 
 // The key file each service uses, in a directory of the test's own.
 const keyFile = vi.hoisted(() => ({ path: "" }));
+
+/** A key erasure confirmed through the typed gate, which main doesn't recheck (#18064). */
+const TYPED = { oneClick: false };
+
+/** The key file version `keyFileVersion` gives for this content. */
+function versionOf(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
+}
 // Claim and restore are relayIdentity's; here only how the entry runs them.
 const setupRuns = vi.hoisted(() => ({ claim: vi.fn(), restore: vi.fn() }));
 vi.mock("../relayIdentity.js", () => ({
@@ -293,6 +327,8 @@ const connections = vi.hoisted(
       started: number;
       stopped: number;
       snapshotsChanged: number;
+      presenceChanged: number;
+      agentStoppedPushesChanged: number;
       keyFileAtStop?: boolean;
     }>
 );
@@ -317,7 +353,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) =>
-      key === "decisions" ? saved.value : key === "decisionsHost" ? savedHost.value : undefined
+      key === "decisions"
+        ? saved.value
+        : key === "decisionsHost"
+          ? savedHost.value
+          : key === "notificationSettings"
+            ? savedNotifications.value
+            : undefined
     ),
     set: vi.fn((key: string, value: unknown) => {
       if (key === "decisions") saved.value = value;
@@ -390,6 +432,8 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             started: 0,
             stopped: 0,
             snapshotsChanged: 0,
+            presenceChanged: 0,
+            agentStoppedPushesChanged: 0,
           };
           connections.push(made);
           return {
@@ -398,6 +442,12 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             },
             snapshotsChanged: () => {
               made.snapshotsChanged += 1;
+            },
+            presenceChanged: () => {
+              made.presenceChanged += 1;
+            },
+            agentStoppedPushesChanged: () => {
+              made.agentStoppedPushesChanged += 1;
             },
             stop: () => {
               made.stopped += 1;
@@ -411,13 +461,46 @@ vi.mock("../DecisionsService.js", async (importOriginal) => {
             loads.failNextOpen = false;
             throw new Error("store unavailable");
           }
+          const persisted = loads.persisted;
           return {
             close: () => loads.closing ?? Promise.resolve(),
-            onCommit: () => () => {},
+            onCommit: (
+              listener: (commit: { questions: Set<string>; meta: Set<string> }) => void
+            ) => {
+              persisted?.commits.add(listener);
+              return () => persisted?.commits.delete(listener);
+            },
             onQuestionDeleted: () => () => {},
             onFault: () => () => {},
             faultReason: () => loads.faultReason,
-            listQuestions: async () => [],
+            removeSettledQuestions: async () => loads.removable.splice(0),
+            listQuestions: async () => persisted?.rows ?? [],
+            getQuestions: async (ids: Iterable<string>) => {
+              const wanted = new Set(ids);
+              return ((persisted?.rows ?? []) as Array<{ question_id: string }>).filter((r) =>
+                wanted.has(r.question_id)
+              );
+            },
+            ...(persisted
+              ? {
+                  getMeta: async (key: string) => persisted.meta.get(key) ?? null,
+                  setMeta: async (key: string, value: string) => {
+                    persisted.meta.set(key, value);
+                    for (const listener of [...persisted.commits]) {
+                      listener({ questions: new Set(), meta: new Set([key]) });
+                    }
+                  },
+                }
+              : notificationRecord.readable
+                ? {
+                    getMeta: async (key: string) => {
+                      if (key !== "daintree:notified-questions") return null;
+                      await notificationRecord.read;
+                      return "[]";
+                    },
+                    setMeta: async () => {},
+                  }
+                : {}),
           } as never;
         },
       });
@@ -432,9 +515,23 @@ import { CHANNELS } from "../../../ipc/channels.js";
 import { outstandingRows, row } from "./questionRows.js";
 import { defaultDecisionsSettings } from "../decisionsSettings.js";
 import { RelayCheckCancelledError } from "../relayCheck.js";
-import { setDecisionsHostsPort } from "../../../window/serviceRefs.js";
+import { setDecisionsHostsPort, setRunAttentionServiceRef } from "../../../window/serviceRefs.js";
+import { events } from "../../events.js";
+import { readUserPresence } from "../../userPresence.js";
 import { noteRelayRemovalLaunch } from "../../pty/relayRemovalLaunches.js";
-import type { DecisionsHostLink, DecisionsHostsPort } from "../../../types/decisionsHosts.js";
+import type {
+  DecisionsAttentionItem,
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../../../shared/types/decisionsAttention.js";
+import type {
+  DecisionsHostLink,
+  DecisionsHostQuestionRead,
+  DecisionsHostQuestions,
+  DecisionsHostsPort,
+  HostCallOutcome,
+} from "../../../types/decisionsHosts.js";
+import { notificationSettingsWritten } from "../../../utils/notificationSettingsPatch.js";
 
 /** An entry status: what it observed, and the revision it was read at. */
 function withRevision<T extends object>(status: T): T & { revision: number } {
@@ -463,20 +560,35 @@ import {
   decisionsHostRuntimeFor,
   decisionsLaunchPort,
   deleteLocalData,
+  removeSettledQuestions,
   deleteRelayData,
   disconnectRelay,
   exportData,
   prepareRelayDeploy,
   exportRecoveryKit,
+  getDecisionQuestionContent,
+  getDecisionQuestionContentByReference,
+  getDecisionQuestionPaneByReference,
+  getDecisionQuestionImage,
+  getDecisionQuestionImageByReference,
+  getDecisionQuestionSummaries,
+  getDecisionQuestionSummariesByReference,
+  actOnHostAttention,
+  cancelDecisionQuestionByReference,
+  cancelHostServedQuestion,
+  hostServedAttention,
+  readHostServedQuestion,
   getDecisionsPaneState,
   getDecisionsPolicy,
   cancelSetupCheck,
   cancelDecisionsModelEvaluation,
   clearDecisionsModelHistory,
+  declineDecisionQuestion,
   getDecisionsModel,
   getDecisionsService,
   getDecisionsStatus,
   listHosts,
+  markDecisionQuestions,
   getSetupCheck,
   noteHostIdentity,
   onDecisionsHostRuntimeChanged,
@@ -488,10 +600,11 @@ import {
   setDecisionsEnabled,
   setDecisionsModel,
   setDecisionsModelThreshold,
-  setDecisionsProxyAllowlisted,
   setDecisionsDefaultQuestionExpiry,
   setDecisionsAgentAskHuman,
   setDecisionsTerminalSnapshots,
+  setDecisionsHoldPhonePushes,
+  setDecisionsAgentStoppedPushes,
   startDecisionsModelEvaluation,
   startRelayRemoval,
   startDecisionsIfEnabled,
@@ -500,6 +613,27 @@ import {
   terminalSnapshotsAllowed,
   verifyRecoveryKit,
 } from "../index.js";
+import type { AnswerDelivery } from "../answerDelivery.js";
+import type { QuestionInboxFacts } from "../DecisionsService.js";
+import type {
+  DecisionQuestionCancelResult,
+  DecisionQuestionImagePartResult,
+  DecisionQuestionLastRead,
+  DecisionQuestionReference,
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+} from "../../../../shared/types/decisionsQuestion.js";
+import {
+  getDecisionQuestionList,
+  onDecisionQuestionsChanged,
+  setDecisionQuestions,
+} from "../../decisionsQuestionList.js";
+import { RetiredAttemptError } from "../relayTransport.js";
+import { DecisionModelRuntime, decisionModelFiles } from "../decisionModel.js";
+import { QUESTION_MARKS_META_KEY, readQuestionMarks } from "../questionMarks.js";
+
+/** A question in Needs you as the owner lists it before the person has marked it (#17895). */
+const UNMARKED = { ask: null, seen: false, cleared: false };
 
 const RELAY = {
   relayOrigin: "https://relay.example.com",
@@ -534,11 +668,17 @@ describe("Decisions entry", () => {
     statGate.started = 0;
     saved.value = undefined;
     savedHost.value = undefined;
+    savedNotifications.value = { enabled: true };
+    nativeNotifications.supported = true;
+    notificationRecord.readable = false;
+    notificationRecord.read = Promise.resolve();
     loads.failNextConstruct = false;
     loads.failNextOpen = false;
+    loads.persisted = null;
     loads.closing = null;
     loads.opening = null;
     loads.faultReason = null;
+    loads.removable = [];
     toastAudience.present = true;
     vi.mocked(store.set).mockClear();
     broadcast.mockClear();
@@ -614,6 +754,428 @@ describe("Decisions entry", () => {
     await stopDecisions();
 
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it("lets the question list only empty once quit begins, and pushes no list to windows (#17229)", async () => {
+    saved.value = { enabled: true };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    // The publisher the entry handed the service, as its feed calls it.
+    const publish = Reflect.get(service, "publishQuestions") as (
+      questions: DecisionQuestionListItem[]
+    ) => void;
+    const item = (questionId: string): DecisionQuestionListItem => ({
+      reference: { hostId: "host_1", projectId: "project-1", terminalId: "pane-a", questionId },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-02T10:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+    });
+    const listPushes = () =>
+      statusView.send.mock.calls.filter(
+        ([, message]) => (message as { name?: string }).name === "decisions:questions-changed"
+      );
+    const heard: DecisionQuestionList[] = [];
+    const off = onDecisionQuestionsChanged((list) => heard.push(list));
+    try {
+      statusView.send.mockClear();
+      publish([item("q_quit_000001")]);
+      expect(getDecisionQuestionList().questions).toEqual([
+        { ...item("q_quit_000001"), inbox: UNMARKED },
+      ]);
+      expect(listPushes()).toHaveLength(1);
+
+      await stopDecisions();
+      publish([item("q_quit_000001"), item("q_quit_000002")]);
+
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(heard.map((list) => list.questions.length)).toEqual([1, 0]);
+      expect(listPushes()).toHaveLength(1);
+    } finally {
+      off();
+      // The list outlives the entry's reset: leave none for the tests after.
+      setDecisionQuestions([]);
+    }
+  });
+
+  it("lists each enrolled Host's questions with this computer's, named by its Host, oldest first (#17230)", async () => {
+    saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    const publish = Reflect.get(service, "publishQuestions") as (
+      questions: DecisionQuestionListItem[],
+      listing?: boolean
+    ) => void;
+    const item = (
+      hostId: string,
+      questionId: string,
+      askedAt: string
+    ): DecisionQuestionListItem => ({
+      reference: { hostId, projectId: "project-1", terminalId: "pane-a", questionId },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt,
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+    });
+    const own = item(RELAY.hostId, "q_own_000001", "2026-11-02T10:05:00.000Z");
+    const theirs = item("qhost_studio_0001", "q_host_00001", "2026-11-02T10:01:00.000Z");
+    const theirsLater = item("qhost_studio_0001", "q_host_00002", "2026-11-02T10:09:00.000Z");
+    const lab = item("qhost_lab_00001", "q_lab_000001", "2026-11-02T10:03:00.000Z");
+    const labHost: DecisionsHostQuestions = {
+      hostId: "lab",
+      name: "Lab",
+      connected: true,
+      questionHostId: "qhost_lab_00001",
+      questions: [lab],
+    };
+    let hosts: DecisionsHostQuestions[] = [
+      {
+        hostId: "studio",
+        name: "Studio",
+        connected: true,
+        questionHostId: "qhost_studio_0001",
+        questions: [theirs, theirsLater],
+      },
+      labHost,
+    ];
+    const changed = new Set<() => void>();
+    const withdraw = setDecisionsHostsPort({
+      // Office is on the host list but has reported no questions.
+      hosts: () => [
+        { hostId: "studio", name: "Studio" },
+        { hostId: "lab", name: "Lab" },
+        { hostId: "office", name: "Office" },
+      ],
+      linkFor: () => null,
+      onLinkOpened: () => () => {},
+      onHostsChanged: () => () => {},
+      runtimeOf: () => null,
+      announceOwnerState: () => {},
+      hostQuestions: () => hosts,
+      onHostQuestionsChanged: (listener) => {
+        changed.add(listener);
+        return () => changed.delete(listener);
+      },
+      readHostQuestion: () => null,
+      cancelHostQuestion: () => null,
+      hostAttention: () => null,
+      lastHostRead: () => null,
+      onAgentStopChanges: () => () => {},
+    });
+    const listPushes = () =>
+      statusView.send.mock.calls.filter(
+        ([, message]) => (message as { name?: string }).name === "decisions:questions-changed"
+      );
+    const studio = { hostId: "studio", name: "Studio", connected: true };
+    try {
+      publish([own]);
+      // Oldest first across every machine, each Host's named.
+      expect(getDecisionQuestionList().questions).toEqual([
+        { ...theirs, remoteHost: studio, inbox: UNMARKED },
+        { ...lab, remoteHost: { hostId: "lab", name: "Lab", connected: true }, inbox: UNMARKED },
+        { ...own, inbox: UNMARKED },
+        { ...theirsLater, remoteHost: studio, inbox: UNMARKED },
+      ]);
+      // A Remote Host's window reads which Hosts' questions are listed (#18049).
+      expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio", "lab"] });
+
+      // A withdrawal or decline queued here shows on this computer's question and a Host's,
+      // which only this computer signs a decline for, while each is still open (#18052).
+      const queuedOwn: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000003", "2026-11-02T10:07:00.000Z"),
+        standing: { kind: "queued" },
+      };
+      const answered: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000002", "2026-11-02T10:06:00.000Z"),
+        standing: { kind: "to-type" },
+      };
+      const replying: DecisionQuestionListItem = {
+        ...item(RELAY.hostId, "q_own_000004", "2026-11-02T10:08:00.000Z"),
+        standing: { kind: "waiting", reason: "reply" },
+      };
+      const listWith = publish as (
+        questions: DecisionQuestionListItem[],
+        listing: boolean,
+        inbox: QuestionInboxFacts
+      ) => void;
+      const facts = (closings: QuestionInboxFacts["closings"]): QuestionInboxFacts => ({
+        asks: new Map(),
+        marks: new Map(),
+        closings,
+      });
+      const mine = [own, answered, queuedOwn, replying];
+      listWith(mine, true, facts(new Map()));
+      const revision = getDecisionQuestionList().revision;
+      statusView.send.mockClear();
+      // The same questions, only what is queued for them changing: every window hears it.
+      listWith(
+        mine,
+        true,
+        facts(
+          new Map([
+            [own.reference.questionId, "withdrawing"],
+            [answered.reference.questionId, "withdrawing"],
+            [queuedOwn.reference.questionId, "declining"],
+            [replying.reference.questionId, "declining"],
+            [theirs.reference.questionId, "declining"],
+          ])
+        )
+      );
+      expect(getDecisionQuestionList().revision).toBeGreaterThan(revision);
+      expect(listPushes()).toHaveLength(1);
+      const closingOf = (list: DecisionQuestionList) =>
+        list.questions.map((question) => [question.reference.questionId, question.closing ?? null]);
+      expect(closingOf((listPushes()[0]![1] as { payload: DecisionQuestionList }).payload)).toEqual(
+        [
+          [theirs.reference.questionId, "declining"],
+          [lab.reference.questionId, null],
+          [own.reference.questionId, "withdrawing"],
+          [answered.reference.questionId, null],
+          [queuedOwn.reference.questionId, "declining"],
+          [replying.reference.questionId, null],
+          [theirsLater.reference.questionId, null],
+        ]
+      );
+      publish([own]);
+      expect(getDecisionQuestionList().questions.some((question) => "closing" in question)).toBe(
+        false
+      );
+
+      // The Host's link goes: its questions stay, as not connected, and every window hears it.
+      statusView.send.mockClear();
+      hosts = [{ ...hosts[0], questions: [theirs], connected: false }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions[0]?.remoteHost).toEqual({
+        hostId: "studio",
+        name: "Studio",
+        connected: false,
+      });
+      expect(getDecisionQuestionList().hostsAway).toEqual(["Studio"]);
+      expect(listPushes()).toHaveLength(1);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio"] });
+
+      // A Host that reported nothing goes away too (#18022): no row changes, yet the list names it.
+      statusView.send.mockClear();
+      const quiet = { ...labHost, questions: [] };
+      hosts = [hosts[0]!, { ...quiet, connected: false }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().hostsAway).toEqual(["Studio", "Lab"]);
+      expect(listPushes()).toHaveLength(1);
+      // Back with the same rows: only the away Host's name goes.
+      hosts = [hosts[0]!, quiet];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().hostsAway).toEqual(["Studio"]);
+      expect(listPushes()).toHaveLength(2);
+      hosts = [hosts[0]!];
+      for (const listener of changed) listener();
+      expect(listPushes()).toHaveLength(2);
+
+      // With none asked here, the Host's are still listed.
+      publish([]);
+      expect(getDecisionQuestionList().questions.map((question) => question.reference)).toEqual([
+        theirs.reference,
+      ]);
+
+      // A Host whose report holds no question is still one whose questions are listed.
+      hosts = [{ ...hosts[0], questions: [] }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: ["studio"] });
+
+      // A Host whose questions name this computer's own id lists none of them.
+      hosts = [{ ...hosts[0], questionHostId: RELAY.hostId, questions: [own] }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: [] });
+
+      // Nothing listed here means nothing at all, and the Hosts' changes are no longer followed.
+      hosts = [{ ...hosts[0], questionHostId: "qhost_studio_0001", questions: [theirs] }];
+      for (const listener of changed) listener();
+      expect(getDecisionQuestionList().questions).toHaveLength(1);
+      const followed = [...changed];
+      publish([], false);
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      expect(await listHosts()).toMatchObject({ inboxHostIds: [] });
+      expect(changed.size).toBe(0);
+      // A Host's change already on its way when it stopped lists nothing.
+      for (const listener of followed) listener();
+      expect(getDecisionQuestionList().questions).toEqual([]);
+    } finally {
+      withdraw();
+      setDecisionQuestions([]);
+    }
+  });
+
+  it("lists a mark once it commits, and with the first list after Decisions starts again (#17895)", async () => {
+    loads.persisted = {
+      rows: [row(1, { origin: { host_id: RELAY.hostId } })],
+      meta: new Map(),
+      commits: new Set(),
+    };
+    saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+    try {
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() =>
+        expect(getDecisionQuestionList().questions[0]?.inbox).toEqual(UNMARKED)
+      );
+      const reference = getDecisionQuestionList().questions[0]!.reference;
+
+      expect(
+        await markDecisionQuestions({ action: "clear", questions: [{ reference, ask: null }] })
+      ).toEqual({ result: "marked", marked: 1 });
+      // The write's commit reads the list again: nothing else republishes it.
+      await vi.waitFor(() =>
+        expect(getDecisionQuestionList().questions[0]?.inbox).toEqual({
+          ask: null,
+          seen: false,
+          cleared: true,
+        })
+      );
+
+      await setDecisionsEnabled(false);
+      expect(getDecisionQuestionList().questions).toEqual([]);
+      const heard: DecisionQuestionList[] = [];
+      const off = onDecisionQuestionsChanged((list) => heard.push(list));
+      try {
+        await setDecisionsEnabled(true);
+        await vi.waitFor(() => expect(heard.length).toBeGreaterThan(0));
+        // Never listed unmarked on the way back: the marks come with the first read of the store.
+        expect(heard.map((list) => list.questions[0]?.inbox?.cleared)).toEqual(
+          heard.map(() => true)
+        );
+      } finally {
+        off();
+      }
+    } finally {
+      setDecisionQuestions([]);
+    }
+  });
+
+  it("records the person's marks on this computer only, each at the ask it was shown with (#17895)", async () => {
+    expect(
+      await markDecisionQuestions({
+        action: "seen",
+        questions: [
+          {
+            reference: { hostId: RELAY.hostId, projectId: "p", terminalId: "t", questionId: "q" },
+            ask: null,
+          },
+        ],
+      })
+    ).toEqual({ result: "not-running" });
+
+    saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+    await startDecisionsIfEnabled();
+    const service = peekDecisionsService()!;
+    const meta = new Map<string, string>();
+    Object.assign(service.getStore()!, {
+      getMeta: async (key: string) => meta.get(key) ?? null,
+      setMeta: async (key: string, value: string) => void meta.set(key, value),
+    });
+    const publish = Reflect.get(service, "publishQuestions") as (
+      questions: DecisionQuestionListItem[],
+      listing?: boolean,
+      inbox?: { asks: ReadonlyMap<string, string | null>; marks: ReadonlyMap<string, unknown> }
+    ) => void;
+    const own: DecisionQuestionListItem = {
+      reference: {
+        hostId: RELAY.hostId,
+        projectId: "project-1",
+        terminalId: "pane-a",
+        questionId: "q_own_000001",
+      },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: null,
+      worktreeId: "w1",
+      worktreeRoot: "/repo",
+      requirement: "human-required",
+      askedAt: "2026-11-02T10:00:00.000Z",
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+    };
+    const asks = new Map([[own.reference.questionId, "note-1"]]);
+    try {
+      publish([own], true, { asks, marks: new Map() });
+      expect(getDecisionQuestionList().questions[0]?.inbox).toEqual({
+        ask: "note-1",
+        seen: false,
+        cleared: false,
+      });
+
+      // Shown before the agent's follow-up: what it asks now wasn't seen, so nothing is kept.
+      expect(
+        await markDecisionQuestions({
+          action: "clear",
+          questions: [{ reference: own.reference, ask: null }],
+        })
+      ).toEqual({ result: "marked", marked: 0 });
+      expect(meta.has(QUESTION_MARKS_META_KEY)).toBe(false);
+
+      expect(
+        await markDecisionQuestions({
+          action: "clear",
+          questions: [{ reference: own.reference, ask: "note-1" }],
+        })
+      ).toEqual({ result: "marked", marked: 1 });
+      const record = await readQuestionMarks(service.getStore()!);
+      expect([...record.values()]).toEqual([
+        {
+          hostId: RELAY.hostId,
+          questionId: "q_own_000001",
+          ask: "note-1",
+          seen: false,
+          cleared: true,
+        },
+      ]);
+
+      // Listed with what the store now reads, it is cleared until it asks something new.
+      publish([own], true, { asks, marks: record });
+      expect(getDecisionQuestionList().questions[0]?.inbox?.cleared).toBe(true);
+      publish([own], true, {
+        asks: new Map([[own.reference.questionId, "note-2"]]),
+        marks: record,
+      });
+      expect(getDecisionQuestionList().questions[0]?.inbox).toEqual({
+        ask: "note-2",
+        seen: false,
+        cleared: false,
+      });
+
+      // A store that can't save it changes nothing, and says so.
+      Object.assign(service.getStore()!, {
+        setMeta: async () => {
+          throw new Error("disk full");
+        },
+      });
+      expect(
+        await markDecisionQuestions({
+          action: "seen",
+          questions: [{ reference: own.reference, ask: "note-2" }],
+        })
+      ).toEqual({ result: "failed" });
+    } finally {
+      setDecisionQuestions([]);
+    }
   });
 
   it("makes no service at boot while the setting is off", async () => {
@@ -954,6 +1516,974 @@ describe("Decisions entry", () => {
       expect(saved.value).toMatchObject({ modelLearning: false });
       expect(cleared.consentedAt).toBeGreaterThan(0);
     });
+
+    /** Stores an evaluation of `claude` with a supported threshold chosen, as an earlier lifetime left it. */
+    async function seedChosenThreshold(threshold: number): Promise<number> {
+      const cli = new FakeAdapter({
+        responder: (prompt: ModelPrompt) =>
+          JSON.stringify({
+            action: "answer",
+            selected_option_ids: ["rebase"],
+            answer_text: null,
+            confidence_estimate: 0.95,
+            supporting_decision_ids: [/\[example id=(\S+) chosen_at=/.exec(prompt.user)?.[1]],
+            risk_flags: [],
+            rationale: null,
+            reason: null,
+          }),
+      });
+      const seeding = new DecisionModelRuntime({
+        files: decisionModelFiles(keyFile.path),
+        onProxyChanged: () => {},
+        createAdapter: () => cli,
+      });
+      try {
+        await seeding.update({
+          modelLearning: true,
+          modelAdapter: "claude",
+          proxyAllowlisted: true,
+        });
+        for (let n = 1; n <= 36; n += 1) await seeding.learner.learn(learned(n));
+        const { evaluatedAt } = await seeding.evaluate();
+        await seeding.setAutoAnswerThreshold(threshold, evaluatedAt);
+        return evaluatedAt;
+      } finally {
+        await seeding.close();
+      }
+    }
+
+    // #18062: answering automatically is one choice, and the heading reads what main does.
+    it("answers nothing from a threshold saved without consent, and choosing it arms the model and the policy together", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      // What anyone who chose a confidence while Policy's old switch was off has saved.
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      await service.getDecisionModel()!.settled();
+      const running = service.getPolicy()!;
+      expect(getDecisionsModel()).toMatchObject({
+        evaluation: { autoAnswerThreshold: 0.8 },
+        answeringFrom: null,
+      });
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+      const chosen = await setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt });
+      expect(chosen.answeringFrom).toBe(0.8);
+      expect(saved.value).toMatchObject({ ...RELAY, consentedAt: 5, proxyAllowlisted: true });
+      expect(service.getPolicy()).toBe(running);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+      expect(
+        running.resolve({ gateId: "design-review/final", requested: "proxy-ok" }).requirement
+      ).toBe("human-required");
+
+      const off = await setDecisionsModelThreshold({ threshold: null, evaluatedAt });
+      expect(off).toMatchObject({ answeringFrom: null, evaluation: { autoAnswerThreshold: null } });
+      expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+    });
+
+    it("stops answering at once on Don't answer automatically though nothing can be written, and stays stopped until chosen again", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: true,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      const model = service.getDecisionModel()!;
+      await model.settled();
+      const running = service.getPolicy()!;
+      expect(model.proxy()).not.toBeNull();
+
+      // The setting's write fails, and the file's write waits its turn and then fails too.
+      vi.mocked(store.set).mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const write = vi.spyOn(model, "setAutoAnswerThreshold").mockImplementationOnce(async () => {
+        await held;
+        throw new Error("disk full");
+      });
+      try {
+        const off = setDecisionsModelThreshold({ threshold: null, evaluatedAt });
+        await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+        expect(model.proxy()).toBeNull();
+        expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+        release();
+        await expect(off).rejects.toMatchObject({ code: "INTERNAL" });
+      } finally {
+        write.mockRestore();
+      }
+      // Both still say yes on disk, and an unrelated save hands the model that setting again.
+      expect(saved.value).toMatchObject({ proxyAllowlisted: true });
+      expect(model.getEvaluation()?.autoAnswerThreshold).toBe(0.8);
+      await setDecisionsDefaultQuestionExpiry(60 * 60_000);
+      await model.settled();
+      expect(model.proxy()).toBeNull();
+      expect(getDecisionsModel().answeringFrom).toBeNull();
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+
+      // Choosing a confidence again is the person's consent, though the setting already said yes.
+      const chosen = await setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt });
+      expect(chosen.answeringFrom).toBe(0.8);
+      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    });
+
+    it("arms only at the confidence just chosen, never a saved one while the new one writes", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      const model = service.getDecisionModel()!;
+      await model.settled();
+
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const original = model.setAutoAnswerThreshold.bind(model);
+      const write = vi
+        .spyOn(model, "setAutoAnswerThreshold")
+        .mockImplementation(async (...args) => {
+          await held;
+          return original(...args);
+        });
+      try {
+        const choosing = setDecisionsModelThreshold({ threshold: 0.9, evaluatedAt });
+        await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+        // Consent waits for the new threshold, so the saved 0.8 never arms meanwhile.
+        expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+        expect(model.proxy()).toBeNull();
+        release();
+        await expect(choosing).resolves.toMatchObject({ answeringFrom: 0.9 });
+      } finally {
+        write.mockRestore();
+      }
+      expect(saved.value).toMatchObject({ proxyAllowlisted: true });
+      expect(connections).toHaveLength(1);
+      expect(connections[0]!.stopped).toBe(0);
+    });
+
+    it("keeps answering from a confidence chosen in Settings across a restart", async () => {
+      const evaluatedAt = await seedChosenThreshold(0.8);
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        modelLearning: true,
+        modelAdapter: "claude",
+        modelConsentedAt: 5,
+        proxyAllowlisted: false,
+      };
+      await startDecisionsIfEnabled();
+      await peekDecisionsService()!.getDecisionModel()!.settled();
+      await setDecisionsModelThreshold({ threshold: 0.7, evaluatedAt });
+      await peekDecisionsService()!.stop();
+
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      await service.getDecisionModel()!.settled();
+      expect(getDecisionsModel().answeringFrom).toBe(0.7);
+      expect(service.getPolicy()!.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+    });
+  });
+
+  describe("question reads (#17097)", () => {
+    afterEach(async () => {
+      await peekDecisionsService()?.stop();
+    });
+
+    const PAYLOAD = { terminalId: "pane-1", questionId: "0190f0aa11112222333344445555aa01" };
+
+    async function running(delivery: Partial<AnswerDelivery> | null) {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const current = { delivery: delivery as AnswerDelivery | null };
+      vi.spyOn(peekDecisionsService()!, "getAnswerDelivery").mockImplementation(
+        () => current.delivery
+      );
+      return current;
+    }
+
+    it("reads through the running delivery, for the asking view's project", async () => {
+      const read = { result: "not-found" } as const;
+      const questionContent = vi.fn(async () => read);
+      const questionSummaries = vi.fn(async () => []);
+      await running({ questionContent, questionSummaries });
+
+      await expect(getDecisionQuestionContent("project-1", PAYLOAD)).resolves.toBe(read);
+      await expect(
+        getDecisionQuestionSummaries("project-1", { terminalId: "pane-1", questionIds: [] })
+      ).resolves.toEqual({ result: "read", summaries: [] });
+
+      expect(questionContent).toHaveBeenCalledExactlyOnceWith(
+        { projectId: "project-1", terminalId: "pane-1" },
+        PAYLOAD.questionId
+      );
+    });
+
+    it("reads a question's image through the running delivery, for the asking view's project (#17100)", async () => {
+      const read = { result: "unavailable", reason: "fetch-failed" } as const;
+      const questionImage = vi.fn(async () => read);
+      await running({ questionImage });
+
+      await expect(
+        getDecisionQuestionImage("project-1", {
+          ...PAYLOAD,
+          attachmentId: "attach_0001",
+          offset: 0,
+        })
+      ).resolves.toBe(read);
+
+      expect(questionImage).toHaveBeenCalledExactlyOnceWith(
+        { projectId: "project-1", terminalId: "pane-1" },
+        PAYLOAD.questionId,
+        "attach_0001",
+        0
+      );
+    });
+
+    it("reads no image while not running, or when the delivery stops under the read", async () => {
+      const image = { ...PAYLOAD, attachmentId: "attach_0001", offset: 0 };
+      await expect(getDecisionQuestionImage("project-1", image)).resolves.toEqual({
+        result: "not-running",
+      });
+      expect(peekDecisionsService()).toBeNull();
+
+      const current = await running(null);
+      current.delivery = {
+        questionImage: async () => {
+          throw new RetiredAttemptError();
+        },
+      } as Partial<AnswerDelivery> as AnswerDelivery;
+      await expect(getDecisionQuestionImage("project-1", image)).resolves.toEqual({
+        result: "not-running",
+      });
+    });
+
+    it("is not running when the delivery stops while a part is read, though the read succeeds", async () => {
+      const current = await running(null);
+      let finish: (read: DecisionQuestionImagePartResult) => void = () => {};
+      current.delivery = {
+        questionImage: () =>
+          new Promise<DecisionQuestionImagePartResult>((resolve) => (finish = resolve)),
+      } as Partial<AnswerDelivery> as AnswerDelivery;
+
+      const read = getDecisionQuestionImage("project-1", {
+        ...PAYLOAD,
+        attachmentId: "attach_0001",
+        offset: 0,
+      });
+      current.delivery = null;
+      finish({
+        result: "read",
+        part: {
+          attachmentId: "attach_0001",
+          mime: "image/png",
+          sha256: "a".repeat(64),
+          size: 1,
+          offset: 0,
+          bytes: new Uint8Array([1]),
+        },
+      });
+
+      await expect(read).resolves.toEqual({ result: "not-running" });
+    });
+
+    it("is not running with no delivery, and makes no service before Decisions runs", async () => {
+      await expect(getDecisionQuestionContent("project-1", PAYLOAD)).resolves.toEqual({
+        result: "not-running",
+      });
+      expect(peekDecisionsService()).toBeNull();
+
+      await running(null);
+      await expect(
+        getDecisionQuestionSummaries("project-1", { terminalId: "pane-1", questionIds: [] })
+      ).resolves.toEqual({ result: "not-running" });
+    });
+
+    describe("by reference, from any window (#17229)", () => {
+      const REFERENCE = {
+        hostId: "host_1",
+        projectId: "project-b",
+        terminalId: "pane-closed",
+        questionId: "0190f0aa11112222333344445555aa01",
+      };
+      const SCOPE = { hostId: "host_1", projectId: "project-b", terminalId: "pane-closed" };
+
+      it("reads with the reference's machine, project and terminal, never a view's", async () => {
+        const read = { result: "not-found" } as const;
+        const questionContent = vi.fn(async () => read);
+        const questionImage = vi.fn(async () => read);
+        await running({ questionContent, questionImage });
+
+        await expect(getDecisionQuestionContentByReference({ reference: REFERENCE })).resolves.toBe(
+          read
+        );
+        await expect(
+          getDecisionQuestionImageByReference({
+            reference: REFERENCE,
+            attachmentId: "attach_0001",
+            offset: 8,
+          })
+        ).resolves.toBe(read);
+
+        expect(questionContent).toHaveBeenCalledExactlyOnceWith(SCOPE, REFERENCE.questionId);
+        expect(questionImage).toHaveBeenCalledExactlyOnceWith(
+          SCOPE,
+          REFERENCE.questionId,
+          "attach_0001",
+          8
+        );
+      });
+
+      it("names each question once, in order, each read in its own reference's scope", async () => {
+        const other = {
+          ...REFERENCE,
+          projectId: "project-c",
+          questionId: "0190f0aa11112222333344445555aa02",
+        };
+        const questionSummaries = vi.fn(async (_scope: unknown, ids: readonly string[]) =>
+          ids.map((questionId) => ({ questionId, result: "not-found" as const }))
+        );
+        await running({ questionSummaries });
+
+        await expect(
+          getDecisionQuestionSummariesByReference({ references: [other, REFERENCE, other] })
+        ).resolves.toEqual({
+          result: "read",
+          summaries: [
+            { questionId: other.questionId, result: "not-found" },
+            { questionId: REFERENCE.questionId, result: "not-found" },
+          ],
+        });
+        expect(questionSummaries.mock.calls).toEqual([
+          [{ ...SCOPE, projectId: "project-c" }, [other.questionId]],
+          [SCOPE, [REFERENCE.questionId]],
+        ]);
+      });
+
+      it("is not running with no delivery, or when it stops under the read", async () => {
+        await expect(
+          getDecisionQuestionContentByReference({ reference: REFERENCE })
+        ).resolves.toEqual({ result: "not-running" });
+        expect(peekDecisionsService()).toBeNull();
+
+        const current = await running(null);
+        current.delivery = {
+          questionSummaries: async () => {
+            throw new RetiredAttemptError();
+          },
+        } as Partial<AnswerDelivery> as AnswerDelivery;
+        await expect(
+          getDecisionQuestionSummariesByReference({ references: [REFERENCE] })
+        ).resolves.toEqual({ result: "not-running" });
+
+        // A read that returns normally as its delivery ends answers not running too.
+        const ending = {
+          questionContent: async () => {
+            current.delivery = null;
+            return { result: "not-found" as const };
+          },
+          questionImage: async () => {
+            current.delivery = null;
+            return { result: "not-found" as const };
+          },
+          questionSummaries: async () => {
+            current.delivery = null;
+            return [];
+          },
+        } as Partial<AnswerDelivery> as AnswerDelivery;
+        current.delivery = ending;
+        await expect(
+          getDecisionQuestionContentByReference({ reference: REFERENCE })
+        ).resolves.toEqual({ result: "not-running" });
+        current.delivery = ending;
+        await expect(
+          getDecisionQuestionImageByReference({
+            reference: REFERENCE,
+            attachmentId: "attach_0001",
+            offset: 0,
+          })
+        ).resolves.toEqual({ result: "not-running" });
+        current.delivery = ending;
+        await expect(
+          getDecisionQuestionSummariesByReference({ references: [REFERENCE] })
+        ).resolves.toEqual({ result: "not-running" });
+      });
+    });
+
+    describe("on an enrolled Remote Host (#17230)", () => {
+      /** A question the Host asked, named by the id its own questions carry. */
+      const ON_HOST = {
+        hostId: "qhost_studio_0001",
+        projectId: "project-server",
+        terminalId: "pane-host",
+        questionId: "0190f0aa11112222333344445555bb01",
+      };
+      const OWN = {
+        ...ON_HOST,
+        hostId: RELAY.hostId,
+        questionId: "0190f0aa11112222333344445555aa09",
+      };
+
+      function publishHostPort(over: Partial<DecisionsHostsPort>): () => void {
+        return setDecisionsHostsPort({
+          hosts: () => [],
+          linkFor: () => null,
+          onLinkOpened: () => () => {},
+          onHostsChanged: () => () => {},
+          runtimeOf: () => null,
+          announceOwnerState: () => {},
+          hostQuestions: () => [],
+          onHostQuestionsChanged: () => () => {},
+          readHostQuestion: () => null,
+          cancelHostQuestion: () => null,
+          hostAttention: () => null,
+          lastHostRead: () => null,
+          onAgentStopChanges: () => () => {},
+          ...over,
+        });
+      }
+
+      it("reads a Host's question on that Host, with or without a delivery here", async () => {
+        const questionContent = vi.fn(async () => ({ result: "not-found" as const }));
+        const current = await running({ questionContent });
+        const answered = { result: "unreadable" } as const;
+        const readHostQuestion = vi.fn((questionHostId: string) =>
+          questionHostId === ON_HOST.hostId
+            ? Promise.resolve({ ok: true as const, value: answered })
+            : null
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: readHostQuestion as DecisionsHostsPort["readHostQuestion"],
+        });
+        try {
+          await expect(getDecisionQuestionContentByReference({ reference: ON_HOST })).resolves.toBe(
+            answered
+          );
+          current.delivery = null;
+          await expect(
+            getDecisionQuestionImageByReference({
+              reference: ON_HOST,
+              attachmentId: "attach_0001",
+              offset: 8,
+            })
+          ).resolves.toBe(answered);
+
+          expect(readHostQuestion.mock.calls).toEqual([
+            [ON_HOST.hostId, { read: "content", reference: ON_HOST }],
+            [
+              ON_HOST.hostId,
+              { read: "image", reference: ON_HOST, attachmentId: "attach_0001", offset: 8 },
+            ],
+          ]);
+          expect(questionContent).not.toHaveBeenCalled();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("never reads a reference naming this computer on a Host", async () => {
+        const questionContent = vi.fn(async () => ({ result: "not-found" as const }));
+        await running({ questionContent });
+        const readHostQuestion = vi.fn(() => null);
+        const withdraw = publishHostPort({ readHostQuestion });
+        try {
+          await expect(getDecisionQuestionContentByReference({ reference: OWN })).resolves.toEqual({
+            result: "not-found",
+          });
+          expect(readHostQuestion).not.toHaveBeenCalled();
+          expect(questionContent).toHaveBeenCalledOnce();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("reads the asking pane only on the machine that owns it, with terminal snapshots off (#18037)", async () => {
+        const own = { result: "closed" } as const;
+        const questionPane = vi.fn(
+          async (_scope: unknown, _questionId: string, _getPtyClient: () => unknown) => own
+        );
+        const current = await running({ questionPane });
+        expect(terminalSnapshotsAllowed()).toBe(false);
+        let outcome: HostCallOutcome<unknown> = { ok: true, value: { result: "unreadable" } };
+        const readHostQuestion = vi.fn((questionHostId: string) =>
+          questionHostId === ON_HOST.hostId ? Promise.resolve(outcome) : null
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: readHostQuestion as DecisionsHostsPort["readHostQuestion"],
+        });
+        try {
+          await expect(getDecisionQuestionPaneByReference({ reference: OWN })).resolves.toBe(own);
+          expect(questionPane).toHaveBeenCalledExactlyOnceWith(
+            { hostId: OWN.hostId, projectId: OWN.projectId, terminalId: OWN.terminalId },
+            OWN.questionId,
+            expect.any(Function)
+          );
+          // The screen is read through main's own pty client.
+          expect(questionPane.mock.calls[0]![2]()).toBe(mcpRefs.ptyClient);
+
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
+            { result: "unreadable" }
+          );
+          expect(readHostQuestion.mock.calls).toEqual([
+            [ON_HOST.hostId, { read: "pane", reference: ON_HOST }],
+          ]);
+          outcome = { ok: false, failure: "needs-update" };
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
+            { result: "needs-update" }
+          );
+          outcome = { ok: false, failure: "disconnected" };
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).resolves.toEqual(
+            { result: "host-not-connected" }
+          );
+          outcome = { ok: false, failure: "outcome-unknown" };
+          await expect(getDecisionQuestionPaneByReference({ reference: ON_HOST })).rejects.toThrow(
+            /outcome-unknown/
+          );
+          // A Host's read never falls back to this computer's panes.
+          expect(questionPane).toHaveBeenCalledOnce();
+
+          current.delivery = null;
+          await expect(getDecisionQuestionPaneByReference({ reference: OWN })).resolves.toEqual({
+            result: "not-running",
+          });
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("says the Host isn't connected when its link is down or went under the read, and fails on any other answer", async () => {
+        await running(null);
+        let outcome: HostCallOutcome<unknown> = { ok: false, failure: "disconnected" };
+        const cancelHostQuestion = vi.fn((_reference: DecisionQuestionReference) =>
+          Promise.resolve(outcome as HostCallOutcome<DecisionQuestionCancelResult>)
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: (() =>
+            Promise.resolve(outcome)) as DecisionsHostsPort["readHostQuestion"],
+          cancelHostQuestion,
+        });
+        try {
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({
+            result: "host-not-connected",
+          });
+          await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "host-not-connected",
+          });
+          outcome = { ok: false, failure: "outcome-unknown" };
+          // A cancel that went out may have been taken: it says so, and isn't sent again.
+          await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "host-not-connected",
+          });
+          // A read that went out and got no answer is a failed read, to retry.
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).rejects.toThrow(/outcome-unknown/);
+          outcome = { ok: false, failure: "unexpected-answer" };
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).rejects.toThrow(/unexpected-answer/);
+          outcome = { ok: true, value: { result: "cancelling" } };
+          await expect(cancelDecisionQuestionByReference({ reference: ON_HOST })).resolves.toEqual({
+            result: "cancelling",
+          });
+          expect(cancelHostQuestion.mock.calls).toEqual([[ON_HOST], [ON_HOST], [ON_HOST]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("answers a read while the Host's link is down with what this computer last read of it (#17946)", async () => {
+        await running(null);
+        let outcome: HostCallOutcome<unknown> = { ok: false, failure: "disconnected" };
+        const read: DecisionQuestionLastRead = {
+          result: "read",
+          revision: 3,
+          alias: 7,
+          readAt: 1_000,
+        };
+        let last: DecisionQuestionLastRead | null = read;
+        const lastHostRead = vi.fn((_reference: DecisionQuestionReference) => last);
+        const withdraw = publishHostPort({
+          readHostQuestion: (() =>
+            Promise.resolve(outcome)) as DecisionsHostsPort["readHostQuestion"],
+          lastHostRead,
+        });
+        try {
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({ result: "host-not-connected", lastRead: read });
+          // Why it can't be dismissed travels with it too.
+          for (const why of [{ result: "not-read" }, { result: "not-sent" }] as const) {
+            last = why;
+            await expect(
+              getDecisionQuestionContentByReference({ reference: ON_HOST })
+            ).resolves.toEqual({ result: "host-not-connected", lastRead: why });
+          }
+          last = null;
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({ result: "host-not-connected" });
+          // A read that went out and got no answer says nothing of the Host being away.
+          outcome = { ok: false, failure: "outcome-unknown" };
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).rejects.toThrow(/outcome-unknown/);
+          outcome = { ok: true, value: { result: "unreadable" } };
+          await expect(
+            getDecisionQuestionContentByReference({ reference: ON_HOST })
+          ).resolves.toEqual({ result: "unreadable" });
+          expect(lastHostRead.mock.calls).toEqual([[ON_HOST], [ON_HOST], [ON_HOST], [ON_HOST]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("signs an owner's decline of a Host's question only while a Host reported to this owner names it (#17946)", async () => {
+        await running(null);
+        const declineQuestion = vi
+          .spyOn(peekDecisionsService()!, "declineQuestion")
+          .mockResolvedValue({
+            result: "submitted",
+            declineId: "0190f0aa-1111-4222-8333-44445555aaaa",
+            outcome: { status: "queued" },
+          });
+        let hosts: DecisionsHostQuestions[] = [];
+        const withdraw = publishHostPort({ hostQuestions: () => hosts });
+        const decline = {
+          reference: ON_HOST,
+          declineId: "0190f0aa-1111-4222-8333-44445555aaaa",
+          expectedRevision: 3,
+        };
+        const studio: DecisionsHostQuestions = {
+          hostId: "studio-03",
+          name: "Studio",
+          connected: false,
+          questionHostId: ON_HOST.hostId,
+          questions: [],
+        };
+        try {
+          // A Host removed, or reported to another owner identity than this one: nothing is signed.
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          // Another Host reported here names other questions.
+          hosts = [{ ...studio, hostId: "lab-01", questionHostId: "qhost_lab_0001" }];
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          expect(declineQuestion).not.toHaveBeenCalled();
+
+          // Reported to this owner, connected or not: the relay holds it to its own record.
+          hosts = [studio];
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // This computer's own question is its store's to check, whatever its Hosts report.
+          hosts = [];
+          const own = { ...decline, reference: OWN };
+          await expect(declineDecisionQuestion(own)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          expect(declineQuestion.mock.calls).toEqual([[decline], [own]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("never sends a Host question's decline again under another owner identity than it was first sent under (#17946)", async () => {
+        await running(null);
+        const current = peekDecisionsService()!;
+        const declineQuestion = vi.spyOn(current, "declineQuestion").mockResolvedValue({
+          result: "submitted",
+          declineId: "0190f0aa-1111-4222-8333-44445555aaab",
+          outcome: { status: "queued" },
+        });
+        const studio: DecisionsHostQuestions = {
+          hostId: "studio-03",
+          name: "Studio",
+          connected: false,
+          questionHostId: ON_HOST.hostId,
+          questions: [],
+        };
+        // The same Host, under the same id, is reported to whichever identity this computer holds.
+        const withdraw = publishHostPort({ hostQuestions: () => [studio] });
+        const decline = {
+          reference: ON_HOST,
+          declineId: "0190f0aa-1111-4222-8333-44445555aaab",
+          expectedRevision: 3,
+        };
+        try {
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // Local data deleted and another installation set up, with the old dismissal still followed.
+          const settings = current.getSettings()!;
+          const getSettings = vi
+            .spyOn(current, "getSettings")
+            .mockReturnValue({ ...settings, installationId: "inst_87654321" });
+          await expect(declineDecisionQuestion(decline)).resolves.toEqual({
+            result: "refused",
+            reason: "not-found",
+          });
+          // A dismissal made under this identity goes as any other.
+          const fresh = { ...decline, declineId: "0190f0aa-1111-4222-8333-44445555aaac" };
+          await expect(declineDecisionQuestion(fresh)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          // Back under the first identity, its own decline may be sent again, as the same decline.
+          getSettings.mockRestore();
+          await expect(declineDecisionQuestion(decline)).resolves.toMatchObject({
+            result: "submitted",
+          });
+          expect(declineQuestion.mock.calls).toEqual([[decline], [fresh], [decline]]);
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("serves a Host's owner nothing over the link once this machine runs as an owner itself", async () => {
+        const questionContent = vi.fn(async () => ({ result: "not-found" as const }));
+        const questionSummaries = vi.fn(async () => []);
+        await running({ questionContent, questionSummaries });
+        const cancelQuestionByReference = vi.spyOn(
+          peekDecisionsService()!,
+          "cancelQuestionByReference"
+        );
+
+        await expect(readHostServedQuestion({ read: "content", reference: OWN })).resolves.toEqual({
+          result: "off",
+        });
+        await expect(
+          readHostServedQuestion({ read: "summaries", references: [OWN] })
+        ).resolves.toEqual({ result: "off" });
+        await expect(readHostServedQuestion({ read: "pane", reference: OWN })).resolves.toEqual({
+          result: "off",
+        });
+        await expect(cancelHostServedQuestion(OWN)).resolves.toEqual({ result: "off" });
+        expect(questionContent).not.toHaveBeenCalled();
+        expect(questionSummaries).not.toHaveBeenCalled();
+        expect(cancelQuestionByReference).not.toHaveBeenCalled();
+      });
+
+      it("resolves a Host's stopped delivery on that Host alone, never on a delivery here (#18031)", async () => {
+        const markHandled = vi.fn(async () => ({ result: "handled" as const }));
+        const resumeAnswer = vi.fn(async () => ({ result: "resolved" as const }));
+        const current = await running({ markHandled, resumeAnswer });
+        const expected = "b".repeat(64);
+        let outcome: HostCallOutcome<DecisionsHostAttentionAnswer> = {
+          ok: true,
+          value: { result: "acted", outcome: { result: "handled" } },
+        };
+        const hostAttention = vi.fn((request: DecisionsHostAttentionRequest) =>
+          request.reference.hostId === ON_HOST.hostId ? Promise.resolve(outcome) : null
+        );
+        const withdraw = publishHostPort({ hostAttention });
+        const unknown = { ...ON_HOST, hostId: "qhost_unknown_0001" };
+        try {
+          await expect(
+            actOnHostAttention({ action: "handled", reference: ON_HOST, expected })
+          ).resolves.toEqual({ result: "acted", outcome: { result: "handled" } });
+          outcome = { ok: false, failure: "outcome-unknown" };
+          // With no delivery of its own running, this computer still reaches the Host.
+          current.delivery = null;
+          await expect(
+            actOnHostAttention({ action: "resume", reference: ON_HOST, expected })
+          ).resolves.toEqual({ result: "unreachable", failure: "outcome-unknown" });
+          // This computer's own question, or one no Host lists, under the same id: never acted on here.
+          for (const reference of [{ ...OWN, questionId: ON_HOST.questionId }, unknown]) {
+            await expect(
+              actOnHostAttention({ action: "handled", reference, expected })
+            ).resolves.toEqual({ result: "no-host" });
+          }
+          expect(hostAttention.mock.calls).toEqual([
+            [{ action: "handled", reference: ON_HOST, expected }],
+            [{ action: "resume", reference: ON_HOST, expected }],
+            [{ action: "handled", reference: unknown, expected }],
+          ]);
+          expect(markHandled).not.toHaveBeenCalled();
+          expect(resumeAnswer).not.toHaveBeenCalled();
+        } finally {
+          withdraw();
+        }
+      });
+
+      it("serves a Host's stopped delivery to its owner through this machine's delivery, only as a Host (#18031)", async () => {
+        const item = { questionId: OWN.questionId } as DecisionsAttentionItem;
+        const attentionItem = vi.fn(async () => item);
+        const copiedAnswer = vi.fn(async () => "copied");
+        const markHandled = vi.fn(async () => ({ result: "handled" as const }));
+        const resumeAnswer = vi.fn(async () => ({ result: "resolved" as const }));
+        await running({ attentionItem, copiedAnswer, markHandled, resumeAnswer });
+        const expected = "c".repeat(64);
+        const requests: DecisionsHostAttentionRequest[] = [
+          { action: "read", reference: OWN },
+          { action: "copy", reference: OWN },
+          { action: "resume", reference: OWN, expected },
+          { action: "handled", reference: OWN, expected },
+        ];
+
+        // Running as an owner itself, it serves no owner's Shell over the link.
+        for (const request of requests) {
+          await expect(hostServedAttention(request)).resolves.toEqual({ result: "off" });
+        }
+        expect(attentionItem).not.toHaveBeenCalled();
+        expect(markHandled).not.toHaveBeenCalled();
+
+        vi.spyOn(peekDecisionsService()!, "getRole").mockReturnValue("host");
+        await expect(hostServedAttention(requests[0]!)).resolves.toEqual({ result: "read", item });
+        await expect(hostServedAttention(requests[1]!)).resolves.toEqual({
+          result: "copied",
+          text: "copied",
+        });
+        await expect(hostServedAttention(requests[2]!)).resolves.toEqual({
+          result: "acted",
+          outcome: { result: "resolved" },
+        });
+        await expect(hostServedAttention(requests[3]!)).resolves.toEqual({
+          result: "acted",
+          outcome: { result: "handled" },
+        });
+        expect(attentionItem).toHaveBeenCalledExactlyOnceWith(OWN);
+        expect(copiedAnswer).toHaveBeenCalledExactlyOnceWith(OWN.questionId, OWN);
+        expect(resumeAnswer).toHaveBeenCalledExactlyOnceWith(OWN.questionId, {
+          reference: OWN,
+          expected,
+        });
+        expect(markHandled).toHaveBeenCalledExactlyOnceWith(OWN.questionId, expected, OWN);
+      });
+
+      it("reads its own asking pane for its owner while it runs as a Host (#18037)", async () => {
+        const questionPane = vi.fn(
+          async (_scope: unknown, _questionId: string, _getPtyClient: () => unknown) => ({
+            result: "closed" as const,
+          })
+        );
+        await running({ questionPane });
+        vi.spyOn(peekDecisionsService()!, "getRole").mockReturnValue("host");
+
+        await expect(readHostServedQuestion({ read: "pane", reference: OWN })).resolves.toEqual({
+          result: "closed",
+        });
+        expect(questionPane).toHaveBeenCalledExactlyOnceWith(
+          { hostId: OWN.hostId, projectId: OWN.projectId, terminalId: OWN.terminalId },
+          OWN.questionId,
+          expect.any(Function)
+        );
+        expect(questionPane.mock.calls[0]![2]()).toBe(mcpRefs.ptyClient);
+      });
+
+      it("reads opening lines here and on each Host in one batch, in the order asked for", async () => {
+        const questionSummaries = vi.fn(async (_scope: unknown, ids: readonly string[]) =>
+          ids.map((questionId) => ({ questionId, result: "read" as const, line: "Here?" }))
+        );
+        await running({ questionSummaries });
+        const second = { ...ON_HOST, questionId: "0190f0aa11112222333344445555bb02" };
+        let connected = true;
+        let failure: "disconnected" | "outcome-unknown" = "disconnected";
+        const readHostQuestion = vi.fn((_questionHostId: string, read: DecisionsHostQuestionRead) =>
+          Promise.resolve(
+            connected && read.read === "summaries"
+              ? {
+                  ok: true as const,
+                  value: {
+                    result: "read" as const,
+                    summaries: [
+                      { questionId: ON_HOST.questionId, result: "read" as const, line: "There?" },
+                    ],
+                  },
+                }
+              : { ok: false as const, failure }
+          )
+        );
+        const withdraw = publishHostPort({
+          readHostQuestion: readHostQuestion as unknown as DecisionsHostsPort["readHostQuestion"],
+        });
+        try {
+          await expect(
+            getDecisionQuestionSummariesByReference({ references: [ON_HOST, OWN, second, ON_HOST] })
+          ).resolves.toEqual({
+            result: "read",
+            summaries: [
+              { questionId: ON_HOST.questionId, result: "read", line: "There?" },
+              { questionId: OWN.questionId, result: "read", line: "Here?" },
+              { questionId: second.questionId, result: "not-found" },
+            ],
+          });
+          // One read for the Host's two questions.
+          expect(readHostQuestion).toHaveBeenCalledExactlyOnceWith(ON_HOST.hostId, {
+            read: "summaries",
+            references: [ON_HOST, second],
+          });
+
+          connected = false;
+          await expect(
+            getDecisionQuestionSummariesByReference({ references: [ON_HOST] })
+          ).resolves.toEqual({
+            result: "read",
+            summaries: [{ questionId: ON_HOST.questionId, result: "host-not-connected" }],
+          });
+          // One that went out and got no answer isn't the Host being away: it couldn't be read.
+          failure = "outcome-unknown";
+          await expect(
+            getDecisionQuestionSummariesByReference({ references: [ON_HOST] })
+          ).resolves.toEqual({
+            result: "read",
+            summaries: [{ questionId: ON_HOST.questionId, result: "unreadable" }],
+          });
+        } finally {
+          withdraw();
+        }
+      });
+    });
+
+    it("is not running when the delivery stopped under the read, whatever the read returned", async () => {
+      const current = await running(null);
+      current.delivery = {
+        questionContent: async () => {
+          current.delivery = null;
+          return { result: "unreadable" };
+        },
+      } as Partial<AnswerDelivery> as AnswerDelivery;
+      await expect(getDecisionQuestionContent("project-1", PAYLOAD)).resolves.toEqual({
+        result: "not-running",
+      });
+
+      current.delivery = {
+        questionSummaries: async () => {
+          throw new RetiredAttemptError();
+        },
+      } as Partial<AnswerDelivery> as AnswerDelivery;
+      await expect(
+        getDecisionQuestionSummaries("project-1", { terminalId: "pane-1", questionIds: [] })
+      ).resolves.toEqual({ result: "not-running" });
+    });
   });
 
   describe("terminal snapshots (#16228)", () => {
@@ -970,6 +2500,13 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState,
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
+        hostAttention: () => null,
+        lastHostRead: () => null,
+        onAgentStopChanges: () => () => {},
       });
       try {
         saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
@@ -1141,38 +2678,523 @@ describe("Decisions entry", () => {
     });
   });
 
-  describe("policy", () => {
-    it("reads the trusted gates and the proxy allowlist as saved", () => {
-      saved.value = { enabled: true, proxyAllowlisted: true };
-      const policy = getDecisionsPolicy();
-      expect(policy.proxyAllowlisted).toBe(true);
-      expect(policy.gates.map((gate) => gate.id)).toContain("design-review/final");
-      expect(policy.defaultQuestionExpiryMs).toBeGreaterThan(0);
+  describe("holding phone pushes (#17240)", () => {
+    afterEach(async () => {
+      await peekDecisionsService()?.stop();
     });
 
-    it("saves the proxy allowlist, keeping every other field, and the running policy follows it", async () => {
+    it("reports presence only while Decisions, the switch and desktop notifications are on, telling the connection of each turn", async () => {
+      notificationRecord.readable = true;
+      let readRecord!: () => void;
+      notificationRecord.read = new Promise<void>((resolve) => (readRecord = resolve));
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
       await startDecisionsIfEnabled();
-      const running = peekDecisionsService()!.getPolicy()!;
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const connection = connections[0]!;
+      const presence = connection.options.presence!;
+      // Nothing until question notifications follow the lifetime; then the connection hears so.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(presence.allowed()).toBe(false);
+      const before = connection.presenceChanged;
+      readRecord();
+      await vi.waitFor(() => expect(connection.presenceChanged).toBe(before + 1));
+      // On by default, with nothing new to agree to.
+      expect(presence.allowed()).toBe(true);
+      const told = connection.presenceChanged;
+      expect((await getDecisionsStatus()).holdPhonePushes).toBeUndefined();
 
-      const policy = await setDecisionsProxyAllowlisted(true);
+      savedNotifications.value = { enabled: false };
+      notificationSettingsWritten();
+      expect(connection.presenceChanged).toBe(told + 1);
+      expect(presence.allowed()).toBe(false);
 
-      expect(policy.proxyAllowlisted).toBe(true);
+      savedNotifications.value = { enabled: true };
+      notificationSettingsWritten();
+      expect(connection.presenceChanged).toBe(told + 2);
+      expect(presence.allowed()).toBe(true);
+
+      // A system that can't show a notification can't tell the person first.
+      nativeNotifications.supported = false;
+      expect(presence.allowed()).toBe(false);
+      nativeNotifications.supported = true;
+
+      // Off reaches the connection before the queue gets to it.
+      const off = setDecisionsHoldPhonePushes(false);
+      expect(presence.allowed()).toBe(false);
+      expect(connection.presenceChanged).toBe(told + 3);
+      expect((await off).holdPhonePushes).toBe(false);
       expect(saved.value).toEqual({
         ...defaultDecisionsSettings(),
         enabled: true,
         ...RELAY,
         consentedAt: 5,
-        proxyAllowlisted: true,
+        holdPhonePushes: false,
       });
-      expect(peekDecisionsService()!.getPolicy()).toBe(running);
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
-      expect(connections).toHaveLength(1);
-      expect(connections[0]!.stopped).toBe(0);
+      expect(peekDecisionsService()!.getSettings()!.holdPhonePushes).toBe(false);
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ holdPhonePushes: false })
+      );
+      // Notifications turning on doesn't override the switch.
+      notificationSettingsWritten();
+      expect(presence.allowed()).toBe(false);
 
-      expect((await setDecisionsProxyAllowlisted(false)).proxyAllowlisted).toBe(false);
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("human-required");
+      const beforeOn = connection.presenceChanged;
+      const on = await setDecisionsHoldPhonePushes(true);
+      expect(on.holdPhonePushes).toBeUndefined();
+      expect(presence.allowed()).toBe(true);
+      expect(connection.presenceChanged).toBeGreaterThan(beforeOn);
+      expect(peekDecisionsService()!.getSettings()!.holdPhonePushes).toBe(true);
+      await vi.waitFor(() => expect(pushedStatuses().at(-1)).not.toHaveProperty("holdPhonePushes"));
+
+      // Decisions turned off, with the app still running.
+      await setDecisionsEnabled(false);
+      expect(presence.allowed()).toBe(false);
+    });
+
+    it("shows Settings whether desktop notifications are on, pushing with each write (#18061)", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      expect(await getDecisionsStatus()).not.toHaveProperty("desktopNotifications");
+      // Whatever starting pushed has landed, so each push below is a write's.
+      const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+      await settle();
+
+      let pushes = pushedStatuses().length;
+      savedNotifications.value = { enabled: false };
+      notificationSettingsWritten();
+      await vi.waitFor(() => expect(pushedStatuses().length).toBe(pushes + 1));
+      expect(pushedStatuses().at(-1)).toMatchObject({ desktopNotifications: false });
+      expect((await getDecisionsStatus()).desktopNotifications).toBe(false);
+
+      pushes = pushedStatuses().length;
+      savedNotifications.value = { enabled: true };
+      notificationSettingsWritten();
+      await vi.waitFor(() => expect(pushedStatuses().length).toBe(pushes + 1));
+      expect(pushedStatuses().at(-1)).not.toHaveProperty("desktopNotifications");
+      expect(await getDecisionsStatus()).not.toHaveProperty("desktopNotifications");
+    });
+
+    it("holds nothing for a lifetime whose question notifications can't follow its questions", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const presence = connections.at(-1)!.options.presence!;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(presence.allowed()).toBe(false);
+      warn.mockRestore();
+    });
+
+    it("shows every window the switch off before the queue reaches it", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the queue.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      let answered = false;
+      let off: ReturnType<typeof setDecisionsHoldPhonePushes> | null = null;
+      try {
+        await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+        off = setDecisionsHoldPhonePushes(false).then((status) => {
+          answered = true;
+          return status;
+        });
+        await vi.waitFor(() =>
+          expect(pushedStatuses().at(-1)).toMatchObject({ holdPhonePushes: false })
+        );
+        expect(answered).toBe(false);
+      } finally {
+        closed();
+      }
+      const [, , status] = await Promise.all([stopping, enabling, off]);
+      expect(status?.holdPhonePushes).toBe(false);
+    });
+
+    it("lets a turn off stand over a turn on queued before it", async () => {
+      saved.value = { enabled: true, consentedAt: 5, holdPhonePushes: false };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      // A stop still closing the store holds the queue behind a switch-on.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      const turningOn = setDecisionsHoldPhonePushes(true);
+      const turningOff = setDecisionsHoldPhonePushes(false);
+      closed();
+      const [, , on, off] = await Promise.all([stopping, enabling, turningOn, turningOff]);
+
+      const wroteOn = vi
+        .mocked(store.set)
+        .mock.calls.some(
+          (call) =>
+            ((call as unknown[])[1] as { holdPhonePushes?: boolean } | undefined)
+              ?.holdPhonePushes === true
+        );
+      expect(wroteOn).toBe(false);
+      expect(on.holdPhonePushes).toBe(false);
+      expect(off.holdPhonePushes).toBe(false);
+      expect(saved.value).toMatchObject({ holdPhonePushes: false });
+    });
+
+    it("refuses to turn on while Decisions is off, without loading it", async () => {
+      saved.value = { enabled: false, holdPhonePushes: false };
+      const constructed = loads.constructed;
+      await expect(setDecisionsHoldPhonePushes(true)).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+      expect(loads.constructed).toBe(constructed);
+    });
+  });
+
+  describe("agent-stopped pushes (#17319)", () => {
+    afterEach(async () => {
+      setRunAttentionServiceRef(null);
+      await peekDecisionsService()?.stop();
+    });
+
+    it("asks only while Decisions and the switch are on, whatever desktop notifications say, telling the connection of each turn", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const connection = connections[0]!;
+      const stopped = connection.options.agentStopped!;
+      // Off by default.
+      expect(stopped.allowed()).toBe(false);
+      expect((await getDecisionsStatus()).agentStoppedPushes).toBeUndefined();
+
+      const on = await setDecisionsAgentStoppedPushes(true);
+      expect(on.agentStoppedPushes).toBe(true);
+      expect(stopped.allowed()).toBe(true);
+      expect(connection.agentStoppedPushesChanged).toBe(1);
+      expect(saved.value).toEqual({
+        ...defaultDecisionsSettings(),
+        enabled: true,
+        ...RELAY,
+        consentedAt: 5,
+        agentStoppedPushes: true,
+      });
+      expect(peekDecisionsService()!.getSettings()!.agentStoppedPushes).toBe(true);
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ agentStoppedPushes: true })
+      );
+
+      // The switch stands alone: desktop notifications and their completion banners don't gate it.
+      savedNotifications.value = { enabled: false, completedEnabled: false };
+      notificationSettingsWritten();
+      expect(stopped.allowed()).toBe(true);
+
+      // Off reaches the connection before the queue gets to it.
+      const off = setDecisionsAgentStoppedPushes(false);
+      expect(stopped.allowed()).toBe(false);
+      expect(connection.agentStoppedPushesChanged).toBe(2);
+      expect((await off).agentStoppedPushes).toBeUndefined();
+      expect(saved.value).toMatchObject({ agentStoppedPushes: false });
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).not.toHaveProperty("agentStoppedPushes")
+      );
+
+      await setDecisionsAgentStoppedPushes(true);
+      await setDecisionsEnabled(false);
+      expect(stopped.allowed()).toBe(false);
+    });
+
+    it("holds every push back while a turn off of Decisions waits its turn", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5, agentStoppedPushes: true };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const service = peekDecisionsService()!;
+      const connection = connections[0]!;
+      const stopped = connection.options.agentStopped!;
+      expect(stopped.allowed()).toBe(true);
+      // A stop still closing the store holds the queue behind a switch-on.
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      const disabling = setDecisionsEnabled(false);
+      // Still saved on, but no push may go out after the click.
+      expect(saved.value).toMatchObject({ enabled: true });
+      expect(stopped.allowed()).toBe(false);
+      closed();
+      await Promise.all([stopping, enabling, disabling]);
+      expect(stopped.allowed()).toBe(false);
+
+      // Back on: it asks again, with the switch kept as it was.
+      await setDecisionsEnabled(true);
+      expect(stopped.allowed()).toBe(true);
+    });
+
+    it("lets a turn off stand over a turn on queued before it", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      const service = peekDecisionsService()!;
+      let closed!: () => void;
+      loads.closing = new Promise<void>((resolve) => (closed = resolve));
+      const stopping = service.stop();
+      const enabling = setDecisionsEnabled(true);
+      await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
+
+      const turningOn = setDecisionsAgentStoppedPushes(true);
+      const turningOff = setDecisionsAgentStoppedPushes(false);
+      closed();
+      const [, , on, off] = await Promise.all([stopping, enabling, turningOn, turningOff]);
+
+      const wroteOn = vi
+        .mocked(store.set)
+        .mock.calls.some(
+          (call) =>
+            ((call as unknown[])[1] as { agentStoppedPushes?: boolean } | undefined)
+              ?.agentStoppedPushes === true
+        );
+      expect(wroteOn).toBe(false);
+      expect(on.agentStoppedPushes).toBeUndefined();
+      expect(off.agentStoppedPushes).toBeUndefined();
+      expect(saved.value).toMatchObject({ agentStoppedPushes: false });
+    });
+
+    it("refuses to turn on while Decisions is off, without loading it", async () => {
+      saved.value = { enabled: false };
+      const constructed = loads.constructed;
+      await expect(setDecisionsAgentStoppedPushes(true)).rejects.toMatchObject(CANCELLED);
+      expect(store.set).not.toHaveBeenCalled();
+      expect(loads.constructed).toBe(constructed);
+    });
+
+    it("reads this computer's quiet hours, its runs put aside and its agents' transitions", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5, agentStoppedPushes: true };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const stopped = connections[0]!.options.agentStopped!;
+
+      expect(stopped.quiet()).toBe(false);
+      const now = new Date();
+      const nowMin = now.getHours() * 60 + now.getMinutes();
+      savedNotifications.value = {
+        enabled: false,
+        quietHoursEnabled: true,
+        quietHoursStartMin: nowMin,
+        quietHoursEndMin: (nowMin + 60) % 1440,
+        quietHoursWeekdays: [],
+      };
+      expect(stopped.quiet()).toBe(true);
+
+      expect(stopped.putAside("t-parked")).toBe(false);
+      setRunAttentionServiceRef({
+        getParkRecord: (id: string) => (id === "t-parked" ? { parkedAt: 1 } : undefined),
+        isSnoozed: (id: string) => id === "t-snoozed",
+      } as unknown as Parameters<typeof setRunAttentionServiceRef>[0]);
+      expect(stopped.putAside("t-parked")).toBe(true);
+      expect(stopped.putAside("t-snoozed")).toBe(true);
+      expect(stopped.putAside("t-other")).toBe(false);
+
+      const heard: unknown[] = [];
+      const off = stopped.watchTransitions((transition) => heard.push(transition));
+      events.emit("agent:state-changed", {
+        terminalId: "t-1",
+        state: "exited",
+        previousState: "working",
+        trigger: "exit",
+        confidence: 1,
+        terminalClosing: true,
+        timestamp: Date.now(),
+      });
+      events.emit("agent:state-changed", {
+        terminalId: "t-2",
+        state: "completed",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+      });
+      off();
+      events.emit("agent:state-changed", {
+        terminalId: "t-3",
+        state: "completed",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+      });
+      expect(heard).toEqual([
+        { terminalId: "t-1", state: "exited", previousState: "working", terminalClosing: true },
+        { terminalId: "t-2", state: "completed", previousState: "working", terminalClosing: false },
+      ]);
+
+      // Parking or snoozing a run is heard; taking it back isn't.
+      const putAside: string[] = [];
+      const offPutAside = stopped.watchPutAside((terminalId) => putAside.push(terminalId));
+      events.emit("terminal:park-changed", { id: "t-p", parked: true, timestamp: Date.now() });
+      events.emit("terminal:park-changed", { id: "t-p", parked: false, timestamp: Date.now() });
+      events.emit("terminal:snooze-changed", { id: "t-s", snoozed: true, timestamp: Date.now() });
+      events.emit("terminal:snooze-changed", { id: "t-s", snoozed: false, timestamp: Date.now() });
+      offPutAside();
+      events.emit("terminal:park-changed", { id: "t-late", parked: true, timestamp: Date.now() });
+      expect(putAside).toEqual(["t-p", "t-s"]);
+
+      // Only away counts as away, as the shared reading says it.
+      expect(stopped.presence).toBe(readUserPresence);
+    });
+
+    it("hears connected Hosts' agents' stops through the Remote Hosts port, as it comes and goes (#17933)", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5, agentStoppedPushes: true };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const stopped = connections[0]!.options.agentStopped!;
+      type StopListener = Parameters<DecisionsHostsPort["onAgentStopChanges"]>[0];
+      const withdrawals: Array<() => void> = [];
+      const publishStops = () => {
+        const listeners = new Set<StopListener>();
+        const withdraw = setDecisionsHostsPort({
+          hosts: () => [],
+          linkFor: () => null,
+          onLinkOpened: () => () => {},
+          onHostsChanged: () => () => {},
+          runtimeOf: () => null,
+          announceOwnerState: () => {},
+          hostQuestions: () => [],
+          onHostQuestionsChanged: () => () => {},
+          readHostQuestion: () => null,
+          cancelHostQuestion: () => null,
+          hostAttention: () => null,
+          lastHostRead: () => null,
+          onAgentStopChanges: (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+        });
+        withdrawals.push(withdraw);
+        const tell = (hostId: string, terminalId: string, isStopped = true) =>
+          listeners.forEach((listener) => listener(hostId, { terminalId, stopped: isStopped }));
+        return { listeners, withdraw, tell };
+      };
+      const reports: Array<{ key: string; stopped: boolean }> = [];
+      let off: (() => void) | null = null;
+      try {
+        const first = publishStops();
+        off = stopped.watchReportedStops!((report) => reports.push(report));
+        expect(first.listeners.size).toBe(1);
+        first.tell("studio", "t-1");
+        first.tell("lab", "t-1");
+        first.tell("studio", "t-2");
+        first.tell("studio", "t-2", false);
+        // The same terminal id on two Hosts, and on this computer, is three agents.
+        const [studioKey, labKey, studioOther] = reports.map((report) => report.key);
+        expect(new Set([studioKey, labKey, studioOther, "t-1"]).size).toBe(4);
+        expect(reports.map((report) => report.stopped)).toEqual([true, true, true, false]);
+        expect(reports[3]!.key).toBe(studioOther);
+
+        // A Host judged its own run's park and snooze: this computer's records don't speak for it.
+        setRunAttentionServiceRef({
+          getParkRecord: () => ({ parkedAt: 1 }),
+          isSnoozed: () => true,
+        } as unknown as Parameters<typeof setRunAttentionServiceRef>[0]);
+        expect(stopped.putAside(studioKey!)).toBe(false);
+        expect(stopped.putAside("t-1")).toBe(true);
+
+        // Withdrawn, the port takes back the stops it passed on that still stood.
+        reports.length = 0;
+        first.withdraw();
+        expect(first.listeners.size).toBe(0);
+        expect(reports).toEqual([
+          { key: studioKey, stopped: false },
+          { key: labKey, stopped: false },
+        ]);
+
+        // A port published later is heard in its place.
+        const second = publishStops();
+        expect(second.listeners.size).toBe(1);
+        reports.length = 0;
+        second.tell("studio", "t-1");
+        expect(reports).toEqual([{ key: studioKey, stopped: true }]);
+
+        // Replaced without being withdrawn first: the old one is let go, and what it passed on.
+        const third = publishStops();
+        expect(second.listeners.size).toBe(0);
+        expect(third.listeners.size).toBe(1);
+        expect(reports).toEqual([
+          { key: studioKey, stopped: true },
+          { key: studioKey, stopped: false },
+        ]);
+
+        off();
+        off = null;
+        expect(third.listeners.size).toBe(0);
+        third.tell("studio", "t-3");
+        // Nor is a port published after it let go.
+        const fourth = publishStops();
+        expect(fourth.listeners.size).toBe(0);
+        expect(reports).toHaveLength(2);
+      } finally {
+        off?.();
+        for (const withdraw of withdrawals) withdraw();
+      }
+    });
+
+    it("takes back the oldest Host stops it holds as it lets them go (#17933)", async () => {
+      saved.value = { enabled: true, ...RELAY, consentedAt: 5, agentStoppedPushes: true };
+      await startDecisionsIfEnabled();
+      await vi.waitFor(() => expect(connections).toHaveLength(1));
+      const stopped = connections[0]!.options.agentStopped!;
+      const port: { tell: Parameters<DecisionsHostsPort["onAgentStopChanges"]>[0] | null } = {
+        tell: null,
+      };
+      const withdraw = setDecisionsHostsPort({
+        hosts: () => [],
+        linkFor: () => null,
+        onLinkOpened: () => () => {},
+        onHostsChanged: () => () => {},
+        runtimeOf: () => null,
+        announceOwnerState: () => {},
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
+        hostAttention: () => null,
+        lastHostRead: () => null,
+        onAgentStopChanges: (listener) => {
+          port.tell = listener;
+          return () => (port.tell = null);
+        },
+      });
+      const reports: Array<{ key: string; stopped: boolean }> = [];
+      const off = stopped.watchReportedStops!((report) => reports.push(report));
+      try {
+        // Far more than any Host holds, spread over several.
+        for (let index = 0; index < 5_000; index += 1) {
+          port.tell!(`host-${index % 5}`, { terminalId: `t-${index}`, stopped: true });
+        }
+        const takenBack = reports.filter((report) => !report.stopped);
+        const sent = reports.filter((report) => report.stopped);
+        expect(sent).toHaveLength(5_000);
+        // The oldest each went as a later one came, and each was taken back as it went.
+        expect(takenBack.map((report) => report.key)).toEqual(
+          sent.slice(0, takenBack.length).map((report) => report.key)
+        );
+        expect(takenBack.length).toBeGreaterThan(0);
+        reports.length = 0;
+        withdraw();
+        expect(reports.length + takenBack.length).toBe(5_000);
+        expect(reports.every((report) => !report.stopped)).toBe(true);
+      } finally {
+        off();
+        withdraw();
+      }
+    });
+  });
+
+  describe("policy", () => {
+    it("reads the trusted gates and the default expiry, with no allowlist of its own (#18062)", () => {
+      saved.value = { enabled: true, proxyAllowlisted: true };
+      const policy = getDecisionsPolicy();
+      expect(policy).not.toHaveProperty("proxyAllowlisted");
+      expect(policy.gates.map((gate) => gate.id)).toContain("design-review/final");
+      expect(policy.defaultQuestionExpiryMs).toBeGreaterThan(0);
     });
 
     it("moves the revision with each save, and tells every window to read it again", async () => {
@@ -1185,18 +3207,18 @@ describe("Decisions entry", () => {
         );
 
       let status = (await getDecisionsStatus()).revision ?? 0;
-      const saved1 = await setDecisionsProxyAllowlisted(true);
+      const saved1 = await setDecisionsDefaultQuestionExpiry(null);
       expect(saved1.revision).toBeGreaterThan(before);
       expect(getDecisionsPolicy()).toEqual(saved1);
       await pushedAfter(status);
 
       status = (await getDecisionsStatus()).revision ?? 0;
-      const saved2 = await setDecisionsProxyAllowlisted(false);
+      const saved2 = await setDecisionsDefaultQuestionExpiry(60 * 60_000);
       expect(saved2.revision).toBeGreaterThan(saved1.revision);
       await pushedAfter(status);
     });
 
-    it("waits for a switch-on under way, so the starting lifetime can't keep the old allowlist", async () => {
+    it("waits for a switch-on under way, so the starting lifetime can't keep the old expiry", async () => {
       saved.value = { enabled: true, consentedAt: 5 };
       await startDecisionsIfEnabled();
       const service = peekDecisionsService()!;
@@ -1208,21 +3230,22 @@ describe("Decisions entry", () => {
       const enabling = setDecisionsEnabled(true);
       await vi.waitFor(() => expect(store.set).toHaveBeenCalledTimes(1));
 
-      let allowed = false;
-      const allowing = setDecisionsProxyAllowlisted(true).then((policy) => {
-        allowed = true;
+      let answered = false;
+      const saving = setDecisionsDefaultQuestionExpiry(null).then((policy) => {
+        answered = true;
         return policy;
       });
       await new Promise((resolve) => setTimeout(resolve, 20));
       // Queued behind the switch-on: nothing saved, nothing answered yet.
-      expect(allowed).toBe(false);
-      expect(saved.value).toMatchObject({ proxyAllowlisted: false });
+      expect(answered).toBe(false);
+      expect(saved.value).toMatchObject({
+        defaultQuestionExpiryMs: defaultDecisionsSettings().defaultQuestionExpiryMs,
+      });
 
       closed();
-      await Promise.all([stopping, enabling, allowing]);
-      expect(saved.value).toMatchObject({ enabled: true, proxyAllowlisted: true });
-      const running = service.getPolicy()!;
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
+      await Promise.all([stopping, enabling, saving]);
+      expect(saved.value).toMatchObject({ enabled: true, defaultQuestionExpiryMs: null });
+      expect(service.getPolicy()!.defaultQuestionExpiryMs).toBeNull();
     });
 
     it("saves the default expiry, never included, and the running policy asks the next question with it", async () => {
@@ -1268,37 +3291,43 @@ describe("Decisions entry", () => {
       expect(running.defaultQuestionExpiryMs).toBe(before.defaultQuestionExpiryMs);
     });
 
-    it("keeps both fields when the expiry and the allowlist are saved at once", async () => {
+    it("keeps both fields when the expiry and an agent's switch are saved at once", async () => {
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
       await startDecisionsIfEnabled();
       const running = peekDecisionsService()!.getPolicy()!;
 
-      const [allowed, expiry] = await Promise.all([
-        setDecisionsProxyAllowlisted(true),
+      const [agents, expiry] = await Promise.all([
+        setDecisionsAgentAskHuman({ agentId: "claude", enabled: true }),
         setDecisionsDefaultQuestionExpiry(null),
       ]);
-      expect(allowed.proxyAllowlisted).toBe(true);
+      expect(agents.askHumanAgents).toEqual(["claude"]);
       // The later save is applied over the earlier one, so its answer holds both.
-      expect(expiry).toMatchObject({ proxyAllowlisted: true, defaultQuestionExpiryMs: null });
-      expect(saved.value).toMatchObject({ proxyAllowlisted: true, defaultQuestionExpiryMs: null });
+      expect(expiry).toMatchObject({ askHumanAgents: ["claude"], defaultQuestionExpiryMs: null });
+      expect(saved.value).toMatchObject({
+        askHumanAgents: ["claude"],
+        defaultQuestionExpiryMs: null,
+      });
       expect(running.defaultQuestionExpiryMs).toBeNull();
-      expect(running.resolve({ requested: "proxy-ok" }).requirement).toBe("proxy-ok");
     });
 
-    it("refuses either policy change after quit, though the switch still reads on", async () => {
+    it("refuses a policy change or an automatic-answer choice after quit, though the switch still reads on", async () => {
       saved.value = { enabled: true, ...RELAY, consentedAt: 5 };
       await startDecisionsIfEnabled();
       await stopDecisions();
       vi.mocked(store.set).mockClear();
 
       await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
-      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      await expect(
+        setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt: 1_761_955_200_000 })
+      ).rejects.toMatchObject(CANCELLED);
       expect(store.set).not.toHaveBeenCalled();
     });
 
-    it("refuses to change the allowlist while off, and saves nothing", async () => {
+    it("refuses to change the policy or choose automatic answers while off, and saves nothing", async () => {
       saved.value = { enabled: false };
-      await expect(setDecisionsProxyAllowlisted(true)).rejects.toMatchObject(CANCELLED);
+      await expect(
+        setDecisionsModelThreshold({ threshold: 0.8, evaluatedAt: 1_761_955_200_000 })
+      ).rejects.toMatchObject(CANCELLED);
       await expect(setDecisionsDefaultQuestionExpiry(null)).rejects.toMatchObject(CANCELLED);
       await expect(
         setDecisionsAgentAskHuman({ agentId: "claude", enabled: true })
@@ -1567,6 +3596,13 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState,
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
+        hostAttention: () => null,
+        lastHostRead: () => null,
+        onAgentStopChanges: () => () => {},
       });
       try {
         saved.value = { enabled: true, consentedAt: 5 };
@@ -1600,6 +3636,7 @@ describe("Decisions entry", () => {
           relayOrigin: CLAIMED.relayOrigin,
           consentedAt: 5,
           keysStored: true,
+          keysVersion: `${versionOf("sealed")}.none`,
         }),
       });
       expect(setupRuns.claim).toHaveBeenCalledExactlyOnceWith(
@@ -1622,7 +3659,7 @@ describe("Decisions entry", () => {
 
     it("records a claimed relay as unverified until a recovery kit is", async () => {
       saved.value = { enabled: true, ...RELAY, recoveryKit: { verifiedAt: 9, ...RELAY } };
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
       setupRuns.claim.mockResolvedValue({ identity: CLAIMED, kitVerified: false });
 
       const result = await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
@@ -1652,9 +3689,57 @@ describe("Decisions entry", () => {
           relayOrigin: CLAIMED.relayOrigin,
           installationId: CLAIMED.installationId,
           deviceId: CLAIMED.deviceId,
+          // The kept keys, unchanged across the restore, are what its kit holds (#18064).
+          keys: versionOf("sealed"),
         },
       });
-      expect(result).toMatchObject({ status: { recoveryKitVerifiedAt: verifiedAt } });
+      expect(result).toMatchObject({
+        status: { recoveryKitVerifiedAt: verifiedAt, recoveryKitCurrent: true },
+      });
+    });
+
+    it("records a restore's kit as current for the keys it saved to an empty file, and not for keys changed under it (#18064)", async () => {
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      // The restore's own save, as the key store records it: sealing needs a keychain these tests lack.
+      const keyStore = peekDecisionsService()!.getKeyStore();
+      const ownWrite = vi.spyOn(keyStore, "lastWrittenVersion");
+      setupRuns.restore.mockImplementation(async () => {
+        writeFileSync(keyFile.path, "sealed from the kit");
+        ownWrite.mockReturnValue(versionOf("sealed from the kit"));
+        return { identity: CLAIMED, kitVerified: true };
+      });
+      const restore = () =>
+        restoreIdentity({
+          url: "https://relay.example.com",
+          kit: "{}",
+          passphrase: "correct horse battery staple",
+        });
+
+      await expect(restore()).resolves.toMatchObject({ status: { recoveryKitCurrent: true } });
+      expect(saved.value).toMatchObject({
+        recoveryKit: { keys: versionOf("sealed from the kit") },
+      });
+
+      // Keys already here that changed while the restore ran aren't what its kit was checked against.
+      saved.value = { enabled: true };
+      writeFileSync(keyFile.path, "sealed before");
+      const result = await restore();
+      expect(result).toMatchObject({ result: "saved" });
+      expect(result).not.toHaveProperty("status.recoveryKitCurrent");
+      expect((saved.value as { recoveryKit: object }).recoveryKit).not.toHaveProperty("keys");
+
+      // Nor are keys that appeared in an empty file by another route than its own save,
+      // such as an interrupted deletion putting newer keys back.
+      saved.value = { enabled: true };
+      rmSync(keyFile.path);
+      ownWrite.mockReturnValue(null);
+      setupRuns.restore.mockImplementation(async () => {
+        writeFileSync(keyFile.path, "newer keys put back");
+        return { identity: CLAIMED, kitVerified: true };
+      });
+      await expect(restore()).resolves.not.toHaveProperty("status.recoveryKitCurrent");
+      expect((saved.value as { recoveryKit: object }).recoveryKit).not.toHaveProperty("keys");
     });
 
     it("records a restored identity the same way", async () => {
@@ -1697,7 +3782,7 @@ describe("Decisions entry", () => {
       await expect(
         claimRelay({ url: "relay.example.com", claimSecret: SECRET })
       ).rejects.toMatchObject(CANCELLED);
-      await expect(disconnectRelay()).rejects.toMatchObject(CANCELLED);
+      await expect(disconnectRelay(TYPED)).rejects.toMatchObject(CANCELLED);
       expect(setupRuns.claim).not.toHaveBeenCalled();
       expect(peekDecisionsService()).toBeNull();
     });
@@ -1728,7 +3813,7 @@ describe("Decisions entry", () => {
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
 
-      const status = await disconnectRelay();
+      const status = await disconnectRelay(TYPED);
 
       expect(existsSync(keyFile.path)).toBe(false);
       expect(status).toEqual(withRevision({ state: "not-connected", consentedAt: 5 }));
@@ -1741,6 +3826,99 @@ describe("Decisions entry", () => {
       expect(peekDecisionsService()?.getSettings()?.relayOrigin).toBeNull();
     });
 
+    it("removes the keys on a one-click confirm only while a current kit covers them (#18064)", async () => {
+      saved.value = {
+        enabled: true,
+        consentedAt: 5,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await startDecisionsIfEnabled();
+      // A rotation from another window landed after the one-click confirm.
+      writeFileSync(keyFile.path, "sealed with a newer epoch");
+
+      await expect(disconnectRelay({ oneClick: true })).rejects.toMatchObject({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+      });
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed with a newer epoch");
+      expect(saved.value).toMatchObject({ ...RELAY });
+      // Every window hears the kit no longer covers the keys, so the dialog asks for the address.
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({
+          keysStored: true,
+          recoveryKitVerifiedAt: 9,
+        })
+      );
+      expect(pushedStatuses().at(-1)).not.toHaveProperty("recoveryKitCurrent");
+
+      // The typed gate needs no kit.
+      await disconnectRelay(TYPED);
+      expect(existsSync(keyFile.path)).toBe(false);
+    });
+
+    it("removes covered keys on a one-click confirm, and a verification from before the keys' version covers none (#18064)", async () => {
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      await disconnectRelay({ oneClick: true });
+      expect(existsSync(keyFile.path)).toBe(false);
+
+      saved.value = { enabled: true, ...RELAY, recoveryKit: { verifiedAt: 9, ...RELAY } };
+      writeFileSync(keyFile.path, "sealed");
+      await expect(disconnectRelay({ oneClick: true })).rejects.toMatchObject({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+      });
+      expect(existsSync(keyFile.path)).toBe(true);
+    });
+
+    it("removes nothing for a typed confirmation made for other keys than the file holds now (#18064)", async () => {
+      // Remove keys was confirmed for one unfinished claim; another window then claimed again.
+      saved.value = { enabled: true };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "another claim's staged keys");
+
+      await expect(
+        disconnectRelay({
+          oneClick: false,
+          relayOrigin: null,
+          keys: `${versionOf("the first claim's keys")}.none`,
+        })
+      ).rejects.toMatchObject({ code: "FILE_CHANGED_SINCE_REVIEW" });
+      for (const keys of [null, `${versionOf("the first claim's keys")}.none`]) {
+        await expect(
+          deleteLocalData({ oneClick: false, relayOrigin: null, keys })
+        ).resolves.toEqual({ result: "failed", reason: "keys-changed" });
+      }
+      expect(readFileSync(keyFile.path, "utf8")).toBe("another claim's staged keys");
+
+      const shown = (await getDecisionsStatus()).keysVersion ?? null;
+      await disconnectRelay({ oneClick: false, relayOrigin: null, keys: shown });
+      expect(existsSync(keyFile.path)).toBe(false);
+    });
+
+    it("removes nothing for a confirmation that named another relay than the one recorded now (#18064)", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+
+      // A second window disconnected and set up another relay while this one's dialog was open.
+      await expect(
+        disconnectRelay({ oneClick: false, relayOrigin: "https://other.example.workers.dev" })
+      ).rejects.toMatchObject({ code: "FILE_CHANGED_SINCE_REVIEW" });
+      await expect(deleteLocalData({ oneClick: false, relayOrigin: null })).rejects.toMatchObject({
+        code: "FILE_CHANGED_SINCE_REVIEW",
+      });
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+      expect(saved.value).toMatchObject({ ...RELAY });
+
+      await disconnectRelay({ oneClick: false, relayOrigin: RELAY.relayOrigin });
+      expect(existsSync(keyFile.path)).toBe(false);
+    });
+
     it("reports keys stored on this computer from the file alone", async () => {
       saved.value = { enabled: true };
       await startDecisionsIfEnabled();
@@ -1749,7 +3927,12 @@ describe("Decisions entry", () => {
       writeFileSync(keyFile.path, "sealed");
 
       expect(await getDecisionsStatus()).toEqual(
-        withRevision({ state: "not-connected", keysStored: true })
+        withRevision({
+          state: "not-connected",
+          keysStored: true,
+          // What an erasure's confirmation names back (#18064).
+          keysVersion: `${versionOf("sealed")}.none`,
+        })
       );
     });
 
@@ -2170,7 +4353,7 @@ describe("Decisions entry", () => {
       await startDecisionsIfEnabled();
       writeFileSync(keyFile.path, "sealed");
 
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
 
       expect(connections[0]!.stopped).toBe(1);
       expect(connections[0]!.keyFileAtStop).toBe(true);
@@ -2185,7 +4368,7 @@ describe("Decisions entry", () => {
       expect(connections).toHaveLength(0);
 
       writeFileSync(keyFile.path, "sealed");
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
       setupRuns.claim.mockResolvedValue({ identity: CLAIMED });
       await claimRelay({ url: "relay.example.com", claimSecret: SECRET });
 
@@ -2492,11 +4675,32 @@ describe("Decisions entry", () => {
       ).resolves.toEqual({ result: "cancelled" });
       await expect(
         exportData({ passphrase: PASSPHRASE }, async () => {
-          await deleteLocalData();
+          await deleteLocalData(TYPED);
           return exportTarget();
         })
       ).resolves.toEqual({ result: "cancelled" });
       expect(existsSync(exportTarget())).toBe(false);
+    });
+
+    it("drops an archive read before settled questions were removed while the dialog was open (#18033)", async () => {
+      saved.value = { enabled: true, ...RELAY };
+      await startDecisionsIfEnabled();
+      dataRuns.buildArchive.mockResolvedValue({ archive: ARCHIVE });
+      const removingThenPicking = async () => {
+        await expect(removeSettledQuestions()).resolves.toMatchObject({ result: "removed" });
+        return exportTarget();
+      };
+
+      loads.removable = ["q_settled"];
+      await expect(exportData({ passphrase: PASSPHRASE }, removingThenPicking)).resolves.toEqual({
+        result: "cancelled",
+      });
+      expect(existsSync(exportTarget())).toBe(false);
+      // A removal that took nothing changed nothing the archive holds.
+      await expect(
+        exportData({ passphrase: PASSPHRASE }, removingThenPicking)
+      ).resolves.toMatchObject({ result: "saved" });
+      rmSync(exportTarget(), { force: true });
     });
 
     it("holds a local deletion asked for mid-write until the archive is written", async () => {
@@ -2509,7 +4713,7 @@ describe("Decisions entry", () => {
 
       const exporting = exportData({ passphrase: PASSPHRASE }, async () => exportTarget());
       await vi.waitFor(() => expect(writes.writing).toBe(true));
-      const deleting = deleteLocalData();
+      const deleting = deleteLocalData(TYPED);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(storedRows.count).toBe(3);
 
@@ -2559,7 +4763,7 @@ describe("Decisions entry", () => {
         CANCELLED
       );
       await expect(deleteRelayData({ origin: RELAY.relayOrigin })).rejects.toMatchObject(CANCELLED);
-      await expect(deleteLocalData()).rejects.toMatchObject(CANCELLED);
+      await expect(deleteLocalData(TYPED)).rejects.toMatchObject(CANCELLED);
       expect(peekDecisionsService()).toBeNull();
     });
 
@@ -2606,7 +4810,7 @@ describe("Decisions entry", () => {
       writeFileSync(keyFile.path, "sealed");
       storedRows.count = 3;
 
-      await expect(deleteLocalData()).resolves.toEqual({
+      await expect(deleteLocalData(TYPED)).resolves.toEqual({
         result: "deleted",
         status: withRevision({ state: "not-connected", consentedAt: 5 }),
       });
@@ -2629,6 +4833,85 @@ describe("Decisions entry", () => {
       );
     });
 
+    it("deletes nothing on a one-click confirm while the key file holds keys no current kit covers (#18064)", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      // Settings hadn't shown these keys, or a kit covering them, when the click came.
+      writeFileSync(keyFile.path, "sealed");
+      storedRows.count = 3;
+
+      await expect(deleteLocalData({ oneClick: true })).resolves.toEqual({
+        result: "failed",
+        reason: "keys-changed",
+      });
+
+      expect(storedRows.count).toBe(3);
+      expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
+      expect(saved.value).toMatchObject({ enabled: true, consentedAt: 5, ...RELAY });
+      // The store reopens, so the lifetime carries on as it was.
+      expect(peekDecisionsService()?.getStore()).not.toBeNull();
+
+      saved.value = {
+        ...(saved.value as object),
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await expect(deleteLocalData({ oneClick: true })).resolves.toMatchObject({
+        result: "deleted",
+      });
+      expect(existsSync(keyFile.path)).toBe(false);
+      expect(storedRows.count).toBe(0);
+    });
+
+    it("counts set-aside keys beside covered ones, and Settings sees them as uncovered (#18064)", async () => {
+      saved.value = {
+        enabled: true,
+        ...RELAY,
+        recoveryKit: { verifiedAt: 9, ...RELAY, keys: versionOf("sealed") },
+      };
+      await startDecisionsIfEnabled();
+      writeFileSync(keyFile.path, "sealed");
+      // An older identity's keys an interrupted deletion couldn't put back.
+      writeFileSync(`${keyFile.path}.erasing`, "an older identity");
+      storedRows.count = 1;
+
+      const status = await getDecisionsStatus();
+      expect(status).not.toHaveProperty("recoveryKitCurrent");
+      expect(status.keysVersion).toBe(`${versionOf("sealed")}.${versionOf("an older identity")}`);
+      await expect(
+        deleteLocalData({
+          oneClick: true,
+          relayOrigin: RELAY.relayOrigin,
+          keys: status.keysVersion!,
+        })
+      ).resolves.toEqual({ result: "failed", reason: "keys-changed" });
+      expect(readFileSync(`${keyFile.path}.erasing`, "utf8")).toBe("an older identity");
+    });
+
+    it("counts keys an interrupted deletion set aside, which it would put back first (#18064)", async () => {
+      saved.value = { enabled: true, consentedAt: 5, ...RELAY };
+      await startDecisionsIfEnabled();
+      writeFileSync(`${keyFile.path}.erasing`, "sealed");
+      storedRows.count = 3;
+
+      await expect(deleteLocalData({ oneClick: true })).resolves.toEqual({
+        result: "failed",
+        reason: "keys-changed",
+      });
+      expect(readFileSync(`${keyFile.path}.erasing`, "utf8")).toBe("sealed");
+      expect(storedRows.count).toBe(3);
+    });
+
+    it("deletes on a one-click confirm when there are no keys to lose (#18064)", async () => {
+      saved.value = { enabled: true, consentedAt: 5 };
+      await startDecisionsIfEnabled();
+      storedRows.count = 2;
+
+      await expect(deleteLocalData({ oneClick: true })).resolves.toMatchObject({
+        result: "deleted",
+      });
+      expect(storedRows.count).toBe(0);
+    });
+
     it("leaves everything as it was when the rows can't be deleted", async () => {
       saved.value = { enabled: true, consentedAt: 5, ...RELAY };
       await startDecisionsIfEnabled();
@@ -2636,7 +4919,10 @@ describe("Decisions entry", () => {
       storedRows.count = 3;
       storedRows.failErase = true;
 
-      await expect(deleteLocalData()).resolves.toEqual({ result: "failed", reason: "storage" });
+      await expect(deleteLocalData(TYPED)).resolves.toEqual({
+        result: "failed",
+        reason: "storage",
+      });
 
       expect(storedRows.count).toBe(3);
       expect(readFileSync(keyFile.path, "utf8")).toBe("sealed");
@@ -2974,8 +5260,8 @@ describe("Decisions entry", () => {
 
     it.each([
       ["turning off", () => setDecisionsEnabled(false)],
-      ["disconnecting", () => disconnectRelay()],
-      ["deleting local data", () => deleteLocalData()],
+      ["disconnecting", () => disconnectRelay(TYPED)],
+      ["deleting local data", () => deleteLocalData(TYPED)],
       ["quitting", () => stopDecisions()],
     ])(
       "is cancelled by %s while the dialog is open, and writes nothing after",
@@ -3000,8 +5286,8 @@ describe("Decisions entry", () => {
 
     it.each([
       ["turning off", () => setDecisionsEnabled(false)],
-      ["disconnecting", () => disconnectRelay()],
-      ["deleting local data", () => deleteLocalData()],
+      ["disconnecting", () => disconnectRelay(TYPED)],
+      ["deleting local data", () => deleteLocalData(TYPED)],
       ["quitting", () => stopDecisions()],
     ])("opens no dialog when %s while the kit is being made", async (_name, act) => {
       await setUp();
@@ -3079,7 +5365,12 @@ describe("Decisions entry", () => {
         PASSPHRASE
       );
       const record = (saved.value as { recoveryKit: { verifiedAt: number } }).recoveryKit;
-      expect(record).toEqual({ verifiedAt: expect.any(Number), ...RECORDED });
+      // Recorded with the version of the key file the kit was checked against (#18064).
+      expect(record).toEqual({
+        verifiedAt: expect.any(Number),
+        ...RECORDED,
+        keys: versionOf("sealed"),
+      });
       expect(result).toEqual({
         result: "verified",
         status: {
@@ -3088,6 +5379,8 @@ describe("Decisions entry", () => {
           consentedAt: 5,
           keysStored: true,
           recoveryKitVerifiedAt: record.verifiedAt,
+          recoveryKitCurrent: true,
+          keysVersion: `${versionOf("sealed")}.none`,
           revision: expect.any(Number),
         },
       });
@@ -3097,6 +5390,64 @@ describe("Decisions entry", () => {
         expect(pushedStatuses().at(-1)).toMatchObject({ recoveryKitVerifiedAt: record.verifiedAt })
       );
       expect(JSON.stringify(saved.value)).not.toContain(PASSPHRASE);
+    });
+
+    it("reads a verified kit as no longer current once the key file changes, keeping when it was verified (#18064)", async () => {
+      await setUp();
+      kitRuns.check.mockResolvedValue({ verified: RECORDED });
+      await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCurrent: true });
+
+      // A rotation seals a new key into the file.
+      writeFileSync(keyFile.path, "sealed with a new epoch");
+      const status = await getDecisionsStatus();
+      expect(status).not.toHaveProperty("recoveryKitCurrent");
+      expect(status).toHaveProperty("recoveryKitVerifiedAt");
+
+      // A setting restored from an older copy names the old version, which the file must hold to count.
+      writeFileSync(keyFile.path, "sealed");
+      expect(await getDecisionsStatus()).toMatchObject({ recoveryKitCurrent: true });
+      rmSync(keyFile.path);
+      expect(await getDecisionsStatus()).not.toHaveProperty("recoveryKitCurrent");
+    });
+
+    it("pushes the status again when a key store changes the file, so Settings stops counting the kit (#18064)", async () => {
+      await setUp();
+      kitRuns.check.mockResolvedValue({ verified: RECORDED });
+      await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+      await vi.waitFor(() =>
+        expect(pushedStatuses().at(-1)).toMatchObject({ recoveryKitCurrent: true })
+      );
+
+      await peekDecisionsService()!.getKeyStore().clear();
+
+      await vi.waitFor(() => expect(pushedStatuses().at(-1)).not.toHaveProperty("keysStored"));
+      expect(pushedStatuses().at(-1)).not.toHaveProperty("recoveryKitCurrent");
+    });
+
+    it("reads a verification from before the keys' version was recorded as not current (#18064)", async () => {
+      await setUp({ recoveryKit: { verifiedAt: 42, ...RECORDED } });
+
+      const status = await getDecisionsStatus();
+      expect(status).toMatchObject({ recoveryKitVerifiedAt: 42 });
+      expect(status).not.toHaveProperty("recoveryKitCurrent");
+    });
+
+    it("records a verification without the keys' version when the key file changed while the kit was checked (#18064)", async () => {
+      await setUp();
+      kitRuns.check.mockImplementation(async () => {
+        writeFileSync(keyFile.path, "rotated while checking");
+        return { verified: RECORDED };
+      });
+
+      const result = await verifyRecoveryKit({ kit: KIT_TEXT, passphrase: PASSPHRASE });
+
+      expect((saved.value as { recoveryKit: object }).recoveryKit).toEqual({
+        verifiedAt: expect.any(Number),
+        ...RECORDED,
+      });
+      expect(result).toMatchObject({ result: "verified" });
+      expect(result).not.toHaveProperty("status.recoveryKitCurrent");
     });
 
     it("keeps an earlier verification when a later kit is refused", async () => {
@@ -3538,6 +5889,13 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState,
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
+        hostAttention: () => null,
+        lastHostRead: () => null,
+        onAgentStopChanges: () => () => {},
       });
       try {
         saved.value = { consentedAt: 5, ...RELAY };
@@ -3580,6 +5938,13 @@ describe("Decisions entry", () => {
         onHostsChanged: () => () => {},
         runtimeOf: () => null,
         announceOwnerState: vi.fn(),
+        hostQuestions: () => [],
+        onHostQuestionsChanged: () => () => {},
+        readHostQuestion: () => null,
+        cancelHostQuestion: () => null,
+        hostAttention: () => null,
+        lastHostRead: () => null,
+        onAgentStopChanges: () => () => {},
       };
       const withdraw = setDecisionsHostsPort(port);
       return {
@@ -3864,7 +6229,7 @@ describe("Decisions entry", () => {
         return suspend();
       });
 
-      const disconnecting = disconnectRelay();
+      const disconnecting = disconnectRelay(TYPED);
       try {
         expect(check.cancelled).toBe(1);
         // The run ends as passed before its cancel lands: still not recorded.
@@ -3929,7 +6294,7 @@ describe("Decisions entry", () => {
         release = resolve;
       });
 
-      const disconnecting = disconnectRelay();
+      const disconnecting = disconnectRelay(TYPED);
       await settle();
       const start = startSetupCheck();
       release();
@@ -3961,7 +6326,7 @@ describe("Decisions entry", () => {
       saved.value = { enabled: true, ...RELAY };
       await startSetupCheck();
 
-      await deleteLocalData();
+      await deleteLocalData(TYPED);
 
       expect(setupChecks.made[0]!.cancelled).toBe(1);
       expect(getSetupCheck()).toBeNull();
@@ -3982,7 +6347,7 @@ describe("Decisions entry", () => {
       writeFileSync(keyFile.path, "sealed");
       await startDecisionsIfEnabled();
 
-      await disconnectRelay();
+      await disconnectRelay(TYPED);
 
       expect((saved.value as { setupCheck: unknown }).setupCheck).toBeNull();
     });

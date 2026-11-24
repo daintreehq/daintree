@@ -2,7 +2,7 @@ import type {
   VoiceCorrectionPassages,
   VoiceCorrectionVerdict,
 } from "@shared/types/voiceSessionSummary";
-import { VOICE_FOLLOWING_TEXT_MAX_CHARS } from "@shared/config/voiceCorrection";
+import { VOICE_FOLLOWING_TEXT_MAX_CHARS } from "@shared/config/voiceCorrectionPolicy";
 import { openingVoiceCommandToken } from "@shared/utils/voiceAgentCommands";
 import type {
   DictationRecord,

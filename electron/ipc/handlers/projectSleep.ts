@@ -5,7 +5,8 @@ import { loadProjectPluginWorkReader } from "../../services/plugin/projectPlugin
 import { installPanelRecoveryStateListener } from "../../services/panelRecoveryQuery.js";
 import { defineIpcNamespace, op } from "../define.js";
 import type { HandlerDependencies } from "../types.js";
-import type { ProjectSleepResult } from "../../../shared/types/ipc/project.js";
+import type { ProjectSleepOptions, ProjectSleepResult } from "../../../shared/types/ipc/project.js";
+import { sanitizeWorkingAtRequest } from "../../services/pty/stopObservation.js";
 
 /**
  * `project:sleep` — the user's Sleep project. The teardown itself lives in
@@ -22,11 +23,12 @@ export function registerProjectSleepHandlers(deps: HandlerDependencies): () => v
     ops: {
       sleepProject: op(
         CHANNELS.PROJECT_SLEEP,
-        async (projectId: string): Promise<ProjectSleepResult> => {
+        async (projectId: string, options?: ProjectSleepOptions): Promise<ProjectSleepResult> => {
           const pluginWork = await loadProjectPluginWorkReader();
+          const workingAtRequest = sanitizeWorkingAtRequest(options?.workingAtRequest);
           const outcome = await sleepProject(
             projectId,
-            { initiator: "user" },
+            { initiator: "user", ...(workingAtRequest.length > 0 && { workingAtRequest }) },
             {
               ptyClient: deps.ptyClient,
               workspaceClient: deps.worktreeService,

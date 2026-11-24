@@ -82,7 +82,11 @@ const hostWait = new Map<
 let redialTimer: ReturnType<typeof setInterval> | null = null;
 let offConnection: (() => void) | null = null;
 /** Switch failures a later dial can't change: the person has to act first. */
-const NOT_REDIALLED = new Set(["HOST_SSH_ACCESS_DENIED", "HOST_VERSION_MISMATCH"]);
+const NOT_REDIALLED = new Set([
+  "HOST_SSH_ACCESS_DENIED",
+  "HOST_CONNECTION_UNUSABLE",
+  "HOST_VERSION_MISMATCH",
+]);
 
 /** Windows whose background projects on a host wait for it to connect, by host id. */
 const backgroundAwaiting = new Map<string, Set<number>>();

@@ -88,7 +88,12 @@ export function registerAppConfigActions(
     argsSchema: z.object({ agentId: z.string(), settings: AgentSettingsEntrySchema }),
     run: async (args: unknown) => {
       const { agentId, settings } = args as { agentId: string; settings: Record<string, unknown> };
-      const updated = await agentSettingsClient.set(agentId, settings as any);
+      // Arming lets Daintree type into an agent later, so this action can't
+      // change a preset's continuation at its limit's reset (#17912): the
+      // schema drops the field and main keeps the stored value.
+      const updated = await agentSettingsClient.set(agentId, settings as any, {
+        lockContinueAtLimitReset: true,
+      });
       useAgentSettingsStore.setState({
         settings: updated,
         isLoading: false,

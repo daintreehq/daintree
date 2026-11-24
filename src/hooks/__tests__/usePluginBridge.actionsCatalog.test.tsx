@@ -20,7 +20,7 @@ const denied = vi.hoisted(() => new Set<string>());
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
-    list: () => [...catalog.values()],
+    listForTransfer: () => [...catalog.values()],
     get: (id: string) => catalog.get(id) ?? null,
     deniesPluginDispatch: (id: string) => denied.has(id),
   },

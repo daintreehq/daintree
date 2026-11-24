@@ -11,7 +11,7 @@ import {
 } from "./webContentsRegistry.js";
 import { getFocusedPanelTracker } from "../services/FocusedPanelTracker.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
-import { resolveInitialCanvasBackgroundColor } from "./skeletonCss.js";
+import { startFrozenViewProjectsPublisher } from "./frozenViewProjects.js";
 import { PtyClient } from "../services/PtyClient.js";
 import { startTerminalLifecycleObserver } from "../services/pty/TerminalLifecycleObserver.js";
 import { startScheduledRunFacts } from "../services/scheduledRuns/index.js";
@@ -19,7 +19,6 @@ import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogC
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
 import { AgentModelCatalogService } from "../services/AgentModelCatalogService.js";
-import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu, rebuildApplicationMenuIfStale } from "../menu.js";
@@ -56,9 +55,18 @@ const CLI_AVAILABILITY_REUSE_MS = 5 * 60 * 1000;
 
 let pluginMenuInitSettled = false;
 
-/** Test-only: forget that plugin init has settled. */
+/**
+ * A plugin tour change awaits a menu rebuild. App-wide rather than per window:
+ * only the focused or elected window carries the rebuild out, and if that
+ * window closes before its timer fires, the next window that qualifies must
+ * still see that one is owed.
+ */
+let forcedMenuRebuildPending = false;
+
+/** Test-only: forget that plugin init has settled and any owed menu rebuild. */
 export function __resetPerWindowInitForTests(): void {
   pluginMenuInitSettled = false;
+  forcedMenuRebuildPending = false;
 }
 
 /**
@@ -71,11 +79,28 @@ function pushHostEventToRemoteViews(name: string, payload: unknown): void {
 }
 
 /**
+ * Whether `win` is the one window that carries out a forced menu rebuild while
+ * no window is focused: the primary, being the window the menu shows
+ * (`menuProjectIdFor` in menu.ts), or with no live primary the first live
+ * window registered.
+ */
+function buildsUnfocusedMenu(
+  win: BrowserWindow,
+  windowRegistry: WindowRegistry | undefined
+): boolean {
+  if (!windowRegistry) return true;
+  const primary = windowRegistry.getPrimary()?.browserWindow;
+  if (primary && !primary.isDestroyed()) return primary === win;
+  const first = windowRegistry.all().find((ctx) => !ctx.browserWindow.isDestroyed());
+  return first?.browserWindow === win;
+}
+
+/**
  * Run the per-window initialization steps that happen on every
  * `setupWindowServices` call: the per-window CLI deferred task,
  * deferred-queue arming, NotificationService wire-up, first-window-only
  * critical-services boot (PtyClient), and per-window service
- * objects (EventBuffer, PortalManager, ProjectSwitchService, ctx.cleanup).
+ * objects (EventBuffer, ProjectSwitchService, ctx.cleanup).
  *
  * Returns a partially-populated `HandlerDependencies` for the caller to extend
  * with `worktreeService`, `worktreePortBroker`, and `projectViewManager` once
@@ -165,21 +190,21 @@ export async function initPerWindowServices(
   // open windows (off macOS) gains or loses an item. Debounced: one plugin load
   // or unload can change the tour set several times in a tick.
   let pluginMenuRebuild: ReturnType<typeof setTimeout> | null = null;
-  let pluginMenuRebuildForced = false;
   const schedulePluginMenuRebuild = (force: boolean): void => {
-    if (force) pluginMenuRebuildForced = true;
+    if (force) forcedMenuRebuildPending = true;
     if (pluginMenuRebuild) return;
     pluginMenuRebuild = setTimeout(() => {
       pluginMenuRebuild = null;
-      const forced = pluginMenuRebuildForced;
-      pluginMenuRebuildForced = false;
       if (win.isDestroyed()) return;
+      const forced = forcedMenuRebuildPending;
       // The menu is app-wide but built against one window's state; let the
       // focused window build it when there is one. A context check needs the
       // focused window outright: with none focused, every window would build
-      // the menu for its own project in turn.
+      // the menu for its own project in turn. A forced rebuild with none focused
+      // still happens, but once, by the window the menu reflects.
       const focused = BrowserWindow.getFocusedWindow();
-      if (focused ? focused !== win : !forced) return;
+      if (focused ? focused !== win : !forced || !buildsUnfocusedMenu(win, windowRegistry)) return;
+      if (forced) forcedMenuRebuildPending = false;
       try {
         if (forced) createApplicationMenu(win, cliService);
         else rebuildApplicationMenuIfStale(win, cliService);
@@ -225,12 +250,6 @@ export async function initPerWindowServices(
   // bus so early-boot events (migrations, PTY init, hydration) reach the
   // inspector. Deferring would drop those events.
   ctx.services.eventBuffer.start();
-  // Match the main app view's background color so portal WebContentsView's
-  // first paint blends with the window chrome instead of flashing white when a
-  // tab is created or returned to after an overlay (#9207). Resolved with the
-  // custom schemes, so a custom light theme doesn't get a dark built-in canvas.
-  const portalBackgroundColor = resolveInitialCanvasBackgroundColor();
-  ctx.services.portalManager = new PortalManager(win, portalBackgroundColor);
   // OS foreground for the plugin focus tracker (#13221). The window's own
   // focus/blur, because a child view's webContents doesn't reliably blur when
   // the window deactivates.
@@ -261,14 +280,13 @@ export async function initPerWindowServices(
     mainWindow: win,
     ptyClient,
     eventBuffer: ctx.services.eventBuffer,
-    portalManager: ctx.services.portalManager,
     cliAvailabilityService,
     agentVersionService: getAgentVersionService() ?? undefined,
     isDemoMode,
     windowRegistry,
   } as HandlerDependencies);
 
-  // Per-window cleanup: ports, portalManager, eventBuffer
+  // Per-window cleanup: ports, eventBuffer
   ctx.cleanup.add(
     toDisposable(() => {
       if (!win.isDestroyed()) {
@@ -315,10 +333,6 @@ export async function initPerWindowServices(
         }
         ctx.services.activePtyHostPort = undefined;
       }
-      if (ctx.services.portalManager) {
-        ctx.services.portalManager.destroy();
-        ctx.services.portalManager = undefined;
-      }
       if (ctx.services.eventBuffer) {
         ctx.services.eventBuffer.stop();
         ctx.services.eventBuffer = undefined;
@@ -335,7 +349,6 @@ export async function initPerWindowServices(
     mainWindow: win,
     ptyClient,
     eventBuffer: ctx.services.eventBuffer,
-    portalManager: ctx.services.portalManager,
     cliAvailabilityService,
     agentVersionService: getAgentVersionService() ?? undefined,
     isDemoMode,
@@ -410,6 +423,11 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
   setFallbackEligibleProjectsListener((projectIds) => {
     ptyClient?.setFallbackEligibleProjects(projectIds);
   });
+  // Likewise the projects whose views are all frozen (#17038), so the host
+  // stops copying output a hidden project's views could not read.
+  startFrozenViewProjectsPublisher((projectIds) => {
+    ptyClient?.setFrozenViewProjects(projectIds);
+  });
 
   // A window whose port the host tore down has no reachable view any more,
   // so the record is cleared to re-open the IPC fallback for it. Identity-
@@ -428,6 +446,10 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
     const modelCatalogSvc = new AgentModelCatalogService({
       getCliDetail: async (agentId) =>
         (await cliAvailabilityService.getSettledDetails())?.[agentId],
+      // Looked up per call: each window replaces the version service, and this
+      // one outlives the window that built it.
+      getCliVersion: async (agentId, command) =>
+        (await getAgentVersionService()?.readVersionAt(agentId, command)) ?? null,
     });
     setAgentModelCatalogService(modelCatalogSvc);
     // Warm the cache in the background so the first renderer request hits

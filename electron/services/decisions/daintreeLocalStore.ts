@@ -1,6 +1,9 @@
 import type Database from "better-sqlite3";
 import {
+  STORE_FORMAT_KEY,
+  checkStoreFormat,
   isPendingMessage,
+  parseAnswers,
   parseMessages,
   unreportedStatuses,
   type AuditEntry,
@@ -14,6 +17,21 @@ import {
 import { getWritesSuppressed } from "../diskPressureState.js";
 import { withDiskRecovery } from "../persistence/db.js";
 import { logWarn } from "../../utils/logger.js";
+import type { QueuedClosing } from "./paneDecisionState.js";
+import {
+  noticeAttemptOf,
+  noticeTrailOf,
+  noticeUntypedOf,
+  type SettledIntent,
+} from "./noticeTrail.js";
+import { HANDLED_ANSWERS_META_KEY, parseHandledAnswers } from "./attentionList.js";
+import {
+  QUESTION_MARKS_META_KEY,
+  parseQuestionMarks,
+  serializeQuestionMarks,
+} from "./questionMarks.js";
+import { removableFromHistory } from "./questionList.js";
+import { SNAPSHOTS_SHARED_META_KEY, sharedRecord } from "./snapshotsShared.js";
 
 /** Every table the store keeps. */
 const DECISIONS_TABLES = [
@@ -63,8 +81,33 @@ export class DecisionsStoreUnavailableError extends Error {
 
 type OpKind = "read" | "write";
 
+/** The outbox kinds `pendingClosings` reads. */
+const CLOSING_KINDS: ReadonlySet<string> = new Set(["cancel", "owner-decline"]);
+
+/**
+ * What one committed transaction wrote that a reader of the store's rows
+ * follows: the questions inserted, changed or removed, and the meta keys set.
+ * Calls that failed, and transactions that rolled back, name nothing.
+ */
+export interface StoreCommit {
+  questions: ReadonlySet<string>;
+  meta: ReadonlySet<string>;
+}
+
+/** What a commit's calls wrote, gathered as they run. */
+interface CommitChange {
+  questions: Set<string>;
+  meta: Set<string>;
+}
+
+function emptyChange(): CommitChange {
+  return { questions: new Set(), meta: new Set() };
+}
+
 interface Op {
   kind: OpKind;
+  /** A write refused on its own while disk space is critical, rather than stopping the store. */
+  refusable?: boolean;
   run: () => unknown;
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
@@ -111,6 +154,21 @@ function isBusyCode(code: unknown): boolean {
 function elapsedSince(since: number): number {
   return Math.round(performance.now() - since);
 }
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+/** The question fields a timeout notice's trail reads; a patch touching none of them can't move it. */
+const TRAIL_FIELDS: readonly (keyof QuestionRow)[] = [
+  "answers_json",
+  "delivery_status",
+  "error_code",
+  "local_status",
+  "question_revision",
+  "expires_at",
+  "history_only",
+];
 
 interface QuestionRecord {
   question_id: string;
@@ -308,6 +366,30 @@ function keepingCancelled(current: QuestionRow, patch: Partial<QuestionRow>): Pa
   return rest;
 }
 
+/**
+ * A create's receipt never takes a question back past a later event already
+ * applied to it (#17234): when the relay commits a create and a phone's
+ * decline or answer is applied before the create's response is read, as when
+ * a lost response has the create sent again, the library would record the
+ * question `open` at the create's older seq and clear the code a later
+ * delivery recorded. A reopen is a later event, and still applies.
+ */
+function keepingLaterEvent(
+  current: QuestionRow,
+  patch: Partial<QuestionRow>
+): Partial<QuestionRow> {
+  if (
+    patch.local_status === undefined ||
+    patch.remote_event_seq == null ||
+    current.remote_event_seq == null ||
+    patch.remote_event_seq >= current.remote_event_seq
+  ) {
+    return patch;
+  }
+  const { local_status: _status, remote_event_seq: _seq, error_code: _code, ...rest } = patch;
+  return rest;
+}
+
 function copyQuestionPatch(patch: Partial<QuestionRow>): Partial<QuestionRow> {
   assertNoLegacyContent(patch);
   const { legacy_content_json: _legacy, ...rest } = patch;
@@ -341,11 +423,6 @@ function toOutboxRecord(i: OutboxItem): OutboxRecord {
   };
 }
 
-function isMarkedPublished(payload: string): boolean {
-  const parsed = JSON.parse(payload) as { maybePublished?: unknown } | null;
-  return parsed?.maybePublished === true;
-}
-
 function outboxFrom(r: OutboxRecord): OutboxItem {
   return {
     id: r.id,
@@ -357,6 +434,145 @@ function outboxFrom(r: OutboxRecord): OutboxItem {
     created_at: Number(r.created_at),
     last_error: r.last_error ?? null,
   };
+}
+
+/** The question a stored relay event names, or null when it names none. */
+function eventQuestionOf(json: string): string | null {
+  try {
+    const questionId = (JSON.parse(json) as { question_id?: unknown } | null)?.question_id;
+    return typeof questionId === "string" && questionId !== "" ? questionId : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A person's answer, decline or follow-up as the library records it in meta, by its key. */
+interface PersonRecord {
+  key: string;
+  kind: "answer" | "decline" | "message";
+  /** The answer's action id, the decline's, or the follow-up's message id. */
+  id: string;
+  questionId: string;
+  /** The relay took it, so its event is still to come back. */
+  sent: boolean;
+}
+
+function personRecordOf(key: string, value: string): PersonRecord | null {
+  const at = key.indexOf(":");
+  const prefix = key.slice(0, at);
+  const kind =
+    prefix === "owner-answer"
+      ? "answer"
+      : prefix === "owner-decline"
+        ? "decline"
+        : prefix === "owner-message"
+          ? "message"
+          : null;
+  const id = key.slice(at + 1);
+  if (kind === null || id === "") return null;
+  try {
+    const parsed = JSON.parse(value) as {
+      question_id?: unknown;
+      result?: { status?: unknown } | null;
+    } | null;
+    if (typeof parsed?.question_id !== "string") return null;
+    return {
+      key,
+      kind,
+      id,
+      questionId: parsed.question_id,
+      sent: parsed.result?.status === "sent",
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** An answer or follow-up the relay took from this computer, by its id. */
+interface Echo {
+  kind: "answer" | "message";
+  id: string;
+}
+
+/** The `echoes` the row doesn't hold yet. */
+function echoesMissingFrom(row: QuestionRow, echoes: readonly Echo[] | undefined): Echo[] {
+  if (echoes === undefined || echoes.length === 0) return [];
+  let answers: Set<string> | null = null;
+  let messages: Set<string> | null = null;
+  return echoes.filter((echo) => {
+    if (echo.kind === "answer") {
+      answers ??= new Set(parseAnswers(row.answers_json).map((entry) => entry.entry_id));
+      return !answers.has(echo.id);
+    }
+    messages ??= new Set(parseMessages(row.messages_json).map((message) => message.message_id));
+    return !messages.has(echo.id);
+  });
+}
+
+/** The agent's message a `message.published` audit entry names; null for any other entry. */
+function publishedMessageOf(json: string): { questionId: string; messageId: string } | null {
+  try {
+    const entry = JSON.parse(json) as {
+      event?: unknown;
+      question_id?: unknown;
+      detail?: { message_id?: unknown } | null;
+    } | null;
+    if (entry?.event !== "message.published") return null;
+    const questionId = entry.question_id;
+    const messageId = entry.detail?.message_id;
+    return typeof questionId === "string" && typeof messageId === "string"
+      ? { questionId, messageId }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The action and message ids a relay event's signed record names. */
+function recordIdsOf(json: string): string[] {
+  try {
+    const record = (
+      JSON.parse(json) as {
+        data?: { record?: { action_id?: unknown; message_id?: unknown } };
+      } | null
+    )?.data?.record;
+    return [record?.action_id, record?.message_id].filter(
+      (id): id is string => typeof id === "string"
+    );
+  } catch {
+    return [];
+  }
+}
+
+/** A relay event with only what names it kept; null for one that can't be read. */
+function redactedEvent(json: string): string | null {
+  try {
+    const event = JSON.parse(json) as Record<string, unknown> | null;
+    if (event === null || typeof event !== "object") return null;
+    const kept: Record<string, unknown> = {};
+    for (const field of ["seq", "event_id", "event_type", "question_id", "question_revision"]) {
+      if (event[field] !== undefined) kept[field] = event[field];
+    }
+    return JSON.stringify(kept);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The question a correlation pointer holds in force, as the library reads it:
+ * the one staged when there is one, else the committed one; a plain id is a
+ * committed one from before pointers were staged.
+ */
+function correlationInForce(value: string): string | null {
+  if (!value.startsWith("{")) return value === "" ? null : value;
+  try {
+    const pointer = JSON.parse(value) as { q?: unknown; p?: unknown } | null;
+    if (typeof pointer?.p === "string") return pointer.p;
+    return typeof pointer?.q === "string" ? pointer.q : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The question a stored `decision.deleted` event names, or null when it names none. */
@@ -480,7 +696,9 @@ export class DaintreeLocalStore implements LocalStore {
    * or refused. A flush holding a copy of one must never write it back.
    */
   private readonly deletedCreates = new Set<string>();
-  private readonly commitListeners = new Set<() => void>();
+  private readonly commitListeners = new Set<(commit: StoreCommit) => void>();
+  /** What the call running now has written; null outside a call. */
+  private writing: CommitChange | null = null;
   private readonly deletionListeners = new Set<(questionId: string) => void>();
   private readonly faultListeners = new Set<(reason: DecisionsStoreUnavailableReason) => void>();
 
@@ -488,10 +706,11 @@ export class DaintreeLocalStore implements LocalStore {
 
   /**
    * Calls `listener` after each transaction that committed at least one
-   * write, once per transaction. It runs after the commit and must not throw
-   * back into it; nothing it does can undo what was stored.
+   * write, once per transaction, with the questions and meta keys it wrote.
+   * It runs after the commit and must not throw back into it; nothing it does
+   * can undo what was stored.
    */
-  onCommit(listener: () => void): () => void {
+  onCommit(listener: (commit: StoreCommit) => void): () => void {
     this.commitListeners.add(listener);
     return () => {
       this.commitListeners.delete(listener);
@@ -573,6 +792,7 @@ export class DaintreeLocalStore implements LocalStore {
       const item = toOutboxRecord(outbox);
       return () => {
         this.st(INSERT_QUESTION).run(question);
+        this.writing?.questions.add(question.question_id);
         this.writeOutbox(item);
       };
     });
@@ -594,24 +814,311 @@ export class DaintreeLocalStore implements LocalStore {
   ): Promise<QuestionRow[]> {
     const status = filter.status ? [...filter.status] : undefined;
     const paneId = filter.paneId;
-    return this.enqueue("read", () =>
-      (this.st("SELECT * FROM decisions_questions ORDER BY alias ASC").all() as QuestionRecord[])
-        .map(fromRecord)
-        .filter((q) => !status || status.includes(q.local_status))
-        .filter((q) => !paneId || q.origin.pane_id === paneId)
-    );
+    return this.enqueue("read", () => {
+      if (status?.length === 0) return [];
+      // Filtered in SQL so settled history is never decoded; a status list
+      // reads decisions_questions_status_idx.
+      const where: string[] = [];
+      const params: string[] = [];
+      if (status) {
+        where.push(`local_status IN (${status.map(() => "?").join(", ")})`);
+        params.push(...status);
+      }
+      if (paneId) {
+        where.push("pane_id = ?");
+        params.push(paneId);
+      }
+      const clause = where.length > 0 ? ` WHERE ${where.join(" AND ")}` : "";
+      return (
+        this.st(`SELECT * FROM decisions_questions${clause} ORDER BY alias ASC`).all(
+          ...params
+        ) as QuestionRecord[]
+      ).map(fromRecord);
+    });
+  }
+
+  /**
+   * The rows of the questions `ids` names that are stored, in alias order,
+   * read by primary key: what a reader following `onCommit` reads of a
+   * commit, rather than every row.
+   */
+  getQuestions(ids: Iterable<string>): Promise<QuestionRow[]> {
+    const list = JSON.stringify([...new Set(ids)]);
+    return this.enqueue("read", () => {
+      if (list === "[]") return [];
+      return (
+        this.st(
+          `SELECT * FROM decisions_questions
+           WHERE question_id IN (SELECT value FROM json_each(?))
+           ORDER BY alias ASC`
+        ).all(list) as QuestionRecord[]
+      ).map(fromRecord);
+    });
+  }
+
+  /**
+   * Removes this computer's settled questions (#18033): every row its list
+   * shows under History (`removableFromHistory`) that nothing still works on,
+   * with its settled injection intents and the person's answer, decline and
+   * follow-up records naming it, in one write. A question keeps its row while
+   * anything is owed for it: an outbox item, an injection not yet acked or
+   * abandoned, a follow-up or receipt waiting (`messages_waiting`), an event
+   * not yet applied, a terminal snapshot the relay may still hold
+   * (`SNAPSHOTS_SHARED_META_KEY`), a person's answer or follow-up the relay
+   * took whose event hasn't come back yet, or one of `busy`, read as the
+   * write runs. Handled answers and the person's marks lose the removed ids.
+   * The audit log, the inbound ledger, the cursor and the library's own
+   * bookkeeping stay. Sends nothing. Resolves with the ids removed.
+   */
+  removeSettledQuestions(hostId: string, busy: () => ReadonlySet<string>): Promise<string[]> {
+    // Refused before it queues, and again as its batch begins: a person's removal never stops the store writing.
+    if (getWritesSuppressed()) {
+      return Promise.reject(new DecisionsStoreUnavailableError("disk-pressure"));
+    }
+    return this.enqueue("write", () => this.removeSettled(hostId, busy()), true);
+  }
+
+  private removeSettled(hostId: string, busy: ReadonlySet<string>): string[] {
+    const handled = parseHandledAnswers(this.readMeta(HANDLED_ANSWERS_META_KEY));
+    const owed = new Set<string>(sharedRecord(this.readMeta(SNAPSHOTS_SHARED_META_KEY)).keys());
+    for (const id of busy) owed.add(id);
+    const unapplied = this.st(
+      "SELECT json FROM decisions_inbound_events WHERE processed_at IS NULL"
+    ).all() as Array<{ json: string }>;
+    for (const { json } of unapplied) {
+      const id = eventQuestionOf(json);
+      if (id !== null) owed.add(id);
+    }
+    const candidates = (
+      this.st(
+        `SELECT * FROM decisions_questions AS q
+         WHERE q.origin_host_id = ? AND q.history_only = 0 AND q.messages_waiting = 0
+           AND q.local_status IN
+             ('human-answered', 'proxy-answered', 'cancelled', 'expired', 'publish-failed')
+           AND NOT EXISTS (SELECT 1 FROM decisions_outbox AS o WHERE o.question_id = q.question_id)
+           AND NOT EXISTS (
+             SELECT 1 FROM decisions_injection_intents AS i
+             WHERE i.question_id = q.question_id AND i.state NOT IN ('acked', 'abandoned'))
+         ORDER BY q.alias ASC`
+      ).all(hostId) as QuestionRecord[]
+    ).map(fromRecord);
+    if (candidates.length === 0) return [];
+    const records = this.personRecords();
+    const echoes = this.echoesOwed(records);
+    const relayDeleted = this.relayDeletedIds();
+    const removed = candidates
+      .filter(
+        (row) =>
+          !owed.has(row.question_id) &&
+          removableFromHistory(row, handled, hostId) &&
+          // An event the relay took and hasn't sent back yet needs the row it lands on,
+          // unless the relay deleted the question, which no event follows.
+          !(
+            this.awaitsEcho(row, echoes.get(row.question_id)) &&
+            !(relayDeleted.has(row.question_id) && row.local_status === "cancelled")
+          )
+      )
+      .map((row) => row.question_id);
+    if (removed.length === 0) return removed;
+    const gone = new Set(removed);
+    for (const id of removed) {
+      this.st("DELETE FROM decisions_injection_intents WHERE question_id = ?").run(id);
+      this.st("DELETE FROM decisions_questions WHERE question_id = ?").run(id);
+      this.writing?.questions.add(id);
+    }
+    // A person's records hold their signed answers and follow-ups, so they go with the question.
+    for (const record of records) {
+      if (gone.has(record.questionId)) this.deleteMeta(record.key);
+    }
+    this.redactEvents(removed);
+    this.forgetCorrelations(gone);
+    if ([...handled.keys()].some((id) => gone.has(id))) {
+      const kept: Record<string, number> = {};
+      for (const [id, revision] of handled) if (!gone.has(id)) kept[id] = revision;
+      this.writeMeta(HANDLED_ANSWERS_META_KEY, JSON.stringify(kept));
+    }
+    const marks = parseQuestionMarks(this.readMeta(QUESTION_MARKS_META_KEY));
+    let marked = false;
+    for (const [key, mark] of marks) {
+      if (mark.hostId === hostId && gone.has(mark.questionId)) {
+        marks.delete(key);
+        marked = true;
+      }
+    }
+    if (marked) this.writeMeta(QUESTION_MARKS_META_KEY, serializeQuestionMarks(marks));
+    return removed;
+  }
+
+  /**
+   * By question, the answers and follow-ups the relay took from this computer:
+   * the person's (their records say `sent`) and the agent's (published, by
+   * the library's audit entry). Each is in its row only once its event is back.
+   */
+  private echoesOwed(records: readonly PersonRecord[]): Map<string, Echo[]> {
+    const echoes = new Map<string, Echo[]>();
+    const add = (questionId: string, echo: Echo) => {
+      const list = echoes.get(questionId);
+      if (list === undefined) echoes.set(questionId, [echo]);
+      else list.push(echo);
+    };
+    for (const record of records) {
+      if (record.sent && record.kind !== "decline") {
+        add(record.questionId, { kind: record.kind, id: record.id });
+      }
+    }
+    const published = this.st(
+      `SELECT json FROM decisions_audit WHERE json LIKE '%"message.published"%'`
+    ).all() as Array<{ json: string }>;
+    for (const { json } of published) {
+      const echo = publishedMessageOf(json);
+      if (echo !== null) add(echo.questionId, { kind: "message", id: echo.messageId });
+    }
+    return echoes;
+  }
+
+  /**
+   * Whether one of `echoes` hasn't come back: neither in the row nor named by
+   * an event the inbox already processed about the question (one it couldn't
+   * apply, a key missing, is back all the same and nothing more follows).
+   */
+  private awaitsEcho(row: QuestionRow, echoes: readonly Echo[] | undefined): boolean {
+    const missing = echoesMissingFrom(row, echoes);
+    if (missing.length === 0) return false;
+    const processed = this.st(
+      `SELECT json FROM decisions_inbound_events
+       WHERE processed_at IS NOT NULL
+         AND (CASE WHEN json_valid(json) THEN json_extract(json, '$.question_id') END) = ?`
+    ).all(row.question_id) as Array<{ json: string }>;
+    const back = new Set(processed.flatMap(({ json }) => recordIdsOf(json)));
+    return missing.some((echo) => !back.has(echo.id));
+  }
+
+  /** The questions a `decision.deleted` event the inbox applied names. */
+  private relayDeletedIds(): Set<string> {
+    const ids = new Set<string>();
+    const events = this.st(
+      `SELECT json FROM decisions_inbound_events
+       WHERE event_type = 'decision.deleted' AND processed_at IS NOT NULL`
+    ).all() as Array<{ json: string }>;
+    for (const { json } of events) {
+      const id = deletedQuestionOf(json);
+      if (id !== null) ids.add(id);
+    }
+    return ids;
+  }
+
+  /**
+   * Strips what the relay sent about removed questions from the events the
+   * inbox already applied: their sealed questions, answers and follow-ups,
+   * which this computer's keys still open. The ledger keeps each event's
+   * seq, id, type, question and revision, all that deduplicating, the cursor
+   * and a reopen's round check read.
+   */
+  private redactEvents(removed: readonly string[]): void {
+    const events = this.st(
+      `SELECT seq, json FROM decisions_inbound_events
+       WHERE processed_at IS NOT NULL
+         AND (CASE WHEN json_valid(json) THEN json_extract(json, '$.question_id') END)
+           IN (SELECT value FROM json_each(?))`
+    ).all(JSON.stringify(removed)) as Array<{ seq: number; json: string }>;
+    for (const { seq, json } of events) {
+      const kept = redactedEvent(json);
+      if (kept !== null) {
+        this.st("UPDATE decisions_inbound_events SET json = ? WHERE seq = ?").run(kept, seq);
+      }
+    }
+  }
+
+  /**
+   * Lets go of each correlation pointer whose question in force was removed,
+   * so a retry under its id asks afresh rather than falling back to an older
+   * question it superseded. One whose question in force stays is kept.
+   */
+  private forgetCorrelations(gone: ReadonlySet<string>): void {
+    const pointers = this.st(
+      "SELECT key, value FROM decisions_meta WHERE key > 'corr:' AND key < 'corr;'"
+    ).all() as Array<{ key: string; value: string }>;
+    for (const { key, value } of pointers) {
+      const inForce = correlationInForce(value);
+      if (inForce !== null && gone.has(inForce)) this.deleteMeta(key);
+    }
+  }
+
+  private deleteMeta(key: string): void {
+    this.st("DELETE FROM decisions_meta WHERE key = ?").run(key);
+    this.writing?.meta.add(key);
+  }
+
+  /** The person's answer, decline and follow-up records the library keeps in meta, by the question each names. */
+  private personRecords(): PersonRecord[] {
+    const records: PersonRecord[] = [];
+    const rows = this.st(
+      `SELECT key, value FROM decisions_meta
+       WHERE (key > 'owner-answer:' AND key < 'owner-answer;')
+          OR (key > 'owner-decline:' AND key < 'owner-decline;')
+          OR (key > 'owner-message:' AND key < 'owner-message;')`
+    ).all() as Array<{ key: string; value: string }>;
+    for (const { key, value } of rows) {
+      const record = personRecordOf(key, value);
+      if (record !== null) records.push(record);
+    }
+    return records;
+  }
+
+  /**
+   * The questions asked on `hostId` by one of `agentKinds` whose origin names
+   * no session yet, whatever their status, in alias order. For the agents
+   * delivery resumes it reads decisions_questions_missing_session_idx, so
+   * linked history is never read.
+   */
+  listSessionlessQuestions(hostId: string, agentKinds: readonly string[]): Promise<QuestionRow[]> {
+    // Written into the query, sorted, rather than bound: SQLite uses a partial
+    // index only for a query that spells out its predicate. Any other list
+    // reads the same rows, without the index.
+    const kinds = [...new Set(agentKinds)]
+      .sort()
+      .map((kind) => `'${kind.replaceAll("'", "''")}'`)
+      .join(", ");
+    return this.enqueue("read", () => {
+      if (kinds === "") return [];
+      return (
+        this.st(
+          `SELECT * FROM decisions_questions
+           WHERE origin_host_id = ? AND agent_kind IN (${kinds})
+             AND (agent_session_id IS NULL OR agent_session_id = '')
+           ORDER BY alias ASC`
+        ).all(hostId) as QuestionRecord[]
+      ).map(fromRecord);
+    });
   }
 
   /**
    * Whether any answer or follow-up waits to be typed, or a typed one to be
    * reported to the relay. Reads three partial indexes, so it costs next to
-   * nothing when nothing waits.
+   * nothing when nothing waits. A person's decline (#17234) keeps its row
+   * `desktop-received` after delivery drops its notice for a run that has
+   * gone, so a cancelled row waits only while an entry is still to be typed;
+   * entries it can't read are taken as waiting, and never fail the read.
    */
   hasPendingDelivery(): Promise<boolean> {
     return this.enqueue("read", () => {
       const waiting = this.st(
-        `SELECT 1 FROM decisions_questions
+        `SELECT 1 FROM decisions_questions AS q
          WHERE delivery_status IN ('desktop-received', 'pending-host') AND history_only = 0
+           AND CASE
+             WHEN local_status <> 'cancelled' THEN 1
+             WHEN NOT json_valid(answers_json) THEN 1
+             WHEN json_type(answers_json) <> 'array' THEN 1
+             ELSE EXISTS (
+               SELECT 1 FROM json_each(q.answers_json) AS entry
+               WHERE CASE
+                 WHEN entry.type = 'object' THEN
+                   json_extract(entry.value, '$.deliver') = 1
+                   AND json_extract(entry.value, '$.delivered') = 0
+                 ELSE 1
+               END
+             )
+           END
          LIMIT 1`
       ).get();
       if (waiting !== undefined) return true;
@@ -637,34 +1144,21 @@ export class DaintreeLocalStore implements LocalStore {
   }
 
   /**
-   * A create's `maybePublished` mark, once stored, stays (#16014): the
-   * publisher rewrites the create from its own copy after each attachment it
-   * uploads, and that copy predates a mark a cancel set meanwhile. A create
-   * deleted meanwhile is refused, never put back: a cancel that dropped it as
-   * never published while a starting attempt was uploading it would otherwise
-   * see it published after all. The refusal fails that flush before it sends
-   * the create.
+   * A create deleted meanwhile is refused, never put back (#16014): a cancel
+   * that dropped it as never published while a starting attempt was uploading
+   * it would otherwise see it published after all. The refusal fails that
+   * flush before it sends the create. Otherwise a create is written as given:
+   * from 0.9.0 the publisher rewrites one only from the item as stored, under
+   * the shared lock, and withdraws its own possibly-published claim from a
+   * create the relay showed it never took.
    */
   putOutbox(item: OutboxItem): Promise<void> {
     return this.enqueueWith("write", () => {
       const record = toOutboxRecord(item);
-      return () =>
-        this.writeOutbox(record.kind === "create" ? this.keepingPublishedMark(record) : record);
-    });
-  }
-
-  /**
-   * Marks a question's pending create as possibly published, changing nothing
-   * else in it: not its upload progress, not its retry time. False when it has
-   * no create left, which is never put back.
-   */
-  markCreateMaybePublished(questionId: string): Promise<boolean> {
-    return this.enqueue("write", () => {
-      const r = this.st(
-        `UPDATE decisions_outbox SET payload = json_set(payload, '$.maybePublished', json('true'))
-         WHERE question_id = ? AND kind = 'create'`
-      ).run(questionId);
-      return r.changes > 0;
+      return () => {
+        if (record.kind === "create") this.refuseDeletedCreate(record);
+        this.writeOutbox(record);
+      };
     });
   }
 
@@ -719,9 +1213,11 @@ export class DaintreeLocalStore implements LocalStore {
 
   deleteOutbox(id: string): Promise<void> {
     return this.enqueue("write", () => {
-      const r = this.st("DELETE FROM decisions_outbox WHERE id = ? RETURNING kind").get(id) as
-        { kind: string } | undefined;
+      const r = this.st(
+        "DELETE FROM decisions_outbox WHERE id = ? RETURNING kind, question_id"
+      ).get(id) as { kind: string; question_id: string } | undefined;
       if (r?.kind === "create") this.deletedCreates.add(id);
+      if (r !== undefined) this.closingWritten(r);
     });
   }
 
@@ -733,6 +1229,27 @@ export class DaintreeLocalStore implements LocalStore {
         ) as OutboxRecord[]
       ).map(outboxFrom)
     );
+  }
+
+  /**
+   * Every withdrawal and decline of the person's queued for the relay
+   * (#18052), retrying or not: the question's id, which, and for a decline
+   * the round it was signed for. Never anything else of a payload.
+   */
+  pendingClosings(): Promise<QueuedClosing[]> {
+    return this.enqueue("read", () => {
+      const rows = this.st(
+        `SELECT question_id, kind,
+           CASE WHEN kind = 'owner-decline'
+             THEN json_extract(payload, '$.signed.record.expected_revision') END AS revision
+         FROM decisions_outbox WHERE kind IN ('cancel', 'owner-decline')`
+      ).all() as { question_id: string; kind: string; revision: unknown }[];
+      return rows.map(({ question_id: questionId, kind, revision }) => ({
+        questionId,
+        closing: kind === "cancel" ? ("withdrawing" as const) : ("declining" as const),
+        revision: kind !== "cancel" && Number.isSafeInteger(revision) ? Number(revision) : null,
+      }));
+    });
   }
 
   insertEvent(ev: InboundEvent): Promise<boolean> {
@@ -780,6 +1297,29 @@ export class DaintreeLocalStore implements LocalStore {
     );
   }
 
+  /**
+   * Throws `StoreFormatError` when a newer Decisions client wrote this store
+   * (0.9.0), so nothing here acts on records it may misread. It only reads:
+   * the bridge stamps an older or unmarked store with its own format as it
+   * starts (`admitStoreFormat`), and the app database has no other writer.
+   */
+  checkFormat(): void {
+    const row = this.st("SELECT value FROM decisions_meta WHERE key = ?").get(STORE_FORMAT_KEY) as
+      { value: unknown } | undefined;
+    checkStoreFormat(row?.value);
+  }
+
+  processedEventsOfType(eventType: string): Promise<InboundEvent[]> {
+    return this.enqueue("read", () =>
+      (
+        this.st(
+          `SELECT * FROM decisions_inbound_events
+           WHERE event_type = ? AND processed_at IS NOT NULL ORDER BY seq ASC`
+        ).all(eventType) as InboundEvent[]
+      ).map(eventFrom)
+    );
+  }
+
   advanceCursor(): Promise<number> {
     return this.enqueue("write", () => {
       const has = this.st("SELECT 1 FROM decisions_inbound_events WHERE seq = ?");
@@ -802,7 +1342,15 @@ export class DaintreeLocalStore implements LocalStore {
 
   putIntent(i: InjectionIntent): Promise<void> {
     const intent = { ...i };
-    return this.enqueue("write", () => this.writeIntent(intent));
+    return this.enqueue("write", () => {
+      this.writeIntent(intent);
+      if (intent.message_id === null) {
+        this.trail(() => {
+          const attempt = noticeAttemptOf(this.readQuestion(intent.question_id), intent, nowIso());
+          return attempt === null ? [] : [attempt];
+        });
+      }
+    });
   }
 
   updateIntent(id: string, patch: Partial<InjectionIntent>): Promise<InjectionIntent | null> {
@@ -812,6 +1360,14 @@ export class DaintreeLocalStore implements LocalStore {
       if (!current) return null;
       const next = { ...current, ...copy };
       this.writeIntent(next);
+      // Closed straight from being written: nothing reached the terminal. One
+      // released from `uncertain` after a reopen may have, and stays so.
+      if (next.state === "abandoned" && current.state === "intent" && next.message_id === null) {
+        this.trail(() => {
+          const untyped = noticeUntypedOf(this.readQuestion(next.question_id), next, nowIso());
+          return untyped === null ? [] : [untyped];
+        });
+      }
       return next;
     });
   }
@@ -827,6 +1383,18 @@ export class DaintreeLocalStore implements LocalStore {
           `SELECT * FROM decisions_injection_intents WHERE state IN ('intent', 'typed')
            ORDER BY created_at ASC, injection_id ASC`
         ).all() as InjectionIntent[]
+      ).map(intentFrom)
+    );
+  }
+
+  uncertainIntents(questionId: string): Promise<InjectionIntent[]> {
+    return this.enqueue("read", () =>
+      (
+        this.st(
+          `SELECT * FROM decisions_injection_intents
+           WHERE question_id = ? AND message_id IS NULL AND state = 'uncertain'
+           ORDER BY created_at ASC, injection_id ASC`
+        ).all(questionId) as InjectionIntent[]
       ).map(intentFrom)
     );
   }
@@ -852,20 +1420,39 @@ export class DaintreeLocalStore implements LocalStore {
       const questionCopy = copyQuestionPatch(questionPatch);
       return () => {
         const current = this.readIntent(intentId);
-        if (current) this.writeIntent({ ...current, ...intentCopy });
-        this.patchQuestion(questionId, questionCopy);
+        const settled = current ? { ...current, ...intentCopy } : null;
+        if (settled) this.writeIntent(settled);
+        this.patchQuestion(questionId, questionCopy, settled ?? undefined);
       };
     });
   }
 
   appendAudit(e: AuditEntry): Promise<void> {
     return this.enqueueWith("write", () => {
-      const at = e.at;
       const json = JSON.stringify(e);
+      const at = e.at;
       return () => {
         this.st("INSERT INTO decisions_audit (at, json) VALUES (?, ?)").run(at, json);
       };
     });
+  }
+
+  /**
+   * Audit entries written inside the write they describe (#17944). A
+   * diagnostic never fails that write: anything but a storage fault, which
+   * fails the write anyway, leaves it without its trail.
+   */
+  private trail(read: () => AuditEntry[]): void {
+    try {
+      for (const e of read()) {
+        this.st("INSERT INTO decisions_audit (at, json) VALUES (?, ?)").run(
+          e.at,
+          JSON.stringify(e)
+        );
+      }
+    } catch (error) {
+      if (isStorageFault(error)) throw error;
+    }
   }
 
   listAudit(limit: number): Promise<AuditEntry[]> {
@@ -894,7 +1481,7 @@ export class DaintreeLocalStore implements LocalStore {
   }
 
   /** Queues `run`; the inputs it needs must already be copied out of the caller's objects. */
-  private enqueue<T>(kind: OpKind, run: () => T): Promise<T> {
+  private enqueue<T>(kind: OpKind, run: () => T, refusable = false): Promise<T> {
     if (this.closed) return Promise.reject(new DecisionsStoreUnavailableError("closed"));
     if (kind === "read" && this.queue.length === 0) {
       const since = performance.now();
@@ -912,7 +1499,13 @@ export class DaintreeLocalStore implements LocalStore {
       }
     }
     return new Promise<T>((resolve, reject) => {
-      this.queue.push({ kind, run, resolve: resolve as (value: unknown) => void, reject });
+      this.queue.push({
+        kind,
+        refusable,
+        run,
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      });
       this.scheduled ??= setImmediate(() => this.flush(false));
     });
   }
@@ -936,13 +1529,13 @@ export class DaintreeLocalStore implements LocalStore {
     do {
       const ops = this.queue.splice(0, DECISIONS_STORE_MAX_BATCH);
       if (ops.length === 0) return;
-      const outcomes = this.runBatch(ops);
+      const { outcomes, change } = this.runBatch(ops);
       ops.forEach((op, i) => {
         const outcome = outcomes[i];
         if (outcome.ok) op.resolve(outcome.value);
         else op.reject(outcome.error);
       });
-      if (ops.some((op, i) => op.kind === "write" && outcomes[i].ok)) this.notifyCommitted();
+      if (ops.some((op, i) => op.kind === "write" && outcomes[i].ok)) this.notifyCommitted(change);
     } while (drainAll);
     if (this.queue.length > 0) this.scheduled = setImmediate(() => this.flush(false));
   }
@@ -965,27 +1558,37 @@ export class DaintreeLocalStore implements LocalStore {
     }
   }
 
-  private notifyCommitted(): void {
+  private notifyCommitted(commit: StoreCommit): void {
     for (const listener of [...this.commitListeners]) {
       try {
-        listener();
+        listener(commit);
       } catch (error) {
         console.warn("[Decisions] A store commit listener threw:", error);
       }
     }
   }
 
-  private runBatch(ops: Op[]): Outcome[] {
-    if (!this.fault && getWritesSuppressed() && ops.some((op) => op.kind === "write")) {
-      this.latch(new DecisionsStoreUnavailableError("disk-pressure"));
-    }
+  private runBatch(ops: Op[]): { outcomes: Outcome[]; change: CommitChange } {
     const outcomes = new Array<Outcome>(ops.length);
+    if (!this.fault && getWritesSuppressed()) {
+      // A write that can be refused alone is, so a person's removal never stops the store writing.
+      ops.forEach((op, i) => {
+        if (op.kind === "write" && op.refusable) {
+          outcomes[i] = { ok: false, error: new DecisionsStoreUnavailableError("disk-pressure") };
+        }
+      });
+      if (ops.some((op, i) => op.kind === "write" && outcomes[i] === undefined)) {
+        this.latch(new DecisionsStoreUnavailableError("disk-pressure"));
+      }
+    }
+    let change = emptyChange();
     const runnable: number[] = [];
     ops.forEach((op, i) => {
+      if (outcomes[i] !== undefined) return;
       if (op.kind === "write" && this.fault) outcomes[i] = { ok: false, error: this.fault };
       else runnable.push(i);
     });
-    if (runnable.length === 0) return outcomes;
+    if (runnable.length === 0) return { outcomes, change };
 
     const writes = runnable.some((i) => ops[i].kind === "write");
     const batch = runnable.map((i) => ops[i]);
@@ -997,20 +1600,23 @@ export class DaintreeLocalStore implements LocalStore {
       elapsedMs,
     });
     try {
-      const { results, fault } = this.withCommitLevel(writes, () =>
+      const committed = this.withCommitLevel(writes, () =>
         withDiskRecovery(this.sqlite, () => this.runTransaction(batch, writes, progress))
       );
       runnable.forEach((opIndex, j) => {
-        outcomes[opIndex] = results[j];
+        outcomes[opIndex] = committed.results[j];
       });
-      if (fault) this.latch(fault.error, siteOf("call", fault.elapsedMs));
+      change = committed.change;
+      if (committed.fault) {
+        this.latch(committed.fault.error, siteOf("call", committed.fault.elapsedMs));
+      }
     } catch (error) {
       // The batch rolled back whole, so nothing in it was stored; only the
       // database itself (begin, commit, an I/O error) fails a whole batch.
       const refused = this.latch(error, siteOf(progress.step, elapsedSince(progress.since)));
       for (const i of runnable) outcomes[i] = { ok: false, error: refused };
     }
-    return outcomes;
+    return { outcomes, change };
   }
 
   /**
@@ -1024,9 +1630,15 @@ export class DaintreeLocalStore implements LocalStore {
     ops: Op[],
     writes: boolean,
     progress: BatchProgress
-  ): { results: Outcome[]; fault: { error: unknown; elapsedMs: number } | null } {
+  ): {
+    results: Outcome[];
+    fault: { error: unknown; elapsedMs: number } | null;
+    change: CommitChange;
+  } {
     const batch = this.sqlite.transaction(() => {
       let fault: { error: unknown; elapsedMs: number } | null = null;
+      // A retried transaction starts its record over.
+      const change = emptyChange();
       const results = ops.map((op): Outcome => {
         // A write after a storage error in the same batch must not commit
         // without the one that failed.
@@ -1035,8 +1647,14 @@ export class DaintreeLocalStore implements LocalStore {
         }
         progress.step = "call";
         progress.since = performance.now();
+        const wrote = emptyChange();
+        this.writing = wrote;
         try {
-          return { ok: true, value: this.sqlite.transaction(op.run)() };
+          const value = this.sqlite.transaction(op.run)();
+          // Only a call whose savepoint was released counts.
+          for (const id of wrote.questions) change.questions.add(id);
+          for (const key of wrote.meta) change.meta.add(key);
+          return { ok: true, value };
         } catch (error) {
           // SQLite ends the whole transaction itself on some I/O errors;
           // carrying on would run the rest outside any transaction.
@@ -1045,11 +1663,13 @@ export class DaintreeLocalStore implements LocalStore {
           // Timed now: the calls after it and the commit aren't its wait.
           fault = { error, elapsedMs: elapsedSince(progress.since) };
           return { ok: false, error: this.storageFault(error) };
+        } finally {
+          this.writing = null;
         }
       });
       progress.step = "commit";
       progress.since = performance.now();
-      return { results, fault };
+      return { results, fault, change };
     });
     progress.step = "begin";
     progress.since = performance.now();
@@ -1115,6 +1735,7 @@ export class DaintreeLocalStore implements LocalStore {
       `INSERT INTO decisions_meta (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`
     ).run(key, value);
+    this.writing?.meta.add(key);
   }
 
   private readCursor(): number {
@@ -1127,32 +1748,47 @@ export class DaintreeLocalStore implements LocalStore {
     return r ? fromRecord(r) : null;
   }
 
-  private patchQuestion(id: string, patch: Partial<QuestionRow>): QuestionRow | null {
+  private patchQuestion(
+    id: string,
+    patch: Partial<QuestionRow>,
+    settled?: SettledIntent
+  ): QuestionRow | null {
     const current = this.readQuestion(id);
     if (!current) return null;
     const next: QuestionRow = {
       ...current,
-      ...keepingCancelled(current, patch),
+      ...keepingCancelled(current, keepingLaterEvent(current, patch)),
       question_id: current.question_id,
       origin: { ...current.origin, ...(patch.origin ?? {}) },
     };
     this.st(UPDATE_QUESTION).run(toRecord(next));
+    this.writing?.questions.add(current.question_id);
+    // The notice's trail goes in the same write as the change it records.
+    if (TRAIL_FIELDS.some((field) => field in patch)) {
+      this.trail(() => noticeTrailOf(current, next, nowIso(), settled));
+    }
     return next;
   }
 
-  private keepingPublishedMark(record: OutboxRecord): OutboxRecord {
-    const stored = this.st("SELECT payload FROM decisions_outbox WHERE id = ?").get(record.id) as
-      { payload: string } | undefined;
-    if (stored === undefined && this.deletedCreates.has(record.id)) {
+  private refuseDeletedCreate(record: OutboxRecord): void {
+    if (!this.deletedCreates.has(record.id)) return;
+    const stored = this.st("SELECT 1 FROM decisions_outbox WHERE id = ?").get(record.id);
+    if (stored === undefined) {
       throw new Error("This question's create is no longer queued, so it isn't written back");
     }
-    if (stored === undefined || !isMarkedPublished(stored.payload)) return record;
-    if (isMarkedPublished(record.payload)) return record;
-    const payload = JSON.parse(record.payload) as Record<string, unknown>;
-    return { ...record, payload: JSON.stringify({ ...payload, maybePublished: true }) };
+  }
+
+  /**
+   * A queued withdrawal or decline is read beside the rows (#18052): its
+   * queuing or sending names its question, so a reader following commits
+   * reads what the question's pane shows again.
+   */
+  private closingWritten(record: { kind: string; question_id: string }): void {
+    if (CLOSING_KINDS.has(record.kind)) this.writing?.questions.add(record.question_id);
   }
 
   private writeOutbox(record: OutboxRecord): void {
+    this.closingWritten(record);
     this.st(
       `INSERT INTO decisions_outbox
          (id, kind, question_id, payload, attempts, next_attempt_at, created_at, last_error)

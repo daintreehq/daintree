@@ -13,3 +13,14 @@ export function sshExecutable(env: NodeJS.ProcessEnv = process.env): string {
   const configured = env[SSH_EXECUTABLE_ENV]?.trim();
   return configured && path.isAbsolute(configured) ? configured : "ssh";
 }
+
+/**
+ * The ssh-keyscan that belongs to that ssh: beside it when `DAINTREE_SSH`
+ * names one (keeping its extension, so `ssh.exe` finds `ssh-keyscan.exe`),
+ * else from PATH.
+ */
+export function sshKeyscanExecutable(env: NodeJS.ProcessEnv = process.env): string {
+  const ssh = sshExecutable(env);
+  if (!path.isAbsolute(ssh)) return "ssh-keyscan";
+  return path.join(path.dirname(ssh), `ssh-keyscan${path.extname(ssh)}`);
+}

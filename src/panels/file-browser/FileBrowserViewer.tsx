@@ -2,13 +2,11 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import {
   Copy,
   Download,
-  ExternalLink,
   FileDiff,
   FileText,
   FileX,
   Folder,
   FolderTree,
-  Globe,
   PanelLeftClose,
   PanelLeftOpen,
   PanelTop,
@@ -53,6 +51,12 @@ import {
   UNSUPPORTED_AUDIO_MESSAGE,
   UNSUPPORTED_VIDEO_MESSAGE,
 } from "@/components/FileViewer/filePreviewKinds";
+import {
+  defaultFileViewMode,
+  FILE_OPEN_ACTION_COPY,
+  fileOpenTarget,
+} from "@/components/FileViewer/fileViewPolicy";
+import { diffFontStyle } from "@/components/Worktree/diffFontSize";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import {
@@ -61,7 +65,12 @@ import {
 } from "@/components/Markdown/MarkdownTextSizeControl";
 import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
-import { toFileReadErrorCode } from "@/components/FileViewer/fileReadErrors";
+import {
+  refusedFileSize,
+  refusedPathIsCanonical,
+  toFileReadErrorCode,
+} from "@/components/FileViewer/fileReadErrors";
+import { useFileViewerChoice } from "@/panels/file/useFileEditorChoice";
 import { useFileChangeCount, type FileChangeSignal } from "@/hooks/useFileChangeCount";
 import {
   FileUnavailableState as UnavailableState,
@@ -78,6 +87,7 @@ import {
 import { saveHostFile, saveHostFileLabel } from "@/services/hostFileSave";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { canPanelTakeFind } from "@/lib/findInPanel";
 import { SVG_DRAW_ERROR, sanitizeSvgForPreview } from "@/lib/svg";
 import { Skeleton, SkeletonBone, SkeletonHint, SkeletonText } from "@/components/ui/Skeleton";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
@@ -99,6 +109,7 @@ import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { useFileEditor } from "@/registry/fileEditorRegistry";
 import { useFileDocumentDraftText } from "@/store/fileDocumentStore";
+import { useFileBrowserDraftReviewStore } from "@/store/fileBrowserDraftReviewStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import type { FileViewMode } from "@shared/types/panel";
 import { logError } from "@/utils/logger";
@@ -108,6 +119,7 @@ import { FileContentContextMenu } from "@/components/FileViewer/FileContentConte
 import type { FileRowMenuController } from "@/hooks/useFileRowMenuItems";
 import { getFileTypeIcon } from "./fileTypeIcons";
 import { basename, join } from "@shared/utils/path";
+import { utf8ByteLength } from "@shared/utils/folderUpload";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
 
 export interface FileBrowserViewerProps {
@@ -277,7 +289,7 @@ const EXTERNAL_ACTIONS = {
 type ViewerState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "text"; content: string }
+  | { status: "text"; content: string; byteLength: number | undefined }
   | { status: "html"; content: string; previewUrl: string | null }
   | { status: "svg"; markup: string | null }
   | { status: "image" }
@@ -285,6 +297,19 @@ type ViewerState =
   | { status: "audio" }
   | { status: "pdf" }
   | { status: "error"; reason: UnavailableReason; message: string };
+
+/**
+ * What the latest settled read of a file said about its size, for the viewers
+ * that may show it (#17336): the bytes it loaded, or the size a too-large
+ * refusal reported; null when it said nothing, or the text isn't UTF-8 (the
+ * document read is strict). Kept with the file it describes, because `state`
+ * still holds the previous file's read for the render that selects the next.
+ */
+interface SizeEvidence {
+  filePath: string;
+  rootPath: string;
+  bytes: number | null;
+}
 
 // The toggle's segments, in toggle order. Rendered is offered for markdown and
 // HTML, Diff for a file the worktree reports as changed, Edit for a file a
@@ -304,6 +329,10 @@ const MODE_LABELS: Record<FileViewMode, string> = {
 const LazyDiffViewer = lazy(() =>
   import("@/components/Worktree/DiffViewer").then((m) => ({ default: m.DiffViewer }))
 );
+
+// A built-in viewer's host (#17336): the plugin view loader and the document
+// controller stay out of the browser's chunk until a table is shown.
+const LazyPluginFileEditorHost = lazy(() => import("@/panels/file/PluginFileEditorHost"));
 
 // Shared by the fetch wait and the lazy-chunk wait so the two are
 // indistinguishable on screen. `Skeleton` carries the 400ms anti-flicker gate.
@@ -374,17 +403,36 @@ export function FileBrowserViewer({
   onOpenAsPanel,
 }: FileBrowserViewerProps) {
   const [state, setState] = useState<ViewerState>({ status: "idle" });
+  const [sizeEvidence, setSizeEvidence] = useState<SizeEvidence | null>(null);
   // The reader's explicit Source/Rendered choice, `null` until they touch the
-  // toggle. Untouched, each renderable type opens on the default that suits it:
-  // markdown is a document you read rendered, while HTML in a repo is code you
-  // opened to read, and a page that renders near-blank otherwise looks like a
-  // broken file (#12205). Once chosen the mode is sticky and shared across both
-  // types, deliberately not reset on file change: a reader paging through docs
-  // in source keeps source, mirroring FilePane (whose per-panel mode also
-  // survives a file swap). A mode the open file can't honour falls back to
+  // toggle. Untouched, each type opens on its own default, the one FilePane's
+  // picker uses too (`defaultFileViewMode`, #12205). Once chosen the mode is
+  // sticky and shared across both types, deliberately not reset on file change:
+  // a reader paging through docs in source keeps source, mirroring FilePane
+  // (whose per-panel mode also survives a file swap). A mode the open file can't honour falls back to
   // Source without being written back, so paging from a changed file in Diff to
   // a clean one and on to another changed file lands back in Diff.
   const [explicitRenderMode, setExplicitRenderMode] = useState<FileViewMode | null>(null);
+  // "Review draft" (#17197): a request for this panel's open file reads as an
+  // Edit choice from the first render it is seen in, so the draft's recovery
+  // banner is what appears rather than a frame of the default mode, and the
+  // effect below makes it the reader's own choice from then on. It waits for
+  // the file to actually be on screen: a filter can hide the selection while
+  // the pane still names it.
+  const draftReview = useFileBrowserDraftReviewStore((store) => store.byPanelId[panelId]);
+  const draftReviewSeq =
+    draftReview !== undefined &&
+    filePath !== null &&
+    relativePath !== null &&
+    draftReview.path === relativePath
+      ? draftReview.seq
+      : null;
+  const chosenMode: FileViewMode | null = draftReviewSeq !== null ? "edit" : explicitRenderMode;
+  useEffect(() => {
+    if (draftReviewSeq === null) return;
+    setExplicitRenderMode("edit");
+    useFileBrowserDraftReviewStore.getState().settleReview(panelId, draftReviewSeq);
+  }, [panelId, draftReviewSeq]);
   const isMarkdown = filePath !== null && isMarkdownFilePath(filePath);
   const isHtml = filePath !== null && isHtmlFilePath(filePath);
   const isRenderable = isMarkdown || isHtml;
@@ -395,21 +443,39 @@ export function FileBrowserViewer({
   const draftText = useFileDocumentDraftText(panelId);
   const wrapLines = usePreferencesStore((state) => state.markdownWrapLines);
   const setWrapLines = usePreferencesStore((state) => state.setMarkdownWrapLines);
+  // The read's own byte count, not a re-encoding of the whole text: see FilePane.
   const contentBytes = useMemo(
-    () => (state.status === "text" ? new TextEncoder().encode(state.content).byteLength : null),
+    () => (state.status === "text" ? (state.byteLength ?? utf8ByteLength(state.content)) : null),
     [state]
   );
+  // A viewer that ships with Daintree fills Rendered for a type the host can't
+  // render itself (a CSV's table, #17336), on the file's size as the last read
+  // saw it: the text it loaded, or the size a too-large refusal reported. The
+  // browser offers built-in viewers only, inside a governed root, as it does
+  // editors.
+  const { pluginViewer, hasBuiltinViewer } = useFileViewerChoice({
+    filePath: filePath ?? undefined,
+    rootPath,
+    enabled: !!editorContext && !isRenderable,
+    fileBytes:
+      sizeEvidence !== null &&
+      sizeEvidence.filePath === filePath &&
+      sizeEvidence.rootPath === rootPath
+        ? sizeEvidence.bytes
+        : null,
+    builtinOnly: true,
+  });
   const editable =
     !!editorContext &&
     !!editor &&
     pluginKnown &&
-    (explicitRenderMode === "edit" ||
+    (chosenMode === "edit" ||
       draftText !== null ||
       (contentBytes !== null && contentBytes <= editor.registration.maxBytes));
   // While another screen drives the project, only what is already open keeps
   // Edit (see useFileEditLock).
   const { lockedBy: editLockedBy, mayEdit } = useFileEditLock(
-    editable && explicitRenderMode === "edit",
+    editable && chosenMode === "edit",
     draftText !== null
   );
   const canEdit = editable && mayEdit;
@@ -438,6 +504,8 @@ export function FileBrowserViewer({
           {
             hasChanges: changeStatus !== undefined,
             onOpenDiff: () => setExplicitRenderMode("diff"),
+            // This menu is on the file the viewer is already showing.
+            showOpenFile: false,
           }
         )
       : null;
@@ -446,15 +514,24 @@ export function FileBrowserViewer({
   const readable = state.status !== "error";
   const availableModes: FileViewMode[] = [
     "source",
-    ...(isRenderable && readable ? (["rendered"] as const) : []),
+    ...((isRenderable && readable) || pluginViewer !== null ? (["rendered"] as const) : []),
     ...(changeStatus !== undefined ? (["diff"] as const) : []),
     ...(canEdit ? (["edit"] as const) : []),
   ];
-  const requestedMode = explicitRenderMode ?? (isMarkdown ? "rendered" : "source");
+  const requestedMode =
+    chosenMode ??
+    (filePath === null ? "source" : hasBuiltinViewer ? "rendered" : defaultFileViewMode(filePath));
   const renderMode: FileViewMode = availableModes.includes(requestedMode)
     ? requestedMode
     : "source";
-  const renderOptions = availableModes.map((mode) => ({ value: mode, label: MODE_LABELS[mode] }));
+  // A mode a plugin fills carries the plugin's name, as in the file panel.
+  const renderOptions = availableModes.map((mode) => ({
+    value: mode,
+    label:
+      mode === "rendered" && pluginViewer !== null
+        ? `${MODE_LABELS[mode]} · ${pluginViewer.pluginName}`
+        : MODE_LABELS[mode],
+  }));
   // Only fetch while Diff is the live mode; a null subject also drops any
   // response still in flight from a mode the reader has since left.
   const diffSubject = useMemo<DiffSubject | null>(
@@ -491,6 +568,7 @@ export function FileBrowserViewer({
   const diffViewType = usePreferencesStore((state) => state.diffViewType);
   const diffWrapLines = usePreferencesStore((state) => state.diffWrapLines);
   const setDiffWrapLines = usePreferencesStore((state) => state.setDiffWrapLines);
+  const diffFontSize = usePreferencesStore((state) => state.diffFontSize);
   const effectiveDiffWrapLines = diffWrapLines ?? (filePath !== null && isProseFilePath(filePath));
   const modeToggleRef = useRef<HTMLDivElement>(null);
   const previousMode = useRef(renderMode);
@@ -529,10 +607,11 @@ export function FileBrowserViewer({
   // Cmd+F opens the open file's find bar while this panel has focus, as it does
   // in the file panel: CodeMirror's in Source, the document's own in rendered
   // Markdown. Media, rendered HTML and Diff mount neither, so it does nothing
-  // there.
+  // there. A modal over the panel keeps it out.
   useEffect(() => {
     if (!isFocused) return;
     const handleFindInPanel = () => {
+      if (!canPanelTakeFind(bodyRef.current)) return;
       markdownViewerRef.current?.openSearch();
       codeViewerRef.current?.openSearch();
     };
@@ -594,6 +673,7 @@ export function FileBrowserViewer({
   // Which file the state on screen belongs to. A re-read triggered by a listing
   // change is for the same file, so it must not clear what is already rendered.
   const shownPathRef = useRef<string | null>(null);
+  const shownRootRef = useRef<string | null>(null);
   const lastContentRef = useRef<string | null>(null);
   const lastSurfaceRefreshNonceRef = useRef(surfaceRefreshNonce);
   // Survives a read the next one cancelled, so a Refresh pressed mid-read
@@ -608,13 +688,16 @@ export function FileBrowserViewer({
     revision,
     changeSignal,
     relativePath,
-    canonicalFilePath !== null && canonicalFilePath === filePath && state.status !== "error"
+    canonicalFilePath !== null &&
+      canonicalFilePath === filePath &&
+      (state.status !== "error" || state.reason === "FILE_TOO_LARGE")
   );
 
   useEffect(() => {
     if (!filePath || !rootPath) {
       shownPathRef.current = null;
       setState({ status: "idle" });
+      setSizeEvidence(null);
       return;
     }
 
@@ -623,7 +706,12 @@ export function FileBrowserViewer({
     const isSvg = isSvgFilePath(filePath);
     const isSameFile = shownPathRef.current === filePath;
     shownPathRef.current = filePath;
+    // A size seen for an earlier selection says nothing about this read, even
+    // for the same file met again after another, or through another root: it
+    // may have grown since.
     if (!isSameFile) lastContentRef.current = null;
+    if (!isSameFile || shownRootRef.current !== rootPath) setSizeEvidence(null);
+    shownRootRef.current = rootPath;
     if (lastSurfaceRefreshNonceRef.current !== surfaceRefreshNonce) {
       forceSurfaceReloadRef.current = true;
       lastSurfaceRefreshNonceRef.current = surfaceRefreshNonce;
@@ -715,10 +803,22 @@ export function FileBrowserViewer({
           });
           return;
         }
-        setState({ status: "text", content: result.content });
+        setSizeEvidence({
+          filePath,
+          rootPath,
+          bytes:
+            result.encoding === "invalid"
+              ? null
+              : (result.byteLength ?? utf8ByteLength(result.content)),
+        });
+        setState({ status: "text", content: result.content, byteLength: result.byteLength });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
+        setSizeEvidence({ filePath, rootPath, bytes: refusedFileSize(error) });
+        // Refused only for its size through its own canonical path: the
+        // watcher's directories still scope its re-reads and the viewer's.
+        if (refusedPathIsCanonical(error)) setCanonicalFilePath(filePath);
         if (isClientAppError(error)) {
           setState({ status: "error", reason: toFileReadErrorCode(error.code), message: "" });
           return;
@@ -855,31 +955,16 @@ export function FileBrowserViewer({
               dismiss: "Dismiss editor error",
             };
 
-  // Which external surface the toolbar's second action aims at. Text belongs in
-  // the editor; media, PDFs and images open with whatever the OS uses for that
-  // type; an HTML page opens in the browser, mirroring FilePane. Never the OS
-  // default for an unknown or binary file — that handler may execute it.
-  const openTarget: OpenTarget =
-    filePath === null
-      ? "editor"
-      : isHtml
-        ? "browser"
-        : isImageFilePath(filePath) && !isSvgFilePath(filePath)
-          ? "default-app"
-          : isVideoFilePath(filePath) ||
-              isAudioFilePath(filePath) ||
-              isPdfFilePath(filePath) ||
-              isUnsupportedVideoFilePath(filePath) ||
-              isUnsupportedAudioFilePath(filePath)
-            ? "default-app"
-            : "editor";
+  // Which external surface the toolbar's second action aims at, by type and
+  // shared with FilePane.
+  const openTarget = filePath === null ? "editor" : fileOpenTarget(filePath);
   const remoteFile = useRemoteFileContext();
   // A default app or browser here can't open a file on an ssh host, so a copy
   // saved here stands in for it (a WSL distro's files open from this PC as they are).
   const savesInstead = openTarget !== "editor" && remoteFile?.saveTarget != null;
   const openAction = savesInstead
     ? { label: saveHostFileLabel(), icon: Download }
-    : OPEN_ACTION_COPY[openTarget];
+    : FILE_OPEN_ACTION_COPY[openTarget];
   const runOpen = () => {
     if (savesInstead) {
       if (filePath) void saveHostFile(filePath);
@@ -914,9 +999,9 @@ export function FileBrowserViewer({
   // Reading controls only for content that can be read: a Markdown file that
   // failed as oversized has no source or rendered view for them to change.
   // A plugin's Edit mode stays, since it may open what the reader could not,
-  // and so does Diff: the diff is fetched from git, not from the failed read.
-  const showModeToggle =
-    filePath !== null && ((isRenderable && readable) || canEdit || changeStatus !== undefined);
+  // and so does Diff: the diff is fetched from git, not from the failed read,
+  // and so does a viewer's Rendered, which reads the file itself.
+  const showModeToggle = filePath !== null && availableModes.length > 1;
   return (
     <>
       <FileViewerToolbar.Root
@@ -1006,7 +1091,9 @@ export function FileBrowserViewer({
                 // markdown one, which only ever applied to Source view.
                 renderMode === "diff"
                   ? { value: effectiveDiffWrapLines, onValueChange: setDiffWrapLines }
-                  : readable && isMarkdown && renderMode === "source"
+                  : // Edit honours the same preference (the editor is handed
+                    // `wrapLines` below), so it carries the same toggle.
+                    renderMode === "edit" || (readable && isMarkdown && renderMode === "source")
                     ? { value: wrapLines, onValueChange: setWrapLines }
                     : null
               }
@@ -1039,7 +1126,7 @@ export function FileBrowserViewer({
           <FileEditorBanner
             key={`${panelId}:${filePath}`}
             filePath={filePath}
-            content={state.content}
+            contentBytes={contentBytes ?? 0}
             onEdit={() => setExplicitRenderMode("edit")}
           />
         )}
@@ -1287,6 +1374,7 @@ export function FileBrowserViewer({
         <div
           data-testid="file-browser-diff"
           className="h-full min-h-0 overflow-auto diff-scroll-root"
+          style={diffFontStyle(diffFontSize)}
         >
           <Suspense fallback={<DiffLoadingSkeleton />}>
             {diffContent === undefined ? (
@@ -1300,6 +1388,39 @@ export function FileBrowserViewer({
                 onRetry={retryDiff}
               />
             )}
+          </Suspense>
+        </div>
+      );
+    }
+    if (renderMode === "rendered" && pluginViewer !== null && editorContext) {
+      return (
+        <div className="flex h-full min-h-0 flex-col">
+          <Suspense
+            fallback={
+              <div className="p-4">
+                <Skeleton label="Loading viewer">
+                  <SkeletonText lines={10} />
+                </Skeleton>
+              </div>
+            }
+          >
+            <LazyPluginFileEditorHost
+              // Every input the host captures at mount: a tab group reuses this
+              // viewer for another panel, which must not keep this one's document.
+              key={`${panelId}\u0000${editorContext.projectId}\u0000${pluginViewer.choiceId}\u0000${rootPath}\u0000${filePath}`}
+              panelId={panelId}
+              projectId={editorContext.projectId}
+              filePath={filePath}
+              fileName={fileName}
+              rootPath={rootPath}
+              candidate={pluginViewer}
+              // Only a write that could have touched the file, or a foreground
+              // refresh, re-checks it: a viewer has no draft to protect. The
+              // refresh rides on its own signal, since a scoped count can
+              // skip the revision a Refresh shares with an unrelated tick.
+              changeTick={fileChangeCount}
+              refreshEpoch={surfaceRefreshNonce}
+            />
           </Suspense>
         </div>
       );
@@ -1359,9 +1480,27 @@ export function FileBrowserViewer({
             />
           );
         }
-        const copy = unavailableCopy(state.reason, state.message, remoteFile);
+        const copy = unavailableCopy(
+          state.reason,
+          state.message,
+          remoteFile,
+          availableModes.includes("rendered") ? (pluginViewer?.pluginName ?? null) : null
+        );
         const wayOut =
-          copy.action === "save" ? (
+          copy.action === "rendered" ? (
+            <Button
+              variant="subtle"
+              size="sm"
+              onClick={(event) => {
+                // The button unmounts with the state it leaves; hand focus to
+                // the toggle, as HTML's View source does.
+                sourceFocusRef.current = { focusVisible: event.detail === 0 };
+                setExplicitRenderMode("rendered");
+              }}
+            >
+              Show in Rendered
+            </Button>
+          ) : copy.action === "save" ? (
             <SaveHostFileButton hostPath={filePath} />
           ) : copy.action === "open" ? (
             <Button variant="subtle" size="sm" onClick={runOpen}>
@@ -1625,14 +1764,6 @@ const MEDIA_STAGE_CLASS = "flex h-full w-full items-center justify-center overfl
 /** Row widths under which the secondary actions fold into "More actions". */
 const COMPACT_BELOW = 360;
 const COMPACT_BELOW_WITH_MODES = 560;
-
-type OpenTarget = "editor" | "default-app" | "browser";
-
-const OPEN_ACTION_COPY: Record<OpenTarget, { label: string; icon: LucideIcon }> = {
-  editor: { label: "Open in editor", icon: ExternalLink },
-  "default-app": { label: "Open in default app", icon: ExternalLink },
-  browser: { label: "Open in browser", icon: Globe },
-};
 
 /**
  * The file's own actions, laid out as buttons at width and folded into one

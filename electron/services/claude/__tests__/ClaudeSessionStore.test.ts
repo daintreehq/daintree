@@ -7,6 +7,7 @@ import type { ShellEnvironmentObservation } from "../../../setup/shellEnvironmen
 import {
   __resetClaudeSessionStoreForTests,
   findUntouchedClaudeSession,
+  getClaudePaneConversationStore,
   getClaudePaneProjectsRoot,
   isClaudeSessionWithoutTranscript,
   observeClaudeTranscript,
@@ -421,6 +422,21 @@ describe("isClaudeSessionWithoutTranscript", () => {
     ).resolves.toBe(false);
   });
 
+  it("judges a conversation reopened from another account's folder there (#17087)", async () => {
+    // The launch's own store is certain, readable and holds nothing of it; the
+    // store the launch reopened it from does.
+    await writeTranscript(CWD_SLUG, SESSION);
+    const launchRoot = path.join(configDir, "default", "projects");
+    await mkdir(launchRoot, { recursive: true });
+    const record = { agentId: "claude", sessionId: SESSION, cwd: CWD };
+
+    rememberClaudePaneStore("term-launch-only", launchRoot);
+    await expect(isClaudeSessionWithoutTranscript(record, "term-launch-only")).resolves.toBe(true);
+
+    rememberClaudePaneStore("term-1", launchRoot, { sessionId: SESSION, configDir });
+    await expect(isClaudeSessionWithoutTranscript(record, "term-1")).resolves.toBe(false);
+  });
+
   it("forgets the oldest terminals once it remembers too many", async () => {
     rememberClaudePaneStore("term-oldest", projectsRoot);
     for (let i = 0; i < 1_024; i++) rememberClaudePaneStore(`term-${i}`, projectsRoot);
@@ -446,5 +462,25 @@ describe("getClaudePaneProjectsRoot", () => {
     rememberClaudePaneStore("term-1", "/b/projects");
 
     expect(getClaudePaneProjectsRoot("term-1")).toBe("/b/projects");
+  });
+
+  it("reads the conversation a launch reopened from its own folder, and only that one (#17087)", () => {
+    const store = { sessionId: SESSION, configDir };
+    rememberClaudePaneStore("term-1", null, store);
+
+    expect(getClaudePaneProjectsRoot("term-1", SESSION)).toBe(projectsRoot);
+    expect(getClaudePaneConversationStore("term-1", SESSION)).toEqual(store);
+    // Another conversation the CLI moved on to is written where the launch runs.
+    expect(getClaudePaneProjectsRoot("term-1", OTHER)).toBeNull();
+    expect(getClaudePaneProjectsRoot("term-1")).toBeNull();
+    expect(getClaudePaneConversationStore("term-1", OTHER)).toBeUndefined();
+  });
+
+  it("drops a reopened conversation's folder once the terminal relaunches without it", () => {
+    rememberClaudePaneStore("term-1", "/b/projects", { sessionId: SESSION, configDir });
+    rememberClaudePaneStore("term-1", "/b/projects");
+
+    expect(getClaudePaneProjectsRoot("term-1", SESSION)).toBe("/b/projects");
+    expect(getClaudePaneConversationStore("term-1", SESSION)).toBeUndefined();
   });
 });

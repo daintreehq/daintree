@@ -1,10 +1,7 @@
 import { VOICE_LANGUAGE_AUTO, voiceLanguageName } from "./voiceLanguages.js";
 import type { HeardAsRule } from "../utils/voiceHeardAs.js";
-import type {
-  VoiceCorrectionModel,
-  VoiceCorrectionProvider,
-  VoiceTranscriptionProvider,
-} from "../types/ipc/api.js";
+import type { VoiceTranscriptionProvider } from "../types/ipc/api.js";
+import { voiceCleanupProviderOf } from "./voiceCorrectionPolicy.js";
 import {
   CORE_CORRECTION_PROMPT,
   CORRECTION_INSTRUCTIONS,
@@ -27,135 +24,7 @@ export {
   LITERAL_CORRECTION_PROMPT,
 };
 
-/**
- * The OpenAI model behind file-command detection and ambiguous-file reranking,
- * which run on a 4 s budget. Migrations hard-code their own target literal and
- * must not import this or VOICE_CLEANUP_AI_MODEL — the active model can move
- * again, but a past migration's target is immutable.
- */
-export const VOICE_DICTATION_AI_MODEL = "gpt-6-luna" as const;
-
-/**
- * The default OpenAI model behind whole-passage cleanup and spoken rewrite.
- * gpt-6.1-terra replaced gpt-6-luna here on the cleanup benchmark
- * (`npm run perf voice-cleanup`, #14793): it repaired more misheard words at the
- * same reasoning effort, with typical round trips still under 2 s.
- */
-export const VOICE_CLEANUP_AI_MODEL = "gpt-6.1-terra" as const;
-
-/** The models cleanup and spoken rewrite may run on; settings let the user pick one. */
-export const VOICE_CLEANUP_MODELS = [
-  "gpt-6.1-terra",
-  "gpt-6-luna",
-  "claude-haiku-5-5",
-  "claude-sonnet-5-5",
-] as const satisfies readonly VoiceCorrectionModel[];
-
-export function isVoiceCleanupModel(value: unknown): value is VoiceCorrectionModel {
-  return (VOICE_CLEANUP_MODELS as readonly unknown[]).includes(value);
-}
-
-export const VOICE_CLEANUP_PROVIDERS = [
-  "openai",
-  "anthropic",
-] as const satisfies readonly VoiceCorrectionProvider[];
-
-/** Each provider's cleanup models, its default first. */
-export const VOICE_CLEANUP_MODELS_BY_PROVIDER: Readonly<
-  Record<VoiceCorrectionProvider, readonly VoiceCorrectionModel[]>
-> = {
-  openai: ["gpt-6.1-terra", "gpt-6-luna"],
-  anthropic: ["claude-haiku-5-5", "claude-sonnet-5-5"],
-};
-
-export function isVoiceCleanupProvider(value: unknown): value is VoiceCorrectionProvider {
-  return (VOICE_CLEANUP_PROVIDERS as readonly unknown[]).includes(value);
-}
-
-/** Which API a cleanup model is sent to. Any model id outside Claude's goes to OpenAI. */
-export function voiceCleanupProviderOf(model: string): VoiceCorrectionProvider {
-  return model.startsWith("claude-") ? "anthropic" : "openai";
-}
-
-/**
- * Reasoning effort sent explicitly on file-link detection; cleanup asks for
- * `cleanupReasoningEffortFor` instead.
- * Both dictation models default to "medium" when the field is omitted — a
- * latency/cost regression for these fast, strict-JSON tasks — so we pin the
- * lowest tier at each call site rather than inheriting the model default.
- * There is no minimum reasoning effort for strict json_schema output.
- */
-export const VOICE_DICTATION_REASONING_EFFORT = "none" as const;
-
-/** The Responses API reasoning tiers a voice-dictation request may ask for. */
-export type VoiceReasoningEffort = "none" | "low" | "medium" | "high";
-
-/** What cleanup knows of a passage when it picks the reasoning effort to send it with. */
-export interface CleanupPassage {
-  /** Characters in the trimmed passage. */
-  chars: number;
-  /** Draft text comes before it, sent as its confirmed history (`recentContext`). */
-  continuing: boolean;
-}
-
-/**
- * Haiku cleans up a standalone passage shorter than this without reasoning
- * (#15504). On the cleanup benchmark (2026-10-30) those came back with a p95
- * of 1.95 s against 3.38 s at medium, and lost no ground on ready text, words
- * lost or risky trials; from 70 characters a retraction ("run it, no wait")
- * began to lose words without it.
- */
-export const CLEANUP_REASONING_MIN_CHARS = 60;
-
-/**
- * The reasoning effort cleanup, its warm-up and rewrite ask each model for,
- * chosen on the cleanup benchmark (2026-10-29). A little reasoning made every
- * model's edits safer: Haiku at medium lost a fifth of the words it lost with
- * none, and the other models gained at low, Sonnet coming back faster too.
- * Given a passage, Haiku skips it on a short standalone one, which has
- * nothing to reason over; a continuing one reads right only against what
- * went before, however short it is. Without one, the model's effort.
- */
-export function cleanupReasoningEffortFor(
-  model: string,
-  passage?: CleanupPassage
-): VoiceReasoningEffort {
-  if (model !== "claude-haiku-5-5") return "low";
-  return passage && !passage.continuing && passage.chars < CLEANUP_REASONING_MIN_CHARS
-    ? "none"
-    : "medium";
-}
-
-/**
- * Every effort a model's cleanup may send a passage with. Claude caches a
- * prompt once per thinking setting, so the warm-up primes each of them.
- */
-export function cleanupWarmEffortsFor(model: string): VoiceReasoningEffort[] {
-  const short = cleanupReasoningEffortFor(model, { chars: 0, continuing: false });
-  return [...new Set([cleanupReasoningEffortFor(model), short])];
-}
-
-/** The longest selection a spoken rewrite takes, matching cleanup's passage cap. */
-export const VOICE_REWRITE_MAX_SELECTION_CHARS = 12_000;
-
-/** The longest spoken instruction a rewrite sends. */
-export const VOICE_REWRITE_MAX_INSTRUCTION_CHARS = 2_000;
-
-/** The most recently sent prompts a cleanup request carries. */
-export const VOICE_RECENT_PROMPTS_MAX = 6;
-
-/**
- * The longest a recent prompt runs in a cleanup request, in UTF-16 units, its
- * cut marker included: past it a pasted log or file is only its opening.
- */
-export const VOICE_RECENT_PROMPT_MAX_CHARS = 1_000;
-
-/**
- * The most draft text after a passage a cleanup request carries, in UTF-16
- * units: enough to show whether the sentence carries on, or a bracket or quote
- * already closes it.
- */
-export const VOICE_FOLLOWING_TEXT_MAX_CHARS = 200;
+export * from "./voiceCorrectionPolicy.js";
 
 /**
  * How each transcriber writes what it hears, so cleanup can tell its habits
@@ -175,6 +44,10 @@ export const TRANSCRIBER_NOTES: Record<VoiceTranscriptionProvider, string> = {
 - It keeps "um", "uh" and "you know", which the cleanup rules take out.
 - It spells dictated symbols out as words ("slash", "dash dash", "dot").
 - It gets rare names and context-bound words wrong in fluent-looking ways ("Tara", "we'd" for "would"), so a misheard word can read like a real one.
+- It flags no unsure words, so a misheard word is never tagged.`,
+  local: `TRANSCRIBER: The target was transcribed on the speaker's device by NVIDIA's Nemotron speech model. Its habits:
+- It punctuates and capitalises as it goes.
+- It is given no project vocabulary, so it writes project and technical names as the ordinary words it heard ("Dantree" for "Daintree", "PTY client" for "PtyClient", "use Shallow" for "useShallow"): repair them where the sentence plainly means the name.
 - It flags no unsure words, so a misheard word is never tagged.`,
   deepgram: `TRANSCRIBER: The target was transcribed by Deepgram. Its habits:
 - It takes fillers out itself and writes numbers as digits.
@@ -295,7 +168,7 @@ function buildTargetSection(target: CorrectionTargetContext): string {
       .join("\n")}`,
     `COMMAND RULES:
 - When <job> says prompt_start=yes and the target opens by asking to run one of these commands or skills, either with its trigger ("slash review", "dollar plugin creator") or with a verb that runs it ("run the review skill on the auth module", "please use plugin creator"), write that command exactly as listed at the very start, then the rest of what was said as its arguments: "/review on the auth module".
-- Only open the prompt with a command when the opening words ask for it to run. A sentence that talks about one ("the review skill is broken", "explain the compact command"), or opens with an ordinary instruction to the agent that shares its name ("clear the build cache", "delete the unused imports", "compact cars use less space"), never starts with the command, whatever the command does.
+- Only open the prompt with a command when the opening words ask to invoke it. A command name used as the verb of an ordinary instruction stays a word, even when the command would do exactly what the instruction asks. Keep "compact this discussion", "clear the build cache", and "delete the unused imports" as ordinary instructions. A sentence that talks about a command ("the review skill is broken", "explain the compact command") also stays in the speaker's words.
 - Anywhere else, outside the arguments of a command the prompt opens with, when a phrase clearly means one of these commands or skills, write its name as the command exactly as listed, in place of the spoken name, and keep every word around it: "do a full design review, using the design review skill" becomes "do a full design review, using the /design-review skill" when /design-review is listed, and "then ship it with the commit command" becomes "then ship it with the /commit command". It clearly means the command when its name is followed by "skill" or "command", said with its trigger ("slash commit"), or handed the work by a verb such as "use", "run" or "with" ("then use plugin creator for a linter"). Words that only share a name stay words: "review the design of the header", "commit the fix", "use the config file".
 - Never write a command that isn't listed, and write a command bare, never in quotes or backticks.
 - When the target already starts with one of these commands, copy the command and everything after it exactly: no recasing, no added punctuation, no rewording of its arguments. You may only drop hesitation sounds.`

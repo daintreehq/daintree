@@ -69,7 +69,7 @@ Some CLIs bracket redraws with DEC mode 2026 synchronized output. The headless t
 
 Spinner and time-counter frames are activity evidence. Cosmetic-only frames can keep an already-working agent alive, but idle-to-working recovery still needs sustained signal.
 
-This layer applies to non-simple monitors only — simple-output agent monitors return early from `onSynchronizedFrame`, so frame signals have no consumer for live agent terminals.
+This layer applies only to monitors whose `consumesSynchronizedFrames` is true: those with a visible-lines accessor outside simple output mode. Both analysis backends install the detector with such a monitor and remove it when the monitor stops, so plain terminals and simple-output agent terminals never hook DEC 2026 frames at all.
 
 ### Escape-Sequence Progress Layer
 

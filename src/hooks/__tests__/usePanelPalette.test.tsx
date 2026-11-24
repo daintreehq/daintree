@@ -13,6 +13,7 @@ const {
   worktreeState,
   projectState,
   devPreview,
+  closePaletteMock,
 } = vi.hoisted(() => ({
   getPanelKindIdsMock: vi.fn(),
   getPanelKindConfigMock: vi.fn(),
@@ -32,6 +33,7 @@ const {
   worktreeState: { worktrees: new Map<string, { id: string; name: string; branch?: string }>() },
   projectState: { currentProject: { id: "proj-1" } as { id: string } | null },
   devPreview: { hidden: false },
+  closePaletteMock: vi.fn(),
 }));
 
 vi.mock("@/hooks/useResolvedPresentation", () => ({
@@ -98,7 +100,7 @@ vi.mock("@/store/paletteStore", () => {
   const getState = () => ({
     ...state,
     openPalette: vi.fn(),
-    closePalette: vi.fn(),
+    closePalette: closePaletteMock,
   });
   const store = (selector: (s: typeof state) => unknown) => selector(state);
   store.getState = getState;
@@ -106,10 +108,12 @@ vi.mock("@/store/paletteStore", () => {
 });
 
 import { usePanelPalette } from "../usePanelPalette";
+import { consumeDeferredPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 
 describe("usePanelPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    consumeDeferredPaletteFocusRestore();
 
     // Ensure window.electron.agentSessionHistory is available for tests
     if (!window.electron) {
@@ -638,6 +642,72 @@ describe("usePanelPalette", () => {
       })
     );
     dispatchSpy.mockRestore();
+  });
+
+  // The launched panel or the setup wizard takes the keyboard; the palette's
+  // exit-time restore ~100ms later must not hand it back to the opener (#16923).
+  describe("focus restore on a pick", () => {
+    function expectClosedWithHandOff(): void {
+      expect(closePaletteMock).toHaveBeenCalledTimes(1);
+      expect(closePaletteMock).toHaveBeenCalledWith("panel");
+      const receive = consumeDeferredPaletteFocusRestore();
+      expect(receive).not.toBeNull();
+      // The hand-off runs the palette's guarded restore, which only refocuses
+      // the opener while nothing else holds the keyboard.
+      const restore = vi.fn();
+      receive!(restore);
+      expect(restore).toHaveBeenCalledTimes(1);
+      closePaletteMock.mockClear();
+    }
+
+    it("hands the restore to a launch picked by click or by Enter", () => {
+      const { result } = renderHook(() => usePanelPalette());
+      const browser = result.current.results.find((item) => item.id === "browser")!;
+
+      expect(result.current.handleSelect(browser)).toBe(browser);
+      expectClosedWithHandOff();
+
+      const selected = result.current.confirmSelection();
+      expect(selected).not.toBeNull();
+      expect(selected).toBe(result.current.results[result.current.selectedIndex]);
+      expectClosedWithHandOff();
+    });
+
+    it("hands the restore to the setup wizard a click or Enter opens", () => {
+      const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+      const { result } = renderHook(() => usePanelPalette());
+      const moreAgentsIndex = result.current.results.findIndex(
+        (item) => item.id === MORE_AGENTS_PANEL_ID
+      );
+      expect(moreAgentsIndex).toBeGreaterThanOrEqual(0);
+      const wizardEvents = () =>
+        dispatchSpy.mock.calls.filter(
+          ([event]) => (event as Event).type === "daintree:open-agent-setup-wizard"
+        );
+
+      expect(result.current.handleSelect(result.current.results[moreAgentsIndex]!)).toBeNull();
+      expect(wizardEvents()).toHaveLength(1);
+      expectClosedWithHandOff();
+
+      act(() => result.current.setSelectedIndex(moreAgentsIndex));
+      expect(result.current.confirmSelection()).toBeNull();
+      expect(wizardEvents()).toHaveLength(2);
+      expectClosedWithHandOff();
+      dispatchSpy.mockRestore();
+    });
+
+    it("keeps the opener restore for a dismissal and for a stale row it swallows", () => {
+      const { result } = renderHook(() => usePanelPalette());
+      const browser = result.current.results.find((item) => item.id === "browser")!;
+
+      expect(result.current.handleSelect({ ...browser, isStale: true })).toBeNull();
+      expect(closePaletteMock).not.toHaveBeenCalled();
+      expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+
+      act(() => result.current.close());
+      expect(closePaletteMock).toHaveBeenCalledTimes(1);
+      expect(consumeDeferredPaletteFocusRestore()).toBeNull();
+    });
   });
 
   describe("agent availability", () => {

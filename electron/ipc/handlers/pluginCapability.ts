@@ -15,12 +15,25 @@ import type {
   PluginCapabilityConsentRequest,
   PluginCapabilityFirstUseRequest,
 } from "../../services/plugin-capability/PluginCapabilityConsentService.js";
-import { getMainWindow } from "../../window/windowRef.js";
-import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { getMainWindow, getWindowRegistry } from "../../window/windowRef.js";
+import {
+  getAppView,
+  getAppWebContents,
+  getWebContentsForProject,
+  getWindowForWebContents,
+  isCachedViewWebContents,
+} from "../../window/webContentsRegistry.js";
 import { isProjectlessWindow } from "../../window/projectlessViews.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { ClientEndpoint } from "../endpoint.js";
-import { resolvePluginFrontend } from "../../services/plugin/pluginFrontendRouting.js";
+import {
+  getPluginInvokeOrigin,
+  resolvePluginFrontend,
+} from "../../services/plugin/pluginFrontendRouting.js";
+import {
+  isRemoteHostView,
+  resolveAmbientWebContents,
+} from "../../services/plugin/rendererTargeting.js";
 import {
   PluginConsentOutcomeSchema,
   PluginFrontendMethod,
@@ -63,9 +76,11 @@ import {
 // `PluginCapabilityConsentService.ensureAllowed` blocks on an injected bridge
 // when a first-use prompt is required. Unlike the plugin-MCP consent bridge,
 // the gated call originates in the plugin's own utility process — there is no
-// initiating renderer to pin to — so the prompt is sent to the focused window,
-// falling back to the primary window. The renderer replies via
-// `plugin-capability:resolve-consent`, correlated by `requestId`.
+// initiating renderer to pin to — so a project's plugin asks in a view showing
+// that project, and an app-global one in the focused window, falling back to
+// the primary window (#17214 bounds both to this machine's views). The
+// renderer replies via `plugin-capability:resolve-consent`, correlated by
+// `requestId`.
 //
 // Which WebContents *inside* that window matters (#11708). The BrowserWindow is
 // only a shell — it stays at `about:blank` with no preload attached — while the
@@ -101,14 +116,64 @@ interface PendingConsent {
 const pendingConsents = new Map<string, PendingConsent>();
 let consentBridgeInstalled = false;
 
-/** Pick the window that should host a capability consent prompt. */
-function resolvePromptWindow(): BrowserWindow | null {
+/**
+ * The renderer a local plugin's consent prompt opens in, or null when nobody
+ * on this machine can answer it (#17214).
+ *
+ * A view of a Remote Host's project never qualifies: its dialog names the
+ * host, while approving grants a plugin running here. A project's plugin asks
+ * only in a view showing that project, so the answer can't read as one about
+ * the project in front. An app-global plugin asks wherever the person is.
+ */
+function resolvePromptWebContents(projectId: string | null): Electron.WebContents | null {
+  if (projectId !== null) return resolveShownProjectView(projectId);
+  for (const win of [BrowserWindow.getFocusedWindow(), getMainWindow()]) {
+    // A window with no project mounts no consent dialog, so it goes unanswered there.
+    if (!win || win.isDestroyed() || isProjectlessWindow(win)) continue;
+    // The app renderer is the window's registered WebContentsView, not the
+    // BrowserWindow shell — see the note above (#11708).
+    const wc = getAppWebContents(win);
+    if (!wc.isDestroyed() && !isRemoteHostView(wc.id)) return wc;
+  }
+  return resolveAmbientWebContents();
+}
+
+/**
+ * A view of `projectId` on this machine that a window has on screen, the
+ * focused window's first, then the primary window's, then any other. With no
+ * view on screen the prompt is undeliverable rather than shown over another
+ * project, or into a view nobody can see: a cached one, or one still restoring
+ * in the background, which is neither attached nor cached until it hydrates.
+ */
+function resolveShownProjectView(projectId: string): Electron.WebContents | null {
   const focused = BrowserWindow.getFocusedWindow();
-  // A window with no project mounts no consent dialog, so it goes unanswered there.
-  if (focused && !focused.isDestroyed() && !isProjectlessWindow(focused)) return focused;
   const primary = getMainWindow();
-  if (primary && !primary.isDestroyed()) return primary;
-  return null;
+  let best: Electron.WebContents | null = null;
+  let bestRank = Number.POSITIVE_INFINITY;
+  for (const wc of getWebContentsForProject(projectId)) {
+    if (isCachedViewWebContents(wc.id) || isRemoteHostView(wc.id)) continue;
+    const win = getWindowForWebContents(wc);
+    if (!win || win.isDestroyed() || !isShownInWindow(win, wc, projectId)) continue;
+    const rank = win === focused ? 0 : win === primary ? 1 : 2;
+    if (rank < bestRank) {
+      best = wc;
+      bestRank = rank;
+    }
+  }
+  return best;
+}
+
+/**
+ * Whether `win` has `wc` on screen: its app view, or, while it switches away
+ * from `projectId`, the outgoing view it keeps up until the incoming one paints.
+ */
+function isShownInWindow(win: BrowserWindow, wc: Electron.WebContents, projectId: string): boolean {
+  if (getAppView(win)?.webContents === wc) return true;
+  const manager = getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager;
+  return (
+    manager?.getOutgoingBridgeProjectId() === projectId &&
+    manager.getProjectIdForWebContents(wc.id) === projectId
+  );
 }
 
 /**
@@ -129,17 +194,16 @@ function settleConsent(requestId: string, outcome: PluginCapabilityConsentOutcom
 }
 
 /**
- * Where a first-use consent question goes. Without Host-mode routing it is the
- * focused window, as it always was. With it, the frontend that drives the
- * plugin's project answers — on another machine, through its Shell — and with
- * nobody attached the question cannot be asked, which fails closed as a
- * denial rather than waiting for someone who may never come.
+ * Where a first-use consent question goes. Without Host-mode routing it is a
+ * view on this machine: the plugin's project's, or for an app-global plugin
+ * the focused one. With it, the frontend that drives the plugin's project
+ * answers — on another machine, through its Shell — and with nobody attached
+ * the question cannot be asked, which fails closed as a denial rather than
+ * waiting for someone who may never come.
  */
 const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityConsentRequest) => {
-  const frontend = resolvePluginFrontend(
-    projectIdFromPluginInstanceKey(request.pluginId),
-    request.pluginId
-  );
+  const ownProjectId = projectIdFromPluginInstanceKey(request.pluginId);
+  const frontend = resolvePluginFrontend(ownProjectId, request.pluginId);
   if (frontend.kind === "remote") {
     // The remote consent wire carries one capability only. A link opens in this
     // host's browser, which `system.openExternal` already refuses for a remote
@@ -161,10 +225,11 @@ const consentBridge: PluginCapabilityConsentBridge = (request: PluginCapabilityC
     );
     return Promise.resolve("undeliverable");
   }
-  const win = resolvePromptWindow();
-  // The app renderer is the window's registered WebContentsView, not the
-  // BrowserWindow shell — see the note above (#11708).
-  const wc = win ? getAppWebContents(win) : null;
+  // An app-global plugin's question inside a call belongs to the caller's
+  // project, the one the routing above answered for.
+  const wc = resolvePromptWebContents(
+    ownProjectId ?? getPluginInvokeOrigin(request.pluginId)?.projectId ?? null
+  );
   if (!wc || wc.isDestroyed()) {
     // Fail closed, but say so honestly: there is no surface to prompt on, which
     // is not the same as a user refusing.

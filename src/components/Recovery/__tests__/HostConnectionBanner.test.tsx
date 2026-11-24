@@ -2,6 +2,41 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { HostConnectionState } from "@shared/types/remoteHosts";
+import type { CloudHostStatus, CloudHostsSnapshot } from "@shared/types/cloudHosts";
+
+const { cloud, startHost } = vi.hoisted(() => {
+  const listeners = new Set<() => void>();
+  const cloud = {
+    snapshot: { providers: [], accounts: [], hosts: [] } as CloudHostsSnapshot,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    /** A `cloud-changed` push reaching this window. */
+    push(snapshot: CloudHostsSnapshot) {
+      cloud.snapshot = snapshot;
+      for (const listener of [...listeners]) listener();
+    },
+  };
+  return { cloud, startHost: vi.fn<(hostId: string) => Promise<void>>() };
+});
+vi.mock("@/components/Hosts/cloud/cloudHostsState", async (importOriginal) => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    ...(await importOriginal<typeof import("@/components/Hosts/cloud/cloudHostsState")>()),
+    useCloudHosts: () => ({
+      snapshot: useSyncExternalStore(cloud.subscribe, () => cloud.snapshot),
+      loaded: true,
+      loadError: null,
+      refresh: () => Promise.resolve(),
+    }),
+  };
+});
+vi.mock("@/clients/cloudHostsClient", () => ({
+  cloudHostsClient: { startHost, refreshHost: vi.fn(() => Promise.resolve()) },
+}));
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -13,6 +48,7 @@ vi.mock("@/utils/logger", () => ({
 import { HostConnectionBanner } from "../HostConnectionBanner";
 import { getHostConnectionBannerCopy } from "../recoveryCopy";
 import { useHostConnectionStore, type HostBannerVariant } from "@/store/hostConnectionStore";
+import { takePendingHostSettings } from "@/components/Settings/Hosts/hostSettingsRequests";
 
 const HANDSHAKE = {
   version: "1.0.0",
@@ -61,6 +97,8 @@ beforeAll(() => {
 beforeEach(() => {
   cleanup();
   connect.mockClear();
+  startHost.mockReset();
+  cloud.snapshot = { providers: [], accounts: [], hosts: [] };
   useHostConnectionStore.getState().reset();
   Object.defineProperty(window, "electron", {
     value: { remoteHosts: { connect } },
@@ -288,6 +326,7 @@ describe("HostConnectionBanner", () => {
       lastSeenAt: null,
       detail: "Warning: something\ngreg@studio-01: Permission denied (publickey).",
       stoppedRetrying: true,
+      blocker: { kind: "ssh-access" },
     });
     render(<HostConnectionBanner />);
     expect(screen.getByText("Couldn't log in to studio-01 over ssh")).toBeTruthy();
@@ -296,6 +335,74 @@ describe("HostConnectionBanner", () => {
     );
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Host details…" })).toBeTruthy();
+  });
+
+  it("names a WSL distribution that's gone, without a word about ssh, and offers Retry", () => {
+    seed({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail:
+        "There is no distribution with the supplied name.\nWsl/Service/WSL_E_DISTRO_NOT_FOUND",
+      stoppedRetrying: true,
+      blocker: { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" },
+    });
+    render(<HostConnectionBanner />);
+    const banner = screen.getByRole("status");
+    expect(screen.getByText("WSL couldn't find Ubuntu-24.04 for studio-01")).toBeTruthy();
+    expect(banner.textContent).toContain("Restore it under that name in WSL, then retry.");
+    expect(banner.textContent?.toLowerCase()).not.toMatch(/ssh|log ?in/);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
+    expect(screen.getByRole("button", { name: "Host details…" })).toBeTruthy();
+  });
+
+  it.each([
+    ["a missing WSL distribution", { kind: "wsl-distro-missing", distro: "Ubuntu-24.04" }],
+    ["an unusable connection", { kind: "unusable", message: "WSL isn't available on this PC" }],
+  ] as const)("opens the host's details from %s", (_what, blocker) => {
+    seed({ status: "unreachable", lastSeenAt: null, detail: null, stoppedRetrying: true, blocker });
+    render(<HostConnectionBanner />);
+    const opened = vi.fn();
+    window.addEventListener("daintree:open-settings-tab", opened);
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Host details…" }));
+    } finally {
+      window.removeEventListener("daintree:open-settings-tab", opened);
+    }
+    expect(takePendingHostSettings()).toEqual({ kind: "detail", hostId: "studio-01" });
+    const event: unknown = opened.mock.calls[0]?.[0];
+    expect(event instanceof CustomEvent && event.detail).toEqual({ tab: "hosts" });
+  });
+
+  it("says only that retries stopped when an unusable connection gave no words", () => {
+    const copy = getHostConnectionBannerCopy(
+      "connection-unavailable",
+      "studio-01",
+      null,
+      0,
+      null,
+      null,
+      { kind: "unusable", message: "   " }
+    );
+    expect(copy.description).toBe(
+      "Automatic retries have stopped. Terminals are read-only until it connects."
+    );
+  });
+
+  it("says a connection that can't be used in the transport's words", () => {
+    seed({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: "spawn wsl.exe ENOENT",
+      stoppedRetrying: true,
+      blocker: { kind: "unusable", message: "WSL isn't available on this PC" },
+    });
+    render(<HostConnectionBanner />);
+    expect(screen.getByText("Couldn't connect to studio-01")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain(
+      "WSL isn't available on this PC. Automatic retries have stopped."
+    );
+    expect(screen.getByRole("status").textContent).not.toContain("ssh");
   });
 
   it("says which build is behind and offers updating that side", () => {
@@ -307,6 +414,7 @@ describe("HostConnectionBanner", () => {
     const { unmount } = render(<HostConnectionBanner />);
     expect(screen.getByText(/^This machine runs an older version of Daintree/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Update this machine" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
     unmount();
 
     seed({
@@ -317,17 +425,64 @@ describe("HostConnectionBanner", () => {
     render(<HostConnectionBanner />);
     expect(screen.getByText("studio-01 runs an older version of Daintree")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Update studio-01" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  });
+
+  it("rechecks a host updated outside this window and lets the obsolete mismatch go once it connects", () => {
+    const behind = {
+      status: "version-mismatch",
+      mismatch: { kind: "protocol", local: 5, remote: 4 },
+      remote: { ...HANDSHAKE, protocolVersion: 4 },
+    } as const;
+    seed(behind);
+    const { container } = render(<HostConnectionBanner />);
+    expect(screen.getByRole("button", { name: "Update studio-01" })).toBeTruthy();
+    // A fresh handshake, not another installation.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
+
+    // The dial leaves the mismatch; still behind, the same answer comes back,
+    // and so does the way to recheck it.
+    act(() => {
+      seed({ status: "connecting", attempt: 1 });
+    });
+    // Held behind the settle window like any other drop.
+    expect(container.firstChild).toBeNull();
+    act(() => {
+      seed(behind);
+    });
+    expect(screen.getByText("studio-01 runs an older version of Daintree")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+    act(() => {
+      seed({ status: "connected", rttMs: 20, handshake: { ...HANDSHAKE, protocolVersion: 5 } });
+    });
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("rechecks when this machine is the one behind too: the host may have been rolled back", () => {
+    seed({
+      status: "version-mismatch",
+      mismatch: { kind: "protocol", local: 4, remote: 5 },
+      remote: { ...HANDSHAKE, protocolVersion: 5 },
+    });
+    render(<HostConnectionBanner />);
+    expect(screen.getByRole("button", { name: "Update this machine" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(connect).toHaveBeenCalledWith({ hostId: "studio-01", restart: true });
   });
 
   it("calls builds a commit apart different, not older, and still offers the update", () => {
     seed({
       status: "version-mismatch",
       mismatch: { kind: "commit", local: "a", remote: "b" },
-      remote: HANDSHAKE,
+      remote: { ...HANDSHAKE, commit: "b" },
     });
     render(<HostConnectionBanner />);
     expect(screen.getByText("studio-01 runs a different build of Daintree")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Update studio-01" })).toBeTruthy();
+    // The host may already have been rebuilt to match.
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
   });
 
   it("says it is checking with the host while an unanswered mutation is resolved", () => {
@@ -341,6 +496,157 @@ describe("HostConnectionBanner", () => {
   });
 });
 
+function machine(overrides: Partial<CloudHostStatus> = {}): CloudHostsSnapshot {
+  return {
+    providers: [],
+    accounts: [],
+    hosts: [
+      {
+        hostId: "studio-01",
+        providerId: "boat",
+        providerUnavailable: null,
+        accountId: "ca_0123456789",
+        accountName: "Personal",
+        resourceId: "bx_23456789",
+        machineName: "studio-01",
+        ownership: "created-by-daintree",
+        createdFor: null,
+        worktreeCleanup: null,
+        provisioning: null,
+        machine: "stopped",
+        rawState: "stopped",
+        machineType: "default",
+        vcpu: 4,
+        memoryGB: 8,
+        hourlyDollars: 0.036,
+        lifetime: { kind: "renewable" },
+        autoStopAt: null,
+        lifetimeSeconds: 7200,
+        stoppedAt: null,
+        stop: null,
+        lastSnapshotAt: null,
+        dataExpired: false,
+        operation: null,
+        lastError: null,
+        observedAt: Date.now(),
+        lastEndpoint: null,
+        hostKeyFingerprint: null,
+        hostKeyReview: null,
+        keptRunningAt: null,
+        asleep: false,
+        ...overrides,
+      },
+    ],
+  };
+}
+
+const STARTING = {
+  id: "op-1",
+  kind: "starting",
+  startedAt: 0,
+  stage: "Starting the machine",
+} as const;
+
+describe("HostConnectionBanner on a stopped cloud machine (#17546)", () => {
+  /** A press on Start, with the start's reply held until the test lets it go. */
+  function pressStart(): () => Promise<void> {
+    let reply!: () => void;
+    startHost.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        reply = resolve;
+      })
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Start and reconnect" }));
+    expect(startHost).toHaveBeenCalledExactlyOnceWith("studio-01");
+    return async () => {
+      await act(async () => {
+        reply();
+        await Promise.resolve();
+      });
+    };
+  }
+
+  /** The provider's running observation, which the start waits for, reaching this window. */
+  function observeRunning() {
+    act(() => cloud.push(machine({ machine: "running", operation: STARTING })));
+  }
+
+  /** The dial is under way, its ssh handshake not yet answered. */
+  function dialUnderWay() {
+    act(() => seed({ status: "connecting", attempt: 1 }, { everConnected: false }));
+  }
+
+  beforeEach(() => {
+    seed({ status: "disconnected" }, { everConnected: false });
+    cloud.snapshot = machine();
+  });
+
+  // Each asks for the link once and neither starts it over: the second finds
+  // the first's dial under way and leaves it to finish (LinkClient.retryNow).
+  const ASKED_WITHOUT_RESTART = [[{ hostId: "studio-01" }], [{ hostId: "studio-01" }]];
+
+  it("asks for the link from both, never starting it over, when the running push lands before the start's reply", async () => {
+    render(<HostConnectionBanner />);
+    const reply = pressStart();
+    observeRunning();
+    expect(connect).toHaveBeenCalledExactlyOnceWith({ hostId: "studio-01" });
+    dialUnderWay();
+    await reply();
+    act(() => cloud.push(machine({ machine: "running" })));
+    expect(connect.mock.calls).toEqual(ASKED_WITHOUT_RESTART);
+  });
+
+  it("asks for the link from both, never starting it over, when the start's reply lands before the running push", async () => {
+    render(<HostConnectionBanner />);
+    const reply = pressStart();
+    await reply();
+    expect(connect).toHaveBeenCalledExactlyOnceWith({ hostId: "studio-01" });
+    dialUnderWay();
+    observeRunning();
+    act(() => cloud.push(machine({ machine: "running" })));
+    expect(connect.mock.calls).toEqual(ASKED_WITHOUT_RESTART);
+  });
+
+  it("dials a window waiting on a machine started elsewhere, without abandoning a dial under way", () => {
+    render(<HostConnectionBanner />);
+    act(() => cloud.push(machine({ operation: STARTING })));
+    expect(connect).not.toHaveBeenCalled();
+    observeRunning();
+    expect(connect).toHaveBeenCalledExactlyOnceWith({ hostId: "studio-01" });
+    dialUnderWay();
+    act(() => cloud.push(machine({ machine: "running" })));
+    expect(connect).toHaveBeenCalledOnce();
+  });
+
+  it("asks a window already dialling for the link again when a machine started elsewhere comes up", () => {
+    render(<HostConnectionBanner />);
+    dialUnderWay();
+    act(() => cloud.push(machine({ machine: "running" })));
+    expect(connect).toHaveBeenCalledExactlyOnceWith({ hostId: "studio-01" });
+  });
+
+  it("dials neither the host it left nor the one it moved to for a start made before the move", async () => {
+    render(<HostConnectionBanner />);
+    const reply = pressStart();
+    // Moved to another cloud host whose machine is already running: not a machine coming up.
+    act(() => {
+      seed({ status: "disconnected" }, { hostId: "mini", hostName: "mini", everConnected: false });
+      const [left] = machine().hosts;
+      const [movedTo] = machine({ hostId: "mini", machine: "running" }).hosts;
+      cloud.push({ providers: [], accounts: [], hosts: [left!, movedTo!] });
+    });
+    await reply();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it("leaves a link that came back by itself alone", () => {
+    render(<HostConnectionBanner />);
+    act(() => seed({ status: "connected", rttMs: 20, handshake: HANDSHAKE }));
+    observeRunning();
+    expect(connect).not.toHaveBeenCalled();
+  });
+});
+
 describe("getHostConnectionBannerCopy", () => {
   const variants: HostBannerVariant[] = [
     "reconnecting",
@@ -349,6 +655,8 @@ describe("getHostConnectionBannerCopy", () => {
     "unreachable",
     "host-mode-off",
     "access-denied",
+    "wsl-distro-missing",
+    "connection-unavailable",
     "version-mismatch",
     "disconnected",
     "checking",

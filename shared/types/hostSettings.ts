@@ -3,6 +3,7 @@ import { isStorableAssistantAgentId, isStorableDefaultAgent } from "./ipc/agentD
 import { isCanopyModelId } from "./ipc/canopy.js";
 import { isIdleShellThresholdMinutes } from "./ipc/idleBackgroundAutoClose.js";
 import { isResumeOnRestart, RESUME_ON_RESTART_VALUES } from "./agentSettings.js";
+import { HOST_IDLE_MINUTES } from "./hostIdle.js";
 import type { HostId } from "./remoteHosts.js";
 
 /**
@@ -36,6 +37,7 @@ export const HOST_SETTING_KEYS = [
   "idleBackgroundAutoClose.thresholdMinutes",
   "idleBackgroundAutoClose.includeIdleShells",
   "idleBackgroundAutoClose.idleShellThresholdMinutes",
+  "hostIdle.idleAfterMinutes",
 ] as const;
 
 export type HostSettingKey = (typeof HOST_SETTING_KEYS)[number];
@@ -89,6 +91,7 @@ export const HOST_SETTING_LABELS: Record<HostSettingKey, string> = {
   "idleBackgroundAutoClose.thresholdMinutes": "Sleep after (minutes)",
   "idleBackgroundAutoClose.includeIdleShells": "Include projects with idle terminals",
   "idleBackgroundAutoClose.idleShellThresholdMinutes": "Idle terminals sleep after (minutes)",
+  "hostIdle.idleAfterMinutes": "Idle after (minutes)",
 };
 
 export const IDLE_THRESHOLD_MINUTES = { min: 15, max: 1440 } as const;
@@ -180,6 +183,8 @@ export function hostSettingRefusal(key: HostSettingKey, value: unknown): string 
       return minutesRefusal(value, LEAK_RESTART_THRESHOLD_MB, "MB");
     case "idleBackgroundAutoClose.idleShellThresholdMinutes":
       return isIdleShellThresholdMinutes(value) ? null : "Expected 1, 2, 4 or 8 hours.";
+    case "hostIdle.idleAfterMinutes":
+      return minutesRefusal(value, HOST_IDLE_MINUTES, "minutes");
     case "agentSettings.resumeOnRestart":
       return isResumeOnRestart(value) ? null : "Not a way to resume agents.";
     case "globalEnvironmentVariables":
@@ -238,6 +243,12 @@ export const HostSettingsPatchFieldsSchema = z
     "idleBackgroundAutoClose.idleShellThresholdMinutes": z
       .number()
       .refine(isIdleShellThresholdMinutes)
+      .optional(),
+    "hostIdle.idleAfterMinutes": z
+      .number()
+      .int()
+      .min(HOST_IDLE_MINUTES.min)
+      .max(HOST_IDLE_MINUTES.max)
       .optional(),
   })
   .strict();

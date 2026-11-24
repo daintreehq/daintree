@@ -50,6 +50,7 @@ import { logError } from "@/utils/logger";
 import { useDistributionStore } from "@/store/distributionStore";
 import { pluralize } from "@/lib/pluralize";
 import { useRemoteHostName } from "@/hooks/useSettingsOwner";
+import type { SettingsTabClose } from "./settingsTabClose";
 
 const GENERAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "overview", label: "Overview" },
@@ -64,6 +65,7 @@ interface GeneralTabProps {
   onNavigateToAgents?: (agentId?: string) => void;
   activeSubtab: string | null;
   onSubtabChange: (id: string) => void;
+  onClose?: SettingsTabClose;
 }
 
 const CURATED_SHORTCUTS = [
@@ -139,6 +141,7 @@ export function GeneralTab({
   onNavigateToAgents,
   activeSubtab,
   onSubtabChange,
+  onClose,
 }: GeneralTabProps) {
   const effectiveSubtab =
     activeSubtab && GENERAL_SUBTABS.some((t) => t.id === activeSubtab) ? activeSubtab : "overview";
@@ -150,6 +153,13 @@ export function GeneralTab({
   // Agent detection runs on the host, so a remote window names it rather than "this machine".
   const remoteHostName = useRemoteHostName();
   const agentMachine = remoteHostName ?? "this machine";
+
+  // The wizard is a full modal, so Settings closes first rather than stacking a second scrim.
+  const openSetupWizard = () => {
+    const open = () => window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
+    if (onClose) void onClose((closed) => closed && open());
+    else open();
+  };
 
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const [showReadyAgents, setShowReadyAgents] = useState(false);
@@ -737,15 +747,7 @@ export function GeneralTab({
                                   Browse available agents
                                 </Button>
                               )}
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() =>
-                                  window.dispatchEvent(
-                                    new CustomEvent("daintree:open-agent-setup-wizard")
-                                  )
-                                }
-                              >
+                              <Button variant="outline" size="sm" onClick={openSetupWizard}>
                                 Run setup wizard
                               </Button>
                             </div>

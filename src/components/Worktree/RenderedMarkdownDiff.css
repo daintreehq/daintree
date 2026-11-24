@@ -59,6 +59,16 @@
   padding-inline: var(--rendered-diff-gutter);
 }
 
+/* A block the stage hasn't mounted yet: its source as plain text, laid out but
+   never painted, so the page is about as tall as it will be and nothing under
+   the reader jumps when the real block replaces it. */
+.rendered-markdown-diff__pending {
+  visibility: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: none;
+}
+
 /* The band hugs its text.
 
    `flow-root` keeps the child's own margins inside the block, which is what
@@ -152,7 +162,7 @@
    the block fill and the bar still carry the state. A rendered Mermaid
    diagram counts as a fence here. */
 .rendered-markdown-diff__block--removed[data-whole="true"]
-  :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd):not(
+  :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, dt, dd, .markdown-frontmatter):not(
     :has(pre, table, .markdown-mermaid)
   ) {
   text-decoration: line-through;

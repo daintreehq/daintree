@@ -102,4 +102,9 @@ export interface CdpPropertyDescriptor {
 
 export interface CdpGetPropertiesResult {
   properties: CdpPropertyDescriptor[];
+  /**
+   * The row no longer owns any handle: its values were released to free the
+   * guest's heap, so nothing in it can be expanded again.
+   */
+  released?: true;
 }

@@ -202,6 +202,34 @@ const SVELTE_PATTERNS = [
 ];
 
 /**
+ * Feature code main loads on demand, never while it boots (#17024): the
+ * plugin manifest schema (dozens of Zod modules, needed when a manifest is
+ * read), the assistant's session service, and voice cleanup with its prompts.
+ * Handler registration reaches each only through an `await import()`; their
+ * light halves (`pluginIdentifiers`, `helpSessionRuntime`,
+ * `voiceCorrectionPolicy`) are what it may load. Main's alone: the renderer
+ * reads voice cleanup's config for its own settings and dictation.
+ */
+export const MAIN_ON_DEMAND_PATTERNS = [
+  {
+    label: "Plugin manifest schema",
+    test: (file) =>
+      /(^|\/)electron\/schemas\/(plugin\.ts|plugin\/|pluginManifestAdvisories\.ts)/.test(file),
+  },
+  {
+    label: "HelpSessionService",
+    test: (file) => /(^|\/)electron\/services\/HelpSessionService\.ts$/.test(file),
+  },
+  {
+    label: "Voice cleanup",
+    test: (file) =>
+      /(^|\/)electron\/services\/(VoiceCorrectionService|voiceCleanupClaude|voiceOpeningCommand)\.ts$/.test(
+        file
+      ) || /(^|\/)shared\/config\/voiceCorrection(OpenAI|Claude)?\.ts$/.test(file),
+  },
+];
+
+/**
  * Modules that must never be reachable from main's eager import graph, whatever
  * the module count says.
  *

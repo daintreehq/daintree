@@ -1,25 +1,9 @@
 // eager-import-allow: performs sync fs and SQLite setup while preparing the runtime environment
-// Dead-fd errnos that must not propagate on GUI launch (AppImage/Wayland, no
-// terminal). EPIPE is a closed pipe (e.g. user quits Terminal.app while
-// Daintree runs); EIO is a disconnected pty (the primary errno for AppImage
-// desktop launches where fd 2 points to an orphaned pty slave); EBADF is a
-// closed fd; ECONNRESET is a socket-backed stdio reset. ENOSPC is
-// intentionally NOT swallowed — it's a real error condition.
-const STDIO_DEAD_CODES = new Set(["EPIPE", "EIO", "EBADF", "ECONNRESET"]);
-for (const stream of [process.stdout, process.stderr]) {
-  if (stream && typeof stream.on === "function") {
-    stream.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code && STDIO_DEAD_CODES.has(err.code)) return;
-      throw err;
-    });
-  }
-}
-
 import nodeV8 from "node:v8";
 import vm from "node:vm";
 import { spawn } from "child_process";
 import { randomBytes } from "crypto";
-import { app, dialog } from "electron";
+import { app } from "electron";
 import path from "path";
 import fs from "fs";
 import { existsSync } from "fs";
@@ -44,12 +28,13 @@ import {
   shouldRetryGpuAfterUpdate,
 } from "../services/gpuDisabledFlag.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { shouldUseHeadlessOzone } from "../boot/hostModeLaunch.js";
 import {
-  HEADLESS_OZONE_SWITCH,
-  isAttachStdioRequested,
-  shouldUseHeadlessOzone,
-} from "../boot/hostModeLaunch.js";
-import { installHeadlessDialogGuards } from "./headlessDialogs.js";
+  applyDevUserDataPath,
+  applyHeadlessOzoneSwitches,
+  installStdioDeadFdGuards,
+  resetUserDataIfRequested,
+} from "./earlyEnvironment.js";
 import { captureAppBundleIdentity } from "../lifecycle/appBundleIdentity.js";
 import {
   e2eCrashDumpsDir,
@@ -62,6 +47,8 @@ import {
 // the early-load path (#9559). environment.ts is imported first in main.ts, so
 // the listener is live before `app.whenReady()` resolves — see deepLinkUrlQueue.
 import "./deepLinkUrlQueue.js";
+
+installStdioDeadFdGuards();
 
 export let exposeGc: (() => void) | undefined;
 try {
@@ -84,20 +71,7 @@ captureAppBundleIdentity({
   loadStatSync: () => (require("original-fs") as typeof fs).statSync,
 });
 
-// In development, use a separate userData directory so the dev instance
-// doesn't conflict with the production app's single-instance lock or storage.
-// Skip when --user-data-dir is explicitly set (e.g. E2E tests) so that
-// each test run gets its own isolated data directory.
-const hasExplicitUserDataDir = process.argv.some((a) => a.startsWith("--user-data-dir"));
-if (!app.isPackaged && !hasExplicitUserDataDir) {
-  const devUserDataDir = process.env.DAINTREE_DEV_USER_DATA_DIR?.trim();
-  app.setPath(
-    "userData",
-    devUserDataDir && path.isAbsolute(devUserDataDir)
-      ? devUserDataDir
-      : path.join(app.getPath("appData"), "daintree-dev")
-  );
-}
+applyDevUserDataPath();
 
 // E2E: redirect crash dumps to workspace-relative path so CI artifact upload
 // captures them. Runs before crashReporter.start() (main.ts:158) because
@@ -106,23 +80,7 @@ if (isE2EMode && e2eCrashDumpsDir && path.isAbsolute(e2eCrashDumpsDir)) {
   app.setPath("crashDumps", e2eCrashDumpsDir);
 }
 
-// Handle --reset-data: wipe userData before Chromium acquires file locks
-// AND before reading any flag files below — otherwise a reset-while-disabled
-// launch would carry the stale GPU flag forward by one cycle.
-const shouldResetData =
-  process.argv.includes("--reset-data") || process.env.DAINTREE_RESET_DATA === "1";
-if (shouldResetData) {
-  const userDataPath = app.getPath("userData");
-  if (fs.existsSync(userDataPath)) {
-    for (const entry of fs.readdirSync(userDataPath)) {
-      try {
-        fs.rmSync(path.join(userDataPath, entry), { recursive: true, force: true });
-      } catch {
-        // Skip locked files
-      }
-    }
-  }
-}
+resetUserDataIfRequested();
 
 // GPU crash fallback: disable hardware acceleration before app.whenReady().
 // The flag is written by GpuCrashMonitorService after repeated GPU crashes or
@@ -193,16 +151,7 @@ export const headlessOzone = shouldUseHeadlessOzone({
 // Enable native Wayland support on Linux (Electron < 38)
 // Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
 if (headlessOzone) {
-  installHeadlessDialogGuards(dialog);
-  app.commandLine.appendSwitch("ozone-platform", "headless");
-  app.commandLine.appendSwitch("disable-gpu");
-  if (!gpuHardwareAccelerationDisabled) app.disableHardwareAcceleration();
-  // `--attach-stdio`'s stdout is the link: its diagnostics go to stderr.
-  (isAttachStdioRequested(process.argv) ? console.error : console.log)(
-    process.argv.includes(HEADLESS_OZONE_SWITCH)
-      ? "[GPU] Headless Host mode: ozone-platform=headless, GPU disabled"
-      : `[GPU] No display server: start Host mode with ${HEADLESS_OZONE_SWITCH}, or Chromium aborts looking for X11`
-  );
+  applyHeadlessOzoneSwitches({ hardwareAccelerationDisabled: gpuHardwareAccelerationDisabled });
 } else if (process.platform === "linux") {
   app.commandLine.appendSwitch("ozone-platform-hint", "auto");
   if (process.env.XDG_SESSION_TYPE === "wayland") {

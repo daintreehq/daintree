@@ -82,6 +82,7 @@ export interface ShardGlobalConfig {
   lastResourceProfile: ResourceProfile | null;
   lastProcessTreePollIntervalMs: number | null;
   fallbackEligibleProjects: string[];
+  frozenViewProjects: string[];
   driveLeases: PtyHostDriveLease[];
 }
 
@@ -451,6 +452,12 @@ export class ShardRecoveryCoordinator {
         type: "set-fallback-eligible-projects",
         projectIds: config.fallbackEligibleProjects,
       });
+    }
+
+    // A shard that booted without it keeps copying output into frozen views
+    // until the set next changes.
+    if (config.frozenViewProjects.length > 0) {
+      shard.send({ type: "set-frozen-view-projects", projectIds: config.frozenViewProjects });
     }
 
     // Without it a restarted shard lets any port type into or resize terminals

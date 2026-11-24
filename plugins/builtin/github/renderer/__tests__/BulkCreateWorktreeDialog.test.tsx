@@ -204,11 +204,11 @@ let mockSelectedRecipeId: string | null = null;
 vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
   CLONE_LAYOUT_ID: "__clone_layout__",
   resolveEligibleDefaultRecipeId: (
-    recipes: unknown[],
+    recipes: Array<{ id: string; shadowedBy?: unknown }>,
     persistedDefaultRecipeId: string | undefined
   ) => {
     // Mirror the real implementation: return the persisted ID only if it exists in recipes and is not shadowed
-    return recipes.some((r: any) => r.id === persistedDefaultRecipeId && !r.shadowedBy)
+    return recipes.some((r) => r.id === persistedDefaultRecipeId && !r.shadowedBy)
       ? persistedDefaultRecipeId
       : undefined;
   },
@@ -218,6 +218,7 @@ vi.mock("@/components/Worktree/hooks/useRecipePicker", () => ({
     recipePickerOpen: false,
     setRecipePickerOpen: vi.fn(),
     recipeSelectionTouchedRef: { current: false },
+    markRecipeSelectionTouched: vi.fn(),
     selectedRecipe:
       mockSelectedRecipeId && mockSelectedRecipeId !== "__clone_layout__"
         ? { name: "Test Recipe", terminals: [{}] }
@@ -314,6 +315,70 @@ vi.mock("@/lib/utils", () => ({
 }));
 
 import { BulkCreateWorktreeDialog } from "../components/BulkCreateWorktreeDialog";
+import {
+  _resetBulkCreateRunsForTests,
+  cancelBulkCreateRun,
+  retryFailedBulkCreateRun,
+  toBulkWorktreeRunSnapshot,
+  useBulkCreateRunStore,
+  type BulkCreateRun,
+} from "../components/bulkCreateRunner";
+import { bulkRunItemStep, summarizeBulkRun } from "@/lib/bulkWorktreeRuns";
+import { notify } from "@/lib/notify";
+
+/** The run Create started most recently. */
+function latestRun(): BulkCreateRun {
+  const { runs } = useBulkCreateRunStore.getState();
+  const ids = Object.keys(runs);
+  const run = runs[ids[ids.length - 1] ?? ""];
+  if (!run) throw new Error("Create has not started a run");
+  return run;
+}
+
+function itemOf(issueNumber: number) {
+  return latestRun().progress.items.get(issueNumber);
+}
+
+/** The run as the toolbar chip and the inbox read it. */
+function runSummary() {
+  return summarizeBulkRun(toBulkWorktreeRunSnapshot(latestRun()));
+}
+
+/** Each item's step in the words the chip's popover shows, by issue/PR number. */
+function itemSteps(): Record<number, string> {
+  const snapshot = toBulkWorktreeRunSnapshot(latestRun());
+  return Object.fromEntries(
+    snapshot.items.map((item) => [
+      item.number,
+      bulkRunItemStep(item, snapshot.mode, snapshot.phase),
+    ])
+  );
+}
+
+/** The dialog closes on Create; cancel comes from the toolbar chip, which calls the runner. */
+async function cancelRun() {
+  await act(async () => {
+    expect(cancelBulkCreateRun(latestRun().id)).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
+
+/** Retry failed, as the toolbar chip sends it. */
+async function retryFailed() {
+  await act(async () => {
+    expect(retryFailedBulkCreateRun(latestRun().id)).not.toBeNull();
+  });
+}
+
+async function clickCreate() {
+  await act(async () => {
+    screen.getByTestId("bulk-create-confirm-button").click();
+  });
+}
+
+function skipBadges(reason: string): number {
+  return screen.queryAllByText(reason).filter((node) => node.dataset.slot === "badge").length;
+}
 
 async function advanceTimersGradually(totalMs: number, stepMs = 100) {
   for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
@@ -380,6 +445,8 @@ beforeAll(() => whenPluginUiReady(), 30_000);
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
+  // Runs outlive the dialog by design, so each test starts with none.
+  _resetBulkCreateRunsForTests();
   setupWorktreeCreateMocks();
   mockTerminals = [];
   mockSelectedRecipeId = null;
@@ -423,6 +490,35 @@ describe("BulkCreateWorktreeDialog", () => {
     onComplete: vi.fn(),
   };
 
+  it("names the worktree count on the confirm button with tabular figures", () => {
+    const { rerender } = render(<BulkCreateWorktreeDialog {...defaultProps} />);
+    const confirm = screen.getByTestId("bulk-create-confirm-button");
+    expect(confirm.textContent).toContain("Create 3 worktrees");
+    expect(confirm.className).toContain("tabular-nums");
+
+    rerender(<BulkCreateWorktreeDialog {...defaultProps} selectedIssues={[makeIssue(1)]} />);
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).toContain(
+      "Create 1 worktree"
+    );
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).not.toContain("worktrees");
+  });
+
+  it("groups digits in a large batch's summary and confirm button", () => {
+    const many = Array.from({ length: 1204 }, (_, i) =>
+      i < 1200 ? { ...makeIssue(i + 1), state: "closed" as const } : makeIssue(i + 1)
+    );
+    render(<BulkCreateWorktreeDialog {...defaultProps} selectedIssues={many} />);
+    expect(screen.getByTestId("bulk-create-footer-hint").textContent).toBe(
+      "1,204 issues \u00b7 1,200 skipped \u00b7 runs in the background"
+    );
+    const clearable = Array.from({ length: 1204 }, (_, i) => makeIssue(i + 1));
+    cleanup();
+    render(<BulkCreateWorktreeDialog {...defaultProps} selectedIssues={clearable} />);
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).toContain(
+      "Create 1,204 worktrees"
+    );
+  });
+
   it("creates worktrees using direct client calls", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
@@ -453,7 +549,9 @@ describe("BulkCreateWorktreeDialog", () => {
     // Advance past verification settle delay
     await advanceTimersGradually(1000);
 
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(latestRun().progress.phase).toBe("done");
+    expect(runSummary().detail).toBe("3 of 3 created");
+    expect(runSummary().facts.ready).toBe(3);
   });
 
   it("shows per-item sub-step status during execution", async () => {
@@ -471,15 +569,25 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Should show "Creating worktree..." labels for the items that started
-    // immediately under concurrency = 3.
-    expect(screen.getAllByText("Creating worktree\u2026").length).toBeGreaterThanOrEqual(1);
+    // Every item started immediately under concurrency = 3, so each is on
+    // its worktree step.
+    expect(Object.values(itemSteps())).toEqual([
+      "Creating worktree\u2026",
+      "Creating worktree\u2026",
+      "Creating worktree\u2026",
+    ]);
 
     // Resolve all
     await act(async () => {
       resolvers[0]?.(createdWorktree("wt-1"));
       await vi.advanceTimersByTimeAsync(0);
     });
+    // The one that landed moves on; the others are still creating.
+    expect(itemOf(1)?.stage).toBe("succeeded");
+    expect([itemOf(2)?.stage, itemOf(3)?.stage]).toEqual([
+      "worktree-creating",
+      "worktree-creating",
+    ]);
     await act(async () => {
       resolvers[1]?.(createdWorktree("wt-2"));
       resolvers[2]?.(createdWorktree("wt-3"));
@@ -487,8 +595,8 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(1000);
 
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
-    expect(screen.getByTestId("bulk-create-done-button")).toBeTruthy();
+    expect(runSummary().detail).toBe("3 of 3 created");
+    expect(latestRun().progress.phase).toBe("done");
   });
 
   it("displays error messages for failed items", async () => {
@@ -508,22 +616,55 @@ describe("BulkCreateWorktreeDialog", () => {
     // Let all tasks run (with backoff delays for transient check)
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText("Branch already exists")).toBeTruthy();
-    expect(screen.getByText(/2 of 3 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(itemOf(2)).toMatchObject({
+      stage: "failed",
+      error: "Branch already exists",
+      failedStep: "worktree",
+    });
+    expect(itemSteps()[2]).toBe("Couldn't create worktree");
+    expect(runSummary().detail).toBe("2 of 3 created · 1 not created");
+    expect(runSummary().facts.failed).toBe(1);
   });
 
-  it("does not show Retry Failed button when all succeed", async () => {
+  it("files one quiet inbox entry and leaves nothing to retry when every item succeeds", async () => {
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
+    mockWorktreeCreate.mockImplementation(
+      () =>
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
     render(<BulkCreateWorktreeDialog {...defaultProps} />);
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    await advanceTimersGradually(5000);
+    // Nothing is filed while the run is still going.
+    await act(async () => {
+      resolvers[0]?.(createdWorktree("wt-1"));
+      resolvers[1]?.(createdWorktree("wt-2"));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(latestRun().progress.phase).toBe("executing");
+    expect(notify).not.toHaveBeenCalled();
 
-    expect(screen.queryByTestId("bulk-create-retry-button")).toBeNull();
-    expect(screen.getByTestId("bulk-create-done-button")).toBeTruthy();
+    await act(async () => {
+      resolvers[2]?.(createdWorktree("wt-3"));
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    const { id } = latestRun();
+    expect(retryFailedBulkCreateRun(id)).toBeNull();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "success",
+        priority: "low",
+        title: "3 worktrees created",
+        supersedeKey: `bulk-worktree-run:${id}`,
+      })
+    );
   });
 
   it("retry skips worktree creation when worktreeId already exists", async () => {
@@ -556,15 +697,14 @@ describe("BulkCreateWorktreeDialog", () => {
 
     const createCallsBefore = mockWorktreeCreate.mock.calls.length;
 
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
 
     await advanceTimersGradually(5000);
 
     // Worktree.create should NOT be called again for issue 2 since it already exists
     expect(mockWorktreeCreate.mock.calls.length).toBe(createCallsBefore);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(itemOf(2)).toMatchObject({ stage: "succeeded", worktreeId: "existing-wt" });
+    expect(runSummary().detail).toBe("3 of 3 created");
 
     // Clean up
     worktreeDataHolder.map.delete("existing-wt");
@@ -599,8 +739,9 @@ describe("BulkCreateWorktreeDialog", () => {
     await advanceTimersGradually(240000, 5000);
 
     expect(callCount).toBe(6);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
+    // The sixth attempt at the worktree step is the one that landed.
+    expect(itemOf(1)).toMatchObject({ stage: "succeeded", attempt: 6, worktreeId: "wt-1" });
+    expect(runSummary().facts.failed).toBe(0);
   });
 
   it("does not auto-retry non-transient errors", async () => {
@@ -619,8 +760,13 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Branch name is invalid")).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      error: "Branch name is invalid",
+      attempt: 1,
+      failedStep: "worktree",
+    });
+    expect(runSummary().facts.failed).toBe(1);
   });
 
   it("does not re-execute when create button is clicked twice rapidly", async () => {
@@ -634,12 +780,13 @@ describe("BulkCreateWorktreeDialog", () => {
 
     await advanceTimersGradually(5000);
 
-    // Each issue should be created exactly once — guard prevents second invocation
+    // One run, and each issue created exactly once — guard prevents second invocation
+    expect(Object.keys(useBulkCreateRunStore.getState().runs)).toHaveLength(1);
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(runSummary().detail).toBe("3 of 3 created");
   });
 
-  it("second run after Done does not show 0 of N created", async () => {
+  it("starts a separate run with fresh tracking when Create is pressed again after reopening", async () => {
     const onComplete = vi.fn();
     const onClose = vi.fn();
     const { rerender } = render(
@@ -651,12 +798,8 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
-
-    // Click Done — state preserved during close
-    await act(async () => {
-      screen.getByTestId("bulk-create-done-button").click();
-    });
+    const first = latestRun();
+    expect(first.progress.phase).toBe("done");
 
     // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
     await act(async () => {
@@ -682,12 +825,17 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    // Should reach 3 of 3, not be stuck at 0 of 3 due to stale batchTrackingRef
+    // A run of its own, reaching 3 of 3 rather than reusing the first one's tracking.
+    const second = latestRun();
+    expect(second.id).not.toBe(first.id);
+    expect(Object.keys(useBulkCreateRunStore.getState().runs)).toHaveLength(2);
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(runSummary().detail).toBe("3 of 3 created");
+    expect(onComplete).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  it("allows create after cancel while in-flight tasks are pending", async () => {
+  it("skips a cancelled run's items as being created until the cancel settles", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
@@ -699,41 +847,47 @@ describe("BulkCreateWorktreeDialog", () => {
     const onClose = vi.fn();
     const { rerender } = render(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
 
-    // Start the batch
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Cancel before in-flight tasks resolve — guard must be released by handleClose
-    await act(async () => {
-      const buttons = screen.getAllByRole("button");
-      const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
-      cancelBtn?.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await cancelRun();
+    expect(latestRun().progress.phase).toBe("cancelling");
 
-    // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
+    // Reopening while the cancel drains: the creates already sent can still
+    // land, so picking the same issues again would race them for the branch.
     await act(async () => {
       rerender(<BulkCreateWorktreeDialog {...defaultProps} isOpen={false} onClose={onClose} />);
     });
-
-    // Reset mocks for the second run
-    mockWorktreeCreate.mockClear();
-    setupWorktreeCreateMocks();
-
     await act(async () => {
       rerender(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
     });
+    expect(skipBadges("Being created")).toBe(3);
+    const confirm = () => screen.getByTestId("bulk-create-confirm-button");
+    expect(confirm().getAttribute("aria-disabled")).toBe("true");
 
-    // Create should work again — guard was released by handleClose
+    await act(async () => {
+      resolvers.forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(latestRun().progress.phase).toBe("cancelled");
+
+    // Settled: the same issues are free to go again.
+    expect(skipBadges("Being created")).toBe(0);
+    expect(confirm().getAttribute("aria-disabled")).toBeNull();
+
+    mockWorktreeCreate.mockClear();
+    setupWorktreeCreateMocks();
+
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
     await advanceTimersGradually(5000);
 
+    expect(Object.keys(useBulkCreateRunStore.getState().runs)).toHaveLength(2);
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(runSummary().detail).toBe("3 of 3 created");
   });
 
   it("retry does not re-verify previously succeeded items", async () => {
@@ -759,8 +913,8 @@ describe("BulkCreateWorktreeDialog", () => {
     await advanceTimersGradually(5000);
 
     // Issue 1 succeeded, issue 2 failed
-    expect(screen.getByText(/1 of 2 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect([itemOf(1)?.stage, itemOf(2)?.stage]).toEqual(["succeeded", "failed"]);
+    expect(runSummary().facts).toMatchObject({ created: 1, failed: 1 });
 
     // Set up retry — issue 2's worktree exists now
     worktreeDataHolder.map.set("retry-wt", {
@@ -770,14 +924,12 @@ describe("BulkCreateWorktreeDialog", () => {
       isMainWorktree: false,
     });
 
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     // Both should now be succeeded — issue 1 stays succeeded, issue 2 retried successfully
-    expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
+    expect([itemOf(1)?.stage, itemOf(2)?.stage]).toEqual(["succeeded", "succeeded"]);
+    expect(runSummary().facts).toMatchObject({ created: 2, ready: 2, failed: 0 });
 
     worktreeDataHolder.map.delete("retry-wt");
   });
@@ -811,7 +963,7 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/1 of 2 created/)).toBeTruthy();
+    expect([itemOf(1)?.stage, itemOf(2)?.stage]).toEqual(["succeeded", "failed"]);
 
     // Before retry: issue 1's terminal now crashes (simulating delayed crash)
     mockTerminals = [{ id: "t-ok", exitCode: 1 }];
@@ -828,15 +980,13 @@ describe("BulkCreateWorktreeDialog", () => {
       failed: [],
     });
 
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     // Issue 1 must STILL be succeeded — verification only scopes to retry run (issue 2)
     // Issue 2 should now be succeeded as well
-    expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
+    expect([itemOf(1)?.stage, itemOf(2)?.stage]).toEqual(["succeeded", "succeeded"]);
+    expect(runSummary().facts).toMatchObject({ ready: 2, failed: 0 });
 
     worktreeDataHolder.map.delete("retry-wt-2");
   });
@@ -868,10 +1018,13 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    // 2 succeeded (items 1, 3), 1 failed (item 2 crashed)
-    expect(screen.getByText(/2 of 3 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    expect(screen.getByText(/terminal\(s\) crashed/)).toBeTruthy();
+    // 2 succeeded (items 1, 3), 1 failed (item 2 crashed). All three
+    // worktrees exist, so all three count as created; the crash is a setup
+    // failure reported beside that count.
+    expect(runSummary().facts).toMatchObject({ created: 3, ready: 2, failed: 1 });
+    expect(itemOf(2)).toMatchObject({ stage: "failed", failedStep: "verification" });
+    expect(itemOf(2)?.error).toMatch(/terminal\(s\) crashed/);
+    expect(itemSteps()[2]).toBe("Terminals exited");
   });
 
   it("large batch with recipe all healthy never shows intermediate 0 count", async () => {
@@ -901,9 +1054,7 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(10000);
 
-    expect(screen.getByText(/6 of 6 created/)).toBeTruthy();
-    expect(screen.queryByText(/0 of/)).toBeNull();
-    expect(screen.queryByText(/failed/)).toBeNull();
+    expect(runSummary().facts).toMatchObject({ created: 6, ready: 6, failed: 0 });
     const spawnBatches = mockRunRecipeWithResults.mock.calls.map(
       (call) => (call[4] as { spawnBatch?: { id: string; size: number } })?.spawnBatch
     );
@@ -912,8 +1063,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(spawnBatches.every((batch) => batch?.size === spawnBatches.length)).toBe(true);
   });
 
-  it("done-phase counts match UI after recipe verification with mixed outcomes", async () => {
-    const { notify: mockNotify } = await import("@/lib/notify");
+  it("files one quiet inbox entry naming the failure after recipe verification with mixed outcomes", async () => {
     mockSelectedRecipeId = "test-recipe";
 
     let recipeCallIndex = 0;
@@ -939,10 +1089,20 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/1 of 2 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    // Done-phase body conveys the result; no toast should fire.
-    expect(mockNotify).not.toHaveBeenCalled();
+    // Both worktrees exist; one item's terminal then crashed.
+    expect(runSummary().facts).toMatchObject({ created: 2, ready: 1, failed: 1 });
+    expect(itemOf(2)).toMatchObject({ stage: "failed", failedStep: "verification" });
+    // No toast: a single low-priority inbox entry records which item failed and why.
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        priority: "low",
+        title: "Worktree creation: 1 failed",
+        message: expect.stringContaining(`#2 terminals exited: ${itemOf(2)?.error}`),
+        supersedeKey: `bulk-worktree-run:${latestRun().id}`,
+      })
+    );
   });
 
   it("recipe verification with multiple crashed terminals reports correct count", async () => {
@@ -971,12 +1131,16 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText("2 terminal(s) crashed after spawn")).toBeTruthy();
-    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      failedStep: "verification",
+      error: "2 terminal(s) crashed after spawn",
+    });
+    // The worktree is on disk, so it counts as created; it just isn't ready.
+    expect(runSummary().facts).toMatchObject({ created: 1, ready: 0, failed: 1 });
   });
 
-  it("second run with recipe after Done resets tracking cleanly", async () => {
+  it("second run with recipe after reopening resets tracking cleanly", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockRunRecipeWithResults.mockResolvedValue({
       spawned: [{ index: 0, terminalId: "t-run1" }],
@@ -999,12 +1163,7 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-
-    // Click Done
-    await act(async () => {
-      screen.getByTestId("bulk-create-done-button").click();
-    });
+    expect(itemOf(1)?.stage).toBe("succeeded");
 
     // Simulate dialog close/reopen cycle (useLayoutEffect resets on false→true)
     await act(async () => {
@@ -1033,11 +1192,12 @@ describe("BulkCreateWorktreeDialog", () => {
     await advanceTimersGradually(5000);
 
     // Second run should succeed — old crashed terminal t-run1 is irrelevant
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
+    expect(Object.keys(useBulkCreateRunStore.getState().runs)).toHaveLength(2);
+    expect(itemOf(1)).toMatchObject({ stage: "succeeded", worktreeId: "wt-1" });
+    expect(runSummary().facts.failed).toBe(0);
   });
 
-  it("stops processing items when dialog is closed during execution", async () => {
+  it("stops queued items on an explicit cancel and reports the ones already underway", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
@@ -1064,18 +1224,13 @@ describe("BulkCreateWorktreeDialog", () => {
     // never starts.
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
 
-    // Close the dialog before remaining items finish
-    await act(async () => {
-      const buttons = screen.getAllByRole("button");
-      const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
-      cancelBtn?.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await cancelRun();
 
-    expect(onClose).toHaveBeenCalled();
+    // The creates already sent can't be called back, so the run waits for
+    // them; the queued item won't start.
+    expect(latestRun().progress.phase).toBe("cancelling");
+    expect(itemSteps()[4]).toBe("Won't start");
 
-    // Resolving the in-flight items after cancel must not trigger item 4 —
-    // runIdRef has been bumped so the stale handlers exit early.
     await act(async () => {
       resolvers[0]?.(createdWorktree("wt-1"));
       resolvers[1]?.(createdWorktree("wt-2"));
@@ -1084,7 +1239,24 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
-    expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
+    expect(latestRun().progress.phase).toBe("cancelled");
+    // The three that landed are reported as created; the queued one never started.
+    expect(itemSteps()).toEqual({
+      1: "Cancelled before setup finished",
+      2: "Cancelled before setup finished",
+      3: "Cancelled before setup finished",
+      4: "Cancelled",
+    });
+    // The summary counts the worktrees that exist, and nothing is left in progress.
+    expect(runSummary().detail).toBe("3 of 4 created (3 not fully set up) \u00b7 1 not created");
+    expect(runSummary().facts.inProgress).toBe(0);
+    const run = latestRun();
+    expect(run.progress.items.get(4)?.worktreeId).toBeUndefined();
+    expect([1, 2, 3].map((n) => run.progress.items.get(n)?.worktreeId)).toEqual([
+      "wt-1",
+      "wt-2",
+      "wt-3",
+    ]);
   });
 
   it("does not run the recipe for an item whose worktree lands after cancel", async () => {
@@ -1116,13 +1288,7 @@ describe("BulkCreateWorktreeDialog", () => {
     const startedCreates = mockWorktreeCreate.mock.calls.length;
     expect(startedCreates).toBeGreaterThan(0);
 
-    await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await cancelRun();
 
     // The creates were already past the point of no return — let them land.
     await act(async () => {
@@ -1138,8 +1304,7 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(startedCreates);
   });
 
-  it("reports the worktrees a cancel left behind", async () => {
-    const { notify: mockNotify } = await import("@/lib/notify");
+  it("reports the worktrees a cancel left behind once the work underway settles", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
@@ -1150,7 +1315,7 @@ describe("BulkCreateWorktreeDialog", () => {
 
     const props = {
       ...defaultProps,
-      selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4)],
+      selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4), makeIssue(5)],
     };
     render(<BulkCreateWorktreeDialog {...props} />);
 
@@ -1158,46 +1323,45 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Land one worktree so the snapshot has both a created and an in-flight count.
+    // Land one worktree, which lets a fourth item start; the fifth stays queued.
     await act(async () => {
       resolvers[0]?.(createdWorktree("wt-1"));
       await vi.advanceTimersByTimeAsync(0);
     });
+    expect(resolvers).toHaveLength(4);
 
-    const stillCreating = resolvers.length - 1;
+    await cancelRun();
 
+    // Nothing is reported until the creates already underway settle.
+    expect(notify).not.toHaveBeenCalled();
+
+    // Two of the three still underway land; the run waits for the third.
     await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
-
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "warning",
-        message: expect.stringContaining(
-          `1 of ${props.selectedIssues.length} worktrees created`
-        ) as unknown as string,
-      })
-    );
-    expect(mockNotify).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining(`${stillCreating} already underway`) as unknown as string,
-      })
-    );
-
-    await act(async () => {
-      resolvers.slice(1).forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 2}`)));
+      resolvers[1]?.(createdWorktree("wt-2"));
+      resolvers[2]?.(createdWorktree("wt-3"));
       await vi.advanceTimersByTimeAsync(1000);
     });
+    expect(notify).not.toHaveBeenCalled();
+    await act(async () => {
+      resolvers[3]?.(createdWorktree("wt-4"));
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    // One quiet inbox entry: #1 finished before the cancel, #2-#4 landed
+    // without setup, and the queued #5 never started.
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        priority: "low",
+        title: "Worktree creation cancelled",
+        message: "4 of 5 created (3 not fully set up) \u00b7 1 not created.",
+        supersedeKey: `bulk-worktree-run:${latestRun().id}`,
+      })
+    );
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(4);
   });
 
-  it("stays silent when a cancel lands before any worktree is underway", async () => {
-    const { notify: mockNotify } = await import("@/lib/notify");
-    vi.mocked(mockNotify).mockClear();
-
+  it("files only a quiet inbox entry when a cancel lands before any worktree is underway", async () => {
     // Stall the batch in its pre-query phase: the queue callbacks are running,
     // so PQueue.pending is non-zero, but no worktree has been requested yet.
     let releasePrequery: (value: string) => void = () => {};
@@ -1217,30 +1381,32 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     // Confirm the run really is executing, or the guard under test never runs.
-    expect(screen.getByTestId("bulk-create-confirm-button").getAttribute("aria-disabled")).toBe(
-      "true"
-    );
+    expect(latestRun().progress.phase).toBe("executing");
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
 
-    await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await cancelRun();
 
-    // Nothing escaped, so the close is its own confirmation — no toast.
-    expect(mockNotify).not.toHaveBeenCalled();
+    // Nothing is filed while the pre-query the cancel interrupted is still out.
+    expect(notify).not.toHaveBeenCalled();
 
     await act(async () => {
       releasePrequery("feature/issue-1");
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
+    expect(latestRun().progress.phase).toBe("cancelled");
+    // Nothing escaped, so there is no toast: only the low-priority inbox record.
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        priority: "low",
+        title: "Worktree creation cancelled",
+        message: "0 of 2 created \u00b7 2 not created.",
+      })
+    );
   });
 
-  it("stops the batch when the dialog unmounts without going through Cancel", async () => {
+  it("keeps the batch going after the dialog closes, and a reopened dialog skips its items", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockRunRecipeWithResults.mockResolvedValue({
       spawned: [{ index: 0, terminalId: "t-1" }],
@@ -1255,7 +1421,7 @@ describe("BulkCreateWorktreeDialog", () => {
     );
 
     // Four items against concurrency 3 leaves one in the backlog, so the
-    // unmount has to both stop the running items and drop the queued one.
+    // close lands with work both running and queued.
     const props = {
       ...defaultProps,
       selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3), makeIssue(4)],
@@ -1265,25 +1431,86 @@ describe("BulkCreateWorktreeDialog", () => {
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
 
-    const startedCreates = mockWorktreeCreate.mock.calls.length;
-    expect(startedCreates).toBeGreaterThan(0);
-    expect(startedCreates).toBeLessThan(props.selectedIssues.length);
-
-    // The parent drops the dialog (ProjectDialogHost renders it only while open),
-    // bypassing handleClose entirely.
+    // The parent drops the dialog (ProjectDialogHost renders it only while open).
     await act(async () => {
       unmount();
       await vi.advanceTimersByTimeAsync(0);
     });
 
     await act(async () => {
-      resolvers.forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
+      resolvers.slice(0, 3).forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // The queued item still starts once a slot frees.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(4);
+
+    // Reopening mid-run: every item belongs to the live run, so none can be
+    // picked again until it ends, and the form says why.
+    render(<BulkCreateWorktreeDialog {...props} />);
+    expect(latestRun().progress.phase).toBe("executing");
+    expect(runSummary().facts.created).toBe(3);
+    expect(skipBadges("Being created")).toBe(4);
+    expect(screen.getByTestId("bulk-create-footer-hint").textContent).toBe(
+      "4 issues selected \u00b7 4 skipped"
+    );
+    expect(screen.getByTestId("bulk-create-confirm-button").getAttribute("aria-disabled")).toBe(
+      "true"
+    );
+
+    await act(async () => {
+      resolvers[3]?.(createdWorktree("wt-4"));
       await vi.advanceTimersByTimeAsync(5000);
     });
 
-    expect(mockRunRecipeWithResults).not.toHaveBeenCalled();
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(startedCreates);
+    expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(4);
+    expect(Object.keys(useBulkCreateRunStore.getState().runs)).toHaveLength(1);
+    expect(latestRun().progress.phase).toBe("done");
+    expect(runSummary().detail).toBe("4 of 4 created");
+    // An ended run holds nothing back.
+    expect(skipBadges("Being created")).toBe(0);
+  });
+
+  it("only skips items a live run in the same project and mode is creating", async () => {
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
+    mockWorktreeCreate.mockImplementation(
+      () =>
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+    const { unmount } = render(<BulkCreateWorktreeDialog {...defaultProps} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    unmount();
+    expect(latestRun().progress.phase).toBe("executing");
+
+    // The same numbers as pull requests are different items.
+    const prView = render(
+      <BulkCreateWorktreeDialog
+        {...defaultProps}
+        mode="pr"
+        selectedIssues={[]}
+        selectedPRs={[makePR(1), makePR(2), makePR(3)]}
+      />
+    );
+    expect(skipBadges("Being created")).toBe(0);
+    prView.unmount();
+
+    // Another project's issues #1-#3 are other issues altogether.
+    projectHolder.currentProject = { id: "other-project", path: "/other/root" };
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+    expect(skipBadges("Being created")).toBe(0);
+    expect(screen.getByTestId("bulk-create-confirm-button").textContent).toContain(
+      "Create 3 worktrees"
+    );
+
+    await act(async () => {
+      resolvers.forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
+      await vi.advanceTimersByTimeAsync(1000);
+    });
   });
 
   it("does not focus a clone-layout panel spawned into a cancelled run", async () => {
@@ -1310,13 +1537,7 @@ describe("BulkCreateWorktreeDialog", () => {
 
     expect(mockAddPanel).toHaveBeenCalled();
 
-    await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await cancelRun();
 
     await act(async () => {
       releasePanel("clone-terminal-id");
@@ -1354,13 +1575,7 @@ describe("BulkCreateWorktreeDialog", () => {
 
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await cancelRun();
 
     await act(async () => {
       releaseRecipe({ spawned: [{ index: 0, terminalId: "t-1" }], failed: [] });
@@ -1370,8 +1585,10 @@ describe("BulkCreateWorktreeDialog", () => {
     // The recipe's own terminals are out of reach — this pins the end state
     // instead: an item cancelled mid-recipe is never assigned and never becomes
     // the selected worktree.
+    expect(latestRun().progress.phase).toBe("cancelled");
     expect(mockAssignIssue).not.toHaveBeenCalled();
     expect(mockSelectWorktree).not.toHaveBeenCalled();
+    expect(mockSetPendingWorktree).not.toHaveBeenCalled();
   });
 
   it("fails the batch instead of stranding it when the project path is missing", async () => {
@@ -1385,76 +1602,26 @@ describe("BulkCreateWorktreeDialog", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    // Reaching a terminal phase is the fix: "Creating worktrees…" with a hidden
-    // X and blocked Escape used to persist forever.
-    expect(screen.getByTestId("bulk-create-done-button")).toBeTruthy();
-    expect(screen.getByTestId("bulk-create-retry-button")).toBeTruthy();
+    // Reaching a terminal phase is the fix: a run stuck "executing" would
+    // hold its items as being created and keep the toolbar chip live forever.
+    expect(latestRun().progress.phase).toBe("done");
     // Every item must carry the failure, not just the one that tripped it.
-    expect(screen.getByText(/0 of 2 created/)).toBeTruthy();
-    expect(screen.getByText(/2 failed/)).toBeTruthy();
+    expect([itemOf(1)?.failedStep, itemOf(2)?.failedStep]).toEqual(["worktree", "worktree"]);
+    expect(runSummary().facts).toMatchObject({ created: 0, failed: 2 });
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
-
-    // Dismissal is unblocked again, so the user isn't trapped.
-    const onCloseSpy = vi.fn();
-    cleanup();
-    render(<BulkCreateWorktreeDialog {...props} onClose={onCloseSpy} />);
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    await act(async () => {
-      screen
-        .getByTestId("bulk-create-worktree-dialog")
-        .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(onCloseSpy).toHaveBeenCalled();
-  });
-
-  it("keeps the primary action in place while executing", async () => {
-    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
-    mockWorktreeCreate.mockImplementation(
-      () =>
-        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
-          resolvers.push(resolve);
-        })
+    // Both failures land in one inbox entry, with the shared reason said once.
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        priority: "low",
+        title: "Worktree creation failed",
+        message: expect.stringContaining(`${itemOf(1)?.error} (#1, #2)`),
+      })
     );
-
-    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-
-    // The header X is unlabelled and correctly disappears mid-run; only the
-    // footer's ordering is what Cancel's hit area depends on.
-    const footerLabels = () =>
-      screen
-        .getAllByRole("button")
-        .map((b) => b.textContent)
-        .filter(Boolean);
-    const footerOrderBefore = footerLabels();
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    // Cancel must not inherit the CTA's slot once the run commits.
-    const confirmButton = screen.getByTestId("bulk-create-confirm-button");
-    expect(confirmButton.getAttribute("aria-disabled")).toBe("true");
-    expect(footerLabels()).toEqual(footerOrderBefore);
-
-    // A stray second click on the now-disabled CTA starts nothing.
-    await act(async () => {
-      confirmButton.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      resolvers[0]?.(createdWorktree("wt-1"));
-      await vi.advanceTimersByTimeAsync(1000);
-    });
   });
 
-  it("blocks Escape and backdrop dismissal while executing", async () => {
+  it("hands the batch to one background run on Create and closes without waiting for it", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
@@ -1464,38 +1631,57 @@ describe("BulkCreateWorktreeDialog", () => {
     );
 
     const onClose = vi.fn();
-    const props = { ...defaultProps, selectedIssues: [makeIssue(1)] };
-    render(<BulkCreateWorktreeDialog {...props} onClose={onClose} />);
+    const onComplete = vi.fn();
+    const props = {
+      ...defaultProps,
+      selectedIssues: [makeIssue(1), makeIssue(2)],
+      onClose,
+      onComplete,
+    };
+    render(<BulkCreateWorktreeDialog {...props} />);
+    expect(Object.keys(useBulkCreateRunStore.getState().runs)).toHaveLength(0);
+
+    await clickCreate();
+
+    // Committed and handed off before any worktree has landed.
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
+    expect(Object.keys(useBulkCreateRunStore.getState().runs)).toHaveLength(1);
+    const run = latestRun();
+    expect(run).toMatchObject({ projectId: "test-project", mode: "issue" });
+    expect(run.progress.phase).toBe("executing");
+    expect([...run.progress.items.keys()]).toEqual([1, 2]);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    const dialog = screen.getByTestId("bulk-create-worktree-dialog");
-    expect(dialog.dataset.dismissible).toBe("false");
-
-    await act(async () => {
-      dialog.click();
-      dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      await vi.advanceTimersByTimeAsync(0);
-    });
-
-    expect(onClose).not.toHaveBeenCalled();
-
-    // The footer Cancel remains the deliberate way out.
-    await act(async () => {
-      const cancelBtn = screen
-        .getAllByRole("button")
-        .find((b) => b.textContent === "Cancel") as HTMLButtonElement;
-      cancelBtn.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(onClose).toHaveBeenCalled();
-
-    await act(async () => {
-      resolvers[0]?.(createdWorktree("wt-1"));
+      resolvers.forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
       await vi.advanceTimersByTimeAsync(1000);
     });
+
+    // The run finishes on its own; it asks nothing more of the dialog.
+    expect(latestRun().progress.phase).toBe("done");
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the worktree selection where it was when the run ends", async () => {
+    mockSelectedRecipeId = "test-recipe";
+    mockRunRecipeWithResults.mockResolvedValue({
+      spawned: [{ index: 0, terminalId: "t-1" }],
+      failed: [],
+    });
+    mockTerminals = [{ id: "t-1", exitCode: undefined }];
+
+    const { unmount } = render(<BulkCreateWorktreeDialog {...defaultProps} />);
+    await clickCreate();
+    unmount();
+    await advanceTimersGradually(5000);
+
+    expect(runSummary().facts).toMatchObject({ created: 3, ready: 3 });
+    // A batch that ends while the user works elsewhere must not move them;
+    // each worktree is reached from the toolbar's run detail instead.
+    expect(mockSelectWorktree).not.toHaveBeenCalled();
+    expect(mockSetPendingWorktree).not.toHaveBeenCalled();
   });
 
   it("keeps completed items visible after worktreeMap updates during execution", async () => {
@@ -1539,7 +1725,7 @@ describe("BulkCreateWorktreeDialog", () => {
       rerender(<BulkCreateWorktreeDialog {...defaultProps} />);
     });
 
-    // Issue #1 must still be visible in the progress list despite worktreeMap update
+    // Issue #1 must still be visible in the batch preview despite worktreeMap update
     expect(screen.getByText("Issue 1")).toBeTruthy();
     expect(screen.getByText("#1")).toBeTruthy();
 
@@ -1552,7 +1738,7 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(1000);
 
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(runSummary().detail).toBe("3 of 3 created");
     // All three items should be visible
     expect(screen.getByText("Issue 1")).toBeTruthy();
     expect(screen.getByText("Issue 2")).toBeTruthy();
@@ -1602,7 +1788,7 @@ describe("BulkCreateWorktreeDialog", () => {
     // queue bodies read from the precomputed map, not fresh IPC calls.
     expect(mockGetAvailableBranch).toHaveBeenCalledTimes(3);
     expect(mockGetDefaultPath).toHaveBeenCalledTimes(3);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(runSummary().detail).toBe("3 of 3 created");
   });
 
   it("suffixes colliding branch names during pre-query", async () => {
@@ -1625,7 +1811,7 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
+    expect(runSummary().facts).toMatchObject({ created: 2, ready: 2 });
 
     const createCalls = mockWorktreeCreate.mock.calls;
     expect(createCalls.length).toBe(2);
@@ -1649,20 +1835,14 @@ describe("BulkCreateWorktreeDialog", () => {
         })
     );
 
-    const onClose = vi.fn();
-    render(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
     // Cancel while pre-query is still pending.
-    await act(async () => {
-      const buttons = screen.getAllByRole("button");
-      const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
-      cancelBtn?.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await cancelRun();
 
     // Reject the pending pre-query after the cancel has bumped runIdRef.
     await act(async () => {
@@ -1670,10 +1850,15 @@ describe("BulkCreateWorktreeDialog", () => {
       await vi.advanceTimersByTimeAsync(100);
     });
 
-    expect(onClose).toHaveBeenCalled();
-    // No stale dispatches — the done button never appears, no error rows
-    // bleed into the closed dialog, and no worktree.create was triggered.
-    expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
+    // No stale dispatches — no item carries the rejection, and no
+    // worktree.create was triggered. The run ends cancelled, not failed.
+    expect(latestRun().progress.phase).toBe("cancelled");
+    expect([...latestRun().progress.items.values()].map((item) => item.error)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(Object.values(itemSteps())).toEqual(["Cancelled", "Cancelled", "Cancelled"]);
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
   });
 
@@ -1694,39 +1879,18 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText("Branch name is invalid")).toBeTruthy();
-    expect(screen.getByText(/2 of 3 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(itemOf(2)).toMatchObject({
+      stage: "failed",
+      error: "Branch name is invalid",
+      failedStep: "worktree",
+    });
+    expect(itemOf(2)?.worktreeId).toBeUndefined();
+    expect(runSummary().facts).toMatchObject({ created: 2, failed: 1 });
     // The failed item never reached worktree.create.
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
   });
 
-  it("does not flash empty state when Done is clicked", async () => {
-    const onComplete = vi.fn();
-    const onClose = vi.fn();
-    render(
-      <BulkCreateWorktreeDialog {...defaultProps} onComplete={onComplete} onClose={onClose} />
-    );
-
-    // Complete a full batch run
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-    await advanceTimersGradually(5000);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
-
-    // Click Done — state should NOT reset while dialog is still mounted
-    await act(async () => {
-      screen.getByTestId("bulk-create-done-button").click();
-    });
-
-    // The completion text should still be visible (no RESET before close)
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
-    expect(onComplete).toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalled();
-  });
-
-  it("invokes stored bulkCreateDialog.onComplete when Done is clicked", async () => {
+  it("invokes stored bulkCreateDialog.onComplete when Create is pressed", async () => {
     const storedOnComplete = vi.fn();
     mockBulkCreateDialog.onComplete = storedOnComplete;
     // Simulate the real closeBulkCreateDialog behavior: prop onComplete/onClose
@@ -1747,17 +1911,11 @@ describe("BulkCreateWorktreeDialog", () => {
       />
     );
 
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-    await advanceTimersGradually(5000);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
-
-    await act(async () => {
-      screen.getByTestId("bulk-create-done-button").click();
-    });
+    await clickCreate();
 
     expect(storedOnComplete).toHaveBeenCalledTimes(1);
+    expect(propOnComplete).toHaveBeenCalledTimes(1);
+    expect(propOnClose).toHaveBeenCalledTimes(1);
   });
 
   it("does not invoke stored bulkCreateDialog.onComplete when dialog is cancelled", async () => {
@@ -1780,31 +1938,38 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(propOnClose).toHaveBeenCalledTimes(1);
   });
 
-  it("invokes stored bulkCreateDialog.onComplete when dialog is dismissed after completion", async () => {
-    // After the batch is done, dismissing via header X / Escape / backdrop
-    // must run the same selection cleanup as the Done button — otherwise
-    // the bulk-action bar stays visible with the now-stale selection.
+  it("clears the selection once, at Create, rather than when the run ends", async () => {
+    // The batch is committed at Create, so its selection is spent then: a
+    // selection held until the run ends would leave the bulk-action bar
+    // offering the same issues again while they are being created.
     const storedOnComplete = vi.fn();
     mockBulkCreateDialog.onComplete = storedOnComplete;
-    const propOnClose = vi.fn(() => {
-      mockBulkCreateDialog.onComplete = undefined;
-    });
+    const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
+    mockWorktreeCreate.mockImplementation(
+      () =>
+        new Promise<ReturnType<typeof createdWorktree>>((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
 
-    render(<BulkCreateWorktreeDialog {...defaultProps} onClose={propOnClose} />);
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+
+    await clickCreate();
+    expect(latestRun().progress.phase).toBe("executing");
+    expect(storedOnComplete).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
+      resolvers.forEach((resolve, i) => resolve(createdWorktree(`wt-${i + 1}`)));
+      await vi.advanceTimersByTimeAsync(1000);
     });
-    await advanceTimersGradually(5000);
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(latestRun().progress.phase).toBe("done");
 
-    // Dismiss via header close button (routes through handleClose, not handleDone)
+    // Dismissing afterwards is a plain close, not a second cleanup.
     await act(async () => {
       screen.getByLabelText("Close dialog").click();
     });
 
     expect(storedOnComplete).toHaveBeenCalledTimes(1);
-    expect(propOnClose).toHaveBeenCalledTimes(1);
   });
 
   it("clone layout generates command for agent panels and preserves plain terminal commands", async () => {
@@ -1844,7 +2009,7 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
 
     // Agent command is regenerated from current settings, not the stale one
     // captured at recipe-generation time.
@@ -1901,7 +2066,7 @@ describe("BulkCreateWorktreeDialog", () => {
     await advanceTimersGradually(5000);
 
     // Worktree still created — failed IPC is non-fatal.
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
 
     // Agent command was still generated (with an empty settings entry).
     expect(mockGenerateAgentCommand).toHaveBeenCalledWith(
@@ -1928,7 +2093,7 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
     // No agent panels → prefetch is skipped entirely.
     expect(mockAgentSettingsGet).not.toHaveBeenCalled();
     expect(mockGenerateAgentCommand).not.toHaveBeenCalled();
@@ -1960,11 +2125,11 @@ describe("BulkCreateWorktreeDialog", () => {
     // Loop continued past the throw — all three terminals attempted.
     expect(mockAddPanel).toHaveBeenCalledTimes(3);
 
-    // Item is surfaced as failed, not silently succeeded.
-    expect(screen.queryByText(/1 of 1 created/)).toBeNull();
-    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    expect(screen.getByTestId("bulk-create-retry-button")).toBeTruthy();
+    // Item is surfaced as failed, not silently succeeded. Its worktree is on
+    // disk, so it counts as created, but not as ready.
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "terminals" });
+    expect(itemSteps()[1]).toBe("Terminals didn't start");
+    expect(runSummary().facts).toMatchObject({ created: 1, ready: 0, failed: 1 });
   });
 
   it("clone layout treats addPanel returning null as a per-terminal failure", async () => {
@@ -1984,9 +2149,8 @@ describe("BulkCreateWorktreeDialog", () => {
     await advanceTimersGradually(5000);
 
     expect(mockAddPanel).toHaveBeenCalledTimes(2);
-    expect(screen.queryByText(/1 of 1 created/)).toBeNull();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    expect(screen.getByTestId("bulk-create-retry-button")).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "terminals" });
+    expect(runSummary().facts).toMatchObject({ ready: 0, failed: 1 });
   });
 
   it("clone layout retry relaunches only the entries that failed", async () => {
@@ -2009,19 +2173,17 @@ describe("BulkCreateWorktreeDialog", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "terminals" });
     expect(mockAddPanel).toHaveBeenCalledTimes(2);
 
     // Retry relaunches only B; A is already running.
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockAddPanel).toHaveBeenCalledTimes(3);
     expect(mockAddPanel.mock.calls[2]?.[0]).toMatchObject({ command: "cmd-b" });
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/1 failed/)).toBeNull();
+    expect(itemOf(1)?.stage).toBe("succeeded");
+    expect(runSummary().facts.failed).toBe(0);
   });
 
   it("clone layout retry re-enters clone branch after verification failure", async () => {
@@ -2042,8 +2204,11 @@ describe("BulkCreateWorktreeDialog", () => {
     await advanceTimersGradually(5000);
 
     // Verification caught the crash and marked the item failed.
-    expect(screen.getByText(/terminal\(s\) crashed/)).toBeTruthy();
-    expect(screen.getByTestId("bulk-create-retry-button")).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      failedStep: "verification",
+      error: expect.stringMatching(/terminal\(s\) crashed/),
+    });
     expect(mockAddPanel).toHaveBeenCalledTimes(1);
 
     // Retry: healthy terminal this time. cloneComplete must have been reset so
@@ -2052,13 +2217,11 @@ describe("BulkCreateWorktreeDialog", () => {
     mockAddPanel.mockResolvedValueOnce("panel-healthy");
     mockTerminals = [{ id: "panel-healthy", exitCode: undefined }];
 
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockAddPanel).toHaveBeenCalledTimes(2);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 });
 
@@ -2099,8 +2262,8 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     await advanceTimersGradually(420000, 5000);
 
     expect(assignCallCount).toBe(7);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
+    expect(itemOf(1)?.stage).toBe("succeeded");
+    expect(runSummary().facts.failed).toBe(0);
   });
 
   it("surfaces non-transient assignment failures as item failures", async () => {
@@ -2118,11 +2281,12 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     await advanceTimersGradually(5000);
 
     // Permanent failure must not retry, and must mark the item failed instead
-    // of falling through to ITEM_SUCCEEDED (see #8975).
+    // of falling through to ITEM_SUCCEEDED (see #8975). The worktree itself is
+    // on disk, so it counts as created; the item is just not ready.
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "assignment", attempt: 1 });
+    expect(itemSteps()[1]).toBe("Couldn't assign issue");
+    expect(runSummary().facts).toMatchObject({ created: 1, ready: 0, failed: 1 });
   });
 
   it("surfaces a silent-drop assignment (token lacks push access) as a failure", async () => {
@@ -2146,9 +2310,9 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     await advanceTimersGradually(5000);
 
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "assignment", attempt: 1 });
+    expect(itemSteps()[1]).toBe("Couldn't assign issue");
+    expect(runSummary().facts).toMatchObject({ created: 1, ready: 0, failed: 1 });
   });
 
   it("gives up on a transient assignment failure only after the wall-clock ceiling", async () => {
@@ -2172,9 +2336,13 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     await advanceTimersGradually(360000, 5000);
 
     expect(mockAssignIssue.mock.calls.length).toBeGreaterThan(3);
-    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      failedStep: "assignment",
+      attempt: mockAssignIssue.mock.calls.length,
+    });
+    expect(itemSteps()[1]).toBe("Couldn't assign issue");
+    expect(runSummary().facts).toMatchObject({ created: 1, ready: 0, failed: 1 });
   });
 
   it("stops assignment retries when the run is cancelled mid-backoff", async () => {
@@ -2197,18 +2365,29 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
 
     // Cancel before backoff expires.
-    await act(async () => {
-      const buttons = screen.getAllByRole("button");
-      const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
-      cancelBtn?.click();
-      await vi.advanceTimersByTimeAsync(0);
-    });
+    await cancelRun();
 
     // Drain remaining backoff window — the stale-run guard must short-circuit
     // the loop before another IPC call goes out.
     await advanceTimersGradually(35000);
 
     expect(mockAssignIssue).toHaveBeenCalledTimes(1);
+  });
+
+  it("still assigns when the dialog closes before its identity lookup answers", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    // The dialog's lookup never answers; the run's own one does.
+    mockGetCurrentUser.mockImplementationOnce(() => new Promise(() => {}));
+    mockGetCurrentUser.mockImplementation(async () => ({ login: "octocat" }));
+
+    const { unmount } = render(<BulkCreateWorktreeDialog {...assignProps} />);
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+      unmount();
+    });
+    await advanceTimersGradually(1000);
+
+    expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "octocat");
   });
 
   it("accounts mixed assignment outcomes correctly in a 3-item batch", async () => {
@@ -2235,9 +2414,11 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
 
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/2 of 3 created/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
-    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
+    // All three worktrees exist, but only two items are fully set up: the
+    // batch must read 2 ready of 3, never 3 of 3.
+    expect(runSummary().facts).toMatchObject({ total: 3, created: 3, ready: 2, failed: 1 });
+    expect(itemOf(2)).toMatchObject({ stage: "failed", failedStep: "assignment" });
+    expect(runSummary().title).toBe("1 of 3 failed");
   });
 
   it("does not re-run the recipe when retrying an assignment-only failure", async () => {
@@ -2267,21 +2448,17 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     await advanceTimersGradually(5000);
 
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "assignment" });
 
-    // Click "Retry failed" — recipe must NOT re-spawn terminals.
-    await act(async () => {
-      const buttons = screen.getAllByRole("button");
-      const retryBtn = buttons.find((b) => b.textContent?.includes("Retry"));
-      retryBtn?.click();
-    });
+    // Retry failed — recipe must NOT re-spawn terminals.
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
     expect(mockTrashPanel).not.toHaveBeenCalled();
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
     expect(assignCallCount).toBe(2);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 
   it("assignment failure is not overwritten by post-batch verification", async () => {
@@ -2307,8 +2484,8 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/Assignment failed/)).toBeTruthy();
-    expect(screen.queryByText(/Missing terminals/)).toBeNull();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "assignment" });
+    expect(itemSteps()[1]).toBe("Couldn't assign issue");
   });
 
   it("patches the cached issue-list slot so the dropdown reflects the self-assign", async () => {
@@ -2384,8 +2561,8 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
     await advanceTimersGradually(5000);
 
     expect(mockAssignIssue).toHaveBeenCalledWith("/test/root", 1, "me");
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/failed/)).toBeNull();
+    expect(itemOf(1)?.stage).toBe("succeeded");
+    expect(runSummary().facts.failed).toBe(0);
     expect(mockLogError).toHaveBeenCalledWith(
       "Failed to patch issue cache after bulk self-assign",
       expect.any(Error)
@@ -2623,15 +2800,17 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
   });
 
+  // The title and the button already count the batch, so a creatable one
+  // trades "selected" for where the work goes once the dialog closes.
   it("omits the skipped clause when the whole selection is creatable", () => {
     render(<BulkCreateWorktreeDialog {...issueProps} />);
-    expect(hintText()).toBe("3 issues selected");
+    expect(hintText()).toBe("3 issues \u00b7 runs in the background");
   });
 
   it("uses the singular noun for a selection of one", () => {
     const props = { ...issueProps, selectedIssues: [makeIssue(1)] };
     render(<BulkCreateWorktreeDialog {...props} />);
-    expect(hintText()).toBe("1 issue selected");
+    expect(hintText()).toBe("1 issue \u00b7 runs in the background");
   });
 
   it("names pull requests in PR mode", () => {
@@ -2642,7 +2821,7 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
       selectedPRs: [makePR(10), makePR(20)],
     };
     render(<BulkCreateWorktreeDialog {...props} />);
-    expect(hintText()).toBe("2 pull requests selected");
+    expect(hintText()).toBe("2 pull requests \u00b7 runs in the background");
   });
 
   it("asks for a selection when there is nothing to plan", () => {
@@ -2651,16 +2830,24 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
     expect(hintText()).toBe("Select an issue to continue");
   });
 
-  it("drops the summary once the run starts, leaving the progress line authoritative", async () => {
-    const props = { ...issueProps, selectedIssues: [makeIssue(1)] };
-    render(<BulkCreateWorktreeDialog {...props} />);
-    expect(screen.getByTestId("bulk-create-footer-hint")).toBeTruthy();
+  it("promises a background run only when Create will start one", () => {
+    const partly = {
+      ...issueProps,
+      selectedIssues: [makeIssue(1), { ...makeIssue(2), state: "closed" as const }],
+    };
+    const { unmount } = render(<BulkCreateWorktreeDialog {...partly} />);
+    expect(hintText()).toBe("2 issues \u00b7 1 skipped \u00b7 runs in the background");
+    unmount();
 
-    await act(async () => {
-      screen.getByTestId("bulk-create-confirm-button").click();
-    });
-
-    expect(screen.queryByTestId("bulk-create-footer-hint")).toBeNull();
+    const none = {
+      ...issueProps,
+      selectedIssues: [
+        { ...makeIssue(1), state: "closed" as const },
+        { ...makeIssue(2), state: "closed" as const },
+      ],
+    };
+    render(<BulkCreateWorktreeDialog {...none} />);
+    expect(hintText()).toBe("2 issues selected \u00b7 2 skipped");
   });
 });
 
@@ -2676,9 +2863,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
   it("renders PR list with branch names in idle state", () => {
     mockListBranches.mockResolvedValue([
-      { name: "origin/feature/pr-10", current: false, remote: true },
-      { name: "origin/feature/pr-20", current: false, remote: true },
-      { name: "origin/feature/pr-30", current: false, remote: true },
+      { name: "origin/feature/pr-10", current: false, remote: "origin" },
+      { name: "origin/feature/pr-20", current: false, remote: "origin" },
+      { name: "origin/feature/pr-30", current: false, remote: "origin" },
     ]);
 
     render(<BulkCreateWorktreeDialog {...prProps} />);
@@ -2692,9 +2879,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
   it("creates worktrees from remote PR branches", async () => {
     mockListBranches.mockResolvedValue([
       { name: "main", current: true, remote: false },
-      { name: "origin/feature/pr-10", current: false, remote: true },
-      { name: "origin/feature/pr-20", current: false, remote: true },
-      { name: "origin/feature/pr-30", current: false, remote: true },
+      { name: "origin/feature/pr-10", current: false, remote: "origin" },
+      { name: "origin/feature/pr-20", current: false, remote: "origin" },
+      { name: "origin/feature/pr-30", current: false, remote: "origin" },
     ]);
 
     render(<BulkCreateWorktreeDialog {...prProps} />);
@@ -2705,7 +2892,7 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(runSummary().detail).toBe("3 of 3 created");
 
     // Should have called create with fromRemote: true
     const createCalls = mockWorktreeCreate.mock.calls;
@@ -2751,7 +2938,7 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(10)?.stage).toBe("succeeded");
     const createCalls = mockWorktreeCreate.mock.calls;
     expect(createCalls[0]![0].useExistingBranch).toBe(true);
     expect(createCalls[0]![0].fromRemote).toBe(false);
@@ -2760,9 +2947,9 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
   it("calls listBranches once per batch, not once per PR", async () => {
     mockListBranches.mockResolvedValue([
       { name: "main", current: true, remote: false },
-      { name: "origin/feature/pr-10", current: false, remote: true },
-      { name: "origin/feature/pr-20", current: false, remote: true },
-      { name: "origin/feature/pr-30", current: false, remote: true },
+      { name: "origin/feature/pr-10", current: false, remote: "origin" },
+      { name: "origin/feature/pr-20", current: false, remote: "origin" },
+      { name: "origin/feature/pr-30", current: false, remote: "origin" },
     ]);
 
     render(<BulkCreateWorktreeDialog {...prProps} />);
@@ -2772,7 +2959,7 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+    expect(runSummary().detail).toBe("3 of 3 created");
     // Single shared snapshot hoisted before the queue, not one per item.
     expect(mockListBranches).toHaveBeenCalledTimes(1);
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
@@ -2788,9 +2975,14 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/0 of 3 created/)).toBeTruthy();
-    expect(screen.getByText(/3 failed/)).toBeTruthy();
-    expect(screen.getAllByText(/git ls-remote failed/).length).toBeGreaterThanOrEqual(1);
+    expect(runSummary().facts).toMatchObject({ created: 0, failed: 3 });
+    // One reason behind every failure, which the chip says once.
+    expect(runSummary().sharedFailure).toMatch(/git ls-remote failed/);
+    expect([10, 20, 30].map((n) => itemOf(n)?.failedStep)).toEqual([
+      "worktree",
+      "worktree",
+      "worktree",
+    ]);
     expect(mockWorktreeCreate).not.toHaveBeenCalled();
     expect(mockFetchPRBranch).not.toHaveBeenCalled();
   });
@@ -2808,8 +3000,12 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/couldn't find remote ref/)).toBeTruthy();
-    expect(screen.getByText(/1 failed/)).toBeTruthy();
+    expect(itemOf(10)).toMatchObject({
+      stage: "failed",
+      failedStep: "worktree",
+      error: expect.stringMatching(/couldn't find remote ref/),
+    });
+    expect(runSummary().facts.failed).toBe(1);
   });
 });
 
@@ -2967,7 +3163,7 @@ describe("BulkCreateWorktreeDialog — base branch", () => {
 
     render(<BulkCreateWorktreeDialog {...issueProps} />);
     await createAndSettle();
-    expect(screen.getByText(/2 failed/)).toBeTruthy();
+    expect(runSummary().facts.failed).toBe(2);
 
     await act(async () => {
       resolveList([
@@ -2977,9 +3173,7 @@ describe("BulkCreateWorktreeDialog — base branch", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    await act(async () => {
-      screen.getByText("Retry failed").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(2000);
 
     const calls = mockWorktreeCreate.mock.calls;
@@ -3046,15 +3240,14 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/Terminal spawn failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "terminals" });
+    expect(itemSteps()[1]).toBe("Terminals didn't start");
     expect(recipeIndicesForCall(0)).toBeUndefined();
 
     // The worktree exists, so nothing about it needs looking up again.
     mockGetAvailableBranch.mockClear().mockRejectedValue(new Error("lookup timed out"));
     mockGetDefaultPath.mockClear().mockRejectedValue(new Error("lookup timed out"));
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockGetAvailableBranch).not.toHaveBeenCalled();
@@ -3062,7 +3255,7 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(2);
     expect(recipeIndicesForCall(1)).toEqual([1]);
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 
   it("keeps verifying the terminals an earlier attempt launched", async () => {
@@ -3088,28 +3281,28 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(recipeIndicesForCall(1)).toEqual([1]);
-    expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      failedStep: "verification",
+      error: expect.stringMatching(/1 terminal\(s\) crashed/),
+    });
 
     mockTerminals = [
       { id: "t-0", worktreeId: "wt-1", exitCode: 1 },
       { id: "t-0b", worktreeId: "wt-1", exitCode: undefined },
       { id: "t-1", worktreeId: "wt-1", exitCode: undefined },
     ];
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(recipeIndicesForCall(2)).toEqual([0]);
     expect(mockTrashPanel).toHaveBeenCalledWith("t-0");
     expect(mockTrashPanel).not.toHaveBeenCalledWith("t-1");
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 
   it("relaunches an entry that died after another entry failed to launch", async () => {
@@ -3139,14 +3332,12 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       { id: "t-0b", worktreeId: "wt-1", exitCode: undefined },
       { id: "t-1", worktreeId: "wt-1", exitCode: undefined },
     ];
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(recipeIndicesForCall(1)).toEqual([0, 1]);
     expect(mockTrashPanel).toHaveBeenCalledWith("t-0");
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 
   it("relaunches only the recipe entries whose terminals crashed after launch", async () => {
@@ -3174,16 +3365,18 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     });
     await advanceTimersGradually(5000);
 
-    expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      failedStep: "verification",
+      error: expect.stringMatching(/1 terminal\(s\) crashed/),
+    });
 
     mockTerminals = [
       { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
       { id: "t-1", worktreeId: "wt-1", exitCode: 1 },
       { id: "t-1-retry", worktreeId: "wt-1", exitCode: undefined },
     ];
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(2);
@@ -3192,8 +3385,8 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     // replacement, and the superseded crash no longer counts against the item.
     expect(mockTrashPanel).toHaveBeenCalledTimes(1);
     expect(mockTrashPanel).toHaveBeenCalledWith("t-1");
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
-    expect(screen.queryByText(/crashed/)).toBeNull();
+    expect(itemOf(1)?.stage).toBe("succeeded");
+    expect(itemOf(1)?.error).toBeUndefined();
   });
 
   it("leaves a crashed terminal the user has since restarted alone", async () => {
@@ -3215,20 +3408,22 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      failedStep: "verification",
+      error: expect.stringMatching(/1 terminal\(s\) crashed/),
+    });
 
     mockTerminals = [
       { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
       { id: "t-1", worktreeId: "wt-1", exitCode: undefined },
     ];
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
     expect(mockTrashPanel).not.toHaveBeenCalled();
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 
   it.each([
@@ -3277,23 +3472,25 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      failedStep: "verification",
+      error: expect.stringMatching(/1 terminal\(s\) crashed/),
+    });
 
     mockTerminals = [
       { id: "t-0", worktreeId: "wt-1", exitCode: undefined },
       { id: "t-1", worktreeId: "wt-1", ...atRetry },
       { id: "t-1b", worktreeId: "wt-1", exitCode: undefined },
     ];
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     if (trashed) expect(mockTrashPanel).toHaveBeenCalledWith("t-1");
     else expect(mockTrashPanel).not.toHaveBeenCalled();
     if (relaunched) {
       expect(recipeIndicesForCall(1)).toEqual([1]);
-      expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+      expect(itemOf(1)?.stage).toBe("succeeded");
     } else {
       expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(1);
     }
@@ -3323,7 +3520,7 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
 
     expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(2);
     expect(recipeIndicesForCall(1)).toEqual([1]);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 
   it("relaunches only the crashed entry of the layout cloned at Create", async () => {
@@ -3343,7 +3540,11 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      failedStep: "verification",
+      error: expect.stringMatching(/1 terminal\(s\) crashed/),
+    });
 
     // The finished run selected the new worktree; its layout must not leak in.
     mockGenerateRecipeFromActiveTerminals.mockReturnValue([
@@ -3355,9 +3556,7 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       { id: "panel-b", worktreeId: "wt-1", exitCode: 1 },
       { id: "panel-b2", worktreeId: "wt-1", exitCode: undefined },
     ];
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockGenerateRecipeFromActiveTerminals).toHaveBeenCalledTimes(1);
@@ -3365,7 +3564,7 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     expect(mockAddPanel.mock.calls[2]?.[0]).toMatchObject({ command: "cmd-b" });
     expect(mockTrashPanel).toHaveBeenCalledWith("panel-b");
     expect(mockTrashPanel).not.toHaveBeenCalledWith("panel-a");
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 
   it("keeps a cloned entry's original index across repeated retries", async () => {
@@ -3385,27 +3584,28 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/Terminal spawn failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "terminals" });
+    expect(itemSteps()[1]).toBe("Terminals didn't start");
 
     // B's first replacement crashes; the next retry must relaunch B again.
     mockTerminals = [
       { id: "panel-a", worktreeId: "wt-1", exitCode: undefined },
       { id: "panel-b2", worktreeId: "wt-1", exitCode: 1 },
     ];
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/1 terminal\(s\) crashed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({
+      stage: "failed",
+      failedStep: "verification",
+      error: expect.stringMatching(/1 terminal\(s\) crashed/),
+    });
 
     mockTerminals = [
       { id: "panel-a", worktreeId: "wt-1", exitCode: undefined },
       { id: "panel-b2", worktreeId: "wt-1", exitCode: 1 },
       { id: "panel-b3", worktreeId: "wt-1", exitCode: undefined },
     ];
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockAddPanel.mock.calls.map((c) => c[0].command)).toEqual([
@@ -3416,14 +3616,14 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     ]);
     expect(mockTrashPanel).toHaveBeenCalledWith("panel-b2");
     expect(mockTrashPanel).not.toHaveBeenCalledWith("panel-a");
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 
   it("fails only the PR still needing a worktree when the retry can't list branches", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockListBranches.mockResolvedValue([
-      { name: "origin/feature/pr-1", current: false, remote: true },
-      { name: "origin/feature/pr-2", current: false, remote: true },
+      { name: "origin/feature/pr-1", current: false, remote: "origin" },
+      { name: "origin/feature/pr-2", current: false, remote: "origin" },
     ]);
     mockWorktreeCreate.mockImplementation((opts: { newBranch: string }) =>
       opts.newBranch === "feature/pr-2"
@@ -3446,27 +3646,32 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/0 of 2 created/)).toBeTruthy();
+    // PR #1's worktree landed and only its terminals failed; PR #2 has no
+    // worktree. Created counts worktrees on disk, so that is 1, with 0 ready.
+    expect(runSummary().facts).toMatchObject({ created: 1, ready: 0, failed: 2 });
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
 
     const listCallsBefore = mockListBranches.mock.calls.length;
     mockListBranches.mockRejectedValue(new Error("git exploded"));
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockListBranches.mock.calls.length).toBe(listCallsBefore + 1);
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(2);
     expect(recipeIndicesForCall(1)).toEqual([0]);
-    expect(screen.getByText(/1 of 2 created/)).toBeTruthy();
-    expect(screen.getByText(/git exploded/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
+    expect(itemOf(2)).toMatchObject({
+      stage: "failed",
+      failedStep: "worktree",
+      error: "git exploded",
+    });
+    expect(runSummary().facts).toMatchObject({ created: 1, ready: 1, failed: 1 });
   });
 
   it("retries a PR's terminals without listing branches for a worktree it already has", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockListBranches.mockResolvedValue([
-      { name: "origin/feature/pr-1", current: false, remote: true },
+      { name: "origin/feature/pr-1", current: false, remote: "origin" },
     ]);
     mockRunRecipeWithResults
       .mockResolvedValueOnce({ spawned: [], failed: [{ index: 0, error: "spawn failed" }] })
@@ -3479,22 +3684,21 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/Terminal spawn failed/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "terminals" });
+    expect(itemSteps()[1]).toBe("Terminals didn't start");
 
     const listCallsBefore = mockListBranches.mock.calls.length;
     mockListBranches.mockRejectedValue(new Error("git exploded"));
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockListBranches.mock.calls.length).toBe(listCallsBefore);
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
     expect(recipeIndicesForCall(1)).toEqual([0]);
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 
-  it("keeps the planned count stable while worktrees land mid-run", async () => {
+  it("keeps a live run's items out of the plan while their worktrees land", async () => {
     const resolvers: Array<(value: ReturnType<typeof createdWorktree>) => void> = [];
     mockWorktreeCreate.mockImplementation(
       () =>
@@ -3504,13 +3708,19 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
     );
     const twoProps = { ...props, selectedIssues: [makeIssue(1), makeIssue(2)] };
     const { rerender } = render(<BulkCreateWorktreeDialog {...twoProps} />);
+    const creatable = () =>
+      Number(
+        /Create (\d+)/.exec(screen.getByTestId("bulk-create-confirm-button").textContent ?? "")?.[1]
+      );
+    expect(creatable()).toBe(2);
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
-    expect(screen.getByTestId("bulk-create-confirm-button").textContent).toContain(
-      "Create 2 worktrees"
-    );
+    // Still mounted here only because the test's onClose doesn't unmount it:
+    // everything picked now belongs to the run.
+    expect(creatable()).toBe(0);
+    expect(skipBadges("Being created")).toBe(2);
 
     await act(async () => {
       resolvers[0]?.(createdWorktree("wt-1", "feature/issue-1-issue-1"));
@@ -3529,16 +3739,18 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       rerender(<BulkCreateWorktreeDialog {...twoProps} />);
     });
 
-    expect(screen.getByTestId("bulk-create-confirm-button").textContent).toContain(
-      "Create 2 worktrees"
-    );
+    // #1 now reads as having its worktree, #2 is still the run's: neither is
+    // offered again in between.
+    expect(skipBadges("Has worktree")).toBe(1);
+    expect(skipBadges("Being created")).toBe(1);
+    expect(creatable()).toBe(0);
 
     await act(async () => {
       resolvers[1]?.(createdWorktree("wt-2", "feature/issue-2-issue-2"));
       await vi.advanceTimersByTimeAsync(0);
     });
     await advanceTimersGradually(1000);
-    expect(screen.getByText(/2 of 2 created/)).toBeTruthy();
+    expect(runSummary().detail).toBe("2 of 2 created");
   });
 
   it("retries a failed item on its planned branch after its worktree is tagged with the issue", async () => {
@@ -3552,7 +3764,8 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
     await advanceTimersGradually(5000);
-    expect(screen.getByText(/0 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)).toMatchObject({ stage: "failed", failedStep: "worktree" });
+    expect(itemOf(1)?.worktreeId).toBeUndefined();
 
     const landed = new Map(worktreeDataHolder.map);
     landed.set("late-wt", {
@@ -3567,13 +3780,11 @@ describe("BulkCreateWorktreeDialog — retry keeps healthy terminals", () => {
       rerender(<BulkCreateWorktreeDialog {...props} />);
     });
 
-    await act(async () => {
-      screen.getByTestId("bulk-create-retry-button").click();
-    });
+    await retryFailed();
     await advanceTimersGradually(5000);
 
     expect(mockWorktreeCreate).toHaveBeenCalledTimes(1);
     expect(mockGetAvailableBranch).not.toHaveBeenCalledWith("/test/root", "");
-    expect(screen.getByText(/1 of 1 created/)).toBeTruthy();
+    expect(itemOf(1)?.stage).toBe("succeeded");
   });
 });

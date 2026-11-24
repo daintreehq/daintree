@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { Profiler } from "react";
 import fs from "fs/promises";
 import path from "path";
@@ -10,8 +12,10 @@ import { useScratchStore } from "@/store/scratchStore";
 import type { Scratch, VoiceSessionSnapshot } from "@shared/types";
 import { setElsewhereLevel } from "@/services/voiceElsewhereLevel";
 import { readToolbarSource } from "./toolbarSource";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
 const BUTTON_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarButton.tsx");
+const SLOT_PATH = path.resolve(__dirname, "../VoiceRecordingToolbarSlot.tsx");
 
 const focusActiveTarget = vi.fn();
 const revealSessionElsewhere = vi.fn();
@@ -47,10 +51,23 @@ vi.mock("@/hooks/useDeferredLoading", () => ({
   useDohertyGate: (value: boolean) => value,
 }));
 
-const motion = vi.hoisted(() => ({ reduced: true }));
+const motion = vi.hoisted(() => ({ reduced: true, listeners: new Set<() => void>() }));
 vi.mock("@/lib/appThemeViewTransition", () => ({
   prefersReducedMotion: () => motion.reduced,
+  subscribeReducedMotion: (listener: () => void) => {
+    motion.listeners.add(listener);
+    return () => {
+      motion.listeners.delete(listener);
+    };
+  },
 }));
+
+function setReducedMotion(reduced: boolean) {
+  motion.reduced = reduced;
+  act(() => {
+    motion.listeners.forEach((listener) => listener());
+  });
+}
 
 vi.mock("../ToolbarContextMenuItems", () => ({
   ToolbarContextMenuItems: () => null,
@@ -87,6 +104,12 @@ vi.mock("@/lib/tooltipShortcut", () => ({
     </span>
   ),
 }));
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
+});
 
 describe("VoiceRecordingToolbarButton — a short tooltip over the session panel (#14920)", () => {
   beforeEach(() => {
@@ -701,10 +724,15 @@ describe("VoiceRecordingToolbarButton — dictation another view owns looks like
 
 describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
   let source: string;
+  let slotSource: string;
   let toolbar: string;
 
   beforeEach(async () => {
-    [source, toolbar] = await Promise.all([fs.readFile(BUTTON_PATH, "utf-8"), readToolbarSource()]);
+    [source, slotSource, toolbar] = await Promise.all([
+      fs.readFile(BUTTON_PATH, "utf-8"),
+      fs.readFile(SLOT_PATH, "utf-8"),
+      readToolbarSource(),
+    ]);
   });
 
   describe("footprint reservation prevents layout shift", () => {
@@ -771,7 +799,10 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       // data-toolbar-item would absorb arrow-key focus while being
       // aria-hidden + non-interactive. DevServerPlaceholder follows the
       // same rule — it has no data-toolbar-item either.
-      const placeholderBlock = source.match(/function VoiceRecordingPlaceholder[\s\S]*?\n\}/)?.[0];
+      // The placeholder lives with the slot, which shows it before the button loads.
+      const placeholderBlock = slotSource.match(
+        /function VoiceRecordingPlaceholder[\s\S]*?\n\}/
+      )?.[0];
       expect(placeholderBlock).toBeDefined();
       // Look only at the rendered JSX, not the explanatory comments above it.
       const placeholderJsx = placeholderBlock!.match(/return\s*\(([\s\S]*?)\);/)?.[1];
@@ -1078,25 +1109,130 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     expect(Math.min(...scales)).toBeGreaterThanOrEqual(0.3);
   });
 
-  it("holds one still shape under reduced motion, whatever the level", () => {
+  it("holds one still shape under reduced motion, whatever the level, without spending frames", () => {
     const { container } = renderStatus("recording");
     useVoiceRecordingStore.setState({ audioLevel: 0.8 });
     runFrames(20);
     const moving = barScales(container);
 
-    // Turned on mid-dictation: the bars stop in the still shape.
-    motion.reduced = true;
-    runFrames(5);
+    // Turned on mid-dictation: the bars stop in the still shape, and the loop
+    // stops with them.
+    setReducedMotion(true);
     const still = barScales(container);
     expect(still).not.toEqual(moving);
+    expect(frames.size).toBe(0);
     useVoiceRecordingStore.setState({ audioLevel: 0 });
     runFrames(30);
     expect(barScales(container)).toEqual(still);
 
-    // And off again: the bars follow the level once more.
-    motion.reduced = false;
+    // And off again: one live loop, and the bars follow the level once more.
+    setReducedMotion(false);
+    expect(frames.size).toBe(1);
     runFrames(30);
+    expect(frames.size).toBe(1);
     expect(barScales(container)).not.toEqual(still);
+  });
+
+  it("starts in the still shape, with no loop, when reduced motion is already on", () => {
+    motion.reduced = true;
+    const { container } = renderStatus("recording");
+    expect(frames.size).toBe(0);
+    // A shape, not the row of resting bars the markup starts from.
+    expect(new Set(barScales(container)).size).toBeGreaterThan(1);
+  });
+
+  it("stops the loop while the window is hidden and picks up the live level on return", () => {
+    const setHidden = (hidden: boolean) => {
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+    };
+    try {
+      const { container } = renderStatus("recording");
+      useVoiceRecordingStore.setState({ audioLevel: 0.9 });
+      runFrames(30);
+      expect(Math.max(...barScales(container))).toBeGreaterThan(0.8);
+
+      setHidden(true);
+      expect(frames.size).toBe(0);
+
+      // The room went quiet while nobody could see the bars: they come back
+      // at rest, not replaying what was heard before the pause.
+      useVoiceRecordingStore.setState({ audioLevel: 0 });
+      setHidden(false);
+      expect(frames.size).toBe(1);
+      runFrames(1);
+      expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
+    } finally {
+      Reflect.deleteProperty(document, "hidden");
+    }
+  });
+
+  describe("in a project view main has cached", () => {
+    const originalElectron = window.electron;
+    let cache: (() => void) | null = null;
+    let warmActivate: (() => void) | null = null;
+
+    beforeEach(() => {
+      __resetProjectViewCacheStateForTests();
+      Object.defineProperty(window, "electron", {
+        configurable: true,
+        writable: true,
+        value: {
+          app: {
+            isViewCached: () => false,
+            onViewCached: (callback: () => void) => {
+              cache = callback;
+              return () => {
+                cache = null;
+              };
+            },
+            onViewWarmActivated: (callback: () => void) => {
+              warmActivate = callback;
+              return () => {
+                warmActivate = null;
+              };
+            },
+            onViewRevealed: () => () => {},
+          },
+        },
+      });
+    });
+
+    afterEach(() => {
+      __resetProjectViewCacheStateForTests();
+      Object.defineProperty(window, "electron", {
+        configurable: true,
+        writable: true,
+        value: originalElectron,
+      });
+    });
+
+    it("schedules no frames while cached, though the view still reports itself visible", () => {
+      const { container } = renderStatus("recording");
+      expect(frames.size).toBe(1);
+
+      act(() => cache?.());
+      expect(document.visibilityState).toBe("visible");
+      expect(frames.size).toBe(0);
+
+      act(() => warmActivate?.());
+      expect(frames.size).toBe(1);
+      useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+      runFrames(30);
+      expect(frames.size).toBe(1);
+      expect(Math.max(...barScales(container))).toBeGreaterThan(0.8);
+    });
+
+    it("drops its lifecycle subscription on unmount", () => {
+      const { unmount } = renderStatus("recording");
+      act(() => cache?.());
+      unmount();
+      // A subscription left behind would restart the loop on reactivation.
+      act(() => warmActivate?.());
+      expect(frames.size).toBe(0);
+    });
   });
 
   it("moves the bars without a React commit per level update", () => {

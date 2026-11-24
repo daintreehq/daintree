@@ -11,6 +11,7 @@ import { buildLaunchIdentity } from "../../../shared/utils/agentLaunchPlan.js";
 import { unknownAgentIdMessage } from "../../../shared/utils/agentLaunchValidation.js";
 import { reconcileResumeLaunchFlagsWith } from "../../../shared/utils/agentResumeFlags.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { conversationStoreFor } from "../../../shared/utils/conversationStore.js";
 import {
   buildPanelLimitSnapshot,
   computeHardwareDefaults,
@@ -65,10 +66,15 @@ export type AgentSessionPaneResult =
       savedInLayout: boolean;
     }
   | {
-      /** A live pane of this worktree already holds the session; nothing was launched. */
+      /**
+       * A live pane of this project already holds the session; nothing was
+       * launched. `worktreeId` is where that pane is filed, which a live move
+       * can have made another worktree than the one asked for (#18009), and
+       * `null` for a pane filed under none.
+       */
       status: "existing";
       projectId: string;
-      worktreeId: string;
+      worktreeId: string | null;
       terminalId: string;
     }
   | { status: "refused"; reason: AgentSessionPaneRefusal; message: string };
@@ -99,12 +105,18 @@ const refused = (reason: AgentSessionPaneRefusal, message: string): AgentSession
 });
 
 /**
- * Resumes keyed by project, worktree, agent and session. The duplicate scan
- * alone can't stop two concurrent calls each launching one: the second scans
- * inside the first one's awaits, before its terminal exists. A joiner gets
- * the first call's result.
+ * Resumes keyed by project and session, as the duplicate scan matches: two
+ * calls aiming one session at different worktrees would put two agents on
+ * one transcript just as two aimed at the same one would. The scan alone
+ * can't stop concurrent calls each launching one: the second scans inside the
+ * first one's awaits, before its terminal exists. A joiner gets the first
+ * call's result, unless that was a refusal only the first call's own request
+ * earned.
  */
-const inFlight = new Map<string, Promise<AgentSessionPaneResult>>();
+const inFlight = new Map<
+  string,
+  { request: AgentSessionPaneRequest; run: Promise<AgentSessionPaneResult> }
+>();
 
 /**
  * Reopen a saved agent session as a new pane in its own worktree, from main
@@ -120,9 +132,9 @@ const inFlight = new Map<string, Promise<AgentSessionPaneResult>>();
  * new one: a Claude conversation the CLI never wrote fails the spawn
  * (`exactResume`) rather than starting afresh under its id.
  *
- * A live pane of the same worktree already holding the session is returned
- * instead of a second agent on one transcript, as `findLiveResumePanelId`
- * does in a view.
+ * A live pane of the project already holding the session is returned instead
+ * of a second agent on one transcript, wherever it is filed (#18009), as
+ * `findLiveResumePanelId` does in a view.
  */
 export async function resumeAgentSessionAsPane(
   request: AgentSessionPaneRequest,
@@ -149,26 +161,36 @@ export async function resumeAgentSessionAsPane(
   const project = deps.getProject(request.projectId);
   if (!project) return refused("unknown-project", "No project with that id is known.");
 
-  const key = JSON.stringify([project.id, request.worktreeId, request.agentId, sessionId]);
+  const key = JSON.stringify([project.id, sessionId]);
   const pending = inFlight.get(key);
   if (pending) {
-    const joined = await pending;
+    const joined = await pending.run;
+    const otherTarget =
+      pending.request.worktreeId !== request.worktreeId ||
+      pending.request.agentId !== request.agentId ||
+      pending.request.cwd !== request.cwd;
+    // The pane another target's call launched is, to this call, one that was
+    // already holding the session.
+    if (joined.status === "launched" && otherTarget) return existingPane(project.id, joined);
     const refusedOnlyItsCaller =
       joined.status === "refused" &&
-      (joined.reason === "cancelled" || joined.reason === "not-authorized");
+      (joined.reason === "cancelled" || joined.reason === "not-authorized" || otherTarget);
     if (!refusedOnlyItsCaller || request.signal?.aborted) return joined;
     // Abandoned by its own caller, or refused to it, not this one: launch again once it has gone.
     if (inFlight.get(key) === pending) inFlight.delete(key);
     return resumeAgentSessionAsPane(request, deps, runtime);
   }
-  const run = Promise.resolve().then(() =>
-    launchResumedPane(project, { ...request, sessionId }, agentConfig, deps, runtime)
-  );
-  inFlight.set(key, run);
+  const entry = {
+    request,
+    run: Promise.resolve().then(() =>
+      launchResumedPane(project, { ...request, sessionId }, agentConfig, deps, runtime)
+    ),
+  };
+  inFlight.set(key, entry);
   try {
-    return await run;
+    return await entry.run;
   } finally {
-    if (inFlight.get(key) === run) inFlight.delete(key);
+    if (inFlight.get(key) === entry) inFlight.delete(key);
   }
 }
 
@@ -180,6 +202,13 @@ async function launchResumedPane(
   runtime: AgentSessionPaneRuntime
 ): Promise<AgentSessionPaneResult> {
   const { worktreeId, agentId, sessionId } = request;
+
+  // A pane already holding the session answers before anything that only
+  // decides where a NEW agent may start: it may be filed under another
+  // worktree than the one asked for, or one whose recorded directory has gone.
+  // Checked again right before the spawn, for a pane that arrives meanwhile.
+  const holding = await findPaneHoldingSession(project.id, sessionId, deps);
+  if (holding.status === "found") return existingPane(project.id, holding);
 
   const worktrees = await readProjectWorktrees(project, deps).catch(() => null);
   if (worktrees === null) {
@@ -237,6 +266,8 @@ async function launchResumedPane(
   // Only a captured launch is kept for restart and restore to replay: flags
   // reconciled into an empty one are no whole configuration.
   const savedFlags = captured?.length ? flags : undefined;
+  // A conversation recorded in another account's folder reopens from there (#17087).
+  const conversationStore = conversationStoreFor(record?.conversationStore, sessionId);
   const command = buildResumeCommand(
     agentId,
     sessionId,
@@ -267,11 +298,9 @@ async function launchResumedPane(
   if (!(await runtime.isDirectory(cwd).catch(() => false))) {
     return refused("worktree-gone", "The directory that session ran in no longer exists.");
   }
-  const held = await findPaneHoldingSession(project.id, worktreeId, sessionId, deps);
+  const held = await findPaneHoldingSession(project.id, sessionId, deps);
   if (held.status === "unavailable") return refused("terminals-unavailable", held.message);
-  if (held.status === "found") {
-    return { status: "existing", projectId: project.id, worktreeId, terminalId: held.terminalId };
-  }
+  if (held.status === "found") return existingPane(project.id, held);
 
   const defaults = computeHardwareDefaults(deps.hostPlatform.totalMemoryBytes);
   const panelLimit = buildPanelLimitSnapshot(panelCount, {
@@ -313,6 +342,7 @@ async function launchResumedPane(
           agentSessionId: sessionId,
           // A conversation the CLI never wrote is refused, never started afresh under its id.
           exactResume: true,
+          ...(conversationStore !== undefined ? { conversationStore } : {}),
           ...(actionContext !== undefined ? { actionContext } : {}),
         },
       ]);
@@ -337,6 +367,7 @@ async function launchResumedPane(
       command,
       agentSessionId: sessionId,
       agentLaunchFlags: savedFlags,
+      conversationStore,
     }),
   };
   let savedInLayout = true;
@@ -361,13 +392,25 @@ async function launchResumedPane(
 
 type HeldSession =
   | { status: "none" }
-  | { status: "found"; terminalId: string }
+  | { status: "found"; terminalId: string; worktreeId: string | null }
   | { status: "unavailable"; message: string };
 
+function existingPane(
+  projectId: string,
+  held: { terminalId: string; worktreeId: string | null }
+): AgentSessionPaneResult {
+  return {
+    status: "existing",
+    projectId,
+    worktreeId: held.worktreeId,
+    terminalId: held.terminalId,
+  };
+}
+
 /**
- * The live pane of this worktree that already holds the session, by the rule
- * a view's `findLiveResumePanelId` applies: trash and dialogs never count, a
- * pane parked in the background does. Read off the pty-host, so a pane only
+ * The live pane of this project that already holds the session, wherever it
+ * is filed (#18009), by the rule a view's `findLiveResumePanelId` applies:
+ * trash and dialogs never count, a pane parked in the background does. Read off the pty-host, so a pane only
  * a window holds is found too; where it sits comes from the saved layout, or
  * from main having started it. A holder neither places is reported rather
  * than launched beside: it may be a dialog, or a pane its window hasn't saved
@@ -375,7 +418,6 @@ type HeldSession =
  */
 async function findPaneHoldingSession(
   projectId: string,
-  worktreeId: string,
   sessionId: string,
   deps: ViewlessDeps
 ): Promise<HeldSession> {
@@ -415,7 +457,6 @@ async function findPaneHoldingSession(
   const live = terminals.filter(
     (terminal): terminal is ViewlessTerminalRecord & { id: string } =>
       typeof terminal.id === "string" &&
-      (terminal.worktreeId ?? null) === worktreeId &&
       terminal.isTrashed !== true &&
       terminal.isExited !== true &&
       terminal.hasPty !== false &&
@@ -436,14 +477,21 @@ async function findPaneHoldingSession(
     return location !== "trash" && location !== "dialog";
   };
 
+  // Filed where the host says, as a listing reads it: the live PTY's own
+  // filing, then the saved pane's.
+  const found = (holder: ViewlessTerminalRecord & { id: string }): HeldSession => ({
+    status: "found",
+    terminalId: holder.id,
+    worktreeId: holder.worktreeId ?? savedPanes.get(holder.id)?.worktreeId ?? null,
+  });
   const started = new Set(hostStartedTerminals(projectId).map((terminal) => terminal.id));
   let unplaced = false;
   for (const holder of live.filter(launchedRunHolds)) {
     if (savedPanes.has(holder.id)) {
-      if (shown(holder.id)) return { status: "found", terminalId: holder.id };
+      if (shown(holder.id)) return found(holder);
       continue;
     }
-    if (started.has(holder.id)) return { status: "found", terminalId: holder.id };
+    if (started.has(holder.id)) return found(holder);
     unplaced = true;
   }
   if (unplaced) {

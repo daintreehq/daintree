@@ -19,15 +19,16 @@ import { detachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import {
   freezeWebContents,
   unfreezeWebContents,
-  unthrottleCpuWebContents,
   purgeMemoryWebContents,
   readJsHeapUsedBytes,
 } from "../utils/webContentsLifecycle.js";
 import { logWarn } from "../utils/logger.js";
 import * as AgentStateCache from "./ProjectViewAgentStateCache.js";
 import { updateViewBounds } from "./ProjectViewFactory.js";
+import { releaseHeldSends } from "./frozenViewDelivery.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
+import { isBulkWorktreeRunViewHeld } from "../services/BulkWorktreeRunRegistry.js";
 import { isCachedViewFlushPending, sendViewCached } from "../services/cachedViewFlush.js";
 import type { CachedViewPurgeSession, ViewEntry } from "./ProjectViewManagerTypes.js";
 
@@ -177,6 +178,8 @@ export function deactivateEntry(
       // A dictation started here still captures its audio in this renderer,
       // and its cleanup writes into its draft (#14773).
       const dictating = isDictationViewHeld(vc);
+      // A bulk worktree creation running there would stall mid-batch (#17085).
+      const creatingWorktrees = isBulkWorktreeRunViewHeld(vc);
       // A flush the cached edge just started runs sequential IPC a freeze would
       // cut short; the manager freezes the view once it settles (#15633).
       const flushing = isCachedViewFlushPending(vc);
@@ -186,6 +189,7 @@ export function deactivateEntry(
         !mcp.unknown &&
         !remoteAssistant &&
         !dictating &&
+        !creatingWorktrees &&
         !flushing
       ) {
         void freezeWebContents(vc);
@@ -358,21 +362,9 @@ export function activateView(
 
   if (!entry.view.webContents.isDestroyed()) {
     unregisterCachedViewWebContents(entry.view.webContents.id);
-  }
-
-  // Clear CPU emulation BEFORE the thaw below. The reset only acts on a
-  // renderer that already has a debugger session, and the thaw attaches one
-  // synchronously — run it first and every activation would pay a CDP round
-  // trip for a view nothing ever throttled. Nothing raises the rate any more
-  // (#12456); this is defensive cleanup for a session left at another rate.
-  // Guests too: separate renderer processes with their own CDP targets. CPU
-  // rate only — a guest the dock-hide path froze stays frozen (separate
-  // mechanism, released by useWebviewThrottle when its tab is shown).
-  if (!entry.view.webContents.isDestroyed()) {
-    void unthrottleCpuWebContents(entry.view.webContents);
-    forEachGuest(entry.view.webContents, (guest) => {
-      void unthrottleCpuWebContents(guest);
-    });
+    // Sends no longer wait on a thaw once the view is active, so what waited
+    // goes now, ahead of everything this activation sends (#17038).
+    releaseHeldSends(entry.view.webContents);
   }
 
   // Defensive unfreeze: efficiency transitions and view activations are
@@ -417,7 +409,7 @@ export function activateView(
  * Invoke `fn` for every live <webview> guest embedded in `hostWc`. There is
  * no main-side attach tracking, so guests are resolved by scanning
  * webContents.getAllWebContents() for hostWebContents identity —
- * O(total webContents), called only on view activation/deactivation.
+ * O(total webContents), so it stays off the switch path (#17039).
  */
 function forEachGuest(
   hostWc: Electron.WebContents,

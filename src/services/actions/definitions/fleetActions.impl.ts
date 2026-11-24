@@ -1,8 +1,10 @@
 // The fleet actions' run bodies, loaded on first dispatch by `runFleetAction` in
 // fleetActions.ts, which keeps the metadata every view registers at boot (#14272).
 // Nothing here may import fleetActions.ts at runtime.
-import type { ActionContext } from "@shared/types/actions";
+import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { usePanelStore } from "@/store/panelStore";
+import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
+import { isForegroundDispatch } from "./dispatchSource";
 import {
   useFleetArmingStore,
   isFleetArmEligible,
@@ -98,6 +100,13 @@ function requestConfirmation(kind: FleetPendingActionKind, targets: PtyPanelData
     sessionLossCount: countSessionLoss(targets),
   });
 }
+
+/**
+ * Who asked for the trash the fleet bar is confirming. The confirmation clears
+ * itself and re-dispatches as the person who confirmed, but a close an agent
+ * asked for stays the agent's: it isn't the person's to undo (#17107).
+ */
+let stagedTrashSource: ActionSource | undefined;
 
 /**
  * Module-level re-entrancy flag for `fleet.retryFailures`. A fast double-
@@ -200,18 +209,25 @@ export const fleetActionRuns = {
     usePanelStore.getState().bulkKillSet(ids);
     useFleetArmingStore.getState().clear();
   },
-  "fleet.trash": async (args: unknown, _ctx: ActionContext) => {
+  "fleet.trash": async (args: unknown, ctx: ActionContext) => {
     const snap = snapshotArmed();
     const targets = snap.terminalTargets;
     if (targets.length === 0) return;
     const confirmed = parseConfirmed(args);
     if (!confirmed && targets.length >= 5) {
+      stagedTrashSource = ctx.dispatchSource;
       requestConfirmation("trash", targets);
       return;
     }
+    // Only the person's own confirmation stands in for the staged request.
+    const source =
+      confirmed && isForegroundDispatch(ctx.dispatchSource) && stagedTrashSource !== undefined
+        ? stagedTrashSource
+        : ctx.dispatchSource;
+    stagedTrashSource = undefined;
     clearPendingIf("trash");
     const ids = new Set(targets.map((t) => t.id));
-    usePanelStore.getState().bulkTrashSet(ids);
+    userCloseCommit(source, [...ids], () => usePanelStore.getState().bulkTrashSet(ids))();
     useFleetArmingStore.getState().clear();
   },
   "fleet.scope.enter": async (_args: unknown, _ctx: ActionContext) => {
@@ -244,6 +260,10 @@ export const fleetActionRuns = {
     // What each target was sent: its own edit where it had one, so a retry
     // doesn't hand it an image or a token that edit took out.
     const textFor = (id: string) => perTargetOverrides[id] ?? payload;
+    // `payload` is the draft as typed, recipe variables unfilled. Only a real
+    // edit goes back as an override: handing the draft to a target as one
+    // would skip its variables, and it would get `{{branch_name}}` literally.
+    const hasOwnText = (id: string) => Object.hasOwn(perTargetOverrides, id);
     // Re-check eligibility at dispatch time: a pane that died or was trashed
     // since the failure was recorded must not receive bytes. The primary
     // broadcast gates this in its caller (tryFleetBroadcastFromEditor), not
@@ -260,17 +280,21 @@ export const fleetActionRuns = {
     if (eligibleTargets.length === 0) return;
     retryInFlight = true;
     try {
-      // Each target's text goes through perTargetOverrides, so the empty
-      // draft is never resolved. `runManagedFleetBroadcast` runs it through the
-      // shared single-flight controller so the retry gains batching, progress,
-      // and a working ribbon Cancel button just like the primary Enter path.
-      // The images go again too, attached wherever that text still names them.
-      const retryOverrides = Object.fromEntries(eligibleTargets.map((id) => [id, textFor(id)]));
-      const result = await runManagedFleetBroadcast("", eligibleTargets, retryOverrides, {
-        isRetry: true,
-        draftPreview: payload,
-        imagePaths,
-      });
+      // The draft is resolved per target again, against the worktree it is in
+      // now, as the first send did; only a target's own edit stands in for it.
+      // `runManagedFleetBroadcast` runs it through the shared single-flight
+      // controller so the retry gains batching, progress, and a working ribbon
+      // Cancel button just like the primary Enter path. The images go again
+      // too, attached wherever that text still names them.
+      const retryOverrides = Object.fromEntries(
+        eligibleTargets.filter(hasOwnText).map((id) => [id, perTargetOverrides[id]!])
+      );
+      const result = await runManagedFleetBroadcast(
+        payload,
+        eligibleTargets,
+        Object.keys(retryOverrides).length > 0 ? retryOverrides : undefined,
+        { isRetry: true, imagePaths }
+      );
       // Permanent failures (dead PTYs) auto-disarm so a future retry doesn't
       // keep firing into the same dead pipes. The retry chip clears for them
       // too — the user already saw them once; surfacing the same id again
@@ -287,17 +311,16 @@ export const fleetActionRuns = {
       // left out rather than retried: its failure stays so it can be retried
       // once it's unlocked. One that left the fleet was left out for good, so
       // its failure goes rather than leaving a Retry that never reaches it.
+      // Another host's agent is armed beside this view's panes, not in
+      // `armedIds`, and one a cancel kept from its batch still needs its Retry.
       const sent = new Set(result.perTarget.map((t) => t.terminalId));
       const { panelsById } = usePanelStore.getState();
-      const { armedIds } = useFleetArmingStore.getState();
+      const { armedIds, crossHostTargets } = useFleetArmingStore.getState();
+      const isStillTarget = (id: string) =>
+        crossHostTargets.some((t) => t.key === id) ||
+        (armedIds.has(id) && isFleetArmEligible(getNarrowPanel(panelsById, id)));
       for (const id of targets) {
-        if (
-          !sent.has(id) &&
-          armedIds.has(id) &&
-          isFleetArmEligible(getNarrowPanel(panelsById, id))
-        ) {
-          continue;
-        }
+        if (!sent.has(id) && isStillTarget(id)) continue;
         if (!stillFailed.has(id) && !awaitingConfirmation.has(id)) {
           useFleetFailureStore.getState().dismissId(id);
         }

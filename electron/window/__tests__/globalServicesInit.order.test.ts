@@ -5,8 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // task-ordering assertions below.
 const registeredTaskNames: string[] = [];
 const registeredTaskRuns = new Map<string, () => unknown>();
-// Hoisted: the HelpSessionService mock factory now runs at import time
-// (globalServicesInit value-imports the singleton statically).
+// Hoisted: referenced from the HelpSessionService mock factory.
 const setMcpRegistry = vi.hoisted(() => vi.fn());
 const dbMaintenanceCalls = vi.hoisted(() => [] as string[]);
 const setProjectMetadataReader = vi.hoisted(() => vi.fn());
@@ -22,6 +21,11 @@ const legacyAuditImport = vi.hoisted(() => ({
   hasSources: false,
   shouldThrow: false,
   calls: [] as { migrationRuns: number; tasksRegistered: number }[],
+}));
+const claudeUsageRestore = vi.hoisted(() => ({
+  storage: { read: () => null, write: () => {} },
+  shouldThrow: false,
+  calls: [] as { storage: unknown; migrationRuns: number; tasksRegistered: number }[],
 }));
 let mockLogRetentionDays: number | undefined = 30;
 const { pruneOldLogs, pruneOldLogsAsync, pruneHeapSnapshots, pruneHeapSnapshotsAsync } = vi.hoisted(
@@ -112,6 +116,22 @@ vi.mock("../../services/persistence/legacyAuditRingImport.js", () => ({
     });
     if (legacyAuditImport.shouldThrow) throw new Error("test-import-failure");
   }),
+}));
+
+vi.mock("../../services/claude/ClaudeUsageObservations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../services/claude/ClaudeUsageObservations.js")>()),
+  restoreClaudeUsageObservations: vi.fn((storage: unknown) => {
+    claudeUsageRestore.calls.push({
+      storage,
+      migrationRuns: migrationRunCalls.count,
+      tasksRegistered: registeredTaskNames.length,
+    });
+    if (claudeUsageRestore.shouldThrow) throw new Error("test-restore-failure");
+  }),
+}));
+
+vi.mock("../../services/persistence/claudeUsageStore.js", () => ({
+  appStateClaudeUsageStorage: claudeUsageRestore.storage,
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -492,10 +512,23 @@ import { startEventLoopLagMonitor } from "../../utils/performance.js";
 import { startAppMetricsMonitor } from "../../services/ProcessMemoryMonitor.js";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
+import { sendToRenderer } from "../../ipc/handlers.js";
 import { store } from "../../store.js";
 import { releaseDeferredQueueOnWindowClosed } from "../lastWindowClosed.js";
 import { projectVisibilityClock } from "../../services/projectVisibilityClock.js";
 import { notifyProjectPresenceChanged } from "../projectPresenceChanges.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
   function resetSweepMocks() {
@@ -888,6 +921,8 @@ describe("initGlobalServices task ordering", () => {
     legacyAuditImport.hasSources = false;
     legacyAuditImport.shouldThrow = false;
     legacyAuditImport.calls.length = 0;
+    claudeUsageRestore.calls.length = 0;
+    claudeUsageRestore.shouldThrow = false;
     mockLogRetentionDays = 30;
     setGlobalServicesInitialized(false);
     _resetGlobalServiceStartsForTest();
@@ -1040,6 +1075,41 @@ describe("initGlobalServices task ordering", () => {
       idleAutoCloseServiceMock.sleepUnderMemoryPressure.mockResolvedValueOnce(3);
       await expect(actions.hibernateIdleProjects()).resolves.toBe(3);
       expect(idleAutoCloseServiceMock.sleepUnderMemoryPressure).toHaveBeenCalledTimes(1);
+    } finally {
+      getStopAppMetricsMonitor()?.();
+      setStopAppMetricsMonitor(previousStop);
+    }
+  });
+
+  it("asks every live window to drop its hidden webviews, and no closed one", async () => {
+    const previousStop = getStopAppMetricsMonitor();
+    setStopAppMetricsMonitor(null);
+    vi.mocked(startAppMetricsMonitor).mockClear();
+
+    try {
+      const liveA = { browserWindow: { isDestroyed: () => false } };
+      const closed = { browserWindow: { isDestroyed: () => true } };
+      const liveB = { browserWindow: { isDestroyed: () => false } };
+      const windows = [liveA, closed, liveB];
+      const fakeRegistry = {
+        all: () => windows,
+        size: windows.length,
+      } as unknown as WindowRegistry;
+      await initGlobalServices(fakeRegistry);
+      registeredTaskRuns.get("app-metrics-monitor")!();
+      const actions = vi.mocked(startAppMetricsMonitor).mock.calls[0]![0]!;
+      vi.mocked(sendToRenderer).mockClear();
+
+      await actions.destroyHiddenWebviews(1);
+      await actions.destroyHiddenWebviews(2);
+
+      const push = (tier: 1 | 2) => ({ name: "window:destroy-hidden-webviews", payload: { tier } });
+      expect(vi.mocked(sendToRenderer).mock.calls).toEqual([
+        [liveA.browserWindow, CHANNELS.EVENTS_PUSH, push(1)],
+        [liveB.browserWindow, CHANNELS.EVENTS_PUSH, push(1)],
+        [liveA.browserWindow, CHANNELS.EVENTS_PUSH, push(2)],
+        [liveB.browserWindow, CHANNELS.EVENTS_PUSH, push(2)],
+      ]);
     } finally {
       getStopAppMetricsMonitor()?.();
       setStopAppMetricsMonitor(previousStop);
@@ -1263,6 +1333,34 @@ describe("initGlobalServices task ordering", () => {
     const setIdx = registeredTaskNames.indexOf("__setProjectMetadataReader__");
     expect(setIdx).toBeGreaterThanOrEqual(0);
     expect(registeredTaskNames.indexOf("mcp-server")).toBeGreaterThan(setIdx);
+  });
+
+  it("wires a help-session service that loads after init the moment it loads", async () => {
+    resetHelpSessionRuntimeForTests();
+    const { helpSessionService } = await import("../../services/HelpSessionService.js");
+    const startOrphanSweep = vi.mocked(helpSessionService.startOrphanSweep);
+    const setPendingHibernationStore = vi.mocked(helpSessionService.setPendingHibernationStore);
+    startOrphanSweep.mockClear();
+    setPendingHibernationStore.mockClear();
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+    // This task waits on the pending-hibernation store's load, so the store
+    // is ready, and still not handed over, once it returns.
+    await registeredTaskRuns.get("assistant-update-resume")?.();
+    expect(setMcpRegistry).not.toHaveBeenCalled();
+    expect(setProjectMetadataReader).not.toHaveBeenCalled();
+    expect(startOrphanSweep).not.toHaveBeenCalled();
+    expect(setPendingHibernationStore).not.toHaveBeenCalled();
+
+    publishHelpSessionService(helpSessionService);
+    expect(setMcpRegistry).toHaveBeenCalledWith(fakeRegistry);
+    expect(setProjectMetadataReader).toHaveBeenCalledWith(expect.any(Function));
+    expect(startOrphanSweep).toHaveBeenCalledTimes(1);
+    expect(setPendingHibernationStore).toHaveBeenCalledTimes(1);
+    expect(setPendingHibernationStore).toHaveBeenCalledWith(
+      expect.objectContaining({ takeResumeAtLaunch: expect.any(Function) })
+    );
   });
 
   it("skips MCP-related tasks when no windowRegistry is supplied", async () => {
@@ -1928,6 +2026,49 @@ describe("initGlobalServices task ordering", () => {
     expect(result).toBe("ok");
     expect(legacyAuditImport.calls).toHaveLength(1);
     expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("restores the saved Claude usage readings after the migrations and before any deferred task (#17610)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    migrationCurrentVersion = 0;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(claudeUsageRestore.calls).toEqual([
+      { storage: claudeUsageRestore.storage, migrationRuns: 1, tasksRegistered: 0 },
+    ]);
+    expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("restores the saved Claude usage readings when no migration is pending", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+
+    expect(claudeUsageRestore.calls).toEqual([
+      { storage: claudeUsageRestore.storage, migrationRuns: 0, tasksRegistered: 0 },
+    ]);
+  });
+
+  it("keeps booting when the Claude usage restore throws", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    claudeUsageRestore.shouldThrow = true;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(claudeUsageRestore.calls).toHaveLength(1);
+    expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("restores no Claude usage readings when the migrations fail", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    migrationCurrentVersion = 0;
+    migrationShouldThrow = true;
+
+    expect(await initGlobalServices(fakeRegistry)).toBe("exit-requested");
+    expect(claudeUsageRestore.calls).toEqual([]);
   });
 
   it("does not import legacy audit rings when the migrations fail", async () => {

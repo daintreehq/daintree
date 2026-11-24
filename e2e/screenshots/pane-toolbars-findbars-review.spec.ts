@@ -6,8 +6,8 @@
  * one family, so the only useful review lays them side by side: the file pane's
  * toolbar, the file browser's tree header (at rest and with View options open),
  * the diff pane's header and footer, the diff's sticky per-file header, the
- * cross-worktree compare stepper, the browser pane toolbar, the Portal's top
- * rows, the notification center header, and the terminal and browser find bars.
+ * cross-worktree compare stepper, the browser pane toolbar, the notification
+ * center header, and the terminal and browser find bars.
  *
  * One launch, one pass per theme: the theme is switched through the real
  * app-theme IPC (`setAppTheme`, which reloads the view), and each surface is
@@ -74,7 +74,6 @@ const STATES = [
   "diffviewer-fileheader",
   "crossdiff-toolbar",
   "browser-toolbar",
-  "portal-toolbar",
   "notification-center-header",
   "terminal-findbar",
   "terminal-findbar-empty",
@@ -844,41 +843,6 @@ async function captureBrowser(run: Run): Promise<void> {
   }
 }
 
-async function capturePortal(run: Run): Promise<void> {
-  const { page, theme } = run;
-  await shoot(run, "portal-toolbar", async () => {
-    const region = page.locator(SEL.portal.region);
-    try {
-      const result = await dispatchAction(page, "portal.openUrl", {
-        url: `${run.baseUrl}/portal`,
-        title: "Helios docs",
-      });
-      if (result.ok === false) throw new Error(`portal.openUrl failed: ${result.error?.message}`);
-      await region.waitFor({ state: "visible", timeout: T_MEDIUM });
-      const back = region.locator(SEL.portal.goBack);
-      await back.waitFor({ state: "visible", timeout: T_MEDIUM });
-      const tabs = region.locator('[role="tablist"][aria-label="Portal tabs"] [role="tab"]');
-      await expect(tabs.first()).toBeVisible({ timeout: T_MEDIUM });
-      await settle(page, 1500);
-      await blur(page);
-      await parkPointer(page);
-      await settle(page, 400);
-      const chrome = back.locator("xpath=ancestor::div[contains(@class,'h-10')][1]/..");
-      await expect(region.getByRole("button", { name: "New tab" })).toBeVisible();
-      await expect(region.getByRole("button", { name: "Close portal" })).toBeVisible();
-      await expect(region.getByRole("button", { name: "Dev servers" })).toBeVisible();
-      await snap(page, "portal-toolbar", theme, [chrome], { pad: 0 });
-    } finally {
-      await dispatchAction(page, "portal.closeAllTabs").catch(() => {});
-      await settle(page, 400);
-      if (await region.isVisible().catch(() => false)) {
-        await dispatchAction(page, "portal.toggle").catch(() => {});
-        await settle(page, 400);
-      }
-    }
-  });
-}
-
 async function captureNotificationCenter(run: Run): Promise<void> {
   const { page, theme } = run;
   await shoot(run, "notification-center-header", async () => {
@@ -1018,7 +982,6 @@ async function captureTheme(run: Run): Promise<void> {
   await group("diff-pane", () => captureDiffPane(run, worktreeId));
   await group("cross-diff", () => captureCrossDiff(run));
   await group("browser", () => captureBrowser(run));
-  await group("portal", () => capturePortal(run));
   await group("notifications", () => captureNotificationCenter(run));
   await group("terminal", () => captureTerminal(run));
 }

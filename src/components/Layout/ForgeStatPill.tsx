@@ -56,6 +56,7 @@ export interface ForgeStatPillProps {
   onOpenChange: (open: boolean) => void;
   onPointerEnter?: (e: React.PointerEvent) => void;
   onPointerLeave?: (e: React.PointerEvent) => void;
+  onFocus?: (e: React.FocusEvent) => void;
 
   /**
    * The count rose recently: the strip's neutral round pip on the glyph, the
@@ -94,6 +95,7 @@ export function ForgeStatPill({
   onOpenChange,
   onPointerEnter,
   onPointerLeave,
+  onFocus,
   activity = false,
   hasDisclosure = true,
 }: ForgeStatPillProps) {
@@ -125,6 +127,7 @@ export function ForgeStatPill({
                 data-stat-segment=""
                 onPointerEnter={onPointerEnter}
                 onPointerLeave={onPointerLeave}
+                onFocus={onFocus}
                 onClick={onClick}
                 className={cn(
                   // Press, transition and the open state's fill and inset edge
@@ -187,6 +190,7 @@ export function ForgeStatPill({
         className="p-0 w-[450px]"
         persistThroughChildOverlays={persistThroughChildOverlays}
         keepMounted={keepMounted}
+        restoreFocusOnClose
       >
         <div
           id={dropdownId}

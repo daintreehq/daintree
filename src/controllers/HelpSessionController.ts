@@ -439,6 +439,11 @@ export class HelpSessionController {
   /** The agent the latest launch was pinned to (`pinAgent`), until it goes live. */
   private _lastPinnedAgentId: string | null = null;
   /**
+   * The pinned launch's hand-off (#18140), which Retry and a passed version
+   * recheck carry again: relaunching without it would start a blank session.
+   */
+  private _lastPinnedSeedPrompt: string | undefined = undefined;
+  /**
    * The agent of the latest launch when it was a vacant-only fresh start
    * (#16495), which Retry and a passed version recheck repeat as one: a plain
    * relaunch would resume the conversation it was meant to leave alone, or take
@@ -459,8 +464,14 @@ export class HelpSessionController {
       const pinned = this._lastPinnedAgentId;
       const fresh = this._lastVacantFresh;
       if (fresh) this._relaunchVacantFresh(fresh);
-      else if (pinned) this.launch({ agentId: pinned, replaceExisting: true, pinAgent: true });
-      else this._maybeAutoLaunch(inputs);
+      else if (pinned) {
+        this.launch({
+          agentId: pinned,
+          replaceExisting: true,
+          pinAgent: true,
+          ...this._pinnedSeed(pinned),
+        });
+      } else this._maybeAutoLaunch(inputs);
     },
   });
 
@@ -541,6 +552,19 @@ export class HelpSessionController {
     const prev = this._lastInputs;
     this._lastInputs = inputs;
 
+    // A session bound here by another launch (#18140) supersedes the one this
+    // lane last failed to start: its Retry, and the pin, hand-off and vacant
+    // start it would repeat, are dropped, so nothing can later be retried over
+    // that session or over the conversation it leaves when it hibernates.
+    if (
+      inputs.terminalId &&
+      inputs.terminalId !== prev?.terminalId &&
+      inputs.terminalId !== this._pendingNewTerminalId &&
+      !this._isLaunching
+    ) {
+      this._dropSupersededLaunch();
+    }
+
     // Clear the version block when the preferred agent changes — the stale
     // block belongs to the previous agent and would otherwise paint over
     // the new agent's empty state. The launch-error banner is cleared for the
@@ -615,7 +639,7 @@ export class HelpSessionController {
     this.launch(
       resumeTarget
         ? { agentId, replaceExisting: true, resumeTarget }
-        : { agentId, ...(pinAgent ? { pinAgent } : {}) }
+        : { agentId, ...(pinAgent ? { pinAgent, ...this._pinnedSeed(agentId) } : {}) }
     );
   }
 
@@ -626,8 +650,31 @@ export class HelpSessionController {
       requestedId: `terminal-${crypto.randomUUID()}`,
       checkVersion: true,
       vacantOnly: true,
-      ...(this._lastPinnedAgentId === agentId ? { pinAgent: true } : {}),
+      ...(this._lastPinnedAgentId === agentId
+        ? { pinAgent: true, ...this._pinnedSeed(agentId) }
+        : {}),
     });
+  }
+
+  /**
+   * Another launch's session holds the lane now: what this lane last failed to
+   * start — its Retry, its version gate and pending recheck, and the pin,
+   * hand-off and vacant start they would repeat — no longer applies.
+   */
+  private _dropSupersededLaunch(): void {
+    this._lastPinnedAgentId = null;
+    this._lastPinnedSeedPrompt = undefined;
+    this._lastVacantFresh = null;
+    this._lastResumeTarget = undefined;
+    if (this._snapshot.launchError || this._snapshot.assistantVersionTooOld) {
+      this._versionGate.clearCooldownTimer();
+      this._patch({ launchError: null, assistantVersionTooOld: null, isCheckingVersion: false });
+    }
+  }
+
+  private _pinnedSeed(agentId: string): { seedPrompt?: string } {
+    const seedPrompt = this._lastPinnedSeedPrompt;
+    return this._lastPinnedAgentId === agentId && seedPrompt ? { seedPrompt } : {};
   }
 
   /**
@@ -980,10 +1027,22 @@ export class HelpSessionController {
     // the re-entrancy guard from outliving the flow that set it.
     if (this._isLaunching && this._isLaunchingGen === this._launchGen) return;
 
+    // A vacant-only start never displaces a session (#16495, #18140). One bound
+    // here since it was asked for — a Retry pressed after another launch took
+    // the tab — is left running, and the banner that offered it goes.
+    if (options.vacantOnly && options.replaceExisting) {
+      const bound = this._slotState().terminalId;
+      if (bound && bound !== this._pendingNewTerminalId) {
+        this._patch({ launchError: null });
+        return;
+      }
+    }
+
     const launchProject = inputs.currentProject;
     this._isLaunching = true;
     this._lastResumeTarget = options.resumeTarget;
     this._lastPinnedAgentId = options.pinAgent ? launchAgentId : null;
+    this._lastPinnedSeedPrompt = options.pinAgent ? options.seedPrompt : undefined;
     this._lastVacantFresh =
       options.vacantOnly === true && options.requestedId !== undefined ? launchAgentId : null;
 
@@ -1698,6 +1757,13 @@ export class HelpSessionController {
       if (!outcome.ok) {
         if (reservedId) {
           this._pendingNewTerminalId = null;
+          // Another launch bound its session here while this one waited, which
+          // is why main refused it (#18140): that session stays, and this
+          // launch offers no Retry over it.
+          if (this._slotState().terminalId !== reservedId) {
+            this._dropSupersededLaunch();
+            return;
+          }
           useHelpPanelStore.getState().clearTerminal(this.slot);
         } else {
           this._hasAutoLaunched = false;
@@ -1787,6 +1853,7 @@ export class HelpSessionController {
             unreleasedHibernation = null;
             this._lastResumeTarget = undefined;
             this._lastPinnedAgentId = null;
+            this._lastPinnedSeedPrompt = undefined;
             useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
             // A picked conversation needs no cleanup on main: its spawn carries
             // `agentSessionId`, which main records as the lane's pointer in
@@ -1949,6 +2016,7 @@ export class HelpSessionController {
       }
       reached = true;
       this._lastPinnedAgentId = null;
+      this._lastPinnedSeedPrompt = undefined;
       this._patch({ phase: "live" });
       window.electron.help.markTerminal(finalTerminalId).catch((err) => {
         logError("Failed to mark help terminal", err);

@@ -45,7 +45,6 @@ import { logError } from "@/utils/logger";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { RecipeImportDialog } from "@/components/TerminalRecipe/RecipeImportDialog";
 import { getRecipeTerminalSummary } from "@/components/Terminal/utils/recipeUtils";
-import { nextDuplicateName } from "@/components/Terminal/RecipeRunner/recipeRunnerUtils";
 import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
 import type { TerminalRecipe } from "@/types";
 import type { RecipeFileImport } from "@/utils/recipeImport";
@@ -81,6 +80,8 @@ function visibleInventoryHeight(el: HTMLElement | null): number | null {
 interface RecipeManagerProps {
   isOpen: boolean;
   onClose: () => void;
+  /** Forwarded to {@link AppDialog.onCloseComplete}: the manager has closed and handed focus back. */
+  onCloseComplete?: () => void;
   onEditRecipe: (recipe: TerminalRecipe) => void;
   onCreateRecipe: (scope: "global" | "project") => void;
 }
@@ -88,6 +89,7 @@ interface RecipeManagerProps {
 export function RecipeManager({
   isOpen,
   onClose,
+  onCloseComplete,
   onEditRecipe,
   onCreateRecipe,
 }: RecipeManagerProps) {
@@ -115,7 +117,7 @@ export function RecipeManager({
   const readRecipeFile = useRecipeStore((s) => s.readRecipeFile);
   const importRecipe = useRecipeStore((s) => s.importRecipe);
   const updateRecipe = useRecipeStore((s) => s.updateRecipe);
-  const createRecipe = useRecipeStore((s) => s.createRecipe);
+  const duplicateRecipe = useRecipeStore((s) => s.duplicateRecipe);
   const currentProject = useProjectStore((s) => s.currentProject);
   // Same test as the editor, so a New that promises a team recipe is only
   // offered when the editor can save one.
@@ -217,10 +219,57 @@ export function RecipeManager({
   const handleExportRecipe = useCallback(
     (recipe: TerminalRecipe) => {
       const json = exportRecipe(recipe.id);
-      if (json !== null) copyWithToast("Recipe", json);
+      if (json !== null) {
+        copyWithToast("Recipe", json);
+        return;
+      }
+      // A row is only listed while it is in the store, so this is a list that
+      // changed under the menu; there is nothing to retry.
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title: "Couldn't copy recipe",
+        message: `"${recipe.name}" is no longer in the list.`,
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+      });
     },
     [exportRecipe]
   );
+
+  const handleExportRecipeToFile = async (recipe: TerminalRecipe) => {
+    try {
+      await exportRecipeToFile(recipe.id);
+    } catch (err) {
+      logError("Failed to export recipe", err);
+      notify({
+        type: "error",
+        title: "Couldn't export recipe",
+        message: `The recipe file couldn't be written: ${formatErrorMessage(err, "unknown error")}`,
+        // The click did nothing else, so it stays a toast rather than inbox-only.
+        priority: "high",
+        action: {
+          label: "Choose another file",
+          onClick: () => void handleExportRecipeToFile(recipe),
+        },
+        context: { eventKind: "uiFeedback" },
+      });
+    }
+  };
+
+  const handlePinRecipe = (recipe: TerminalRecipe, pinned: boolean) => {
+    updateRecipe(recipe.id, { showInEmptyState: pinned }).catch((err: unknown) => {
+      logError("Failed to update recipe pin", err);
+      notify({
+        type: "error",
+        title: "Couldn't update recipe pin",
+        message: `The pin change couldn't be saved: ${formatErrorMessage(err, "unknown error")}`,
+        priority: "high",
+        action: { label: "Retry", onClick: () => handlePinRecipe(recipe, pinned) },
+        context: { eventKind: "uiFeedback" },
+      });
+    });
+  };
 
   const openImportDialog = (file: RecipeFileImport | null) => {
     setImportedRecipeId(null);
@@ -279,9 +328,9 @@ export function RecipeManager({
       ?.scrollIntoView?.({ block: "nearest" });
   }, [importedRecipeId, showImportDialog]);
 
-  // Same naming rule as the canvas band's Duplicate, so a copy made in either
-  // place never collides with an existing recipe's name or on-disk filename.
-  // A plugin recipe's copy has no projectId and lands as a global the user owns.
+  // The store names the copy and picks its tier, so a copy made here and one
+  // made from the canvas band land the same way: a team recipe's copy is a team
+  // recipe in the open project, never a Global one.
   const handleDuplicateRecipe = async (recipe: TerminalRecipe) => {
     // A plugin's panel steps and variables only work in its own recipe (#13797).
     if (recipeUsesPluginOnlyFeatures(recipe)) {
@@ -295,18 +344,18 @@ export function RecipeManager({
       });
       return;
     }
-    const existingNames = new Set(useRecipeStore.getState().recipes.map((r) => r.name));
     try {
-      await createRecipe(
-        recipe.projectId,
-        nextDuplicateName(recipe.name, existingNames),
-        recipe.worktreeId,
-        recipe.terminals,
-        false,
-        recipe.autoAssign
-      );
+      await duplicateRecipe(recipe.id);
     } catch (err) {
       logError("Failed to duplicate recipe", err);
+      notify({
+        type: "error",
+        title: "Couldn't duplicate recipe",
+        message: `The copy couldn't be saved: ${formatErrorMessage(err, "unknown error")}`,
+        priority: "high",
+        action: { label: "Retry", onClick: () => void handleDuplicateRecipe(recipe) },
+        context: { eventKind: "uiFeedback" },
+      });
     }
   };
 
@@ -452,10 +501,14 @@ export function RecipeManager({
                 <FactSeparator />
               </>
             )}
-            <span className="min-w-0 truncate">
-              {pluralize(recipe.terminals.length, "terminal")}
-              {summary && summary !== recipe.name ? `: ${summary}` : ""}
-            </span>
+            <TruncatedTooltip
+              content={`${pluralize(recipe.terminals.length, "terminal")}${summary && summary !== recipe.name ? `: ${summary}` : ""}`}
+            >
+              <span className="min-w-0 truncate">
+                {pluralize(recipe.terminals.length, "terminal")}
+                {summary && summary !== recipe.name ? `: ${summary}` : ""}
+              </span>
+            </TruncatedTooltip>
             <FactSeparator />
             <span className="shrink-0">
               {recipe.lastUsedAt ? (
@@ -492,7 +545,7 @@ export function RecipeManager({
                   <Button
                     variant="ghost"
                     size="icon-sm"
-                    className="text-text-secondary hover:text-text-primary aria-expanded:bg-overlay-raised aria-expanded:text-text-primary"
+                    className="text-text-secondary hover:text-text-primary aria-expanded:bg-overlay-hover aria-expanded:text-text-primary"
                     aria-label={`More actions for recipe ${recipe.name}`}
                   >
                     <MoreHorizontal />
@@ -504,11 +557,7 @@ export function RecipeManager({
             <DropdownMenuContent align="end" sideOffset={4} className="min-w-[200px]">
               <DropdownMenuCheckboxItem
                 checked={isPinned}
-                onSelect={() =>
-                  void updateRecipe(recipe.id, { showInEmptyState: !isPinned }).catch((err) =>
-                    logError("Failed to update recipe pin", err)
-                  )
-                }
+                onSelect={() => handlePinRecipe(recipe, !isPinned)}
               >
                 Pin to canvas
               </DropdownMenuCheckboxItem>
@@ -527,7 +576,7 @@ export function RecipeManager({
                 <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Copy as JSON
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void exportRecipeToFile(recipe.id)}>
+              <DropdownMenuItem onSelect={() => void handleExportRecipeToFile(recipe)}>
                 <FileUp data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Export to file…
               </DropdownMenuItem>
@@ -665,7 +714,7 @@ export function RecipeManager({
 
   return (
     <>
-      <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
+      <AppDialog isOpen={isOpen} onClose={onClose} onCloseComplete={onCloseComplete} size="lg">
         <AppDialog.Header>
           <AppDialog.Title icon={<Workflow />}>Recipe manager</AppDialog.Title>
           <AppDialog.CloseButton />
@@ -745,7 +794,7 @@ export function RecipeManager({
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="shrink-0 aria-expanded:bg-overlay-raised aria-expanded:text-text-primary"
+                      className="shrink-0 aria-expanded:bg-overlay-hover aria-expanded:text-text-primary"
                     >
                       <FileDown />
                       Import

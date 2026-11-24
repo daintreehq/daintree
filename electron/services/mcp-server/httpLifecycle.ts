@@ -30,7 +30,11 @@ import type {
   McpWorkspaceBinding,
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
-import { helpOwnershipPrincipal, relayOwnershipPrincipal } from "./resourceOwnership.js";
+import {
+  helpOwnershipPrincipal,
+  relayConversationKey,
+  relayOwnershipPrincipal,
+} from "./resourceOwnership.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
@@ -128,6 +132,12 @@ export interface HttpLifecycleDeps extends SessionServerDepsSource {
   emitStatusChange: () => void;
   emitRuntimeStateChange: () => void;
   setConfig: (patch: Record<string, unknown>) => void;
+  /**
+   * The control surface's port for scripts outside a pane to find (#17904),
+   * or null once it no longer serves there. Synchronous, so a withdrawal and a
+   * later start's publication land in order.
+   */
+  publishDiscoveryPort: (port: number | null) => void;
 }
 
 /**
@@ -187,7 +197,7 @@ export interface McpRelaySessionHandle {
   callTool(
     tool: string,
     args: Record<string, unknown>,
-    options: { timeoutMs: number; callId: string }
+    options: { timeoutMs: number; callId: string; signal?: AbortSignal }
   ): Promise<CallToolResult>;
   close(): void;
 }
@@ -939,6 +949,20 @@ export class HttpLifecycle {
     this.bearerRegister.delete(tokenHash);
   }
 
+  /**
+   * End every session `apiKey` opened and drop its bearer-register row, once a
+   * rotation has replaced it (#17213). The key's next request is refused
+   * anyway; what this closes is the streams it already holds open, an `/sse`
+   * stream or a `/mcp` GET, which would otherwise keep receiving pushes and
+   * keep a bound workspace protected until the idle reaper. A null key is the
+   * empty header a server without one admits.
+   */
+  revokeApiKeySessions(apiKey: string | null): void {
+    const authHeader = apiKey ? `Bearer ${apiKey}` : "";
+    this.deps.sessionStore.revokeSessionsByCredential(sessionCredentialDigest(authHeader));
+    this.clearBearer(createHash("sha256").update(authHeader).digest("hex"));
+  }
+
   private clearAllBearers(): void {
     this.bearerRegister.clear();
     this.sessionToTokenHash.clear();
@@ -1020,6 +1044,7 @@ export class HttpLifecycle {
         console.log(
           `[MCP] Server started on http://127.0.0.1:${this.port}/mcp (Streamable HTTP) and /sse (legacy SSE)`
         );
+        this.deps.publishDiscoveryPort(this.port);
         this.deps.emitStatusChange();
       } catch (err) {
         this.lastError = formatErrorMessage(err, "MCP server failed to start");
@@ -1228,6 +1253,7 @@ export class HttpLifecycle {
 
   private handleUnexpectedClose(): void {
     const wasRunning = !this.holdsOnly;
+    this.deps.publishDiscoveryPort(null);
     this.drainControl("MCP server closed unexpectedly");
     this.closeHeldRoutes();
 
@@ -1323,6 +1349,9 @@ export class HttpLifecycle {
           }
         }
 
+        // Before the drain: a closing listener stops accepting at once, but the
+        // drain can take seconds, and another process could take the port meanwhile.
+        this.deps.publishDiscoveryPort(null);
         const wasRunning = this.isRunning;
         // A hold keeps the listener open: from here it answers only held routes.
         const keepListener = !closeListener && this.holds.size > 0 && this.isListening;
@@ -1908,6 +1937,16 @@ export class HttpLifecycle {
         // but this one only registered afterwards, still holding the pin it
         // resolved first. Retire it as well; the client reconnects onto the new pin.
         this.deps.sessionStore.revokeSession(transport.sessionId);
+      } else if (
+        tier === "external" &&
+        transport.sessionId !== undefined &&
+        resolveCredentialKind(authHeader, this.apiKeyBearerHash, this.helpTokenValidator) !==
+          "external-client"
+      ) {
+        // The API key rotated while this handshake was out (#17213). The
+        // rotation closed the sessions the old key had filed; this one only
+        // registered afterwards, under a key nothing accepts any more.
+        this.deps.sessionStore.revokeSession(transport.sessionId);
       }
     } catch (err) {
       console.error("[MCP] Streamable HTTP request failed:", err);
@@ -1941,10 +1980,16 @@ export class HttpLifecycle {
     const workspaceBinding = this.describePaneWorkspaceBinding(spec.workspaceId);
     store.sessionTierMap.set(sessionId, spec.tier);
     store.sessionOriginMap.set(sessionId, "external");
-    store.resourceOwnership.bindPrincipal(
-      sessionId,
-      relayOwnershipPrincipal(spec.caller.senderId, spec.caller.helpSessionId)
-    );
+    const principal = relayOwnershipPrincipal(spec.caller.senderId, spec.caller.helpSessionId);
+    store.resourceOwnership.bindPrincipal(sessionId, principal);
+    // What the caller's conversation launched here before it resumed is its
+    // own again (#17919), held under the sender this host authenticated.
+    if (spec.caller.conversationId !== undefined) {
+      store.resourceOwnership.attachConversation(
+        principal,
+        relayConversationKey(spec.caller.senderId, spec.caller.conversationId)
+      );
+    }
     store.sessionWorkspaceMap.set(sessionId, workspaceBinding.workspaceId);
     // When each call in flight here gives up (#15699), so what it waits on
     // ends first and nothing it approves runs after its caller was told no.
@@ -1981,14 +2026,15 @@ export class HttpLifecycle {
     return {
       sessionId,
       isOpen: () => store.relaySessions.has(sessionId),
-      callTool: async (tool, args, { timeoutMs, callId }) => {
+      callTool: async (tool, args, { timeoutMs, callId, signal }) => {
         const deadline = { at: Date.now() + timeoutMs };
         callDeadlines.set(callId, deadline);
         try {
+          // A Shell's cancel (#17985) reaches the tool as its own request's abort.
           return (await client.callTool(
             { name: tool, arguments: args, _meta: { [RELAY_CALL_ID_META_KEY]: callId } },
             undefined,
-            { timeout: timeoutMs }
+            { timeout: timeoutMs, ...(signal ? { signal } : {}) }
           )) as CallToolResult;
         } finally {
           if (callDeadlines.get(callId) === deadline) callDeadlines.delete(callId);

@@ -61,6 +61,8 @@ const {
     setAssistantControl: vi.fn(),
     disconnectHelpBearer: vi.fn(),
     resetHelpTransports: vi.fn(),
+    bindHelpConversation: vi.fn(),
+    forgetAssistantConversation: vi.fn(),
     recordTurnOutcome: vi.fn(),
     getRuntimeState: vi.fn<
       () => import("../../../shared/types/ipc/mcpServer.js").McpRuntimeSnapshot
@@ -112,6 +114,7 @@ function cleanSyncResult(
 ): import("../AssistantContentMirror.js").AssistantContentSyncResult {
   return {
     copied: 0,
+    unchanged: 0,
     removed: 0,
     truncated: false,
     omittedSkills: [],
@@ -184,8 +187,10 @@ import {
   HelpSessionService,
   assistantAgentDirKey,
   codexTrustArgs,
+  helpSessionService,
   projectRuleRoots,
 } from "../HelpSessionService.js";
+import { loadedHelpSessionService } from "../helpSessionRuntime.js";
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { parse as parseToml } from "smol-toml";
 import { HELP_MCP_TOOL_TIMEOUT_MS } from "../../../shared/types/replyWait.js";
@@ -249,6 +254,12 @@ function stripManagedAddenda(content: string): string {
     .replace(/\n*<!-- DAINTREE_RUNBOOKS_START -->[\s\S]*?<!-- DAINTREE_RUNBOOKS_END -->\n*/, "")
     .replace(/\n+$/, "");
 }
+
+describe("HelpSessionService module", () => {
+  it("publishes its singleton for code that reads it without loading it", () => {
+    expect(loadedHelpSessionService()).toBe(helpSessionService);
+  });
+});
 
 describe("HelpSessionService", () => {
   let tmpRoot: string;
@@ -884,6 +895,47 @@ describe("HelpSessionService", () => {
           if (name !== "host-inventory.md") expect(content.split(START)).toHaveLength(2);
         }
       });
+
+      it("rewrites neither prompt file on a relaunch with the same snapshot", async () => {
+        snapshot = withProjects(["alpha"]);
+        install();
+        const first = await service.provisionSession(globalInput());
+        if (!first) throw new Error("expected result");
+        const before = await fs.readFile(path.join(first.sessionPath, "CLAUDE.md"), "utf-8");
+        for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+          await fs.utimes(path.join(first.sessionPath, name), 1_000, 1_000);
+        }
+
+        const second = await service.provisionSession(globalInput());
+        if (!second) throw new Error("expected result");
+
+        for (const name of ["CLAUDE.md", "AGENTS.md"]) {
+          const file = path.join(second.sessionPath, name);
+          expect((await fs.stat(file)).mtimeMs, name).toBe(1_000_000);
+        }
+        const after = await fs.readFile(path.join(second.sessionPath, "CLAUDE.md"), "utf-8");
+        expect(after).toBe(before);
+        expect(after.startsWith("# Global Help")).toBe(true);
+      });
+
+      it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+        "replaces a prompt file it can't read with the global assistant's own",
+        async () => {
+          snapshot = withProjects(["alpha"]);
+          install();
+          const first = await service.provisionSession(globalInput());
+          if (!first) throw new Error("expected result");
+          const claudePath = path.join(first.sessionPath, "CLAUDE.md");
+          await fs.chmod(claudePath, 0o000);
+
+          const second = await service.provisionSession(globalInput());
+          if (!second) throw new Error("expected result");
+
+          const claude = await fs.readFile(claudePath, "utf-8");
+          expect(claude.startsWith("# Global Help")).toBe(true);
+          expect(claude).toContain("`id-alpha`");
+        }
+      );
 
       it("gives a Codex run the block and the sidecar it is told to read when reopened", async () => {
         snapshot = withProjects(["alpha"]);
@@ -3849,6 +3901,387 @@ describe("HelpSessionService", () => {
         expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("claude-conv-2");
       });
 
+      describe("conversation ownership (#17919)", () => {
+        // Provisioning wires conversation ownership to the MCP server's ledger.
+        const listener = {
+          bind: mockMcpServerService.bindHelpConversation,
+          forget: mockMcpServerService.forgetAssistantConversation,
+        };
+        const ownershipOfLane = (slot = 0) =>
+          (backing.get(slotKey("proj-1", slot)) as { conversationOwnershipId?: string } | undefined)
+            ?.conversationOwnershipId;
+
+        beforeEach(() => {
+          listener.bind.mockClear();
+          listener.forget.mockClear();
+        });
+
+        it("keeps the id when the lane resumes its conversation, and binds each bearer to it", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+          expect(id).toEqual(expect.any(String));
+          expect(listener.bind).toHaveBeenLastCalledWith(first.sessionId, id);
+          expect(service.getConversationOwnershipId(first.sessionId)).toBe(id);
+          await service.revokeSession(first.sessionId);
+          expect(service.getConversationOwnershipId(first.sessionId)).toBeNull();
+
+          const resumed = await launchLane("term-2", "conv-1");
+
+          expect(ownershipOfLane()).toBe(id);
+          expect(listener.bind).toHaveBeenLastCalledWith(resumed.sessionId, id);
+          expect(service.getConversationOwnershipId(resumed.sessionId)).toBe(id);
+          expect(listener.forget).not.toHaveBeenCalled();
+        });
+
+        it("gives another conversation its own id and keeps the lane's previous one to pick back", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id1 = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+          const other = await launchLane("term-2", "conv-2");
+          const id2 = ownershipOfLane();
+          expect(id2).not.toBe(id1);
+          await service.revokeSession(other.sessionId);
+
+          const pickedBack = await launchLane("term-3", "conv-1");
+          expect(ownershipOfLane()).toBe(id1);
+          expect(listener.bind).toHaveBeenLastCalledWith(pickedBack.sessionId, id1);
+          expect(listener.forget).not.toHaveBeenCalled();
+          await service.revokeSession(pickedBack.sessionId);
+
+          // A third conversation pushes out the oldest the lane remembers.
+          await launchLane("term-4", "conv-3");
+          expect([id1, id2]).not.toContain(ownershipOfLane());
+          expect(listener.forget).toHaveBeenCalledExactlyOnceWith(id2);
+        });
+
+        it("starts afresh when main turned the resume into a fresh start, or there was no id to match", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id1 = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+
+          const restarted = await service.provisionSession(provisionInput());
+          if (!restarted) throw new Error("expected provision");
+          expect(service.markTerminalForToken(restarted.token, "term-2")).toBe(true);
+          await service.recordLaneLaunchForToken(restarted.token, "conv-1", {
+            freshConversation: true,
+          });
+          const id2 = ownershipOfLane();
+          expect(id2).not.toBe(id1);
+          await service.revokeSession(restarted.sessionId);
+
+          const idless = await launchLane("term-3");
+          const id3 = ownershipOfLane();
+          await service.revokeSession(idless.sessionId);
+          await launchLane("term-4");
+          expect(new Set([id1, id2, id3, ownershipOfLane()]).size).toBe(4);
+        });
+
+        it("forgets every conversation the lane kept when it is cleared", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id1 = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+          const second = await launchLane("term-2", "conv-2");
+          const id2 = ownershipOfLane();
+
+          await service.discardConversation("proj-1", 0);
+
+          expect(listener.forget).toHaveBeenCalledWith(id1);
+          expect(listener.forget).toHaveBeenCalledWith(id2);
+          expect(service.getConversationOwnershipId(second.sessionId)).toBeNull();
+          await service.revokeSession(second.sessionId);
+          await launchLane("term-3", "conv-1");
+          expect([id1, id2]).not.toContain(ownershipOfLane());
+        });
+
+        it("carries the id through a capture that learns the conversation's id", async () => {
+          mockPtyGracefulKill.mockResolvedValueOnce("codex-thread-1");
+          const first = await launchLane("term-codex");
+          const id = ownershipOfLane();
+
+          await service.revokeByWebContentsId(42);
+          await Promise.resolve();
+          await Promise.resolve();
+          expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("codex-thread-1");
+          expect(ownershipOfLane()).toBe(id);
+          expect(service.getConversationOwnershipId(first.sessionId)).toBeNull();
+
+          await launchLane("term-codex-2", "codex-thread-1");
+          expect(ownershipOfLane()).toBe(id);
+        });
+
+        it("keeps the id on every pointer write a capture makes for the same conversation", async () => {
+          mockPtyGracefulKill.mockResolvedValueOnce(null);
+          await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+          hibernationStore.set.mockClear();
+
+          await service.revokeByWebContentsId(42);
+          await Promise.resolve();
+
+          expect(hibernationStore.set).toHaveBeenCalled();
+          for (const [, entry] of hibernationStore.set.mock.calls) {
+            expect((entry as { conversationOwnershipId?: string }).conversationOwnershipId).toBe(
+              id
+            );
+          }
+        });
+
+        it("keeps the id when a quit-time capture learns the lane's first id", async () => {
+          const first = await launchLane("term-1");
+          const id = ownershipOfLane();
+          const lanes = service.snapshotLaneTerminals();
+          await service.revokeSession(first.sessionId);
+
+          await service.noteQuitCapture(lanes.get("term-1")!, "thread-1");
+
+          expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("thread-1");
+          expect(ownershipOfLane()).toBe(id);
+        });
+
+        it("gives a conversation the run moved to none of the one it started with", async () => {
+          mockPtyGracefulKill.mockResolvedValueOnce("conv-after-clear");
+          await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+
+          await service.revokeByWebContentsId(42);
+          await Promise.resolve();
+          await Promise.resolve();
+          expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("conv-after-clear");
+          expect(ownershipOfLane()).toBeUndefined();
+
+          const moved = await launchLane("term-2", "conv-after-clear");
+          expect([undefined, id]).not.toContain(ownershipOfLane());
+          await service.revokeSession(moved.sessionId);
+          // The conversation it started with is the lane's previous one, still its own.
+          await launchLane("term-3", "conv-1");
+          expect(ownershipOfLane()).toBe(id);
+          expect(listener.forget).not.toHaveBeenCalledWith(id);
+        });
+
+        it("parks the known conversation when a quit-time capture names another", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+          const lanes = service.snapshotLaneTerminals();
+          await service.revokeSession(first.sessionId);
+
+          await service.noteQuitCapture(lanes.get("term-1")!, "conv-2");
+
+          expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("conv-2");
+          expect(ownershipOfLane()).toBeUndefined();
+          await launchLane("term-2", "conv-1");
+          expect(ownershipOfLane()).toBe(id);
+        });
+
+        it("keeps the previous conversation's id when a capture finds the run went back to it", async () => {
+          const first = await launchLane("term-1", "conv-b");
+          const idB = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+          const second = await launchLane("term-2", "conv-a");
+          const idA = ownershipOfLane();
+          const lanes = service.snapshotLaneTerminals();
+          await service.revokeSession(second.sessionId);
+
+          await service.noteQuitCapture(lanes.get("term-2")!, "conv-b");
+
+          expect(ownershipOfLane()).toBe(idB);
+          expect(listener.forget).not.toHaveBeenCalled();
+          await launchLane("term-3", "conv-a");
+          expect(ownershipOfLane()).toBe(idA);
+        });
+
+        it("gives a fork no ownership of its own and keeps the conversation it forked from", async () => {
+          const first = await launchLane("term-1", "conv-1");
+          const id = ownershipOfLane();
+          await service.revokeSession(first.sessionId);
+
+          const fork = await service.provisionSession(provisionInput());
+          if (!fork) throw new Error("expected provision");
+          expect(service.markTerminalForToken(fork.token, "term-2")).toBe(true);
+          listener.bind.mockClear();
+          await service.recordLaneLaunchForToken(fork.token, "conv-1", {
+            forkedConversation: true,
+          });
+
+          expect(ownershipOfLane()).toBeUndefined();
+          expect(service.getConversationOwnershipId(fork.sessionId)).toBeNull();
+          expect(listener.bind).not.toHaveBeenCalled();
+          await service.revokeSession(fork.sessionId);
+          // The conversation it forked from, resumed, is still its own.
+          await launchLane("term-3", "conv-1");
+          expect(ownershipOfLane()).toBe(id);
+          expect(listener.forget).not.toHaveBeenCalled();
+        });
+
+        it("keeps the lane's id private to main", async () => {
+          await launchLane("term-1", "conv-1");
+
+          const taken = await service.takePendingHibernation("proj-1", 0, 11);
+
+          expect(taken).not.toHaveProperty("conversationOwnershipId");
+          expect(service.listKeptLanes("proj-1")[0]).not.toHaveProperty("conversationOwnershipId");
+        });
+
+        describe("handing coordination between lanes (#18143)", () => {
+          let coordinators: Map<string, number>;
+          let commit: ReturnType<typeof vi.fn>;
+
+          beforeEach(() => {
+            coordinators = new Map();
+            commit = vi.fn(
+              (change: {
+                entries?: Record<string, Entry>;
+                coordinator?: { projectId: string; slot: number };
+              }) => {
+                for (const [key, entry] of Object.entries(change.entries ?? {})) {
+                  backing.set(key, entry);
+                }
+                if (change.coordinator) {
+                  coordinators.set(change.coordinator.projectId, change.coordinator.slot);
+                }
+                return Promise.resolve();
+              }
+            );
+            Object.assign(hibernationStore, {
+              getCoordinator: vi.fn((projectId: string) => coordinators.get(projectId) ?? null),
+              commit,
+            });
+          });
+
+          async function launchSlot(slot: number, terminalId: string, agentSessionId: string) {
+            const result = await service.provisionSession({ ...provisionInput(), slot });
+            if (!result) throw new Error("expected provision");
+            expect(service.markTerminalForToken(result.token, terminalId)).toBe(true);
+            await service.recordLaneLaunchForToken(result.token, agentSessionId);
+            return result;
+          }
+
+          function handOver(from: number, to: number): Promise<void> {
+            const handover = service.handOverLaneCoordination("proj-1", from, to);
+            if (!("written" in handover)) throw new Error(`refused: ${handover.refused}`);
+            return handover.written;
+          }
+
+          it("moves the work's id to the lane taking over and gives the other its id, in one write", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const held = ownershipOfLane(0);
+            const theirs = ownershipOfLane(1);
+            expect(held).not.toBe(theirs);
+
+            const written = handOver(0, 1);
+
+            // Every call either run makes from here on already names the moved id.
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(held);
+            expect(service.getConversationOwnershipId(a.sessionId)).toBe(theirs);
+            expect(service.getLaneCoordinator("proj-1")).toBe(1);
+            await written;
+            expect(commit).toHaveBeenCalledTimes(1);
+            expect(ownershipOfLane(1)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(theirs);
+            // Each lane still points at its own conversation.
+            expect(backing.get(slotKey("proj-1", 0))?.agentSessionId).toBe("conv-a");
+            expect(backing.get(slotKey("proj-1", 1))?.agentSessionId).toBe("conv-b");
+            expect(listener.forget).not.toHaveBeenCalled();
+          });
+
+          it("keeps the handed work through a stop of the lane that handed it and a resume of the other", async () => {
+            await launchSlot(0, "term-a", "conv-a");
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const held = ownershipOfLane(0);
+
+            await handOver(0, 1);
+            await service.discardConversation("proj-1", 0);
+
+            expect(listener.forget).not.toHaveBeenCalledWith(held);
+            await service.revokeSession(b.sessionId);
+            const resumed = await launchSlot(1, "term-b2", "conv-b");
+            expect(service.getConversationOwnershipId(resumed.sessionId)).toBe(held);
+            expect(listener.bind).toHaveBeenLastCalledWith(resumed.sessionId, held);
+          });
+
+          it("hands the work back to the lane that first held it", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const held = ownershipOfLane(0);
+
+            const theirs = ownershipOfLane(1);
+            await handOver(0, 1);
+            expect(ownershipOfLane(1)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(theirs);
+            await handOver(1, 0);
+
+            expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(theirs);
+            expect(ownershipOfLane(1)).toBe(theirs);
+            expect(ownershipOfLane(0)).toBe(held);
+            expect(service.getLaneCoordinator("proj-1")).toBe(0);
+          });
+
+          it("gives the lane handing over a new id when the other held none", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const held = ownershipOfLane(0);
+            // Provisioned and running, but its spawn hasn't settled a conversation yet.
+            const b = await service.provisionSession({ ...provisionInput(), slot: 1 });
+            if (!b) throw new Error("expected provision");
+            expect(service.markTerminalForToken(b.token, "term-b")).toBe(true);
+
+            await handOver(0, 1);
+
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(held);
+            const given = service.getConversationOwnershipId(a.sessionId);
+            expect(given).toEqual(expect.any(String));
+            expect(given).not.toBe(held);
+            expect(ownershipOfLane(0)).toBe(given);
+          });
+
+          it("refuses, changing nothing, while a launch holds the receiving lane's pointer", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const held = ownershipOfLane(0);
+            await service.revokeSession(b.sessionId);
+            await service.takePendingHibernation("proj-1", 1, 11);
+
+            expect(service.handOverLaneCoordination("proj-1", 0, 1)).toEqual({
+              refused: "starting",
+            });
+
+            expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(held);
+            expect(service.getLaneCoordinator("proj-1")).toBeNull();
+            expect(commit).not.toHaveBeenCalled();
+          });
+
+          it("refuses a lane with nothing to take the work into while the other holds some", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const held = ownershipOfLane(0);
+
+            expect(service.handOverLaneCoordination("proj-1", 0, 1)).toEqual({ refused: "unheld" });
+            expect(service.getConversationOwnershipId(a.sessionId)).toBe(held);
+            expect(commit).not.toHaveBeenCalled();
+
+            // With no work to hand, coordination alone moves.
+            const handover = service.handOverLaneCoordination("proj-1", 1, 0);
+            expect(handover).toHaveProperty("written");
+            expect(service.getLaneCoordinator("proj-1")).toBe(0);
+          });
+
+          it("moves a kept lane's id through its pointer, which its next resume picks up", async () => {
+            const a = await launchSlot(0, "term-a", "conv-a");
+            const held = ownershipOfLane(0);
+            await service.revokeSession(a.sessionId);
+            const b = await launchSlot(1, "term-b", "conv-b");
+            const theirs = ownershipOfLane(1);
+
+            await handOver(0, 1);
+
+            expect(service.getConversationOwnershipId(b.sessionId)).toBe(held);
+            expect(ownershipOfLane(0)).toBe(theirs);
+            const resumed = await launchSlot(0, "term-a2", "conv-a");
+            expect(service.getConversationOwnershipId(resumed.sessionId)).toBe(theirs);
+          });
+        });
+      });
+
       it("never downgrades a known id to the empty sentinel when an eviction capture finds nothing", async () => {
         mockPtyGracefulKill.mockResolvedValueOnce(null);
         await launchLane("term-evict", "claude-conv-3");
@@ -5742,6 +6175,101 @@ describe("HelpSessionService", () => {
       // A Claude lane of the same project is still handed the plugin's notes.
       await service.provisionSession(provisionInput());
       expect(mockResolveAssistantPluginKnowledge).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("a relaunch with nothing changed (#17076)", () => {
+    const LONG_AGO_S = 1_000;
+    const ownFiles = ["CLAUDE.md", "AGENTS.md", ".mcp.json", path.join(".claude", "settings.json")];
+
+    async function backdate(sessionPath: string, names: string[]): Promise<void> {
+      for (const name of names) {
+        await fs.utimes(path.join(sessionPath, name), LONG_AGO_S, LONG_AGO_S);
+      }
+    }
+
+    it("rewrites none of the session's own files", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected first provision");
+      const before = await Promise.all(
+        ownFiles.map((name) => fs.readFile(path.join(first.sessionPath, name), "utf-8"))
+      );
+      await backdate(first.sessionPath, ownFiles);
+
+      const second = await service.provisionSession(provisionInput());
+      if (!second) throw new Error("expected second provision");
+
+      for (const [i, name] of ownFiles.entries()) {
+        const file = path.join(second.sessionPath, name);
+        expect((await fs.stat(file)).mtimeMs, name).toBe(LONG_AGO_S * 1000);
+        expect(await fs.readFile(file, "utf-8"), name).toBe(before[i]);
+      }
+    });
+
+    it("brings a stale prompt file's blocks current and leaves the other alone", async () => {
+      const first = await service.provisionSession(provisionInput());
+      if (!first) throw new Error("expected first provision");
+      const claudePath = path.join(first.sessionPath, "CLAUDE.md");
+      // A block an older build left behind, and one that went missing.
+      const stale = (await fs.readFile(claudePath, "utf-8")).replace(
+        /<!-- DAINTREE_ASSISTANT_SCRATCH_START -->[\s\S]*?<!-- DAINTREE_ASSISTANT_SCRATCH_END -->\n/,
+        ""
+      );
+      await fs.writeFile(
+        claudePath,
+        `${stale}\n<!-- DAINTREE_MESSAGING_START -->\nold inbox rules\n<!-- DAINTREE_MESSAGING_END -->\n`
+      );
+      await backdate(first.sessionPath, ["AGENTS.md"]);
+
+      await service.provisionSession(provisionInput());
+
+      const claude = await fs.readFile(claudePath, "utf-8");
+      expect(claude).toContain("<!-- DAINTREE_ASSISTANT_SCRATCH_START -->");
+      expect(claude).not.toContain("old inbox rules");
+      expect(
+        (await fs.stat(path.join(first.sessionPath, "AGENTS.md"))).mtimeMs,
+        "AGENTS.md had nothing to change"
+      ).toBe(LONG_AGO_S * 1000);
+    });
+
+    it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+      "puts back a settings file's mode without rewriting it",
+      async () => {
+        const first = await service.provisionSession(provisionInput());
+        if (!first) throw new Error("expected first provision");
+        const settings = path.join(first.sessionPath, ".claude", "settings.json");
+        await fs.chmod(settings, 0o644);
+        await backdate(first.sessionPath, [path.join(".claude", "settings.json")]);
+
+        await service.provisionSession(provisionInput());
+
+        const stats = await fs.stat(settings);
+        expect(stats.mode & 0o777).toBe(0o600);
+        expect(stats.mtimeMs).toBe(LONG_AGO_S * 1000);
+      }
+    );
+
+    it("hashes the bundled template again only when one of its files changes", async () => {
+      const templateClaude = path.join(helpFolder, "CLAUDE.md");
+      // A whole-second mtime, so putting it back below restores it exactly.
+      await fs.utimes(templateClaude, LONG_AGO_S, LONG_AGO_S);
+      await service.provisionSession(provisionInput());
+      const readFile = vi.spyOn(fs, "readFile");
+      const templateReads = () =>
+        readFile.mock.calls.filter(([file]) => file === templateClaude).length;
+
+      await service.provisionSession(provisionInput());
+      expect(templateReads()).toBe(0);
+
+      // Same length, and its mtime put back: only the change time shows it.
+      await fs.writeFile(templateClaude, "# Hel!", "utf-8");
+      await fs.utimes(templateClaude, LONG_AGO_S, LONG_AGO_S);
+      expect((await fs.stat(templateClaude)).mtimeMs).toBe(LONG_AGO_S * 1000);
+      const third = await service.provisionSession(provisionInput());
+      if (!third) throw new Error("expected third provision");
+      expect(templateReads()).toBeGreaterThan(0);
+      const claude = await fs.readFile(path.join(third.sessionPath, "CLAUDE.md"), "utf-8");
+      expect(stripManagedAddenda(claude)).toBe("# Hel!");
     });
   });
 

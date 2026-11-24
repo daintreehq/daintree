@@ -21,7 +21,8 @@ import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import type { ActionSource } from "@shared/types/actions";
 import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
 import { isPtyPanel } from "@shared/types/panel";
-import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { defaultLoginLabel, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { reopensFromConversationStore } from "@shared/utils/conversationStore";
 import {
   DestructiveConsequence,
   type DestructiveConfirmCopy,
@@ -52,14 +53,17 @@ export function buildRestartOnAccountCopy(
   terminalTitle: string | undefined,
   accountName: string,
   agentWorking: boolean,
-  keepConversation = false
+  keepConversation = false,
+  agentId?: string
 ): DestructiveConfirmCopy {
   return {
     title: `Restart ${quoted(terminalTitle, "terminal")} on ${quoted(accountName, "another account")}?`,
     lead: agentWorking ? "Its agent is working and will be interrupted." : undefined,
-    description: keepConversation
-      ? "It keeps its preset and reopens this conversation on that account, and the scrollback is discarded. If the account can't find the conversation, the panel offers a new one or the way back."
-      : "It keeps its preset and starts a new conversation on that account, and the scrollback is discarded.",
+    description: !keepConversation
+      ? "It keeps its preset and starts a new conversation on that account, and the scrollback is discarded."
+      : reopensFromConversationStore(agentId)
+        ? "It keeps its preset and continues this conversation on that account, and the scrollback is discarded. The conversation stays in the folder it began in. If it can't be reopened, the panel offers a new one or the way back."
+        : "It keeps its preset and reopens this conversation on that account, and the scrollback is discarded. If the account can't find the conversation, the panel offers a new one or the way back.",
     confirmLabel: "Restart on account",
   };
 }
@@ -84,6 +88,9 @@ export function useRestartAccountChoices(
   const savedAccounts = useAgentSettingsStore((s) =>
     agentId ? s.settings?.agents?.[agentId]?.accounts : undefined
   );
+  const defaultLoginName = useAgentSettingsStore((s) =>
+    agentId ? s.settings?.agents?.[agentId]?.defaultLoginName : undefined
+  );
   const customPresets = useAgentSettingsStore((s) =>
     agentId ? s.settings?.agents?.[agentId]?.customPresets : undefined
   );
@@ -98,11 +105,11 @@ export function useRestartAccountChoices(
     const accounts = sanitizeAgentAccounts(savedAccounts);
     if (accounts.length === 0 && !currentAccountId) return [];
     const all: RestartAccountChoice[] = [
-      { id: null, name: "Default login" },
+      { id: null, name: defaultLoginLabel(defaultLoginName) },
       ...accounts.map((account) => ({ id: account.id, name: account.name })),
     ];
     return all.filter((choice) => choice.id !== (currentAccountId ?? null));
-  }, [agentId, currentAccountId, savedAccounts]);
+  }, [agentId, currentAccountId, savedAccounts, defaultLoginName]);
 
   const headroomFor = useAgentAccountHeadroom(agentId, open && choices.length > 0);
   // A preset that can't be found refuses the switch anyway; its folder is unknown.
@@ -210,15 +217,12 @@ function RestartOnAccountConfirm({
 }: RestartOnAccountConfirmDialogProps & { request: RestartOnAccountRequest }) {
   const keepId = useId();
   const [keepConversation, setKeepConversation] = useState(false);
-  // Offered where a refusal can be recognised, as on a preset switch (#16045).
-  const canKeep = usePanelStore((state) => {
+  const agentId = usePanelStore((state) => {
     const panel = state.panelsById[request.terminalId];
-    return (
-      panel !== undefined &&
-      isPtyPanel(panel) &&
-      supportsConversationKeepingSwitch(panel.launchAgentId)
-    );
+    return panel !== undefined && isPtyPanel(panel) ? panel.launchAgentId : undefined;
   });
+  // Offered where a refusal can be recognised, as on a preset switch (#16045).
+  const canKeep = supportsConversationKeepingSwitch(agentId);
   const keep = canKeep && keepConversation;
 
   const handleConfirm = useCallback(() => {
@@ -246,7 +250,8 @@ function RestartOnAccountConfirm({
     request.terminalTitle,
     request.account.name,
     request.agentWorking,
-    keep
+    keep,
+    agentId
   );
   return (
     <ConfirmDialog

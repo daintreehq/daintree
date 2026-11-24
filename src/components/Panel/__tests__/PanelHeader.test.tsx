@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
-import { act, cleanup, render, screen, fireEvent } from "@testing-library/react";
+import { act, cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { LazyMoveToWorktreePicker } from "../lazyMoveToWorktreePicker";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
@@ -820,10 +821,15 @@ describe("PanelHeader", () => {
       expect(trashButton?.getAttribute("data-destructive")).not.toBe("true");
     });
 
-    it("dispatches terminal.rename when clicking Rename", () => {
+    it("dispatches terminal.rename only after the menu has returned focus", async () => {
       render(<PanelHeader {...makeProps()} />);
       const menu = screen.getByTestId("overflow-menu");
       findMenuButton(menu, "Rename")?.click();
+      expect(mockDispatch).not.toHaveBeenCalled();
+      act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
       expect(mockDispatch).toHaveBeenCalledWith(
         "terminal.rename",
         { terminalId: "test-panel" },
@@ -976,6 +982,50 @@ describe("PanelHeader", () => {
     });
   });
 
+  describe("Reset terminal modes (#17328)", () => {
+    it("sits beside Redraw and dispatches only once focus is back on the panel", async () => {
+      mockHasPty = true;
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      const redraw = screen.getByTestId("panel-redraw");
+      const reset = screen.getByTestId("panel-reset-modes");
+      expect(redraw.nextElementSibling).toBe(reset);
+
+      fireEvent.click(reset);
+      // With an agent running the action stages a confirm, whose own close
+      // must return focus to this panel rather than to the dying menu item.
+      expect(mockDispatch).not.toHaveBeenCalled();
+      act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+      expect(mockDispatch).not.toHaveBeenCalled();
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "terminal.resetModes",
+        { terminalId: "test-panel" },
+        { source: "menu" }
+      );
+    });
+
+    it("isn't offered on a panel without a terminal", () => {
+      mockHasPty = false;
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      expect(screen.queryByTestId("panel-reset-modes")).toBeNull();
+    });
+
+    it("isn't offered once the terminal's process has exited, beside a Redraw that still is", () => {
+      mockHasPty = true;
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: { "test-panel": { id: "test-panel", kind: "terminal", exitCode: 1 } },
+      };
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      expect(screen.getByTestId("panel-redraw")).toBeTruthy();
+      expect(screen.queryByTestId("panel-reset-modes")).toBeNull();
+    });
+  });
+
   describe("Move to worktree", () => {
     const findMenuButton = (label: string) =>
       Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button")).find(
@@ -1055,10 +1105,17 @@ describe("PanelHeader", () => {
       expect(findMenuButton("Move to new worktree…")).toBeUndefined();
     });
 
-    it("opens the picker once the menu has closed, without moving anything", () => {
+    it("opens the picker once the menu has closed, without moving anything", async () => {
       placePanelIn("w-a");
       mockWorktreeIds = ["w-a", "w-b"];
       render(<PanelHeader {...makeProps()} />);
+
+      // Opening the menu fetches the picker's chunk ahead of the pick.
+      const preload = vi.spyOn(LazyMoveToWorktreePicker, "preload");
+      onTestFinished(() => preload.mockRestore());
+      act(() => mockMenuOpenChange?.(true));
+      expect(preload).toHaveBeenCalled();
+      await preload.mock.results[0]!.value;
 
       fireEvent.click(findMenuButton("Move to worktree…")!);
       // Still inside the menu's teardown: opening now would race its focus return.
@@ -1068,6 +1125,76 @@ describe("PanelHeader", () => {
       expect(picker()?.getAttribute("data-panel-id")).toBe("test-panel");
       expect(picker()?.getAttribute("data-current-worktree-id")).toBe("w-a");
       expect(mockDispatch).not.toHaveBeenCalled();
+    });
+
+    describe("while the picker's chunk is still loading", () => {
+      let land: () => void;
+      beforeEach(async () => {
+        // The real chunk, so the picker renders once the stand-in load lands.
+        await LazyMoveToWorktreePicker.preload();
+        const loading = new Promise<void>((resolve) => {
+          land = resolve;
+        });
+        const isLoaded = vi.spyOn(LazyMoveToWorktreePicker, "isLoaded").mockReturnValue(false);
+        const preload = vi
+          .spyOn(LazyMoveToWorktreePicker, "preload")
+          .mockImplementation(() => loading.then(() => ({}) as never));
+        onTestFinished(() => {
+          isLoaded.mockRestore();
+          preload.mockRestore();
+        });
+        placePanelIn("w-a");
+        mockWorktreeIds = ["w-a", "w-b"];
+      });
+
+      const pickCold = () => {
+        render(<PanelHeader {...makeProps()} />);
+        fireEvent.click(findMenuButton("Move to worktree…")!);
+        // The menu hands focus back to the button meanwhile.
+        expect(finishMenuClose()).toBe(false);
+        expect(picker()).toBeNull();
+      };
+      // The chunk lands, and the task the opener waits on for the menu's focus
+      // return has run.
+      const settle = () =>
+        act(async () => {
+          land();
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+
+      it("opens the picker once the chunk lands", async () => {
+        pickCold();
+        await settle();
+        expect(picker()?.getAttribute("data-panel-id")).toBe("test-panel");
+      });
+
+      it("drops the pick when the menu opens again first", async () => {
+        pickCold();
+        act(() => mockMenuOpenChange?.(true));
+        await settle();
+        expect(picker()).toBeNull();
+      });
+
+      it("drops the pick when focus has gone elsewhere by then", async () => {
+        pickCold();
+        await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+        const elsewhere = document.createElement("input");
+        document.body.appendChild(elsewhere);
+        onTestFinished(() => elsewhere.remove());
+        elsewhere.focus();
+        await settle();
+        expect(picker()).toBeNull();
+      });
+
+      it("drops the pick when the header goes to another panel and back", async () => {
+        const { rerender } = render(<PanelHeader {...makeProps()} />);
+        fireEvent.click(findMenuButton("Move to worktree…")!);
+        expect(finishMenuClose()).toBe(false);
+        rerender(<PanelHeader {...makeProps({ id: "other-panel" })} />);
+        rerender(<PanelHeader {...makeProps()} />);
+        await settle();
+        expect(picker()).toBeNull();
+      });
     });
 
     it("leaves an ordinary menu close alone", () => {
@@ -1091,14 +1218,14 @@ describe("PanelHeader", () => {
       expect(picker()).toBeNull();
     });
 
-    it("closes an open picker when the header goes on to another panel", () => {
+    it("closes an open picker when the header goes on to another panel", async () => {
       // A picker opened for one panel must never move another.
       placePanelIn("w-a");
       mockWorktreeIds = ["w-a", "w-b"];
       const { rerender } = render(<PanelHeader {...makeProps()} />);
       fireEvent.click(findMenuButton("Move to worktree…")!);
       finishMenuClose();
-      expect(picker()).not.toBeNull();
+      await waitFor(() => expect(picker()).not.toBeNull());
 
       rerender(<PanelHeader {...makeProps({ id: "other-panel" })} />);
       expect(picker()).toBeNull();
@@ -1443,7 +1570,7 @@ describe("PanelHeader", () => {
       ["background", "terminal.background", "grid"],
       ["trash", "terminal.trash", "grid"],
       ["kill", "terminal.kill", "grid"],
-    ] as const)("routes %s to %s for this panel", (commandId, actionId, location) => {
+    ] as const)("routes %s to %s for this panel", async (commandId, actionId, location) => {
       registerPluginKind(PLUGIN_KIND);
       // Another panel holds focus: the command still names this one.
       mockStoreState = { ...mockStoreState, focusedId: "other-panel" };
@@ -1466,6 +1593,13 @@ describe("PanelHeader", () => {
         .find((entry) => entry.id === commandId)!;
 
       findMenuButton(command.label)!.click();
+      if (commandId === "rename") {
+        expect(mockDispatch).not.toHaveBeenCalled();
+        act(() => mockMenuCloseAutoFocus?.(new Event("closeAutoFocus", { cancelable: true })));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+      }
 
       expect(mockDispatch).toHaveBeenCalledTimes(1);
       expect(mockDispatch).toHaveBeenCalledWith(

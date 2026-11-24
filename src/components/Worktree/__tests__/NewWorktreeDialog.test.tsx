@@ -6,6 +6,7 @@ import { render, screen, cleanup, act, fireEvent, within } from "@testing-librar
 import { useState } from "react";
 import type { BranchInfo } from "@/types/electron";
 import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { UI_SKELETON_FLOOR_MS, UI_SKELETON_GATE_MS } from "@/lib/animationUtils";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -18,26 +19,42 @@ vi.stubGlobal(
 
 const mockDispatch = vi.fn();
 /** The form's draft for another host, as the placement row would ask for it. */
+/** Lets a test keep the dialog's children mounted while closed, as AppDialog's exit does. */
+const dialogMock = vi.hoisted(() => ({ keepChildrenWhenClosed: false }));
 const placement = vi.hoisted(() => ({
   getDraft: null as null | (() => unknown),
   onCommitChange: null as null | ((commit: unknown) => void),
+  onCloudChange: null as null | ((commit: unknown) => void),
 }));
+const startCloudWorktreePlacement = vi.hoisted(() => vi.fn(async () => "feature-test"));
 
 vi.mock("@/components/Hosts/Overview/LazyHostOverviewParts", () => ({
   LazyWorktreePlacementRow: (props: {
     getDraft: () => unknown;
     onCommitChange?: (commit: unknown) => void;
+    onCloudChange?: (commit: unknown) => void;
   }) => {
     placement.getDraft = props.getDraft;
     placement.onCommitChange = props.onCommitChange ?? null;
+    placement.onCloudChange = props.onCloudChange ?? null;
     return null;
   },
 }));
+vi.mock("@/components/Hosts/cloudWorktreePlacement", () => ({ startCloudWorktreePlacement }));
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: (...args: unknown[]) => mockDispatch(...args),
   },
+}));
+
+/** Whether this window can open a resource's box as a host, and the handoff Create starts. */
+const machineHandoff = vi.hoisted(() => ({ offered: false, open: vi.fn() }));
+vi.mock("@/components/Hosts/resourceHostHandoff", () => ({
+  canOfferResourceBoxHandoff: () => machineHandoff.offered,
+}));
+vi.mock("@/components/Worktree/openCreatedWorktreeOnMachine", () => ({
+  openCreatedWorktreeOnMachine: (...args: unknown[]) => machineHandoff.open(...args),
 }));
 
 const mockGetAvailableBranch = vi.fn();
@@ -294,11 +311,17 @@ const projectSettingsFixture = vi.hoisted(() => ({
     defaultWorktreeRecipeId?: string;
     resourceEnvironments?: Record<string, object>;
   } | null,
+  /** What the hook lists in place of Project settings' none: a settings file's, read by the host. */
+  hostEnvironments: undefined as Record<string, object> | undefined,
+  environmentsLoaded: true,
 }));
 vi.mock("@/components/Worktree/hooks/useNewWorktreeProjectSettings", () => ({
   useNewWorktreeProjectSettings: () => ({
     projectSettings: projectSettingsFixture.value,
     configuredBranchPrefix: "",
+    resourceEnvironments:
+      projectSettingsFixture.value?.resourceEnvironments ?? projectSettingsFixture.hostEnvironments,
+    environmentsLoaded: projectSettingsFixture.environmentsLoaded,
   }),
 }));
 
@@ -306,6 +329,7 @@ vi.mock("@/components/ui/AppDialog", () => {
   const Dialog = ({
     children,
     isOpen,
+    initialFocus,
   }: {
     children: React.ReactNode;
     isOpen: boolean;
@@ -313,8 +337,14 @@ vi.mock("@/components/ui/AppDialog", () => {
     onBeforeClose?: () => boolean;
     size?: string;
     dismissible?: boolean;
+    initialFocus?: string;
     "data-testid"?: string;
-  }) => (isOpen ? <div data-testid="new-worktree-dialog">{children}</div> : null);
+  }) =>
+    isOpen || dialogMock.keepChildrenWhenClosed ? (
+      <div data-testid="new-worktree-dialog" data-initial-focus={initialFocus}>
+        {children}
+      </div>
+    ) : null;
   Dialog.Header = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.Title = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
   Dialog.CloseButton = () => <button aria-label="Close" />;
@@ -1375,11 +1405,14 @@ describe("NewWorktreeDialog — branch list cache", () => {
     vi.clearAllMocks();
   });
 
-  it("shows the skeleton on first-ever open while branches load", async () => {
+  it("shows the skeleton on first-ever open once the load outlasts the onset gate", async () => {
     mockListBranches.mockReturnValue(new Promise(() => {}));
     renderDialog();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
 
-    expect(screen.getByRole("status")).toBeDefined();
+    expect(screen.getByRole("status", { name: "Loading branches" })).toBeDefined();
     expect(screen.queryByTestId("branch-name-input")).toBeNull();
   });
 
@@ -1529,8 +1562,363 @@ describe("NewWorktreeDialog — branch list cache", () => {
         rawData: null,
       },
     });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UI_SKELETON_GATE_MS);
+    });
 
-    expect(screen.getByRole("status")).toBeDefined();
+    expect(screen.getByRole("status", { name: "Loading branches" })).toBeDefined();
+    expect(screen.queryByTestId("branch-name-input")).toBeNull();
+  });
+});
+
+describe("NewWorktreeDialog — branch loading skeleton timing", () => {
+  const STEP_MS = 10;
+  const LOADING_HINT = "Loading branches…";
+  const observers: MutationObserver[] = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    delete document.body.dataset.performanceMode;
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    for (const observer of observers.splice(0)) observer.disconnect();
+    cleanup();
+    dialogMock.keepChildrenWhenClosed = false;
+    delete document.body.dataset.performanceMode;
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function resolveBranchesAfter(ms: number) {
+    mockListBranches.mockImplementation(
+      () => new Promise<BranchInfo[]>((resolve) => setTimeout(() => resolve(TEST_BRANCHES), ms))
+    );
+  }
+
+  const skeleton = () => screen.queryByRole("status", { name: "Loading branches" });
+  const branchInput = () => screen.queryByTestId("branch-name-input");
+  const loadingHint = () => screen.queryByText(LOADING_HINT) !== null;
+  const reservation = () => document.querySelector<HTMLElement>('[inert][aria-hidden="true"]');
+  const SKELETON_SELECTOR = '[role="status"][aria-label="Loading branches"]';
+  const FORM_SELECTOR = '[data-testid="branch-name-input"]';
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  /** Steps the clock, recording each step what the branch area and footer showed. */
+  async function sample(totalMs: number, startAt = 0) {
+    const frames: { at: number; skeleton: boolean; form: boolean; hint: boolean }[] = [];
+    for (let at = STEP_MS; at <= totalMs; at += STEP_MS) {
+      await advance(STEP_MS);
+      frames.push({
+        at: startAt + at,
+        skeleton: skeleton() !== null,
+        form: branchInput() !== null,
+        hint: loadingHint(),
+      });
+    }
+    return frames;
+  }
+
+  /**
+   * Whether `selector` was mounted or unmounted while watching, including in a
+   * commit a later one in the same act() replaced: a removed subtree keeps its
+   * descendants, so the removal record still shows what was there. Assumes the
+   * selector's attributes don't change on a node React reuses.
+   */
+  function watchMounts(selector: string) {
+    let seen = false;
+    const scan = (records: MutationRecord[]) => {
+      for (const record of records) {
+        for (const node of [...record.addedNodes, ...record.removedNodes]) {
+          if (node instanceof Element && (node.matches(selector) || node.querySelector(selector)))
+            seen = true;
+        }
+      }
+    };
+    // Records are handed to the callback whenever microtasks run, and only the
+    // ones not yet delivered come back from takeRecords(), so both read them.
+    const observer = new MutationObserver(scan);
+    observer.observe(document.body, { childList: true, subtree: true });
+    observers.push(observer);
+    return () => {
+      scan(observer.takeRecords());
+      return seen;
+    };
+  }
+
+  it("never mounts the skeleton when branches resolve inside the onset gate", async () => {
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
+    renderDialog();
+
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).toBeNull();
+    // The form's footprint is held, drawn by nothing and out of reach.
+    expect(reservation()?.textContent).toContain("Destination");
+    expect(loadingHint()).toBe(false);
+    // AppDialog is told to put initial focus on its surface while there is no field.
+    const dialog = screen.getByTestId("new-worktree-dialog");
+    expect(dialog.getAttribute("data-initial-focus")).toBe("surface");
+    const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+
+    expect(skeletonMounted()).toBe(false);
+    expect(frames.filter((f) => f.skeleton || f.hint)).toEqual([]);
+    expect(frames.find((f) => f.form)?.at).toBeLessThanOrEqual(UI_SKELETON_GATE_MS);
+    expect(reservation()).toBeNull();
+    expect(dialog.getAttribute("data-initial-focus")).toBeNull();
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("never mounts the skeleton for a load that resolves a millisecond before the gate", async () => {
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS - 1);
+    renderDialog();
+
+    await advance(UI_SKELETON_GATE_MS - 1);
+    expect(branchInput()).not.toBeNull();
+    await sample(UI_SKELETON_FLOOR_MS);
+
+    expect(skeletonMounted()).toBe(false);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("never mounts the skeleton when the load settles in the batch the gate fires in", async () => {
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS);
+    renderDialog();
+
+    // One act: the gate's timer and the load land in the same render.
+    await advance(UI_SKELETON_GATE_MS);
+    expect(branchInput()).not.toBeNull();
+    await sample(UI_SKELETON_FLOOR_MS);
+
+    expect(skeletonMounted()).toBe(false);
+    expect(branchInput()).not.toBeNull();
+  });
+
+  it("shows the skeleton at the gate and holds it to the millisecond of the floor", async () => {
+    const loadMs = UI_SKELETON_GATE_MS + 2 * STEP_MS;
+    resolveBranchesAfter(loadMs);
+    renderDialog();
+
+    await advance(UI_SKELETON_GATE_MS - 1);
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).toBeNull();
+    await advance(1);
+    expect(skeleton()).not.toBeNull();
+
+    // The load settles 20ms in, in an act of its own so it commits then; the
+    // floor still runs from the skeleton's appearance.
+    await advance(loadMs - UI_SKELETON_GATE_MS);
+    expect(skeleton()).not.toBeNull();
+    await advance(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS - loadMs - 1);
+    expect(skeleton()).not.toBeNull();
+    expect(branchInput()).toBeNull();
+    await advance(1);
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).not.toBeNull();
+
+    await advance(0);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("goes from held space to the skeleton to the form, with no form before the skeleton", async () => {
+    const formMounted = watchMounts(FORM_SELECTOR);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    renderDialog();
+
+    const beforeGate = await sample(UI_SKELETON_GATE_MS - STEP_MS);
+    expect(beforeGate.some((f) => f.skeleton || f.form || f.hint)).toBe(false);
+    // Not even the first commit of a cold open, before the bootstrap ran.
+    expect(formMounted()).toBe(false);
+
+    const frames = await sample(UI_SKELETON_FLOOR_MS + 12 * STEP_MS, UI_SKELETON_GATE_MS - STEP_MS);
+
+    const shown = frames.filter((f) => f.skeleton);
+    expect(shown[0]?.at).toBe(UI_SKELETON_GATE_MS);
+    // Never both, never neither once shown: the skeleton hands straight to the form.
+    expect(frames.some((f) => f.skeleton && f.form)).toBe(false);
+    expect(frames.filter((f) => !f.skeleton && !f.form)).toEqual([]);
+    // The footer says it's loading exactly while the skeleton does.
+    expect(frames.filter((f) => f.hint !== f.skeleton)).toEqual([]);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("measures the floor from the skeleton's appearance, not from the load settling", async () => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS - 4 * STEP_MS);
+    renderDialog();
+
+    const frames = await sample(UI_SKELETON_GATE_MS + 2 * UI_SKELETON_FLOOR_MS);
+
+    expect(frames.find((f) => f.form)?.at).toBe(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("swaps a load that outlasts the floor out the moment it resolves", async () => {
+    const loadMs = UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS + 15 * STEP_MS;
+    resolveBranchesAfter(loadMs);
+    renderDialog();
+
+    // Through the gate on its own: React holds an act()'s updates until it
+    // exits, so one long advance would commit the skeleton, and start its
+    // floor, only at the end of it.
+    await advance(UI_SKELETON_GATE_MS);
+    expect(skeleton()).not.toBeNull();
+    await advance(loadMs - UI_SKELETON_GATE_MS - 1);
+    expect(skeleton()).not.toBeNull();
+    expect(branchInput()).toBeNull();
+    await advance(1);
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).not.toBeNull();
+  });
+
+  it("starts a fresh gate when reopened after a close mid-load", async () => {
+    mockListBranches.mockReturnValue(new Promise(() => {}));
+    const props = { onClose: vi.fn(), rootPath: "/test/root" };
+    const { rerender } = render(<NewWorktreeDialog isOpen={true} {...props} />);
+    await sample(UI_SKELETON_GATE_MS + 5 * STEP_MS);
+    expect(skeleton()).not.toBeNull();
+
+    rerender(<NewWorktreeDialog isOpen={false} {...props} />);
+    await advance(STEP_MS);
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    rerender(<NewWorktreeDialog isOpen={true} {...props} />);
+
+    // Neither the last opening's skeleton nor its floor carries over.
+    await advance(UI_SKELETON_GATE_MS - 1);
+    expect(skeletonMounted()).toBe(false);
+    await advance(1);
+    expect(skeleton()).not.toBeNull();
+    await sample(UI_SKELETON_FLOOR_MS);
+    expect(skeleton()).toBeNull();
+    await advance(0);
+    expect(document.activeElement).toBe(branchInput());
+  });
+
+  it("holds space again on a cold reopen after an opening that showed the form", async () => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
+    const props = { onClose: vi.fn(), rootPath: "/test/root" };
+    const { rerender } = render(<NewWorktreeDialog isOpen={true} {...props} />);
+    await sample(UI_SKELETON_GATE_MS);
+    expect(branchInput()).not.toBeNull();
+
+    rerender(<NewWorktreeDialog isOpen={false} {...props} />);
+    await advance(STEP_MS);
+    clearBranchListCache();
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    const formMounted = watchMounts(FORM_SELECTOR);
+    rerender(<NewWorktreeDialog isOpen={true} {...props} />);
+
+    expect(reservation()).not.toBeNull();
+    await advance(UI_SKELETON_GATE_MS - 1);
+    expect(formMounted()).toBe(false);
+    expect(reservation()).not.toBeNull();
+    await advance(1);
+    expect(skeleton()).not.toBeNull();
+  });
+
+  it.each([
+    ["clicking Create", () => fireEvent.click(screen.getByTestId("create-worktree-button"))],
+    ["Cmd+Enter", () => fireEvent.keyDown(window, { key: "Enter", metaKey: true })],
+    ["Ctrl+Enter", () => fireEvent.keyDown(window, { key: "Enter", ctrlKey: true })],
+  ])("holds %s back while the floor keeps the skeleton up", async (_name, submit) => {
+    resolveBranchesAfter(UI_SKELETON_GATE_MS + 2 * STEP_MS);
+    renderDialog();
+    await sample(UI_SKELETON_GATE_MS + 5 * STEP_MS);
+    expect(skeleton()).not.toBeNull();
+    const create = screen.getByTestId("create-worktree-button");
+    expect(create.getAttribute("aria-disabled")).toBe("true");
+
+    // A submit that got through would validate the empty name and leave its
+    // error waiting on the form.
+    await act(async () => submit());
+    await sample(UI_SKELETON_FLOOR_MS);
+    expect(branchInput()).not.toBeNull();
+    expect(create.getAttribute("aria-disabled")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await act(async () => submit());
+    expect(screen.queryByRole("alert")).not.toBeNull();
+  });
+
+  it.each([
+    ["mid-load", null],
+    ["mid-floor", UI_SKELETON_GATE_MS + 2 * STEP_MS],
+  ])("keeps the skeleton through the exit when closed %s", async (_name, loadMs) => {
+    dialogMock.keepChildrenWhenClosed = true;
+    if (loadMs === null) mockListBranches.mockReturnValue(new Promise(() => {}));
+    else resolveBranchesAfter(loadMs);
+    const props = { onClose: vi.fn(), rootPath: "/test/root" };
+    const { rerender } = render(<NewWorktreeDialog isOpen={true} {...props} />);
+    await sample(UI_SKELETON_GATE_MS + 5 * STEP_MS);
+    expect(skeleton()).not.toBeNull();
+
+    const formMounted = watchMounts(FORM_SELECTOR);
+    rerender(<NewWorktreeDialog isOpen={false} {...props} />);
+    const frames = await sample(UI_SKELETON_FLOOR_MS);
+
+    expect(frames.filter((f) => !f.skeleton || !f.hint)).toEqual([]);
+    expect(formMounted()).toBe(false);
+    // Create is still mounted for the fade, and as held as it was at the close.
+    const create = screen.getByTestId("create-worktree-button");
+    expect(create.getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps the form up through the gate on a Retry after a failed load", async () => {
+    mockListBranches.mockRejectedValueOnce(new Error("not a git repository"));
+    renderDialog();
+    await sample(UI_SKELETON_GATE_MS);
+    const retry = screen.getByRole("button", { name: "Retry" });
+    expect(branchInput()).not.toBeNull();
+
+    resolveBranchesAfter(UI_SKELETON_GATE_MS / 4);
+    const formMounted = watchMounts(FORM_SELECTOR);
+    const skeletonMounted = watchMounts(SKELETON_SELECTOR);
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(screen.getByTestId("create-worktree-button").getAttribute("aria-disabled")).toBe("true");
+    // On screen but out of reach: a field touched against the emptied list
+    // would keep the reloaded one from seeding the base.
+    expect(branchInput()?.closest("[inert]")).not.toBeNull();
+    const frames = await sample(UI_SKELETON_GATE_MS + UI_SKELETON_FLOOR_MS);
+
+    expect(frames.filter((f) => !f.form)).toEqual([]);
+    expect(branchInput()?.closest("[inert]")).toBeNull();
+    expect(formMounted()).toBe(false);
+    expect(skeletonMounted()).toBe(false);
+    expect(document.getElementById("base-branch")?.textContent).toContain("main");
+  });
+
+  it("swaps the skeleton out as soon as branches resolve in performance mode", async () => {
+    document.body.dataset.performanceMode = "true";
+    const loadMs = UI_SKELETON_GATE_MS + 2 * STEP_MS;
+    resolveBranchesAfter(loadMs);
+    renderDialog();
+
+    await advance(UI_SKELETON_GATE_MS);
+    expect(skeleton()).not.toBeNull();
+    await advance(loadMs - UI_SKELETON_GATE_MS - 1);
+    expect(skeleton()).not.toBeNull();
+    await advance(1);
+    expect(skeleton()).toBeNull();
+    expect(branchInput()).not.toBeNull();
+    await advance(0);
+    expect(document.activeElement).toBe(branchInput());
   });
 });
 
@@ -2894,6 +3282,108 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
   });
 });
 
+describe("NewWorktreeDialog — a path the user chose (#16891)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/two" } }
+        : { ok: true, result: undefined }
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    placement.getDraft = null;
+    placement.onCommitChange = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function typeBranch(value: string) {
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), { target: { value } });
+    });
+    await advanceTimersGradually(500);
+  }
+
+  const pathInput = () => screen.getByTestId("worktree-path-input") as HTMLInputElement;
+
+  async function createAndReadPath() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const call = mockDispatch.mock.calls.find(([id]) => id === "worktree.create");
+    return (call?.[1] as { options: { path: string; newBranch: string } } | undefined)?.options;
+  }
+
+  it("keeps a typed path through a later branch edit and creates there", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await typeBranch("feature/one");
+    expect(pathInput().value).toBe("/test/root-worktrees/feature/one");
+
+    await act(async () => {
+      fireEvent.change(pathInput(), { target: { value: "/custom/place" } });
+    });
+    await typeBranch("feature/two");
+
+    expect(mockGetAvailableBranch).toHaveBeenLastCalledWith("/test/root", "feature/two");
+    expect(mockGetDefaultPath).toHaveBeenLastCalledWith("/test/root", "feature/two");
+    expect(pathInput().value).toBe("/custom/place");
+    expect(await createAndReadPath()).toMatchObject({
+      newBranch: "feature/two",
+      path: "/custom/place",
+    });
+    // Created, the form starts over: the next name gets a suggestion again.
+    expect(pathInput().value).toBe("");
+  });
+
+  it("keeps a browsed path the same way", async () => {
+    const createOnly = mockDispatch.getMockImplementation()!;
+    mockDispatch.mockImplementation(async (actionId: string, ...rest: unknown[]) =>
+      actionId === "project.openDialog"
+        ? { ok: true, result: "/picked/place" }
+        : createOnly(actionId, ...rest)
+    );
+    renderDialog();
+    await advanceTimersGradually(500);
+    await typeBranch("feature/one");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse for a worktree directory" }));
+    });
+    expect(pathInput().value).toBe("/picked/place");
+    await typeBranch("feature/two");
+
+    expect(mockGetDefaultPath).toHaveBeenLastCalledWith("/test/root", "feature/two");
+    expect(pathInput().value).toBe("/picked/place");
+    expect(await createAndReadPath()).toMatchObject({ path: "/picked/place" });
+  });
+
+  it("clears a suggested path along with the branch name", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await typeBranch("feature/one");
+    expect(pathInput().value).toBe("/test/root-worktrees/feature/one");
+
+    await typeBranch("");
+    expect(pathInput().value).toBe("");
+  });
+});
+
 describe("NewWorktreeDialog — creating on another host (#14991)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -2946,6 +3436,50 @@ describe("NewWorktreeDialog — creating on another host (#14991)", () => {
     });
     return submit;
   }
+
+  it("creates on the chosen host with an emptied path, and asks for one again back on this host", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("worktree-path-input"), { target: { value: "" } });
+    });
+    // The row's submit asks the dialog for its draft, as the real one does.
+    const drafts: unknown[] = [];
+    await chooseHost("studio-02", {
+      relativePath: null,
+      submit: () => drafts.push(placement.getDraft!()),
+    });
+
+    expect(screen.queryByTestId("worktree-path-input")).toBeNull();
+    expect(screen.getByTestId("placed-worktree-path").textContent).toBe(
+      "Where studio-02 puts new worktrees"
+    );
+    const primary = screen.getByTestId("create-worktree-button");
+    expect(primary.getAttribute("aria-disabled")).toBeNull();
+    await act(async () => {
+      fireEvent.click(primary);
+    });
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Enter", metaKey: true });
+    });
+    expect(drafts).toEqual([
+      expect.objectContaining({ newBranch: "feature/placed", path: "" }),
+      expect.objectContaining({ newBranch: "feature/placed", path: "" }),
+    ]);
+    expect(screen.queryByText("Please enter a worktree path")).toBeNull();
+
+    await chooseHost(null);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    expect(screen.getByRole("alert").textContent).toContain("Please enter a worktree path");
+    expect(mockDispatch).not.toHaveBeenCalledWith(
+      "worktree.create",
+      expect.anything(),
+      expect.anything()
+    );
+  });
 
   it("widens the host label cap only when the summary has moved above the buttons", async () => {
     renderDialog();
@@ -3799,5 +4333,531 @@ describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
 
     await submit();
     expect(launchedPrompt()).toBe(PROMPT);
+  });
+});
+
+describe("NewWorktreeDialog — a new cloud machine (#17359)", () => {
+  const MACHINE = { accountId: "ca_0123456789", machineType: "small", lifetimeHours: 2 };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? {
+            ok: true,
+            result: { worktreeId: "/test/root-worktrees/feature/test", branch: "feature/test" },
+          }
+        : { ok: true, result: undefined }
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    placement.onCloudChange = null;
+    placement.onCommitChange = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function nameBranch() {
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/test" },
+      });
+    });
+    await advanceTimersGradually(500);
+  }
+
+  async function chooseNewMachine(overrides: Record<string, unknown> = {}) {
+    await act(async () => {
+      placement.onCloudChange?.({
+        accountId: MACHINE.accountId,
+        label: "New machine · Personal",
+        homeName: "This Mac",
+        blocked: null,
+        machine: () => MACHINE,
+        ...overrides,
+      });
+    });
+  }
+
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  const actionCalls = (actionId: string) =>
+    mockDispatch.mock.calls.filter(([id]) => id === actionId);
+
+  it("creates the worktree here, starting nothing for it, then asks for its machine", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await chooseNewMachine();
+
+    expect(screen.getByTestId("create-worktree-button").textContent).toContain(
+      "Create on new machine"
+    );
+    expect(screen.getByTestId("new-machine-setup-note").textContent).toContain(
+      "off for a new machine. Your"
+    );
+    // The path stays this machine's: the worktree is made here first.
+    expect(screen.getByTestId("worktree-path-input")).toBeTruthy();
+
+    await submit();
+    const created = actionCalls("worktree.create");
+    expect(created).toHaveLength(1);
+    expect((created[0]![1] as { options: Record<string, unknown> }).options).toMatchObject({
+      newBranch: "feature/test",
+      path: "/test/root-worktrees/feature/test",
+      worktreeMode: "local",
+    });
+    expect(
+      (created[0]![1] as { options: Record<string, unknown> }).options.provisionResource
+    ).toBeUndefined();
+    expect(actionCalls("agent.launch")).toHaveLength(0);
+    expect(startCloudWorktreePlacement).toHaveBeenCalledWith({
+      projectId: "test-project",
+      worktreeId: "/test/root-worktrees/feature/test",
+      branch: "feature/test",
+      machine: MACHINE,
+    });
+  });
+
+  it("holds Create while the machine can't be asked for, saying why", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseNewMachine({ blocked: "Reading the machine sizes…", machine: () => null });
+
+    const primary = screen.getByTestId("create-worktree-button");
+    expect(primary.getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText("Reading the machine sizes…")).toBeTruthy();
+    await submit();
+    expect(actionCalls("worktree.create")).toHaveLength(0);
+    expect(startCloudWorktreePlacement).not.toHaveBeenCalled();
+  });
+
+  it("asks for no machine when the worktree couldn't be created here", async () => {
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: false, error: { message: "fatal: branch exists" } }
+        : { ok: true, result: undefined }
+    );
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await chooseNewMachine();
+    await submit();
+    expect(actionCalls("worktree.create")).toHaveLength(1);
+    expect(startCloudWorktreePlacement).not.toHaveBeenCalled();
+  });
+});
+
+describe("NewWorktreeDialog — open on its environment's machine (#17358)", () => {
+  const RUN_HERE = { id: "r-here", name: "Dev server", terminals: [{ type: "terminal" }] };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    machineHandoff.offered = true;
+    machineHandoff.open.mockResolvedValue({ status: "placing", hostId: "dt-box" });
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockDispatch.mockImplementation(async (actionId: string) => {
+      switch (actionId) {
+        case "worktree.create":
+          return { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } };
+        case "worktree.waitUntilReady":
+          return {
+            ok: true,
+            result: { setupState: "ready", stage: null, error: null, timedOut: false },
+          };
+        case "agent.launch":
+          return { ok: true, result: { launched: true, terminalId: "t-1" } };
+        default:
+          return { ok: true, result: undefined };
+      }
+    });
+    projectSettingsFixture.value = { resourceEnvironments: { cloud: {}, staging: {} } };
+  });
+
+  afterEach(() => {
+    machineHandoff.offered = false;
+    projectSettingsFixture.hostEnvironments = undefined;
+    projectSettingsFixture.environmentsLoaded = true;
+    recipeFixtures.recipes = [];
+    firstAgentFixtures.lastAgentByProject = {};
+    recipePickerCalls.selected = null;
+    projectSettingsFixture.value = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function nameBranch() {
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/test" },
+      });
+    });
+    await advanceTimersGradually(500);
+  }
+
+  async function pickEnvironment(name: string) {
+    const group = screen.getByRole("radiogroup", { name: "Environment" });
+    await act(async () => {
+      fireEvent.click(within(group).getByRole("radio", { name }));
+    });
+  }
+
+  async function chooseOpenOnMachine() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("open-on-machine"));
+    });
+  }
+
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  function actionCalls(actionId: string) {
+    return mockDispatch.mock.calls.filter(([id]) => id === actionId);
+  }
+
+  it("offers it for an environment, never for Local", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+    await pickEnvironment("cloud");
+
+    const toggle = screen.getByTestId("open-on-machine");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByTestId("open-on-machine-detail")).toBeNull();
+  });
+
+  it("isn't offered where this window can't open a machine as a host", async () => {
+    machineHandoff.offered = false;
+    renderDialog();
+    await advanceTimersGradually(500);
+    await pickEnvironment("cloud");
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+  });
+
+  it("isn't offered, and does nothing, while another host is chosen", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+
+    const placedSubmit = vi.fn();
+    await act(async () => {
+      placement.onCommitChange?.({
+        hostId: "studio-02",
+        hostName: "studio-02",
+        homeName: "This Mac",
+        status: "idle",
+        unavailable: null,
+        relativePath: null,
+        submit: placedSubmit,
+      });
+    });
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+    await submit();
+    expect(placedSubmit).toHaveBeenCalledTimes(1);
+    expect(actionCalls("worktree.create")).toHaveLength(0);
+    expect(machineHandoff.open).not.toHaveBeenCalled();
+  });
+
+  it("isn't offered, and does nothing, while a new cloud machine is chosen", async () => {
+    const machine = { accountId: "ca_0123456789", machineType: "small", lifetimeHours: 2 };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+
+    await act(async () => {
+      placement.onCloudChange?.({
+        accountId: machine.accountId,
+        label: "New machine · Personal",
+        homeName: "This Mac",
+        blocked: null,
+        machine: () => machine,
+      });
+    });
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+    await submit();
+    expect(actionCalls("worktree.create")[0]?.[1]).toMatchObject({
+      options: { worktreeMode: "local" },
+    });
+    expect(machineHandoff.open).not.toHaveBeenCalled();
+    expect(startCloudWorktreePlacement).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: "new-wt-id", machine })
+    );
+    expect(mockAddPendingCreation.mock.calls.at(-1)?.[1]).not.toHaveProperty("openOnMachine");
+    placement.onCloudChange = null;
+  });
+
+  it("lists a settings file's environments when Project settings has none, and offers it there", async () => {
+    projectSettingsFixture.value = {};
+    projectSettingsFixture.hostEnvironments = { cloud: {} };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(actionCalls("worktree.create")[0]?.[1]).toMatchObject({
+      options: { provisionResource: true, worktreeMode: "cloud" },
+    });
+    expect(machineHandoff.open).toHaveBeenCalledWith(
+      expect.objectContaining({ environment: "cloud" })
+    );
+  });
+
+  it("names what Create will do and turns the agent and recipe off here", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await pickEnvironment("cloud");
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBeNull();
+    expect((screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement).disabled).toBe(false);
+
+    await chooseOpenOnMachine();
+
+    const toggle = screen.getByRole("checkbox", { name: "Open on its machine" });
+    const detail = document.getElementById(toggle.getAttribute("aria-describedby") ?? "");
+    expect(detail?.textContent).toContain("Once cloud's status names its ssh machine");
+    expect(detail?.textContent).toContain("it's added for this worktree and removed with it");
+    expect(detail?.textContent).toContain("Host setup opens to install and start it first");
+    expect(screen.getByTestId("first-agent-picker").getAttribute("data-disabled")).toBe("true");
+    expect(document.getElementById("recipe-selector-trigger")?.hasAttribute("disabled")).toBe(true);
+    expect((screen.getByTestId("first-agent-prompt") as HTMLTextAreaElement).disabled).toBe(true);
+  });
+
+  it("provisions here, then hands the created worktree to its machine, starting nothing locally", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    recipePickerCalls.selected = RUN_HERE;
+    const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(actionCalls("worktree.create")[0]?.[1]).toMatchObject({
+      options: { provisionResource: true, worktreeMode: "cloud" },
+    });
+    expect(machineHandoff.open).toHaveBeenCalledTimes(1);
+    expect(machineHandoff.open).toHaveBeenCalledWith({
+      worktreeId: "new-wt-id",
+      projectId: "test-project",
+      environment: "cloud",
+      label: "feature/test",
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(actionCalls("agent.launch")).toHaveLength(0);
+    expect(actionCalls("worktree.waitUntilReady")).toHaveLength(0);
+    expect(runRecipe).not.toHaveBeenCalled();
+    expect(mockAddPendingCreation).toHaveBeenCalledWith(
+      "/test/root-worktrees/feature/test",
+      expect.objectContaining({ worktreeMode: "cloud", openOnMachine: true })
+    );
+  });
+
+  it("creates as before when it isn't chosen, starting the agent here", async () => {
+    firstAgentFixtures.lastAgentByProject = { "test-project": "claude" };
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await submit();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    expect(actionCalls("worktree.create")).toHaveLength(1);
+    expect(machineHandoff.open).not.toHaveBeenCalled();
+    expect(actionCalls("agent.launch")).toHaveLength(1);
+    expect(mockAddPendingCreation.mock.calls.at(-1)?.[1]).not.toHaveProperty("openOnMachine");
+  });
+
+  it("never remembers an agent or recipe that was off because the worktree left", async () => {
+    recipeFixtures.recipes = [{ id: "global-work", name: "Work", terminals: [] }];
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await act(async () => {
+      fireEvent.click(document.getElementById("recipe-selector-option-2")!);
+    });
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(machineHandoff.open).toHaveBeenCalledTimes(1);
+    expect(mockSetLastAgent).not.toHaveBeenCalled();
+    expect(mockSetLastRecipe).not.toHaveBeenCalled();
+  });
+
+  it("names the branch the host made, not the one asked for", async () => {
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test-2" } }
+        : { ok: true, result: undefined }
+    );
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(machineHandoff.open).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "feature/test-2" })
+    );
+  });
+
+  it("starts no handoff when the create fails", async () => {
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: false, error: { message: "Branch already exists" } }
+        : { ok: true, result: undefined }
+    );
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    await submit();
+
+    expect(actionCalls("worktree.create")).toHaveLength(1);
+    expect(machineHandoff.open).not.toHaveBeenCalled();
+  });
+
+  it("asks again after a switch to another environment", async () => {
+    renderDialog();
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await pickEnvironment("cloud");
+    await chooseOpenOnMachine();
+    expect(screen.getByTestId("open-on-machine").getAttribute("aria-checked")).toBe("true");
+
+    await pickEnvironment("staging");
+
+    expect(screen.getByTestId("open-on-machine").getAttribute("aria-checked")).toBe("false");
+    await submit();
+    expect(machineHandoff.open).not.toHaveBeenCalled();
+  });
+
+  it("keeps the choice through a Retry", async () => {
+    renderDialog({
+      restoreDraft: retryDraft({
+        baseBranch: "main",
+        branchMode: "new",
+        worktreeMode: "cloud",
+        openOnMachine: true,
+      }),
+    });
+    await advanceTimersGradually(800);
+
+    expect(screen.getByTestId("open-on-machine").getAttribute("aria-checked")).toBe("true");
+    await submit();
+    expect(machineHandoff.open).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: "new-wt-id", environment: "cloud" })
+    );
+  });
+
+  it("holds a Retry that was to open on its machine until the environments have loaded", async () => {
+    projectSettingsFixture.environmentsLoaded = false;
+    projectSettingsFixture.value = null;
+    const draft = retryDraft({
+      baseBranch: "main",
+      branchMode: "new",
+      worktreeMode: "cloud",
+      agentId: "claude",
+      openOnMachine: true,
+    });
+    const onClose = vi.fn();
+    const view = renderDialog({ restoreDraft: draft, onClose });
+    await advanceTimersGradually(800);
+
+    await submit();
+    expect(actionCalls("worktree.create")).toHaveLength(0);
+    expect(screen.getByText("Loading environments…")).toBeDefined();
+
+    projectSettingsFixture.value = { resourceEnvironments: { cloud: {}, staging: {} } };
+    projectSettingsFixture.environmentsLoaded = true;
+    view.rerender(
+      <NewWorktreeDialog
+        isOpen={true}
+        onClose={onClose}
+        rootPath="/test/root"
+        restoreDraft={draft}
+      />
+    );
+    await advanceTimersGradually(100);
+    await submit();
+
+    expect(machineHandoff.open).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    expect(actionCalls("agent.launch")).toHaveLength(0);
+  });
+
+  it("drops the choice on a Retry whose environment is no longer listed", async () => {
+    renderDialog({
+      restoreDraft: retryDraft({
+        baseBranch: "main",
+        branchMode: "new",
+        worktreeMode: "gone-env",
+        openOnMachine: true,
+      }),
+    });
+    await advanceTimersGradually(800);
+
+    expect(screen.queryByTestId("open-on-machine")).toBeNull();
+    await submit();
+    expect(machineHandoff.open).not.toHaveBeenCalled();
   });
 });

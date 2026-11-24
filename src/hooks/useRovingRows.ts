@@ -220,8 +220,8 @@ export function useRovingRows({
 
   const rowRef = useCallback(
     (key: string) => (element: HTMLElement | null) => {
-      // Unmounts are left in the map: a windowed row comes and goes as it
-      // scrolls, and every read checks `isConnected` before trusting an entry.
+      // Every read checks `isConnected` before trusting an entry, since a
+      // windowed row comes and goes as it scrolls.
       if (!element) {
         // React also passes null on every re-render (the callback is new each
         // time), so whether this was an unmount is only knowable after the
@@ -229,10 +229,24 @@ export function useRovingRows({
         // list rather than leave the keyboard user on the document.
         const detached = elementsRef.current.get(key);
         queueMicrotask(() => {
+          // A row that really left is dropped, so a long windowed list holds no
+          // detached rows for the files it scrolled past. A newer registration
+          // under the same key stays.
+          if (detached && !detached.isConnected && elementsRef.current.get(key) === detached) {
+            elementsRef.current.delete(key);
+          }
           const container = containerRef.current;
           if (focusedKeyRef.current !== key) return;
           if (!detached || detached.isConnected || !container?.isConnected) return;
           if (document.activeElement !== document.body && document.activeElement !== null) {
+            return;
+          }
+          // Replaced rather than windowed out (the list switched between its
+          // static and windowed forms, say): focus follows the row, since an
+          // unwindowed container can't hold it.
+          const replacement = elementsRef.current.get(key);
+          if (replacement?.isConnected) {
+            replacement.focus({ preventScroll: true });
             return;
           }
           parkedRef.current = true;

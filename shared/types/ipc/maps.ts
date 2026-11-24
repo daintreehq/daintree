@@ -1,10 +1,16 @@
-import type { GitCommitResult, GitRemoteCommitPreview, StagingStatus } from "../git.js";
+import type {
+  GitCommitResult,
+  GitRemoteCommitPreview,
+  RepoOperationPin,
+  StagingStatus,
+} from "../git.js";
 import type { AgentId } from "../agent.js";
 import type {
   VoiceInputError,
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
   VoiceLiveLevel,
+  LocalSpeechModelStatus,
   VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
@@ -40,6 +46,7 @@ import type {
   VoiceCorrectionPace,
   VoiceInputSettings,
   VoiceInputSettingsPatch,
+  VoiceSessionVocabulary,
 } from "./api.js";
 
 import type { TerminalActivityPayload } from "./terminal.js";
@@ -48,6 +55,7 @@ import type {
   AgentStateTransitionDroppedPayload,
   AgentDetectedPayload,
   AgentRateLimitObservedPayload,
+  AgentUpdateInstalledChangedPayload,
   AgentExitedPayload,
   AgentFallbackTriggeredPayload,
   ArtifactDetectedPayload,
@@ -120,6 +128,7 @@ import type { DevPreviewStateChangedPayload, DevPreviewAllSessionsPayload } from
 import type { ServiceConnectivityPayload } from "./connectivity.js";
 import type { AgentDefaultsSnapshot } from "./agentDefaults.js";
 import type { AgentToolbarPinsSnapshot } from "./agentToolbarPins.js";
+import type { AgentUsageSnapshot, AgentUsageTrackingSnapshot } from "./agentUsage.js";
 import type { SanitizedTelemetryEvent, TelemetryPreviewState } from "./telemetryPreview.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type { GitCommitListOptions, GitCommitListResponse } from "../git.js";
@@ -876,7 +885,14 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: AgentSettings;
   };
   "agent-settings:set": {
-    args: [payload: { agentType: AgentId; settings: Record<string, unknown> }];
+    args: [
+      payload: {
+        agentType: AgentId;
+        settings: Record<string, unknown>;
+        /** Keep each preset's stored `continueAtLimitReset` (#17912). */
+        lockContinueAtLimitReset?: boolean;
+      },
+    ];
     result: AgentSettings;
   };
   "agent-settings:reset": {
@@ -969,7 +985,21 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "git:commit": {
-    args: [payload: { cwd: string; message: string }];
+    args: [
+      payload: {
+        cwd: string;
+        message: string;
+        /**
+         * What a Commit & push confirm reviewed (#17563): all three or none.
+         * With them the commit refuses (`commit-review-stale`) unless the
+         * worktree is still on that branch, at that commit, with exactly those
+         * changes staged, and the result reports `stagedIdentity`.
+         */
+        expectedBranch?: string;
+        expectedHeadOid?: string;
+        expectedStagedIdentity?: string;
+      },
+    ];
     result: GitCommitResult;
   };
   "git:push": {
@@ -986,11 +1016,13 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
   "git:pull-rebase": {
-    args: [payload: { cwd: string }];
+    args: [payload: { cwd: string; expectedBranch?: string; expectedHeadOid?: string }];
     /**
-     * Runs `git pull --rebase origin <currentBranch>`. Throws
+     * Runs `git pull --rebase <upstream remote> <upstream branch>`. Throws
      * `GitOperationError` on failure (including `conflict-unresolved` when the
-     * rebase halts on a conflict).
+     * rebase halts on a conflict). With `expectedBranch` and `expectedHeadOid`
+     * (both or neither) it refuses with `pull-rebase-review-stale` when the
+     * worktree is no longer on that branch at that commit.
      */
     result: void;
   };
@@ -1022,11 +1054,11 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: StagingStatus;
   };
   "git:abort-repository-operation": {
-    args: [cwd: string];
+    args: [cwd: string, expected?: RepoOperationPin];
     result: void;
   };
   "git:continue-repository-operation": {
-    args: [cwd: string];
+    args: [cwd: string, expected?: RepoOperationPin];
     result: void;
   };
   "git:scan-conflict-markers": {
@@ -1054,7 +1086,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: void;
   };
 
-  // Portal channels
   // Keybinding channels
   "keybinding:get-overrides": {
     args: [];
@@ -1563,6 +1594,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
 export interface IpcEventMap {
   // Remote Hosts namespaces: one push channel each, carrying a discriminated union.
   "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
+  "remote-hosts:ssh-sign-in-event": import("./remoteHosts.js").SshSignInEvent;
   "host-mode:event": import("./hostMode.js").HostModeEvent;
   "device-answer:event": import("./deviceAnswer.js").DeviceAnswerEvent;
   /** Every assistant persona as stored, after any write (#16213). */
@@ -1623,6 +1655,10 @@ export interface IpcEventMap {
   "terminal:decision-state": import("../decisions.js").PaneDecisionState;
   // This machine's Decisions status changed, relay connection included; sent to its own windows only.
   "decisions:status-changed": import("../decisions.js").DecisionsStatus;
+  // Every question this computer's Decisions holds changed (#17229); never any content. Its own windows only.
+  "decisions:questions-changed": import("../decisionsQuestion.js").DecisionQuestionList;
+  // Open one question in the question view (#17232): a click on its desktop notification. One window only.
+  "decisions:open-question": import("../decisionsQuestion.js").DecisionsOpenQuestionRequest;
   // The relay's paired devices or its key changed; Settings reads the list again. Its own windows only.
   "decisions:devices-changed": null;
   // The setup check's progress (#16024). Its own windows only.
@@ -1677,6 +1713,7 @@ export interface IpcEventMap {
   "agent:all-clear": { timestamp: number; shouldFlash: boolean };
   "agent:detected": AgentDetectedPayload;
   "agent:rate-limit-observed": AgentRateLimitObservedPayload;
+  "agent:update-installed-changed": AgentUpdateInstalledChangedPayload;
   "agent:exited": AgentExitedPayload;
   "agent:fallback-triggered": AgentFallbackTriggeredPayload;
 
@@ -1762,8 +1799,12 @@ export interface IpcEventMap {
 
   // An agent terminal's When done choice changed (#16171); main sends it to every view of that project.
   "terminal-when-done:changed": import("./terminalWhenDone.js").TerminalWhenDoneChange;
+  // An armed Codex pane's continuation at its limit's reset changed (#17909); every view of its project.
+  "codex-limit-continue:changed": import("../codexLimitContinuation.js").CodexLimitContinueChange;
   // A pane's held composer send changed (#16379); this machine's views of its project.
   "composer-hold:changed": import("./composerHold.js").ComposerHoldChange;
+  "bulk-worktree-runs:changed": import("./bulkWorktreeRuns.js").BulkWorktreeRunsChanged;
+  "bulk-worktree-runs:commanded": import("./bulkWorktreeRuns.js").BulkWorktreeRunCommand;
   // Main asks every local view of a project to move or remove an armed terminal's pane (#16171).
   "terminal-when-done:finish-request": import("./terminalWhenDone.js").TerminalWhenDoneFinishRequest;
   /**
@@ -1815,8 +1856,16 @@ export interface IpcEventMap {
     authorization?: import("./mcpServer.js").McpDispatchAuthorization;
     /** The pane or Assistant tab that sent the call (#14992); set only by main. */
     requester?: import("./mcpServer.js").McpRequester;
+    /** "Don't ask again for this kind of action" (#16752); set only by main, display only. */
+    delegationOffer?: import("./mcpServer.js").McpDelegationOffer;
     /** Main's deadline for the call as sent, epoch ms (#15648); set only by main. */
     dispatchDeadlineAt?: number;
+    /** Main's own `actions.list` walk (#17036); set only by main, on a local send. */
+    actionsListWalk?: boolean;
+    /** When this unconfirmed dispatch may run unasked (#17917); set only by main. */
+    confirmationCondition?: import("./mcpServer.js").McpConfirmationCondition;
+    /** This machine's global Assistant made the call through `host.call` (#18153); set only by main. */
+    callerOrigin?: "global-assistant";
   };
 
   /**
@@ -2028,12 +2077,6 @@ export interface IpcEventMap {
   // Power policy changed — battery, focus, visibility, or screen lock (#12515)
   "system:power-policy-changed": import("../powerPolicy.js").PowerPolicySnapshot;
 
-  // Portal events
-  "portal:nav-event": import("../portal.js").PortalNavEvent;
-  "portal:focus": void;
-  "portal:blur": void;
-  "portal:tab-evicted": { tabId: string };
-
   // System Sleep events
   "system-sleep:on-suspend": void;
   "system-sleep:on-wake": number;
@@ -2043,7 +2086,7 @@ export interface IpcEventMap {
   "os-dnd:state-changed": import("./osDnd.js").OsDndState;
 
   // Menu events
-  "menu:action": { actionId: string; args?: unknown; portalActionId?: string };
+  "menu:action": { actionId: string; args?: unknown };
 
   // Window events
   "window:fullscreen-change": boolean;
@@ -2065,14 +2108,13 @@ export interface IpcEventMap {
     availableMb: number;
     writesSuppressed: boolean;
   };
-  "portal:tabs-evicted": { tabIds: string[] };
 
   // Sound events (main → renderer)
-  "sound:trigger": { soundFile: string; detune?: number };
+  "sound:trigger": { soundFile: string; detune?: number; volume?: number };
   "sound:cancel": void;
 
   // Notification events
-  "notification:update": { waitingCount: number };
+  "notification:update": { waitingPanelIds: string[]; membershipOnly?: boolean };
   "notification:watch-navigate": { panelId: string; panelTitle: string; worktreeId?: string };
   "notification:show-toast": MainProcessToastPayload;
 
@@ -2221,8 +2263,13 @@ export interface IpcEventMap {
   "voice-input:reveal-requested": VoiceRevealRequest;
   // The live session's input level, to the views on screen that don't own it.
   "voice-input:live-level": VoiceLiveLevel;
+  // To every view whenever the on-device model's status changes, a
+  // download's progress included.
+  "voice-input:local-model-status": LocalSpeechModelStatus;
   // To the owner: another view's control panel paused or resumed it.
   "voice-input:pause-requested": VoicePauseRequest;
+  // To the owner: the project vocabulary its session runs with.
+  "voice-input:session-vocabulary": VoiceSessionVocabulary;
 
   // Demo mode events (main → renderer command forwarding)
   "demo:exec-move-to": DemoMoveToPayload;
@@ -2294,6 +2341,9 @@ export interface IpcEventMap {
   // Host-owned agent defaults changed (#13345)
   "agent-defaults:changed": AgentDefaultsSnapshot;
 
+  // The merged-worktree rule removed a worktree; its receipt waits to be taken (#17321)
+  "merged-worktree-cleanup:receipts-ready": void;
+
   // A saved agent settings change on the host, the whole slice (#14700)
   "agent-settings:changed": import("../agentSettings.js").AgentSettings;
 
@@ -2309,6 +2359,8 @@ export interface IpcEventMap {
 
   // This machine's toolbar agent pins changed (#14702)
   "agent-toolbar-pins:changed": AgentToolbarPinsSnapshot;
+  "agent-usage:changed": AgentUsageSnapshot;
+  "agent-usage:tracking-changed": AgentUsageTrackingSnapshot;
   /** Which copy of an agent's CLI launches changed on the machine the agents run on. */
   "agent-cli-copies:changed": { agentId: string };
   "help:global-assistant-changed": import("./help.js").GlobalAssistantView;
@@ -2524,6 +2576,10 @@ export interface IpcEventMap {
   // renderer re-pulls via `plugin:list` for the full data.
   "plugin:provenance-changed": Record<string, never>;
 
+  // This machine's list of added plugin catalogs changed (#17434), from any
+  // window. Signal-only: Browse and the settings page re-read it.
+  "plugin:catalog-sources-changed": Record<string, never>;
+
   // A plugin's stored settings changed, from the settings form or the plugin's
   // own `host.settings.set` (main → renderer). Signal-only: receivers re-read
   // what they derive from it. Project-scoped for a project-local instance.
@@ -2684,6 +2740,7 @@ export type IpcEventBusMap = Pick<
   | "agent:all-clear"
   | "agent:detected"
   | "agent:rate-limit-observed"
+  | "agent:update-installed-changed"
   | "agent:exited"
   | "agent:fallback-triggered"
   // Window lifecycle (window-scoped)
@@ -2760,6 +2817,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:actions-running-changed"
   // Plugin provenance record changed (global broadcast)
   | "plugin:provenance-changed"
+  // This machine's added plugin catalogs changed (global broadcast)
+  | "plugin:catalog-sources-changed"
   // Plugin stored settings changed (global broadcast for an app-global
   // instance, project-scoped send for a project one)
   | "plugin:settings-changed"
@@ -2810,6 +2869,8 @@ export type IpcEventBusMap = Pick<
   | "terminal:decision-state"
   // This machine's Decisions status (local windows only)
   | "decisions:status-changed"
+  | "decisions:questions-changed"
+  | "decisions:open-question"
   | "decisions:devices-changed"
   | "decisions:setup-check-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)

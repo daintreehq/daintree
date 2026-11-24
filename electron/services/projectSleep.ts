@@ -2,7 +2,6 @@ import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { projectStore } from "./ProjectStore.js";
 import { getHibernationService } from "./HibernationService.js";
-import { helpSessionService } from "./HelpSessionService.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 import {
   gracefulTeardownAndJournalProject,
@@ -13,7 +12,11 @@ import { readPanelRecoveryHold, type PanelRecoveryHold } from "./panelRecoveryQu
 import type { ProjectViewManagersProvider } from "../window/activeProjectIds.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
-import type { PluginWorkStopped, ProjectSleepResult } from "../../shared/types/ipc/project.js";
+import type {
+  PluginWorkStopped,
+  ProjectSleepResult,
+  SleepRequestWorking,
+} from "../../shared/types/ipc/project.js";
 import { summarizePluginWorkStopped, type ProjectPluginWork } from "./plugin/projectPluginWork.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { AppError } from "../utils/errorTypes.js";
@@ -50,7 +53,11 @@ export interface SleepProjectDependencies {
  * policy owns its own eligibility; Sleep only owns the order it is asked in.
  */
 export type SleepProjectOptions =
-  | { initiator: "user" }
+  | {
+      initiator: "user";
+      /** Agents the request found working; see `ProjectTeardownOptions.workingAtRequest`. */
+      workingAtRequest?: readonly SleepRequestWorking[];
+    }
   | {
       initiator: "policy";
       /** Still a candidate? Synchronous, asked before each step that can't be undone. */
@@ -65,7 +72,7 @@ export type SleepProjectOptions =
 type PolicyRefusal = ViewRefusal | "ineligible" | PanelRecoveryHold;
 
 /** What a project's view is doing that an automatic teardown waits out. */
-type ViewRefusal = "mcp-dispatch" | "dictation";
+type ViewRefusal = "mcp-dispatch" | "dictation" | "worktree-creation";
 
 export type SleepProjectOutcome =
   | ({ status: "slept" } & ProjectSleepResult)
@@ -77,6 +84,8 @@ export type SleepProjectOutcome =
        * `mcp-dispatch`: an MCP dispatch is waiting on one of its views.
        * `dictation`: a dictation session, or the cleanup after its stop, still
        * needs one of its views.
+       * `worktree-creation`: a bulk worktree creation still runs in one of its
+       * views (#17085).
        * `ineligible`: the policy said no at a later check.
        * `panel-unrecoverable` / `panel-unknown`: a view holds work recovery
        * storage would not bring back, or could not say whether it does.
@@ -224,6 +233,7 @@ async function runSleep(
     //
     // Best-effort: losing the resume entry must not fail the sleep.
     try {
+      const { helpSessionService } = await import("./HelpSessionService.js");
       await helpSessionService.revokeByProjectId(projectId);
     } catch (revokeError) {
       logError("project-sleep-help-revoke-failed", revokeError, { projectId });
@@ -253,7 +263,12 @@ async function runSleep(
         projectId,
         ptyClient,
         deps.workspaceClient ?? undefined,
-        { preserveSession: true, writeBackSessionIds: true, beforeKill }
+        {
+          preserveSession: true,
+          writeBackSessionIds: true,
+          beforeKill,
+          ...(options.initiator === "user" && { workingAtRequest: options.workingAtRequest }),
+        }
       );
     if (aborted) return skip(killGate.refusal ?? "ineligible");
 
@@ -269,14 +284,9 @@ async function runSleep(
       });
     }
 
-    for (const session of sessions) {
-      try {
-        writeHibernatedMarker(session.id);
-      } catch (markerError) {
-        // Costs this terminal its restore banner, nothing else.
-        console.warn(`[ProjectSleep] marker failed for ${session.id}:`, markerError);
-      }
-    }
+    // A failed marker costs that terminal its restore banner wording, nothing
+    // else, so the writer swallows its own failures.
+    await Promise.all(sessions.map((session) => writeHibernatedMarker(session.id)));
 
     // A draft can start in the seconds the kill took, and the view it lives in
     // is about to be destroyed. The terminals are already gone, so a hold here
@@ -447,6 +457,7 @@ function viewRefusal(projectId: string, provider: ProjectViewManagersProvider): 
     try {
       if (manager.isMcpDispatchProtected(projectId)) return "mcp-dispatch";
       if (manager.isDictationHeld(projectId)) return "dictation";
+      if (manager.isBulkWorktreeRunHeld(projectId)) return "worktree-creation";
     } catch {
       return "mcp-dispatch";
     }

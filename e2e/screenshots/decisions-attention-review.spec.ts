@@ -3,6 +3,9 @@
  * Daintree couldn't type in on its own (#16020), reached from a pane's
  * Decisions chip and from Settings → Decisions → Questions, with Copy answer,
  * Try resume, Choose destination (and its confirmation) and Mark handled.
+ * Since #18048 a stopped delivery the inbox lists is reviewed in the inbox;
+ * this harness's question list holds none of these answers, so every way in
+ * reaches the standalone list, as it does for an answer the inbox can't list.
  *
  * Two fake Claude panes share one worktree. Decisions itself never loads: the
  * harness answers the Decisions ops in main from a table it fills, and pushes
@@ -352,6 +355,8 @@ async function answerDecisions(app: ElectronApplication): Promise<void> {
     handle("decisions:get-status", () => t().status);
     handle("decisions:get-pane-state", (id: string) => t().panes[id] ?? null);
     handle("decisions:list-attention", () => ({ result: "listed", items: t().items }));
+    // The inbox's list holds none of them, so Review answers opens this list (#18048).
+    handle("decisions:list-questions", () => ({ revision: 1, questions: [] }));
     handle("decisions:list-answer-destinations", (questionId: string) => {
       const asker = t().items.find((i) => i.questionId === questionId)?.origin.paneId;
       return {
@@ -381,7 +386,7 @@ async function answerDecisions(app: ElectronApplication): Promise<void> {
           result: "waiting",
           terminalId: payload.terminalId,
           title: to?.title ?? null,
-          waitsFor: "idle",
+          waitsFor: to?.waitsFor ?? "prompt",
         };
       }
     );
@@ -392,7 +397,6 @@ async function answerDecisions(app: ElectronApplication): Promise<void> {
     // What Settings → Decisions reads while connected.
     handle("decisions:get-policy", () => ({
       gates: [],
-      proxyAllowlisted: false,
       defaultQuestionExpiryMs: 86_400_000,
       maxQuestionExpiryMs: 7 * 86_400_000,
       revision: 1,
@@ -428,6 +432,14 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       status: "needs-attention",
       reason: "resume_worktree_gone",
       question: "Drop the legacy search index once the reindex finishes?",
+      fullQuestion: "Drop the legacy search index once the reindex finishes?",
+      plan: null,
+      reference: {
+        hostId: "host-local",
+        projectId: "helios",
+        terminalId: "pane-gone-36",
+        questionId: "qid-att-36-search",
+      },
       askedAt: iso(26 * 3_600_000),
       origin: {
         projectId: "helios",
@@ -438,6 +450,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         agentName: "Codex",
         paneId: "pane-gone-36",
         paneTitle: null,
+        otherHost: null,
       },
       answer: {
         source: "human",
@@ -447,9 +460,11 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         answeredAt: iso(9 * 3_600_000),
       },
       answerUnavailable: null,
+      notice: null,
       followUps: [],
       canResume: false,
       canReassign: true,
+      token: "token",
     },
     {
       questionId: "qid-att-38-token",
@@ -457,6 +472,15 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       status: "needs-attention",
       reason: "relaunched",
       question: "Should token refresh retry once on a 401 before signing the user out?",
+      fullQuestion:
+        "Should token refresh retry once on a 401 before signing the user out?\n\nThe flaky tests all fail the same way: the access token expires mid-request, the refresh races the retry, and the second request goes out with the old token.",
+      plan: null,
+      reference: {
+        hostId: "host-local",
+        projectId: "helios",
+        terminalId: panes.asker,
+        questionId: "qid-att-38-token",
+      },
       askedAt: iso(2 * 3_600_000 + 12 * 60_000),
       origin: {
         projectId: "helios",
@@ -467,6 +491,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         agentName: "Claude",
         paneId: panes.asker,
         paneTitle: ASKER_TITLE,
+        otherHost: null,
       },
       answer: {
         source: "human",
@@ -476,9 +501,11 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         answeredAt: iso(40 * 60_000),
       },
       answerUnavailable: null,
+      notice: null,
       followUps: [],
       canResume: true,
       canReassign: true,
+      token: "token",
     },
     {
       questionId: "qid-att-39-queue",
@@ -486,6 +513,14 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       status: "delivery-uncertain",
       reason: "crash_unreconciled",
       question: "Which queue should the billing webhooks move to?",
+      fullQuestion: "Which queue should the billing webhooks move to?",
+      plan: null,
+      reference: {
+        hostId: "host-local",
+        projectId: "helios",
+        terminalId: panes.other,
+        questionId: "qid-att-39-queue",
+      },
       askedAt: iso(55 * 60_000),
       origin: {
         projectId: "helios",
@@ -496,6 +531,7 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         agentName: "Claude",
         paneId: panes.other,
         paneTitle: OTHER_TITLE,
+        otherHost: null,
       },
       answer: {
         source: "human",
@@ -505,9 +541,11 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         answeredAt: iso(18 * 60_000),
       },
       answerUnavailable: null,
+      notice: null,
       followUps: [],
       canResume: false,
       canReassign: false,
+      token: "token",
     },
     {
       questionId: "qid-att-40-unread",
@@ -515,6 +553,9 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
       status: "needs-attention",
       reason: "answer_unreadable",
       question: null,
+      fullQuestion: null,
+      plan: null,
+      reference: null,
       askedAt: iso(14 * 60_000),
       origin: {
         projectId: "helios",
@@ -525,12 +566,15 @@ function seedItems(panes: Panes, featureId: string): DecisionsAttentionItem[] {
         agentName: "Claude",
         paneId: "pane-gone-40",
         paneTitle: null,
+        otherHost: null,
       },
       answer: null,
       answerUnavailable: "unreadable",
+      notice: null,
       followUps: [],
       canResume: false,
       canReassign: false,
+      token: "token",
     },
   ];
 }
@@ -539,6 +583,7 @@ function seedDestinations(panes: Panes, featureId: string): DecisionsAnswerDesti
   return [
     {
       terminalId: panes.asker,
+      run: "1".repeat(64),
       title: ASKER_TITLE,
       agentId: "claude",
       agentName: "Claude",
@@ -547,9 +592,11 @@ function seedDestinations(panes: Panes, featureId: string): DecisionsAnswerDesti
       worktreeId: featureId,
       worktreeName: "feature-auth-token-refresh",
       askedHere: false,
+      waitsFor: "composer",
     },
     {
       terminalId: panes.other,
+      run: "2".repeat(64),
       title: OTHER_TITLE,
       agentId: "claude",
       agentName: "Claude",
@@ -558,6 +605,7 @@ function seedDestinations(panes: Panes, featureId: string): DecisionsAnswerDesti
       worktreeId: featureId,
       worktreeName: "feature-auth-token-refresh",
       askedHere: false,
+      waitsFor: "composer",
     },
   ];
 }
@@ -802,7 +850,7 @@ async function daintreeStates(run: Run): Promise<void> {
     await ready(page, panes);
     await openFromChip(page, panes);
     await page.getByRole("button", { name: "Choose destination for q-38" }).click();
-    const menu = page.locator('[role="menu"]').filter({ hasText: "Agents running here" });
+    const menu = page.getByRole("menu");
     await expect(menu).toContainText(OTHER_TITLE, { timeout: 8000 });
     await parkPointer(page);
     await snapLayers(page, "destinations", theme, [DIALOG, '[role="menu"]']);
@@ -811,7 +859,7 @@ async function daintreeStates(run: Run): Promise<void> {
     await ready(page, panes);
     await openFromChip(page, panes);
     await page.getByRole("button", { name: "Choose destination for q-36" }).click();
-    const menu = page.locator('[role="menu"]').filter({ hasText: "Agents running here" });
+    const menu = page.getByRole("menu");
     await menu.getByText(OTHER_TITLE).click();
     const confirm = page
       .locator('[role="dialog"], [role="alertdialog"]')
@@ -868,6 +916,15 @@ async function daintreeStates(run: Run): Promise<void> {
         timeout: 8000,
       });
     }
+    // Resolving the last answer closes the list rather than leave it empty (#18027).
+    await expect(page.locator(DIALOG)).toHaveCount(0, { timeout: 8000 });
+    // Opened with nothing left, as Review answers can after another window handled
+    // the answer while the chip still showed it, it says so.
+    await reseed(run.app, panes, run.featureId);
+    await openPopover(page, panes.asker);
+    await setTable(run.app, { items: [] });
+    await page.locator('[data-testid="terminal-decisions-review"]').click();
+    await page.locator(DIALOG).waitFor({ state: "visible", timeout: 10_000 });
     await expect(page.locator(DIALOG)).toContainText("Nothing needs attention");
     await parkPointer(page);
     await snapLayers(page, "empty", theme, [DIALOG]);
@@ -880,8 +937,11 @@ async function daintreeStates(run: Run): Promise<void> {
       );
     });
     await page.locator(SETTINGS).waitFor({ state: "visible", timeout: 20_000 });
-    const row = page.locator(`${SETTINGS_PANEL} #decisions-questions`);
-    await expect(row).toContainText("4 answers", { timeout: 10_000 });
+    const row = page.locator(`${SETTINGS_PANEL} #decisions-questions-inbox`);
+    // Answers the inbox can't list are offered beside it (#18048).
+    await expect(row.getByRole("button", { name: "Review other answers" })).toBeVisible({
+      timeout: 10_000,
+    });
     await page.evaluate((sel) => {
       const el = document.querySelector<HTMLElement>(sel);
       let scroller = el?.parentElement ?? null;

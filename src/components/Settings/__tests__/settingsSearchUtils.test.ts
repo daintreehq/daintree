@@ -40,6 +40,8 @@ const GOLDEN_QUERIES = [
   { query: "github", expectedTopResults: ["forge-access-token", "tab-nav-code-forge"] },
   { query: "remote resources", expectedTopResults: ["tab-nav-project:environments"] },
   { query: "docker akash", expectedTopResults: ["tab-nav-project:environments"] },
+  { query: "droplet", expectedTopResults: ["hosts-cloud-providers"] },
+  { query: "digital ocean", expectedTopResults: ["hosts-cloud-providers"] },
 ] as const;
 
 describe("filterSettings", () => {
@@ -110,6 +112,18 @@ describe("filterSettings", () => {
         );
         expect(hit?.tab).toBe("general");
         expect(hit?.subtab).toBe("overview");
+      }
+    }
+  );
+
+  it.each(["links", "bookmarks", "custom links", "global links", "launcher", "portal links"])(
+    "finds the person's own links on the Links page by %s, with or without a project open",
+    (query) => {
+      for (const hasProject of [true, false]) {
+        const hit = filterSettings(SETTINGS_SEARCH_INDEX, query, { hasProject }).find(
+          (entry) => entry.id === "global-links"
+        );
+        expect(hit?.tab).toBe("links");
       }
     }
   );
@@ -194,6 +208,27 @@ describe("filterSettings", () => {
     for (const query of ["antigravity", "Antigravity IDE"]) {
       const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
       expect(results.some((r) => r.id === "editor-external")).toBe(true);
+    }
+  });
+
+  it("matches the external editor entry for each JetBrains IDE", () => {
+    for (const query of [
+      "JetBrains",
+      "WebStorm",
+      "IntelliJ IDEA",
+      "PhpStorm",
+      "PyCharm",
+      "GoLand",
+      "Rider",
+      "CLion",
+      "DataGrip",
+      "RubyMine",
+    ]) {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
+      expect(
+        results.some((r) => r.id === "editor-external"),
+        query
+      ).toBe(true);
     }
   });
 
@@ -384,9 +419,9 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       worktree: "Worktree paths",
       agents: "CLI agents",
       "code-forge": "Code forge",
-      portal: "Portal links",
       toolbar: "Toolbar customization",
       notifications: "Notifications",
+      links: "Links",
       integrations: "Integrations",
       voice: "Voice input",
       canopy: "Canopy",

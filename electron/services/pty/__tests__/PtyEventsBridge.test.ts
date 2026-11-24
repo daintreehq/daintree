@@ -2,6 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { bridgePtyEvent } from "../PtyEventsBridge.js";
 import { events } from "../../events.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
+import type { PtyHostEvent } from "../../../../shared/types/pty-host.js";
+import {
+  _pendingTerminalInventoryPrefetchesForTests,
+  _resetTerminalInventoryPrefetchForTests,
+  prefetchTerminalInventory,
+} from "../../terminalInventoryPrefetch.js";
 import {
   clearClaudeUsageObservations,
   readClaudeUsageRecords,
@@ -11,6 +17,7 @@ describe("bridgePtyEvent", () => {
   afterEach(() => {
     events.removeAllListeners();
     clearClaudeUsageObservations();
+    _resetTerminalInventoryPrefetchForTests();
   });
 
   it("normalizes agent-state trigger and confidence before emitting", () => {
@@ -37,6 +44,25 @@ describe("bridgePtyEvent", () => {
       trigger: "activity",
       confidence: 1,
     });
+  });
+
+  it("carries the terminal-closing mark onto the bus, and only when set (#17193)", () => {
+    const closing: Array<true | undefined> = [];
+    events.on("agent:state-changed", (payload) => closing.push(payload.terminalClosing));
+    const edge = {
+      type: "agent-state",
+      id: "term-1",
+      state: "idle",
+      previousState: "working",
+      timestamp: 1,
+      trigger: "exit",
+      confidence: 1,
+    } as const;
+
+    bridgePtyEvent({ ...edge, terminalClosing: true });
+    bridgePtyEvent(edge);
+
+    expect(closing).toEqual([true, undefined]);
   });
 
   it("keeps a host throwaway run's agent observations off the bus (#14445)", () => {
@@ -96,6 +122,72 @@ describe("bridgePtyEvent", () => {
 
     expect(handled).toBe(true);
     expect(payloads).toEqual([{ terminalId: "term-1", observedAt: 1_000, timestamp: 1_000 }]);
+  });
+
+  it("forwards an update-installed set and clear with their two fields only (#17905)", () => {
+    const payloads: unknown[] = [];
+    events.on("agent:update-installed-changed", (payload) => payloads.push(payload));
+
+    expect(
+      bridgePtyEvent({
+        type: "agent-update-installed-changed",
+        terminalId: "term-1",
+        updateInstalled: {
+          observedAt: 1_000,
+          namesRestart: true,
+          line: "✔ Update installed · /restart to apply",
+        } as never,
+        timestamp: 1_000,
+      })
+    ).toBe(true);
+    bridgePtyEvent({
+      type: "agent-update-installed-changed",
+      terminalId: "term-1",
+      updateInstalled: null,
+      timestamp: 2_000,
+    });
+
+    expect(payloads).toEqual([
+      {
+        terminalId: "term-1",
+        updateInstalled: { observedAt: 1_000, namesRestart: true },
+        timestamp: 1_000,
+      },
+      { terminalId: "term-1", updateInstalled: null, timestamp: 2_000 },
+    ]);
+  });
+
+  it("drops an inventory read taken before an update-installed change (#17905)", () => {
+    void prefetchTerminalInventory("p1", async () => []);
+    expect(_pendingTerminalInventoryPrefetchesForTests()).toEqual(["p1"]);
+
+    bridgePtyEvent({
+      type: "agent-update-installed-changed",
+      terminalId: "term-1",
+      updateInstalled: { observedAt: 1_000, namesRestart: false },
+      timestamp: 1_000,
+    });
+
+    expect(_pendingTerminalInventoryPrefetchesForTests()).toEqual([]);
+  });
+
+  it.each([
+    ["no observation", undefined],
+    ["a non-boolean offer", { observedAt: 1_000, namesRestart: "yes" }],
+    ["a time that isn't one", { observedAt: Number.NaN, namesRestart: true }],
+  ])("drops an update-installed event carrying %s (#17905)", (_name, updateInstalled) => {
+    const payloads: unknown[] = [];
+    events.on("agent:update-installed-changed", (payload) => payloads.push(payload));
+
+    const handled = bridgePtyEvent({
+      type: "agent-update-installed-changed",
+      terminalId: "term-1",
+      updateInstalled: updateInstalled as never,
+      timestamp: 1_000,
+    });
+
+    expect(handled).toBe(true);
+    expect(payloads).toEqual([]);
   });
 
   it("forwards a fallback offer from the host, and drops one with an unknown reason (#14370)", () => {
@@ -520,5 +612,92 @@ describe("bridgePtyEvent", () => {
   it("returns false for unhandled event types", () => {
     const handled = bridgePtyEvent({ type: "unknown-event" } as never);
     expect(handled).toBe(false);
+  });
+});
+
+describe("bridgePtyEvent — pause-duration gauge ownership (#17575)", () => {
+  afterEach(() => events.removeAllListeners());
+
+  function collect() {
+    const seen: unknown[] = [];
+    events.on("terminal:reliability-metric", (payload) => seen.push(payload));
+    return seen;
+  }
+
+  const gauge = {
+    type: "terminal-reliability-metric",
+    payload: {
+      terminalId: "resource-governor",
+      metricType: "pause-duration-gauge",
+      timestamp: 1,
+      perTerminalHeld: [
+        { terminalId: "own-1", heldDurationMs: 2000 },
+        { terminalId: "moved-1", heldDurationMs: 3000 },
+      ],
+      clearedTerminalIds: ["own-2", "moved-2"],
+    },
+  } satisfies PtyHostEvent;
+  const isForeignTerminal = (id: string) => id.startsWith("moved-");
+
+  it("drops entries and clears for terminals another shard owns", () => {
+    const seen = collect();
+
+    bridgePtyEvent(structuredClone(gauge), { isForeignTerminal });
+
+    expect(seen).toEqual([
+      {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: 1,
+        perTerminalHeld: [{ terminalId: "own-1", heldDurationMs: 2000 }],
+        clearedTerminalIds: ["own-2"],
+      },
+    ]);
+  });
+
+  it("drops a clear list made only of another shard's terminals", () => {
+    const seen = collect();
+    const event = structuredClone(gauge);
+    event.payload.clearedTerminalIds = ["moved-2"];
+
+    bridgePtyEvent(event, { isForeignTerminal });
+
+    expect(seen).toEqual([
+      {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: 1,
+        perTerminalHeld: [{ terminalId: "own-1", heldDurationMs: 2000 }],
+      },
+    ]);
+  });
+
+  it("emits nothing when every entry belongs to another shard", () => {
+    const seen = collect();
+
+    const handled = bridgePtyEvent(structuredClone(gauge), { isForeignTerminal: () => true });
+
+    expect(handled).toBe(true);
+    expect(seen).toEqual([]);
+  });
+
+  it("passes the gauge through untouched without an ownership check", () => {
+    const seen = collect();
+
+    bridgePtyEvent(structuredClone(gauge));
+
+    expect(seen).toEqual([gauge.payload]);
+  });
+
+  it("leaves other metrics alone even when they name a foreign terminal", () => {
+    const seen = collect();
+    const pauseEnd = {
+      type: "terminal-reliability-metric",
+      payload: { terminalId: "moved-1", metricType: "pause-end", timestamp: 1, durationMs: 5 },
+    } satisfies PtyHostEvent;
+
+    bridgePtyEvent(structuredClone(pauseEnd), { isForeignTerminal });
+
+    expect(seen).toEqual([pauseEnd.payload]);
   });
 });

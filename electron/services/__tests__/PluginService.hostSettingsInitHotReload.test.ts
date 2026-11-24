@@ -1992,49 +1992,58 @@ describe("worktree review checks (#13806)", () => {
   it("clears every project a plugin published to when it unloads", async () => {
     await writeDevPlugin("dev-checks", "acme.checks");
     const service = new PluginService(tmpDir);
-    await service.initialize();
-    await service.activatePlugin("acme.checks");
-    checksOf(service).set(
-      "acme.checks",
-      new Map([
-        ["proj-a", new Map([["/a/wt", [warn("a")]]])],
-        ["proj-b", new Map([["/b/wt", [warn("b")]]])],
-      ])
-    );
-    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+    try {
+      await service.initialize();
+      await service.activatePlugin("acme.checks");
+      checksOf(service).set(
+        "acme.checks",
+        new Map([
+          ["proj-a", new Map([["/a/wt", [warn("a")]]])],
+          ["proj-b", new Map([["/b/wt", [warn("b")]]])],
+        ])
+      );
+      ipcViewMocks.broadcastToProjectRenderers.mockClear();
 
-    service.unloadPlugin("acme.checks");
+      service.unloadPlugin("acme.checks");
 
-    expect(checksOf(service).has("acme.checks")).toBe(false);
-    expect(checkEvents().map((event) => [event.to, event.payload])).toEqual([
-      ["proj-a", { pluginId: "acme.checks", projectId: "proj-a", checks: {} }],
-      ["proj-b", { pluginId: "acme.checks", projectId: "proj-b", checks: {} }],
-    ]);
+      expect(checksOf(service).has("acme.checks")).toBe(false);
+      expect(checkEvents().map((event) => [event.to, event.payload])).toEqual([
+        ["proj-a", { pluginId: "acme.checks", projectId: "proj-a", checks: {} }],
+        ["proj-b", { pluginId: "acme.checks", projectId: "proj-b", checks: {} }],
+      ]);
+    } finally {
+      service.dispose();
+    }
   });
 
   it("clears a plugin's checks, and advances its generation, when its worker is replaced", async () => {
     await writeDevPlugin("dev-checks-reload", "acme.checks-reload");
     const service = new PluginService(tmpDir);
-    await service.initialize();
-    await service.activatePlugin("acme.checks-reload");
-    checksOf(service).set(
-      "acme.checks-reload",
-      new Map([["proj-a", new Map([["/a/wt", [warn("a")]]])]])
-    );
-    ipcViewMocks.broadcastToProjectRenderers.mockClear();
+    try {
+      await service.initialize();
+      await service.activatePlugin("acme.checks-reload");
+      checksOf(service).set(
+        "acme.checks-reload",
+        new Map([["proj-a", new Map([["/a/wt", [warn("a")]]])]])
+      );
+      ipcViewMocks.broadcastToProjectRenderers.mockClear();
 
-    (
-      devWorkerMock.bridges[0].deps as unknown as { clearPriorRegistrations: () => void }
-    ).clearPriorRegistrations();
+      (
+        devWorkerMock.bridges[0].deps as unknown as { clearPriorRegistrations: () => void }
+      ).clearPriorRegistrations();
 
-    expect(checksOf(service).size).toBe(0);
-    expect(checkEvents().map((event) => event.payload)).toEqual([
-      { pluginId: "acme.checks-reload", projectId: "proj-a", checks: {} },
-    ]);
-    const generation = (
-      service as unknown as { worktreeReviewChecksGenerations: Map<string, number> }
-    ).worktreeReviewChecksGenerations.get("acme.checks-reload");
-    expect(generation).toBe(1);
+      expect(checksOf(service).size).toBe(0);
+      expect(checkEvents().map((event) => event.payload)).toEqual([
+        { pluginId: "acme.checks-reload", projectId: "proj-a", checks: {} },
+      ]);
+      const generation = (
+        service as unknown as { worktreeReviewChecksGenerations: Map<string, number> }
+      ).worktreeReviewChecksGenerations.get("acme.checks-reload");
+      expect(generation).toBe(1);
+    } finally {
+      // Stop the watcher before the fixture directory is removed.
+      service.dispose();
+    }
   });
 
   it("clears every plugin's checks on a closed project and leaves other projects alone", async () => {

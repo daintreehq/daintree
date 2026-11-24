@@ -130,6 +130,27 @@ describe("AgentQuotaSection (#12797)", () => {
   });
 });
 
+describe("AgentQuotaSection on a page Settings isn't showing (#17981)", () => {
+  it("reads Codex and Claude only while its page can be seen", async () => {
+    readQuota.mockResolvedValue({ status: "unavailable", reason: "read-failed", fetchedAt: NOW });
+    const codex = render(<AgentQuotaSection agentId="codex" isActive={false} />);
+    await act(async () => {});
+    expect(readQuota).not.toHaveBeenCalled();
+    codex.rerender(<AgentQuotaSection agentId="codex" isActive />);
+    await act(async () => {});
+    expect(readQuota).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    readUsage.mockClear();
+    const claude = render(<AgentQuotaSection agentId="claude" isActive={false} />);
+    await act(async () => {});
+    expect(readUsage).not.toHaveBeenCalled();
+    claude.rerender(<AgentQuotaSection agentId="claude" isActive />);
+    await act(async () => {});
+    expect(readUsage).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("AgentQuotaSection refresh (#12797)", () => {
   it("marks a fresh reading stale once one of its windows has reset", async () => {
     readQuota.mockResolvedValue({
@@ -237,6 +258,26 @@ describe("AgentQuotaSection profiles (#13686)", () => {
     ]);
     expect(document.body.textContent).toContain("for each CODEX_HOME your presets use");
     expect(document.body.textContent).not.toContain("the signed-in account");
+  });
+
+  it("names the default profile after its login once the user names it, lone or not (#17080)", async () => {
+    useAgentSettingsStore.setState({
+      settings: { agents: { codex: { defaultLoginName: "Work" } } } as AgentSettings,
+    });
+    readQuota.mockResolvedValue(reading(10));
+    await renderFor("codex");
+    expect(labels()).toEqual(["Work · default login 5-hour limit used"]);
+
+    cleanup();
+    readProfiles.mockResolvedValue([
+      { key: "a", isDefault: true, presetNames: ["Personal"], result: reading(10) },
+      { key: "b", isDefault: false, presetNames: ["Lab"], result: reading(80) },
+    ]);
+    await renderFor("codex");
+    expect(labels()).toEqual([
+      "Work · default login · Personal 5-hour limit used",
+      "Lab 5-hour limit used",
+    ]);
   });
 
   it("leaves a lone profile unnamed, as before presets were read", async () => {
@@ -604,6 +645,19 @@ describe("AgentQuotaSection for Claude Code (#16370)", () => {
     await renderFor("claude");
 
     expect(screen.getByText("Default login")).toBeTruthy();
+  });
+
+  it("names a lone default login's group, alias included, once the user names it (#17080)", async () => {
+    useAgentSettingsStore.setState({
+      settings: { agents: { claude: { defaultLoginName: "Home" } } } as AgentSettings,
+    });
+    readUsage.mockResolvedValue([claudeAccount({ accountNames: ["Personal"] })]);
+    await renderFor("claude");
+
+    expect(screen.getByText("Home · default login · Personal")).toBeTruthy();
+    expect(meters()[0]?.getAttribute("aria-label")).toBe(
+      "Home · default login · Personal weekly limit used"
+    );
   });
 
   it("offers Retry when the read fails before anything is shown, then shows the readings", async () => {

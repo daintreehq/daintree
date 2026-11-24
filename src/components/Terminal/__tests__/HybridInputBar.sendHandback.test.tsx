@@ -5,6 +5,7 @@
  * they are still where the send left them (#14692).
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 
 const fleetBroadcast = vi.hoisted(() =>
   vi.fn((_terminalId: string, _text: string, _onSent: () => void) => false)
@@ -183,6 +184,12 @@ async function mount({ isolated = false } = {}) {
 function press() {
   document.body.dispatchEvent(new Event("pointerdown", { bubbles: true }));
 }
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
+});
 
 describe("HybridInputBar hands the keyboard back to a terminal-first user's terminal", () => {
   it("moves the keyboard to the terminal once the send is accepted", async () => {

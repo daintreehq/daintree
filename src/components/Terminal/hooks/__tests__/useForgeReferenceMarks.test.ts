@@ -22,6 +22,18 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const subscribed = vi.hoisted(() => ({ invalidated: 0 }));
+vi.mock("@/services/forgeReferenceLookup", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/services/forgeReferenceLookup")>();
+  return {
+    ...actual,
+    onForgeReferencesInvalidated: (listener: () => void) => {
+      subscribed.invalidated++;
+      return actual.onForgeReferencesInvalidated(listener);
+    },
+  };
+});
+
 import { forgeReferenceField, rescanForgeReferences } from "../../inputEditorExtensions";
 import { invalidateForgeReferences } from "@/services/forgeReferenceLookup";
 import { REFERENCE_LOOKUP_SETTLE_MS, useForgeReferenceMarks } from "../useForgeReferenceMarks";
@@ -67,6 +79,7 @@ function render(initial: Partial<Props> = {}) {
 }
 
 beforeEach(() => {
+  subscribed.invalidated = 0;
   vi.useFakeTimers();
   invalidateForgeReferences();
   getReferencesByNumbers.mockReset();
@@ -105,6 +118,23 @@ describe("useForgeReferenceMarks (#14849)", () => {
     expect(getReferencesByNumbers).toHaveBeenCalledExactlyOnceWith(CWD, [14843]);
   });
 
+  it("keeps its subscriptions across keystrokes, rescanning each draft", async () => {
+    const hook = render();
+    for (const draft of ["#", "#7", "see #7", "see #7 and #14843"]) {
+      type(draft);
+      hook.rerender({ cwd: CWD, paused: false, value: draft });
+    }
+    expect(subscribed.invalidated).toBe(1);
+    await vi.advanceTimersByTimeAsync(REFERENCE_LOOKUP_SETTLE_MS);
+    expect(getReferencesByNumbers).toHaveBeenCalledExactlyOnceWith(CWD, [7, 14843]);
+    expect(marked()).toEqual(["#7", "#14843"]);
+
+    // The rescan a restored draft asks for still reaches the composer.
+    view.setState(EditorState.create({ doc: "#7 only", extensions: [forgeReferenceField] }));
+    rescanForgeReferences(view);
+    expect(marked()).toEqual(["#7"]);
+  });
+
   it("marks a number already known at once, without asking again", async () => {
     type("#7");
     const hook = render();
@@ -129,6 +159,26 @@ describe("useForgeReferenceMarks (#14849)", () => {
     hook.rerender({ cwd: null, paused: false, value: "#7 again" });
     expect(marked()).toEqual([]);
     await vi.advanceTimersByTimeAsync(REFERENCE_LOOKUP_SETTLE_MS);
+    expect(getReferencesByNumbers).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a restored draft's marks off without a cwd", async () => {
+    type("#7");
+    const hook = render();
+    await vi.advanceTimersByTimeAsync(REFERENCE_LOOKUP_SETTLE_MS);
+    const stashed = view.state;
+    expect(marked()).toEqual(["#7"]);
+
+    type("");
+    hook.rerender({ cwd: null, paused: false, value: "" });
+    view.setState(stashed);
+    expect(marked()).toEqual(["#7"]);
+    hook.rerender({ cwd: null, paused: false, value: "#7" });
+    expect(marked()).toEqual([]);
+
+    view.setState(stashed);
+    rescanForgeReferences(view);
+    expect(marked()).toEqual([]);
     expect(getReferencesByNumbers).toHaveBeenCalledTimes(1);
   });
 

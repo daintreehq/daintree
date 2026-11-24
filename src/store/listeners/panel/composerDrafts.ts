@@ -19,9 +19,32 @@ export const COMPOSER_DRAFT_REFRESH_MS = 30_000;
 export function draftKeysWithText(drafts: ReadonlyMap<string, string>): string[] {
   const keys: string[] = [];
   for (const [key, value] of drafts) {
-    if (value.trim().length > 0 && !isOtherHostDraftKey(key)) keys.push(key);
+    if (holdsText(value) && !isOtherHostDraftKey(key)) keys.push(key);
   }
   return keys.sort();
+}
+
+/** Stops at the first character that isn't whitespace, so a long draft costs no more than a short one. */
+function holdsText(value: string): boolean {
+  return /\S/.test(value);
+}
+
+/**
+ * Whether `next` can hold text in a different set of drafts than `prev`. A
+ * keystroke inside a draft that held text and still does changes nothing, so
+ * typing never derives the whole set again.
+ */
+export function draftsWithTextMayDiffer(
+  next: ReadonlyMap<string, string>,
+  prev: ReadonlyMap<string, string>
+): boolean {
+  if (next.size !== prev.size) return true;
+  for (const [key, value] of next) {
+    const before = prev.get(key);
+    if (before === value) continue;
+    if (before === undefined || holdsText(before) !== holdsText(value)) return true;
+  }
+  return false;
 }
 
 /**
@@ -62,7 +85,12 @@ export function setupComposerDraftListeners(): DisposableStore {
   d.add(
     toDisposable(
       useTerminalInputStore.subscribe((next, prev) => {
-        if (next.draftInputs !== prev.draftInputs) report();
+        if (
+          next.draftInputs !== prev.draftInputs &&
+          draftsWithTextMayDiffer(next.draftInputs, prev.draftInputs)
+        ) {
+          report();
+        }
       })
     )
   );

@@ -9,6 +9,7 @@ import {
   SEND_KEYS_GAP_MS,
 } from "../../../shared/utils/terminalKeys.js";
 import { MAX_ASSISTANT_SLOTS } from "../../../shared/config/assistantSlots.js";
+import { VIEWLESS_ASSISTANT_AGENT_IDS } from "../../../shared/config/globalAssistant.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import type { HelpSessionStartedBy } from "../HelpSessionService.js";
 import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
@@ -17,17 +18,8 @@ import type { PtyClient } from "../PtyClient.js";
 import type { AssistantLaunchSettings } from "../../../shared/utils/assistantLaunchFlags.js";
 import { READY_SCREEN_LINES, untilAssistantReady } from "./assistantReadiness.js";
 
-/**
- * The agents started as an assistant with no view (#13511): the assistant
- * backends that run live, each answering its own folder-trust question or told
- * to trust its folder at launch.
- */
-export const VIEWLESS_START_AGENT_IDS: readonly string[] = [
-  "claude",
-  "codex",
-  "copilot",
-  "antigravity",
-];
+/** The agents started as an assistant with no view (#13511). */
+export const VIEWLESS_START_AGENT_IDS = VIEWLESS_ASSISTANT_AGENT_IDS;
 
 /** One agent a start with no view could run, as `AssistantLaunchDeps.launchableAgents` lists it. */
 export interface LaunchableAssistantAgent {

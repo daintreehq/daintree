@@ -157,11 +157,14 @@ describe("host action visibility", () => {
 });
 
 describe("Switch host keybinding", () => {
-  it("is bound where Remote Hosts exists and not on Windows, where the action isn't", () => {
-    const bound = (isWindows: boolean) =>
-      buildDefaultKeybindings(isWindows).some((binding) => binding.actionId === "host.switch");
+  it("is bound on every platform, Windows included, since every platform is a Shell", () => {
+    const bound = (isWindows: boolean, isLinux = false) =>
+      buildDefaultKeybindings(isWindows, isLinux).some(
+        (binding) => binding.actionId === "host.switch"
+      );
     expect(bound(false)).toBe(true);
-    expect(bound(true)).toBe(false);
+    expect(bound(true)).toBe(true);
+    expect(bound(false, true)).toBe(true);
   });
 });
 

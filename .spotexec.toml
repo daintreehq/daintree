@@ -1,0 +1,136 @@
+# Runs heavy commands on remote runners with spotexec (`sx`). Runners and
+# accounts live in each developer's ~/.config/spotexec/config.toml.
+#
+#   sx test src/foo/__tests__/bar.test.ts    one or more unit test files
+#   sx test-all                              the whole unit suite in one run
+#   sx test-ssh                              the opt-in real-ssh suites
+#   sx typecheck / sx lint / sx check        typecheck, lint, guards and format
+version = 1
+timeout = "15m"
+# Commands past the instance cap wait for a slot; test-all holds a whole VM for
+# its full run.
+queue_timeout = "60m"
+pool = ["aws"]
+env_allow = ["NODE_OPTIONS", "TZ"]
+
+# One shared pool for every command: 8-vCPU VMs with at least 32 GiB, up to six
+# jobs to a VM (exclusive tasks take a whole one), and at most twelve VMs per
+# machine. Past that, even a workflow of thirty agents queues for a slot instead
+# of launching more. Starting a VM costs a minute or more, and every VM then
+# bills its idle timeout after its last job, so a few warm VMs beat many cold
+# ones. Six, not eight: these jobs average about 1.5 busy CPUs each, so six keep
+# all eight busy while they share the CPUs, and six typechecks (~3 GB each)
+# still fit 32 GiB. This is background batch work, so a busy VM matters more
+# than how fast any one job finishes. Builds on the machine's global runner
+# named aws (its account, regions, and its baked images and fleet state, which
+# follow the runner's name), or else its first aws-spot runner.
+[runners.aws]
+extends = "aws"
+extends_type = "aws-spot"
+vcpus = 8
+min_memory_gib = 32
+instance_types = ["m6a.*", "m7a.*", "m8a.*", "r6a.*", "r7a.*", "r8a.*"]
+max_slots = 6
+max_instances = 12
+idle_timeout = "10m"
+
+[sync]
+mode = "auto"
+writeback = "always"
+exclude = [".env*", "*.pem", "*.key"]
+# Perf provenance, guards and scripts ask git about the checkout (rev-parse,
+# status, ls-files).
+git_seed = true
+
+# Mirrors .github/actions/install: the same cached paths, keyed on the same
+# inputs, plus the Electron check that is part of the install command here.
+[deps]
+lockfiles = [
+  "package-lock.json",
+  "package.json",
+  ".npmrc",
+  "packages/*/package.json",
+  "scripts/postinstall.cjs",
+  "scripts/patchNodePty*.cjs",
+  "scripts/ci/verify-electron-install.mjs",
+  "electron/native/*/binding.gyp",
+  "electron/native/*/package.json",
+  "electron/native/*/src/**",
+]
+# Electron's npm package fetches its binary on first use; one unit test runs it.
+# CI skips onnxruntime-node's CUDA download the same way.
+install = "ONNXRUNTIME_NODE_INSTALL=skip npm ci && node scripts/ci/verify-electron-install.mjs"
+cache_dirs = [
+  "node_modules",
+  "packages/*/node_modules",
+  "electron/native/*/build",
+  "electron/native/*/bin",
+]
+timeout = "20m"
+
+[container]
+dockerfile = ".spotexec/Dockerfile"
+
+# Builds the workspace packages before every run, as CI's install step does:
+# their dist/ isn't cached (it follows the sources, not the lockfile), and
+# tests import it and typecheck reads its declarations. The build takes half a
+# minute on a slot, so it is skipped while the slot's last build still matches
+# every non-test file (.spotexec/prepare-key.mjs). The stamp is ignored output
+# in the slot, like dist/, so a slot never trusts another slot's build.
+[setup]
+run = '''
+stamp=.tmp/spotexec-prepare.sha
+key=$(node .spotexec/prepare-key.mjs) || exit 1
+fresh=1
+for d in packages/*/; do grep -q '"prepare"' "$d/package.json" 2>/dev/null && [ ! -d "$d/dist" ] && fresh=0; done
+[ "$fresh" = 1 ] && [ "$(cat "$stamp" 2>/dev/null)" = "$key" ] && exit 0
+rm -f "$stamp"
+npm run prepare --workspaces --if-present && mkdir -p .tmp && echo "$key" > "$stamp"
+'''
+
+[tasks.test]
+run = "npx vitest run {args}"
+
+# The whole suite in one Vitest run with all 8 CPUs, as `npm test` runs it. A
+# VM per shard spent about 3 of each part's 4 minutes starting up.
+[tasks.test-all]
+run = "npx vitest run {args}"
+exclusive = true
+timeout = "30m"
+
+# The opt-in real-ssh suites against a private user-mode sshd (see
+# docs/development.md#real-ssh-end-to-end). On Linux the host socket lives
+# under /run/user/<uid>, which the image leaves world-writable for this.
+[tasks.test-ssh]
+run = '''mkdir -p -m 700 "/run/user/$(id -u)" && DAINTREE_SSH_E2E=1 npx vitest run electron/remote/__tests__/ssh.e2e.test.ts electron/remote/__tests__/attachStdio.ssh.e2e.test.ts electron/remote/__tests__/sshMasters.ssh.e2e.test.ts electron/remote/__tests__/hostSetup.ssh.e2e.test.ts {args}'''
+timeout = "20m"
+
+# `npm run typecheck` runs three tsc projects at once, which peaked past 16 GB,
+# so the projects run one at a time here (every one, even after a failure).
+[tasks.typecheck]
+run = '''projects=$(node -e 'import("./scripts/typecheck.mjs").then(m => console.log(m.PROJECTS.map(p => p.name).join(" ")))') && [ -n "$projects" ] || { echo "[typecheck] no projects found"; exit 1; }; status=0; for p in $projects; do s=$SECONDS; node scripts/typecheck.mjs --only "$p" && echo "[typecheck] $p ok ($((SECONDS - s))s)" || { echo "[typecheck] $p failed"; status=1; }; done; exit $status'''
+timeout = "30m"
+
+# Each ESLint thread builds its own typed program: CI's 2 threads suit its
+# 16 GB runners; 4 peak around 15.5 GB and take lint from 8 minutes to under 3
+# once warm, so lint takes the whole VM.
+[tasks.lint]
+run = "ESLINT_CONCURRENCY=4 npm run lint:ratchet"
+exclusive = true
+timeout = "30m"
+
+[tasks.guards]
+run = "npm run check:guards"
+timeout = "30m"
+
+# Prettier over the whole repo, three of guards' seven minutes when they ran
+# together. The cache is keyed on content as in CI, and kept in the slot's
+# ignored .tmp/ rather than the shared node_modules.
+[tasks.format]
+run = "npm run format:check -- --cache --cache-strategy content --cache-location .tmp/prettier-cache"
+timeout = "30m"
+
+# `npm run check` in four parts.
+[tasks.check]
+parallel = ["typecheck", "lint", "guards", "format"]
+fail_fast = false

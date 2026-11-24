@@ -72,6 +72,17 @@ function lastRow(content: HTMLElement, rowPx: number): LastRow | null {
   return { right: Math.max(...row.map((rect) => rect.right)) };
 }
 
+interface RailReading {
+  shell: HTMLDivElement;
+  /** Whether the controls take a row of their own beneath the text. */
+  rail: boolean;
+}
+
+function writeRail(reading: RailReading | null): void {
+  if (!reading || reading.rail === reading.shell.hasAttribute("data-composer-rail")) return;
+  reading.shell.toggleAttribute("data-composer-rail", reading.rail);
+}
+
 interface UseComposerMeasureParams {
   inputShellRef: React.RefObject<HTMLDivElement | null>;
   trailingGroupRef: React.RefObject<HTMLDivElement | null>;
@@ -144,10 +155,11 @@ export function useComposerMeasure({
     };
   }, [inputShellRef, trailingGroupRef]);
 
-  const measure = useCallback(() => {
+  // Reads only: what the shell should do, decided from layout as it stands.
+  const readRail = useCallback((): RailReading | null => {
     const shell = inputShellRef.current;
     const trailing = trailingGroupRef.current;
-    if (!shell || !trailing) return;
+    if (!shell || !trailing) return null;
 
     // Read through the shell, not the view: the editor moves to the Expanded
     // Editor and back, and only one that is in this shell sits beside these
@@ -159,6 +171,7 @@ export function useComposerMeasure({
     const editor = shell.querySelector<HTMLElement>(".cm-editor");
     // A draft emptied or replaced whole since the last pass is a new draft,
     // even if this pass is the first to see it and it already holds text.
+    // Taken as it is read: no style rule matches it, so no layout waits on it.
     const draftReset = editor?.hasAttribute(COMPOSER_DRAFT_RESET_ATTR) ?? false;
     if (draftReset) editor?.removeAttribute(COMPOSER_DRAFT_RESET_ATTR);
     let rail = false;
@@ -177,10 +190,10 @@ export function useComposerMeasure({
         rail = end === null || end.right + CORNER_GAP_PX > trailing.getBoundingClientRect().left;
       }
     }
-
-    if (rail === shell.hasAttribute("data-composer-rail")) return;
-    shell.toggleAttribute("data-composer-rail", rail);
+    return { shell, rail };
   }, [inputShellRef, trailingGroupRef]);
+
+  const measure = useCallback(() => writeRail(readRail()), [readRail]);
 
   // Measured inside the observer's callback, not deferred to a frame: it runs
   // after layout and before paint, so a pane dragged past a decision point
@@ -205,11 +218,25 @@ export function useComposerMeasure({
     return () => observer.disconnect();
   }, [trackEl, trailingEl, measure]);
 
+  // The geometry event comes from the autosize's write, just after it sized
+  // the editor. Reading layout there would force it in the middle of
+  // CodeMirror's writes, so the pass is handed back to the view: a request made
+  // while it writes runs in its next read and write, in the same frame.
   useEffect(() => {
     if (!shellEl) return;
-    shellEl.addEventListener(COMPOSER_GEOMETRY_EVENT, measure);
-    return () => shellEl.removeEventListener(COMPOSER_GEOMETRY_EVENT, measure);
-  }, [shellEl, measure]);
+    const request = {
+      read: (): RailReading | null => readRail(),
+      write: (reading: RailReading | null) => writeRail(reading),
+    };
+    const onGeometry = (event: Event) => {
+      const view =
+        event.target instanceof HTMLElement ? EditorView.findFromDOM(event.target) : null;
+      if (view) view.requestMeasure(request);
+      else measure();
+    };
+    shellEl.addEventListener(COMPOSER_GEOMETRY_EVENT, onGeometry);
+    return () => shellEl.removeEventListener(COMPOSER_GEOMETRY_EVENT, onGeometry);
+  }, [shellEl, readRail, measure]);
 
   useLayoutEffect(() => {
     measure();

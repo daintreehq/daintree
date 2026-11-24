@@ -4,6 +4,7 @@ import type {
   Project,
   ProjectAddOptions,
   ProjectCloseResult,
+  ProjectSleepOptions,
   ProjectSleepResult,
   ProjectCreationIdentity,
 } from "@shared/types";
@@ -17,6 +18,7 @@ import { notify } from "@/lib/notify";
 import { notifyPluginWorkStopped } from "@/lib/pluginWorkStoppedNotice";
 import {
   setCurrentProjectAwaitingCloneAccessor,
+  setCurrentProjectIdAccessor,
   setProjectPathIndexAccessor,
 } from "@/store/storeAccessors";
 import { actionService } from "@/services/ActionService";
@@ -25,7 +27,7 @@ import { logDebug } from "@/utils/logger";
 import { useUrlHistoryStore } from "./urlHistoryStore";
 import { useHelpPanelStore } from "./helpPanelStore";
 import { ASSISTANT_SLOTS, assistantSlotKey } from "../../shared/config/assistantSlots";
-import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { createSafeJSONStorage, stableProjection } from "./persistence/safeStorage";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
 import { panelPersistence, panelToSnapshot } from "./persistence/panelPersistence";
 import { draftInputPersistence } from "./persistence/draftInputPersistence";
@@ -44,6 +46,12 @@ import {
 } from "@shared/utils/projectOpenErrors";
 import type { NotificationAction } from "./notificationStore";
 import { getViewWorkspaceId } from "./viewWorkspaceId";
+import {
+  applyOptimisticProjectUpdate,
+  rollbackOptimisticProjectUpdate,
+  syncProjectFields,
+  type OptimisticProjectWrite,
+} from "./optimisticProjectWrites";
 import {
   clearPanelStoreForSwitchThroughAccessor,
   clearFleetArmingThroughAccessor,
@@ -186,6 +194,7 @@ function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
   // silently drops a sibling window's concurrent drafts (#11352). Same delta
   // contract as terminals/tab groups.
   const draftDelta = draftInputPersistence.computeDelta(projectId, draftInputs);
+  draftInputPersistence.noteOutgoingSave(projectId, draftInputs, draftDelta.changedIds);
   // Persist the *durable* selection, not whatever is incidentally active. A
   // focus promotion (e.g. a temporary PR worktree spun up by a batch merge)
   // leaves `restoreWorktreeId` pointing at the last deliberate selection, so it
@@ -378,8 +387,9 @@ interface ProjectState {
    * and the layout survives, so reopening restores it like a relaunch. When the
    * project is the one on screen this also drops the window to the no-project
    * state, the way {@link closeActiveProject} does but without wiping state.
+   * `options` carries what the user's request saw of its agents (#17886).
    */
-  sleepProject: (projectId: string) => Promise<ProjectSleepResult>;
+  sleepProject: (projectId: string, options?: ProjectSleepOptions) => Promise<ProjectSleepResult>;
   /**
    * Drop this window to the no-project state without touching main — the local
    * half of {@link sleepProject}, reused when another window slept the project
@@ -1315,40 +1325,65 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 
   updateProject: async (id, updates) => {
-    // Snapshot for rollback
-    const prevProjects = get().projects;
-    const prevCurrentProject = get().currentProject;
+    const write: OptimisticProjectWrite = { status: "pending" };
 
     // Optimistic apply — no isLoading spinner; UI reflects the change immediately
     set((state) => ({
       error: null,
-      projects: state.projects.map((p) => (p.id === id ? { ...p, ...updates } : p)),
+      projects: state.projects.map((p) =>
+        p.id === id ? applyOptimisticProjectUpdate(p, updates, write) : p
+      ),
       currentProject:
         state.currentProject?.id === id
-          ? { ...state.currentProject, ...updates }
+          ? applyOptimisticProjectUpdate(state.currentProject, updates, write)
           : state.currentProject,
     }));
 
     try {
       await projectClient.update(id, updates);
-      // Reconcile with server-side normalization in the background. loadProjects
-      // only fills currentProject when it's null, so explicitly re-sync the
-      // active project from the reloaded list to pick up any normalization.
-      await get().loadProjects();
-      if (get().currentProject?.id === id) {
-        const reconciled = get().projects.find((p) => p.id === id);
-        if (reconciled) set({ currentProject: reconciled });
-      }
+      write.status = "saved";
     } catch (error) {
-      // Rollback to pre-optimistic state
-      set({ projects: prevProjects, currentProject: prevCurrentProject, isLoading: false });
+      write.status = "failed";
+      // Undo only the fields this write still owns (#17520): other projects'
+      // saved edits, a newer selection, and other operations' isLoading stay.
+      set((state) => {
+        let rolledBack = false;
+        const projects = state.projects.map((p) => {
+          if (p.id !== id) return p;
+          const restored = rollbackOptimisticProjectUpdate(p, write);
+          if (restored !== p) rolledBack = true;
+          return restored;
+        });
+        // Reloads replace list rows but never currentProject, so its own write
+        // history can predate Main's value. Like the success path, re-sync it
+        // from the list row (this write's fields only), or its claims if no row.
+        const row = projects.find((p) => p.id === id);
+        return {
+          projects: rolledBack ? projects : state.projects,
+          currentProject:
+            state.currentProject?.id === id
+              ? row
+                ? syncProjectFields(state.currentProject, row, Object.keys(updates))
+                : rollbackOptimisticProjectUpdate(state.currentProject, write)
+              : state.currentProject,
+          error: "Failed to update project",
+        };
+      });
       logErrorWithContext(error, {
         operation: "update_project",
         component: "projectStore",
         details: { projectId: id, updates },
       });
-      set({ error: "Failed to update project" });
       throw error;
+    }
+
+    // Reconcile with server-side normalization in the background. loadProjects
+    // only fills currentProject when it's null, so explicitly re-sync the
+    // active project from the reloaded list to pick up any normalization.
+    await get().loadProjects();
+    if (get().currentProject?.id === id) {
+      const reconciled = get().projects.find((p) => p.id === id);
+      if (reconciled) set({ currentProject: reconciled });
     }
   },
 
@@ -1488,7 +1523,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     clearPanelStoreForSwitchThroughAccessor({ destroyInstances: true });
   },
 
-  sleepProject: async (projectId) => {
+  sleepProject: async (projectId, options) => {
     const isActive = get().currentProject?.id === projectId;
 
     // Main broadcasts `project:slept` while this call is still in flight, and
@@ -1518,7 +1553,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       }
 
       const projectName = get().projects.find((p) => p.id === projectId)?.name ?? "the project";
-      const result = await projectClient.sleepProject(projectId);
+      const result = await projectClient.sleepProject(projectId, options);
       notifyPluginWorkStopped(projectName, result.pluginWorkStopped);
 
       if (isActive) {
@@ -1813,6 +1848,12 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
   },
 });
 
+// Rebuilt only when `projects` changes, so sets of transient fields (`isLoading`,
+// `error`) leave the persisted slice unchanged and skip serialization.
+const persistedProjects = stableProjection((projects: Project[]) =>
+  projects.map(({ lastKnownStats: _lastKnownStats, ...rest }) => rest)
+);
+
 export const useProjectStore = create<ProjectState>()(
   subscribeWithSelector(
     persist(
@@ -1830,7 +1871,7 @@ export const useProjectStore = create<ProjectState>()(
           // since every `WebContentsView` serializes the whole `projects` array
           // from its own copy, so a view holding a stale snapshot would clobber
           // a newer one. Strip it and let main stay authoritative.
-          projects: state.projects.map(({ lastKnownStats: _lastKnownStats, ...rest }) => rest),
+          projects: persistedProjects(state.projects),
         }),
         merge: (persistedState, currentState) => {
           const persisted = persistedState as { projects?: unknown } | undefined;
@@ -1868,6 +1909,8 @@ setProjectPathIndexAccessor(() => {
 setCurrentProjectAwaitingCloneAccessor(() =>
   isAwaitingClone(useProjectStore.getState().currentProject)
 );
+
+setCurrentProjectIdAccessor(() => useProjectStore.getState().currentProject?.id ?? null);
 
 // Break circular dependency by injecting project ID getter. Falls back to the
 // view's own workspace id so a scratch view — which has no Project row, and so

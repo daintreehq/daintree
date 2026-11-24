@@ -48,6 +48,54 @@ describe("checkDestination", () => {
     expect((await checkDestination(path.join(root, "other-repo"), [URL])).status).toBe("occupied");
   });
 
+  it("refuses a folder name over the directory-entry limit", async () => {
+    const check = await checkDestination(path.join(root, "a".repeat(256)), [URL]);
+    expect(check).toMatchObject({ status: "invalid", detail: "Folder name is too long" });
+  });
+
+  it("measures a leading space, which the name validator trims away", async () => {
+    const check = await checkDestination(path.join(root, ` ${"a".repeat(255)}`), [URL]);
+    expect(check.status).toBe("invalid");
+  });
+
+  it("refuses a parent folder over the directory-entry limit instead of calling the path free", async () => {
+    const check = await checkDestination(path.join(root, "p".repeat(256), "repo"), [URL]);
+    expect(check).toMatchObject({ status: "invalid", detail: "Folder name is too long" });
+  });
+
+  // Where names are bytes, 85 characters fit and "-2" pushes the sibling past
+  // the limit while its character count stays far below 255.
+  it.runIf(process.platform === "linux")(
+    "suggests no sibling that is too long in bytes, though short in characters",
+    async () => {
+      const taken = path.join(root, "あ".repeat(85));
+      fs.mkdirSync(taken);
+      fs.writeFileSync(path.join(taken, "notes.txt"), "mine");
+      expect(await checkDestination(taken, [URL])).toMatchObject({
+        status: "occupied",
+        suggestion: null,
+      });
+    }
+  );
+
+  it.runIf(process.platform === "linux")(
+    "refuses a parent folder that is too long in bytes, though short in characters",
+    async () => {
+      const check = await checkDestination(path.join(root, "あ".repeat(100), "repo"), [URL]);
+      expect(check).toMatchObject({ status: "invalid" });
+    }
+  );
+
+  it("suggests no sibling whose name would be too long", async () => {
+    const taken = path.join(root, "t".repeat(254));
+    fs.mkdirSync(taken);
+    fs.writeFileSync(path.join(taken, "notes.txt"), "mine");
+    expect(await checkDestination(taken, [URL])).toMatchObject({
+      status: "occupied",
+      suggestion: null,
+    });
+  });
+
   it("refuses relative paths and the disk root", async () => {
     expect((await checkDestination("relative/dir", [URL])).status).toBe("invalid");
     expect((await checkDestination("/", [URL])).status).toBe("invalid");
@@ -87,6 +135,37 @@ describe("suggestDestination", () => {
     });
     expect(check).toMatchObject({ status: "free", path: path.join(projects, "daintree-2") });
   });
+
+  it("skips a mirrored path this machine can't hold and falls back to the projects folder", async () => {
+    const home = path.join(root, "home-long");
+    const projects = path.join(home, "Projects");
+    fs.mkdirSync(projects, { recursive: true });
+    const check = await suggestDestination({
+      homeDir: home,
+      projectsDir: projects,
+      homeRelativePath: `Projects/${"q".repeat(256)}/app`,
+      repoName: "app",
+      remoteUrls: [URL],
+    });
+    expect(check).toMatchObject({ status: "free", path: path.join(projects, "app") });
+  });
+
+  it.runIf(process.platform === "linux")(
+    "skips a mirrored path whose folder is too long in bytes, though short in characters",
+    async () => {
+      const home = path.join(root, "home-long-bytes");
+      const projects = path.join(home, "Projects");
+      fs.mkdirSync(projects, { recursive: true });
+      const check = await suggestDestination({
+        homeDir: home,
+        projectsDir: projects,
+        homeRelativePath: `Projects/${"あ".repeat(100)}/app`,
+        repoName: "app",
+        remoteUrls: [URL],
+      });
+      expect(check).toMatchObject({ status: "free", path: path.join(projects, "app") });
+    }
+  );
 
   it("ignores a relative path that climbs out of home", async () => {
     const home = path.join(root, "home-c");

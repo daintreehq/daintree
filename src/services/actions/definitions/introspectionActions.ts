@@ -8,17 +8,7 @@ import {
   ActionsGetSchemaArgsSchema,
   ActionsListArgsSchema,
   ActionsSearchArgsSchema,
-  listActionManifest,
-  searchActionManifest,
 } from "@shared/utils/actionIntrospection";
-import { actionService } from "@/services/ActionService";
-import { usePanelStore } from "@/store/panelStore";
-import { usePortalStore } from "@/store/portalStore";
-import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { listPersistedStores } from "@/store/persistence/persistedStoreRegistry";
-import { readLocalStorageItemSafely } from "@/store/persistence/safeStorage";
 
 export function registerIntrospectionActions(
   actions: ActionRegistry,
@@ -42,11 +32,10 @@ export function registerIntrospectionActions(
       offset: z.number().int().nonnegative(),
       hasMore: z.boolean(),
     }),
-    run: async (args: unknown, ctx: ActionContext) =>
-      listActionManifest(
-        actionService.list(ctx, { includeSchemas: false }),
-        (args as z.infer<typeof ActionsListArgsSchema>) ?? {}
-      ),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { runActionsList } = await import("./introspectionActions.impl");
+      return runActionsList(args, ctx);
+    },
   }));
 
   // Registered here purely for manifest registration — schema, description,
@@ -97,48 +86,12 @@ export function registerIntrospectionActions(
       focusedTerminalId: z.string().optional(),
       focusedTerminalKind: z.string().optional(),
       focusedTerminalTitle: z.string().optional(),
-      portalOpen: z.boolean(),
-      portalActiveTabId: z.string().nullable(),
       terminalCount: z.number(),
       worktreeCount: z.number(),
     }),
     run: async () => {
-      const project = useProjectStore.getState().currentProject;
-      const terminalState = usePanelStore.getState();
-      const worktreeSelection = useWorktreeSelectionStore.getState();
-      const worktrees = getCurrentViewStore().getState().worktrees;
-      const portal = usePortalStore.getState();
-
-      const focusedId = terminalState.focusedId;
-      const focusedTerminal = focusedId ? (terminalState.panelsById[focusedId] ?? null) : null;
-
-      const activeWorktreeId = worktreeSelection.activeWorktreeId;
-      const activeWorktree = activeWorktreeId ? worktrees.get(activeWorktreeId) : null;
-
-      const ctx: ActionContext = {
-        projectId: project?.id,
-        projectName: project?.name,
-        projectPath: project?.path,
-        activeWorktreeId: activeWorktreeId ?? undefined,
-        activeWorktreeName: activeWorktree?.name,
-        activeWorktreePath: activeWorktree?.path,
-        activeWorktreeBranch: activeWorktree?.branch,
-        activeWorktreeIsMain: activeWorktree?.isMainWorktree,
-        focusedWorktreeId: worktreeSelection.focusedWorktreeId ?? undefined,
-        focusedTerminalId: focusedId ?? undefined,
-        focusedTerminalKind: focusedTerminal?.kind,
-        focusedTerminalTitle: focusedTerminal?.title,
-      };
-
-      return {
-        ...ctx,
-        portalOpen: portal.isOpen,
-        portalActiveTabId: portal.activeTabId,
-        terminalCount: terminalState.panelIds.filter(
-          (id) => terminalState.panelsById[id]?.location !== "trash"
-        ).length,
-        worktreeCount: worktrees.size,
-      };
+      const { runActionsGetContext } = await import("./introspectionActions.impl");
+      return runActionsGetContext();
     },
   }));
 
@@ -160,47 +113,8 @@ export function registerIntrospectionActions(
       stores: z.array(PersistedStoreInfoSchema),
     }),
     run: async () => {
-      const registrations = listPersistedStores();
-      const stores: z.infer<typeof PersistedStoreInfoSchema>[] = registrations.map((reg) => {
-        const options = reg.store.persist.getOptions();
-        const storageKey = typeof options.name === "string" ? options.name : "";
-        const declaredVersion = typeof options.version === "number" ? options.version : null;
-
-        // storage-key: declared-elsewhere
-        const raw = storageKey ? readLocalStorageItemSafely(storageKey) : null;
-        const hasPersistedValue = raw !== null;
-        const sizeBytes = raw !== null ? raw.length * 2 : 0;
-
-        let persistedBlobVersion: number | null = null;
-        let parseStatus: "ok" | "missing" | "corrupt" = "missing";
-        if (raw !== null) {
-          try {
-            const parsed = JSON.parse(raw) as { version?: unknown };
-            parseStatus = "ok";
-            if (typeof parsed?.version === "number") {
-              persistedBlobVersion = parsed.version;
-            }
-          } catch {
-            parseStatus = "corrupt";
-          }
-        }
-
-        return {
-          storeId: reg.storeId,
-          storageKey,
-          declaredVersion,
-          persistedBlobVersion,
-          hasMigrate: typeof options.migrate === "function",
-          hasMerge: typeof options.merge === "function",
-          hasPartialize: typeof options.partialize === "function",
-          persistedStateType: reg.persistedStateType,
-          hasPersistedValue,
-          sizeBytes,
-          parseStatus,
-        };
-      });
-
-      return { storeCount: stores.length, stores };
+      const { runActionsPersistedStores } = await import("./introspectionActions.impl");
+      return runActionsPersistedStores();
     },
   }));
 
@@ -230,8 +144,8 @@ export function registerIntrospectionActions(
       results: z.array(z.unknown()),
     }),
     run: async (args: unknown, ctx: ActionContext) => {
-      const { query, limit } = args as z.infer<typeof ActionsSearchArgsSchema>;
-      return searchActionManifest(actionService.list(ctx, { includeSchemas: false }), query, limit);
+      const { runActionsSearch } = await import("./introspectionActions.impl");
+      return runActionsSearch(args, ctx);
     },
   }));
 
@@ -263,29 +177,8 @@ export function registerIntrospectionActions(
     // that budget ever gains real headroom; do not raise the ratchet for it.
     resultSchema: McpGetSchemaResultSchema,
     run: async (args: unknown, ctx: ActionContext) => {
-      const { actionId } = args as { actionId: string };
-      const entry = actionService.get(actionId, ctx);
-
-      if (!entry || entry.mcpVisibility === "hidden" || entry.danger === "restricted") {
-        return {
-          ok: false,
-          entry: null,
-          policy: null,
-          error: {
-            code: "NOT_FOUND",
-            message: `No action found with id "${actionId}". Use actions.search to find available actions.`,
-          },
-        };
-      }
-
-      // `policy` is main's to fill: this runs in the renderer, which has no
-      // session, tier, or grant state to evaluate one against. Main rebuilds
-      // this payload in `filterIntrospectionResultForSession` and substitutes
-      // the real record there, or denies the read if it cannot build one. The
-      // null placeholder is what lets that field stay required-and-nullable in
-      // the declared schema rather than optional. `McpGetSchemaWireResultSchema`
-      // is the stricter shape a client sees once main has filled it in.
-      return { ok: true, entry, policy: null, error: null };
+      const { runActionsGetSchema } = await import("./introspectionActions.impl");
+      return runActionsGetSchema(args, ctx);
     },
   }));
 }

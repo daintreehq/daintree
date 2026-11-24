@@ -671,6 +671,23 @@ describe("source side", () => {
   });
 });
 
+describe("cloneAndOpen staging", () => {
+  it("clones into a folder name at the directory-entry limit", async () => {
+    const host = createTestHost(root, "long-name");
+    const destination = path.join(root, "long-name-home", "n".repeat(255));
+    const outcome = await host.service.cloneAndOpen({
+      opId: nextOpId(),
+      source: { kind: "remote", url: URL },
+      destination,
+      branch: null,
+      options: { submodules: false, depth: "full" },
+      setupRecipeId: null,
+    });
+    expect(outcome).toMatchObject({ ok: true, projectPath: destination });
+    expect(fs.existsSync(path.join(destination, ".git"))).toBe(true);
+  });
+});
+
 describe("clones racing for one folder", () => {
   const stagingLeft = (parent: string) =>
     fs.readdirSync(parent).filter((name) => name.includes(".daintree-clone-"));
@@ -1130,5 +1147,197 @@ describe("remote reads across lookups", () => {
       (await service.match({ remoteUrls: [URL], committedProjectId: null })).map((m) => m.path)
     ).toEqual([repo]);
     expect(reads).toEqual([repo, repo, repo]);
+  });
+});
+
+describe("the source's name, emoji and colour", () => {
+  const COMMITTED_URL = "https://example.test/daintreehq/committed-identity.git";
+  const committedIdentity = { version: 1, name: "Committed name", emoji: "🧪", color: "#123456" };
+  const display = { name: "Daintree app", emoji: "🎸", color: "#ff5500" };
+  const readProjectJson = (dir: string) =>
+    fs.readFileSync(path.join(dir, ".daintree", "project.json"), "utf8");
+
+  beforeAll(() => {
+    const committedBare = makeBare(root, "committed-identity");
+    aliasRemote(COMMITTED_URL, committedBare);
+    const seed = makeRepo(root, "committed-identity-seed", committedBare);
+    fs.mkdirSync(path.join(seed, ".daintree"), { recursive: true });
+    fs.writeFileSync(
+      path.join(seed, ".daintree", "project.json"),
+      JSON.stringify(committedIdentity, null, 2)
+    );
+    git(seed, ["add", "."]);
+    git(seed, ["commit", "-q", "-m", "identity"]);
+    git(seed, ["push", "-q", "-u", "origin", "main"]);
+  });
+
+  const cloneWith = (
+    host: ReturnType<typeof createTestHost>,
+    url: string,
+    destination: string,
+    shown?: { name: string; emoji: string; color: string | null }
+  ) =>
+    host.service.cloneAndOpen({
+      opId: nextOpId(),
+      source: { kind: "remote", url },
+      destination,
+      branch: null,
+      options: { submodules: false, depth: "full" },
+      setupRecipeId: null,
+      ...(shown ? { display: shown } : {}),
+    });
+
+  it("gives a fresh clone the source's identity when the repository carries none", async () => {
+    const host = createTestHost(root, "display-a");
+    const destination = path.join(root, "display-a-home", "Projects", "daintree");
+    const outcome = await cloneWith(host, URL, destination, display);
+    expect(outcome).toMatchObject({ ok: true, projectName: "Daintree app" });
+    expect(host.projects[0]).toMatchObject(display);
+    expect(fs.existsSync(path.join(destination, ".daintree", "project.json"))).toBe(false);
+  });
+
+  it("gives a fresh clone the source's identity over the committed one, leaving the file alone", async () => {
+    const host = createTestHost(root, "display-b");
+    const destination = path.join(root, "display-b-home", "Projects", "committed");
+    const outcome = await cloneWith(host, COMMITTED_URL, destination, {
+      name: "Renamed here",
+      emoji: "🎸",
+      color: null,
+    });
+    expect(outcome).toMatchObject({ ok: true, projectName: "Renamed here" });
+    const project = host.projects[0]!;
+    expect(project).toMatchObject({ name: "Renamed here", emoji: "🎸" });
+    // The source shows no colour, so neither does its copy.
+    expect(project.color).toBeUndefined();
+    expect(JSON.parse(readProjectJson(destination))).toEqual(committedIdentity);
+  });
+
+  it("keeps the committed identity for a clone asked for without one", async () => {
+    const host = createTestHost(root, "display-c");
+    const destination = path.join(root, "display-c-home", "Projects", "committed");
+    await cloneWith(host, COMMITTED_URL, destination);
+    expect(host.projects[0]).toMatchObject({
+      name: "Committed name",
+      emoji: "🧪",
+      color: "#123456",
+    });
+    expect(host.updateProjectDisplay).not.toHaveBeenCalled();
+  });
+
+  const openWith = (
+    host: ReturnType<typeof createTestHost>,
+    projectId: string | null,
+    clonePath: string,
+    url: string,
+    shown = display
+  ) =>
+    host.service.open({
+      projectId,
+      path: clonePath,
+      remoteUrls: [url],
+      branch: null,
+      branchRemoteUrl: null,
+      navigateOnly: true,
+      display: shown,
+    });
+
+  it("fills every field a project the host has still keeps at its default", async () => {
+    const host = createTestHost(root, "display-d");
+    const clone = path.join(root, "display-d-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    const project = host.addProject(clone);
+    const opened = await openWith(host, project.id, clone, URL);
+    expect(opened.projectName).toBe("Daintree app");
+    expect(host.projects[0]).toMatchObject(display);
+  });
+
+  it("fills defaults from the source, not the committed file, and leaves the file alone", async () => {
+    const host = createTestHost(root, "display-e");
+    const clone = path.join(root, "display-e-clone");
+    git(root, ["clone", "-q", COMMITTED_URL, clone]);
+    // Registered before the file was there, so still at its defaults.
+    const project = host.addProject(clone);
+    await openWith(host, project.id, clone, COMMITTED_URL);
+    expect(host.projects[0]).toMatchObject(display);
+    expect(JSON.parse(readProjectJson(clone))).toEqual(committedIdentity);
+  });
+
+  it("never overwrites a name, emoji or colour customised on the host", async () => {
+    const host = createTestHost(root, "display-f");
+    const clone = path.join(root, "display-f-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    const customised = host.addProject(clone, undefined, { name: "Mine", emoji: "🦊" });
+    const opened = await openWith(host, customised.id, clone, URL);
+    expect(opened.projectName).toBe("Mine");
+    expect(host.projects[0]).toMatchObject({ name: "Mine", emoji: "🦊", color: "#ff5500" });
+
+    await openWith(host, customised.id, clone, URL, { ...display, color: "#000000" });
+    expect(host.projects[0]!.color).toBe("#ff5500");
+  });
+
+  it("keeps a committed identity the host already took when opening an existing project", async () => {
+    const host = createTestHost(root, "display-g");
+    const clone = path.join(root, "display-g-clone");
+    git(root, ["clone", "-q", COMMITTED_URL, clone]);
+    const project = host.addProject(clone, undefined, {
+      name: "Committed name",
+      emoji: "🧪",
+      color: "#123456",
+    });
+    await openWith(host, project.id, clone, COMMITTED_URL);
+    expect(host.projects[0]).toMatchObject({
+      name: "Committed name",
+      emoji: "🧪",
+      color: "#123456",
+    });
+    expect(host.updateProjectDisplay).not.toHaveBeenCalled();
+  });
+
+  it("treats a row another registration of the folder made meanwhile as the host's own", async () => {
+    const host = createTestHost(root, "display-j");
+    const clone = path.join(root, "display-j-home", "Projects", "daintree");
+    git(root, ["clone", "-q", URL, clone]);
+    // Someone on the host added the folder, named their way, while this open registered it.
+    host.registerProject.mockImplementationOnce(async (projectPath) =>
+      host.addProject(projectPath, undefined, { name: "Theirs", emoji: "🦊" })
+    );
+    const opened = await openWith(host, null, clone, URL);
+    expect(opened.projectName).toBe("Theirs");
+    expect(host.projects[0]).toMatchObject({ name: "Theirs", emoji: "🦊", color: "#ff5500" });
+  });
+
+  it("changes nothing about a project a window here holds when an assistant is refused", async () => {
+    const host = createTestHost(root, "display-i");
+    const clone = path.join(root, "display-i-clone");
+    git(root, ["clone", "-q", URL, clone]);
+    const project = host.addProject(clone);
+    const opened = await host.service.open(
+      {
+        projectId: project.id,
+        path: clone,
+        remoteUrls: [URL],
+        branch,
+        branchRemoteUrl: URL,
+        display,
+      },
+      {
+        beforeAnyChange: true,
+        assertMayPlace: () => {
+          throw new Error("held");
+        },
+      }
+    );
+    expect(opened).toMatchObject({ canCheckOutBranch: true, projectName: "display-i-clone" });
+    expect(host.updateProjectDisplay).not.toHaveBeenCalled();
+  });
+
+  it("gives an unregistered clone it adopts the source's identity over the committed one", async () => {
+    const host = createTestHost(root, "display-h");
+    const clone = path.join(root, "display-h-home", "Projects", "committed");
+    git(root, ["clone", "-q", COMMITTED_URL, clone]);
+    const opened = await openWith(host, null, clone, COMMITTED_URL);
+    expect(opened.projectName).toBe("Daintree app");
+    expect(host.projects[0]).toMatchObject(display);
+    expect(JSON.parse(readProjectJson(clone))).toEqual(committedIdentity);
   });
 });

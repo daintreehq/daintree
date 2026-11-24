@@ -920,6 +920,62 @@ describe("ActionService", () => {
       // The whole point of putting it on the context rather than in args: a
       // caller cannot plant it. Same property that makes `dispatchSource`
       // trustworthy — the stamp is unconditional and overwrites the override.
+      // #17917: main's offer of the next-fallback tick lets exactly the preset
+      // restart into its own guarded run, unconfirmed, and nothing else.
+      it("lets the next-fallback offer past the gate only for the preset restart", async () => {
+        const restart = vi.fn().mockResolvedValue(undefined);
+        service.register({
+          ...confirmAction(restart),
+          id: "terminal.restartOnPreset" as ActionId,
+        });
+        const other = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(other));
+
+        const offered = await service.dispatch("terminal.restartOnPreset", undefined, {
+          source: "agent",
+          ownFallbackStep: true,
+        });
+        expect(offered.ok).toBe(true);
+        expect(restart).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostOwnFallbackStep: true, hostConfirmed: undefined })
+        );
+
+        const elsewhere = await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          ownFallbackStep: true,
+        });
+        expect(elsewhere).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+        expect(other).not.toHaveBeenCalled();
+
+        const fromPlugin = await service.dispatch("terminal.restartOnPreset", undefined, {
+          source: "plugin",
+          ownFallbackStep: true,
+        });
+        expect(fromPlugin).toMatchObject({ ok: false, error: { code: "CONFIRMATION_REQUIRED" } });
+        expect(restart).toHaveBeenCalledTimes(1);
+      });
+
+      it("never takes the next-fallback offer from a contextOverride", async () => {
+        const restart = vi.fn().mockResolvedValue(undefined);
+        service.register({
+          ...confirmAction(restart),
+          id: "terminal.restartOnPreset" as ActionId,
+        });
+
+        const result = await service.dispatch("terminal.restartOnPreset", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { hostOwnFallbackStep: true },
+        });
+
+        expect(result.ok).toBe(true);
+        expect(restart).toHaveBeenCalledWith(
+          undefined,
+          expect.objectContaining({ hostOwnFallbackStep: undefined })
+        );
+      });
+
       it("overwrites a contextOverride that claims an approval the host never made", async () => {
         const mockRun = vi.fn().mockResolvedValue(undefined);
         service.register(confirmAction(mockRun));
@@ -938,22 +994,25 @@ describe("ActionService", () => {
 
       // #16751: who asked and whether a person answered, for a plugin action's
       // handler. Narrower than hostConfirmed, and only the agent source has them.
-      it("stamps the Assistant origin and a person's approval for an agent dispatch", async () => {
-        const mockRun = vi.fn().mockResolvedValue(undefined);
-        service.register(confirmAction(mockRun));
+      it.each(["assistant", "global-assistant"] as const)(
+        "stamps the %s origin and a person's approval for an agent dispatch (#18153)",
+        async (origin) => {
+          const mockRun = vi.fn().mockResolvedValue(undefined);
+          service.register(confirmAction(mockRun));
 
-        await service.dispatch("actions.list", undefined, {
-          source: "agent",
-          confirmed: true,
-          hostCallerOrigin: "assistant",
-          hostPersonApproved: true,
-        });
+          await service.dispatch("actions.list", undefined, {
+            source: "agent",
+            confirmed: true,
+            hostCallerOrigin: origin,
+            hostPersonApproved: true,
+          });
 
-        expect(mockRun).toHaveBeenCalledWith(
-          undefined,
-          expect.objectContaining({ hostCallerOrigin: "assistant", hostPersonApproved: true })
-        );
-      });
+          expect(mockRun).toHaveBeenCalledWith(
+            undefined,
+            expect.objectContaining({ hostCallerOrigin: origin, hostPersonApproved: true })
+          );
+        }
+      );
 
       it("never stamps a person's approval on a dispatch the gate didn't see confirmed", async () => {
         const mockRun = vi.fn().mockResolvedValue(undefined);
@@ -970,21 +1029,24 @@ describe("ActionService", () => {
         );
       });
 
-      it("ignores both facts on an agent dispatch's contextOverride, confirmed or not", async () => {
-        const mockRun = vi.fn().mockResolvedValue(undefined);
-        service.register(confirmAction(mockRun));
+      it.each(["assistant", "global-assistant"] as const)(
+        "ignores both facts on an agent dispatch's contextOverride claiming %s",
+        async (origin) => {
+          const mockRun = vi.fn().mockResolvedValue(undefined);
+          service.register(confirmAction(mockRun));
 
-        await service.dispatch("actions.list", undefined, {
-          source: "agent",
-          confirmed: true,
-          contextOverride: { hostCallerOrigin: "assistant", hostPersonApproved: true },
-        });
+          await service.dispatch("actions.list", undefined, {
+            source: "agent",
+            confirmed: true,
+            contextOverride: { hostCallerOrigin: origin, hostPersonApproved: true },
+          });
 
-        expect(mockRun).toHaveBeenCalledWith(
-          undefined,
-          expect.objectContaining({ hostCallerOrigin: undefined, hostPersonApproved: undefined })
-        );
-      });
+          expect(mockRun).toHaveBeenCalledWith(
+            undefined,
+            expect.objectContaining({ hostCallerOrigin: undefined, hostPersonApproved: undefined })
+          );
+        }
+      );
 
       it.each(["user", "plugin", "keybinding"] as const)(
         "drops both for a %s dispatch, from the options and from a contextOverride",
@@ -995,7 +1057,7 @@ describe("ActionService", () => {
           await service.dispatch("actions.list", undefined, {
             source,
             confirmed: true,
-            hostCallerOrigin: "assistant",
+            hostCallerOrigin: source === "plugin" ? "global-assistant" : "assistant",
             hostPersonApproved: true,
             contextOverride: { hostCallerOrigin: "assistant", hostPersonApproved: true },
           });
@@ -1117,6 +1179,35 @@ describe("ActionService", () => {
 
         expect(mockRun.mock.calls.map(([, ctx]) => ctx.dispatchDeadlineAt)).toEqual([
           1_000,
+          undefined,
+        ]);
+      });
+
+      // Main's own `actions.list` walk (#17036): it widens one page past the
+      // caller-facing cap, so only main's agent dispatch may set it.
+      it("stamps ctx.actionsListWalk only from an agent dispatch's options, never a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          actionsListWalk: true,
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { actionsListWalk: true },
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "user",
+          confirmed: true,
+          actionsListWalk: true,
+        });
+
+        expect(mockRun.mock.calls.map(([, ctx]) => ctx.actionsListWalk)).toEqual([
+          true,
+          undefined,
           undefined,
         ]);
       });
@@ -2196,10 +2287,10 @@ describe("ActionService", () => {
   });
 
   describe("lastAction tracking", () => {
-    const makeAction = (
+    const makeAction = <S extends z.ZodTypeAny | undefined = undefined>(
       id: string,
-      overrides: Partial<ActionDefinition> = {}
-    ): ActionDefinition => ({
+      overrides: Partial<ActionDefinition<S>> = {}
+    ): ActionDefinition<S> => ({
       id: id as ActionId,
       title: "Test",
       description: "Test action",
@@ -2327,6 +2418,56 @@ describe("ActionService", () => {
 
       await service.dispatch("test.destructive" as ActionId, undefined, { source: "context-menu" });
       expect(service.getLastAction()?.actionId).toBe("test.safe");
+    });
+
+    it.each(["user", "keybinding", "menu", "context-menu"] as const)(
+      "does not capture a safe action's confirmed dispatch from %s (#17205)",
+      async (source) => {
+        // A runtime-escalated safe action's prompt re-dispatches with
+        // `{ confirmed: true }`. Recording that would let action.repeatLast apply
+        // the approval to whatever the action targets later, unasked.
+        const schema = z.object({ confirmed: z.boolean().optional() }).optional();
+        const run = vi.fn().mockResolvedValue(undefined);
+        service.register(makeAction("test.safe"));
+        service.register(makeAction("test.escalating", { argsSchema: schema, run }));
+
+        await service.dispatch("test.safe" as ActionId, undefined, { source: "user" });
+        await service.dispatch("test.escalating" as ActionId, { confirmed: true }, { source });
+
+        expect(run).toHaveBeenCalledWith({ confirmed: true }, expect.anything());
+        expect(service.getLastAction()).toEqual({ actionId: "test.safe", args: undefined });
+      }
+    );
+
+    it("does not capture a confirmation the schema fills in (#17205)", async () => {
+      const schema = z.object({ confirmed: z.boolean().default(true) });
+      service.register(makeAction("test.defaultConfirmed", { argsSchema: schema }));
+
+      await service.dispatch("test.defaultConfirmed" as ActionId, {}, { source: "user" });
+      expect(service.getLastAction()).toBeNull();
+    });
+
+    it("still captures a dispatch whose args don't carry a confirmation", async () => {
+      const schema = z.object({ confirmed: z.boolean().optional() }).optional();
+      service.register(makeAction("test.escalating", { argsSchema: schema }));
+
+      await service.dispatch(
+        "test.escalating" as ActionId,
+        { confirmed: false },
+        { source: "user" }
+      );
+      expect(service.getLastAction()).toEqual({
+        actionId: "test.escalating",
+        args: { confirmed: false },
+      });
+
+      // Quick Create passes `options.confirmed`. A replay carries args only, so
+      // that approval can't ride along and the action stays repeatable.
+      await service.dispatch("test.escalating" as ActionId, undefined, {
+        source: "keybinding",
+        confirmed: true,
+      });
+      expect(service.getLastAction()).toEqual({ actionId: "test.escalating", args: undefined });
     });
 
     it("outer dispatch captures after inner dispatch completes (nested ordering)", async () => {
@@ -2846,6 +2987,71 @@ describe("ActionService", () => {
       const second = service.list()[0]!.inputSchema as Record<string, unknown>;
       expect(second.poisoned).toBeUndefined();
       expect((second.properties as Record<string, unknown>).poisoned).toBeUndefined();
+    });
+
+    it("lends a transfer the cached schemas and examples, and list() still copies them (#17036)", () => {
+      const examples = [{ args: { count: 1 }, description: "One" }];
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test",
+        description:
+          "Test action for validating ActionService definition invariant warnings and registration behavior.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({ count: z.number() }),
+        resultSchema: z.object({ total: z.number() }),
+        mcpOutputSchema: true,
+        examples,
+        run: vi.fn().mockResolvedValue({ total: 1 }),
+      } as unknown as ActionDefinition);
+
+      const [lentA] = service.listForTransfer();
+      const [lentB] = service.listForTransfer();
+      expect(lentA!.inputSchema).toBeDefined();
+      expect(lentA!.outputSchema).toBeDefined();
+      expect(lentA).not.toBe(lentB);
+      expect(lentA!.inputSchema).toBe(lentB!.inputSchema);
+      expect(lentA!.outputSchema).toBe(lentB!.outputSchema);
+      expect(lentA!.examples).toBe(examples);
+
+      const [copied] = service.list();
+      expect(copied!.inputSchema).toEqual(lentA!.inputSchema);
+      expect(copied!.inputSchema).not.toBe(lentA!.inputSchema);
+      expect(copied!.outputSchema).not.toBe(lentA!.outputSchema);
+      expect(copied!.examples).toEqual(examples);
+      expect(copied!.examples).not.toBe(examples);
+    });
+
+    it("gives a transfer the same entries list() does", () => {
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test",
+        description:
+          "Test action for validating ActionService definition invariant warnings and registration behavior.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({ count: z.number() }),
+        run: vi.fn().mockResolvedValue(undefined),
+      });
+      service.register({
+        id: "actions.search" as ActionId,
+        title: "Hidden",
+        description:
+          "Test action for validating ActionService definition invariant warnings and registration behavior.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        isVisible: () => false,
+        run: vi.fn().mockResolvedValue(undefined),
+      });
+
+      expect(service.listForTransfer()).toEqual(service.list());
+      expect(service.listForTransfer().map((entry) => entry.id)).toEqual(["actions.list"]);
     });
 
     it("isolates outputSchema from caller mutations", () => {

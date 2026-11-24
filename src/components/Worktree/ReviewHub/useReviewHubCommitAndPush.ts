@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
 import type { PushProgressEvent } from "@shared/types/ipc/gitPush";
-import type { GitCommitResult, GitPushReview } from "@shared/types/git";
+import type { GitOperationReason } from "@shared/types/ipc/errors";
+import type {
+  GitCommitResult,
+  GitCommitReview,
+  GitPullRebaseReview,
+  GitPushReview,
+} from "@shared/types/git";
 import { isClientAppError } from "@/utils/clientAppError";
 import type { debounce } from "@/utils/debounce";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -32,6 +38,11 @@ interface UseReviewHubCommitAndPushArgs {
    * message must not sit in the composer as unsent while its push runs.
    */
   onCommitted: (worktreePath: string, message: string) => void;
+  /**
+   * Called once a commit or pull may have moved the branch tip, ahead of the
+   * worktree store hearing about it, for reads keyed on that tip.
+   */
+  onHeadMoved: (worktreePath: string) => void;
 }
 
 /**
@@ -46,6 +57,7 @@ export function useReviewHubCommitAndPush({
   setActionError,
   debouncedBgRefreshRef,
   onCommitted,
+  onHeadMoved,
 }: UseReviewHubCommitAndPushArgs) {
   const [pushError, setPushError] = useState<PushErrorState | null>(null);
   // Provider-classified push-error state, resolved async via the active forge
@@ -72,6 +84,17 @@ export function useReviewHubCommitAndPush({
   const [isPushing, setIsPushing] = useState(false);
   const [pullRebasing, setPullRebasing] = useState(false);
   const isPullRebasingRef = useRef(false);
+  // Bumped whenever this hub stops owning a push review it has yet to ask for:
+  // on reset (close), on a move to another worktree, and on unmount. The push
+  // confirm holds one request app-wide, so a late one would cancel whatever
+  // review is open by then.
+  const reviewOwnerRef = useRef(0);
+  useEffect(() => {
+    const owner = reviewOwnerRef;
+    return () => {
+      owner.current++;
+    };
+  }, [worktreePath]);
 
   useEffect(() => {
     setShowPushDetails(false);
@@ -116,6 +139,7 @@ export function useReviewHubCommitAndPush({
       try {
         await window.electron.git.commit(worktreePath, message);
         onCommitted(worktreePath, message);
+        onHeadMoved(worktreePath);
         // A commit resets the review: anything still (or newly) changed after
         // it is a new change, so stale viewed markers must not stick to it.
         useDiffViewedStore.getState().clearWorktree(worktreePath);
@@ -131,7 +155,7 @@ export function useReviewHubCommitAndPush({
         throw err;
       }
     },
-    [worktreePath, refresh, setActionError, debouncedBgRefreshRef, onCommitted]
+    [worktreePath, refresh, setActionError, debouncedBgRefreshRef, onCommitted, onHeadMoved]
   );
 
   const isPushingRef = useRef(false);
@@ -142,18 +166,21 @@ export function useReviewHubCommitAndPush({
    */
   const lastPushReviewRef = useRef<GitPushReview | null>(null);
 
-  // Nothing reaches the network: the banner reads like main's own refusal of a
-  // reviewed push that moved, and offers no Retry, because there is no approval
-  // left to retry under. The next step is a fresh review of the push.
+  // Nothing reaches the network: the banner carries main's refusal reason for a
+  // reviewed push that moved, says in its own words why this one was held
+  // back, and offers no Retry, because there is no approval left to retry
+  // under. The next step is a fresh review of the push.
   const withholdPush = useCallback((detail: string, branchName?: string) => {
     lastPushReviewRef.current = null;
-    const rawMessage = `${detail} Nothing was pushed. Review the push again to see what it would publish now.`;
-    setPushError({ reason: "push-review-stale", rawMessage, branchName });
+    const summary = `${detail} Nothing was pushed.`;
+    const rawMessage = `${summary} Review the push again to see what it would publish now.`;
+    setPushError({ reason: "push-review-stale", rawMessage, summary, branchName });
   }, []);
 
+  /** Resolves to the reason a push failed, or `undefined` when it landed or never started. */
   const runPush = useCallback(
-    async (review: GitPushReview) => {
-      if (isPushingRef.current) return;
+    async (review: GitPushReview): Promise<GitOperationReason | undefined> => {
+      if (isPushingRef.current) return undefined;
       isPushingRef.current = true;
       lastPushReviewRef.current = review;
       setIsPushing(true);
@@ -192,6 +219,7 @@ export function useReviewHubCommitAndPush({
         );
         setPushError(null);
         setPushAnnouncement(announcedTarget ? `Pushed to ${announcedTarget}` : "Push complete");
+        return undefined;
       } catch (err) {
         // GitOperationError carries `gitReason` (auth-failed, push-rejected-*, etc.).
         // AppError carries `code` from a different union (RATE_LIMITED, etc.) — fall
@@ -203,8 +231,9 @@ export function useReviewHubCommitAndPush({
         const rawMessage = isRateLimited
           ? "Too many push attempts in a short window — wait a moment and try again."
           : formatErrorMessage(err, "Failed to push");
+        const reason = errFields.gitReason ?? classifyGitError(rawMessage);
         setPushError({
-          reason: errFields.gitReason ?? classifyGitError(rawMessage),
+          reason,
           rawMessage,
           leaseSha: errFields.leaseSha,
           branchName: errFields.branchName,
@@ -219,6 +248,7 @@ export function useReviewHubCommitAndPush({
           branchName: errFields.branchName,
           leaseSha: errFields.leaseSha,
         });
+        return reason;
       } finally {
         cleanup();
         setIsPushing(false);
@@ -228,51 +258,70 @@ export function useReviewHubCommitAndPush({
     [worktreePath]
   );
 
+  // The commit half of both Commit & push paths. A failure lands in the action
+  // banner and rethrows, so nothing after it runs. `review` is what a confirm
+  // listed (#17563): main then refuses with `commit-review-stale` and commits
+  // nothing when the branch, its tip or the staged changes moved while it was
+  // open.
+  const commitForPush = useCallback(
+    async (message: string, review?: GitCommitReview): Promise<GitCommitResult> => {
+      let committed: GitCommitResult;
+      try {
+        committed = await window.electron.git.commit(worktreePath, message, review);
+      } catch (err) {
+        // Decodes a typed git error's wire prefix off the message, so the
+        // detail reads as the sentence main wrote.
+        readGitErrorFields(err);
+        setActionError({
+          title: "Couldn't commit changes",
+          detail: formatErrorMessage(err, "Failed to commit changes"),
+        });
+        throw err;
+      }
+      onCommitted(worktreePath, message);
+      onHeadMoved(worktreePath);
+      // Same review reset as handleCommit — the changeset starts over.
+      useDiffViewedStore.getState().clearWorktree(worktreePath);
+      await refresh();
+      return committed;
+    },
+    [worktreePath, refresh, setActionError, onCommitted, onHeadMoved]
+  );
+
   const handleCommitAndPush = useCallback(
-    async (message: string, target: CommitPushTarget) => {
+    /**
+     * Resolves to "withheld" when the commit landed but its push never ran as
+     * approved: held back here, or refused by main because the branch moved
+     * past the commit before the push.
+     */
+    async (message: string, target: CommitPushTarget): Promise<"withheld" | undefined> => {
       setActionError(null);
       setPushError(null);
       debouncedBgRefreshRef.current?.cancel();
       setIsCommitPushInFlight(true);
       try {
-        let committed: GitCommitResult;
-        try {
-          committed = await window.electron.git.commit(worktreePath, message);
-        } catch (err) {
-          setActionError({
-            title: "Couldn't commit changes",
-            detail: formatErrorMessage(err, "Failed to commit changes"),
-          });
-          throw err;
+        // Held to what the confirm listed (#17563).
+        const committed = await commitForPush(
+          message,
+          target.reviewed
+            ? {
+                branch: target.branch,
+                headOid: target.reviewed.headOid,
+                stagedIdentity: target.reviewed.stagedIdentity,
+              }
+            : undefined
+        );
+        const push = reviewForCommittedPush(committed, target);
+        if ("withheld" in push) {
+          withholdPush(push.withheld, target.branch);
+          return "withheld";
         }
-        onCommitted(worktreePath, message);
-        // Same review reset as handleCommit — the changeset starts over.
-        useDiffViewedStore.getState().clearWorktree(worktreePath);
-        await refresh();
-        const review = reviewForCommittedPush(committed, target);
-        if (!review) {
-          withholdPush(
-            committed.oid
-              ? "The branch moved while the push was being reviewed, so the commit sits on history the review didn't show."
-              : "The commit was made, but couldn't be read back to pin the push to it.",
-            target.branch
-          );
-          return;
-        }
-        await runPush(review);
+        return (await runPush(push.review)) === "push-review-stale" ? "withheld" : undefined;
       } finally {
         setIsCommitPushInFlight(false);
       }
     },
-    [
-      worktreePath,
-      refresh,
-      runPush,
-      withholdPush,
-      setActionError,
-      debouncedBgRefreshRef,
-      onCommitted,
-    ]
+    [commitForPush, runPush, withholdPush, setActionError, debouncedBgRefreshRef]
   );
 
   const handleRetryPush = useCallback(async () => {
@@ -296,44 +345,84 @@ export function useReviewHubCommitAndPush({
     await runPush(result.review);
   }, [worktreePath, runPush]);
 
-  const handlePullRebase = useCallback(async () => {
-    if (isPullRebasingRef.current) return;
-    isPullRebasingRef.current = true;
-    setPullRebasing(true);
-    debouncedBgRefreshRef.current?.cancel();
-    try {
-      await window.electron.git.pullRebase(worktreePath);
-      // Successful rebase may have changed the working tree; refresh staging
-      // status before clearing the banner so the user sees the new state.
-      await refresh();
+  /**
+   * Commit & push on a branch with no commit yet (#17588). Git names no push
+   * destination before a branch's first commit, so there was nothing to preview
+   * the push against: the commit is made first, and the push then goes through
+   * the same review Push uses, against the destination and history git reports
+   * once the branch exists. Declining it leaves the commit, as Commit would.
+   */
+  const handleCommitThenReviewPush = useCallback(
+    async (message: string) => {
+      setActionError(null);
       setPushError(null);
-    } catch (err) {
-      // A rebase that halts on conflicts surfaces as `conflict-unresolved`;
-      // surface it through the same banner so the user sees the next step.
-      const errFields = readGitErrorFields(err);
-      const rawMessage = formatErrorMessage(err, "Failed to pull and rebase");
-      setPushError({
-        reason: errFields.gitReason ?? classifyGitError(rawMessage),
-        rawMessage,
-      });
-      // Refresh in case the rebase started and left files in conflict.
-      await refresh();
-    } finally {
-      isPullRebasingRef.current = false;
-      setPullRebasing(false);
-    }
-  }, [worktreePath, refresh, debouncedBgRefreshRef]);
+      debouncedBgRefreshRef.current?.cancel();
+      setIsCommitPushInFlight(true);
+      const owner = reviewOwnerRef.current;
+      try {
+        await commitForPush(message);
+        // Closed or moved on while the commit ran: the commit stays, and its
+        // push is reviewed whenever someone next asks for one.
+        if (reviewOwnerRef.current !== owner) return;
+        // Raised by the commit landing, not by a click now, so it never takes
+        // over a push review opened elsewhere while the commit ran.
+        const result = await useGitPushConfirmStore
+          .getState()
+          .requestConfirmation(worktreePath, { yieldToPending: true });
+        if (!result.confirmed) return;
+        await runPush(result.review);
+      } finally {
+        setIsCommitPushInFlight(false);
+      }
+    },
+    [worktreePath, commitForPush, runPush, setActionError, debouncedBgRefreshRef]
+  );
+
+  const handlePullRebase = useCallback(
+    async (review: GitPullRebaseReview) => {
+      if (isPullRebasingRef.current) return;
+      isPullRebasingRef.current = true;
+      setPullRebasing(true);
+      debouncedBgRefreshRef.current?.cancel();
+      try {
+        // Held to the branch and commit the confirm showed (#17188): an agent
+        // committing or switching branches while it was open makes the pull
+        // refuse with `pull-rebase-review-stale`, whose banner reopens the
+        // confirm rather than retrying the stale approval.
+        await window.electron.git.pullRebase(worktreePath, review);
+        // Successful rebase may have changed the working tree; refresh staging
+        // status before clearing the banner so the user sees the new state.
+        await refresh();
+        setPushError(null);
+      } catch (err) {
+        // A rebase that halts on conflicts surfaces as `conflict-unresolved`;
+        // surface it through the same banner so the user sees the next step.
+        const errFields = readGitErrorFields(err);
+        const rawMessage = formatErrorMessage(err, "Failed to pull and rebase");
+        setPushError({
+          reason: errFields.gitReason ?? classifyGitError(rawMessage),
+          rawMessage,
+        });
+        // Refresh in case the rebase started and left files in conflict.
+        await refresh();
+      } finally {
+        // Even a failed pull may have rebased some of the way.
+        onHeadMoved(worktreePath);
+        isPullRebasingRef.current = false;
+        setPullRebasing(false);
+      }
+    },
+    [worktreePath, refresh, debouncedBgRefreshRef, onHeadMoved]
+  );
 
   // Confirmed through the same dialog the `git.pullRebase` action uses, so the
   // Review Hub CTA shows the upstream, the incoming commits and the replay set
   // rather than two counts. It used to open its own count-only confirm, which
   // made the same operation look different depending on where it was started.
   const confirmPullRebase = useCallback(async () => {
-    const confirmed = await useGitPullRebaseConfirmStore
-      .getState()
-      .requestConfirmation(worktreePath);
-    if (!confirmed) return;
-    await handlePullRebase();
+    const result = await useGitPullRebaseConfirmStore.getState().requestConfirmation(worktreePath);
+    if (!result.confirmed) return;
+    await handlePullRebase(result.review);
   }, [worktreePath, handlePullRebase]);
 
   /**
@@ -376,6 +465,7 @@ export function useReviewHubCommitAndPush({
   const clearPushError = useCallback(() => setPushError(null), []);
 
   const reset = useCallback(() => {
+    reviewOwnerRef.current++;
     setPushError(null);
     lastPushReviewRef.current = null;
     setPullRebasing(false);
@@ -398,6 +488,7 @@ export function useReviewHubCommitAndPush({
     pullRebasing,
     handleCommit,
     handleCommitAndPush,
+    handleCommitThenReviewPush,
     handleRetryPush,
     handlePushClean,
     confirmPullRebase,

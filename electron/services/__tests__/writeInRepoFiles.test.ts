@@ -204,8 +204,10 @@ describe("writeInRepoSettings", () => {
     activeResourceEnvironment: "default",
     defaultWorktreeMode: "local",
     browserAllowedHosts: ["example.com"],
+    links: [{ id: "link-1", title: "Staging", url: "https://staging.example.com/" }],
     daintreeMcpTier: "core",
     daintreeMcpSkipConfirmations: true,
+    removeMergedWorktrees: true,
     exposeDaintreeMcpToAgents: true,
   };
 

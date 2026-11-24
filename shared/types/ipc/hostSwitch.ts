@@ -1,4 +1,5 @@
 import type { HostId } from "../remoteHosts.js";
+import type { HostDirectoryMetadata } from "./hostFiles.js";
 
 /** The fresh remote check of a branch, run on the machine the branch is on. */
 export type BranchRemoteState =
@@ -50,6 +51,8 @@ export interface HostSwitchPreparation {
   toHostId: HostId;
   projectId: string;
   projectName: string;
+  /** The project's name, emoji and colour on the source, which the host's copy takes; null from older sources. */
+  display: import("./projectMatch.js").ProjectDisplayIdentity | null;
   /** Where the checked-out branch lives on the source host. */
   worktreePath: string;
   branch: string | null;
@@ -113,6 +116,8 @@ export type HostSwitchExecutePayload =
       branch: import("./projectMatch.js").HostBranchTarget | null;
       options: import("./projectMatch.js").HostCloneOptions;
       setupRecipeId: string | null;
+      /** The source project's name, emoji and colour, for the clone to take. */
+      display?: import("./projectMatch.js").ProjectDisplayIdentity;
     }
   /** Open a project the target already has (or adopt an unregistered clone it found). */
   | {
@@ -125,6 +130,8 @@ export type HostSwitchExecutePayload =
       branchRemoteUrl: string | null;
       /** Go to the copy as it is: no fetch, no worktree. */
       navigateOnly?: boolean;
+      /** The source project's name, emoji and colour, for whatever the copy still has at its defaults. */
+      display?: import("./projectMatch.js").ProjectDisplayIdentity;
     }
   /** Clone a repository by its URL onto a host, register and open it (Add project…). */
   | {
@@ -228,6 +235,7 @@ export interface HostSwitchListDirectoryPayload {
   toHostId: HostId;
   path: string;
   showHidden?: boolean;
+  metadata?: HostDirectoryMetadata;
 }
 
 export interface HostSwitchPickerRootsPayload {

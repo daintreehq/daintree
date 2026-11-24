@@ -1,3 +1,4 @@
+import { flushSync } from "react-dom";
 import {
   useCallback,
   useEffect,
@@ -9,15 +10,19 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import type { PluggableList } from "unified";
-import remarkGfm from "remark-gfm";
-import type { Nodes as HastNodes, RootContent as HastContent } from "hast";
+import type { Element as HastElement, Nodes as HastNodes, RootContent as HastContent } from "hast";
 import type { GitStatus } from "@shared/types/git";
 import {
   MarkdownImageCacheBust,
   useMarkdownRenderPolicy,
 } from "@/components/Markdown/markdownRenderPolicy";
 import { MARKDOWN_FONT_SIZE_TOKEN } from "@/components/Markdown/MarkdownDocument";
+import {
+  isFrontmatterType,
+  MARKDOWN_REMARK_PLUGINS,
+} from "@/components/Markdown/markdownRemarkPlugins";
 import { MarkdownTableLabelPrefix } from "@/components/Markdown/MarkdownTable";
+import { rehypeMarkdownAlerts } from "@/components/Markdown/markdownAlerts";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { cn } from "@/lib/utils";
@@ -32,6 +37,7 @@ import {
   type TextRange,
 } from "./markdownBlockDiff";
 import { RenderedMarkdownDiffSkeleton } from "./RenderedMarkdownDiffSkeleton";
+import { useStagedMarkdownBlocks, type StagedMarkdownUnit } from "./useStagedMarkdownBlocks";
 import "@/components/Markdown/MarkdownDocument.css";
 import "./RenderedMarkdownDiff.css";
 
@@ -83,13 +89,15 @@ export interface RenderedMarkdownDiffProps {
    * How many discrete changes the document holds, so the host can offer a
    * counter and a stepper. A modified pair is ONE change, not two. Stamped with
    * the attempt it counts and never reported while a comparison is pending, so
-   * the host can't step through the previous document's changes.
+   * the host can't step through the previous document's changes. Withdrawn
+   * with `null`, never `0`: zero is a finished comparison with no changes, a
+   * verdict a host acts on, while a withdrawn count is no verdict at all.
    *
    * Reported rather than derived by the host because the host has a patch and
    * this component has the model — and the two disagree by design: a patch hunk
    * is a run of lines, a change here is a block the reader can point at.
    */
-  onChangeCount?: (count: number, forAttempt: string) => void;
+  onChangeCount?: (count: number | null, forAttempt: string) => void;
 }
 
 /**
@@ -130,6 +138,12 @@ interface SettledBuild {
 const UNCHANGED_RUN_LIMIT = 5;
 const UNCHANGED_CONTEXT = 2;
 
+/** One shared empty list: a fresh `[]` per render would rebuild a block's plugins and re-parse it. */
+const NO_RANGES: readonly TextRange[] = [];
+
+/** How far past the visible edge a block counts as on screen and jumps the queue. */
+const VIEWPORT_STAGE_MARGIN = "200px";
+
 /** One change the reader can point at, or a run of blocks they can skip. */
 type Section =
   | { kind: "change"; index: number; change: MarkdownBlockChange }
@@ -167,6 +181,67 @@ function toSections(changes: readonly MarkdownBlockChange[]): {
   return { sections, changeCount };
 }
 
+/** The indices of a run's blocks that are on the page: all of them, or the fold's two edges. */
+function shownRunIndices(length: number, expanded: boolean): number[] {
+  const all = Array.from({ length }, (_, index) => index);
+  if (expanded || length <= UNCHANGED_RUN_LIMIT) return all;
+  return [...all.slice(0, UNCHANGED_CONTEXT), ...all.slice(length - UNCHANGED_CONTEXT)];
+}
+
+function changeUnitKey(index: number): string {
+  return `change-${index}`;
+}
+
+function runUnitKey(runId: number, index: number): string {
+  return `run-${runId}-${index}`;
+}
+
+/** What a block parses: its source, plus the definitions appended when it cites one. */
+function blockChars(block: MarkdownBlock, definitions: string): number {
+  return block.source.length + (block.referenceIds.length ? definitions.length : 0);
+}
+
+/** Every unit on the page, in document order, for the stage to admit. */
+function stageUnits(
+  sections: readonly Section[],
+  expandedRuns: ReadonlySet<number>,
+  oldDefinitions: string,
+  newDefinitions: string
+): StagedMarkdownUnit[] {
+  const units: StagedMarkdownUnit[] = [];
+  for (const section of sections) {
+    if (section.kind === "change") {
+      const { change } = section;
+      units.push(
+        change.kind === "modified"
+          ? {
+              key: changeUnitKey(section.index),
+              pipelines: 2,
+              chars:
+                blockChars(change.old, oldDefinitions) + blockChars(change.new, newDefinitions),
+            }
+          : {
+              key: changeUnitKey(section.index),
+              pipelines: 1,
+              chars: blockChars(
+                change.block,
+                change.kind === "removed" ? oldDefinitions : newDefinitions
+              ),
+            }
+      );
+      continue;
+    }
+    for (const index of shownRunIndices(section.blocks.length, expandedRuns.has(section.id))) {
+      units.push({
+        key: runUnitKey(section.id, index),
+        pipelines: 1,
+        chars: blockChars(section.blocks[index]!, newDefinitions),
+      });
+    }
+  }
+  return units;
+}
+
 type BlockKind = "unchanged" | "added" | "removed";
 
 const BLOCK_LABEL: Record<BlockKind, string> = {
@@ -196,6 +271,25 @@ const RANGE_LABEL: Record<"added" | "removed", string> = {
   added: "Inserted: ",
   removed: "Deleted: ",
 };
+
+const INLINE_MARK_CLASS = "rendered-markdown-diff__inline";
+
+/** A revision mark `inlineRangePlugin` wrapped a changed range in. */
+function isRevisionMark(element: HastElement): boolean {
+  const className = element.properties.className;
+  return (
+    (element.tagName === "ins" || element.tagName === "del") &&
+    Array.isArray(className) &&
+    className.includes(INLINE_MARK_CLASS)
+  );
+}
+
+/**
+ * After the inline marks, never before: they go in only when the rendered text
+ * matches the engine's flattening, which keeps an alert's marker, so taking the
+ * marker out first would cost every edited alert its word marks.
+ */
+const ALERTS_PLUGIN: PluggableList[number] = [rehypeMarkdownAlerts, { isRevisionMark }];
 
 /**
  * Flatten a hast tree the way the engine flattens mdast, and hand back the text
@@ -261,7 +355,7 @@ function inlineRangePlugin(ranges: readonly TextRange[], expectedText: string, k
     const { text, entries } = collectTextNodes(tree);
     if (text !== expectedText) return;
     // hast models a class attribute as a list, not the joined string.
-    const className = ["rendered-markdown-diff__inline", `rendered-markdown-diff__inline--${kind}`];
+    const className = [INLINE_MARK_CLASS, `${INLINE_MARK_CLASS}--${kind}`];
     // Native revision elements rather than styled spans: `<ins>` and `<del>`
     // are what an assistive technology reads as a revision, and a `<span>` with
     // a background is not a revision to anything but a sighted reader.
@@ -310,17 +404,22 @@ function inlineRangePlugin(ranges: readonly TextRange[], expectedText: string, k
 
 function DiffBlock({
   kind,
+  blockType,
   source,
   definitions,
   ranges,
   expectedText,
   whole,
+  pending,
+  stageKey,
   blockRef,
   tabIndex,
   components,
   urlTransform,
 }: {
   kind: BlockKind;
+  /** The block's mdast type, as the engine split it. */
+  blockType: string;
   source: string;
   definitions: string;
   ranges: readonly TextRange[];
@@ -334,6 +433,15 @@ function DiffBlock({
    * has a partner and only parts of it actually moved.
    */
   whole: boolean;
+  /**
+   * Not mounted yet (see `useStagedMarkdownBlocks`): the block keeps its frame,
+   * so focus, navigation and the page's height survive, and holds its source as
+   * invisible plain text, which lays out at roughly the rendered height without
+   * a parse.
+   */
+  pending: boolean;
+  /** The stage unit this block is, when it is one on its own (an unchanged block). */
+  stageKey?: string;
   components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
   urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
 }) {
@@ -343,10 +451,40 @@ function DiffBlock({
   // footnote section, so attaching them to every block put one under every
   // paragraph. Two blocks citing different footnotes still mint the same
   // generated ids, which is a cosmetic duplicate rather than a wrong render.
-  const content = definitions ? `${source}\n\n${definitions}` : source;
+  //
+  // Rendered alone, every block starts its own document, which is the one place
+  // front matter is recognised: a later paragraph opening with a `+++` line
+  // would turn into a metadata block. A leading blank line keeps any block but
+  // the document's actual front matter out of that position, and renders as
+  // nothing.
+  const body = isFrontmatterType(blockType) ? source : `\n${source}`;
+  const content = definitions ? `${body}\n\n${definitions}` : body;
   const rehypePlugins = useMemo<PluggableList>(
-    () => (ranges.length ? [inlineRangePlugin(ranges, expectedText, kind)] : []),
+    () =>
+      ranges.length
+        ? [inlineRangePlugin(ranges, expectedText, kind), ALERTS_PLUGIN]
+        : [ALERTS_PLUGIN],
     [ranges, expectedText, kind]
+  );
+
+  // react-markdown parses on every render. The stage re-renders the blocks
+  // around a slice as it lands, so the parsed tree is held explicitly: a block
+  // already on screen never parses again unless its own inputs change.
+  const markdown = useMemo(
+    () => (
+      <MarkdownTableLabelPrefix value={TABLE_LABEL_PREFIX[kind]}>
+        <ReactMarkdown
+          remarkPlugins={MARKDOWN_REMARK_PLUGINS}
+          rehypePlugins={rehypePlugins}
+          urlTransform={urlTransform}
+          components={components}
+          skipHtml
+        >
+          {content}
+        </ReactMarkdown>
+      </MarkdownTableLabelPrefix>
+    ),
+    [kind, rehypePlugins, urlTransform, components, content]
   );
 
   return (
@@ -356,19 +494,16 @@ function DiffBlock({
       className={cn("rendered-markdown-diff__block", `rendered-markdown-diff__block--${kind}`)}
       data-block-kind={kind}
       data-whole={whole ? "true" : "false"}
+      data-stage-key={stageKey}
     >
       {kind !== "unchanged" && <span className="sr-only">{BLOCK_LABEL[kind]}</span>}
-      <MarkdownTableLabelPrefix value={TABLE_LABEL_PREFIX[kind]}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={rehypePlugins}
-          urlTransform={urlTransform}
-          components={components}
-          skipHtml
-        >
-          {content}
-        </ReactMarkdown>
-      </MarkdownTableLabelPrefix>
+      {pending ? (
+        <div className="rendered-markdown-diff__pending" aria-hidden="true">
+          {source}
+        </div>
+      ) : (
+        markdown
+      )}
     </div>
   );
 }
@@ -389,7 +524,12 @@ export function RenderedMarkdownDiff({
   onChangeCount,
 }: RenderedMarkdownDiffProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  useScopedSelectAll(rootRef);
+  // Blocks mount in slices, so a Select All has to put the rest in the DOM
+  // first or the copy would stop at whatever had been reached.
+  const [stageFlush, setStageFlush] = useState(0);
+  useScopedSelectAll(rootRef, true, "surface", () => {
+    flushSync(() => setStageFlush((count) => count + 1));
+  });
 
   // Reconstruction, parsing and both LCS passes run in exactly one of two
   // places. A small document builds here, memoized because the React Compiler
@@ -447,7 +587,7 @@ export function RenderedMarkdownDiff({
     // as the next comparison starts. The host keys counts by attempt, and a
     // refresh or a layout switch can remount this view on the very same attempt
     // while its build is still pending; the old count must not come back with it.
-    return () => onChangeCount?.(0, attemptKey);
+    return () => onChangeCount?.(null, attemptKey);
   }, [onChangeCount, counted, changeCount, attemptKey]);
 
   // Which folded runs the reader has opened. Keyed by run id rather than index
@@ -467,6 +607,50 @@ export function RenderedMarkdownDiff({
   // that revision had — the protocol handler reads the working tree, and a
   // historical blob would need an IPC this view deliberately avoids.
   const { components, urlTransform } = useMarkdownRenderPolicy({ filePath, rootPath });
+
+  // One block is one unified pipeline. A long document mounts a budgeted slice
+  // per frame rather than every changed and expanded block in one commit.
+  const units = useMemo(
+    () =>
+      result?.ok
+        ? stageUnits(
+            sections,
+            expandedRuns,
+            result.model.oldDefinitions,
+            result.model.newDefinitions
+          )
+        : [],
+    [result, sections, expandedRuns]
+  );
+  const { admitted, admit } = useStagedMarkdownBlocks(units, result, stageFlush);
+
+  // What the reader can see mounts first. The sweep works top-down, so a step
+  // to a distant change or a fling down the page would otherwise land on
+  // placeholders until it got there. Every unit's frame is in the DOM from the
+  // first commit, so the frames are observed rather than the content.
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || units.length === 0 || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const keys: string[] = [];
+        for (const entry of entries) {
+          const key =
+            entry.isIntersecting && entry.target instanceof HTMLElement
+              ? entry.target.dataset.stageKey
+              : undefined;
+          if (key) keys.push(key);
+        }
+        if (keys.length > 0) admit(keys);
+      },
+      // `scrollMargin` grows the pane's own scroller too, not just the window.
+      { rootMargin: VIEWPORT_STAGE_MARGIN, scrollMargin: VIEWPORT_STAGE_MARGIN }
+    );
+    for (const element of root.querySelectorAll<HTMLElement>("[data-stage-key]")) {
+      observer.observe(element);
+    }
+    return () => observer.disconnect();
+  }, [units, admit]);
 
   const fontStyle: MarkdownFontStyle | undefined =
     fontSize === undefined
@@ -509,10 +693,12 @@ export function RenderedMarkdownDiff({
             <div
               key={`change-${section.index}`}
               data-change-index={section.index}
+              data-stage-key={changeUnitKey(section.index)}
               className="rendered-markdown-diff__change"
             >
               <BlockChange
                 change={section.change}
+                pending={!admitted.has(changeUnitKey(section.index))}
                 oldDefinitions={result.model.oldDefinitions}
                 newDefinitions={result.model.newDefinitions}
                 components={components}
@@ -522,6 +708,8 @@ export function RenderedMarkdownDiff({
           ) : (
             <UnchangedRun
               key={`unchanged-${section.id}`}
+              runId={section.id}
+              admitted={admitted}
               blocks={section.blocks}
               definitions={result.model.newDefinitions}
               expanded={expandedRuns.has(section.id)}
@@ -546,6 +734,8 @@ export function RenderedMarkdownDiff({
  * they were heading for back off the screen.
  */
 function UnchangedRun({
+  runId,
+  admitted,
   blocks,
   definitions,
   expanded,
@@ -553,6 +743,9 @@ function UnchangedRun({
   components,
   urlTransform,
 }: {
+  runId: number;
+  /** The stage's mounted units; a block outside it renders its placeholder. */
+  admitted: ReadonlySet<string>;
   blocks: readonly MarkdownBlock[];
   /** The new side's reference definitions, for the blocks that cite one. */
   definitions: string;
@@ -572,55 +765,61 @@ function UnchangedRun({
     wasExpanded.current = expanded;
   }, [expanded]);
 
-  const shared = { components, urlTransform, kind: "unchanged" as const, ranges: [], whole: false };
-  const render = (block: MarkdownBlock, key: string, reveal = false) => (
-    <DiffBlock
-      key={key}
-      blockRef={reveal ? revealedRef : undefined}
-      tabIndex={reveal ? -1 : undefined}
-      source={block.source}
-      // Every block renders on its own, so one citing `[docs][d]` needs the
-      // definition appended or it renders the literal brackets and loses its
-      // link. Only the blocks that actually cite one pay for it.
-      definitions={block.referenceIds.length ? definitions : ""}
-      expectedText={block.text}
-      {...shared}
-    />
-  );
-
-  if (expanded || blocks.length <= UNCHANGED_RUN_LIMIT) {
+  const shared = {
+    components,
+    urlTransform,
+    kind: "unchanged" as const,
+    ranges: NO_RANGES,
+    whole: false,
+  };
+  const render = (index: number) => {
+    const block = blocks[index]!;
+    const reveal = expanded && index === UNCHANGED_CONTEXT;
     return (
-      <>
-        {blocks.map((block, index) =>
-          render(block, `block-${index}`, expanded && index === UNCHANGED_CONTEXT)
-        )}
-      </>
+      <DiffBlock
+        // Keyed by position in the run, in one flat list with the fold, so
+        // opening it keeps the edge blocks mounted instead of parsing them again.
+        key={`block-${index}`}
+        blockRef={reveal ? revealedRef : undefined}
+        tabIndex={reveal ? -1 : undefined}
+        pending={!admitted.has(runUnitKey(runId, index))}
+        stageKey={runUnitKey(runId, index)}
+        blockType={block.type}
+        source={block.source}
+        // Every block renders on its own, so one citing `[docs][d]` needs the
+        // definition appended or it renders the literal brackets and loses its
+        // link. Only the blocks that actually cite one pay for it.
+        definitions={block.referenceIds.length ? definitions : ""}
+        expectedText={block.text}
+        {...shared}
+      />
     );
-  }
+  };
+
+  const items = shownRunIndices(blocks.length, expanded).map(render);
+  if (items.length === blocks.length) return <>{items}</>;
 
   const hiddenCount = blocks.length - UNCHANGED_CONTEXT * 2;
-  return (
-    <>
-      {blocks.slice(0, UNCHANGED_CONTEXT).map((block, index) => render(block, `lead-${index}`))}
-      <button
-        type="button"
-        onClick={onExpand}
-        className="rendered-markdown-diff__fold"
-        aria-expanded={false}
-      >
-        {/*
-          "Expand", not "Show", and "unchanged", not "hidden": the Unified and
-          Split layouts of this same panel are one segmented-control click away
-          and their hunk expanders already say `Expand N lines` and
-          `N unchanged lines hidden`. Same panel, same gesture, same verb.
-        */}
-        {`Expand ${hiddenCount} unchanged ${hiddenCount === 1 ? "block" : "blocks"}`}
-      </button>
-      {blocks
-        .slice(blocks.length - UNCHANGED_CONTEXT)
-        .map((block, index) => render(block, `trail-${index}`))}
-    </>
+  items.splice(
+    UNCHANGED_CONTEXT,
+    0,
+    <button
+      key="fold"
+      type="button"
+      onClick={onExpand}
+      className="rendered-markdown-diff__fold"
+      aria-expanded={false}
+    >
+      {/*
+        "Expand", not "Show", and "unchanged", not "hidden": the Unified and
+        Split layouts of this same panel are one segmented-control click away
+        and their hunk expanders already say `Expand N lines` and
+        `N unchanged lines hidden`. Same panel, same gesture, same verb.
+      */}
+      {`Expand ${hiddenCount} unchanged ${hiddenCount === 1 ? "block" : "blocks"}`}
+    </button>
   );
+  return <>{items}</>;
 }
 
 /** Keys that scroll a focused table or activate something in it. */
@@ -754,18 +953,21 @@ function useLinkedTableScroll(pairRef: RefObject<HTMLDivElement | null>, content
 
 function BlockChange({
   change,
+  pending,
   oldDefinitions,
   newDefinitions,
   components,
   urlTransform,
 }: {
   change: MarkdownBlockChange;
+  /** A pair mounts both halves together, so its table linking sees both tables. */
+  pending: boolean;
   oldDefinitions: string;
   newDefinitions: string;
   components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
   urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
 }) {
-  const shared = { components, urlTransform };
+  const shared = { components, urlTransform, pending };
   if (change.kind === "modified") {
     return (
       <ModifiedPair
@@ -785,9 +987,10 @@ function BlockChange({
   return (
     <DiffBlock
       kind={kind}
+      blockType={change.block.type}
       source={change.block.source}
       definitions={definitions}
-      ranges={[]}
+      ranges={NO_RANGES}
       expectedText={change.block.text}
       whole={kind !== "unchanged"}
       {...shared}
@@ -797,26 +1000,30 @@ function BlockChange({
 
 function ModifiedPair({
   change,
+  pending,
   oldDefinitions,
   newDefinitions,
   components,
   urlTransform,
 }: {
   change: Extract<MarkdownBlockChange, { kind: "modified" }>;
+  pending: boolean;
   oldDefinitions: string;
   newDefinitions: string;
   components: ReturnType<typeof useMarkdownRenderPolicy>["components"];
   urlTransform: ReturnType<typeof useMarkdownRenderPolicy>["urlTransform"];
 }) {
   const pairRef = useRef<HTMLDivElement>(null);
-  useLinkedTableScroll(pairRef, `${change.old.source}\n${change.new.source}`);
-  const shared = { components, urlTransform };
+  // Keyed on mounting too: a pending pair has no tables to link yet.
+  useLinkedTableScroll(pairRef, pending ? "" : `${change.old.source}\n${change.new.source}`);
+  const shared = { components, urlTransform, pending };
   // Removed then added, GitHub's ordering: the reader sees what the block
   // said before the replacement that follows it.
   return (
     <div ref={pairRef} className="rendered-markdown-diff__pair">
       <DiffBlock
         kind="removed"
+        blockType={change.old.type}
         source={change.old.source}
         definitions={change.old.referenceIds.length ? oldDefinitions : ""}
         ranges={change.inline.old}
@@ -826,6 +1033,7 @@ function ModifiedPair({
       />
       <DiffBlock
         kind="added"
+        blockType={change.new.type}
         source={change.new.source}
         definitions={change.new.referenceIds.length ? newDefinitions : ""}
         ranges={change.inline.new}

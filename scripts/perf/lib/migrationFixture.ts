@@ -313,6 +313,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
       idleShellThresholdMinutes: 60,
     },
     pluginBackgroundUpdateCheck: { enabled: false, lastCheckedAt: null },
+    hostIdle: { idleAfterMinutes: 30 },
     appState: {
       activeWorktreeId: "wt-0",
       sidebarWidth: 350,
@@ -405,6 +406,7 @@ export function createHeavyMigrationFixture(): LegacyStoreV0 {
       auditRetention: 30,
     },
     pendingErrors,
+    mergedWorktreeRemovalReceipts: [],
     errorFingerprints: {},
     gpu: { hardwareAccelerationDisabled: false },
     crashRecovery: { autoRestoreOnCrash: false },

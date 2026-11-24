@@ -3,6 +3,7 @@ import {
   InfoResponse,
   MIN_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
+  type ProtocolFeature,
 } from "@daintreehq/decisions-protocol";
 import protocolPackage from "@daintreehq/decisions-protocol/package.json" with { type: "json" };
 import type {
@@ -25,6 +26,9 @@ export const DAINTREE_RELAY_VERSIONS: Readonly<DecisionsRelayVersions> = Object.
   protocolMax: PROTOCOL_VERSION,
   workerVersion: protocolPackage.version,
 });
+
+/** What a relay advertises when the owner may ask it for an agent-stopped push (#17319). */
+const AGENT_STOPPED_PUSH_FEATURE: ProtocolFeature = "agent-stopped-push-v1";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 /** `/health` and `/info` are a few hundred bytes; anything far bigger isn't a relay. */
@@ -173,6 +177,9 @@ export async function checkDecisionsRelay(
         relay.protocolMin !== daintree.protocolMin ||
         relay.protocolMax !== daintree.protocolMax,
     },
+    ...(relayInfo.features?.includes(AGENT_STOPPED_PUSH_FEATURE) === true
+      ? {}
+      : { advertisesAgentStoppedPushes: false as const }),
   };
 }
 

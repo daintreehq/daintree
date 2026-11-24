@@ -312,8 +312,44 @@ describe("createPicker", () => {
     const escape = press("Escape");
     expect(escape.defaultPrevented).toBe(true);
     expect(ofType("selectionChanged").at(-1)).toMatchObject({ observations: [], cause: "user" });
-    // Nothing left to clear: Escape is the host's again.
+    expect(ofType("dismissRequested")).toHaveLength(0);
+  });
+
+  it("asks the host to close the picker on Escape with nothing selected", () => {
+    start();
+    let pageEscapes = 0;
+    document.addEventListener("keydown", () => (pageEscapes += 1), {
+      signal: testListeners.signal,
+    });
+
+    const escape = press("Escape", {}, document.getElementById("first")!);
+    expect(escape.defaultPrevented).toBe(true);
+    expect(pageEscapes).toBe(0);
+    expect(ofType("dismissRequested")).toHaveLength(1);
+    expect(ofType("selectionChanged")).toHaveLength(0);
+  });
+
+  it("peels one layer per Escape, however long the key is held", () => {
+    start();
+    document.getElementById("first")!.click();
+    const selections = ofType("selectionChanged").length;
+
+    press("Escape");
+    expect(press("Escape", { repeat: true }).defaultPrevented).toBe(true);
+    expect(press("Escape", { repeat: true }).defaultPrevented).toBe(true);
+    expect(ofType("selectionChanged")).toHaveLength(selections + 1);
+    expect(ofType("dismissRequested")).toHaveLength(0);
+
+    press("Escape");
+    expect(ofType("dismissRequested")).toHaveLength(1);
+  });
+
+  it("leaves Escape to an IME composition and to the page in browse mode", () => {
+    start();
+    expect(press("Escape", { isComposing: true }).defaultPrevented).toBe(false);
+    picker!.setMode("browse");
     expect(press("Escape").defaultPrevented).toBe(false);
+    expect(ofType("dismissRequested")).toHaveLength(0);
   });
 
   it("leaves keys to an IME composition and to a focused page control", () => {
@@ -394,6 +430,94 @@ describe("createPicker", () => {
     // With nothing held, browse leaves nothing behind.
     handle.clearSelection();
     expect(handle.getOverlayRoot()).toBeNull();
+  });
+
+  it("does nothing while paused, and resumes in the mode it was left in (#17067)", async () => {
+    const handle = start();
+    document.getElementById("first")!.click();
+    runFrames();
+    pointAt(document.getElementById("second")!);
+    expect(frames.size).toBe(1);
+
+    handle.setPaused(true);
+    expect(frames.size).toBe(0);
+    expect(handle.getOverlayRoot()).toBeNull();
+    const selections = ofType("selectionChanged").length;
+    let pageClicks = 0;
+    const second = document.getElementById("second")!;
+    second.addEventListener("click", () => {
+      pageClicks += 1;
+    });
+    second.click();
+    pointAt(second);
+    // A page that keeps re-rendering behind a hidden preview.
+    document.getElementById("first")!.className = "re-rendered";
+    await Promise.resolve();
+    expect(pageClicks).toBe(1);
+    expect(ofType("selectionChanged")).toHaveLength(selections);
+    expect(frames.size).toBe(0);
+
+    handle.setPaused(false);
+    expect(frames.size).toBe(1);
+    runFrames();
+    expect(handle.getOverlayRoot()?.host.isConnected).toBe(true);
+    second.click();
+    expect(pageClicks).toBe(1);
+    expect(selectedLabel()).toBe("a#second");
+  });
+
+  it("lets no host request restart its work while paused", () => {
+    const handle = start();
+    document.getElementById("first")!.click();
+    pointAt(document.getElementById("second")!);
+    runFrames();
+    expect(ofType("hoverChanged").at(-1)?.observation).not.toBeNull();
+
+    handle.setPaused(true);
+    // The hover goes with the pointer that cannot be over a hidden page.
+    expect(ofType("hoverChanged").at(-1)?.observation).toBeNull();
+    handle.setAvailability(SETTLED);
+    handle.setMode("browse");
+    handle.setMode("select");
+    handle.clearHover();
+    expect(
+      handle.reselect({ elementId: ofType("selectionChanged")[0]!.observations[0]!.elementId })
+    ).toBe(true);
+
+    expect(frames.size).toBe(0);
+    expect(handle.getOverlayRoot()).toBeNull();
+    let pageClicks = 0;
+    const second = document.getElementById("second")!;
+    second.addEventListener("click", () => {
+      pageClicks += 1;
+    });
+    second.click();
+    expect(pageClicks).toBe(1);
+  });
+
+  it("starts paused when installed for a preview out of sight", () => {
+    picker = createPicker({
+      channel: CHANNEL,
+      mode: "select",
+      paused: true,
+      post: (event) => events.push(event),
+    });
+    let pageClicks = 0;
+    const link = document.getElementById("first")!;
+    link.addEventListener("click", () => {
+      pageClicks += 1;
+    });
+    link.click();
+    pointAt(link);
+
+    expect(pageClicks).toBe(1);
+    expect(frames.size).toBe(0);
+    expect(ofType("selectionChanged")).toHaveLength(0);
+
+    picker.setPaused(false);
+    link.click();
+    expect(pageClicks).toBe(1);
+    expect(ofType("selectionChanged")).toHaveLength(1);
   });
 
   it("reports a framework the selection's markup names, once per document", () => {

@@ -65,7 +65,7 @@ export const TIER1_MITIGATION_COOLDOWN_MS = 5 * 60 * 1000;
  * three platforms while staying well under {@link POLL_INTERVAL_MS}.
  *
  * This window brackets tier 1's *destructive* levers — tearing down a hidden
- * portal tab kills a renderer, and that footprint does come back inside it. It
+ * webview kills its guest renderer, and that footprint does come back inside it. It
  * says nothing about the pty-host scrollback trim, which only drops JS
  * references: the collection is a GC away and the pages are an OS reclaim pass
  * after that, both far outside any window worth blocking a 30s poll on. That
@@ -79,8 +79,8 @@ export const RECLAIM_SETTLE_MS = 3_000;
  *
  * This is a suppressor, never an authorizer. Failing to clear it is not
  * evidence tier 1 failed — only levers whose effect the sampler can attribute
- * can clear it at all, in practice the hidden-portal-tab teardown that kills a
- * renderer. The pty-host scrollback trim never can (see
+ * can clear it at all, in practice the hidden-webview teardown that kills a
+ * guest renderer. The pty-host scrollback trim never can (see
  * {@link RECLAIM_SETTLE_MS}), which is why the old gate — where a sub-threshold
  * delta was one of the two conditions *permitting* escalation — rubber-stamped
  * the tier-2 eviction tier 1 exists to prevent (#11674).
@@ -510,13 +510,11 @@ export function getEluHighStreaks(): ReadonlyMap<number, number> {
 
 export interface MemoryPressureActions {
   /**
-   * Returns the number of hidden portal tabs destroyed. This is a FLOOR, not a
-   * total: the `window:destroy-hidden-webviews` push that rides along is
-   * fire-and-forget, so any webviews the renderers drop in response are not
-   * counted. Reported under a name that says what it measures rather than
-   * implying it covers every webview this action tears down.
+   * Asks every window's renderers to drop their hidden webviews. The
+   * `window:destroy-hidden-webviews` push is fire-and-forget, so nothing comes
+   * back to count: what they free shows only in the measured delta.
    */
-  destroyHiddenWebviews: (tier: 1 | 2) => Promise<number>;
+  destroyHiddenWebviews: (tier: 1 | 2) => void | Promise<void>;
   /**
    * Puts opted-in idle projects to sleep early (#13852). Returns the number of
    * terminals killed.
@@ -1135,7 +1133,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             baselineFailed = true;
           }
 
-          let tier1TabsEvicted = 0;
           let tier1Trim: TrimStateSummary | null = null;
           let tier1TrimFailed = false;
           let tier1ReadersRetired = 0;
@@ -1156,7 +1153,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               kernelPressureLevel: kernelLevel,
             });
 
-            tier1TabsEvicted = await actions.destroyHiddenWebviews(1);
+            await actions.destroyHiddenWebviews(1);
 
             // Awaited so the host has at least accepted and applied the request
             // before the settle window opens; fire-and-forget left it still
@@ -1214,7 +1211,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             const tier1Trimmed = tier1Trim?.trimmed ?? 0;
             const tier1Outcome: MitigationOutcome =
               !pressureRemains ||
-              tier1TabsEvicted > 0 ||
               tier1Trimmed > 0 ||
               tier1ReadersRetired > 0 ||
               (!resampleFailed && !baselineFailed && deltaMb >= MIN_RECLAIMED_MB)
@@ -1237,18 +1233,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             logInfo("memory-pressure-tier1-reclaim", {
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
-              // Attributable to the portal-tab teardown and a retired Canopy
-              // reader only, the reader's once its process has exited. The
+              // Attributable to the hidden webviews renderers drop and a retired
+              // Canopy reader only, the reader's once its process has exited. The
               // scrollback trims (host and renderer) cannot move this inside
               // the settle window whatever they did, so a zero here is not
               // evidence any lever failed.
               deltaMb: Math.round(deltaMb),
-              // Portal tabs are the only part of this lever whose outcome main
-              // can observe (the webview push is fire-and-forget), so this is a
-              // floor. Even so it separates "tier 1 found tabs to destroy" from
-              // "it found none" when the delta reads zero — previously
-              // indistinguishable.
-              portalTabsDestroyed: tier1TabsEvicted,
               // The trim's own report, for the same reason: separates "every
               // terminal was deliberately protected" (trimmed 0 / skipped N)
               // from "the trim never reached the host" (shardsFailed > 0).
@@ -1336,10 +1326,9 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             // levers after it nor blind the reclaim measurement below, which
             // is this tier's whole point. Previously a thrown
             // destroyHiddenWebviews(2) skipped both remaining levers.
-            let tier2TabsEvicted = 0;
             let tier2ActionFailed = false;
             try {
-              tier2TabsEvicted = await actions.destroyHiddenWebviews(2);
+              await actions.destroyHiddenWebviews(2);
             } catch (err) {
               tier2ActionFailed = true;
               logWarn("memory-pressure-tier2-action-failed", {
@@ -1403,7 +1392,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               : Math.max(0, tier2BeforeMb - tier2AfterMb);
             const tier2Outcome: MitigationOutcome =
               !tier2PressureRemains ||
-              tier2TabsEvicted > 0 ||
               tier2ViewsEvicted > 0 ||
               tier2HostsReclaimed > 0 ||
               tier2TerminalsHibernated > 0 ||
@@ -1416,7 +1404,6 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               beforeMb: Math.round(tier2BeforeMb),
               afterMb: Math.round(tier2AfterMb),
               deltaMb: Math.round(tier2DeltaMb),
-              portalTabsDestroyed: tier2TabsEvicted,
               viewsEvicted: tier2ViewsEvicted,
               workspaceHostsReclaimed: tier2HostsReclaimed,
               terminalsHibernated: tier2TerminalsHibernated,

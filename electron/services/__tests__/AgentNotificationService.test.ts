@@ -15,6 +15,7 @@ const projectStoreMock = vi.hoisted(() => ({
   loadNotificationOverrides: vi.fn(async (_projectId: string) => {}),
   getCurrentProjectId: vi.fn(() => null),
   getProjectState: vi.fn(async () => null),
+  getProjectById: vi.fn<(projectId: string) => { name: string } | null>(() => null),
   onProjectStatePersisted: vi.fn(
     (listener: (workspaceId: string, state: { terminals: unknown[] } | null) => void) => {
       persistedListeners.add(listener);
@@ -32,6 +33,8 @@ const notificationServiceMock = vi.hoisted(() => ({
   getUserPresence: vi.fn<() => "present" | "away" | "unknown">(() => "present"),
   closeNotificationsForPanel: vi.fn(),
   isOwnerViewFocused: vi.fn<(owner: number | undefined) => boolean>(() => false),
+  closeNotificationByKey: vi.fn(),
+  openDecisionQuestion: vi.fn(),
 }));
 
 const soundServiceMock = vi.hoisted(() => ({
@@ -76,8 +79,13 @@ import {
   _resetEndpointRegistryForTesting,
   getEndpointRegistry,
 } from "../../ipc/endpointRegistry.js";
-import { setPtyClientRef } from "../../window/serviceRefs.js";
+import { setPtyClientRef, setRunAttentionServiceRef } from "../../window/serviceRefs.js";
+import { RunAttentionService } from "../RunAttentionService.js";
+import type { RunParkRecord, RunSnoozeRecord } from "../../../shared/types/ipc/fleet.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
+import { setDecisionQuestions } from "../decisionsQuestionList.js";
+import { getEffectiveRegistry } from "../../../shared/config/agentRegistry.js";
+import type { DecisionQuestionListItem } from "../../../shared/types/decisionsQuestion.js";
 
 /** Stand-in for a project view's webContents id — the renderer that owns the watched panels. */
 const OWNER = 101;
@@ -2640,6 +2648,329 @@ describe("AgentNotificationService", () => {
     });
   });
 
+  describe("runs put aside by a park or a snooze (#17192)", () => {
+    let attention: RunAttentionService;
+    const started: RunAttentionService[] = [];
+
+    /** The live attention service, as the stats handlers publish it, over records already on disk. */
+    function startAttention(stored: { parks?: Record<string, RunParkRecord> } = {}) {
+      let parks = stored.parks ?? {};
+      let snoozes: Record<string, RunSnoozeRecord> = {};
+      attention = new RunAttentionService({
+        load: () => parks,
+        save: (records) => {
+          parks = records;
+        },
+        loadSnoozes: () => snoozes,
+        saveSnoozes: (records) => {
+          snoozes = records;
+        },
+      });
+      started.push(attention);
+      setRunAttentionServiceRef(attention);
+    }
+
+    beforeEach(() => startAttention());
+
+    afterEach(() => {
+      setRunAttentionServiceRef(null);
+      for (const service of started.splice(0)) service.dispose();
+    });
+
+    function makePayloadFor(
+      terminalId: string,
+      agentId: string,
+      state: AgentState,
+      previousState: AgentState = "working"
+    ) {
+      return { ...makePayload(state, previousState), terminalId, agentId };
+    }
+
+    const twoDockedAgents = {
+      activeWorktreeId: "wt-1",
+      terminals: ["term-1", "term-2"].map((id, i) => ({
+        id,
+        kind: "terminal",
+        agentId: `agent-${i + 1}`,
+        title: `Agent ${i + 1}`,
+        location: "dock",
+        worktreeId: "wt-1",
+      })),
+    };
+
+    /** Each way to put a run aside, and the matching way to take it back with no transition. */
+    const putAside = {
+      park: { set: (id: string) => attention.park(id), lift: (id: string) => attention.unpark(id) },
+      snooze: {
+        set: (id: string) => attention.snooze(id, "30m"),
+        lift: (id: string) => attention.unsnooze(id),
+      },
+    };
+
+    for (const [how, { set: setAside, lift }] of Object.entries(putAside)) {
+      describe(`by a ${how}`, () => {
+        it("takes down a waiting agent's banner and cancels its reminder for good", () => {
+          mockStore({ waitingEnabled: true });
+
+          events.emit("agent:state-changed", makePayload("waiting"));
+          vi.advanceTimersByTime(200);
+          expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+
+          setAside("term-1");
+          expect(notificationServiceMock.closeNotificationsForPanel).toHaveBeenCalledWith("term-1");
+
+          // Taken back while still waiting: the cancelled reminder stays cancelled.
+          lift("term-1");
+          vi.advanceTimersByTime(300_000);
+          expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+          expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+        });
+
+        it("drops a waiting banner still in its burst window", () => {
+          mockStore({ waitingEnabled: true, soundEnabled: true });
+
+          events.emit("agent:state-changed", makePayload("waiting"));
+          setAside("term-1");
+          vi.advanceTimersByTime(300_000);
+
+          expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+          expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+        });
+
+        it("raises no banner, sound or reminder when the run then waits", () => {
+          mockStore({ waitingEnabled: true, soundEnabled: true });
+
+          setAside("term-1");
+          events.emit("agent:state-changed", makePayload("waiting"));
+          vi.advanceTimersByTime(300_000);
+
+          expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+          expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+        });
+
+        it("starts no completion banner when the run then finishes", () => {
+          mockStore({ completedEnabled: true, soundEnabled: true });
+
+          setAside("term-1");
+          events.emit("agent:state-changed", makePayload("completed"));
+          lift("term-1");
+          vi.advanceTimersByTime(5000);
+
+          expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+        });
+
+        it("cancels a completion banner still in its debounce", () => {
+          mockStore({ completedEnabled: true, soundEnabled: true });
+
+          events.emit("agent:state-changed", makePayload("completed"));
+          vi.advanceTimersByTime(1000);
+          setAside("term-1");
+          lift("term-1");
+          vi.advanceTimersByTime(5000);
+
+          expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+        });
+
+        it("leaves an already-waiting run out of a sibling's grouped reminder", () => {
+          mockStore({ waitingEnabled: true }, twoDockedAgents);
+
+          events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+          events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+          setAside("term-2");
+          lift("term-2");
+          vi.advanceTimersByTime(180_000);
+
+          expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+          expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+            "Agent still waiting",
+            expect.any(String),
+            expect.objectContaining({ closeWithPanels: ["term-1"] })
+          );
+        });
+
+        it("keeps a run that waits while put aside out of a sibling's grouped reminder", () => {
+          mockStore({ waitingEnabled: true }, twoDockedAgents);
+
+          setAside("term-2");
+          events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+          events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+          lift("term-2");
+          vi.advanceTimersByTime(180_000);
+
+          expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+          expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+            "Agent still waiting",
+            expect.any(String),
+            expect.objectContaining({ closeWithPanels: ["term-1"] })
+          );
+        });
+
+        it("drops a finish already gathered for its burst", () => {
+          mockStore({ completedEnabled: true, soundEnabled: true });
+
+          events.emit("agent:state-changed", makePayload("completed"));
+          vi.advanceTimersByTime(1999);
+          // The debounce fires and gathers the finish; its burst goes out a tick later.
+          vi.advanceTimersToNextTimer();
+          setAside("term-1");
+          vi.advanceTimersByTime(100);
+
+          expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+        });
+
+        it("drops a Canopy ask still in its burst window", () => {
+          mockStore({ soundEnabled: true });
+          vi.advanceTimersByTime(9_000);
+
+          agentNotificationService.notifyCanopyAsk(
+            { terminalId: "term-1", worktreeId: "wt-1", agentId: "agent-1", kind: "approval" },
+            () => []
+          );
+          setAside("term-1");
+          vi.advanceTimersByTime(200);
+
+          expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+        });
+
+        it("raises no Canopy ask for a run already put aside", () => {
+          mockStore({ soundEnabled: true });
+          vi.advanceTimersByTime(9_000);
+
+          setAside("term-1");
+          agentNotificationService.notifyCanopyAsk(
+            { terminalId: "term-1", worktreeId: "wt-1", agentId: "agent-1", kind: "approval" },
+            () => []
+          );
+          vi.advanceTimersByTime(200);
+
+          expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+          expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+        });
+
+        it("leaves other runs' alerts alone", () => {
+          mockStore({ waitingEnabled: true }, twoDockedAgents);
+          agentNotificationService.syncWatchedPanels(OWNER, ["term-1", "term-2"]);
+
+          events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+          setAside("term-2");
+          vi.advanceTimersByTime(200);
+
+          expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+          expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
+            "Agent waiting",
+            expect.any(String),
+            expect.objectContaining({ panelId: "term-1" }),
+            "notification:watch-navigate",
+            expect.objectContaining({ closeWithPanels: ["term-1"] })
+          );
+        });
+      });
+    }
+
+    it("pages again for the next wait once the park is lifted", () => {
+      mockStore({ waitingEnabled: true });
+
+      attention.park("term-1");
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+
+      attention.unpark("term-1");
+      events.emit("agent:state-changed", makePayload("working", "waiting"));
+      agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.any(String),
+        escalationOptions(OWNER)
+      );
+    });
+
+    it("honours a park restored from disk, which announces nothing", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+      startAttention({ parks: { "term-1": { parkedAt: Date.now() } } });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(300_000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("holds back a waiting banner whose burst ends after a park it never heard of", () => {
+      mockStore({ waitingEnabled: true, soundEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      startAttention({ parks: { "term-1": { parkedAt: Date.now() } } });
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("holds back a finish whose debounce ends after a park it never heard of", () => {
+      mockStore({ completedEnabled: true, soundEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("completed"));
+      startAttention({ parks: { "term-1": { parkedAt: Date.now() } } });
+      vi.advanceTimersByTime(5000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("holds back a reminder that comes due after a park it never heard of", () => {
+      mockStore({ waitingEnabled: true }, twoDockedAgents);
+      setRunAttentionServiceRef(null);
+
+      events.emit("agent:state-changed", makePayloadFor("term-1", "agent-1", "waiting"));
+      events.emit("agent:state-changed", makePayloadFor("term-2", "agent-2", "waiting"));
+      startAttention({ parks: { "term-2": { parkedAt: Date.now() } } });
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.any(String),
+        expect.objectContaining({ closeWithPanels: ["term-1"] })
+      );
+    });
+
+    it("stays quiet while a snooze outlives the park beside it", () => {
+      mockStore({ waitingEnabled: true });
+
+      attention.park("term-1");
+      attention.snooze("term-1", "30m");
+      attention.unpark("term-1");
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(300_000);
+
+      expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("pages again once a snooze has run out", () => {
+      mockStore({ waitingEnabled: true });
+
+      attention.snooze("term-1", "15m");
+      vi.advanceTimersByTime(15 * 60_000);
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(200);
+
+      expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("Canopy asks", () => {
     const ask = (terminalId = "term-1", kind: "approval" | "question" = "approval") => ({
       terminalId,
@@ -4300,5 +4631,482 @@ describe("each project's own choices across a burst (#15635)", () => {
         expect(projectStoreMock.loadNotificationOverrides).toHaveBeenCalledWith("project-c");
       }
     );
+  });
+});
+
+describe("Decisions questions (#17232)", () => {
+  /** A question as the shared list names it, asked by `terminalId` at `askedAt` (ms). */
+  function question(
+    terminalId: string,
+    askedAt: number,
+    overrides: Partial<DecisionQuestionListItem> = {}
+  ): DecisionQuestionListItem {
+    return {
+      reference: { hostId: "host-1", projectId: PROJECT_ID, terminalId, questionId: "q-1" },
+      alias: 1,
+      agentKind: "claude",
+      projectLabel: "Daintree",
+      worktreeId: "wt-1",
+      worktreeRoot: "/repo",
+      requirement: "proxy-ok",
+      askedAt: new Date(askedAt).toISOString(),
+      expiresAt: null,
+      settledAt: null,
+      standing: { kind: "waiting", reason: "open" },
+      replyRequest: null,
+      stall: null,
+      ...overrides,
+    };
+  }
+
+  /** The agent's turn: to work, then finished a moment later. */
+  function turn(work: () => void = () => {}) {
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+    work();
+    events.emit("agent:state-changed", makePayload("completed", "working"));
+    vi.advanceTimersByTime(5_000);
+  }
+
+  const finished = () =>
+    notificationServiceMock.showWatchNotification.mock.calls.filter(
+      (call) => call[0] === "Agent finished"
+    );
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    osDndServiceMock.getState.mockReturnValue(undefined);
+    agentNotificationService.initialize();
+    await vi.dynamicImportSettled();
+    agentNotificationService.syncWatchedPanels(OWNER, ["term-1"]);
+    mockStore({ completedEnabled: true });
+  });
+
+  afterEach(() => {
+    setDecisionQuestions([]);
+    agentNotificationService.dispose();
+    vi.runOnlyPendingTimers();
+    vi.useRealTimers();
+  });
+
+  it("replaces the Agent finished banner for a turn that asked a question", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("still replaces it once the question was answered before the banner would show", () => {
+    turn(() =>
+      setDecisionQuestions([
+        question("term-1", Date.now(), {
+          standing: { kind: "settled", outcome: "answered", handled: false },
+        }),
+      ])
+    );
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("shows the banner for a turn after the one that asked", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+    expect(finished()).toHaveLength(0);
+
+    turn();
+
+    expect(finished()).toHaveLength(1);
+  });
+
+  it("keeps the banner replaced when Decisions turns off before it would show", () => {
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+    setDecisionQuestions([question("term-1", Date.now())]);
+    events.emit("agent:state-changed", makePayload("completed", "working"));
+    // Turning Decisions off empties the list inside the banner's two-second wait.
+    setDecisionQuestions([]);
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("keeps the banner replaced when the terminal is closed before it would show", () => {
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+    setDecisionQuestions([question("term-1", Date.now())]);
+    events.emit("agent:state-changed", makePayload("completed", "working"));
+    events.emit("agent:killed", { terminalId: "term-1", agentId: "agent-1" } as never);
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("shows the banner when the terminal comes back under its id and exits at once", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+    events.emit("agent:killed", { terminalId: "term-1", agentId: "agent-1" } as never);
+    vi.advanceTimersByTime(1_000);
+
+    // A failed spawn reports `exited` from `working` with no turn ever starting.
+    events.emit("agent:spawned", { terminalId: "term-1", agentId: "agent-1" } as never);
+    vi.advanceTimersByTime(10_000);
+    events.emit("agent:state-changed", makePayload("exited", "working"));
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(1);
+  });
+
+  it("keeps the banner replaced when a spawn is reported in the middle of the turn", () => {
+    turn(() => {
+      setDecisionQuestions([question("term-1", Date.now())]);
+      vi.advanceTimersByTime(1_000);
+      events.emit("agent:spawned", { terminalId: "term-1", agentId: "agent-1" } as never);
+    });
+
+    expect(finished()).toHaveLength(0);
+  });
+
+  it("shows a later turn's banner when the agent exits naturally after it", () => {
+    turn(() => setDecisionQuestions([question("term-1", Date.now())]));
+    events.emit("agent:state-changed", makePayload("working", "idle"));
+    vi.advanceTimersByTime(1_000);
+
+    // A natural exit tells `agent:exited` before the agent's last transition.
+    events.emit("agent:exited", { terminalId: "term-1", agentId: "agent-1" } as never);
+    events.emit("agent:state-changed", makePayload("exited", "working"));
+    vi.advanceTimersByTime(5_000);
+
+    expect(finished()).toHaveLength(1);
+  });
+
+  it("shows the banner when another terminal asked during the turn", () => {
+    turn(() => setDecisionQuestions([question("term-other", Date.now())]));
+
+    expect(finished()).toHaveLength(1);
+  });
+
+  it("shows a question from a terminal no view watches, naming the agent, its project and the opening line", () => {
+    agentNotificationService.syncWatchedPanels(OWNER, []);
+    const asked = question("term-unwatched", Date.now());
+
+    agentNotificationService.notifyDecisionQuestion(asked, "Ship the migration now?", "key-1");
+
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    const [title, body, options] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+    expect(title).toBe(`Question from ${getEffectiveRegistry().claude!.name} in Daintree`);
+    expect(body).toBe("Ship the migration now?");
+    // Never routed to a view on another machine: this computer shows it.
+    expect(options.ownerWebContentsId).toBeUndefined();
+
+    options.onClick();
+    expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledWith(asked.reference);
+  });
+
+  it("names the project from its record when the question carries no label, and says how to read it without an opening line", () => {
+    projectStoreMock.getProjectById.mockReturnValue({ name: "Website" });
+
+    agentNotificationService.notifyDecisionQuestion(
+      question("term-1", Date.now(), { projectLabel: null, agentKind: "not-an-agent" }),
+      null,
+      "key-1"
+    );
+
+    const [title, body] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+    expect(title).toBe("Question from An agent in Website");
+    expect(body).toBe("Open it to read what was asked.");
+  });
+
+  it("gives each question its own banner, replaced by a re-send and taken down by the same key", () => {
+    const asked = question("term-1", Date.now());
+    agentNotificationService.notifyDecisionQuestion(asked, "Hi?", "k-1");
+    agentNotificationService.notifyDecisionQuestion(asked, "Hi?", "k-1");
+    agentNotificationService.notifyDecisionQuestion(asked, "Other?", "k-2");
+    const keys = notificationServiceMock.showNativeNotification.mock.calls.map(
+      (call) => call[2].replaceKey as string
+    );
+
+    agentNotificationService.closeDecisionQuestion("k-1");
+
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(notificationServiceMock.closeNotificationByKey).toHaveBeenCalledWith(keys[0]);
+  });
+
+  it("is silenced by turning notifications off, and only by that", () => {
+    // Monday 23:00, inside 22:00 to 06:00 quiet hours, with the session muted and both alert switches off.
+    vi.setSystemTime(new Date(2024, 0, 1, 23, 0));
+    mockStore({
+      completedEnabled: false,
+      waitingEnabled: false,
+      quietHoursEnabled: true,
+      quietHoursStartMin: 22 * 60,
+      quietHoursEndMin: 6 * 60,
+    });
+    agentNotificationService.setSessionMuteUntil(Date.now() + 60 * 60 * 1000);
+    expect(agentNotificationService.decisionQuestionNotificationsOn(PROJECT_ID)).toBe(true);
+    agentNotificationService.notifyDecisionQuestion(question("term-1", Date.now()), "Hi?", "k");
+    expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+
+    notificationServiceMock.showNativeNotification.mockClear();
+    mockStore({ enabled: false } as never);
+    expect(agentNotificationService.decisionQuestionNotificationsOn(PROJECT_ID)).toBe(false);
+    agentNotificationService.notifyDecisionQuestion(question("term-1", Date.now()), "Hi?", "k");
+    expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+  });
+
+  it("reads the question's project's alert overrides before it shows", async () => {
+    await agentNotificationService.prepareDecisionQuestion("project-cold");
+
+    expect(projectStoreMock.loadNotificationOverrides).toHaveBeenCalledWith("project-cold");
+  });
+
+  it("plays this computer's waiting sound with sound on", () => {
+    mockStore({ soundEnabled: true });
+
+    agentNotificationService.notifyDecisionQuestion(question("term-1", Date.now()), "Hi?", "k");
+
+    expect(soundServiceMock.playFile).toHaveBeenCalledWith(
+      DEFAULT_NOTIFICATION_SETTINGS.waitingSoundFile
+    );
+  });
+
+  describe("follow-ups and stalled answers (#17235)", () => {
+    const agentName = () => getEffectiveRegistry().claude!.name;
+
+    it("names the agent wanting a reply and the question, and opens the question at that follow-up", () => {
+      const asked = question("term-unwatched", Date.now(), {
+        standing: { kind: "waiting", reason: "reply" },
+        replyRequest: "ask-1",
+      });
+
+      agentNotificationService.notifyDecisionReply(asked, "Ship the migration now?", "reply-key");
+
+      const [title, body, options] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+      expect(title).toBe(`${agentName()} in Daintree wants a reply`);
+      expect(body).toBe("Ship the migration now?");
+      expect(options.ownerWebContentsId).toBeUndefined();
+      options.onClick();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledWith(
+        asked.reference,
+        "ask-1"
+      );
+    });
+
+    it("says how to read a follow-up whose question's line can't be read", () => {
+      projectStoreMock.getProjectById.mockReturnValue(null);
+      agentNotificationService.notifyDecisionReply(
+        question("term-1", Date.now(), { projectLabel: null, replyRequest: "ask-1" }),
+        null,
+        "reply-key"
+      );
+
+      const [title, body] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+      expect(title).toBe(`${agentName()} wants a reply`);
+      expect(body).toBe("Open the question to read the follow-up.");
+    });
+
+    it("gives a stalled answer's reason in the attention list's words, and opens its question in the inbox (#18048)", () => {
+      const stalled = question("term-1", Date.now(), {
+        standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+        stall: { answerRevision: 2, followUpIds: [], reason: "pane_gone" },
+      });
+
+      agentNotificationService.notifyDecisionStall(stalled, "stall-key");
+
+      const [title, body, options] = notificationServiceMock.showNativeNotification.mock.calls[0]!;
+      expect(title).toBe(`Answer to ${agentName()} in Daintree needs attention`);
+      expect(body).toBe("The terminal that asked was closed.");
+      expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
+      options.onClick();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
+        stalled.reference
+      );
+    });
+
+    it("names held follow-ups, an uncertain delivery, and a reason it has no words for", () => {
+      projectStoreMock.getProjectById.mockReturnValue(null);
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          // Shaped like any other kind, but only Object's own.
+          agentKind: "constructor",
+          projectLabel: null,
+          standing: { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
+          stall: { answerRevision: null, followUpIds: ["m-1", "m-2"], reason: "inject_rejected" },
+        }),
+        "stall-key"
+      );
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: 1, followUpIds: ["m-1"], reason: "unspecified" },
+        }),
+        "stall-key-2"
+      );
+
+      const [[uncertainTitle, uncertainBody], [title, body]] =
+        notificationServiceMock.showNativeNotification.mock.calls;
+      expect(uncertainTitle).toBe("Follow-ups may or may not have been delivered");
+      expect(uncertainBody).toBe("The terminal refused the follow-ups.");
+      expect(title).toBe(`Answer and follow-up to ${agentName()} in Daintree need attention`);
+      expect(body).toBe("Daintree won't type them in on its own.");
+    });
+
+    it("names a timeout notice in the answer's place, and the Host that asked, never the question or its plan (#17944)", () => {
+      const closed = {
+        closedReason: "expired" as const,
+        replyMode: "advisory" as const,
+        closureNotice: {
+          delivery: "needs-attention" as const,
+          disposition: "fallback-due" as const,
+        },
+        standing: { kind: "needs-attention" as const, deliveryStatus: "needs-attention" as const },
+        // The expiry closes round 0: the stall carries that revision.
+        stall: { answerRevision: 0, followUpIds: [], reason: "pane_gone" },
+      };
+      agentNotificationService.notifyDecisionStall(question("term-1", Date.now(), closed), "k-1");
+      const remote = question("term-2", Date.now(), {
+        ...closed,
+        closureNotice: { delivery: "uncertain", disposition: "fallback-due" },
+        standing: { kind: "needs-attention", deliveryStatus: "delivery-uncertain" },
+        stall: { answerRevision: 0, followUpIds: [], reason: "crash_unreconciled" },
+        remoteHost: { hostId: "host-2", name: "Atlas", connected: true },
+      });
+      agentNotificationService.notifyDecisionStall(remote, "k-2");
+
+      const [[title, body, options], [remoteTitle, remoteBody, remoteOptions]] =
+        notificationServiceMock.showNativeNotification.mock.calls;
+      expect(title).toBe(`Timeout notice for ${agentName()} in Daintree needs attention`);
+      expect(body).toBe("The terminal that asked was closed.");
+      expect(remoteTitle).toBe(
+        `Timeout notice for ${agentName()} in Daintree on Atlas may or may not have been delivered`
+      );
+      expect(remoteBody).toBe(
+        "Daintree stopped while typing it in, so it isn't typed again on its own."
+      );
+      for (const text of [title, body, remoteTitle, remoteBody]) expect(text).not.toMatch(/plan/i);
+
+      expect(notificationServiceMock.openDecisionQuestion).not.toHaveBeenCalled();
+      options.onClick();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledExactlyOnceWith(
+        question("term-1", Date.now(), closed).reference
+      );
+      // The Host's question opens too, its stall read and resolved through its Host.
+      remoteOptions.onClick();
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenCalledTimes(2);
+      expect(notificationServiceMock.openDecisionQuestion).toHaveBeenLastCalledWith(
+        remote.reference
+      );
+      expect(remote.reference).not.toEqual(question("term-1", Date.now(), closed).reference);
+    });
+
+    it("plays and shows nothing without a stall, and names the Remote Host where the reason would say this computer (#18026)", () => {
+      mockStore({ soundEnabled: true });
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: null,
+        }),
+        "k-0"
+      );
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+
+      agentNotificationService.notifyDecisionStall(
+        question("term-2", Date.now(), {
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: 1, followUpIds: [], reason: "answer_unreadable" },
+          remoteHost: { hostId: "host-2", name: "Atlas", connected: true },
+        }),
+        "k-1"
+      );
+      expect(soundServiceMock.playFile).toHaveBeenCalledTimes(1);
+      const [[, body]] = notificationServiceMock.showNativeNotification.mock.calls;
+      expect(body).toBe("The answer couldn't be decrypted on Atlas.");
+    });
+
+    it("names only the follow-up when a follow-up alone stopped beside a notice that may have been typed", () => {
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          closedReason: "expired",
+          closureNotice: { delivery: "uncertain", disposition: "fallback-due" },
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: null, followUpIds: ["m-1"], reason: "pane_gone" },
+        }),
+        "k"
+      );
+      const [[title]] = notificationServiceMock.showNativeNotification.mock.calls;
+      expect(title).toBe(`Follow-up to ${agentName()} in Daintree needs attention`);
+    });
+
+    it("names the follow-up, not the notice, once the notice was typed", () => {
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          closedReason: "expired",
+          closureNotice: { delivery: "delivered", disposition: "fallback-due" },
+          standing: { kind: "needs-attention", deliveryStatus: "needs-attention" },
+          stall: { answerRevision: null, followUpIds: ["m-1"], reason: "pane_gone" },
+        }),
+        "k"
+      );
+      const [[title]] = notificationServiceMock.showNativeNotification.mock.calls;
+      expect(title).toBe(`Follow-up to ${agentName()} in Daintree needs attention`);
+    });
+
+    it("plays this computer's waiting sound for each, with sound on", () => {
+      mockStore({ soundEnabled: true });
+      agentNotificationService.notifyDecisionReply(
+        question("term-1", Date.now(), { replyRequest: "ask-1" }),
+        "Hi?",
+        "k-1"
+      );
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+        }),
+        "k-2"
+      );
+      expect(soundServiceMock.playFile.mock.calls).toEqual([
+        [DEFAULT_NOTIFICATION_SETTINGS.waitingSoundFile],
+        [DEFAULT_NOTIFICATION_SETTINGS.waitingSoundFile],
+      ]);
+    });
+
+    it("is silenced by turning notifications off, as a question's own is", () => {
+      mockStore({ enabled: false, soundEnabled: true } as never);
+      agentNotificationService.notifyDecisionReply(
+        question("term-1", Date.now(), { replyRequest: "ask-1" }),
+        "Hi?",
+        "k"
+      );
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+        }),
+        "k"
+      );
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+      expect(soundServiceMock.playFile).not.toHaveBeenCalled();
+    });
+
+    it("gives each its own banner, taken down by its key", () => {
+      agentNotificationService.notifyDecisionReply(
+        question("term-1", Date.now(), { replyRequest: "ask-1" }),
+        "Hi?",
+        "reply-key"
+      );
+      agentNotificationService.notifyDecisionStall(
+        question("term-1", Date.now(), {
+          stall: { answerRevision: 1, followUpIds: [], reason: "pane_gone" },
+        }),
+        "stall-key"
+      );
+      const [replyBanner, stallBanner] =
+        notificationServiceMock.showNativeNotification.mock.calls.map(
+          (call) => call[2].replaceKey as string
+        );
+      expect(replyBanner).not.toBe(stallBanner);
+
+      agentNotificationService.closeDecisionQuestion("stall-key");
+      expect(notificationServiceMock.closeNotificationByKey).toHaveBeenCalledWith(stallBanner);
+    });
   });
 });

@@ -48,7 +48,7 @@ Tests are split into ten Playwright projects:
 - **full-worktree** — Worktree lifecycle, project switching, git detection, cross-project flows, agent and scrollback restore across relaunch.
 - **full-presets** — Agent presets, recipes, CCR, and what a preset launch actually hands the agent.
 - **full-platform** — Settings, persistence, a11y, keyboard, OS-shell surfaces, oauth, security.
-- **full-panels** — Browser, dev-preview, portal, Review Hub, file viewer and editor, drag-drop, action palette, notifications, toolbar chrome.
+- **full-panels** — Browser, dev-preview, Review Hub, file viewer and editor, drag-drop, action palette, notifications, toolbar chrome.
 - **full-resilience** — Errors, IPC faults, real pty-host and renderer crashes, races, process cleanup, diagnostics, MCP consent and workspace binding.
 - **full-plugins** — Plugin manager UI, plugin lifecycle (enable/disable, restart gating), manifest contribution rendering against the sideloaded sample plugin, and `launchMcp` for every wired agent.
 - **nightly** — Long-running memory-leak / soak detection, 4 specs (workers=1, no retries). The project name predates the scheduled nightly; it now runs as part of the `stabilize` sweep and on demand, not on a cron.
@@ -216,7 +216,7 @@ e2e/
 │   ├── worktree/        # worktree, project, git, restore
 │   ├── presets/         # agent presets, recipes, launch outcome
 │   ├── platform/        # settings, persistence, a11y, oauth
-│   ├── panels/          # browser, dev-preview, portal, Review Hub, files
+│   ├── panels/          # browser, dev-preview, Review Hub, files
 │   ├── resilience/      # errors, IPC faults, crashes, races, MCP consent
 │   └── plugins/         # plugin manager UI, lifecycle, manifest contributions, launchMcp
 ├── nightly/             # 4 memory-leak / soak specs (stabilize sweep / on demand)
@@ -326,7 +326,7 @@ A separate workflow for fine-grained ad-hoc runs of a single test file with conf
 
 ### `stabilize.yml` (cross-platform validation)
 
-The comprehensive cross-platform surface, dispatched on demand by the `stabilize` skill (`.agents/skills/stabilize/`) — it replaced the old scheduled nightly. `workflow_dispatch` only (no cron), input `platform` defaulting to `linux-windows` (also `windows` | `linux` | `all` | `non-windows` | `macos`). One run executes `check`, unit `test`, the `perf-liveness` scenario guard (its own job, as in `ci.yml`, kept out of the unit shards), `build` + smoke, `integration-test` (Linux legs only), and every E2E suite (`core`, all seven `full-*` buckets, and the `nightly` memory-leak soak) across the chosen platforms. All of those start in parallel — `check`/`test` do not gate E2E — so a single run surfaces every failure at once, and the app is built once per OS (`e2e-build`) and handed to every shard through `e2e.yml`'s `prebuilt_artifact` input. A second input, `only`, scopes a re-run to named pieces (e.g. `-f only='test full-terminal'`; aliases `full` and `e2e`), and the `stabilize-ok` gate accepts `skipped` only from pieces the run deliberately left out (via `only`, or `integration-test` on a run with no Linux leg). `knip` is not part of the workflow: it is OS-agnostic, so the skill runs it once locally. It opens no issues — the driving agent triages results from the per-shard `failed-specs-*` / `failure-report-*` artifacts and the `stabilize-merged-playwright-report`. Watch the single `stabilize-ok` gate for the overall verdict. The skill runs the full gate locally first on macOS, so CI defaults to `linux-windows` (no macOS); `windows` alone is the usual iteration target, and `all` (adds macOS-on-CI) is reserved for the rare macOS issue that can't be reproduced locally.
+The comprehensive cross-platform surface, dispatched on demand by the `stabilize` skill (`.agents/skills/stabilize/`) — it replaced the old scheduled nightly. `workflow_dispatch` only (no cron), input `platform` defaulting to `linux-windows` (also `windows` | `linux` | `all` | `non-windows` | `macos`). One run executes `check`, unit `test`, the `perf-liveness` scenario guard (its own job, kept out of the unit shards), `build` + smoke, `integration-test` (Linux legs only), and every E2E suite (`core`, all seven `full-*` buckets, and the `nightly` memory-leak soak) across the chosen platforms. All of those start in parallel — `check`/`test` do not gate E2E — so a single run surfaces every failure at once, and the app is built once per OS (`e2e-build`) and handed to every shard through `e2e.yml`'s `prebuilt_artifact` input. A second input, `only`, scopes a re-run to named pieces (e.g. `-f only='test full-terminal'`; aliases `full` and `e2e`), and the `stabilize-ok` gate accepts `skipped` only from pieces the run deliberately left out (via `only`, or `integration-test` on a run with no Linux leg). `knip` is not part of the workflow: it is OS-agnostic, so the skill runs it once locally. It opens no issues — the driving agent triages results from the per-shard `failed-specs-*` / `failure-report-*` artifacts and the `stabilize-merged-playwright-report`. Watch the single `stabilize-ok` gate for the overall verdict. The skill runs the full gate locally first on macOS, so CI defaults to `linux-windows` (no macOS); `windows` alone is the usual iteration target, and `all` (adds macOS-on-CI) is reserved for the rare macOS issue that can't be reproduced locally.
 
 ### Release Gating
 
@@ -352,7 +352,7 @@ Two distinct smoke checks run at different points in the pipeline:
 
 | Command | What runs | When | Where |
 | --- | --- | --- | --- |
-| `npm run test:smoke` | `scripts/run-smoke.mjs` — Electron stability soak | Push (Linux only) | `.github/workflows/ci.yml` |
+| `npm run test:smoke` | `scripts/run-smoke.mjs` — Electron stability soak | PR (Linux only) | `.github/workflows/ci.yml` |
 | `npm run test:e2e:core` | Playwright `core` project (3 e2e specs) | Release (all 3 OSes) | `release-{linux,macos,windows}.yml` |
 
 `npm run test:smoke` launches the built Electron binary in `--smoke-test` mode and validates stability markers: node-pty native module load, renderer `did-finish-load`, IPC bridge round-trip, terminal stress rounds, and project persistence stress. It is a single-run soak (with configurable retries) — not a Playwright suite.

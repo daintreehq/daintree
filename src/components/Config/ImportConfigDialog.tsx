@@ -196,10 +196,11 @@ function SectionRow({ section }: { section: ConfigBundlePreviewSection }) {
  * operation, plus a pre-import snapshot (held in the main process for the
  * duration of the apply, see `ConfigBundleService`).
  *
- * The action itself only fires {@link IMPORT_CONFIG_EVENT}; this component owns
- * the whole flow so the confirmation, the apply, and the report stay together.
+ * The action itself only fires {@link IMPORT_CONFIG_EVENT}, which
+ * `ImportConfigDialogGate` turns into `request`; this component owns the whole
+ * flow so the confirmation, the apply, and the report stay together.
  */
-export function ImportConfigDialog() {
+export function ImportConfigDialog({ request }: { request: number }) {
   const [preview, setPreview] = useState<ConfigBundlePreview | null>(null);
   const [isApplying, setIsApplying] = useState(false);
   const [applyFailure, setApplyFailure] = useState<ApplyFailure | null>(null);
@@ -293,22 +294,14 @@ export function ImportConfigDialog() {
     }
   }, [markOutcomeUnknown]);
 
+  // One import per request: requests that arrived while the chunk loaded
+  // collapse into one, as they would into the single-flight gate anyway.
+  const handledRequest = useRef(0);
   useEffect(() => {
-    const handler = () => {
-      void beginImport();
-    };
-    window.addEventListener(IMPORT_CONFIG_EVENT, handler);
-    return () => window.removeEventListener(IMPORT_CONFIG_EVENT, handler);
-  }, [beginImport]);
-
-  // An import applied in any window has to reach this one too — each project
-  // view holds its own theme and notification stores, and `app.reloadConfig`
-  // reconciles neither.
-  useEffect(() => {
-    return window.electron.configBundle.onImported(() => {
-      void refreshImportedConfig();
-    });
-  }, []);
+    if (request === handledRequest.current) return;
+    handledRequest.current = request;
+    void beginImport();
+  }, [request, beginImport]);
 
   /**
    * The one recovery the confirmation can offer for an import with no undo:

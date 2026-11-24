@@ -1,4 +1,5 @@
 import React, {
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -24,6 +25,7 @@ import {
   Plus,
   RadioTower,
   RefreshCw,
+  RotateCcw,
   RotateCw,
   Settings,
   Trash2,
@@ -54,6 +56,7 @@ import {
 import { useNestedDragGuard } from "@/components/DragDrop/useNestedDragGuard";
 import { PanelTabList } from "./PanelTabList";
 import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
+import { useReadoutClearance, useWholeItemFit } from "./panelHeaderFit";
 import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import type { PanelKind } from "@/types";
@@ -83,6 +86,7 @@ import {
 } from "@/hooks";
 import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
 import { TerminalScheduleChip } from "@/components/Terminal/TerminalScheduleChip";
+import { TerminalResumedChip } from "@/components/Terminal/TerminalResumedChip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -100,7 +104,6 @@ import { PopoverAnchor } from "@/components/ui/popover";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
-import { PanelEmojiDialog } from "./PanelEmojiDialog";
 import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 import { HiddenTabMenuItem } from "./HiddenTabMenuItem";
 import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
@@ -108,7 +111,9 @@ import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
 import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
 import { SortableTabButton } from "./SortableTabButton";
 import { TAB_DRAG_MODIFIERS } from "./tabDragModifiers";
-import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
+import { lazyWithPreload } from "@/lib/lazyWithPreload";
+import { createDeferredOverlayOpener } from "@/lib/deferredOverlayOpen";
+import { LazyMoveToWorktreePicker as MoveToWorktreePicker } from "./lazyMoveToWorktreePicker";
 import {
   getRegisteredTourIdsSnapshot,
   subscribeToTourRegistry,
@@ -157,6 +162,7 @@ import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { ActionId } from "@shared/types/actions";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
+import { terminalScreenEnded } from "@/utils/terminalLiveScreen";
 
 /**
  * The window controls keep `icon-xs`'s 24px target but draw a 14px glyph, the
@@ -173,134 +179,11 @@ const CONTROL_ICON = "[&_svg]:size-3.5 focus-visible:-outline-offset-2";
  */
 const AFTER_MENU_FOCUS_RESTORE_MS = 0;
 
-/** Space kept between the maximized readout and anything it might meet. */
-const READOUT_CLEARANCE_PX = 12;
-
-/**
- * Whether the maximized readout, centred over the whole bar, clears everything
- * the bar lays out around it: the identity group, the metadata, the tab strip,
- * a plugin toolbar, the status box and the controls, each marked
- * `data-readout-obstacle`. The readout is absolute, so hiding it never moves
- * what it is measured against. The status box counts even when empty: it is
- * reserved space a status can appear in.
- */
-function useReadoutClearance(
-  readoutRef: React.RefObject<HTMLDivElement | null>,
-  active: boolean
-): boolean {
-  const [clear, setClear] = useState(true);
-  useLayoutEffect(() => {
-    const readout = readoutRef.current;
-    const bar = readout?.parentElement;
-    if (!active || !readout || !bar || typeof ResizeObserver === "undefined") {
-      setClear(true);
-      return;
-    }
-    const measure = () => {
-      const r = readout.getBoundingClientRect();
-      const blocked = Array.from(bar.querySelectorAll<HTMLElement>("[data-readout-obstacle]")).some(
-        (el) => {
-          const o = el.getBoundingClientRect();
-          return (
-            o.width > 0 &&
-            o.right + READOUT_CLEARANCE_PX > r.left &&
-            o.left - READOUT_CLEARANCE_PX < r.right
-          );
-        }
-      );
-      setClear(!blocked);
-    };
-    const resizes = new ResizeObserver(measure);
-    // Obstacles come and go (a chip, a tab strip), so the set is re-observed
-    // whenever the bar's tree changes rather than once at mount.
-    const observeAll = () => {
-      resizes.disconnect();
-      resizes.observe(bar);
-      resizes.observe(readout);
-      bar.querySelectorAll("[data-readout-obstacle]").forEach((el) => resizes.observe(el));
-      measure();
-    };
-    observeAll();
-    const mutations = new MutationObserver(observeAll);
-    mutations.observe(bar, { childList: true, subtree: true });
-    return () => {
-      mutations.disconnect();
-      resizes.disconnect();
-    };
-  }, [active, readoutRef]);
-  return clear;
-}
-
-/**
- * Priority+ for the metadata row: whatever cannot fit leaves whole rather than
- * being clipped mid-number by the row's edge. Items leave in attention order,
- * not position: lowest `data-fit-priority` first (unmarked items, the ambient
- * readings, count as 0), and among equals the later one first, so a waiting
- * decision outlasts a queue count and the telemetry goes before either. Items
- * are hidden with the `hidden` attribute, which takes them out of the tab order
- * too, and all are tried again whenever the bar, the row or the status beside
- * it changes, so a widening bar or a status clearing brings them back.
- */
-function useWholeItemFit(rowRef: React.RefObject<HTMLDivElement | null>): void {
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    const region = row?.parentElement?.parentElement;
-    if (!row || !region || typeof ResizeObserver === "undefined") return;
-    const overflows = () => row.scrollWidth > row.clientWidth + 0.5;
-    const fit = () => {
-      const items = Array.from(row.children).filter(
-        (child): child is HTMLElement => child instanceof HTMLElement
-      );
-      for (const item of items) item.removeAttribute("hidden");
-      if (!overflows()) return;
-      const leaving = items
-        .map((item, index) => ({ item, index, priority: Number(item.dataset.fitPriority ?? 0) }))
-        .sort((a, b) => a.priority - b.priority || b.index - a.index);
-      for (const { item } of leaving) {
-        if (!overflows()) break;
-        // Never pulled out from under the keyboard: a reading or chip being
-        // read stays until focus leaves it, and the clip covers the rest.
-        if (item.contains(document.activeElement)) continue;
-        item.setAttribute("hidden", "");
-      }
-    };
-    const resizes = new ResizeObserver(fit);
-    // The row's room depends on its siblings too: a title renamed shorter or a
-    // mark leaving the identity group frees width without the bar resizing.
-    const observeAll = () => {
-      resizes.disconnect();
-      resizes.observe(region);
-      resizes.observe(row);
-      for (const child of Array.from(region.children)) resizes.observe(child);
-    };
-    observeAll();
-    const regionChildren = new MutationObserver(observeAll);
-    regionChildren.observe(region, { childList: true });
-    // Chips arrive and leave with the pane's state, text inside them changes,
-    // and the status beside the row takes and gives back room. The `hidden`
-    // the fit itself sets is an attribute, which is not observed.
-    // A chip whose priority rises (a subagent now waiting) is re-weighed too.
-    const mutations = new MutationObserver(fit);
-    mutations.observe(row.parentElement!, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      attributeFilter: ["data-fit-priority"],
-    });
-    // An item kept because it held focus is weighed again once focus leaves.
-    const onFocusOut = (event: FocusEvent) => {
-      const next = event.relatedTarget;
-      if (!(next instanceof Node) || !row.contains(next)) queueMicrotask(fit);
-    };
-    row.addEventListener("focusout", onFocusOut);
-    return () => {
-      resizes.disconnect();
-      mutations.disconnect();
-      regionChildren.disconnect();
-      row.removeEventListener("focusout", onFocusOut);
-    };
-  }, [rowRef]);
-}
+// Loaded on demand, as the move picker is: every pane has a header.
+const PanelEmojiDialog = lazyWithPreload(
+  () => import("./PanelEmojiDialog"),
+  (mod) => mod.PanelEmojiDialog
+);
 
 export interface PanelHeaderProps {
   id: string;
@@ -487,10 +370,12 @@ function PanelHeaderComponent({
 
   // Get background activity stats for Zen Mode header
   const { activeCount, workingCount, waitingCount } = useBackgroundPanelStats(id, isMaximized);
-  const readoutRef = useRef<HTMLDivElement | null>(null);
-  const metadataRowRef = useRef<HTMLDivElement | null>(null);
-  useWholeItemFit(metadataRowRef);
-  const readoutClear = useReadoutClearance(readoutRef, isMaximized && activeCount > 0);
+  // Nodes rather than refs: both mount conditionally, and the fit has to
+  // attach to whichever node is there now, not the one present at mount.
+  const [readout, setReadout] = useState<HTMLDivElement | null>(null);
+  const [metadataRow, setMetadataRow] = useState<HTMLDivElement | null>(null);
+  useWholeItemFit(metadataRow);
+  const readoutClear = useReadoutClearance(readout, isMaximized && activeCount > 0);
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
 
   // Watch state — only relevant for agent panels
@@ -539,6 +424,7 @@ function PanelHeaderComponent({
     return panel && isPtyPanel(panel) ? (panel.isInputLocked ?? false) : false;
   });
   const hasPty = panelKindHasPty(kind);
+  const screenEnded = usePanelStore((state) => terminalScreenEnded(state.panelsById[id]));
   // A primitive, so the header re-renders on a visibility or empty/non-empty
   // change and never on a keystroke into the notes. "empty" is an open
   // scratchpad with no notes yet, which earns no header toggle.
@@ -689,15 +575,33 @@ function PanelHeaderComponent({
   const handleMoveToWorktreeSelect = useCallback(() => {
     pendingMovePickerRef.current = id;
   }, [id]);
+  // A pick whose overlay is still loading; a menu opening or a different panel
+  // drops it.
+  const [deferredOpener] = useState(createDeferredOverlayOpener);
+  useEffect(
+    () => () => {
+      deferredOpener.cancel();
+      // A menu close landing after this would otherwise start a pick for a
+      // header that's gone.
+      pendingMovePickerRef.current = null;
+      pendingEmojiDialogRef.current = null;
+    },
+    [deferredOpener, id]
+  );
   const handleOverflowMenuOpenChange = (open: boolean) => {
     if (!open) return;
     setOverflowTooltipOpen(false);
+    // Fetched while the menu is up, so picking the item mounts the picker in
+    // the same frame the menu hands focus over instead of after a chunk load.
+    if (canMoveToWorktree) void MoveToWorktreePicker.preload().catch(() => {});
+    if (chrome.isAgent || displayEmoji) void PanelEmojiDialog.preload().catch(() => {});
     // A menu reopened inside its exit animation never unmounts, so the close
     // hook below never runs for that close; drop the intent rather than let it
     // open the picker on some later, unrelated close.
     pendingMovePickerRef.current = null;
     pendingEmojiDialogRef.current = null;
     pendingMenuDispatchRef.current = null;
+    deferredOpener.cancel();
   };
   const handleOverflowMenuCloseAutoFocus = (event: Event) => {
     const pendingDispatch = pendingMenuDispatchRef.current;
@@ -718,9 +622,10 @@ function PanelHeaderComponent({
       if (pendingEmojiPanelId !== id) return;
       // The dialog focuses its own search field and hands focus back to the
       // button when it closes.
-      event.preventDefault();
-      setHasOpenedEmojiDialog(true);
-      setEmojiDialogPanelId(id);
+      deferredOpener.open(PanelEmojiDialog, event, () => {
+        setHasOpenedEmojiDialog(true);
+        setEmojiDialogPanelId(id);
+      });
       return;
     }
     const pendingPanelId = pendingMovePickerRef.current;
@@ -728,9 +633,10 @@ function PanelHeaderComponent({
     if (pendingPanelId === null || pendingPanelId !== id) return;
     // The picker takes focus into its search field; returning it to the
     // button first would only flash a ring on the way.
-    event.preventDefault();
-    setHasOpenedMovePicker(true);
-    setMovePickerPanelId(id);
+    deferredOpener.open(MoveToWorktreePicker, event, () => {
+      setHasOpenedMovePicker(true);
+      setMovePickerPanelId(id);
+    });
   };
 
   // The same list the right-click menu renders for these kinds (#12606), so
@@ -797,6 +703,13 @@ function PanelHeaderComponent({
         if (!proceed) return;
         void actionService.dispatch("terminal.kill", { terminalId: panelId }, { source: "menu" });
       });
+      return;
+    }
+    if (commandId === "rename") {
+      pendingMenuDispatchRef.current = {
+        actionId: GENERIC_PANEL_MENU_ACTION_IDS[commandId],
+        args: { terminalId: id },
+      };
       return;
     }
     void actionService.dispatch(
@@ -1471,6 +1384,8 @@ function PanelHeaderComponent({
 
             {hasPty && <TerminalScheduleChip terminalId={id} />}
 
+            {hasPty && <TerminalResumedChip terminalId={id} />}
+
             {/* Primary ink on any pane: its job is to be found on one that has
                 lost focus while dictation still goes into it. */}
             {isDictationTarget && (
@@ -1692,7 +1607,7 @@ function PanelHeaderComponent({
               // items' focus rings inside it; -mr-1 gives that padding back so
               // the spacing to what follows is unchanged.
               <div
-                ref={metadataRowRef}
+                ref={setMetadataRow}
                 data-testid="panel-header-content"
                 className="-mr-1 flex min-w-0 items-center gap-1.5 self-stretch overflow-hidden whitespace-nowrap px-1 empty:hidden"
               >
@@ -1712,7 +1627,7 @@ function PanelHeaderComponent({
           the pane's own header outranks a summary of the others. */}
       {isMaximized && activeCount > 0 && (
         <div
-          ref={readoutRef}
+          ref={setReadout}
           className={cn(
             "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 whitespace-nowrap text-xs text-text-secondary select-none pointer-events-none @max-[720px]/header:hidden",
             !readoutClear && "invisible"
@@ -1875,6 +1790,22 @@ function PanelHeaderComponent({
                       Redraw
                     </DropdownMenuItem>
                   )}
+                  {hasPty && !screenEnded && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        // Run once the menu has handed focus back: with an
+                        // agent running, the action stages a confirm.
+                        pendingMenuDispatchRef.current = {
+                          actionId: "terminal.resetModes",
+                          args: { terminalId: id },
+                        };
+                      }}
+                      data-testid="panel-reset-modes"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Reset terminal modes
+                    </DropdownMenuItem>
+                  )}
 
                   {canRestart && onRestart && (
                     <DropdownMenuItem onSelect={handleRestartSelect} data-testid="panel-restart">
@@ -1916,13 +1847,14 @@ function PanelHeaderComponent({
                     </DropdownMenuItem>
                   )}
                   <DropdownMenuItem
-                    onSelect={() =>
-                      void actionService.dispatch(
-                        "terminal.rename",
-                        { terminalId: id },
-                        { source: "menu" }
-                      )
-                    }
+                    onSelect={() => {
+                      // Dispatched from the close hook: the inline input would
+                      // otherwise lose focus to the menu's restore and submit.
+                      pendingMenuDispatchRef.current = {
+                        actionId: "terminal.rename",
+                        args: { terminalId: id },
+                      };
+                    }}
                   >
                     <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Rename
@@ -2233,24 +2165,28 @@ function PanelHeaderComponent({
       modal={true}
     >
       {header}
-      {hasOpenedMovePicker && (
-        <MoveToWorktreePicker
-          panelId={id}
-          currentWorktreeId={currentWorktreeId}
-          isOpen={isMovePickerOpen}
-          onOpenChange={handleMovePickerOpenChange}
-          returnFocusRef={overflowButtonRef}
-        />
-      )}
-      {hasOpenedEmojiDialog && (
-        <PanelEmojiDialog
-          panelId={emojiDialogPanelId ?? id}
-          title={title}
-          isOpen={emojiDialogPanelId !== null}
-          onClose={() => setEmojiDialogPanelId(null)}
-          restoreFocusTo={overflowButtonRef}
-        />
-      )}
+      <Suspense fallback={null}>
+        {hasOpenedMovePicker && (
+          <MoveToWorktreePicker
+            panelId={id}
+            currentWorktreeId={currentWorktreeId}
+            isOpen={isMovePickerOpen}
+            onOpenChange={handleMovePickerOpenChange}
+            returnFocusRef={overflowButtonRef}
+          />
+        )}
+      </Suspense>
+      <Suspense fallback={null}>
+        {hasOpenedEmojiDialog && (
+          <PanelEmojiDialog
+            panelId={emojiDialogPanelId ?? id}
+            title={title}
+            isOpen={emojiDialogPanelId !== null}
+            onClose={() => setEmojiDialogPanelId(null)}
+            restoreFocusTo={overflowButtonRef}
+          />
+        )}
+      </Suspense>
     </AppPalettePopover>
   );
 }

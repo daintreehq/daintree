@@ -20,6 +20,8 @@
  *
  * Frozen renderers do not auto-resume on focus or reattach. Callers activating a
  * frozen view must call `unfreezeWebContents` before relying on its event loop.
+ * Frozen here means frozen by {@link freezeWebContents}: it is the only thing in
+ * the app that sends a freeze, so its record is what a thaw consults.
  *
  * Do not verify freeze with Playwright. It unconditionally enables focus emulation
  * on every page target and forces the renderer visible, so a
@@ -85,6 +87,41 @@ interface LifecycleTrack {
 const lifecycleTracks = new WeakMap<Electron.WebContents, LifecycleTrack>();
 let lifecycleSendOrder = 0;
 
+type FrozenStateListener = (wc: Electron.WebContents, frozen: boolean) => void;
+const frozenStateListeners = new Set<FrozenStateListener>();
+
+function isTrackFrozen(track: LifecycleTrack): boolean {
+  return track.freezesInFlight > 0 || track.lastFreezeSent > track.lastThawApplied;
+}
+
+function notifyIfFrozenStateChanged(
+  wc: Electron.WebContents,
+  track: LifecycleTrack,
+  wasFrozen: boolean
+): void {
+  const frozen = isTrackFrozen(track);
+  if (frozen === wasFrozen) return;
+  for (const listener of [...frozenStateListeners]) {
+    try {
+      listener(wc, frozen);
+    } catch (err) {
+      console.error("[webContentsLifecycle] frozen-state listener threw:", err);
+    }
+  }
+}
+
+/**
+ * Be told each time {@link isWebContentsFrozen} flips for a renderer: true
+ * the moment a freeze is asked for, false once a thaw succeeds or a freeze
+ * that never went out is given up. Returns the unsubscribe.
+ */
+export function onFrozenStateChange(listener: FrozenStateListener): () => void {
+  frozenStateListeners.add(listener);
+  return () => {
+    frozenStateListeners.delete(listener);
+  };
+}
+
 type LifecycleResult = { sent: false } | { sent: true; order: number; applied: boolean };
 
 async function setLifecycleState(
@@ -118,21 +155,40 @@ export async function freezeWebContents(wc: Electron.WebContents): Promise<void>
     lastThawApplied: 0,
   };
   lifecycleTracks.set(wc, track);
+  const wasFrozen = isTrackFrozen(track);
   track.freezesInFlight++;
+  notifyIfFrozenStateChanged(wc, track, wasFrozen);
   // Settled the moment the command goes out, not when it is answered, so a
   // later thaw that succeeds still outranks a freeze whose answer never comes.
   const result = await setLifecycleState(wc, "frozen", (order) => {
     track.freezesInFlight--;
     track.lastFreezeSent = Math.max(track.lastFreezeSent, order);
   });
-  if (!result.sent) track.freezesInFlight--;
+  if (!result.sent) {
+    const wasFrozenBeforeRollback = isTrackFrozen(track);
+    track.freezesInFlight--;
+    notifyIfFrozenStateChanged(wc, track, wasFrozenBeforeRollback);
+  }
 }
 
-export async function unfreezeWebContents(wc: Electron.WebContents): Promise<void> {
+/**
+ * Thaw a renderer main froze. One main never froze, or whose freeze a thaw has
+ * since released, is left alone: the CDP attach and two round trips would buy
+ * nothing, and every routed MCP call and activation lands here (#17036).
+ * `force` sends `"active"` regardless, for a caller that wants the lifecycle
+ * command itself rather than a thaw.
+ */
+export async function unfreezeWebContents(
+  wc: Electron.WebContents,
+  opts: { force?: boolean } = {}
+): Promise<void> {
+  if (!opts.force && !isWebContentsFrozen(wc)) return;
   const result = await setLifecycleState(wc, "active");
   const track = lifecycleTracks.get(wc);
   if (!track || !result.sent || !result.applied) return;
+  const wasFrozen = isTrackFrozen(track);
   track.lastThawApplied = Math.max(track.lastThawApplied, result.order);
+  notifyIfFrozenStateChanged(wc, track, wasFrozen);
 }
 
 /**
@@ -144,8 +200,7 @@ export async function unfreezeWebContents(wc: Electron.WebContents): Promise<voi
  */
 export function isWebContentsFrozen(wc: Electron.WebContents): boolean {
   const track = lifecycleTracks.get(wc);
-  if (!track) return false;
-  return track.freezesInFlight > 0 || track.lastFreezeSent > track.lastThawApplied;
+  return track ? isTrackFrozen(track) : false;
 }
 
 /**

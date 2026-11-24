@@ -8,10 +8,17 @@ import {
   useMemo,
   useRef,
   useContext,
+  useSyncExternalStore,
   memo,
   type ComponentProps,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import {
+  SettingsDeepLinkProvider,
+  createSettingsDeepLinkHolds,
+  type SettingsDeepLink,
+  type SettingsDeepLinkHolds,
+} from "./settingsDeepLink";
 import { InsetSurface } from "@/components/ui/insetSurface";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { SettingsSubpageProvider, type SettingsSubpage } from "./SettingsSubpage";
@@ -120,6 +127,7 @@ import { HostLinkStatus } from "./Hosts/HostLinkStatus";
 import { requestHostSettings } from "./Hosts/hostSettingsRequests";
 import { hostEnvDrafts } from "./Hosts/hostEnvDrafts";
 import type { SettingsTabClose } from "./settingsTabClose";
+import { onSettingsCloseRequest, type SettingsCloseRequest } from "./settingsCloseRequests";
 import { availableSearchEntries, isSettingsTabAvailable } from "./settingsTabAvailability";
 
 let rememberedTab: SettingsTab = "general";
@@ -236,6 +244,13 @@ interface SettingsDialogProps {
 export type { SettingsTab, SettingsScope } from "./settingsTabRegistry";
 export { scopeForTab } from "./settingsTabRegistry";
 
+/** Settings has gone: every flow waiting to carry on after it does. */
+function settleCloseWaiters(waiters: Set<(closed: boolean) => void>): void {
+  const settles = [...waiters];
+  waiters.clear();
+  for (const settle of settles) settle(true);
+}
+
 export function SettingsDialog(props: SettingsDialogProps) {
   // Provider must wrap SettingsDialogInner: the inner component reads the registry
   // via useContext to render nav-sidebar error dots.
@@ -282,6 +297,15 @@ function SettingsDialogInner({
   // can fire while the dialog is animating out. Read this ref inside the
   // timer callback to skip the speculative mount when the dialog is closing.
   const isOpenRef = useRef(isOpen);
+  // Closed but still animating out, until onCloseComplete has handed focus back.
+  // Set in a layout effect: a zero-length exit (performance mode) completes in
+  // the dialog's own passive effect, which runs before this component's.
+  const exitingRef = useRef(false);
+  const wasOpenRef = useRef(isOpen);
+  useLayoutEffect(() => {
+    exitingRef.current = !isOpen && (wasOpenRef.current || exitingRef.current);
+    wasOpenRef.current = isOpen;
+  }, [isOpen]);
   useEffect(() => {
     isOpenRef.current = isOpen;
     // Reopened before the exit finished: that close's follow-up hears it didn't close.
@@ -305,6 +329,11 @@ function SettingsDialogInner({
   const target =
     machineOptions.find((option) => option.hostId !== null && option.hostId === targetHostId) ??
     null;
+  // Bumped when the picked host is removed or re-pointed: its page remounts,
+  // since what it holds is the old machine's.
+  const targetIdentity = useSyncExternalStore(hostEnvDrafts.subscribe, () =>
+    target?.hostId ? hostEnvDrafts.identity(target.hostId) : 0
+  );
   const showingDevicePage = useSettingsTargetStore((s) => s.showingDevicePage);
   const setShowingDevicePage = useSettingsTargetStore((s) => s.setShowingDevicePage);
   // Another machine's work settings own the page; this machine's device pages stay listed.
@@ -363,7 +392,14 @@ function SettingsDialogInner({
   // `SettingsTabScrollEffect` / `LazyTabContent`) when it commits — that's
   // the only reliable signal that lazy-loaded content is in the DOM, so we
   // drive the scroll from the child rather than polling from the parent.
-  const [scrollToSection, setScrollToSection] = useState<string | null>(null);
+  // A link from search also carries what was typed, for a tab that picks one of
+  // its subtabs by it (Code forge opens the provider the words name).
+  const [scrollTarget, setScrollTarget] = useState<{ sectionId: string; query?: string } | null>(
+    null
+  );
+  const scrollToSection = scrollTarget?.sectionId ?? null;
+  const setScrollToSection = (sectionId: string | null | undefined) =>
+    setScrollTarget(sectionId ? { sectionId } : null);
 
   // activeTab is read non-reactively via useEffectEvent to avoid re-running
   // this reset-on-open effect when the user changes tabs mid-session.
@@ -651,8 +687,10 @@ function SettingsDialogInner({
       return false;
     }
     // A host's unsaved environment edit holds the close the same way, on that host's page.
-    const unsavedHost = hostEnvDrafts.firstUnsaved();
-    if (unsavedHost && machineOptions.some((option) => option.hostId === unsavedHost)) {
+    const unsavedHost = hostEnvDrafts.firstUnsaved((hostId) =>
+      machineOptions.some((option) => option.hostId === hostId)
+    );
+    if (unsavedHost) {
       setSearchQuery("");
       setHiddenSettingBanner(null);
       if (activeScope !== "global") {
@@ -704,6 +742,33 @@ function SettingsDialogInner({
     return true;
   };
 
+  // A flow that started here and carries on in a dialog of its own (a worktree
+  // placed once its host's setup finishes) closes Settings the way Close does,
+  // and carries on once Settings has gone and handed focus back: an unsaved
+  // setting holds the close, and a reopen keeps the flow waiting for the next.
+  // One that asks while Settings is already animating out waits for that exit.
+  const closeWaitersRef = useRef(new Set<(closed: boolean) => void>());
+  const answerCloseRequest = useEffectEvent((request: SettingsCloseRequest) => {
+    if (!isOpen && !exitingRef.current) return;
+    request.claim();
+    closeWaitersRef.current.add(request.settle);
+    // Not handleClose: its follow-up slot belongs to the tab that closed with one.
+    if (isOpen) {
+      void flushBeforeClose().then((closing) => {
+        if (closing) onClose();
+      });
+    }
+  });
+  useEffect(() => {
+    const waiters = closeWaitersRef.current;
+    const stop = onSettingsCloseRequest((request) => answerCloseRequest(request));
+    return () => {
+      stop();
+      // Gone without finishing its exit (its error boundary, the view going): nothing is left to wait for.
+      settleCloseWaiters(waiters);
+    };
+  }, []);
+
   // A plugin's setting lives in the plugin manager or Project settings → Plugins,
   // so it goes through the action `host.settings.open` uses instead of a tab here.
   const openPluginSetting = async (plugin: NonNullable<SettingsSearchEntry["plugin"]>) => {
@@ -749,6 +814,9 @@ function SettingsDialogInner({
       setActiveSubtabs((prev) => ({ ...prev, [tab]: subtab }));
     }
     searchInputRef.current?.blur();
+    // Clearing search shows the panels again in this urgent commit, so a link still
+    // waiting from an earlier result goes now, before a tab can act on it once more.
+    setScrollTarget(null);
     // Defer scrollToSection together with the tab change. Setting it
     // urgently would let the previously-active tab's effect consume the
     // pending id (it sees isActive=true after the urgent commit but
@@ -762,7 +830,7 @@ function SettingsDialogInner({
         setActiveScope(nextScope);
       }
       setActiveTab(tab);
-      setScrollToSection(sectionId ?? null);
+      setScrollTarget(sectionId ? { sectionId, query: cleanSearchQuery } : null);
     });
   };
 
@@ -802,7 +870,7 @@ function SettingsDialogInner({
   };
 
   const handleScrollToSectionHandled = (sectionId: string, landed: boolean) => {
-    setScrollToSection((current) => (current === sectionId ? null : current));
+    setScrollTarget((current) => (current?.sectionId === sectionId ? null : current));
     const requirement = pendingRequirementRef.current;
     pendingRequirementRef.current = null;
     if (requirement && !landed) setHiddenSettingBanner(requirement);
@@ -976,6 +1044,8 @@ function SettingsDialogInner({
         const afterClose = afterCloseRef.current;
         afterCloseRef.current = null;
         afterClose?.(true);
+        exitingRef.current = false;
+        settleCloseWaiters(closeWaitersRef.current);
       }}
       size="4xl"
       // Search owns first focus (below), not the first tabbable — which was the scope
@@ -1306,7 +1376,7 @@ function SettingsDialogInner({
                   onInteract={markPanelInteracted}
                 >
                   <HostWorkSettingsPage
-                    key={target.hostId}
+                    key={`${target.hostId}:${targetIdentity}`}
                     hostId={target.hostId}
                     hostName={target.name}
                     connected={target.connected}
@@ -1392,6 +1462,7 @@ function SettingsDialogInner({
                               onSubtabChange={(id) =>
                                 setActiveSubtabs((prev) => ({ ...prev, general: id }))
                               }
+                              onClose={handleClose}
                             />
                             <SettingsTabScrollEffect
                               isActive={isActive && !panelsHidden}
@@ -1416,6 +1487,7 @@ function SettingsDialogInner({
                               onSettingsChange={onSettingsChange}
                               isActive={isActive && !panelsHidden}
                               scrollToSectionId={scrollToSection}
+                              scrollTarget={scrollTarget}
                               onScrollToSectionHandled={handleScrollToSectionHandled}
                             />
                           </Suspense>
@@ -1487,6 +1559,7 @@ function LazyTabContentImpl({
   onSettingsChange,
   isActive,
   scrollToSectionId,
+  scrollTarget,
   onScrollToSectionHandled,
 }: {
   entry: LazySettingsTabEntry;
@@ -1496,6 +1569,7 @@ function LazyTabContentImpl({
   onSettingsChange?: () => void;
   isActive: boolean;
   scrollToSectionId: string | null;
+  scrollTarget: { sectionId: string; query?: string } | null;
   onScrollToSectionHandled: (id: string, landed: boolean) => void;
 }) {
   const id = entry.id as SettingsTab;
@@ -1519,13 +1593,22 @@ function LazyTabContentImpl({
     props.isActive = isActive;
   }
 
-  // Runs synchronously after the lazy chunk's Suspense boundary commits, so
-  // the target section element is guaranteed to exist in the DOM. Replaces
-  // the rAF polling loop that was racing the Suspense reveal (#6878).
-  useSettingsScrollToSection(isActive, scrollToSectionId, onScrollToSectionHandled, id);
-
+  // Lands after the lazy chunk's Suspense boundary commits, once nothing in the
+  // tab holds it for values still loading in. Replaces the rAF polling loop that
+  // was racing the Suspense reveal (#6878).
   const LazyComp = entry.LazyComponent;
-  return <LazyComp {...props} />;
+  return (
+    <SettingsDeepLinkScope
+      isActive={isActive}
+      scrollToSectionId={scrollToSectionId}
+      query={scrollTarget?.query ?? null}
+      request={scrollTarget}
+      onHandled={onScrollToSectionHandled}
+      tab={id}
+    >
+      <LazyComp {...props} />
+    </SettingsDeepLinkScope>
+  );
 }
 
 function ProjectFormTabContent({
@@ -1866,14 +1949,33 @@ export function useHoverIntentPrefetch({
 // `onHandled` learns whether the setting itself was found. A section result that is
 // not on the page is one hidden behind a switch, which is what the dialog's
 // "only appears when" note exists to explain — and only then.
+//
+// `holds` defers the landing while the tab's content is still loading in: its values
+// decide which rows render, and a miss on the first commit would report a setting the
+// user has switched on as hidden. The effect reads the live hold, not the subscribed
+// snapshot, because a child takes its hold in a layout effect of this same commit.
 export function useSettingsScrollToSection(
   isActive: boolean,
   scrollToSectionId: string | null,
   onHandled: (id: string, landed: boolean) => void,
-  tab?: SettingsTab
+  tab?: SettingsTab,
+  holds?: SettingsDeepLinkHolds
 ): void {
+  const held = useSyncExternalStore(
+    holds?.subscribe ?? subscribeToNoHolds,
+    holds?.isHeld ?? isNeverHeld
+  );
+  // The link this instance has already landed. A release re-runs the effect on the
+  // snapshot's way up as well as down, and the commit that releases can already land,
+  // so without it one link could land twice before the dialog clears it.
+  const handledRef = useRef<string | null>(null);
   useLayoutEffect(() => {
-    if (!isActive || !scrollToSectionId) return;
+    if (!scrollToSectionId) {
+      handledRef.current = null;
+      return;
+    }
+    if (!isActive || holds?.isHeld() || handledRef.current === scrollToSectionId) return;
+    handledRef.current = scrollToSectionId;
     const landed =
       scrollAndHighlightSettingsSection(scrollToSectionId) ||
       (tab !== undefined && landOnSettingByText(scrollToSectionId, tab));
@@ -1881,7 +1983,44 @@ export function useSettingsScrollToSection(
       document.getElementById(`settings-tab-${tab}`)?.focus({ preventScroll: true });
     }
     onHandled(scrollToSectionId, landed);
-  }, [isActive, scrollToSectionId, onHandled, tab]);
+  }, [isActive, scrollToSectionId, onHandled, tab, holds, held]);
+}
+
+const subscribeToNoHolds = () => () => {};
+const isNeverHeld = () => false;
+
+/**
+ * A lazy tab's deep-link host: the holds its content takes while loading in, the
+ * link it may act on while showing, and the landing, which runs in this component's
+ * own layout effect and so after every hold its children take in the same commit.
+ */
+export function SettingsDeepLinkScope({
+  isActive,
+  scrollToSectionId,
+  query,
+  request,
+  onHandled,
+  tab,
+  children,
+}: {
+  isActive: boolean;
+  scrollToSectionId: string | null;
+  query: string | null;
+  /** The link's identity, so a tab can tell a new link to the same section from the last. */
+  request: object | null;
+  onHandled: (id: string, landed: boolean) => void;
+  tab: SettingsTab;
+  children: React.ReactNode;
+}) {
+  const [holds] = useState(createSettingsDeepLinkHolds);
+  useSettingsScrollToSection(isActive, scrollToSectionId, onHandled, tab, holds);
+  const deepLink: SettingsDeepLink = {
+    sectionId: isActive ? scrollToSectionId : null,
+    query: isActive ? query : null,
+    request: isActive ? request : null,
+    holds,
+  };
+  return <SettingsDeepLinkProvider value={deepLink}>{children}</SettingsDeepLinkProvider>;
 }
 
 function SettingsTabScrollEffect({
@@ -2213,10 +2352,10 @@ export function ScopeChip({
   const isProject = scope === "project" && projectLabel !== null;
   const scopeWord = scope === "project" ? "Project" : "Global";
   const entity = isProject ? projectLabel : null;
-  const title = crossScope
+  const disclosure = crossScope
     ? `Switches to ${scopeWord.toLowerCase()} settings${entity ? ` for ${entity}` : ""}`
-    : undefined;
-  return (
+    : null;
+  const chip = (
     <span
       className={cn(
         "inline-flex items-center gap-1 max-w-[14rem] min-w-0 shrink-0",
@@ -2225,7 +2364,6 @@ export function ScopeChip({
         // one accent is already spent on the nav's active marker.
         crossScope ? "bg-tint/20 text-text-primary" : "bg-tint/10 text-text-secondary"
       )}
-      title={title}
     >
       {crossScope && (
         <>
@@ -2241,6 +2379,13 @@ export function ScopeChip({
         </>
       )}
     </span>
+  );
+  if (disclosure === null) return chip;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{chip}</TooltipTrigger>
+      <TooltipContent side="top">{disclosure}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -2519,7 +2664,7 @@ export function SearchResults({
                 // The app's one "Enter acts on this row" treatment, moved by the
                 // pointer as well as the arrow keys so only one row is ever lit.
                 PALETTE_ROW_CLASS,
-                "group w-full text-left p-3 rounded-[var(--radius-md)]",
+                "w-full text-left p-3 rounded-[var(--radius-md)]",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
               )}
             >
@@ -2546,7 +2691,7 @@ export function SearchResults({
                         <span key={i} className="flex min-w-0 items-center gap-1">
                           {i > 0 && (
                             <ChevronRight
-                              className="h-2.5 w-2.5 shrink-0 text-text-muted"
+                              className="h-2.5 w-2.5 shrink-0 text-text-secondary"
                               aria-hidden="true"
                             />
                           )}
@@ -2581,7 +2726,7 @@ export function SearchResults({
                     "w-4 h-4 shrink-0 transition-[color,translate] duration-150",
                     index === activeIndex
                       ? "text-text-secondary translate-x-0.5"
-                      : "text-text-muted group-hover:text-text-secondary"
+                      : "text-text-secondary"
                   )}
                 />
               </div>

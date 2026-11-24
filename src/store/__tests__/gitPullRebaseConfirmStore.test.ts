@@ -1,56 +1,66 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { useGitPullRebaseConfirmStore } from "../gitPullRebaseConfirmStore";
 
+const REVIEW = { branch: "feature/x", headOid: "a".repeat(40) };
+const DECLINED = { confirmed: false, review: null };
+
 afterEach(() => {
   if (useGitPullRebaseConfirmStore.getState().pendingConfirm) {
-    useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+    useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
   }
 });
 
 describe("gitPullRebaseConfirmStore", () => {
-  it("resolves the awaited Promise with the value passed to resolveConfirmation", async () => {
+  it("resolves an approval with the review it was approved under (#17188)", async () => {
     const pending = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe("/repo");
 
-    useGitPullRebaseConfirmStore.getState().resolveConfirmation(true);
-    await expect(pending).resolves.toBe(true);
+    useGitPullRebaseConfirmStore.getState().resolveConfirmation(REVIEW);
+    await expect(pending).resolves.toEqual({ confirmed: true, review: REVIEW });
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
-  it("cancels a prior pending request (resolves it false) when a new one arrives", async () => {
-    const first = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-a");
-    const second = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-b");
+  it("resolves a decline with no review", async () => {
+    const pending = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
 
-    await expect(first).resolves.toBe(false);
-    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe("/repo-b");
+    useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
+    await expect(pending).resolves.toEqual(DECLINED);
+  });
 
-    useGitPullRebaseConfirmStore.getState().resolveConfirmation(true);
-    await expect(second).resolves.toBe(true);
+  it("declines a prior pending request when a new one arrives, even for the same worktree", async () => {
+    const first = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    const second = useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+
+    await expect(first).resolves.toEqual(DECLINED);
+    expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe("/repo");
+
+    useGitPullRebaseConfirmStore.getState().resolveConfirmation(REVIEW);
+    await expect(second).resolves.toEqual({ confirmed: true, review: REVIEW });
   });
 
   it("resolveConfirmation is a no-op when nothing is pending", () => {
-    expect(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(true)).not.toThrow();
+    expect(() => useGitPullRebaseConfirmStore.getState().resolveConfirmation(REVIEW)).not.toThrow();
     expect(useGitPullRebaseConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
-  describe("requestSeq (ErrorBoundary reset signal, #9918)", () => {
+  describe("requestSeq (preview key and ErrorBoundary reset signal, #9918, #17188)", () => {
     it("strictly increases on each request, including back-to-back supersede", () => {
       const before = useGitPullRebaseConfirmStore.getState().requestSeq;
 
-      useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-a");
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-a");
       const afterFirst = useGitPullRebaseConfirmStore.getState().requestSeq;
       expect(afterFirst).toBeGreaterThan(before);
 
-      useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-b");
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo-a");
       const afterSecond = useGitPullRebaseConfirmStore.getState().requestSeq;
       expect(afterSecond).toBeGreaterThan(afterFirst);
     });
 
     it("does not change when a pending request is resolved", () => {
-      useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
       const afterRequest = useGitPullRebaseConfirmStore.getState().requestSeq;
 
-      useGitPullRebaseConfirmStore.getState().resolveConfirmation(true);
+      useGitPullRebaseConfirmStore.getState().resolveConfirmation(REVIEW);
       expect(useGitPullRebaseConfirmStore.getState().requestSeq).toBe(afterRequest);
     });
   });

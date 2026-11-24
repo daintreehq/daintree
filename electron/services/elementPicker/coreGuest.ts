@@ -68,6 +68,7 @@ import {
   buildPickerClearSelectionSource,
   buildPickerDisposeSource,
   buildPickerModeSource,
+  buildPickerPausedSource,
   buildPickerReselectSource,
   buildProbeSource,
 } from "./guestSources.js";
@@ -257,6 +258,7 @@ export class CoreGuest {
     epoch: number;
     installId: number;
     mode: SitePreviewMode;
+    paused: boolean;
     origins: GuestOriginPolicy;
     frameId: string;
   }): Promise<boolean> {
@@ -318,6 +320,7 @@ export class CoreGuest {
           bindingName: this.deps.bindingName,
           channel,
           mode: input.mode,
+          paused: input.paused,
           origins: input.origins,
           body,
         }),
@@ -778,6 +781,10 @@ export class CoreGuest {
 
   setMode(mode: SitePreviewMode): Promise<void> {
     return this.callBootstrap(buildPickerModeSource(this.installId, mode));
+  }
+
+  setPaused(paused: boolean): Promise<void> {
+    return this.callBootstrap(buildPickerPausedSource(this.installId, paused));
   }
 
   clearSelection(): Promise<void> {

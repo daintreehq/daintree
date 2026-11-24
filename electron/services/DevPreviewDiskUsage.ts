@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -80,76 +79,5 @@ export async function statDirMeta(cwd: string, relPath: string): Promise<DevPrev
     return { relPath, exists: true, mtimeMs: stat.mtimeMs };
   } catch {
     return { relPath, exists: false, mtimeMs: null };
-  }
-}
-
-export async function computeDirSize(dirPath: string): Promise<number | null> {
-  try {
-    const stat = await fsPromises.stat(dirPath);
-    if (!stat.isDirectory()) return null;
-  } catch {
-    return null;
-  }
-  if (process.platform === "win32") {
-    return computeDirSizeWalk(dirPath);
-  }
-  return computeDirSizeDu(dirPath);
-}
-
-// POSIX path: shell out to `du -sk` (kilobytes). execFile avoids shell
-// interpretation entirely — dirPath cannot inject. `du` deduplicates
-// hardlinks by inode within the traversal, so pnpm-linked files inside
-// node_modules count once per inode (still reports apparent content size,
-// not the disk that would actually be reclaimed by deletion).
-async function computeDirSizeDu(dirPath: string): Promise<number | null> {
-  return new Promise((resolve) => {
-    execFile("du", ["-sk", dirPath], { maxBuffer: 1024 * 1024, timeout: 30_000 }, (err, stdout) => {
-      if (err) return resolve(null);
-      const firstField = stdout.trim().split(/\s+/, 1)[0];
-      const kilobytes = Number.parseInt(firstField, 10);
-      if (!Number.isFinite(kilobytes)) return resolve(null);
-      resolve(kilobytes * 1024);
-    });
-  });
-}
-
-// Windows fallback: no `du` available. Walks the tree with opendir,
-// accumulating file sizes via lstat. Tracks an inode set to dedupe
-// hardlinks where the FS reports a stable inode (NTFS returns 0/unstable
-// values in some cases — those entries simply count each time, accepting a
-// small over-report on edge filesystems).
-async function computeDirSizeWalk(dirPath: string): Promise<number | null> {
-  try {
-    let total = 0;
-    const seenInos = new Set<string>();
-    const stack: string[] = [dirPath];
-    while (stack.length > 0) {
-      const cur = stack.pop()!;
-      let handle: Awaited<ReturnType<typeof fsPromises.opendir>>;
-      try {
-        handle = await fsPromises.opendir(cur);
-      } catch {
-        continue;
-      }
-      for await (const ent of handle) {
-        const full = path.join(cur, ent.name);
-        if (ent.isDirectory()) {
-          stack.push(full);
-        } else if (ent.isFile() || ent.isSymbolicLink()) {
-          try {
-            const st = await fsPromises.lstat(full);
-            const inoKey = st.ino ? `${st.dev}:${st.ino}` : null;
-            if (inoKey && seenInos.has(inoKey)) continue;
-            if (inoKey) seenInos.add(inoKey);
-            total += st.size;
-          } catch {
-            // skip unreadable
-          }
-        }
-      }
-    }
-    return total;
-  } catch {
-    return null;
   }
 }

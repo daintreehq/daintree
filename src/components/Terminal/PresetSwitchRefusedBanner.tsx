@@ -6,7 +6,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { isPtyPanel } from "@shared/types/panel";
-import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
+import { defaultLoginPhrase, sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import {
   dismissRefusedPresetSwitch,
   returnAfterRefusedSwitch,
@@ -20,9 +20,6 @@ export interface PresetSwitchRefusedCopy {
   startNewLabel: string;
   backLabel: string;
 }
-
-/** How the default login reads where an account's name would go. */
-const DEFAULT_LOGIN_NAME = "the default login";
 
 /**
  * Says what the CLI said, on which preset or account, and never why: the
@@ -82,6 +79,9 @@ export function PresetSwitchRefusedBanner({ panelId }: { panelId: string }) {
   const savedAccounts = useAgentSettingsStore((s) =>
     agentId ? s.settings?.agents?.[agentId]?.accounts : undefined
   );
+  const defaultLoginName = useAgentSettingsStore((s) =>
+    agentId ? s.settings?.agents?.[agentId]?.defaultLoginName : undefined
+  );
   const [backUnavailable, setBackUnavailable] = useState<
     "held-elsewhere" | "unavailable" | undefined
   >(undefined);
@@ -104,7 +104,7 @@ export function PresetSwitchRefusedBanner({ panelId }: { panelId: string }) {
     const accounts = sanitizeAgentAccounts(savedAccounts);
     const accountName = (accountId: string | null | undefined) =>
       accountId == null
-        ? DEFAULT_LOGIN_NAME
+        ? defaultLoginPhrase(defaultLoginName)
         : accounts.find((account) => account.id === accountId)?.name;
     targetName = accountName(target.accountId) ?? "that account";
     priorName = accountName(prior.agentAccountId);

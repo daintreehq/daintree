@@ -84,6 +84,7 @@ import { getLifecycleLedger, ledgerFactsFromSpawnOptions } from "./pty/lifecycle
 import { BrokerError } from "./rpc/index.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
+import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
 import type { TerminalLaunchAttribution } from "./pty/TerminalLifecycleObserver.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
 import { RecentTerminalExits } from "./pty/RecentTerminalExits.js";
@@ -124,6 +125,7 @@ import type {
   PtyHostDriveLease,
   FirstPromptCandidate,
   OwnedTypedInput,
+  PtyHostTerminalStatusFields,
 } from "../../shared/types/pty-host.js";
 import type {
   ClosedProcessKillResult,
@@ -147,8 +149,14 @@ import type {
 } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
+import type { CodexLimitAnswer, CodexLimitQuery } from "../../shared/types/codexLimitReset.js";
+import type {
+  CodexLimitContinueResult,
+  CodexLimitStopRef,
+} from "../../shared/types/codexLimitContinuation.js";
 import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/terminalSubmission.js";
 import type { TerminalHandback } from "../../shared/types/handback.js";
+import type { UpdateInstalledObservation } from "../../shared/types/ipc/agent.js";
 import { withoutHandbackInstruction } from "../../shared/utils/handback.js";
 import { buildFirstPrompt, sanitizeFirstPrompt } from "../../shared/utils/firstPrompt.js";
 import { isCheckoutPendingProject } from "./projectClone/checkoutGate.js";
@@ -159,6 +167,8 @@ const __dirname = path.dirname(__filename);
 interface TerminalInfoResponse {
   id: string;
   projectId?: string;
+  /** Placed in no project on purpose (#17926), as its spawn said. */
+  unplaced?: true;
   kind?: PanelKind;
   launchAgentId?: AgentId;
   /** This PTY backs the Daintree Assistant overlay, not a grid pane. */
@@ -174,6 +184,8 @@ interface TerminalInfoResponse {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Its agent run hasn't been observed waiting at its prompt or a question yet (#18014). */
+  promptUnseen?: true;
   /** Last visible-content change, ignoring spinner and timer redraws (#12428). */
   lastOutputChangeAt?: number;
   lastInputTime?: number;
@@ -207,9 +219,13 @@ interface TerminalInfoResponse {
    * still waiting on its exit — the host's project stats count those.
    */
   isExited?: boolean;
+  /** Its agent is being quit: the PTY still runs, but nothing new should land in it. */
+  isClosing?: boolean;
   agentSessionId?: string;
   /** The Claude store the launch env names; absent when it can't be resolved (#16269). */
   claudeConfigDir?: string;
+  /** The Codex home the launch env names; absent when it can't be resolved (#17318). */
+  codexHome?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
   /** The scheduled run this terminal was launched for (#15977). */
@@ -219,6 +235,7 @@ interface TerminalInfoResponse {
   agentPresetId?: string;
   agentPresetColor?: string;
   originalAgentPresetId?: string;
+  fallbackChainIndex?: number;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
   /**
@@ -227,6 +244,11 @@ interface TerminalInfoResponse {
    * means none was observed. Reset with the record when the PTY is replaced.
    */
   agentIncarnation?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane's run showed it
+   * (#17905). Absent when not seen, or once that run ended.
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Lifecycle-ledger generation of the record that answered. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
@@ -243,6 +265,8 @@ interface TerminalInfoResponse {
   submission?: TerminalSubmissionRecord;
   /** Most recent handback marker observed for a request this terminal held (#12488). */
   lastHandback?: TerminalHandback;
+  /** Present only when {@link PtyClient.getTerminalAsync} asked about the Codex limit (#17906). */
+  codexLimit?: CodexLimitAnswer;
 }
 
 /**
@@ -264,6 +288,14 @@ export type PtySubmitDecorator = (
   text: string,
   handbackCode: string | undefined
 ) => { text: string; handbackCode: string; handbackInstruction: "run" } | null;
+
+/**
+ * What a spawn is handed: `projectId: null` places the terminal in no project
+ * on purpose (#17926), where an absent one takes the active project.
+ */
+export type PtyClientSpawnOptions = Omit<PtyHostSpawnOptions, "projectId" | "unplaced"> & {
+  projectId?: string | null;
+};
 
 export interface PtyIncarnationExit {
   terminalId: string;
@@ -342,6 +374,8 @@ const CLOSED_PROCESS_KILL_TIMEOUT_MS = 15_000;
 const END_TRASH_GRACE_TIMEOUT_MS = 5000;
 /** One run of Main's tree-kill helper for roots a disposing host handed over. */
 const HANDOFF_TREE_KILL_TIMEOUT_MS = 3000;
+/** The host's own lane wait (30 s) plus the screen read, before main stops listening (#17909). */
+const CONTINUE_CODEX_LIMIT_TIMEOUT_MS = 45_000;
 /**
  * How long quit waits, once the hosts have exited, for those kills: Main's
  * helper is usually cold, and it dies with Main. Only a host that could not
@@ -525,6 +559,8 @@ export class PtyClient extends EventEmitter {
   private lastResourceProfile: ResourceProfile | null = null;
   /** Last fallback-eligible project set pushed to the shards (#12557); replayed on shard boot. */
   private fallbackEligibleProjects: string[] = [];
+  /** Last frozen-view project set pushed to the shards (#17038); replayed on shard boot. */
+  private frozenViewProjects: string[] = [];
   /** Drive leases a remote client is party to; replayed on shard boot. */
   private driveLeases: PtyHostDriveLease[] = [];
   /** Per-connection holder identity, echoed to the host on every (re)connect (#12557). */
@@ -639,6 +675,7 @@ export class PtyClient extends EventEmitter {
         lastResourceProfile: this.lastResourceProfile,
         lastProcessTreePollIntervalMs: this.lastProcessTreePollIntervalMs,
         fallbackEligibleProjects: this.fallbackEligibleProjects,
+        frozenViewProjects: this.frozenViewProjects,
         driveLeases: this.driveLeases,
       }),
       hasPortRefreshConsumers: () => Boolean(this.onPortRefresh) || this.auxPortRefresh.size > 0,
@@ -656,6 +693,14 @@ export class PtyClient extends EventEmitter {
       incarnationLost: (id, launchGeneration) => {
         const fact: PtyIncarnationLost = { terminalId: id, launchGeneration };
         this.emit("incarnation-lost", fact);
+        // The host that observed this run's update footer died with it, so no
+        // clear will come from there (#17905).
+        bridgePtyEvent({
+          type: "agent-update-installed-changed",
+          terminalId: id,
+          updateInstalled: null,
+          timestamp: Date.now(),
+        });
       },
       logWarn,
     });
@@ -718,6 +763,7 @@ export class PtyClient extends EventEmitter {
         this.recovery.cleanupOrphanedPtysForShard(shard, fallbackCrashType);
         shard.broker.clear(new BrokerError("HOST_EXITED", "Pty host exited"));
         shard.shouldResyncProjectContext = true;
+        this.clearPauseDurationsOfShard(shard);
         // The crashed shard's throttle/memory-warning holds are gone with the
         // process; recompute the aggregate so a sibling-free release isn't
         // stuck behind a dead shard's stale hold. Only for the shard that
@@ -870,6 +916,10 @@ export class PtyClient extends EventEmitter {
   private buildRouterDeps(shard: PtyShard): PtyEventRouterDeps {
     return {
       isDisposed: () => this.isDisposed || shard.retired,
+      isForeignTerminal: (id) => {
+        const owner = this.terminalOwners.get(id);
+        return owner !== undefined && owner !== shard.key;
+      },
       broker: shard.broker,
       emitter: new ShardEventEmitter((event, args) => this.emitFromShard(shard, event, args)),
       state: {
@@ -1054,6 +1104,34 @@ export class PtyClient extends EventEmitter {
    * the release edge if the aggregate flipped — a retired/crashed shard must
    * not pin "throttled"/"memory warning" on forever.
    */
+  /**
+   * A host's pause-duration gauge names a terminal as cleared only on the tick
+   * after its hold ends, and the host that exited can't say it any more: its
+   * replacement starts with nothing held. Clear every live terminal it owned,
+   * on its own route, so no pane keeps a duration from the dead host (#17575).
+   * That includes one whose kill was still waiting for an exit the dead host
+   * will never send; one already exited (a preserved entry) had its duration
+   * cleared on exit.
+   */
+  private clearPauseDurationsOfShard(shard: PtyShard): void {
+    const owned: string[] = [];
+    for (const [id, owner] of this.terminalOwners) {
+      if (owner !== shard.key) continue;
+      if (this.pendingSpawns.has(id) || this.pendingKillCount.has(id)) owned.push(id);
+    }
+    if (owned.length === 0) return;
+    this.handleShardEvent(shard, {
+      type: "terminal-reliability-metric",
+      payload: {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: Date.now(),
+        perTerminalHeld: [],
+        clearedTerminalIds: owned,
+      },
+    });
+  }
+
   private dropShardSignals(shardKey: string): void {
     this.signalAggregator.dropShard(shardKey);
     this.memoryPauseTracker.dropShard(shardKey);
@@ -1532,7 +1610,7 @@ export class PtyClient extends EventEmitter {
     return null;
   }
 
-  spawn(id: string, options: PtyHostSpawnOptions): void {
+  spawn(id: string, options: PtyClientSpawnOptions): void {
     if (!this.pendingSpawns.has(id) && this.pendingSpawns.size >= this.MAX_PENDING_SPAWNS) {
       logWarn(
         `[PtyClient] spawn rejected — pendingSpawns at cap (${this.MAX_PENDING_SPAWNS}), id=${id}`
@@ -1549,13 +1627,16 @@ export class PtyClient extends EventEmitter {
       return;
     }
 
-    const activeProjectId = this.activeProjectId ?? undefined;
+    const { projectId: requestedProjectId, ...placeless } = options;
     const normalizedProjectId =
-      typeof options.projectId === "string" && options.projectId.trim()
-        ? options.projectId
+      typeof requestedProjectId === "string" && requestedProjectId.trim()
+        ? requestedProjectId
         : undefined;
-
-    const resolvedProjectId = normalizedProjectId ?? activeProjectId;
+    // A spawn that names no project takes the active one, for callers that
+    // never name one; one placed in none on purpose never does.
+    const unplaced = requestedProjectId === null;
+    const resolvedProjectId =
+      normalizedProjectId ?? (unplaced ? undefined : (this.activeProjectId ?? undefined));
     // Every launch path ends here: a project still awaiting its clone has no
     // folder, and the pty-host would quietly fall back to another cwd (#16352).
     // Only a named project is checked: a spawn naming none isn't asking for
@@ -1572,8 +1653,14 @@ export class PtyClient extends EventEmitter {
       this.emit("spawn-result", id, result);
       return;
     }
+    // Stored for crash replay as sent, so a replay can't take whichever
+    // project is active by then either.
     const projectResolvedOptions: PtyHostSpawnOptions =
-      resolvedProjectId !== undefined ? { ...options, projectId: resolvedProjectId } : options;
+      resolvedProjectId !== undefined
+        ? { ...placeless, projectId: resolvedProjectId }
+        : unplaced
+          ? { ...placeless, unplaced: true }
+          : placeless;
     // Mint the launch generation here — every spawn (fresh, restart, resume)
     // funnels through this method, so the ledger sees each incarnation exactly
     // once. The pty-host adopts the stamped generation and echoes it on exits
@@ -1860,7 +1947,7 @@ export class PtyClient extends EventEmitter {
     }
   }
 
-  private groupByOwnerShard(ids: string[]): Map<PtyShard, string[]> {
+  private groupByOwnerShard(ids: readonly string[]): Map<PtyShard, string[]> {
     const groups = new Map<PtyShard, string[]>();
     for (const id of ids) {
       const shard = this.shardForTerminal(id);
@@ -1978,8 +2065,22 @@ export class PtyClient extends EventEmitter {
    * Null for unknown terminals — callers fall back to unscoped delivery.
    */
   getTerminalProjectId(id: string): string | null {
-    const projectId = this.pendingSpawns.get(id)?.projectId;
+    // The running incarnation's, while a duplicate awaits the host's answer:
+    // its output, input and lease are still that project's (#17926).
+    const projectId = (this.displacedSpawns.get(id)?.entry ?? this.pendingSpawns.get(id))
+      ?.projectId;
     return typeof projectId === "string" && projectId.length > 0 ? projectId : null;
+  }
+
+  /** Whether main holds `id`'s spawn record as one placed in no project on purpose (#17926). */
+  isUnplacedTerminal(id: string): boolean {
+    // A duplicate still awaiting the host's answer doesn't speak for the
+    // terminal it would displace, which may still be running in a project.
+    const displaced = this.displacedSpawns.get(id)?.entry;
+    return (
+      this.pendingSpawns.get(id)?.unplaced === true &&
+      (displaced === undefined || displaced.unplaced === true)
+    );
   }
 
   /**
@@ -2101,6 +2202,20 @@ export class PtyClient extends EventEmitter {
         type: "set-fallback-eligible-projects",
         projectIds: this.fallbackEligibleProjects,
       });
+    }
+  }
+
+  /**
+   * Tell every shard which projects have only views that may be CDP-frozen
+   * (#17038). While no window shows such a project, the host stops copying its
+   * plain terminals' output to views that cannot read it, and their panes
+   * repaint from the host mirror when they return. Sent to every shard for the
+   * same reason as {@link setFallbackEligibleProjects}.
+   */
+  setFrozenViewProjects(projectIds: string[]): void {
+    this.frozenViewProjects = [...projectIds];
+    for (const shard of this.shards.values()) {
+      shard.send({ type: "set-frozen-view-projects", projectIds: this.frozenViewProjects });
     }
   }
 
@@ -2695,6 +2810,38 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * A project's terminal records, read in one request from the shard that
+   * owns the project, where `getTerminalsForProjectAsync` plus a
+   * `getTerminalAsync` per id costs a request per terminal (#17776). Resolves
+   * `[]` when the host doesn't answer, as the id read does.
+   *
+   * Each record is read from the shard that owns its id, where every id-based
+   * call for it goes, as the per-id read did. An id that moved to another
+   * shard while the host answered is read again from its owner, and kept only
+   * when that record names this project: a preserved exit lingers on its old
+   * shard after the id respawns elsewhere (#16811).
+   */
+  async getProjectTerminalsAsync(projectId: string): Promise<TerminalInfoResponse[]> {
+    const shard = this.shardForProjectQuery(projectId);
+    const terminals = await sendPtyHostRpc<TerminalInfoResponse[]>(
+      shard,
+      `project-terminals-${projectId}`,
+      (requestId) => ({ type: "get-project-terminals", projectId, requestId })
+    ).catch(() => []);
+    if (terminals.every((terminal) => this.shardForTerminal(terminal.id) === shard)) {
+      return terminals;
+    }
+    const owned = await Promise.all(
+      terminals.map(async (terminal) => {
+        if (this.shardForTerminal(terminal.id) === shard) return terminal;
+        const moved = await this.getTerminalAsync(terminal.id);
+        return moved?.projectId === projectId ? moved : null;
+      })
+    );
+    return owned.filter((terminal) => terminal !== null);
+  }
+
+  /**
    * Get terminal info by ID. Passing `submissionToken` additionally resolves
    * that submission's correlation record onto the response (#12337) — the same
    * round trip, so a status read correlating a send costs no extra RPC.
@@ -2707,18 +2854,26 @@ export class PtyClient extends EventEmitter {
    * `strict` rejects when a live host fails to answer in time instead of
    * resolving `null`, so a caller confirming that a terminal is gone doesn't
    * mistake a stalled query for its absence. A host that is gone still resolves
-   * `null` — its terminals went with it.
+   * `null` — its terminals went with it. `codexLimit` asks when the pane's
+   * spent Codex window resets (#17906).
    */
   async getTerminalAsync(
     id: string,
     submissionToken?: string,
-    options?: { strict?: boolean }
+    options?: { strict?: boolean; codexLimit?: CodexLimitQuery }
   ): Promise<TerminalInfoResponse | null> {
     const shard = this.shardForTerminal(id);
+    const codexLimit = options?.codexLimit;
     const promise = sendPtyHostRpc<TerminalInfoResponse | null>(
       shard,
       submissionToken === undefined ? `terminal-${id}` : `terminal-${id}-sub-${submissionToken}`,
-      (requestId) => ({ type: "get-terminal", id, requestId, submissionToken })
+      (requestId) => ({
+        type: "get-terminal",
+        id,
+        requestId,
+        submissionToken,
+        ...(codexLimit !== undefined && { codexLimit }),
+      })
     );
     return promise.catch((error) => {
       if (
@@ -2732,6 +2887,48 @@ export class PtyClient extends EventEmitter {
       }
       return null;
     });
+  }
+
+  /**
+   * The status fields a bulk status read needs, for many terminals at once
+   * (#17809): one request per owning shard rather than one full record read per
+   * id, and no native grid read on the host. Passing `submissionToken` also
+   * resolves that submission's record per terminal.
+   *
+   * An id missing from the map was not observed — its shard holds no record for
+   * it, is down or still booting, or failed to answer in time — so a caller
+   * must not read its absence as "nothing to report". Never rejects.
+   */
+  async getTerminalStatusFieldsAsync(
+    ids: readonly string[],
+    submissionToken?: string
+  ): Promise<Map<string, PtyHostTerminalStatusFields>> {
+    const fields = new Map<string, PtyHostTerminalStatusFields>();
+    const unique = [...new Set(ids.filter((id) => typeof id === "string" && id !== ""))];
+    if (unique.length === 0) return fields;
+    await Promise.all(
+      [...this.groupByOwnerShard(unique)].map(async ([shard, shardIds]) => {
+        // A request to a host that isn't up would only sit out the broker's
+        // deadline and hold every other shard's answer back with it.
+        if (shard.retired || !shard.isRunning()) return;
+        const terminals = await sendPtyHostRpc<PtyHostTerminalStatusFields[]>(
+          shard,
+          "terminal-status-fields",
+          (requestId) => ({
+            type: "get-terminal-status-fields",
+            ids: shardIds,
+            requestId,
+            ...(submissionToken !== undefined ? { submissionToken } : {}),
+          })
+        ).catch(() => [] as PtyHostTerminalStatusFields[]);
+        // Only what this shard was asked about counts as its answer.
+        const asked = new Set(shardIds);
+        for (const terminal of terminals) {
+          if (asked.has(terminal.id)) fields.set(terminal.id, terminal);
+        }
+      })
+    );
+    return fields;
   }
 
   /** Get available terminals (idle or waiting for user input), across all shards */
@@ -2792,6 +2989,12 @@ export class PtyClient extends EventEmitter {
     shardsFailed: number;
   }> {
     const shards = this.fanOutShards();
+    // A host mid-restart is not fanned out to, but its terminals are still
+    // missing from the answer — it counts as a failure, not as nothing.
+    const unreachable = Math.max(
+      0,
+      [...this.shards.values()].filter((shard) => !shard.retired).length - shards.length
+    );
     const results = await Promise.all(
       shards.map((shard) => {
         const promise = sendPtyHostRpc<TerminalInfoResponse[]>(
@@ -2805,11 +3008,11 @@ export class PtyClient extends EventEmitter {
         );
       })
     );
-    const shardsFailed = results.filter((r) => !r.ok).length;
+    const shardsFailed = results.filter((r) => !r.ok).length + unreachable;
     return {
       terminals: results.flatMap((r) => r.terminals),
       degraded: shardsFailed > 0,
-      shardsTotal: shards.length,
+      shardsTotal: shards.length + unreachable,
       shardsFailed,
     };
   }
@@ -2902,31 +3105,95 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
-   * Scan every terminal's semantic buffer for `query` and return one
-   * ANSI-stripped snippet per matching terminal, across all shards. Substring
-   * (case-insensitive) unless `isRegex` is true. Returns an empty array on
-   * regex compile error or IPC failure — UI never throws on bad input.
+   * Scan semantic buffers for `query` and return one ANSI-stripped snippet per
+   * matching terminal. Substring (case-insensitive) unless `isRegex` is true.
+   * With `terminalIds`, only those terminals' owning shards are asked, each for
+   * its own ids; without, every terminal on every shard is scanned. Never
+   * rejects: a regex compile error yields no matches, and a shard that fails,
+   * times out, or is mid-restart keeps the other shards' matches but marks the
+   * answer incomplete, so its silence never reads as "nothing matched".
    */
   async searchSemanticBuffersAsync(
     query: string,
-    isRegex: boolean
-  ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]> {
-    const results = await Promise.all(
-      this.fanOutShards().map((shard) => {
-        const promise = sendPtyHostRpc<
-          import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]
-        >(shard, "semantic-search", (requestId) => ({
-          type: "search-semantic-buffers",
-          query,
-          isRegex,
-          requestId,
-        }));
-        return promise.catch(
-          () => [] as import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]
-        );
-      })
+    isRegex: boolean,
+    terminalIds?: readonly string[]
+  ): Promise<import("../../shared/types/ipc/terminal.js").SemanticSearchResult> {
+    const reachable = this.fanOutShards();
+    let targets: Array<[PtyShard, string[] | undefined]>;
+    let unreachable: number;
+    if (terminalIds === undefined) {
+      targets = reachable.map((shard) => [shard, undefined]);
+      unreachable = Math.max(
+        0,
+        [...this.shards.values()].filter((shard) => !shard.retired).length - reachable.length
+      );
+    } else {
+      // A scoped search needs only the shards that own its terminals.
+      const owners = [...this.groupByOwnerShard(terminalIds)];
+      targets = owners.filter(([shard]) => reachable.includes(shard));
+      unreachable = owners.length - targets.length;
+    }
+    // With nothing ready, `fanOutShards` still hands back the default shard, and
+    // a host that hasn't announced ready can answer before its terminals are
+    // replayed, so its answer can't vouch for a complete search.
+    const allLive = targets.every(
+      ([shard]) => !shard.retired && shard.lifecycle.isInitialized && shard.lifecycle.child !== null
     );
-    return results.flat();
+    const results = await Promise.all(
+      targets.map(([shard, ids]) =>
+        sendPtyHostRpc<import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[]>(
+          shard,
+          "semantic-search",
+          (requestId) => ({
+            type: "search-semantic-buffers",
+            query,
+            isRegex,
+            requestId,
+            ...(ids ? { terminalIds: ids } : {}),
+          })
+        ).then(
+          (matches) => ({ matches, ok: true }),
+          () => ({
+            matches: [] as import("../../shared/types/ipc/terminal.js").SemanticSearchMatch[],
+            ok: false,
+          })
+        )
+      )
+    );
+    return {
+      matches: results.flatMap((r) => r.matches),
+      complete: unreachable === 0 && allLive && results.every((r) => r.ok),
+    };
+  }
+
+  /** Whether the host wrote the mode reset; false for a terminal it can't reach. */
+  async resetTerminalModesAsync(id: string): Promise<boolean> {
+    const shard = this.shardForTerminal(id);
+    const promise = sendPtyHostRpc<boolean>(shard, `reset-modes-${id}`, (requestId) => ({
+      type: "reset-terminal-modes",
+      id,
+      requestId,
+    }));
+    return promise.catch(() => false);
+  }
+
+  /** Arm or disarm reporting the terminal's settled Codex stop (#17909). */
+  setCodexLimitContinue(id: string, armed: boolean): void {
+    this.shardForTerminal(id).send({ type: "set-codex-limit-continue", id, armed });
+  }
+
+  /**
+   * Have the terminal's host check the pane is still at `stop` and type the
+   * line that continues it (#17909). Rejects when the host didn't answer.
+   */
+  continueCodexLimitAsync(id: string, stop: CodexLimitStopRef): Promise<CodexLimitContinueResult> {
+    const shard = this.shardForTerminal(id);
+    return sendPtyHostRpc<CodexLimitContinueResult>(
+      shard,
+      `continue-codex-limit-${id}`,
+      (requestId) => ({ type: "continue-codex-limit", id, requestId, stop }),
+      { method: "continue-codex-limit", timeoutMs: CONTINUE_CODEX_LIMIT_TIMEOUT_MS }
+    );
   }
 
   /** Replay terminal history */

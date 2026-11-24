@@ -327,10 +327,12 @@ export class ScratchStore {
     return this.getScratchById(scratchId);
   }
 
-  /** Acknowledgement watermarks for live scratches, keyed by id. */
-  getLastCompletionSeenMap(): Map<string, number> {
-    const db = getSharedDb();
-    const rows = db
+  /**
+   * Every live scratch's id beside its raw acknowledgement watermark, in one
+   * statement and in no particular order: the stats poll's read (#17806).
+   */
+  getCompletionWatermarks(): Array<{ id: string; lastCompletionSeenAt: number | null }> {
+    return getSharedDb()
       .select({
         id: scratchesTable.id,
         lastCompletionSeenAt: scratchesTable.lastCompletionSeenAt,
@@ -338,8 +340,12 @@ export class ScratchStore {
       .from(scratchesTable)
       .where(isNull(scratchesTable.deletedAt))
       .all();
+  }
+
+  /** Acknowledgement watermarks for live scratches, keyed by id. */
+  getLastCompletionSeenMap(): Map<string, number> {
     const map = new Map<string, number>();
-    for (const row of rows) {
+    for (const row of this.getCompletionWatermarks()) {
       if (typeof row.lastCompletionSeenAt === "number" && row.lastCompletionSeenAt > 0) {
         map.set(row.id, row.lastCompletionSeenAt);
       }

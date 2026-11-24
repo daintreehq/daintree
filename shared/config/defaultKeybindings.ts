@@ -23,6 +23,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Navigation",
   },
   {
+    // Unbound by default: ⌘P then "files" + Tab reaches the same scope, and the
+    // nearby chords are taken. Rebindable for anyone who wants a direct key.
+    actionId: "nav.quickOpenFile",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open file by name",
+    category: "Navigation",
+  },
+  {
     actionId: "nav.focusRegion.next",
     combo: "F6",
     scope: "global",
@@ -69,6 +79,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Reopen last closed panel",
     category: "Terminal",
+  },
+  {
+    actionId: "panel.undoClose",
+    combo: "Cmd+Z",
+    scope: "global",
+    priority: 0,
+    description: "Undo closing a panel",
+    category: "Panels",
   },
   {
     actionId: "terminal.resumeSessions",
@@ -409,6 +427,24 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
+    // Unbound by default; here so it can be bound (#17236).
+    actionId: "decisions.openInbox",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open Decisions inbox",
+    category: "Agents",
+  },
+  {
+    // Unbound by default; here so it can be bound (#17236).
+    actionId: "decisions.openNextQuestion",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open next Decisions question",
+    category: "Agents",
+  },
+  {
     actionId: "agent.focusNextWorking",
     combo: "Cmd+Alt+.",
     scope: "global",
@@ -457,6 +493,16 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Send selection to another terminal",
+    category: "Terminal",
+  },
+  {
+    // Terminal.app's Copy Plain Text (⌥⇧⌘C), and one modifier out from the
+    // terminal's own Ctrl+Shift+C on Linux; Cmd+Shift+C is worktree.copyTree.
+    actionId: "terminal.copyClean",
+    combo: "Cmd+Shift+Alt+C",
+    scope: "global",
+    priority: 0,
+    description: "Copy selection as clean text",
     category: "Terminal",
   },
   {
@@ -710,52 +756,61 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Panels",
   },
   {
-    actionId: "panel.togglePortal",
-    combo: "Cmd+\\",
-    scope: "global",
-    priority: 0,
-    description: "Toggle portal panel",
-    category: "Panels",
-  },
-  {
-    actionId: "portal.closeTab",
-    combo: "Cmd+W",
-    scope: "portal",
-    priority: 20,
-    description: "Close active portal tab",
-    category: "Portal",
-  },
-  {
-    actionId: "portal.nextTab",
-    combo: "Ctrl+Tab",
-    scope: "portal",
-    priority: 20,
-    description: "Next portal tab",
-    category: "Portal",
-  },
-  {
-    actionId: "portal.prevTab",
-    combo: "Ctrl+Shift+Tab",
-    scope: "portal",
-    priority: 20,
-    description: "Previous portal tab",
-    category: "Portal",
-  },
-  {
-    actionId: "portal.newTab",
-    combo: "Cmd+T",
-    scope: "portal",
-    priority: 20,
-    description: "New portal tab",
-    category: "Portal",
-  },
-  {
     actionId: "devPreview.reloadPreview",
     combo: "Cmd+R",
     scope: "dev-preview",
     priority: 20,
     description: "Reload dev preview",
     category: "Dev preview",
+  },
+  // Bare keys, live only while focus is inside a diff viewer (DiffPane pushes
+  // the scope), so they never reach another panel. The `when` keeps a rebind
+  // to a modified key out of the viewer's own text fields too: the global
+  // layer lets modified keys through from those, and bare ones it never does.
+  {
+    actionId: "diff.nextChange",
+    combo: "N",
+    scope: "diff",
+    priority: 5,
+    description: "Next hunk in the diff, on into the next file",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
+  },
+  {
+    actionId: "diff.previousChange",
+    combo: "P",
+    scope: "diff",
+    priority: 5,
+    description: "Previous hunk in the diff, back into the previous file",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
+  },
+  {
+    actionId: "diff.nextFile",
+    combo: "]",
+    scope: "diff",
+    priority: 5,
+    description: "Next file in the diff",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
+  },
+  {
+    actionId: "diff.previousFile",
+    combo: "[",
+    scope: "diff",
+    priority: 5,
+    description: "Previous file in the diff",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
+  },
+  {
+    actionId: "diff.toggleViewed",
+    combo: "V",
+    scope: "diff",
+    priority: 5,
+    description: "Mark the diff's file viewed, or the focused file in its list",
+    category: "Git",
+    when: "!textInputFocused && !terminalFocused",
   },
   {
     actionId: "nav.toggleSidebar",
@@ -983,6 +1038,15 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Sleep idle projects",
+    category: "Project",
+  },
+  {
+    // Unbound by default; here so it can be bound (#17882).
+    actionId: "project.sleepAll",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Sleep all projects",
     category: "Project",
   },
   {
@@ -1253,8 +1317,8 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
 ];
 
-// Remote Hosts doesn't exist on Windows, so neither does its action. U sits
-// beside the I, O and P switchers; Cmd+Alt+H would take macOS Hide Others.
+// Every platform is a Shell, so every platform has the action. U sits beside
+// the I, O and P switchers; Cmd+Alt+H would take macOS Hide Others.
 const REMOTE_HOSTS_KEYBINDINGS: KeybindingConfig[] = [
   {
     actionId: "host.switch",
@@ -1277,14 +1341,6 @@ const WINDOWS_ONLY_KEYBINDINGS: KeybindingConfig[] = [
     priority: 10,
     description: "Close focused panel",
     category: "Terminal",
-  },
-  {
-    actionId: "portal.closeTab",
-    combo: "Ctrl+F4",
-    scope: "portal",
-    priority: 20,
-    description: "Close active portal tab",
-    category: "Portal",
   },
 ];
 
@@ -1330,6 +1386,20 @@ const NON_MAC_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
     description: "Open Canopy",
     category: "Project",
     when: "!canopyHidden",
+  },
+];
+
+// Unbound on Windows, where Ctrl+Alt is AltGr: AltGr+C and AltGr+Shift+C type
+// ć/Ć or č/Č on Polish, Latvian and similar layouts. The row stays so the
+// action can still be bound there.
+const WINDOWS_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
+  {
+    actionId: "terminal.copyClean",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Copy selection as clean text",
+    category: "Terminal",
   },
 ];
 
@@ -1445,14 +1515,12 @@ const LINUX_REPLACEMENT_KEYBINDINGS: KeybindingConfig[] = [
  * the host OS it runs on.
  */
 export function buildDefaultKeybindings(isWindows: boolean, isLinux = false): KeybindingConfig[] {
-  const bindings = isWindows
-    ? [...CORE_KEYBINDINGS]
-    : [...CORE_KEYBINDINGS, ...REMOTE_HOSTS_KEYBINDINGS];
+  const bindings = [...CORE_KEYBINDINGS, ...REMOTE_HOSTS_KEYBINDINGS];
   if (!isWindows && !isLinux) return bindings;
   const replacements = isLinux
     ? // Linux first: the first match wins, and Linux overrides the shared dictation key.
       [...LINUX_REPLACEMENT_KEYBINDINGS, ...NON_MAC_REPLACEMENT_KEYBINDINGS]
-    : NON_MAC_REPLACEMENT_KEYBINDINGS;
+    : [...WINDOWS_REPLACEMENT_KEYBINDINGS, ...NON_MAC_REPLACEMENT_KEYBINDINGS];
   const replaced = bindings.map(
     (binding) =>
       replacements.find((r) => r.actionId === binding.actionId && r.scope === binding.scope) ??
@@ -1487,7 +1555,6 @@ export const KEYBINDING_CATEGORY_ORDER: readonly string[] = [
   "Search",
   "Project",
   "Git",
-  "Portal",
   "Dev preview",
   "View",
   "Voice",

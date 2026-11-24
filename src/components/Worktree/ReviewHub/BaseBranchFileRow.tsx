@@ -1,15 +1,21 @@
 import type React from "react";
+import type { Ref } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
 import { Badge } from "@/components/ui/badge";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import type { FileDecoration } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import { getBaseBranchStatusConfig } from "./reviewHubUtils";
 
 interface BaseBranchFileRowProps {
   file: CrossWorktreeFile;
+  /** Position in the list, which its arrow keys step through. */
+  rowIndex: number;
+  openButtonRef?: Ref<HTMLButtonElement>;
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
   unresolvedDecoration?: FileDecoration;
   onBadgeClick?: () => void;
@@ -17,10 +23,16 @@ interface BaseBranchFileRowProps {
 
 export function BaseBranchFileRow({
   file,
+  rowIndex,
+  openButtonRef,
   onClick,
   unresolvedDecoration,
   onBadgeClick,
 }: BaseBranchFileRowProps) {
+  // The row only lays its parts out; the directory and the file name each clip
+  // inside their own box, so each is measured where it clips.
+  const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
+  const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
   const config = getBaseBranchStatusConfig(file.status);
   const normalized = file.path.replace(/\\/g, "/");
   const lastSlash = normalized.lastIndexOf("/");
@@ -39,7 +51,13 @@ export function BaseBranchFileRow({
   const badgeLabel = unresolvedDecoration?.tooltip ?? `Unresolved review comments on ${file.path}`;
 
   return (
-    <TruncatedTooltip content={file.path}>
+    // The row's buttons are its tab stops; the path text takes none of its own.
+    <TruncatedTooltip
+      content={file.path}
+      isTruncated={dirTruncated || baseTruncated}
+      focusable={false}
+      contentClassName="font-mono [overflow-wrap:anywhere]"
+    >
       <div
         className={cn(
           "group/baserow w-full flex items-center text-xs rounded-[var(--radius-md)] px-1.5 py-1.5",
@@ -47,8 +65,11 @@ export function BaseBranchFileRow({
         )}
       >
         <button
+          ref={openButtonRef}
           type="button"
           onClick={onClick}
+          aria-label={`${config.word}: ${file.path}`}
+          data-base-row-index={rowIndex}
           className={cn(
             "relative -mx-1 flex min-w-0 flex-1 items-baseline rounded-[var(--radius-sm)] px-1 text-left",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
@@ -67,6 +88,7 @@ export function BaseBranchFileRow({
           </span>
           {dir && (
             <PathTail
+              ref={dirRef}
               data-testid="base-branch-file-row-dir"
               className={cn(
                 "shrink font-mono text-2xs transition-colors duration-150 ease-out",
@@ -77,6 +99,7 @@ export function BaseBranchFileRow({
             </PathTail>
           )}
           <span
+            ref={baseRef}
             data-testid="base-branch-file-row-base"
             className={cn(
               "shrink truncate font-medium font-mono text-2xs transition-colors duration-150 ease-out",
@@ -94,23 +117,40 @@ export function BaseBranchFileRow({
             <DiffStat insertions={insertions} deletions={deletions} />
           </div>
         )}
-        {hasBadge && (
-          <button
-            type="button"
-            onClick={onBadgeClick}
-            aria-label={badgeLabel}
-            disabled={!onBadgeClick}
-            className={cn(
-              "shrink-0 inline-flex ml-2 rounded-full",
-              onBadgeClick ? "cursor-pointer" : "cursor-default",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
-            )}
-          >
-            <Badge size="xs" tone="warning" shape="pill" className="tabular-nums">
-              {unresolvedDecoration!.badge}
+        {hasBadge &&
+          (onBadgeClick ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* min-h-6 min-w-6 is the 24px target (WCAG 2.5.8); -my-1 hands the
+                    extra height back so the row does not grow. */}
+                <button
+                  type="button"
+                  onClick={onBadgeClick}
+                  aria-label={badgeLabel}
+                  className={cn(
+                    "shrink-0 inline-flex items-center justify-center ml-1 -my-1 min-h-6 min-w-6 rounded-full cursor-pointer",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
+                  )}
+                >
+                  <Badge size="xs" tone="warning" shape="pill" className="tabular-nums">
+                    {unresolvedDecoration!.badge}
+                  </Badge>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">{badgeLabel}</TooltipContent>
+            </Tooltip>
+          ) : (
+            <Badge
+              size="xs"
+              tone="warning"
+              shape="pill"
+              className="ml-2 tabular-nums"
+              data-testid="base-branch-file-row-badge"
+            >
+              <span aria-hidden="true">{unresolvedDecoration!.badge}</span>
+              <span className="sr-only">{badgeLabel}</span>
             </Badge>
-          </button>
-        )}
+          ))}
       </div>
     </TruncatedTooltip>
   );

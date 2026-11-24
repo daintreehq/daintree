@@ -1,5 +1,7 @@
 import type {
+  CheckRun,
   CIStatus,
+  FetchOptions,
   Issue,
   IssueTooltipData,
   ListOptions,
@@ -14,6 +16,7 @@ import type {
 } from "../../../../shared/types/forge.js";
 import type {
   GitLabIssue,
+  GitLabJob,
   GitLabMergeRequest,
   GitLabProject,
   GitLabRelease,
@@ -26,13 +29,17 @@ import {
   gitlabRestPage,
   getRateLimitSnapshot,
   resetRateLimitSnapshots,
+  resetReadFlights,
+  resolveRequestAuth,
+  type QueryValue,
 } from "./GitLabClient.js";
 import { BoundedCache } from "./boundedCache.js";
-import { getInstanceHost } from "./GitLabAuth.js";
+import { GITLAB_API_TIMEOUT_MS, getInstanceHost } from "./GitLabAuth.js";
 import { encodeProjectId, repoFullPath } from "./gitlabRemote.js";
 import {
   absolutizeAvatarUrl,
   gitlabIssueToForgeIssue,
+  gitlabJobToCheckRun,
   gitlabReleaseToForgeRelease,
   graphqlMergeRequestToForgePR,
   issueToTooltipData,
@@ -62,6 +69,17 @@ const DEFAULT_LIST_PAGE_SIZE = 30;
 /** Branches per batched GraphQL branch→MR query. */
 export const GRAPHQL_BRANCH_CHUNK_SIZE = 20;
 
+/** Merge requests per batched GraphQL number→MR query. */
+export const GRAPHQL_IID_CHUNK_SIZE = 20;
+
+/**
+ * How long a batched MR read answers later reads. Long enough for the CI read
+ * that follows a PR revalidation in the same pass to reuse the pipeline status
+ * the PR read just fetched; far shorter than any poll interval, so it never
+ * stands in for a poll.
+ */
+const MERGE_REQUEST_CACHE_TTL_MS = 5_000;
+
 const issueTooltipCache = new BoundedCache<IssueTooltipData | null>({
   maxEntries: 200,
   retainMs: TOOLTIP_CACHE_TTL_MS,
@@ -89,11 +107,42 @@ const repoStatsCache = new BoundedCache<RepoStatsSnapshot>({
   maxEntries: 20,
   retainMs: REPO_STATS_STALE_RETAIN_MS,
 });
+/**
+ * One merge request as a batched GraphQL read saw it, or `null` when that read
+ * confirmed there is no such MR. `ciStatus` is `undefined` when the pipeline
+ * field was unreadable, which says nothing about whether CI exists.
+ */
+interface MergeRequestLookup {
+  pr: PR;
+  ciStatus: CIStatus | null | undefined;
+}
+/** `seq` orders entries by when their read was sent; see {@link cacheMergeRequest}. */
+interface CachedMergeRequest {
+  seq: number;
+  lookup: MergeRequestLookup | null;
+}
+const mergeRequestCache = new BoundedCache<CachedMergeRequest>({
+  maxEntries: 500,
+  // Resident past its freshness so its `seq` still turns away an older read
+  // that answers late. A read caches when its own requests settle — a GraphQL
+  // query and, at worst, a REST fallback after it, each bounded by the timeout.
+  retainMs: 4 * GITLAB_API_TIMEOUT_MS,
+});
+let mergeRequestReadSeq = 0;
+/** Pending number→MR chunks, so overlapping batch reads share one query. */
+const mergeRequestFlights = new Map<string, Promise<Map<number, MergeRequestLookup | null>>>();
+/**
+ * Hosts whose GraphQL schema can't serve the number query, so their batches go
+ * straight to REST instead of failing the query first on every poll. Cleared
+ * with the caches, so an upgraded instance is tried again.
+ */
+const restOnlyBatchHosts = new Set<string>();
 const allCaches: ReadonlyArray<BoundedCache<unknown>> = [
   issueTooltipCache,
   prTooltipCache,
   avatarCache,
   repoStatsCache,
+  mergeRequestCache,
 ];
 
 /**
@@ -125,6 +174,9 @@ export function clearGitLabCaches(): void {
   cacheGeneration += 1;
   for (const cache of allCaches) cache.clear();
   avatarInflight.clear();
+  mergeRequestFlights.clear();
+  restOnlyBatchHosts.clear();
+  resetReadFlights();
   if (sweepTimer !== null) {
     clearTimeout(sweepTimer);
     sweepTimer = null;
@@ -139,7 +191,7 @@ export function getGitLabCacheGeneration(): number {
 
 /** Resident entry counts, for tests that assert expired entries are released. */
 export function gitLabCacheSizesForTests(): Record<
-  "issueTooltips" | "prTooltips" | "avatars" | "repoStats",
+  "issueTooltips" | "prTooltips" | "avatars" | "repoStats" | "mergeRequests",
   number
 > {
   return {
@@ -147,6 +199,7 @@ export function gitLabCacheSizesForTests(): Record<
     prTooltips: prTooltipCache.size,
     avatars: avatarCache.size,
     repoStats: repoStatsCache.size,
+    mergeRequests: mergeRequestCache.size,
   };
 }
 
@@ -196,6 +249,7 @@ export async function listIssuesImpl(repo: RepoRef, opts: ListOptions): Promise<
     host: repo.host,
     path: `/projects/${encodeProjectId(repo)}/issues`,
     query: listQuery(opts, mapIssueListState(opts.state)),
+    ...(opts.bypassCache ? { fresh: true } : {}),
   });
   return {
     // An entry with no `iid` maps to issue #0 with an empty URL — unopenable
@@ -212,6 +266,7 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
     host: repo.host,
     path: `/projects/${encodeProjectId(repo)}/merge_requests`,
     query: listQuery(opts, mapMRListState(opts.state)),
+    ...(opts.bypassCache ? { fresh: true } : {}),
   });
   return {
     items: withUsableNumber(page.items).map((mr) => mergeRequestToForgePR(mr, repo.host)),
@@ -227,11 +282,16 @@ function nullOn404<T>(err: unknown): T | null {
   throw err;
 }
 
-export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue | null> {
+export async function getIssueImpl(
+  repo: RepoRef,
+  number: number,
+  options?: FetchOptions
+): Promise<Issue | null> {
   try {
     const { data } = await gitlabRest<GitLabIssue>({
       host: repo.host,
       path: `/projects/${encodeProjectId(repo)}/issues/${number}`,
+      ...(options?.fresh ? { fresh: true } : {}),
     });
     return gitlabIssueToForgeIssue(data, repo.host);
   } catch (err) {
@@ -239,11 +299,16 @@ export async function getIssueImpl(repo: RepoRef, number: number): Promise<Issue
   }
 }
 
-export async function getPRImpl(repo: RepoRef, number: number): Promise<PR | null> {
+export async function getPRImpl(
+  repo: RepoRef,
+  number: number,
+  options?: FetchOptions
+): Promise<PR | null> {
   try {
     const { data } = await gitlabRest<GitLabMergeRequest>({
       host: repo.host,
       path: `/projects/${encodeProjectId(repo)}/merge_requests/${number}`,
+      ...(options?.fresh ? { fresh: true } : {}),
     });
     return mergeRequestToForgePR(data, repo.host);
   } catch (err) {
@@ -292,12 +357,13 @@ query DaintreeMRsForBranches($fullPath: ID!, $branches: [String!]) {
         author { username avatarUrl }
         headPipeline { status }
         detailedMergeStatus
+        userNotesCount
       }
     }
   }
 }`;
 
-interface BranchBatchResponse {
+interface MergeRequestsResponse {
   project: {
     mergeRequests: {
       pageInfo?: { hasNextPage?: boolean } | null;
@@ -324,12 +390,14 @@ export async function findPRsByBranchesImpl(
 ): Promise<Map<string, PR | null>> {
   const unique = [...new Set(branches.filter((b) => typeof b === "string" && b.length > 0))];
   const result = new Map<string, PR | null>();
+  const epoch = cacheEpoch();
 
   for (let start = 0; start < unique.length; start += GRAPHQL_BRANCH_CHUNK_SIZE) {
     const chunk = unique.slice(start, start + GRAPHQL_BRANCH_CHUNK_SIZE);
-    let response: BranchBatchResponse;
+    const seq = ++mergeRequestReadSeq;
+    let response: MergeRequestsResponse;
     try {
-      response = await gitlabGraphQL<BranchBatchResponse>(repo.host, BRANCH_BATCH_QUERY, {
+      response = await gitlabGraphQL<MergeRequestsResponse>(repo.host, BRANCH_BATCH_QUERY, {
         fullPath: repoFullPath(repo),
         branches: chunk,
       });
@@ -345,8 +413,12 @@ export async function findPRsByBranchesImpl(
     }
     const found = new Map<string, PR>();
     for (const node of nodes) {
-      const pr = graphqlMergeRequestToForgePR(node, repo.host);
-      if (!pr || pr.headRef.length === 0) continue;
+      const lookup = mergeRequestLookupFromNode(node, repo.host);
+      if (!lookup) continue;
+      // A newly detected MR's CI read follows within the same pass.
+      cacheMergeRequest(repo, lookup.pr.number, lookup, seq, epoch);
+      const pr = lookup.pr;
+      if (pr.headRef.length === 0) continue;
       if (!found.has(pr.headRef)) found.set(pr.headRef, pr);
     }
     // A truncated window (100+ MRs across the chunk's branches) means a
@@ -382,16 +454,442 @@ export async function getCIStatusImpl(repo: RepoRef, prNumber: number): Promise<
   } catch (err) {
     return nullOn404<CIStatus>(err);
   }
-  const state = pipelineStatusToCIState(mr.head_pipeline?.status);
-  if (!state || !mr.head_pipeline) return null;
+  return ciStatusFromPipeline(mr.head_pipeline?.status, mr.head_pipeline) ?? null;
+}
+
+/**
+ * GitLab reports one head-pipeline status rather than per-check counts, so the
+ * roll-up projects that single status. `undefined` when there is no status to
+ * read.
+ */
+function ciStatusFromPipeline(status: unknown, rawData: unknown): CIStatus | undefined {
+  const state = pipelineStatusToCIState(status);
+  if (!state || !rawData) return undefined;
   return {
     state,
     total: 1,
     passed: state === "success" ? 1 : 0,
     failed: state === "failure" ? 1 : 0,
     pending: state === "pending" ? 1 : 0,
-    rawData: mr.head_pipeline,
+    rawData,
   };
+}
+
+/** Jobs per page on a pipeline's job lists: GitLab's maximum. */
+const CHECKS_PAGE_SIZE = 100;
+
+/**
+ * Ceiling on pages walked per job list by one {@link getChecksImpl} call, 1000
+ * jobs, far past any real pipeline. It exists so a next-page header that never
+ * runs out can't loop against a rate-limited API, and it rejects rather than
+ * truncating.
+ */
+const MAX_CHECK_PAGES = 10;
+
+async function listPipelineJobs(
+  host: string,
+  path: string,
+  query: Record<string, QueryValue>,
+  fresh: boolean,
+  incomplete: (why: string) => Error
+): Promise<GitLabJob[]> {
+  const jobs: GitLabJob[] = [];
+  const seenPages = new Set<string>();
+  const seenIds = new Set<number>();
+  let page = "1";
+  for (let i = 0; i < MAX_CHECK_PAGES; i++) {
+    seenPages.add(page);
+    const result = await gitlabRestPage<GitLabJob>({
+      host,
+      path,
+      query: { ...query, per_page: CHECKS_PAGE_SIZE, page },
+      ...(fresh ? { fresh: true } : {}),
+    });
+    for (const job of result.items) {
+      const id = job && typeof job === "object" ? job.id : undefined;
+      // Offset pages over a list that changed between reads: a retry adds an
+      // attempt at the top, so an entry read already comes round again while
+      // the job it pushed down is never read at all.
+      if (typeof id === "number") {
+        if (seenIds.has(id)) throw incomplete("the pipeline changed mid-read");
+        seenIds.add(id);
+      }
+      jobs.push(job);
+    }
+    let next = result.nextCursor;
+    // A full page with no next page may be a proxy that dropped GitLab's
+    // pagination headers rather than the last page; the next page settles it.
+    if (next === null && result.items.length >= CHECKS_PAGE_SIZE) {
+      next = String(Number.parseInt(page, 10) + 1);
+    }
+    if (next === null) return jobs;
+    // A next page that repeats one already read would loop, or drop the rest.
+    if (seenPages.has(next)) throw incomplete("pagination stalled");
+    page = next;
+  }
+  throw incomplete(`more than ${MAX_CHECK_PAGES * CHECKS_PAGE_SIZE} jobs`);
+}
+
+/**
+ * GitLab names every job in a pipeline uniquely, so two entries sharing a name
+ * are attempts of one job: a retried trigger job (the bridges list documents no
+ * `include_retried`), or a job retried between the job and status reads. The
+ * newer attempt replaces the older in place. Entries without ids to compare are
+ * all kept, since dropping one would hide a check.
+ */
+function latestAttempts(jobs: readonly GitLabJob[]): GitLabJob[] {
+  const out: GitLabJob[] = [];
+  const indexByName = new Map<string, number>();
+  for (const job of jobs) {
+    const name = job && typeof job === "object" ? job.name : undefined;
+    const at = typeof name === "string" ? indexByName.get(name) : undefined;
+    if (at === undefined) {
+      if (typeof name === "string") indexByName.set(name, out.length);
+      out.push(job);
+      continue;
+    }
+    const keptId = out[at].id;
+    if (typeof keptId === "number" && typeof job.id === "number") {
+      if (job.id > keptId) out[at] = job;
+    } else {
+      out.push(job);
+    }
+  }
+  return out;
+}
+
+/**
+ * Per-job CI detail for one merge request: every job, trigger job and external
+ * commit status in its head pipeline, the latest attempt of each.
+ *
+ * `null` only when the merge request doesn't exist, and `{ checks: [] }` only
+ * when GitLab says it has no pipeline. Anything else that stops a complete read
+ * rejects: a short list would answer "which job failed?" wrongly.
+ */
+export async function getChecksImpl(
+  repo: RepoRef,
+  prNumber: number,
+  options?: FetchOptions
+): Promise<{ checks: CheckRun[] } | null> {
+  const fresh = options?.fresh === true;
+  let mr: GitLabMergeRequest;
+  try {
+    const { data } = await gitlabRest<GitLabMergeRequest>({
+      host: repo.host,
+      path: `/projects/${encodeProjectId(repo)}/merge_requests/${prNumber}`,
+      ...(fresh ? { fresh: true } : {}),
+    });
+    mr = data;
+  } catch (err) {
+    return nullOn404(err);
+  }
+
+  const incomplete = (why: string): Error =>
+    new Error(`Could not read all checks for merge request !${prNumber}: ${why}`);
+  if (!mr || typeof mr !== "object" || Array.isArray(mr)) {
+    throw incomplete("GitLab returned an unreadable merge request");
+  }
+
+  const pipeline = mr.head_pipeline;
+  // Only an explicit `null` says no pipeline has run. GitLab leaves the field
+  // out for an account that can't read pipelines, and "no checks" is the wrong
+  // answer to give it.
+  if (pipeline === null) return { checks: [] };
+  if (!pipeline || typeof pipeline !== "object") {
+    throw incomplete("GitLab didn't report the merge request's pipeline");
+  }
+  const pipelineId = pipeline.id;
+  if (typeof pipelineId !== "number" || !Number.isSafeInteger(pipelineId) || pipelineId <= 0) {
+    throw incomplete("GitLab reported a pipeline with no id");
+  }
+  // A fork's merge request usually runs its pipeline in the fork, where the
+  // pipeline id belongs to the fork's project rather than this one.
+  const projectId =
+    typeof pipeline.project_id === "number" &&
+    Number.isSafeInteger(pipeline.project_id) &&
+    pipeline.project_id > 0
+      ? String(pipeline.project_id)
+      : encodeProjectId(repo);
+  const sha = pipeline.sha;
+  if (typeof sha !== "string" || !sha) {
+    throw incomplete("GitLab reported a pipeline with no commit");
+  }
+  const base = `/projects/${projectId}/pipelines/${pipelineId}`;
+  // The commit statuses list wants a signed-in account even on a public
+  // project, where the job lists don't. A read that goes out without a token
+  // can only list the pipeline's own jobs; one that carries a token reads the
+  // statuses too, and any failure there rejects like the rest.
+  const signedIn = (await resolveRequestAuth(repo.host)).token !== null;
+
+  const [jobs, bridges, statuses] = await Promise.all([
+    listPipelineJobs(repo.host, `${base}/jobs`, { include_retried: false }, fresh, incomplete),
+    listPipelineJobs(repo.host, `${base}/bridges`, {}, fresh, incomplete),
+    // An external CI (Jenkins posting commit statuses) lands in the pipeline as
+    // statuses neither job list returns. This list holds every kind, so only
+    // the ones the job lists didn't already give are kept.
+    signedIn
+      ? listPipelineJobs(
+          repo.host,
+          `/projects/${projectId}/repository/commits/${encodeURIComponent(sha)}/statuses`,
+          {
+            pipeline_id: pipelineId,
+            ...(typeof pipeline.ref === "string" && pipeline.ref ? { ref: pipeline.ref } : {}),
+          },
+          fresh,
+          incomplete
+        )
+      : Promise.resolve<GitLabJob[]>([]),
+  ]);
+
+  const listed = new Set<number>();
+  for (const job of [...jobs, ...bridges]) {
+    if (job && typeof job === "object" && typeof job.id === "number") listed.add(job.id);
+  }
+  const external = statuses.filter((status) => {
+    if (!status || typeof status !== "object") return true;
+    if (typeof status.id === "number" && listed.has(status.id)) return false;
+    // GitLab before 17.9 ignores `pipeline_id` and answers for every pipeline
+    // on the commit.
+    return status.pipeline_id === undefined || status.pipeline_id === pipelineId;
+  });
+
+  const checks: CheckRun[] = [];
+  for (const job of latestAttempts([...jobs, ...bridges, ...external])) {
+    const check = gitlabJobToCheckRun(job);
+    if (!check) throw incomplete("GitLab returned a job with no name");
+    checks.push(check);
+  }
+  return { checks };
+}
+
+function mergeRequestKey(repo: RepoRef, iid: number): string {
+  return `${repo.host.toLowerCase()}/${repoFullPath(repo)}!${iid}`;
+}
+
+/**
+ * Overlapping reads can answer out of order: an ordinary batch sent before a
+ * fresh one may land after it, and must not put the older view back.
+ */
+function cacheMergeRequest(
+  repo: RepoRef,
+  iid: number,
+  lookup: MergeRequestLookup | null,
+  seq: number,
+  epoch: number
+): void {
+  const key = mergeRequestKey(repo, iid);
+  const existing = mergeRequestCache.peek(key);
+  if (existing && existing.seq > seq) return;
+  cacheSet(mergeRequestCache, key, { seq, lookup }, epoch);
+}
+
+function mergeRequestLookupFromNode(
+  node: Record<string, unknown>,
+  host: string
+): MergeRequestLookup | null {
+  const pr = graphqlMergeRequestToForgePR(node, host);
+  if (!pr) return null;
+  const pipeline = node.headPipeline as { status?: unknown } | null | undefined;
+  // An explicit `null` is GitLab saying the MR has no head pipeline; a missing
+  // or malformed field is not evidence of that.
+  const ciStatus =
+    pipeline === null
+      ? null
+      : pipeline && typeof pipeline === "object"
+        ? ciStatusFromPipeline(pipeline.status, pipeline)
+        : undefined;
+  return { pr, ciStatus };
+}
+
+const IID_BATCH_QUERY = `
+query DaintreeMRsByIids($fullPath: ID!, $iids: [String!], $first: Int) {
+  project(fullPath: $fullPath) {
+    mergeRequests(iids: $iids, first: $first) {
+      pageInfo { hasNextPage }
+      nodes {
+        iid
+        title
+        description
+        state
+        draft
+        sourceBranch
+        targetBranch
+        webUrl
+        createdAt
+        updatedAt
+        mergedAt
+        closedAt
+        author { username avatarUrl }
+        headPipeline { status }
+        detailedMergeStatus
+        userNotesCount
+      }
+    }
+  }
+}`;
+
+/**
+ * A failure that says this instance can't serve the query at all, rather than
+ * that this attempt didn't land: no GraphQL endpoint, or a schema older than a
+ * field or argument the query uses. Other GraphQL errors (a resolver timeout,
+ * a gateway page) are transient and only omit the chunk.
+ */
+function isUnservableBatchQuery(err: unknown): boolean {
+  if (!(err instanceof GitLabApiError)) return false;
+  if (err.status === 404) return true;
+  return (
+    err.status === 200 &&
+    /doesn't exist on type|doesn't accept argument|isn't a defined input type/i.test(err.message)
+  );
+}
+
+/**
+ * The same answers from one REST read per MR, for an instance whose GraphQL
+ * can't serve the batch. One read still carries both the MR and its pipeline.
+ */
+async function fetchMergeRequestsOverRest(
+  repo: RepoRef,
+  chunk: number[]
+): Promise<Map<number, MergeRequestLookup | null>> {
+  const result = new Map<number, MergeRequestLookup | null>();
+  await Promise.all(
+    chunk.map(async (iid) => {
+      try {
+        // Fresh: joining a read already in flight would cache its older view
+        // under this chunk's newer `seq`.
+        const { data } = await gitlabRest<GitLabMergeRequest>({
+          host: repo.host,
+          path: `/projects/${encodeProjectId(repo)}/merge_requests/${iid}`,
+          fresh: true,
+        });
+        result.set(iid, {
+          pr: mergeRequestToForgePR(data, repo.host),
+          ciStatus: ciStatusFromPipeline(data.head_pipeline?.status, data.head_pipeline) ?? null,
+        });
+      } catch (err) {
+        if (err instanceof GitLabApiError && err.status === 404) result.set(iid, null);
+      }
+    })
+  );
+  return result;
+}
+
+async function fetchMergeRequestChunk(
+  repo: RepoRef,
+  chunk: number[]
+): Promise<Map<number, MergeRequestLookup | null>> {
+  const host = repo.host.toLowerCase();
+  if (restOnlyBatchHosts.has(host)) return fetchMergeRequestsOverRest(repo, chunk);
+  const result = new Map<number, MergeRequestLookup | null>();
+  const epoch = cacheEpoch();
+  let response: MergeRequestsResponse;
+  try {
+    response = await gitlabGraphQL<MergeRequestsResponse>(repo.host, IID_BATCH_QUERY, {
+      fullPath: repoFullPath(repo),
+      iids: chunk.map(String),
+      first: chunk.length,
+    });
+  } catch (err) {
+    if (!isUnservableBatchQuery(err)) return result;
+    if (epoch === cacheGeneration) restOnlyBatchHosts.add(host);
+    return fetchMergeRequestsOverRest(repo, chunk);
+  }
+  const connection = response.project?.mergeRequests;
+  const nodes = connection?.nodes;
+  // `project: null` is no access or no such project; absence is unconfirmed.
+  if (!connection || !Array.isArray(nodes)) return result;
+  for (const node of nodes) {
+    const lookup = mergeRequestLookupFromNode(node, repo.host);
+    if (lookup && chunk.includes(lookup.pr.number)) result.set(lookup.pr.number, lookup);
+  }
+  if (connection.pageInfo?.hasNextPage !== true) {
+    for (const iid of chunk) if (!result.has(iid)) result.set(iid, null);
+  }
+  return result;
+}
+
+/**
+ * Merge requests by number, as one GraphQL query per
+ * {@link GRAPHQL_IID_CHUNK_SIZE} rather than one REST read per MR — and the
+ * same read answers both the PR and its CI, which REST fetched separately. A
+ * present key is authoritative; an omitted one didn't get an answer this time.
+ * `fresh` skips both the short cache and any read already in flight, which may
+ * have started before the caller's last observation. Chunks run together so a
+ * large set answers within one request's time.
+ */
+async function lookupMergeRequests(
+  repo: RepoRef,
+  iids: number[],
+  fresh: boolean
+): Promise<Map<number, MergeRequestLookup | null>> {
+  const unique = [...new Set(iids.filter((n) => Number.isInteger(n) && n > 0))].sort(
+    (a, b) => a - b
+  );
+  const result = new Map<number, MergeRequestLookup | null>();
+  const epoch = cacheEpoch();
+  const missing: number[] = [];
+  for (const iid of unique) {
+    const cached = fresh
+      ? undefined
+      : mergeRequestCache.get(mergeRequestKey(repo, iid), MERGE_REQUEST_CACHE_TTL_MS);
+    if (cached === undefined) missing.push(iid);
+    else result.set(iid, cached.lookup);
+  }
+
+  const flights: Array<Promise<Map<number, MergeRequestLookup | null>>> = [];
+  for (let start = 0; start < missing.length; start += GRAPHQL_IID_CHUNK_SIZE) {
+    const chunk = missing.slice(start, start + GRAPHQL_IID_CHUNK_SIZE);
+    const flightKey = `${repo.host.toLowerCase()}/${repoFullPath(repo)}!${chunk.join(",")}`;
+    const pending = fresh ? undefined : mergeRequestFlights.get(flightKey);
+    if (pending) {
+      flights.push(pending);
+      continue;
+    }
+    const seq = ++mergeRequestReadSeq;
+    // Cached once, by the flight itself: a caller that joined it may finish much
+    // later, waiting on a slower chunk of its own.
+    const started: Promise<Map<number, MergeRequestLookup | null>> = fetchMergeRequestChunk(
+      repo,
+      chunk
+    )
+      .then((answers) => {
+        for (const [iid, lookup] of answers) cacheMergeRequest(repo, iid, lookup, seq, epoch);
+        return answers;
+      })
+      .finally(() => {
+        if (mergeRequestFlights.get(flightKey) === started) mergeRequestFlights.delete(flightKey);
+      });
+    mergeRequestFlights.set(flightKey, started);
+    flights.push(started);
+  }
+  for (const answers of await Promise.all(flights)) {
+    for (const [iid, lookup] of answers) result.set(iid, lookup);
+  }
+  return result;
+}
+
+export async function findPRsByNumbersImpl(
+  repo: RepoRef,
+  prNumbers: number[],
+  options?: FetchOptions
+): Promise<Map<number, PR | null>> {
+  const lookups = await lookupMergeRequests(repo, prNumbers, options?.fresh === true);
+  const result = new Map<number, PR | null>();
+  for (const [iid, lookup] of lookups) result.set(iid, lookup ? lookup.pr : null);
+  return result;
+}
+
+export async function getCIStatusesImpl(
+  repo: RepoRef,
+  prNumbers: number[]
+): Promise<Map<number, CIStatus | null>> {
+  const lookups = await lookupMergeRequests(repo, prNumbers, false);
+  const result = new Map<number, CIStatus | null>();
+  for (const [iid, lookup] of lookups) {
+    if (lookup === null) result.set(iid, null);
+    else if (lookup.ciStatus !== undefined) result.set(iid, lookup.ciStatus);
+  }
+  return result;
 }
 
 export async function getRepoMetadataImpl(repo: RepoRef): Promise<RepoMetadata> {
@@ -587,25 +1085,19 @@ export async function getRepoStatsImpl(
   const now = Date.now();
   try {
     const [issuesPage, mrsPage] = await Promise.all([
+      // The default list query, so a first-page list read in flight at the
+      // same moment joins this request rather than repeating it.
       gitlabRestPage<GitLabIssue>({
         host: repo.host,
         path: `/projects/${encodeProjectId(repo)}/issues`,
-        query: {
-          state: "opened",
-          per_page: DEFAULT_LIST_PAGE_SIZE,
-          order_by: "created_at",
-          sort: "desc",
-        },
+        query: listQuery({}, mapIssueListState("open")),
+        ...(opts?.bypassCache ? { fresh: true } : {}),
       }),
       gitlabRestPage<GitLabMergeRequest>({
         host: repo.host,
         path: `/projects/${encodeProjectId(repo)}/merge_requests`,
-        query: {
-          state: "opened",
-          per_page: DEFAULT_LIST_PAGE_SIZE,
-          order_by: "created_at",
-          sort: "desc",
-        },
+        query: listQuery({}, mapMRListState("open")),
+        ...(opts?.bypassCache ? { fresh: true } : {}),
       }),
     ]);
 

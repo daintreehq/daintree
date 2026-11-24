@@ -109,6 +109,13 @@ export function ProjectThemeRows() {
         onReset={() => void setTheme(null)}
         resetAriaLabel="Use the global theme in this project"
         error={themeError}
+        errorAction={
+          themeError !== undefined ? (
+            <Button variant="outline" size="sm" onClick={retryFailedSave}>
+              Retry
+            </Button>
+          ) : undefined
+        }
       />
       {suggestion !== null && suggestionDescription !== null && (
         <SettingsRow

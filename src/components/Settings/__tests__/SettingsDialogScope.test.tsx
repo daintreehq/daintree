@@ -87,6 +87,13 @@ describe("settings scope orientation", () => {
       // The signal has to reach a screen reader too, not just the eye.
       expect(screen.getByText(/switches to/i)).toBeTruthy();
     });
+
+    it("discloses a cross-scope switch through a tooltip, never a native title", () => {
+      const { container } = render(
+        <ScopeChip scope="project" projectLabel="Helios Dashboard" crossScope />
+      );
+      expect(container.querySelector("[title]")).toBeNull();
+    });
   });
 
   describe("sidebar markers", () => {

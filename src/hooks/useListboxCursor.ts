@@ -106,6 +106,35 @@ export function stepListboxCursor(
   }
 }
 
+/** Rows a page key moves a palette cursor, matching the tree palettes. */
+export const LISTBOX_PAGE_SIZE = 10;
+
+/**
+ * Where a list cursor goes for PageUp/PageDown: a fixed number of rows that
+ * stops at the ends rather than wrapping, because a page key that went round a
+ * short list would land back where it started and look like it did nothing.
+ * A fixed count rather than a measured page, since palette rows vary in height
+ * and render progressively. Returns `null` for any other key and for an empty
+ * list. An `index` outside the list pages from the first row.
+ */
+export function pageListboxCursor(
+  key: string,
+  index: number,
+  count: number,
+  pageSize: number = LISTBOX_PAGE_SIZE
+): number | null {
+  if (count <= 0) return null;
+  const from = index >= 0 && index < count ? index : 0;
+  switch (key) {
+    case "PageDown":
+      return Math.min(count - 1, from + pageSize);
+    case "PageUp":
+      return Math.max(0, from - pageSize);
+    default:
+      return null;
+  }
+}
+
 /**
  * Whether a key belongs to the field rather than the list. The list steps on
  * bare keys only: Shift+Home selects the field's text, Cmd+Arrow moves its

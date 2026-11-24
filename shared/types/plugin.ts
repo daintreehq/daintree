@@ -12,6 +12,11 @@ import type {
   ResourceRef,
 } from "./forge.js";
 import type { PluginArtifactApi } from "./pluginArtifacts.js";
+import type {
+  CloudProviderContribution,
+  CloudProviderDescriptor,
+  CloudProviderImpl,
+} from "./pluginCloudProvider.js";
 export type {
   PluginArtifact,
   PluginArtifactApi,
@@ -35,6 +40,7 @@ import type {
   PluginCanDispatchResult,
 } from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
+import type { TerminalInputLine } from "./terminalStatus.js";
 import type {
   AgentDetectionConfig,
   AgentInitialPromptForm,
@@ -61,6 +67,7 @@ import type {
 } from "./plugin/fileEditors.js";
 export {
   DEFAULT_FILE_EDITOR_MAX_BYTES,
+  FILE_EDITOR_MAX_BYTES_CEILING,
   HOST_FILE_EDITOR_CHOICE,
   isFileEditorChoiceKey,
   fileEditorChoiceId,
@@ -123,6 +130,7 @@ import type {
   PluginApplicationDescriptor,
   ProjectApplicationState,
 } from "./plugin/projectApplication.js";
+import type { PluginCloudAccountInfo } from "./cloudHosts.js";
 export {
   PLUGIN_APPLICATION_DESTINATIONS,
   PLUGIN_APPLICATION_ARRANGEMENTS,
@@ -630,7 +638,13 @@ export interface PluginSearchProviderInfo {
   kind: "declarative" | "runtime";
   /** The user's "Show in quick switcher" choice. */
   shown: boolean;
-  /** Another plugin's provider registered the same keyword first in this project; this one is refused. */
+  /**
+   * A shown provider of another plugin registered the same keyword first in
+   * this project, so this one is refused, and would still be if it were
+   * switched off and then on. A switched-off provider claims no keyword.
+   * Daintree's own file search holds its keyword (`files`) ahead of every
+   * plugin, and is named here as "Daintree".
+   */
   keywordTakenBy?: string;
 }
 
@@ -969,8 +983,11 @@ export type MenuItemLocation = "terminal" | "file" | "view" | "help";
 // `"panel"` was removed (#10512): no renderer surface ever mounted
 // `usePluginContextMenuItems("panel")`, so a contributed panel context-menu item
 // was silently dead. Only `worktree` / `terminal` / `file` / `browser` /
-// `project` have live consumers (`project` is the toolbar project pill).
-export type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project";
+// `project` / `assistant` have live consumers (`project` is the toolbar project
+// pill; `assistant` is the Assistant panel's session menus, kept apart from
+// `terminal` so an item written for worker panes never lands on an assistant).
+export type ContextMenuLocation =
+  "worktree" | "terminal" | "file" | "browser" | "project" | "assistant";
 
 export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "fs:project-read",
@@ -1131,9 +1148,10 @@ export interface MenuItemContribution {
 export interface KeybindingContribution {
   actionId: ActionId;
   combo: string;
-  // Mirrors the manifest schema's scope enum (electron/schemas/plugin.ts) so
-  // plugin authors can't compile against a scope the manifest gate rejects.
-  scope?: import("./keybinding.js").KeyScope;
+  // The manifest schema's scope enum, deliberately not the app's `KeyScope`: a
+  // scope the app retires stays declarable here, and its bindings are dropped
+  // rather than failing the manifest's types (#17245).
+  scope?: import("../config/pluginKeybindingScopes.js").PluginKeybindingScope;
   description?: string;
   when?: string;
 }
@@ -1154,6 +1172,74 @@ export interface ContextMenuContribution {
   extensions?: string[];
   /** `location: "file"` only: worktree-relative globs, any of which must match. */
   paths?: string[];
+  /**
+   * Opts the item into an availability check (#18141). Each time a menu shows
+   * the item, the host asks the plugin's {@link CONTEXT_MENU_AVAILABILITY_CHANNEL}
+   * handler with this id and the clicked subject, and keeps the item visible but
+   * disabled, with the answer beside it, when the plugin names a reason. Letters,
+   * digits, `_` and `-`, at most 64 characters. Omitted, the item is offered as
+   * soon as its `when` holds, without asking.
+   */
+  availability?: string;
+}
+
+/**
+ * The handler channel a plugin registers with {@link PluginHostApi.registerHandler}
+ * to answer for its `contributes.contextMenus` items that set `availability`
+ * (#18141). The handler receives one {@link ContextMenuAvailabilityRequest} and
+ * returns `null` when the item can run on that subject, or a short reason when
+ * it can't. A reason is one line of at most
+ * {@link CONTEXT_MENU_AVAILABILITY_REASON_MAX} characters.
+ *
+ * The answer is advisory: the item is disabled while the menu waits (up to
+ * {@link CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS} from opening, starting the
+ * plugin included), and when the handler is missing, throws, answers late or
+ * answers anything else, the item is offered as it would be without the check.
+ * The host separately stops waiting for the handler that long after it
+ * starts, whatever longer `timeoutMs` it was registered with.
+ */
+export const CONTEXT_MENU_AVAILABILITY_CHANNEL = "@daintree/context-menu-availability";
+
+/** Max length of a reason a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler returns. */
+export const CONTEXT_MENU_AVAILABILITY_REASON_MAX = 120;
+
+/**
+ * How long a menu waits for a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} answer
+ * before offering the item anyway, and the longest the host waits for the handler.
+ */
+export const CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS = 3000;
+
+/**
+ * What a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler is asked: the
+ * item's `availability` id, its `location`, and the subject the menu was
+ * opened on. Only the subject fields that location carries are present.
+ */
+export interface ContextMenuAvailabilityRequest {
+  /** The item's manifest `availability` id. */
+  availability: string;
+  location: ContextMenuLocation;
+  /** `terminal` and `browser`: the panel the menu was opened on. */
+  panelId?: string;
+  /** `terminal` and `browser`: that panel's kind. */
+  panelKind?: string;
+  /** `terminal` (when the panel has one) and `worktree`: the worktree. */
+  worktreeId?: string;
+  /** `project`, and `assistant` on a project session: the project. */
+  projectId?: string;
+  /** `file`: the row's path relative to its worktree root, when it is inside one. */
+  relativePath?: string;
+  /** `file`: whether the row is a folder. */
+  isDirectory?: boolean;
+  /** `assistant`: a project assistant session or the global assistant. */
+  assistantScope?: "project" | "global";
+  /** `assistant`: the session's terminal, when it is up. */
+  terminalId?: string;
+  /** `assistant`: the agent the session runs, when known. */
+  agentId?: string;
+  /** `assistant`, project sessions: the lane's zero-based slot. */
+  slot?: number;
+  /** `assistant`, global: which launch of that terminal. */
+  incarnation?: number;
 }
 
 /**
@@ -1306,6 +1392,11 @@ interface PluginHostedViewDescriptorBase {
   componentPath: string;
   /** For a `location: "fileEditor"` view, the file editors it backs (#13809). */
   fileEditors?: readonly HostedFileEditorDescriptor[];
+  /**
+   * The plugin ships with Daintree. Carried on the view so whoever chooses
+   * between views learns it from the same snapshot, never a later one.
+   */
+  builtin?: boolean;
 }
 
 export interface PluginSettingsHostedViewDescriptor extends PluginHostedViewDescriptorBase {
@@ -1813,11 +1904,13 @@ export interface PanelViewProps {
   /**
    * Present only for a `location: "fileEditor"` view (#13809): the file it was
    * opened for, owned by the host. Read it with a revision, save against the
-   * revision you read, and report your unsaved text with `setDraft` so the
-   * host's dirty indicator, Rendered preview and Save / Discard / Cancel prompt
-   * on close all apply. The draft is the host's, not the view's: it survives
-   * the user switching to Source and back, and the close prompt can save it
-   * after your view has unmounted.
+   * revision you read, and report your unsaved text with `setDraft`, naming the
+   * revision it started from, so the host's dirty indicator, Rendered preview
+   * and Save / Discard / Cancel prompt on close all apply. The draft is the
+   * host's, not the view's: it survives the user switching to Source and back,
+   * and the close prompt can save it after your view has unmounted. Calls made
+   * after your view unmounts change nothing, so flush a pending (debounced)
+   * draft in your unmount cleanup.
    */
   readonly fileDocument?: PluginFileDocument;
   /**
@@ -3114,6 +3207,14 @@ export interface PluginManifest {
      */
     worktreeDeleteNotes?: WorktreeDeleteNotesContribution[];
     /**
+     * Cloud providers an installed plugin runs in its worker (#17351), each
+     * registered as `{pluginId}.{id}`. Optional in the type but always
+     * materialized by the manifest schema's `.default([])`. Refused for a
+     * project plugin: a repository must never add a provider that creates
+     * machines.
+     */
+    cloudProviders?: CloudProviderContribution[];
+    /**
      * Plugin-contributed file editors (#12323): an extra, writable mode on the
      * host's file panel for the declared extensions. Built-in plugins only in
      * v1 — the slot resolves through the host-bundled builtin view registry,
@@ -4068,7 +4169,45 @@ export interface PluginCatalogProvenance {
   version: string;
   /** `https://github.com/{owner}/{repo}`, as the catalog lists it. */
   repo: string;
+  /**
+   * The catalog that listed the release, when it is one the person added
+   * (#17434), as its normalized URL. Absent means Daintree's own catalog, which
+   * is what every record written before added catalogs existed reads as, so
+   * those installs keep checking where they always did.
+   */
+  sourceUrl?: string;
 }
+
+/**
+ * Why a catalog URL wasn't added (#17434): not an `https://` URL that parses
+ * (`malformed`, `insecure`), carries a user name or password (`credentials`),
+ * names a private or loopback host (`private-host`), is longer than the limit
+ * (`too-long`), is Daintree's own catalog (`builtin`), is already in the list
+ * (`duplicate`), or the list is full (`too-many`).
+ */
+export type PluginCatalogSourceRefusal =
+  | "malformed"
+  | "insecure"
+  | "credentials"
+  | "private-host"
+  | "too-long"
+  | "builtin"
+  | "duplicate"
+  | "too-many";
+
+/**
+ * The catalogs this machine's person added beside Daintree's own (#17434), in
+ * the order they were added, each as its normalized URL. Kept in their own
+ * settings, never a repository's, and never synced to a host.
+ */
+export interface PluginCatalogSources {
+  sources: string[];
+}
+
+/** Outcome of adding a catalog: the list as it now stands either way. */
+export type PluginCatalogSourceAddResult =
+  | { status: "added"; sourceUrl: string; sources: string[] }
+  | { status: "refused"; reason: PluginCatalogSourceRefusal; sources: string[] };
 
 /**
  * Why a recognised `daintree://plugin/install` link was refused before
@@ -4080,6 +4219,7 @@ export interface PluginCatalogProvenance {
  * - `malformed-sha256` — `sha256` isn't 64 hex digits
  * - `malformed-id` — `id` isn't a community plugin id (`publisher.name`, outside `daintree.*`)
  * - `malformed-version` — `version` isn't a semver version
+ * - `malformed-source` — `source` isn't an `https://` catalog URL (#17434)
  * - `conflicting-params` — parameters that don't belong together, or repeat
  */
 export type PluginDeepLinkRefusal =
@@ -4088,6 +4228,7 @@ export type PluginDeepLinkRefusal =
   | "malformed-sha256"
   | "malformed-id"
   | "malformed-version"
+  | "malformed-source"
   | "conflicting-params";
 
 /**
@@ -4102,9 +4243,11 @@ export type PluginDeepLinkRefusal =
  *   user presses install, so the HTTP warning fires before the preview. With
  *   `&sha256=<64 hex>` (https only) the archive is previewed straight away and
  *   only an archive with that digest can be previewed or installed.
- * - `install-catalog` — `daintree://plugin/install?id=<publisher.name>[&version=]`:
+ * - `install-catalog` — `daintree://plugin/install?id=<publisher.name>[&version=][&source=]`:
  *   resolves the release from a freshly fetched community catalog (the newest
  *   one when no version is named), previews it, and installs only its digest.
+ *   `source` names a catalog the person added (#17434); a link can't add one,
+ *   so a catalog they haven't added is refused before anything is fetched.
  * - `install-refused` — a recognised install link that is malformed; the
  *   Plugin Manager says why.
  * - `open` — `daintree://plugin/open?id=<publisher.name>`: opens the Plugin
@@ -4112,7 +4255,7 @@ export type PluginDeepLinkRefusal =
  */
 export type PluginDeepLinkIntent =
   | { action: "install"; url: string; sha256?: string }
-  | { action: "install-catalog"; pluginId: string; version?: string }
+  | { action: "install-catalog"; pluginId: string; version?: string; sourceUrl?: string }
   | { action: "install-refused"; reason: PluginDeepLinkRefusal }
   | { action: "open"; pluginId: string };
 
@@ -4206,26 +4349,50 @@ export interface PluginUrlInstallPreview {
    * rather than trusting `url`.
    */
   catalog?: PluginCatalogProvenance;
+  /**
+   * Set when the installed copy came from a different catalog than this
+   * release (#17434), naming that catalog (`sourceUrl` absent is Daintree's
+   * own). Installing replaces that copy, and its updates then come from this
+   * release's catalog.
+   */
+  replacesCatalog?: { sourceUrl?: string };
 }
 
 /**
  * A catalog release to preview (#16779): `version` omitted means the newest
- * one the catalog lists.
+ * one the catalog lists. `sourceUrl` names a catalog the person added
+ * (#17434); omitted, it is Daintree's own.
  */
 export interface PluginCatalogPreviewRequest {
   pluginId: string;
   version?: string;
+  sourceUrl?: string;
 }
 
 /**
  * The confirm of a catalog release's preview. Main looks the release up in a
- * fresh catalog again and refuses unless it still lists this `version` from
- * this `repo` with the digest in `expected`, which must name `pluginId`.
+ * fresh copy of the catalog `sourceUrl` names (Daintree's own when omitted)
+ * again and refuses unless it still lists this `version` from this `repo` with
+ * the digest in `expected`, which must name `pluginId`.
+ *
+ * `intent: "update"` is the update an installed copy was offered (#16781): its
+ * catalog must be the one that copy was installed from, so an update never
+ * moves a plugin to another catalog, and that catalog needn't still be in the
+ * person's list. Otherwise the catalog must be one they added (#17434).
+ * `sourceUrl` and `intent` are new: an older Daintree reads the request as
+ * one for its own catalog, and the preview it answers names no `sourceUrl`.
  */
 export interface PluginCatalogInstallRequest {
   pluginId: string;
   version: string;
   repo: string;
+  sourceUrl?: string;
+  intent?: "update";
+  /**
+   * The preview's {@link PluginUrlInstallPreview.replacesCatalog}, echoed back
+   * so the install is refused if the installed copy changed catalogs since.
+   */
+  replacesCatalog?: { sourceUrl?: string };
   expected: PluginInstallExpectation;
 }
 
@@ -4248,6 +4415,11 @@ export interface PluginCatalogListing {
   repo: string;
   /** The manifest's list at review time. Display only: it grants nothing. */
   capabilities: string[];
+  /**
+   * The catalog that lists it, stamped by main rather than read from the
+   * catalog (#17434). Absent for Daintree's own.
+   */
+  sourceUrl?: string;
 }
 
 /**
@@ -4270,6 +4442,32 @@ export type PluginCatalogBrowseResult =
       failure: PluginCatalogFailure;
     }
   | { status: "unavailable"; failure: PluginCatalogFailure };
+
+/**
+ * What `plugin.browseCatalog` may carry (#17434): the added catalogs a remote
+ * window's machine lists, sent by that machine's main process. A local window
+ * sends nothing, and main reads its own list.
+ */
+export interface PluginCatalogBrowseRequest {
+  sourceUrls?: string[];
+}
+
+/** One catalog's part of a Browse read (#17434); `sourceUrl` absent is Daintree's own. */
+export interface PluginCatalogSourceBrowse {
+  sourceUrl?: string;
+  result: PluginCatalogBrowseResult;
+}
+
+/**
+ * Outcome of `plugin.browseCatalog` (#17434): Daintree's own catalog, in the
+ * shape it always had so an older Daintree reading the answer still lists it,
+ * and under `added` each catalog the person added, in their order. Each is
+ * read on its own, so one that can't be read never hides the others. An older
+ * host answers without `added`.
+ */
+export type PluginCatalogsBrowseResult = PluginCatalogBrowseResult & {
+  added?: PluginCatalogSourceBrowse[];
+};
 
 /**
  * Outcome of `plugin.previewFromUrl` and `plugin.previewFromCatalog`. Failures
@@ -4511,7 +4709,9 @@ export interface InstalledPluginRecord {
  * - `catalog_not_listed` — the fresh catalog doesn't list the plugin, or that version of it
  * - `catalog_mismatch` — the archive or the listing no longer matches the release that was
  *   reviewed: its manifest names another plugin or version, or the confirm found the entry's
- *   digest or repository changed since the preview
+ *   digest or repository changed since the preview, or an update names another catalog than
+ *   the installed copy came from
+ * - `catalog_source_unknown` — the release names a catalog the person hasn't added (#17434)
  */
 export type PluginInstallErrorCode =
   | "lock_failed"
@@ -4536,7 +4736,8 @@ export type PluginInstallErrorCode =
   | "catalog_unavailable"
   | "catalog_stale"
   | "catalog_not_listed"
-  | "catalog_mismatch";
+  | "catalog_mismatch"
+  | "catalog_source_unknown";
 
 /**
  * Structured install validation error. `path` is the JSON pointer segments
@@ -4593,6 +4794,19 @@ export interface PluginInstallOptions {
    * install IPC.
    */
   catalog?: PluginCatalogProvenance;
+  /**
+   * Main-only, with `catalog`: the other catalog the reviewed preview said
+   * this install replaces a copy from (#17434), or `null` when it said none.
+   * Checked under the install lock against the installed record, so a copy
+   * that changed catalogs since the review isn't replaced unseen. Transient.
+   */
+  catalogReplaces?: { sourceUrl?: string } | null;
+  /**
+   * Main-only, with `catalog`: this is the update an installed copy was
+   * offered (#17434). Under the install lock it lands only on a copy still
+   * installed from the same catalog, and only over an older version. Transient.
+   */
+  catalogUpdate?: boolean;
   /**
    * Correlation id for progress reporting and cancellation (#11302). Minted by
    * the caller that wants feedback; omitting it installs exactly as before, just
@@ -4777,6 +4991,12 @@ export interface LoadedPluginInfo {
   instanceMode?: "project";
   /** Project ids the package is enabled in. Present exactly when `instanceMode` is. */
   enabledInProjects?: string[];
+  /**
+   * Cloud accounts connected on the machine listing it for a provider in this
+   * plugin's namespace (#17353): what its uninstall asks to keep or remove.
+   * Absent when there are none.
+   */
+  cloudAccounts?: PluginCloudAccountInfo[];
 }
 
 export interface PluginIpcContext {
@@ -4848,7 +5068,9 @@ export interface PluginHandlerOptions {
    * Deadline, in milliseconds, for one invoke of this channel. When it passes,
    * the renderer's `invoke` rejects with a `PLUGIN_INVOKE_TIMEOUT:` error and a
    * worker-hosted handler's invoke is cancelled. Defaults to five minutes;
-   * `0` disables the deadline for handlers that legitimately run longer.
+   * `0` disables the deadline for handlers that legitimately run longer. A
+   * {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler is always held to
+   * {@link CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS} or less.
    */
   timeoutMs?: number;
 }
@@ -4925,9 +5147,11 @@ export interface PluginWorktreeStatus {
 /**
  * A git operation the host saw in progress in a worktree, read from the
  * operation's marker files under the git directory. Only operations that block
- * normal work appear here; a worktree with none reads as `null`.
+ * normal work appear here; a worktree with none reads as `null`. `am` is a
+ * halted `git am`, kept apart from `rebase` because the two finish with
+ * different commands.
  */
-export type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
+export type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert" | "am";
 
 /**
  * How far a worktree's post-create setup has got.
@@ -5294,6 +5518,63 @@ export type PluginSendToAgentRefusalReason =
   | "busy";
 
 /**
+ * Where Pilot places an agent run, worst-first: the same band every Daintree
+ * surface sorts the run into, so a plugin's list and Pilot agree on which run
+ * needs the user. Read from the user's own decisions first, then the agent's
+ * own report, then Canopy's reading when it is on, then the state the host
+ * observed off the terminal — an ordering, never a guarantee about what the
+ * agent is doing.
+ *
+ * - `blocked` — stopped on an error.
+ * - `needs-you` — asking the user something: the agent printed that it needs
+ *   them, or Canopy read its stop as an approval or question the user hasn't
+ *   had in front of them.
+ * - `quiet` — working, but its terminal has been silent long enough to look
+ *   stalled.
+ * - `review` — stopped after work, or on an approval or question wait, that
+ *   the user hasn't looked at since.
+ * - `running` — working.
+ * - `done` — stopped after work the user has seen.
+ * - `parked` — the user parked it.
+ * - `snoozed` — the user snoozed it.
+ * - `idle` — nothing to report: a shell at its prompt, a session restored
+ *   with no work since, an ask already seen.
+ */
+export type PluginAgentBand =
+  // `FleetBand`, spelled out so the SDK bundle never pulls the fleet types and
+  // their panel imports; pinned to it by a type test.
+  "blocked" | "needs-you" | "quiet" | "review" | "running" | "done" | "parked" | "snoozed" | "idle";
+
+/**
+ * Canopy's reading, when it is what placed a run in its band: a suggestion
+ * from the local model the user turned on, never an observation. Advisory —
+ * show it as "read by Canopy", not as fact.
+ *
+ * What it read follows from the band it placed the run in: an ask for
+ * `needs-you` (or `idle` once seen), a wait that asks nothing for `review`
+ * (or `done` once seen), a screen standing still behind its spinner for
+ * `quiet`.
+ */
+export interface PluginAgentCanopyNote {
+  /** When the screen behind the reading was read (epoch ms). */
+  readonly readAt: number;
+  /**
+   * Which ask the reading saw, when it read one: an approval of something the
+   * agent is about to do, or a question only the user can answer. Absent when
+   * the reading isn't an ask, or didn't say which.
+   */
+  readonly ask?: "approval" | "question";
+  /**
+   * The question, verbatim from the screen. Only on an ask, and only for a
+   * plugin that declares `terminal:read` and is a built-in or holds the user's
+   * lasting grant of it ("Allow and remember" at a
+   * {@link PluginTerminalsApi.readScreen} prompt): reading the list never
+   * raises the consent prompt itself. Up to 160 characters.
+   */
+  readonly quote?: string;
+}
+
+/**
  * One agent pane in the plugin's project, as {@link PluginAgentsApi.list}
  * reports it.
  *
@@ -5322,7 +5603,39 @@ export interface PluginAgentPane {
   readonly canDraft: boolean;
   /** Why it would not, when `canDraft` is `false`. */
   readonly draftRefusal?: PluginSendToAgentRefusalReason;
+  /**
+   * Whether this plugin launched the agent with its own `agent.launch`, by the
+   * record the host keeps of its launches: the one the {@link PluginAgentsApi}
+   * input methods reach. A pane restored after a restart under the id it was
+   * launched with keeps it while the host still holds the record: one whose
+   * pane hasn't come back in 30 days lapses, and only the 200 most recent are
+   * kept. `false` for an agent the user, an
+   * assistant or another plugin started, for a launch that named its own
+   * `requestedId`, and for one launched before this plugin was last disabled
+   * or uninstalled. In a view of a Remote Host's project, `true` means a launch
+   * sent there with `{ hostId }` since this machine last started.
+   */
+  readonly launchedByThisPlugin: boolean;
+  /**
+   * The band Pilot places the run in. Absent when the host has no place for
+   * it: before it has read its agents once, for a pane it hasn't read yet, and
+   * in a view of a Remote Host's project.
+   */
+  readonly band?: PluginAgentBand;
+  /** Present when Canopy's reading is what placed the run in {@link band}. */
+  readonly canopy?: PluginAgentCanopyNote;
 }
+
+/**
+ * An agent pane as the project's view reports it: without
+ * `launchedByThisPlugin`, `band` or `canopy`. Who launched a pane, and where
+ * Pilot places it, are answered only from the host's own records, never from
+ * the pane itself.
+ */
+export type PluginAgentPaneObservation = Omit<
+  PluginAgentPane,
+  "launchedByThisPlugin" | "band" | "canopy"
+>;
 
 /**
  * One agent run anywhere in the app, as {@link PluginAgentsApi.listAll}
@@ -5351,6 +5664,13 @@ export interface PluginAgentRun {
   readonly agentId?: string;
   /** Last observed agent state, when there is one. An observation, not a fact. */
   readonly observedState?: AgentState;
+  /**
+   * The band Pilot places the run in. Present on every run the host reports;
+   * optional only so a test fixture written before it still compiles.
+   */
+  readonly band?: PluginAgentBand;
+  /** Present when Canopy's reading is what placed the run in {@link band}. */
+  readonly canopy?: PluginAgentCanopyNote;
 }
 
 /**
@@ -5380,8 +5700,11 @@ export interface PluginAllAgentsSnapshot {
  * The kind of surface that has focus, as
  * {@link PluginActivationApi.onDidChangeFocusedPanel} reports it. A built-in
  * panel kind passes through as-is; every plugin-contributed panel, this
- * plugin's own included, is `"plugin"`; `"portal"` is the Portal (web chat)
- * dock.
+ * plugin's own included, is `"plugin"`.
+ *
+ * `"portal"` is deprecated and never reported: it was the Portal (web chat)
+ * dock, which Daintree no longer has. It stays in the type only so a plugin
+ * that still compares against it keeps compiling; drop the comparison.
  */
 export type PluginFocusedPanelKind =
   // `BuiltInPanelKind`, spelled out so the SDK bundle never pulls the panel
@@ -5409,7 +5732,7 @@ export interface PluginFocusedPanel {
   readonly kind: PluginFocusedPanelKind | null;
   /** The focused panel is a terminal currently running an agent. */
   readonly agent: boolean;
-  /** The focused panel's worktree, when it belongs to one. Always `null` for `"portal"`. */
+  /** The focused panel's worktree, when it belongs to one. */
   readonly worktreeId: string | null;
 }
 
@@ -5653,6 +5976,14 @@ export interface PluginTerminalReadScreenOptions {
  *   `""` (and `lineCount` `0`) when the screen is blank — an empty screen, not a
  *   missing terminal. `truncated` is `true` when lines above the returned ones,
  *   or bytes past the 16 KiB cap, were left out; the newest content is kept.
+ *   `inputLine` says what the agent's input box holds: `empty`, `typed`, or
+ *   `suggestion` (the CLI's own suggested next prompt, which `text` shows as
+ *   ordinary characters), or `unknown` for an agent with no declared rule, a
+ *   box not found, or a terminal running no agent. It is read off the whole
+ *   screen, so it is there even when `lines` stops above the box, and from the
+ *   screen's styling, so it is an observation and never a verdict on who wrote
+ *   the text. The host always sends it; it is optional so mock fixtures written
+ *   before it still type-check.
  * - `exited`: the terminal is still listed but its process has exited.
  * - `not-found`: no terminal this plugin may read has that id. One answer for
  *   an unknown id, one in another project, and one that is not a user terminal.
@@ -5665,6 +5996,7 @@ export type PluginTerminalScreenResult =
       readonly text: string;
       readonly lineCount: number;
       readonly truncated: boolean;
+      readonly inputLine?: TerminalInputLine;
     }
   | { readonly status: "exited" }
   | { readonly status: "not-found" }
@@ -5851,6 +6183,16 @@ export interface PluginNotifyOptions {
    * inbox row and its OS banner — instead of stacking beside it.
    */
   dedupeKey?: string;
+  /**
+   * `"assistant"` also offers it to one Daintree Assistant that is watching for
+   * plugins' notifications, in a project where the user lets the Assistant use
+   * this plugin's tools. The Assistant is told this plugin's id, the project,
+   * severity, time and a short plain key; it reads the title and body with a
+   * call of its own, and acts only through this plugin's tools. The person's
+   * toast, inbox row and banner are unchanged. Needs a project: a project
+   * plugin's own, or for an installed plugin a `worktreeId` target.
+   */
+  audience?: "assistant";
 }
 
 /** What {@link PluginHostApi.notify} resolves with. */
@@ -6071,8 +6413,10 @@ export interface PluginConfirmOptions {
  *   for a Daintree MCP session, and `"plugin"` for a plugin (a `host.dispatch`,
  *   a call from a panel through `plugin.invoke`, or an event route).
  * - `origin: "assistant"` means the person's Daintree Assistant made the MCP
- *   call. Provenance, not proof: the Assistant acts on what its pane is sent,
- *   and that includes other agents' replies.
+ *   call, and `origin: "global-assistant"` that their global Assistant made it
+ *   through `host.call` from outside the project. Provenance, not proof: an
+ *   assistant acts on what its pane is sent, and that includes other agents'
+ *   replies.
  * - `approval: "person"` means someone answered the host's confirm dialog for
  *   this very dispatch. It is never set by a standing answer: an automation
  *   grant, "Allow for this session", or the Assistant's Never ask leave it
@@ -6082,7 +6426,7 @@ export interface PluginConfirmOptions {
  */
 export interface PluginActionContext {
   readonly dispatchSource: ActionSource;
-  readonly origin?: "assistant";
+  readonly origin?: "assistant" | "global-assistant";
   readonly approval?: "person";
 }
 
@@ -7374,6 +7718,33 @@ export interface PluginActivationApi {
     impl: WorktreeDeleteNotesProviderImpl
   ): Promise<() => void>;
   /**
+   * Bind the implementation of a cloud provider the manifest declares in
+   * `contributes.cloudProviders` (#17351). Daintree lists the provider, and
+   * names its accounts and machines, from the manifest; every call it makes
+   * of the provider (checking credentials, the catalog, creating, starting,
+   * stopping and deleting machines, SSH access) comes to `impl` here. A
+   * plugin that isn't running is activated for the call.
+   *
+   * Each call has 30 seconds, activation included. A late answer, a crash or
+   * a throw is a provider error on that account; a throw whose `code` is a
+   * `CloudHostErrorCode` keeps that code. The impl must have every method the
+   * declared capabilities need: `renewLifetime` for a renewable lifetime,
+   * `authorizeSsh` or `sshAccess` for the declared SSH key timing.
+   *
+   * Returns a disposer that unbinds the impl; the binding also goes when the
+   * plugin's worker stops or the plugin unloads. Must be called during
+   * `activate()`. Calling it again with the same id replaces the binding, and
+   * the older disposer becomes inert.
+   *
+   * @throws {Error} If called after activation resolves or times out, with an
+   *   id `contributes.cloudProviders` does not declare, or with an impl
+   *   missing a method the declaration needs.
+   */
+  registerCloudProvider(
+    descriptor: CloudProviderDescriptor,
+    impl: CloudProviderImpl
+  ): Promise<() => void>;
+  /**
    * Subscribe to active-worktree changes. The callback fires with the new
    * active snapshot (or `null` when none is active). Returns a disposer;
    * calling it more than once is a no-op. All subscriptions are automatically
@@ -7505,11 +7876,11 @@ export interface PluginActivationApi {
   ): Promise<() => void>;
   /**
    * Subscribe to which kind of panel has focus (#13221): a terminal, a browser
-   * panel, a diff, the Portal, … The callback receives a frozen
+   * panel, a diff, … The callback receives a frozen
    * {@link PluginFocusedPanel} with `kind: null` while Daintree is not the
    * foreground window or nothing that is a panel has focus. Gated on
    * `panel:focus-read`. A project plugin sees focus only inside its own
-   * project, and `kind: null` everywhere else, the Portal included.
+   * project, and `kind: null` everywhere else.
    *
    * The current focus is delivered once after subscribing, then every change.
    * Coalesced to the latest value with a 250ms default window, and a value
@@ -8593,8 +8964,10 @@ export interface PluginActionContribution {
    * call the Assistant makes goes through the host's confirm dialog unless the
    * person has told Daintree not to ask (an automation grant, or the
    * Assistant's Never ask). The handler's {@link PluginActionContext} then says
-   * which: `approval: "person"` only when the dialog was answered. Agent panes
-   * and the global Assistant never reach it.
+   * which: `approval: "person"` only when the dialog was answered. The global
+   * Assistant reaches it too, through `host.call` on this machine while a view
+   * of the project is open, and always meets that view's dialog. Agent panes
+   * never reach it.
    */
   assistantReach?: "confirm-only";
   keywords?: string[];

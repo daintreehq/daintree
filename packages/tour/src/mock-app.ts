@@ -6,6 +6,7 @@ export {
   GRID_RECT,
   MockApp,
   MockGrid,
+  MockToolbarButton,
   MockWaitingPill,
   MockWorktreeCard,
   TOOLBAR_AGENTS,

@@ -1,33 +1,73 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useEffectEvent, useRef, useState } from "react";
 import type { DecisionsStatus } from "@shared/types/decisions";
 import { SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { Callout } from "@/components/ui/Callout";
+import { deviceOwnerPhrase, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { useDecisions } from "./useDecisions";
 import { useDecisionsPolicy } from "./useDecisionsPolicy";
 import { useDecisionsModel } from "./useDecisionsModel";
+import { useRelayCheck } from "./useRelayCheck";
 import { DecisionsConsentDialog } from "./DecisionsConsentDialog";
 import { DecisionsConnectionSection, kitUnverified } from "./DecisionsConnectionSection";
 import { DecisionsDevicesAndHosts } from "./DecisionsDevicesAndHosts";
-import { DecisionsAgentsSection } from "./DecisionsAgentsSection";
+import { DecisionsStatusFacts } from "./DecisionsStatusFacts";
+import { useDecisionsDevices } from "./useDecisionsDevices";
+import {
+  DecisionsAgentsSection,
+  switchedOnCount,
+  useDecisionsAgentSupport,
+} from "./DecisionsAgentsSection";
+import { DecisionsInvolvementSettingsSection } from "./DecisionsInvolvementSettingsSection";
 import { DecisionsQuestionsSection } from "./DecisionsQuestionsSection";
+import { DecisionsNotificationsSection } from "./DecisionsNotificationsSection";
 import { DecisionsPolicySection } from "./DecisionsPolicySection";
 import { DecisionsModelSection } from "./DecisionsModelSection";
-import { DecisionsVoiceSection } from "./DecisionsVoiceSection";
 import { DecisionsDataSection } from "./DecisionsDataSection";
 import type { SettingsTabClose } from "@/components/Settings/settingsTabClose";
+import { useHoldSettingsDeepLink } from "@/components/Settings/settingsDeepLink";
 import { holdRelayUrlRequests } from "./relayUrlRequest";
+import { unfinishedReason } from "./setupCheckCopy";
+import { remoteWindowText } from "./hostsCopy";
+
+/**
+ * Setup is finished and the relay is up, so the page can lead with the everyday
+ * controls. Anything short of that (no relay, an unverified kit, a setup check
+ * that hasn't passed, a connection that is down or has a problem) is something
+ * Connection is for.
+ */
+function setupDone(status: DecisionsStatus): boolean {
+  return (
+    status.relayOrigin !== undefined &&
+    status.state === "connected" &&
+    status.problem === undefined &&
+    unfinishedReason(status) === null
+  );
+}
 
 /**
  * Settings → Integrations → Decisions: one switch, consent the first time it
  * turns on, and behind it a section per part of the feature. Each section is
  * its own component so the child issue that fills one doesn't touch the rest.
+ *
+ * Until setup is finished and the relay is up, Connection and what it leads to
+ * (Devices, Remote Hosts, Encryption) come first, in the order a first run
+ * needs them. After that the everyday controls (Agents, Questions, Policy,
+ * Decision model) come first and those follow, and Data is last either way.
  */
-export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose } = {}) {
+export function DecisionsSettingsTab({
+  onClose,
+  isActive = true,
+}: { onClose?: SettingsTabClose; isActive?: boolean } = {}) {
   const decisions = useDecisions();
   // A deploy pane's request for the URL field lasts as long as this opening.
   useEffect(() => holdRelayUrlRequests(), []);
   const { status, pending, saveFailure } = decisions;
+  // The sections a settings link may name aren't there until the first read lands.
+  useHoldSettingsDeepLink(status === null && decisions.loadError === null);
   const [consentOpen, setConsentOpen] = useState(false);
   // A request for the recovery kit's passphrase field, until Data has focused it.
   const [kitFocusRequest, setKitFocusRequest] = useState(0);
@@ -36,6 +76,7 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   const [pairFocusRequest, setPairFocusRequest] = useState(0);
   const askForPairing = () => setPairFocusRequest((count) => count + 1);
   const shownBefore = useRef<DecisionsStatus | null>(null);
+  const remoteHostName = useRemoteHostName();
 
   // A relay newly set up here and not yet verified asks for its recovery kit
   // next, whether the setup's own answer or a status push showed it first.
@@ -67,9 +108,42 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
   }, [status]);
 
   const on = status !== null && status.state !== "off";
+  // Connection first stays that way once the person has seen it first, for this
+  // opening of Settings: finishing setup, or a reconnect, would otherwise move
+  // the section they're looking at a screen or two down under them. Only a
+  // visible page counts, since the tab is read ahead while hidden. Off clears it.
+  const [connectionLed, setConnectionLed] = useState(false);
+  if (status !== null) {
+    if (status.state === "off") {
+      if (connectionLed) setConnectionLed(false);
+    } else if (isActive && !setupDone(status) && !connectionLed) {
+      setConnectionLed(true);
+    }
+  }
+  const connectionFirst = connectionLed || (status !== null && !setupDone(status));
   // One read for the sections it feeds, so one Retry recovers them all.
   const policy = useDecisionsPolicy(on);
   const model = useDecisionsModel(on);
+  // Connection's check of the relay (#18061), and one read of the relay's
+  // devices, for Devices and Remote Hosts and for Connection's facts; both
+  // shared with Notifications.
+  const relay = useRelayCheck();
+  // Off unmounts Connection: what it checked, or is checking, goes with it, as
+  // its own check did before the tab held it.
+  const forgetRelayCheck = useEffectEvent(() => relay.reset());
+  useEffect(() => {
+    if (!on) forgetRelayCheck();
+  }, [on]);
+  const devicesRead = useDecisionsDevices(on ? (status.relayOrigin ?? null) : null);
+  const { supported } = useDecisionsAgentSupport();
+  const installedRead = useCliAvailabilityStore((state) => state.hasRealData);
+  // Counted as the facts line counts them (#18059), from the policy as last
+  // read, which the Agents switches show too; never before the first read. A
+  // remote window's agents are the Host's, which its Agents section doesn't show.
+  const agentsOff =
+    !isRemoteWindow() &&
+    policy.policy !== null &&
+    switchedOnCount(policy.policy.askHumanAgents, supported, installedRead) === 0;
   const enabled = pending?.enabled ?? on;
   const locked = status === null || pending !== null;
 
@@ -83,6 +157,56 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
       void decisions.setEnabled({ enabled: true });
     }
   };
+
+  // Keyed, so moving a group keeps what each section holds (a draft, a running check).
+  const setup = on && (
+    <Fragment key="setup">
+      <DecisionsConnectionSection
+        status={status}
+        relay={relay}
+        locked={pending !== null}
+        onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
+        onClose={onClose}
+        onFinishSetup={askForKit}
+        onPairPhone={askForPairing}
+        facts={<DecisionsStatusFacts devices={devicesRead} policy={policy} />}
+        agentsOff={agentsOff}
+      />
+      <DecisionsDevicesAndHosts
+        status={status}
+        devicesRead={devicesRead}
+        locked={pending !== null}
+        pairFocusRequest={pairFocusRequest}
+        onPairFocused={() => setPairFocusRequest(0)}
+      />
+    </Fragment>
+  );
+  const everyday = on && (
+    <Fragment key="everyday">
+      <DecisionsAgentsSection status={status} policy={policy} />
+      <DecisionsInvolvementSettingsSection
+        active={isActive}
+        statusRevision={status.revision ?? null}
+        locked={pending !== null}
+      />
+      <DecisionsQuestionsSection
+        policy={policy}
+        status={status}
+        locked={pending !== null}
+        onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
+        onClose={onClose}
+      />
+      <DecisionsNotificationsSection
+        status={status}
+        relayCheck={relay.check}
+        devices={devicesRead}
+        locked={pending !== null}
+        onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
+      />
+      <DecisionsPolicySection policy={policy} />
+      <DecisionsModelSection model={model} />
+    </Fragment>
+  );
 
   return (
     <div className="space-y-8">
@@ -117,37 +241,18 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
             onRetry={() => void decisions.setEnabled(saveFailure.payload)}
           />
         )}
+        {/* Said once for the page: Agents is left out here and Questions' default
+            is this computer's, while the Host serves its own agents (#18066). */}
+        {on && remoteHostName !== null && (
+          <Callout severity="neutral" data-testid="decisions-remote-window-note">
+            {remoteWindowText(remoteHostName, deviceOwnerPhrase())}
+          </Callout>
+        )}
       </div>
 
       {on && (
         <>
-          <DecisionsConnectionSection
-            status={status}
-            locked={pending !== null}
-            onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
-            onClose={onClose}
-            onFinishSetup={askForKit}
-            onPairPhone={askForPairing}
-          />
-          <DecisionsDevicesAndHosts
-            status={status}
-            locked={pending !== null}
-            pairFocusRequest={pairFocusRequest}
-            onPairFocused={() => setPairFocusRequest(0)}
-          />
-          <DecisionsAgentsSection status={status} policy={policy} />
-          <DecisionsQuestionsSection
-            policy={policy}
-            status={status}
-            locked={pending !== null}
-            onChanged={(next) => (next ? decisions.applyStatus(next) : void decisions.reload())}
-          />
-          <DecisionsPolicySection policy={policy} />
-          <DecisionsModelSection
-            model={model}
-            proxyAllowlisted={policy.policy?.proxyAllowlisted === true}
-          />
-          <DecisionsVoiceSection />
+          {connectionFirst ? [setup, everyday] : [everyday, setup]}
           <DecisionsDataSection
             status={status}
             locked={pending !== null}
@@ -159,12 +264,16 @@ export function DecisionsSettingsTab({ onClose }: { onClose?: SettingsTabClose }
         </>
       )}
 
+      {/* Open until main answers, so focus goes back to a switch that takes it again. */}
       <DecisionsConsentDialog
         isOpen={consentOpen}
+        saving={pending !== null}
         onCancel={() => setConsentOpen(false)}
         onAccept={() => {
-          setConsentOpen(false);
-          void decisions.setEnabled({ enabled: true, consent: true });
+          if (locked) return;
+          void decisions
+            .setEnabled({ enabled: true, consent: true })
+            .then(() => setConsentOpen(false));
         }}
       />
     </div>

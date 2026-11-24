@@ -16,7 +16,8 @@ import {
   mcpPaneConfigService,
   type PanePluginServer,
 } from "../../../services/McpPaneConfigService.js";
-import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { loadedHelpSessionService } from "../../../services/helpSessionRuntime.js";
+import { getRemoteService } from "../../../remote/runtime.js";
 import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import {
@@ -25,6 +26,8 @@ import {
   resolvePaneClaudeProjectsRoot,
 } from "../../../services/claude/ClaudeSessionStore.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
+import type { ConversationStore } from "../../../../shared/types/panel.js";
+import { conversationStoreFor } from "../../../../shared/utils/conversationStore.js";
 import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
 import {
   TerminalSpawnOptionsSchema,
@@ -39,6 +42,11 @@ import { decisionsHostServes, loadDecisionsModule } from "../../../window/servic
 import { AppError } from "../../../utils/errorTypes.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import { peekComposerSendHold } from "../../../services/composerHold/composerSendHoldLive.js";
+import {
+  forgetContinuationPane,
+  noteContinuationSpawn,
+} from "../../../services/codexLimitContinuation/forgetPane.js";
+import { canContinueAtLimitReset } from "../../../../shared/types/codexLimitContinuation.js";
 import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
@@ -52,6 +60,7 @@ import {
 } from "../../../../shared/types/terminal.js";
 import {
   DEFAULT_DANGEROUS_ARGS,
+  stripPermissionAutoArgs,
   relaunchResumeAsAssignedSession,
   supportsExactSessionCapture,
   supportsSessionIdAssignment,
@@ -179,9 +188,30 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
 // keeps the wiring ahead of each one.
 /** So the Assistant's panel shows its plugin tool calls beside its calls to Daintree's own server. */
 function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void {
-  mcpServerService.setAssistantPluginLaneResolver((terminalId) =>
-    helpSessionService.getAssistantPluginLane(terminalId)
+  mcpServerService.setAssistantPluginLaneResolver(
+    (terminalId) => loadedHelpSessionService()?.getAssistantPluginLane(terminalId) ?? null
   );
+}
+
+/** An Assistant's pane, by its binding; none is bound before the service loads. */
+/**
+ * Whether a Claude launch forks the conversation it reopens into a new one
+ * (`--fork-session`), as a user's own launch flags may ask: the run is then
+ * another conversation, whatever id it was resumed by (#17919). Read from the
+ * flags themselves, so a prompt that only mentions the flag is no fork.
+ */
+function forksClaudeConversation(
+  flags: readonly string[] | undefined,
+  agentId: string | undefined
+): boolean {
+  return (
+    agentId === "claude" &&
+    (flags ?? []).some((flag) => flag === "--fork-session" || flag.startsWith("--fork-session="))
+  );
+}
+
+function isBoundHelpTerminal(terminalId: string): boolean {
+  return loadedHelpSessionService()?.isHelpTerminal(terminalId) ?? false;
 }
 
 /**
@@ -265,7 +295,7 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
   return cachedPluginService;
 }
 import {
-  listAgentSessions,
+  listAgentSessionsOrThrow,
   clearAgentSessions,
   pruneAgentSessions,
   readSessionHistorySync,
@@ -314,6 +344,7 @@ import {
   isDecisionsUpdateTerminalId,
 } from "../../../../shared/config/terminalScreenPersistence.js";
 import { parseRelayRemovalCommand } from "../../../../shared/config/relayRemoval.js";
+import { buildMcpServerUrl } from "../../../../shared/config/mcpClientConfigs.js";
 import {
   noteRelayRemovalLaunch,
   spoilRelayRemovalLaunch,
@@ -467,18 +498,22 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // to whatever is globally current would hand the terminal to the wrong workspace,
     // and leaving it unset made ownership fall back to PtyClient's global
     // `activeProjectId`, so deleting a scratch never killed its terminals (#11079).
-    // Only a caller that sent no id at all falls back to the current project.
     // Blank is absent, not an identity: PtyClient already substitutes its
     // active project for a blank id, so leaving it as `""` here would let a
     // whitespace projectId slip past checks that a missing one is subject to.
-    const explicitWorkspaceId = validatedOptions.projectId?.trim() || undefined;
-    const resolvedProject = explicitWorkspaceId
-      ? projectStore.getProjectById(explicitWorkspaceId)
-      : projectStore.getCurrentProject();
+    //
+    // A caller that sent no id is placed in the window that asked: its own
+    // workspace, or none for a window showing none. Never the Host's current
+    // project, which names whatever some window last showed, another window's
+    // or, for a remote window, one of the Host's own (#17926). The lease gate
+    // places it the same way (`"caller-or-none"`).
+    const callerWorkspaceId = ctx.projectId?.trim() ? ctx.projectId : undefined;
+    const workspaceId = validatedOptions.projectId?.trim() || callerWorkspaceId;
+    const resolvedProject = workspaceId ? projectStore.getProjectById(workspaceId) : null;
 
-    // Ownership is the explicit id; project-only enrichment below (settings, shell
+    // Ownership is the workspace id; project-only enrichment below (settings, shell
     // overrides, project-path cwd fallback) stays gated on a resolved Project.
-    const projectId = explicitWorkspaceId ?? resolvedProject?.id;
+    const projectId = workspaceId;
     const projectPath = resolvedProject?.path;
 
     // A request naming BOTH a project and a worktree asserts that the worktree
@@ -618,7 +653,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // an await between those bindings and the spawn lets a competing provision
     // revoke them against a PTY that does not exist yet, leaving the spawn to
     // proceed untracked.
-    let spawnWorktreeId = validatedOptions.worktreeId;
+    // The project's driver's ssh-agent, when it forwards one here (#17432).
+    // Settled beside the ownership claim, for the same reason.
+    const forwardedAgentSocket = projectId
+      ? (getRemoteService("agentForwardingHost")?.socketForSpawn(projectId) ?? null)
+      : null;
+    // Placed in no project, nothing can vouch for a worktree, and a journaled
+    // one would count against that worktree's own history.
+    let spawnWorktreeId = projectId === undefined ? undefined : validatedOptions.worktreeId;
+    const agentSocketPath = await forwardedAgentSocket;
     if ((await worktreeOwnership) === false) {
       console.warn(
         `[TerminalSpawn] Dropping worktreeId ${spawnWorktreeId} for terminal ${id.slice(0, 8)}: ` +
@@ -666,10 +709,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // of `tier`), so a `core` session can still skip permission prompts and a
     // `full` session can still respect them.
     const helpToken = spawnEnv?.DAINTREE_MCP_TOKEN ?? "";
-    const helpTier = helpToken ? helpSessionService.validateToken(helpToken) : false;
+    // Only the service mints help tokens, so with it not loaded a token here
+    // is stale or the user's own and validates as nothing.
+    const helpSessions = helpToken ? loadedHelpSessionService() : null;
+    const helpTier = helpSessions?.validateToken(helpToken) ?? false;
     const isAssistantAgent =
       typeof launchAgentId === "string" && getAssistantWiredAgentIds().includes(launchAgentId);
-    const isHelpLaunch = helpTier !== false && isAssistantAgent && safeCommand.length > 0;
+    const isHelpLaunch =
+      helpSessions !== null && helpTier !== false && isAssistantAgent && safeCommand.length > 0;
     // The rejection below keys off this rather than `isAssistantAgent`, which
     // now also requires an implemented `mcpInjection` mode: an agent excluded
     // on that new ground would otherwise sail past the throw and fall through
@@ -791,19 +838,47 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       launchAgentId === "claude"
         ? resolvePaneClaudeProjectsRoot({ shell: quotingShell, env: spawnEnv })
         : undefined;
-    const untouchedSessionId = await findUntouchedClaudeSession(safeCommand, launchAgentId, {
-      cwd,
-      agentSessionId: validatedOptions.agentSessionId,
-      projectsRoot: claudePaneStore ?? null,
-    }).catch(() => undefined);
+    // A conversation kept across an account switch stays in the folder it was
+    // written under (#17087), where a lookup by id from this launch's folder
+    // can't find it, so it reopens by its transcript's path. It was written,
+    // just not here: absence from this launch's store proves nothing, and it is
+    // never replaced by a fresh conversation under its id.
+    const conversationStore =
+      launchAgentId === "claude"
+        ? conversationStoreFor(validatedOptions.conversationStore, validatedOptions.agentSessionId)
+        : undefined;
+    let reopenedConversation: ConversationStore | undefined;
+    if (conversationStore && safeCommand) {
+      const { resumeClaudeFromConversationStore } =
+        await import("../../../services/claude/claudeConversationResume.js");
+      const byPath = await resumeClaudeFromConversationStore(
+        safeCommand,
+        conversationStore,
+        cwd
+      ).catch(() => undefined);
+      if (byPath) {
+        safeCommand = byPath;
+        reopenedConversation = conversationStore;
+      }
+    }
+    const exactResume = validatedOptions.exactResume === true || conversationStore !== undefined;
+    const untouchedSessionId = conversationStore
+      ? undefined
+      : await findUntouchedClaudeSession(safeCommand, launchAgentId, {
+          cwd,
+          agentSessionId: validatedOptions.agentSessionId,
+          projectsRoot: claudePaneStore ?? null,
+        }).catch(() => undefined);
     // A caller resuming one exact conversation would otherwise get an empty
     // one wearing its id (#16019). Refused before anything is minted or armed.
-    if (untouchedSessionId && validatedOptions.exactResume === true) {
+    if (untouchedSessionId && exactResume) {
       throw new Error(
         `Terminal ${id.slice(0, 8)} has no Claude conversation to resume; refusing a fresh one under its id`
       );
     }
-    if (claudePaneStore !== undefined) rememberClaudePaneStore(id, claudePaneStore);
+    if (claudePaneStore !== undefined) {
+      rememberClaudePaneStore(id, claudePaneStore, reopenedConversation);
+    }
 
     // Expand `${settings:*}` templates a plugin agent embedded in its command
     // or args (e.g. `--token=${settings:apiToken}`). The agent's args were
@@ -851,9 +926,18 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // then leaves no agent behind to be offered a relaunch.
     let pluginToolsLaunchProjectId: string | null = null;
 
+    // The terminal setting's Auto mode (#17435) reaches an assistant's command
+    // through the agent's launch flags, and a restart rebuilds it from them
+    // with no help token, but the assistant's permission level is its own. So
+    // the declared Auto args never survive on an assistant launch, fresh or
+    // restarted, as its bypass flag never survives on its own.
+    if (typeof launchAgentId === "string" && (isHelpLaunch || isBoundHelpTerminal(id))) {
+      safeCommand = stripPermissionAutoArgs(safeCommand, launchAgentId);
+    }
+
     if (isHelpLaunch && launchAgentId) {
       const dangerous = DEFAULT_DANGEROUS_ARGS[launchAgentId];
-      const bypassPermissions = helpSessionService.getBypassPermissions(helpToken);
+      const bypassPermissions = helpSessions.getBypassPermissions(helpToken);
       // A `waitForReply` send holds its call until the agent answers, and
       // Claude Code's own MCP call timeout would cut it off first.
       if (launchAgentId === "claude" && spawnEnv?.MCP_TOOL_TIMEOUT === undefined) {
@@ -901,7 +985,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // token reused with `launchAgentId: "codex"`) — refuse to spawn
       // rather than silently launching Codex without its MCP wiring.
       if (launchAgentId === "codex") {
-        const codexArgs = helpSessionService.getCodexLaunchArgs(helpToken);
+        const codexArgs = helpSessions.getCodexLaunchArgs(helpToken);
         if (codexArgs === null) {
           throw new Error(
             "Daintree Assistant help token does not belong to a Codex session; refusing to spawn"
@@ -919,7 +1003,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // A `null` return is the agent-mismatch signal (e.g. a Claude help
       // token reused with `launchAgentId: "copilot"`) — refuse to spawn.
       if (launchAgentId === "copilot") {
-        const copilotArgs = helpSessionService.getCopilotLaunchArgs(helpToken);
+        const copilotArgs = helpSessions.getCopilotLaunchArgs(helpToken);
         if (copilotArgs === null) {
           throw new Error(
             "Daintree Assistant help token does not belong to a Copilot session; refusing to spawn"
@@ -935,7 +1019,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // the lane's session-only trust and allow-rule file. Same `null`
       // contract: another agent's help token refuses to spawn.
       if (launchAgentId === "antigravity") {
-        const antigravityArgs = helpSessionService.getAntigravityLaunchArgs(helpToken);
+        const antigravityArgs = helpSessions.getAntigravityLaunchArgs(helpToken);
         if (antigravityArgs === null) {
           throw new Error(
             "Daintree Assistant help token does not belong to an Antigravity session; refusing to spawn"
@@ -955,7 +1039,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // belong to a Claude session is a cross-agent reuse and refuses to spawn.
       let claudeArgs: string[] = [];
       if (launchAgentId === "claude") {
-        const laneArgs = helpSessionService.getClaudeLaunchArgs(helpToken);
+        const laneArgs = helpSessions.getClaudeLaunchArgs(helpToken);
         if (laneArgs === null) {
           throw new Error(
             "Daintree Assistant help token does not belong to a Claude session; refusing to spawn"
@@ -971,7 +1055,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // instruction surface and an env var for shell substitution. Merged
       // unconditionally — the path is cleared on every app start and stays
       // valid for the lifetime of this process.
-      const scratchEnv = helpSessionService.getAssistantScratchEnv(helpToken);
+      const scratchEnv = helpSessions.getAssistantScratchEnv(helpToken);
       if (scratchEnv) {
         spawnEnv = { ...(spawnEnv ?? {}), ...scratchEnv };
       }
@@ -985,7 +1069,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       let pluginArgs: string[] = [];
       let pluginsPrepared = false;
       const pluginLaunch =
-        launchMcp !== undefined ? helpSessionService.getPluginLaunchContext(helpToken) : null;
+        launchMcp !== undefined ? helpSessions.getPluginLaunchContext(helpToken) : null;
       if (launchMcp !== undefined && pluginLaunch !== null) {
         try {
           // A name the Assistant's own servers or the user's assistant folder
@@ -1051,7 +1135,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // spawn (e.g. a stale resume against a session a sibling provision
       // already displaced) — refuse to launch as a help session rather
       // than silently degrading to a non-help Claude.
-      if (!helpSessionService.markTerminalForToken(helpToken, id, launchAgentId)) {
+      if (!helpSessions.markTerminalForToken(helpToken, id, launchAgentId)) {
         if (pluginsPrepared) await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
         throw new Error(
           "Daintree Assistant session token is invalid or already displaced; refusing to spawn"
@@ -1060,7 +1144,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // A session whose teardown began while its plugin servers were prepared
       // still binds — its capture needs the PTY — but must not hand them over:
       // that teardown already revoked whatever its old PTY held.
-      if (pluginsPrepared && helpSessionService.getPluginLaunchContext(helpToken) === null) {
+      if (pluginsPrepared && helpSessions.getPluginLaunchContext(helpToken) === null) {
         pluginMcpGrantRegistry.revokeTerminal(id);
       }
     } else if (launchMcp !== undefined && safeCommand.length > 0 && resolvedProject) {
@@ -1123,7 +1207,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // none of the session's own wiring either. Plugin servers reach the
         // Assistant only through its own launch, checked against its session
         // and its answer, so this one gets none.
-        const isHelpTerminal = helpSessionService.isHelpTerminal(id);
+        const isHelpTerminal = isBoundHelpTerminal(id);
         const pluginReport = isHelpTerminal
           ? null
           : await resolveLaunchPluginsReport(
@@ -1245,8 +1329,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
                   : {}),
               });
               // Every format's hook for the orchestration bearer, whether or
-              // not the agent reads it from here.
-              spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
+              // not the agent reads it from here. The endpoint rides with it so
+              // a script the agent runs (`daintree call`, a git hook) can reach
+              // the control surface as this pane, and only where the bearer is.
+              spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, {
+                DAINTREE_MCP_TOKEN: prepared.token,
+                DAINTREE_MCP_URL: buildMcpServerUrl(launchPort),
+              });
             }
           }
         }
@@ -1280,7 +1369,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       if (requiredPluginTools.length > 0 && requiredPluginToolStatuses.length === 0) {
         requiredPluginToolStatuses = requiredPluginToolsAll(
           requiredPluginTools,
-          helpSessionService.isHelpTerminal(id) ? "unavailable" : "config-failed"
+          isBoundHelpTerminal(id) ? "unavailable" : "config-failed"
         );
       }
       if (requiredPluginToolStatuses.length > 0) {
@@ -1300,7 +1389,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         if (preparedForThisLaunch) {
           await mcpPaneConfigService.revokePaneConfig(id).catch(() => {});
         }
-      } else if (!helpSessionService.isHelpTerminal(id)) {
+      } else if (!isBoundHelpTerminal(id)) {
         pluginToolsLaunchProjectId = resolvedProject.id;
       }
     } else if (requiredPluginTools.length > 0) {
@@ -1327,10 +1416,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // value (no `getDefaultShell()` fallback) so the PTY pool can match —
     // see `acquirePtyProcess` in `terminalSpawn.ts`.
     let spawnAgentSessionId = validatedOptions.agentSessionId;
+    // A resume main turned into a fresh start is a new conversation, whatever
+    // its id: what the old one launched isn't its to clean up (#17919).
+    let startsFreshConversation = false;
     if (untouchedSessionId) {
       const relaunch = relaunchResumeAsAssignedSession(safeCommand, launchAgentId);
       if (relaunch?.sessionId === untouchedSessionId) {
         safeCommand = relaunch.command;
+        startsFreshConversation = true;
         // A caller that only had the command still gets the id on the record, so
         // teardown hands it back like any other assigned launch.
         spawnAgentSessionId ??= untouchedSessionId;
@@ -1369,6 +1462,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       validatedOptions.whenDone !== undefined
         ? await import("../../../services/terminalWhenDone/terminalWhenDoneLive.js")
         : null;
+    // Only an agent a pane can be armed for reads its preset's continuation
+    // switch (#17912); the assistant is never armed.
+    const continuationLive =
+      projectId !== undefined &&
+      typeof launchAgentId === "string" &&
+      canContinueAtLimitReset(launchAgentId) &&
+      !isHelpLaunch &&
+      !isBoundHelpTerminal(id)
+        ? await import("../../../services/codexLimitContinuation/codexLimitContinuationLive.js")
+        : null;
 
     // Main can't see a Windows pane's Claude store (its PowerShell profile may
     // move it), so the lookup above stays unsure there and an untouched pane
@@ -1377,7 +1480,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     // to resume. A caller resuming one exact conversation keeps the refusal.
     const windowsClaudeResume: WindowsClaudeResumeChoice | undefined = (() => {
       if (!windowsAgentExecutable || launchAgentId !== "claude" || untouchedSessionId) return;
-      if (claudePaneStore !== null || validatedOptions.exactResume === true) return;
+      if (claudePaneStore !== null || exactResume) return;
       const relaunch = relaunchResumeAsAssignedSession(safeCommand, launchAgentId);
       if (!relaunch) return;
       if (spawnAgentSessionId && spawnAgentSessionId !== relaunch.sessionId) return;
@@ -1479,7 +1582,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         typeof launchAgentId === "string" &&
         safeCommand.length > 0 &&
         !isHelpLaunch &&
-        !helpSessionService.isHelpTerminal(id) &&
+        !isBoundHelpTerminal(id) &&
         validatedOptions.scheduledRun === undefined &&
         validatedOptions.restore !== true &&
         getLifecycleLedger().currentGeneration(id) === undefined &&
@@ -1495,11 +1598,23 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // can never be taken for the removal's, whichever spawn went first.
       if (removalArgv) noteRelayRemovalLaunch(id);
       else if (isDecisionsRemoveTerminalId(id)) spoilRelayRemovalLaunch(id);
+      // The person turned forwarding on for this host, so it outranks an
+      // SSH_AUTH_SOCK a preset or project env names. Checked again with nothing
+      // left to await: the driver may have turned it off, or moved on, while
+      // the launch was built.
+      if (
+        agentSocketPath &&
+        projectId &&
+        getRemoteService("agentForwardingHost")?.isForwarding(projectId)
+      ) {
+        spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, { SSH_AUTH_SOCK: agentSocketPath });
+      }
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over
       // the shell, so when the agent exits the shell reclaims the foreground.
       // SIGINT routes to the agent (the foreground process group) via the
       // kernel's TTY line discipline; the shell stays pristine.
+      const generationBeforeSpawn = getLifecycleLedger().currentGeneration(id);
       ptyClient.spawn(id, {
         cwd,
         shell: spawnShell,
@@ -1513,7 +1628,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         pluginPanelKindId: validatedOptions.pluginPanelKindId,
         title,
         titleMode: validatedOptions.titleMode,
-        projectId,
+        // None on purpose, so PtyClient doesn't hand it its active project.
+        projectId: projectId ?? null,
         restore: validatedOptions.restore,
         isEphemeral: validatedOptions.isEphemeral,
         // Seal the assistant's identity onto the record itself, for the
@@ -1527,7 +1643,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // (`buildRestartEnv`), so `isHelpLaunch` is false there — and nothing
         // unbinds the session on a restart's kill. Without it, Restart All
         // Terminals would quietly strip the assistant's identity.
-        isAssistantTerminal: isHelpLaunch || helpSessionService.isHelpTerminal(id),
+        isAssistantTerminal: isHelpLaunch || isBoundHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
         scheduledRun: validatedOptions.scheduledRun,
@@ -1537,6 +1653,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         agentPresetColor: validatedOptions.agentPresetColor,
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
+        fallbackChainIndex: validatedOptions.fallbackChainIndex,
         handbackCode: validatedOptions.handbackCode,
         // Only the spawn that registered a scheduled run reports for it
         // (#15982), and a launch armed with When done reports for its code.
@@ -1554,6 +1671,30 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // natural exit left on the pane survives it — once the host confirms the
       // spawn (#12433).
       noteTerminalLaunch(id, { command: safeCommand, agentSessionId: spawnAgentSessionId });
+      // Whether the preset starts the pane armed to continue at its limit's
+      // reset, confirmed with the spawn's own generation (#17912). Unchanged
+      // means PtyClient refused the spawn without sending it, and the
+      // generation still current is an earlier launch's.
+      const launchGeneration = getLifecycleLedger().currentGeneration(id);
+      if (
+        projectId !== undefined &&
+        launchGeneration !== undefined &&
+        launchGeneration !== generationBeforeSpawn
+      ) {
+        if (continuationLive && typeof launchAgentId === "string") {
+          continuationLive.noteContinuationLaunch({
+            terminalId: id,
+            projectId,
+            launchGeneration,
+            agentId: launchAgentId,
+            presetId: validatedOptions.agentPresetId,
+            originalPresetId:
+              validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
+          });
+        } else {
+          noteContinuationSpawn(id, projectId, launchGeneration);
+        }
+      }
       if (whenDone !== undefined && whenDoneLive && validatedOptions.handbackCode !== undefined) {
         // No generation means PtyClient refused the spawn without sending it.
         const launchGeneration = getLifecycleLedger().currentGeneration(id);
@@ -1572,12 +1713,20 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // (#13205). Memory-first, so it is current before any later capture.
       // The PTY is already up, so a failure here must not fail the spawn.
       if (isHelpLaunch) {
+        // A launch that forks the conversation it reopens runs a new one its id
+        // doesn't name (#17919).
+        const laneLaunch = forksClaudeConversation(validatedOptions.agentLaunchFlags, launchAgentId)
+          ? ({ forkedConversation: true } as const)
+          : startsFreshConversation
+            ? ({ freshConversation: true } as const)
+            : undefined;
         try {
-          helpSessionService
-            .recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
-            .catch((err) => {
-              console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
-            });
+          (laneLaunch
+            ? helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId, laneLaunch)
+            : helpSessions.recordLaneLaunchForToken(helpToken, spawnAgentSessionId)
+          ).catch((err) => {
+            console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
+          });
         } catch (err) {
           console.warn("[TerminalSpawn] Failed to record assistant lane pointer:", err);
         }
@@ -1595,7 +1744,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // If we bound this terminalId to a help session above, unbind now so a
       // future provision doesn't try to kill a PTY that never spawned.
       if (isHelpLaunch) {
-        helpSessionService.unbindTerminal(id);
+        helpSessions.unbindTerminal(id);
       }
       const errorMessage = formatErrorMessage(error, "Failed to spawn terminal");
       throw new Error(`Failed to spawn terminal: ${errorMessage}`);
@@ -1693,6 +1842,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         throw new Error("Invalid terminal ID: must be a string");
       }
       if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
+      // The pane goes with this kill: its continuation choice goes too (#17912).
+      if (options?.closesPane === true) forgetContinuationPane(id);
       dropHeldComposerSend(id, options);
       // Before any await: a restart's respawn arms a fresh window for this id,
       // and it must not be the one this kill clears.
@@ -1731,10 +1882,20 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error("Invalid terminal ID: must be a string");
     }
     if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
+    if (options?.closesPane === true) forgetContinuationPane(id);
     dropHeldComposerSend(id, options);
+    // An Assistant's lane, frozen before the kill: the id it hands back is the
+    // lane's conversation too, which a view keeps by itself otherwise (#17919).
+    const helpSessions = loadedHelpSessionService();
+    const lane = helpSessions?.snapshotLaneTerminals().get(id);
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
     const generation = getLifecycleLedger().currentGeneration(id);
     const sessionId = await ptyClient.gracefulKill(id);
+    if (lane && sessionId) {
+      helpSessions?.noteQuitCapture(lane, sessionId).catch((err) => {
+        console.warn("[TerminalGracefulKill] Failed to record assistant lane conversation:", err);
+      });
+    }
     await persistCloseRecord(
       info,
       sessionId,
@@ -1780,7 +1941,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
   const handleAgentSessionList = async (payload: { worktreeId?: string; projectId?: string }) => {
     const { app } = await import("electron");
-    return listAgentSessions(
+    return listAgentSessionsOrThrow(
       payload?.worktreeId,
       app.getPath("userData"),
       getAgentSessionRetentionDays(),
@@ -1967,6 +2128,8 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
     }
 
+    // The renderer removes the pane once this answers, without a kill (#17912).
+    forgetContinuationPane(terminalId);
     return { record };
   };
 

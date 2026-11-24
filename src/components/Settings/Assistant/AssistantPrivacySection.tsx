@@ -266,15 +266,7 @@ export function AssistantPrivacySection({
         <SettingsGroup>
           <SettingsSwitchCard
             title="Capture audit log"
-            subtitle={
-              auditConfigFailed
-                ? "Recording status unavailable"
-                : auditLoading
-                  ? "Checking…"
-                  : auditEnabled
-                    ? "Recording every dispatch"
-                    : "New dispatches will not be recorded"
-            }
+            subtitle="Record every Daintree action the assistant dispatches"
             isEnabled={auditEnabled}
             onChange={handleAuditEnabledToggle}
             ariaLabel="Capture audit log"

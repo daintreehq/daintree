@@ -10,6 +10,7 @@ import type {
   HostWorktreeEntry,
   RemoteProcessInventory,
 } from "../../../shared/types/ipc/hostMetrics.js";
+import type { HostIdleObservation } from "../../../shared/types/hostIdle.js";
 import type {
   ProcessInventorySnapshot,
   ProcessTreeSample,
@@ -25,10 +26,11 @@ import {
 import { AppError } from "../../utils/errorTypes.js";
 import { Lane } from "../link/frames.js";
 import { ControlKind, type HostSummaryFrame } from "../link/messages.js";
-import { stampNow, type ElapsedStamp } from "../link/elapsed.js";
-import type { LinkSession } from "../link/session.js";
+import { elapsedSince, stampNow, type ElapsedStamp } from "../link/elapsed.js";
+import { DEFAULT_PING_INTERVAL_MS, type LinkSession } from "../link/session.js";
 import type { FleetCaller } from "./hostOps.js";
 import {
+  AgentStopChangePayloadSchema,
   AgentWaitingPayloadSchema,
   AttentionPayloadSchema,
   FleetTargetListSchema,
@@ -37,12 +39,14 @@ import {
   ProcessInventorySchema,
   WorktreeListSchema,
   normalizeFleetOpId,
+  type AgentStopChangePayload,
 } from "./linkMethods.js";
 import { boundProcessInventory } from "./processInventoryWire.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
 import { receiveSummary, type SummaryReceipt } from "./summaryReceipt.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
 import type { AgentWaitingHeard, AgentWaitingListener } from "./agentWaiting.js";
+import type { AgentStopListener } from "./agentStops.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import { connectionKey } from "../client/connection.js";
 import { admitHostNotice } from "../hybrid/hostNoticeBudget.js";
@@ -52,6 +56,22 @@ import { createKeyedLogLimiter } from "../../utils/keyedLogLimiter.js";
 
 const logger = createLogger("main:client");
 const logLimiter = createKeyedLogLimiter();
+
+/**
+ * The oldest a host's agent stop may be when it arrives, at most, for this
+ * Shell to take it (#17933): three pings, so the one the host names may have
+ * left a full interval before it posted, with room for the trip and its own
+ * delay. Older, or with no bound at all, it is dropped: the link was stalled
+ * or down when the agent stopped, and a stop is never passed on late.
+ */
+export const HOST_STOP_MAX_AGE_MS = 3 * DEFAULT_PING_INTERVAL_MS;
+
+/**
+ * The most stops kept per host to take back. A stop is never taken back once
+ * its agent stays stopped, so the oldest go first, taken back as they go:
+ * nothing could take them back later.
+ */
+export const MAX_LIVE_STOPS_PER_HOST = 1000;
 
 /** ~15 minutes of summaries at the sample cadence. */
 export const HOST_METRICS_RING_SIZE = Math.ceil((15 * 60_000) / HOST_METRICS_INTERVAL_MS);
@@ -67,6 +87,7 @@ export interface HostMetricsClientOptions {
     touch?(hostId: HostId): void;
     get(hostId: HostId): MetricsConnection | undefined;
     connectionState(hostId: HostId): HostConnectionState;
+    onStateChange(listener: (hostId: HostId, state: HostConnectionState) => void): () => void;
     onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
     /** This Shell launch, as every host it dials knows it. */
     readonly localClient?: { clientId: string; clientName: string };
@@ -76,10 +97,15 @@ export interface HostMetricsClientOptions {
     get(hostId: HostId): HostDescriptor | null;
     onChange(listener: () => void): () => void;
   };
-  /** This machine's own sampler; subscribed only while some other host exists. */
+  /** This machine's own sampler; subscribed only while something reads it beside another host. */
   localLoop: {
     subscribe(listener: (summary: HostMetricsSummary) => void): () => void;
   } | null;
+  /** Whether a view on this machine is showing host figures; none when absent. */
+  figuresDemand?: {
+    followed(): boolean;
+    onChange(listener: () => void): () => void;
+  };
   /** Push to every local view. */
   emit(event: HostMetricsEvent): void;
   /** Present an opted-in host's attention event in one view; false when no view took it. */
@@ -89,6 +115,11 @@ export interface HostMetricsClientOptions {
    * inbox only, or announced. Announced when absent.
    */
   waitingPolicy?(): "silent" | "quiet" | "announce";
+  /**
+   * Whether this machine tracks agent usage (#17981). While it doesn't, no
+   * host's usage readings are kept or passed on, whatever a host sends. On when absent.
+   */
+  agentUsageTracking?(): boolean;
   /** This machine's fleet and worktree reads, for the "local" host. */
   local: {
     listFleetTargets(): Promise<HostFleetTargetList>;
@@ -234,6 +265,13 @@ export class HostMetricsClient {
   private readonly summaryListeners = new Set<(hostId: HostId) => void>();
   /** This Shell's assistants' armed agent watches, the only ones told of a host's agents' waits. */
   private readonly agentWaitingListeners = new Set<AgentWaitingListener>();
+  /** What in main hears hosts' agents' stops: empty unless Decisions asked for them. */
+  private readonly agentStopListeners = new Set<AgentStopListener>();
+  /**
+   * Per host, the stops passed on and not taken back, by the link each came
+   * on: one whose link ends can no longer be taken back, so it is then.
+   */
+  private readonly liveStops = new Map<HostId, Map<string, LinkSession>>();
   private stopLocal: (() => void) | null = null;
   private stopLocalWorktrees: (() => void) | null = null;
   private localWorktrees: WorktreeChangeWatch | null = null;
@@ -247,7 +285,9 @@ export class HostMetricsClient {
   start(): void {
     this.disposers.push(
       this.options.manager.onSessionOpened((hostId, session) => this.wire(hostId, session)),
-      this.options.registry.onChange(() => this.syncHosts())
+      this.options.registry.onChange(() => this.syncHosts()),
+      this.options.manager.onStateChange(() => this.syncLocalSampling()),
+      this.options.figuresDemand?.onChange(() => this.syncLocalSampling()) ?? (() => {})
     );
     this.syncHosts();
   }
@@ -261,6 +301,8 @@ export class HostMetricsClient {
     this.stopLocalProjects?.();
     this.stopLocalProjects = null;
     this.summaryListeners.clear();
+    this.agentStopListeners.clear();
+    this.liveStops.clear();
   }
 
   /** Hears each summary as it is recorded; it never asks a host for one. */
@@ -283,6 +325,78 @@ export class HostMetricsClient {
     };
   }
 
+  /**
+   * Hosts' agents seen stopping, and those stops taken back (#17933), for the
+   * owner's phone. Only links already up are heard: nothing here dials a
+   * host, and no notification choice of the person's applies.
+   */
+  onAgentStopChanges(listener: AgentStopListener): () => void {
+    this.agentStopListeners.add(listener);
+    return () => {
+      this.agentStopListeners.delete(listener);
+      // No one left holds them, so no one is owed their taking back.
+      if (this.agentStopListeners.size === 0) this.liveStops.clear();
+    };
+  }
+
+  private hearAgentStop(
+    hostId: HostId,
+    session: LinkSession,
+    payload: AgentStopChangePayload
+  ): void {
+    if (this.agentStopListeners.size === 0 || !session.isOpen) return;
+    const live = this.liveStops.get(hostId);
+    if (!payload.stopped) {
+      if (live?.delete(payload.terminalId) !== true) return;
+      if (live.size === 0) this.liveStops.delete(hostId);
+      this.tellAgentStop(hostId, payload.terminalId, false);
+      return;
+    }
+    // Dated on this Shell's clocks alone: by the ping the host names, or before
+    // it had one, by this link's start, which came before anything on it.
+    const since =
+      payload.afterPing === null ? session.startedAt : session.pingSentAt(payload.afterPing);
+    if (since === null) return;
+    const maxAgeMs = payload.ageMs + elapsedSince(since, (this.options.clock ?? stampNow)());
+    if (maxAgeMs > HOST_STOP_MAX_AGE_MS) return;
+    let evicted: string | null = null;
+    if (live) {
+      live.delete(payload.terminalId);
+      live.set(payload.terminalId, session);
+      if (live.size > MAX_LIVE_STOPS_PER_HOST) {
+        evicted = live.keys().next().value!;
+        live.delete(evicted);
+      }
+    } else {
+      this.liveStops.set(hostId, new Map([[payload.terminalId, session]]));
+    }
+    // Taken back as it's let go: nothing could take it back later.
+    if (evicted !== null) this.tellAgentStop(hostId, evicted, false);
+    this.tellAgentStop(hostId, payload.terminalId, true);
+  }
+
+  /** A link that ended takes back every stop that came on it: none of them can be now. */
+  private endAgentStops(hostId: HostId, session: LinkSession): void {
+    const live = this.liveStops.get(hostId);
+    if (!live) return;
+    for (const [terminalId, cameOn] of [...live]) {
+      if (cameOn !== session) continue;
+      live.delete(terminalId);
+      this.tellAgentStop(hostId, terminalId, false);
+    }
+    if (live.size === 0) this.liveStops.delete(hostId);
+  }
+
+  private tellAgentStop(hostId: HostId, terminalId: string, stopped: boolean): void {
+    for (const listener of [...this.agentStopListeners]) {
+      try {
+        listener(hostId, { terminalId, stopped });
+      } catch (error) {
+        logger.warn("A host's agent stop couldn't be taken", { hostId, error });
+      }
+    }
+  }
+
   private hearAgentWaiting(hostId: HostId, heard: AgentWaitingHeard): void {
     if (this.agentWaitingListeners.size === 0) return;
     if (this.options.registry.get(hostId)?.assistantControlEnabled !== true) return;
@@ -303,6 +417,25 @@ export class HostMetricsClient {
     return this.rings.get(hostId)?.[0] ?? null;
   }
 
+  /**
+   * Drop a forgotten host's history now. A re-pointed host keeps its id, and
+   * the registry only moves on after its views have heard, so a seed or a
+   * list read in between would otherwise hand them the old machine's figures.
+   */
+  forgetHistory(hostId: HostId): void {
+    this.rings.delete(hostId);
+  }
+
+  /**
+   * Tracking was turned off (#17981): drop every usage reading held from the
+   * hosts. Each summary stays the same object, so its receipt and link stay with it.
+   */
+  forgetAgentUsage(): void {
+    for (const ring of this.rings.values()) {
+      for (const summary of ring) delete summary.agentUsage;
+    }
+  }
+
   /** When a summary this client holds arrived, and what its frame proved about its age (#14462). */
   receiptOf(summary: HostMetricsSummary): SummaryReceipt | null {
     return this.receipts.get(summary) ?? null;
@@ -317,6 +450,26 @@ export class HostMetricsClient {
     const token = this.arrivedOn.get(summary);
     if (token === undefined) return null;
     return session !== null && this.linkTokens.get(session) === token;
+  }
+
+  /**
+   * The host's idle clock as its latest summary gave it, and when that summary
+   * was taken by the host's clock (#17923): only for one that came on
+   * `session` less than `maxAgeMs` ago by this machine's clocks, so it is the
+   * host's word now rather than one kept from before a drop or a sleep.
+   */
+  idleOn(
+    hostId: HostId,
+    session: LinkSession,
+    maxAgeMs: number
+  ): { idle: HostIdleObservation; sampledAt: number } | null {
+    const summary = this.latest(hostId);
+    if (!summary?.idle || this.cameOn(summary, session) !== true) return null;
+    const receipt = this.receiptOf(summary);
+    if (!receipt || elapsedSince(receipt.at, (this.options.clock ?? stampNow)()) >= maxAgeMs) {
+      return null;
+    }
+    return { idle: summary.idle, sampledAt: summary.sampledAt };
   }
 
   /** Agents a connected host last reported working and waiting; unknown while it isn't connected. */
@@ -496,6 +649,8 @@ export class HostMetricsClient {
     const at = (this.options.clock ?? stampNow)();
     const { timing, ...summary } = frame;
     const stamped: HostMetricsSummary = { ...summary, hostId };
+    // A host from before #17981 sends usage whatever this machine wants.
+    if (this.options.agentUsageTracking?.() === false) delete stamped.agentUsage;
     this.receipts.set(
       stamped,
       receiveSummary(timing, (nonce) => session?.pingSentAt(nonce) ?? null, at)
@@ -565,6 +720,15 @@ export class HostMetricsClient {
         return null;
       }
     );
+    session.registerCallHandler(
+      MetricsLinkMethod.AGENT_STOP_CHANGED,
+      AgentStopChangePayloadSchema,
+      (payload) => {
+        this.hearAgentStop(hostId, session, payload);
+        return null;
+      }
+    );
+    session.onClose(() => this.endAgentStops(hostId, session));
     session.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (payload) => {
       // Before the person's choices: a host too old to send its agents' waits
       // is heard this way by an agent watch that takes any reason.
@@ -650,17 +814,7 @@ export class HostMetricsClient {
         }
       }
     }
-    if (hosts.length > 0 && !this.stopLocal && this.options.localLoop) {
-      this.stopLocal = this.options.localLoop.subscribe((summary) => {
-        this.record(LOCAL_HOST_ID, summary);
-        // A project closed here fires no worktree event; the sample tick catches it.
-        this.localWorktrees?.poke();
-      });
-    } else if (hosts.length === 0 && this.stopLocal) {
-      this.stopLocal();
-      this.stopLocal = null;
-      this.rings.delete(LOCAL_HOST_ID);
-    }
+    this.syncLocalSampling();
     // A window showing another host lists this machine's worktrees too.
     const follow = this.options.local.onWorktreesMaybeChanged;
     if (hosts.length > 0 && !this.stopLocalWorktrees && follow) {
@@ -691,5 +845,37 @@ export class HostMetricsClient {
       this.stopLocalProjects();
       this.stopLocalProjects = null;
     }
+  }
+
+  /**
+   * This machine's own summary is read beside another host's: by a view
+   * showing host figures, and while a host is connected, by the sample tick
+   * that catches a project closed here for a window on that host. Saved hosts
+   * that are all disconnected leave it unsampled, as its reads are
+   * subprocesses every few seconds (#17027).
+   */
+  private syncLocalSampling(): void {
+    const wanted = this.localSummaryWanted();
+    if (wanted && !this.stopLocal && this.options.localLoop) {
+      this.stopLocal = this.options.localLoop.subscribe((summary) => {
+        this.record(LOCAL_HOST_ID, summary);
+        // A project closed here fires no worktree event; the sample tick catches it.
+        this.localWorktrees?.poke();
+      });
+    } else if (!wanted && this.stopLocal) {
+      this.stopLocal();
+      this.stopLocal = null;
+      // Not current once nothing updates it: the next reader waits for a fresh sample.
+      this.rings.delete(LOCAL_HOST_ID);
+    }
+  }
+
+  private localSummaryWanted(): boolean {
+    const hosts = this.options.registry.list().filter((host) => !isLocalHostId(host.id));
+    if (hosts.length === 0) return false;
+    if (this.options.figuresDemand?.followed() === true) return true;
+    return hosts.some(
+      (host) => this.options.manager.connectionState(host.id).status === "connected"
+    );
   }
 }

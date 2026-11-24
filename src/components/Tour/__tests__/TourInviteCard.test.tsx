@@ -17,6 +17,7 @@ vi.mock("@/components/ui/tooltip", () => ({
 const { getOnboardingStateMock } = vi.hoisted(() => ({ getOnboardingStateMock: vi.fn() }));
 vi.mock("@/clients/onboardingClient", () => ({ getOnboardingState: getOnboardingStateMock }));
 
+import { DAINTREE_TOUR_VERSION } from "../daintreeTourSummary";
 import { TOUR_CHAPTERS } from "../tourChapters";
 import { OPEN_TOUR_EVENT, TOUR_COMPLETED_EVENT } from "../tourEvents";
 import { inviteStateFor, TourInviteCard, TourWelcomeLink } from "../TourInviteCard";
@@ -27,6 +28,15 @@ const tour = (patch: Partial<TourOnboardingState> = {}): TourOnboardingState => 
   lastChapter: 0,
   ...patch,
 });
+
+/** Progress saved at chapter `index` under the tour's current version. */
+const savedAt = (index: number, patch: Partial<TourOnboardingState> = {}) =>
+  tour({
+    lastChapter: index,
+    lastChapterId: TOUR_CHAPTERS[index]!.id,
+    contentVersion: DAINTREE_TOUR_VERSION,
+    ...patch,
+  });
 
 const stored = (
   daintree: TourOnboardingState,
@@ -51,8 +61,18 @@ describe("inviteStateFor", () => {
   });
 
   it("offers to resume an unfinished tour at the chapter it stopped on", () => {
-    expect(inviteStateFor(tour({ lastChapter: 4 }))).toEqual({ kind: "resume", chapter: 4 });
+    expect(inviteStateFor(savedAt(4))).toEqual({ kind: "resume", chapter: 4 });
     expect(inviteStateFor(tour({ lastChapter: 0 })).kind).toBe("invite");
+  });
+
+  it("starts over on progress saved against an earlier version of the chapters", () => {
+    // Index 9 was Review and push before the rewrite; it is Hosts now.
+    expect(inviteStateFor(tour({ lastChapter: 9 })).kind).toBe("invite");
+    expect(inviteStateFor(savedAt(9, { contentVersion: undefined })).kind).toBe("invite");
+  });
+
+  it("starts over when the saved chapter is one this platform doesn't play", () => {
+    expect(inviteStateFor(savedAt(4, { lastChapterId: "review" })).kind).toBe("invite");
   });
 });
 
@@ -80,7 +100,7 @@ describe("TourInviteCard", () => {
   });
 
   it("names the chapter an unfinished tour resumes at", async () => {
-    setup(tour({ lastChapter: 3 }));
+    setup(savedAt(3));
     render(<TourInviteCard />);
     await screen.findByRole("button", { name: "Resume tour" });
     expect(screen.getByTestId("tour-invite-card").textContent).toContain(TOUR_CHAPTERS[3]!.title);

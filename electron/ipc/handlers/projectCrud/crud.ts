@@ -23,7 +23,7 @@ import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { pruneWindowStateForPath } from "../../../windowState.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
-import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { forgetContinuationProject } from "../../../services/codexLimitContinuation/forgetPane.js";
 import { logError } from "../../../utils/logger.js";
 import { captureProjectLayoutSeed } from "../../../services/plugin/projectLayoutSeeds.js";
 
@@ -51,7 +51,7 @@ const PROJECT_VISIBLE_MESSAGE =
 export async function addProjectByPath(
   projectPath: string,
   options?: ProjectAddOptions,
-  internal?: { fresh?: boolean }
+  internal?: { fresh?: boolean; onCreated?: () => void }
 ): Promise<Project> {
   if (typeof projectPath !== "string" || !projectPath) {
     throw new Error("Invalid project path");
@@ -72,6 +72,7 @@ export async function addProjectByPath(
     identity: normalizeCreationIdentity(options?.identity),
     ...(groupId ? { groupId } : {}),
     ...(internal?.fresh ? { fresh: true } : {}),
+    ...(internal?.onCreated ? { onCreated: internal.onCreated } : {}),
   });
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
   return project;
@@ -206,6 +207,8 @@ async function removeProjectRow(
   // project to reconcile it away.
   notifyProjectPluginsClosed(projectId);
   notifyProjectPluginsRemoved(projectId);
+  // Its panes are gone for good, and so is what was chosen for them (#17912).
+  forgetContinuationProject(projectId);
 
   await projectStore.removeProject(projectId);
 }
@@ -396,6 +399,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
         // Best-effort: an uncaught rejection would be relabelled INTERNAL by
         // the catch below and abort a close the user asked for.
         try {
+          const { helpSessionService } = await import("../../../services/HelpSessionService.js");
           await helpSessionService.revokeByProjectId(projectId);
         } catch (revokeError) {
           logError("project-close-help-revoke-failed", revokeError, { projectId });
@@ -558,10 +562,11 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     }
 
     const newPath = result.filePaths[0];
-    // Route through the relocation coordinator: it forks internally — an OPEN
-    // project (visible in any window) runs the phase-3 quiesce/rebind pipeline
-    // so the live view/host/PTYs are repointed rather than stranded; a closed
-    // reattach delegates to the phase-1/2 path. It broadcasts PROJECT_UPDATED to
+    // Route through the relocation coordinator: it forks internally — a project
+    // holding live runtimes (visible in any window, or kept warm in the
+    // background) runs the phase-3 quiesce/rebind pipeline so its views, host
+    // and PTYs are repointed rather than stranded; a reattach of a project
+    // holding nothing delegates to the phase-1/2 path. It broadcasts PROJECT_UPDATED to
     // every cached view by immutable id, so the new path reaches windows other
     // than the one that ran the locate flow (#11282).
     const { projectRelocationCoordinator } =

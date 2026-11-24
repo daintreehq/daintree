@@ -106,7 +106,7 @@ const REACHES_BOTH: VoiceWaitKeysReach = { enter: true, escape: true, page: true
 const REACHES_ESCAPE: VoiceWaitKeysReach = { enter: false, escape: true, page: true };
 
 // Whether this page's window holds the keyboard, which another app, or another
-// view in the window (a portal tab), takes from it. Followed from load, so a
+// view in the window, takes from it. Followed from load, so a
 // wait that starts while it doesn't (a spoken "send it") knows.
 let windowFocused = true;
 

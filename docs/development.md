@@ -64,7 +64,6 @@ Main Process (electron/)     Renderer (src/)
 | `GitService` | Git operations via simple-git |
 | `workspace-host/WorkspaceService` | Worktree polling and status (per-worktree tracking via `WorktreeMonitor`) |
 | `CopyTreeService` | Context generation for agents |
-| `PortalManager` | Localhost browser, log viewer |
 | `ProjectStore` | Multi-project persistence |
 | `HibernationService` | Evicts a sleeping project's cached renderer for `sleepProject` |
 
@@ -74,9 +73,8 @@ Main Process (electron/)     Renderer (src/)
 | ------------------------------- | --------------------------------------------------------- |
 | `components/Terminal/`          | Xterm.js rendering, grid layout                           |
 | `components/Worktree/`          | Dashboard cards, status display                           |
-| `components/Layout/`            | App shell, toolbar, dock                                  |
+| `components/Layout/`            | App shell, toolbar, dock, links launcher                  |
 | `components/Browser/`           | Browser panel (BrowserPane, toolbar)                      |
-| `components/Portal/`            | Localhost portal, dev-server dashboard, log viewer        |
 | `panels/<kind>/`                | Per-kind panel modules for the seven built-in panel kinds |
 | `services/actions/definitions/` | Action definitions — the dispatch and MCP tool surface    |
 | `store/*.ts`                    | Zustand stores                                            |
@@ -92,7 +90,6 @@ Main Process (electron/)     Renderer (src/)
 | `worktreeStore`       | Active worktree, selection                                            |
 | `createWorktreeStore` | Per-view worktree list + git status (factory, backed by MessagePorts) |
 | `projectStore`        | Current project, project list                                         |
-| `portalStore`         | Portal tabs, visibility                                               |
 
 ### Shared Types (`shared/types/ipc/`)
 
@@ -120,7 +117,7 @@ npm test -- src/components/__tests__/Foo.test.tsx  # Tests covering your change
 npm run test:watch -- <path>  # Watch mode
 ```
 
-Don't run the whole suite locally (15-20 minutes): CI runs it on every PR, sharded 6 ways behind `ci-ok`, together with `npm run check`. E2E does not run on PRs. Fix failures outside your files from the CI log.
+Don't run the whole suite locally (15-20 minutes): PR CI runs the tests your diff reaches behind `ci-ok`, together with `npm run check`, and the daily stabilization run covers the whole suite. E2E does not run on PRs. Fix failures outside your files from the CI log.
 
 Tests live in `__tests__/` directories adjacent to source. Use Vitest. Bug fixes need a regression test that fails without the fix. Mock the dependencies of the code under test, never the seam being fixed: an IPC bug gets a real IPC round-trip, a PTY spawn bug a real spawn. Elsewhere, mock IPC via `vi.mock()`.
 
@@ -147,9 +144,9 @@ The latency scenario prints one `[remote-harness] keystroke RTT ms {...}` line (
 
 The script packages the current commit in a `node:<.nvmrc>-bookworm` container, since native modules link against what they're built on, and caches the AppImage under `.tmp/host-install-e2e/<commit>/`. Uncommitted changes aren't in it. That build takes about 20 minutes in a Docker VM with 14 GB of memory (`colima start --memory 14 --cpu 8`); to skip it, set `DAINTREE_CONTAINER_E2E_APPIMAGE` to any packaged Linux AppImage of the daemon's architecture, such as one from `https://updates.daintree.org/nightly/`.
 
-Each scenario's machine (`harness/linuxHost/Dockerfile`, `harness/containerHost.ts`) is an Ubuntu 24.04 container with sshd, an unprivileged user, git and the libraries the deb declares, with `updates.daintree.org` pointing at a feed container in its network namespace. The feed serves the build and its checksum over TLS from a certificate authority made for the run, trusted only by that machine and the test's `fetch`, so the production feed URLs and https-only rules apply unchanged. It covers a fresh install by host fetch and by bundle push, each ending with Host mode on and a terminal answering over the link; a feed with a wrong sha512 refused with the running host untouched; and a second build (the same AppImage repacked by `harness/linuxHost/repackAppImage.mjs` with a marker naming another commit, which staging accepts and the restarted process contradicts) rolled back to the previous build, running. The containers remove themselves after an hour if a run dies before its teardown; the images stay as Docker's cache.
+Each scenario's machine (`harness/linuxHost/Dockerfile`, `harness/containerHost.ts`) is an Ubuntu 24.04 container with sshd, an unprivileged user, git and the libraries the deb declares, with `updates.daintree.org` pointing at a feed container in its network namespace. The feed serves the build and its checksum over TLS from a certificate authority made for the run, trusted only by that machine and the test's `fetch`, so the production feed URLs and https-only rules apply unchanged. It covers a fresh install by host fetch and by bundle push, each ending with Host mode on and a terminal answering over the link after the SSH connection that started it has closed; a feed with a wrong sha512 refused with the running host untouched; a second build (the same AppImage repacked by `harness/linuxHost/repackAppImage.mjs` with a marker naming another commit, which staging accepts and the restarted process contradicts) rolled back to the previous build, running; a connection that finds the Host killed starting it again; and removal stopping it while the install and its projects stay. The containers remove themselves after an hour if a run dies before its teardown; the images stay as Docker's cache.
 
-`systemd --user` needs systemd as PID 1, so `harness/linuxHost/standins/` answers for `systemctl`, `loginctl` and `journalctl`. The stand-in runs the unit setup wrote: its real `ExecStart` and `ExecStop`, its `Environment`, `TimeoutStopSec`, `Restart=on-failure`, and `KillMode=mixed` over a process group where systemd has a cgroup. The client's identity is injected as the build it claims to be, since vitest isn't a packaged app.
+The machine has no init system, as on Agent 37 and most container sandboxes: no `systemctl`, `loginctl` or `/run/user`, and an unprivileged login. Setup there starts Host mode in a session of its own instead of as a `systemd --user` service, with its socket under `~/.cache/daintree/run` and its output in `~/.cache/daintree/host.log`, and a connection starts it again when it isn't running. The client's identity is injected as the build it claims to be, since vitest isn't a packaged app.
 
 ## Debugging
 
@@ -198,16 +195,19 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 
 ## CI
 
-`.github/workflows/ci.yml` runs on push/PR to `main` and `develop`:
+`.github/workflows/ci.yml` runs on pull requests to `main` and `develop`, and never on a push: the daily stabilization run checks the merged tree, and the release workflows check what ships. A PR takes only the jobs its diff needs, because every open PR shares the org's 20 concurrent runners (5 on macOS):
 
-1. **static** and **lint** (Ubuntu): typecheck, codegen and drift guards, format, and the ESLint ratchet (the pieces of `npm run check`)
-2. **test** (Ubuntu): vitest unit tests, sharded 6 ways, minus the perf liveness guard
-3. **perf-liveness** (Ubuntu): `scripts/perf/__tests__/scenarioLiveness.test.ts` on its own runner, ungated, so its per-scenario child processes stay off the shards' critical path
-4. **host-scripts-macos** (macOS): `electron/remote/client/__tests__/hostInstaller.realShell.test.ts`, so the host installer's swap and rollback scripts run under a Mac's `/bin/sh` and BSD tools as well as Linux's
-5. **build** (Ubuntu only): production build verification
-6. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
+1. **changes** (Ubuntu): reads the diff against the PR's base and decides which jobs below run. A draft runs nothing until it is marked ready for review.
+2. **static** (Ubuntu): typecheck, codegen and drift guards, and format. Runs for every PR, docs-only ones included, since Markdown is formatted too.
+3. **lint** (Ubuntu): the ESLint ratchet. Skipped for a docs-only diff.
+4. **test** (Ubuntu): `vitest run --changed <base>`, the test files that import a changed file, on one runner, the perf scenario liveness guard included when the diff reaches it. A change to any `package.json`, the Vitest or Vite config, or `vitest.setup.ts` and what it imports runs the whole suite. A test that reads a file through `fs` rather than importing it isn't selected; the daily stabilization run covers it. The job summary says how many files ran.
+5. **host-scripts-macos** (macOS): `electron/remote/client/__tests__/hostInstaller.realShell.test.ts` under a Mac's `/bin/sh` and BSD tools, only when the `test` job's selection includes it or the PR changes `ci.yml` or the install action
+6. **packages** (Ubuntu): packs the plugin packages and builds a scaffolded plugin against them, only when the diff touches `packages/` or their direct inputs in the app (shared types, plugin schemas and services, the plugin UI kit and its styles, the sample project, the build scripts), a README alone excepted; the daily stabilization run builds and smoke-tests them every time
+7. **plugin-catalog** (Ubuntu): only when `plugins/catalog.json` changes
+8. **build** (Ubuntu): production build, bundle-boundary checks, and smoke. Skipped for a docs-only diff.
+9. **ci-ok**: aggregate gate that fails if any job failed or was cancelled; a skipped job passes. The sole required status check.
 
-`static` and `lint` default to Ubuntu on push/PR but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites: only `check:preload-backdoors` after the build, and `scripts/run-packaged-smoke.mjs` on every packaged binary a feed offers (macOS arm64, universal and x64 on Intel, Linux x64 and arm64 AppImages) before any nightly binary or `latest*.yml` reaches R2.
+A manual dispatch (`gh workflow run CI --ref <branch>`) runs every job except `plugin-catalog`, with the whole unit suite. `warm-caches.yml` saves the caches these jobs restore on `develop`, since a PR can only restore caches from its own branch or its base. `static` and `lint` default to Ubuntu on PRs but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites: only `check:preload-backdoors` after the build, and `scripts/run-packaged-smoke.mjs` on every packaged binary a feed offers (macOS arm64, universal and x64 on Intel, Linux x64 and arm64 AppImages) before any nightly binary or `latest*.yml` reaches R2.
 
 ## Compiler bailout tooling
 
@@ -215,7 +215,7 @@ React Compiler bailouts are tracked with two tools that share **one collector**:
 
 ```bash
 npm run compiler-budget:check     # Gate: diffs the scan against the baseline
-npm run compiler-budget:critical  # Triage: the same scan, filtered to severity "Error"
+npm run compiler-budget:critical  # Triage: the same scan's bailouts, by severity, file and line
 npm run compiler-budget:update    # Accept: rewrites the baseline from the scan
 ```
 
@@ -227,7 +227,7 @@ npm run compiler-budget:update    # Accept: rewrites the baseline from the scan
 
 **Severity buckets** are derived from the plugin's exported `LintRules` registry, so a plugin upgrade that recategorizes a rule reflows the gate:
 
-- **`Hint` (cosmetic `Todo` noise):** collapsed to a per-file `hintCount` and gated only by a **global budget**. Per-file churn moves freely; the whole-repo total may not grow. Entries for deleted files are excluded from that ceiling — their budget left with the code.
+- **`Hint` (`Todo`, syntax the compiler doesn't support yet):** collapsed to a per-file `hintCount` and gated only by a **global budget**. Per-file churn moves freely; the whole-repo total may not grow. Entries for deleted files are excluded from that ceiling — their budget left with the code. A `Todo` is **not cosmetic**: the compiler abandons the whole component or hook over it, exactly as over an `Error`, and emits no memoization at all. It ranks lower only because the code breaks no rule. So `check` warns by name about every file whose `Todo` count grew, including a new file, even while the pooled total holds, and never reports a new file with one as clean.
 - **`Error` + `Warning`:** tracked verbatim in `errorBailouts` and gated **strictly** — any per-file increase, any new file with a strict bailout, or any count-neutral swap to a different category fails.
 
 **A baseline entry with nothing to report is three different events**, and the gate resolves which by asking the filesystem and the scan:
@@ -246,7 +246,9 @@ The gate is **fail-closed** about its own collection. A file that cannot be read
 
 The baseline also records a **coverage** block (`discovered` / `scanned` / `filtered` / `withEvents`). It is what the collapse guard compares against; without it a silent collector is indistinguishable from a codebase that got clean.
 
-`compiler-budget:critical` exits 0 when the scan **completed**, not when it found nothing — findings may still be listed. It exits 1 only when the listing is incomplete.
+`compiler-budget:critical` lists bailouts by file in three sections, `Error`, `Warning` and `Hint`, with exact counts. Lines come from a sample of up to 20 per file for `Hint`s, each naming the line of the function it cost where the compiler reports one. A few lint-only validations log an `Error` without abandoning the function; every `Todo` abandons it. It exits 0 when the scan **completed**, not when it found nothing — findings may still be listed. It exits 1 only when the listing is incomplete.
+
+The components and hooks that render on every app-shell interaction (the toolbar, the project switcher's hook and its mutation hooks, and Canopy's view, card and inbox actions) are pinned at zero bailouts by `scripts/compiler-hot-surfaces.test.mjs`, which runs in the unit suite. The pooled budget can't hold them: a regression there is offset by any improvement elsewhere.
 
 `vite.config.ts` keeps a minimal `reactCompilerReportPlugin` that writes nothing and only asserts the compiler is still wired into the real build.
 

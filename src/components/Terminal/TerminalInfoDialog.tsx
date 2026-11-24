@@ -1,6 +1,7 @@
 import { Children, isValidElement, useCallback, useEffect, useId, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
+import { Callout } from "@/components/ui/Callout";
 import { ChevronRight, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
@@ -141,6 +142,8 @@ interface RowProps {
   label: string;
   value: RowValue;
   mono?: boolean;
+  /** Live-ticking duration or age: fixed-width digits so a refresh doesn't shift the line. */
+  tabular?: boolean;
   /** Render a delayed skeleton instead of the fallback while the remote read is in flight. */
   pending?: boolean;
   /** What to show when the value is absent. Defaults to the not-applicable dash. */
@@ -155,7 +158,14 @@ interface RowProps {
  * alternative — a `<div>` per pair — needs `display: contents` to participate in the
  * grid, which has a documented history of dropping the row from the accessibility tree.
  */
-function Row({ label, value, mono = false, pending = false, fallback = NONE }: RowProps) {
+function Row({
+  label,
+  value,
+  mono = false,
+  tabular = false,
+  pending = false,
+  fallback = NONE,
+}: RowProps) {
   const hasValue = value !== undefined && value !== null && value !== "";
   const display = hasValue ? String(value) : fallback;
 
@@ -182,6 +192,7 @@ function Row({ label, value, mono = false, pending = false, fallback = NONE }: R
               mono && hasValue
                 ? "font-mono text-xs [overflow-wrap:anywhere] tabular-nums"
                 : "break-words",
+              tabular && hasValue && !mono && "tabular-nums",
               !hasValue && "text-text-secondary"
             )}
           >
@@ -816,6 +827,7 @@ Performance:
               />
               <Row
                 label={hasExited ? "Started" : "Runtime"}
+                tabular
                 // Falls back to the panel's own `startedAt` when the host read fails,
                 // rather than reporting "Unavailable" for a fact this window already
                 // has. The UI clock is a few ms later than the PTY's, which does not
@@ -832,6 +844,7 @@ Performance:
               />
               <Row
                 label="Last output"
+                tabular
                 value={
                   info?.lastOutputTime !== undefined
                     ? formatLastActivity(info.lastOutputTime)
@@ -862,22 +875,19 @@ Performance:
           </p>
 
           {error && (
-            <div
-              // Warning, not error. The headline answers are intact and correct — this
-              // is a partial degradation, which the runtime-signal tiers put at T2. The
-              // old treatment was the loudest thing on the surface while its own body
-              // text said the values above were still accurate.
-              //
-              // No tinted fill. A 10% status tint behind this text composites it down
-              // below the 4.5:1 floor, where the same token on the bare dialog surface
-              // clears it — the tint was costing the banner its legibility to look
-              // like a banner.
-              className={cn(
-                "rounded-[var(--radius-lg)] border border-status-warning/40 py-3 space-y-2",
-                GUTTER_BLEED
-              )}
+            // Warning, not error: the headline answers are intact, so this is a partial
+            // degradation. Callout carries the severity in its glyph and keeps the words
+            // on the neutral ramp, which holds contrast and forced-colors where
+            // status-coloured text does not.
+            <Callout
+              severity="warning"
               role="alert"
               data-testid="terminal-info-error"
+              title={
+                info
+                  ? "Lost contact with the terminal host."
+                  : "Couldn\u2019t load live terminal details."
+              }
             >
               {/*
                * Two failures, two sentences. A first read that fails leaves only what
@@ -886,25 +896,12 @@ Performance:
                * terminal. A refresh that fails after a good read leaves real values that
                * are no longer current, which is a different thing to be told.
                */}
-              <p className="text-sm text-text-primary">
-                {info ? (
-                  <>
-                    <span className="font-semibold text-status-warning">
-                      Lost contact with the terminal host.
-                    </span>{" "}
-                    Process-level values are from the last successful read and may be out of date.
-                  </>
-                ) : (
-                  <>
-                    <span className="font-semibold text-status-warning">
-                      Couldn&apos;t load live terminal details.
-                    </span>{" "}
-                    What&apos;s shown comes from this window; process-level detail — PID, TTY,
-                    buffers, activity — is missing.
-                  </>
-                )}
+              <p>
+                {info
+                  ? "Process-level values are from the last successful read and may be out of date."
+                  : "What\u2019s shown comes from this window; process-level detail — PID, TTY, buffers, activity — is missing."}
               </p>
-              <div className="flex items-center gap-2">
+              <div className="mt-2 flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
                   Retry
                 </Button>
@@ -933,11 +930,11 @@ Performance:
                 // `anywhere` rather than `break-all`: the old rule split the terminal
                 // UUID mid-token so the wrapped line opened with a bare hyphen that read
                 // as a stray dash, and the id could not be selected as one string.
-                className="text-xs font-mono [overflow-wrap:anywhere] text-text-primary select-text"
+                className="mt-2 text-xs font-mono [overflow-wrap:anywhere] text-text-primary select-text"
               >
                 {error}
               </p>
-            </div>
+            </Callout>
           )}
 
           {/*
@@ -997,6 +994,7 @@ Performance:
               <Row label="State" value={agentState} pending={pending} />
               <Row
                 label="State changed"
+                tabular
                 value={
                   info?.lastStateChange != null
                     ? formatLastActivity(info.lastStateChange)
@@ -1011,6 +1009,7 @@ Performance:
           <Group title="Activity">
             <Row
               label="Last input"
+              tabular
               value={
                 info?.lastInputTime !== undefined
                   ? formatLastActivity(info.lastInputTime)
@@ -1021,6 +1020,7 @@ Performance:
             />
             <Row
               label="Last output"
+              tabular
               value={
                 info?.lastOutputTime !== undefined
                   ? formatLastActivity(info.lastOutputTime)

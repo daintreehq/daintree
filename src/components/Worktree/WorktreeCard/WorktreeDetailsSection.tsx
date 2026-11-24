@@ -6,6 +6,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
+import type { WorktreeLifecycleStatus } from "@shared/types/worktree";
 import type { RetryAction } from "@/store";
 import type { ErrorRecord } from "@/store/errorStore";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
@@ -19,7 +20,6 @@ import { Callout } from "@/components/ui/Callout";
 import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
 import {
-  Activity,
   ChevronRight,
   GitCommitHorizontal,
   Pause,
@@ -27,7 +27,6 @@ import {
   Plug,
   RefreshCw,
   ShieldAlert,
-  Trash2,
 } from "lucide-react";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { actionService } from "@/services/ActionService";
@@ -41,14 +40,9 @@ import {
 import { useCardFocusHandoff } from "./hooks/useCardFocusHandoff";
 import { resourceLifecycleVisibility } from "../utils/resourceLifecycle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuTrigger,
-  ContextMenuItem,
-  ContextMenuSeparator,
-} from "@/components/ui/context-menu";
 import { pluralize } from "@/lib/pluralize";
+import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { LifecycleRunDisclosure } from "./LifecycleRunDetails";
 
 const COUNT_BUMP_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
 
@@ -118,8 +112,22 @@ export interface WorktreeDetailsSectionProps {
   onResourcePause?: () => void;
   onResourceConnect?: () => void;
   onResourceProvision?: () => void;
-  onResourceTeardown?: () => void;
-  onResourceStatus?: () => void;
+}
+
+// The try/finally lives outside the component: React Compiler abandons a
+// component over a try block with no catch clause.
+async function dispatchRetrySetup(worktreeId: string, onSettled: () => void): Promise<void> {
+  try {
+    // Pin the action context to this card's worktree so `isEnabled` evaluates
+    // against the failed card, not whichever worktree happens to be focused.
+    await actionService.dispatch(
+      "worktree.lifecycle.retrySetup",
+      { worktreeId },
+      { source: "user", contextOverride: { focusedWorktreeId: worktreeId } }
+    );
+  } finally {
+    onSettled();
+  }
 }
 
 export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
@@ -154,18 +162,19 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     onResourceResume,
     onResourcePause,
     onResourceConnect,
-    onResourceTeardown,
-    onResourceStatus,
   } = props;
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
 
   // Forge-resolved committer avatar (#8514). Resolves to the provider's
   // profile picture when the email is public; `undefined` while loading or on
-  // miss, so the existing Gravatar tier transparently takes over.
+  // miss, so the existing Gravatar tier transparently takes over. Asked for
+  // only while the panel that shows it is open; the resting row's tooltip asks
+  // for its own when it opens (#17072).
   const forgeAuthorAvatarUrl = useForgeAuthorAvatar({
     email: worktree.worktreeChanges?.lastCommitAuthor?.email,
     cwd: worktree.path,
+    enabled: isExpanded,
   });
 
   const reviewChangeLine = useReviewChangeHint(worktree);
@@ -248,6 +257,26 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     : worktree.lifecycleStatus?.error;
   const lifecycleOutput = pluginStepsFailed ? undefined : worktree.lifecycleStatus?.output;
   const hasLifecycleDetails = lifecycleFailed && Boolean(lifecycleError || lifecycleOutput);
+  // A status check is quick and repeats on a timer; a row for it would come and
+  // go under the summary every poll.
+  const runningLifecycle =
+    !isBeingDeleted &&
+    worktree.lifecycleStatus?.state === "running" &&
+    worktree.lifecycleStatus.phase !== "resource-status"
+      ? worktree.lifecycleStatus
+      : undefined;
+  // A setup over before the gate opens never adds a row only to take it away.
+  const showRunningLifecycle = useDohertyGate(runningLifecycle !== undefined);
+  // From `setupRun`, which a later phase's status never replaces. Not while
+  // setup runs again: that run's own output is the one to read.
+  // `setupStatus` as well: a status check can take the slot mid-run.
+  const setupRunning =
+    (worktree.lifecycleStatus?.phase === "setup" && worktree.lifecycleStatus.state === "running") ||
+    worktree.setupStatus?.state === "running";
+  const succeededSetup =
+    !setupRunning && worktree.setupRun?.state === "success" && worktree.setupRun.output?.trim()
+      ? worktree.setupRun
+      : undefined;
   // Two separate observations: the host found unapproved repository commands
   // this worktree would run, and/or its setup was skipped for want of approval.
   // The second outlives the first once the commands are approved elsewhere.
@@ -274,17 +303,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     e.stopPropagation();
     if (isRetryingSetup) return;
     setIsRetryingSetup(true);
-    try {
-      // Pin the action context to this card's worktree so `isEnabled` evaluates
-      // against the failed card, not whichever worktree happens to be focused.
-      await actionService.dispatch(
-        "worktree.lifecycle.retrySetup",
-        { worktreeId: worktree.id },
-        { source: "user", contextOverride: { focusedWorktreeId: worktree.id } }
-      );
-    } finally {
-      setIsRetryingSetup(false);
-    }
+    await dispatchRetrySetup(worktree.id, () => setIsRetryingSetup(false));
   };
 
   // Same rule the worktree menu's Runtime ▸ Environment section applies, so the
@@ -352,7 +371,11 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             className={cn(DISCLOSURE_BUTTON, isExpanded && DISCLOSURE_BUTTON_LABELLED)}
           >
             <ChevronRight
-              className={cn("h-3 w-3 shrink-0 text-text-secondary", isExpanded && "rotate-90")}
+              data-animated-chevron
+              className={cn(
+                "h-3 w-3 shrink-0 text-text-secondary transition-transform duration-150 ease-out",
+                isExpanded && "rotate-90"
+              )}
               aria-hidden="true"
             />
             {isExpanded &&
@@ -483,51 +506,6 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 </span>
               </TruncatedTooltip>
 
-              {hasResourceConfig && (
-                <ContextMenu>
-                  <ContextMenuTrigger asChild>
-                    <span className="sr-only">Resource actions</span>
-                  </ContextMenuTrigger>
-                  <ContextMenuContent onClick={(e) => e.stopPropagation()}>
-                    {showResourceResume && onResourceResume && (
-                      <ContextMenuItem onClick={onResourceResume}>
-                        <Play className="w-3.5 h-3.5 mr-2" />
-                        Resume resource
-                      </ContextMenuItem>
-                    )}
-                    {showResourcePause && onResourcePause && (
-                      <ContextMenuItem onClick={onResourcePause}>
-                        <Pause className="w-3.5 h-3.5 mr-2" />
-                        Pause resource
-                      </ContextMenuItem>
-                    )}
-                    {showResourceConnect && (
-                      <ContextMenuItem onClick={onResourceConnect}>
-                        <Plug className="w-3.5 h-3.5 mr-2" />
-                        Connect to resource
-                      </ContextMenuItem>
-                    )}
-                    {(showResourceResume || showResourcePause || showResourceConnect) &&
-                      onResourceStatus && <ContextMenuSeparator />}
-                    {onResourceStatus && (
-                      <ContextMenuItem onClick={onResourceStatus}>
-                        <Activity className="w-3.5 h-3.5 mr-2" />
-                        Check status
-                      </ContextMenuItem>
-                    )}
-                    {onResourceTeardown && (
-                      <>
-                        <ContextMenuSeparator />
-                        <ContextMenuItem destructive onClick={onResourceTeardown}>
-                          <Trash2 className="w-3.5 h-3.5 mr-2" />
-                          Tear down resource
-                        </ContextMenuItem>
-                      </>
-                    )}
-                  </ContextMenuContent>
-                </ContextMenu>
-              )}
-
               {hasResourceConfig &&
                 (showResourceResume || showResourcePause || showResourceConnect) && (
                   <span className="relative z-10 ml-1 inline-flex shrink-0 items-center gap-0.5">
@@ -639,7 +617,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   commitMessage={worktree.worktreeChanges?.lastCommitMessage}
                   commitBody={worktree.worktreeChanges?.lastCommitBody}
                   commitSha={worktree.worktreeChanges?.headOid}
-                  forgeAvatarUrl={forgeAuthorAvatarUrl}
+                  forgeAvatarCwd={worktree.path}
                   lastActivityTimestamp={worktree.lastActivityTimestamp}
                 />
               )}
@@ -693,7 +671,32 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
               showTime={true}
               forgeAvatarUrl={forgeAuthorAvatarUrl}
             />
+            {succeededSetup && (
+              <LifecycleRunDisclosure
+                status={succeededSetup}
+                label="Setup output"
+                className="mt-2"
+              />
+            )}
           </div>
+        )}
+
+        {runningLifecycle && showRunningLifecycle && (
+          <LifecycleRunRow
+            status={runningLifecycle}
+            className={cn(
+              "py-1",
+              // Outside the Details disclosure, like the recovery block: what
+              // a run is doing is the question while it runs, open or not.
+              isExpanded
+                ? isSidebar
+                  ? "px-2.5"
+                  : "px-3"
+                : isSidebar
+                  ? "mt-1"
+                  : "mt-1 pl-1.5 pr-2.5"
+            )}
+          />
         )}
 
         {lifecycleFailed && (
@@ -834,6 +837,31 @@ export interface WorktreeDeleteErrorBannerProps {
  * a delete failure regardless of collapse state — otherwise a collapsed card
  * silently absorbs the error.
  */
+/**
+ * A running phase's row under the summary. It goes the moment the run settles,
+ * so a reader focused in its log is handed to the card rather than to <body>.
+ */
+function LifecycleRunRow({
+  status,
+  className,
+}: {
+  status: WorktreeLifecycleStatus;
+  className: string;
+}) {
+  const focusHandoffRef = useCardFocusHandoff<HTMLDivElement>();
+  return (
+    <div
+      ref={focusHandoffRef}
+      // Pressing in it never switches worktrees.
+      data-card-control=""
+      data-testid="worktree-lifecycle-run"
+      className={className}
+    >
+      <LifecycleRunDisclosure status={status} label="Output" />
+    </div>
+  );
+}
+
 export function WorktreeDeleteErrorBanner({
   message,
   onRetry,

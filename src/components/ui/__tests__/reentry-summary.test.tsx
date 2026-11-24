@@ -11,6 +11,17 @@ import {
 import type { ReEntrySummaryState, SummaryRow } from "@/hooks/useReEntrySummary";
 import { navigateToNotificationSource } from "@/components/Notifications/notificationNavigation";
 import { useUIStore } from "@/store/uiStore";
+import {
+  _resetForTests as _resetEscapeStackForTests,
+  registerEscape,
+  registerEscapeFallback,
+} from "@/lib/escapeStack";
+import {
+  _resetTooltipFocusSuppressionForTests,
+  isTooltipSuppressedForElement,
+} from "@/lib/tooltipFocusSuppression";
+import { TooltipContent } from "@/components/ui/tooltip";
+import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import type { ReactNode } from "react";
 
@@ -18,7 +29,7 @@ import type { ReactNode } from "react";
 // as-is; the content is dropped so tooltip text can't collide with queries.
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipContent: () => null,
+  TooltipContent: vi.fn(() => null),
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
@@ -427,6 +438,419 @@ describe("ReEntrySummary", () => {
     );
     const card = screen.getByRole("status");
     expect(document.activeElement).not.toBe(card);
+  });
+
+  describe("keyboard focus (#17272)", () => {
+    // Global Escape routing lives above this component; mount the real bubble
+    // dispatcher so Escape reaches the stack the way it does in the app.
+    function EscapeHost() {
+      useGlobalEscapeDispatcher();
+      return null;
+    }
+
+    let outside: HTMLButtonElement;
+
+    beforeEach(() => {
+      _resetEscapeStackForTests();
+      _resetTooltipFocusSuppressionForTests();
+      outside = document.createElement("button");
+      outside.textContent = "outside";
+      document.body.append(outside);
+    });
+
+    afterEach(() => {
+      outside.remove();
+      _resetEscapeStackForTests();
+      _resetTooltipFocusSuppressionForTests();
+    });
+
+    const pressEscape = () => {
+      const target = document.activeElement ?? document.body;
+      act(() => {
+        fireEvent.keyDown(target, { key: "Escape" });
+      });
+    };
+
+    const focus = (el: HTMLElement) => {
+      act(() => {
+        el.focus();
+      });
+    };
+
+    const advance = (ms: number) => {
+      act(() => {
+        vi.advanceTimersByTime(ms);
+      });
+    };
+
+    const renderWithEscape = (state: ReEntrySummaryState) =>
+      render(
+        <>
+          <EscapeHost />
+          <ReEntrySummary state={state} />
+        </>
+      );
+
+    it("pauses auto-dismiss while focus is inside the card and resumes once it leaves", () => {
+      const dismiss = vi.fn();
+      render(<ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />);
+      flushEntry();
+
+      focus(screen.getByLabelText("Pin summary"));
+      focus(screen.getByRole("button", { name: /feature-test/ }));
+      advance(AUTO_DISMISS_MS + 2000);
+      expect(dismiss).not.toHaveBeenCalled();
+
+      focus(outside);
+      advance(AUTO_DISMISS_MS);
+      expect(dismiss).toHaveBeenCalledOnce();
+    });
+
+    it("holds while either the pointer or focus is still on the card", () => {
+      const dismiss = vi.fn();
+      render(<ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />);
+      flushEntry();
+      const card = screen.getByRole("status");
+
+      fireEvent.mouseEnter(card);
+      focus(screen.getByLabelText("Pin summary"));
+      fireEvent.mouseLeave(card);
+      advance(AUTO_DISMISS_MS + 2000);
+      expect(dismiss).not.toHaveBeenCalled();
+
+      fireEvent.mouseEnter(card);
+      focus(outside);
+      advance(AUTO_DISMISS_MS + 2000);
+      expect(dismiss).not.toHaveBeenCalled();
+
+      fireEvent.mouseLeave(card);
+      advance(AUTO_DISMISS_MS);
+      expect(dismiss).toHaveBeenCalledOnce();
+    });
+
+    it("dismisses on Escape while focus is inside, handing focus back with its ring", () => {
+      const dismiss = vi.fn();
+      renderWithEscape(makeState({ dismiss, rows: [makeRow()] }));
+      flushEntry();
+
+      focus(outside);
+      focus(screen.getByLabelText("Dismiss summary"));
+      const restore = vi.spyOn(outside, "focus");
+      pressEscape();
+
+      expect(dismiss).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(outside);
+      expect(restore).toHaveBeenCalledOnce();
+      expect(restore.mock.calls[0]?.[0]?.focusVisible).not.toBe(false);
+      // Its own tooltip must not open on the focus this handed it.
+      expect(isTooltipSuppressedForElement(outside)).toBe(true);
+    });
+
+    it("takes Escape ahead of a toast already on the stack, and gives it back on leaving", () => {
+      const dismiss = vi.fn();
+      const dismissToast = vi.fn();
+      renderWithEscape(makeState({ dismiss, rows: [makeRow()] }));
+      flushEntry();
+      // On the stack after the summary mounted: only a registration made when
+      // focus entered can sit above it.
+      registerEscape(dismissToast);
+
+      focus(screen.getByLabelText("Pin summary"));
+      pressEscape();
+      expect(dismiss).toHaveBeenCalledOnce();
+      expect(dismissToast).not.toHaveBeenCalled();
+
+      focus(outside);
+      pressEscape();
+      expect(dismiss).toHaveBeenCalledOnce();
+      expect(dismissToast).toHaveBeenCalledOnce();
+    });
+
+    // A pointer press carries a click count; Enter or Space on the button does
+    // not, and keeps the ring the keyboard user is following.
+    it.each([
+      ["clicked", 1, true],
+      ["pressed from the keyboard", 0, false],
+    ])("hands focus back when the dismiss button is %s", (_how, detail, ringless) => {
+      const dismiss = vi.fn();
+      render(<ReEntrySummary state={makeState({ dismiss, rows: [makeRow()] })} />);
+      flushEntry();
+
+      focus(outside);
+      // Moving between the card's own controls keeps the origin from outside.
+      focus(screen.getByLabelText("Pin summary"));
+      const dismissButton = screen.getByLabelText("Dismiss summary");
+      focus(dismissButton);
+      const restore = vi.spyOn(outside, "focus");
+      fireEvent.click(dismissButton, { detail });
+
+      expect(dismiss).toHaveBeenCalledOnce();
+      expect(document.activeElement).toBe(outside);
+      expect(restore.mock.calls[0]?.[0]?.focusVisible === false).toBe(ringless);
+    });
+
+    it("hands focus back to the most recent origin", () => {
+      const dismiss = vi.fn();
+      const other = document.createElement("button");
+      document.body.append(other);
+      try {
+        renderWithEscape(makeState({ dismiss, rows: [makeRow()] }));
+        flushEntry();
+
+        focus(outside);
+        focus(screen.getByLabelText("Pin summary"));
+        focus(other);
+        focus(screen.getByLabelText("Pin summary"));
+        pressEscape();
+
+        expect(document.activeElement).toBe(other);
+      } finally {
+        other.remove();
+      }
+    });
+
+    it("still dismisses on Escape when the origin has gone", () => {
+      const dismiss = vi.fn();
+      renderWithEscape(makeState({ dismiss, rows: [makeRow()] }));
+      flushEntry();
+
+      focus(outside);
+      const pin = screen.getByLabelText("Pin summary");
+      focus(pin);
+      const restore = vi.spyOn(outside, "focus");
+      outside.remove();
+      pressEscape();
+
+      expect(dismiss).toHaveBeenCalledOnce();
+      expect(restore).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a row", () => screen.getByRole("button", { name: /feature-test/ })],
+      ["Open notifications", () => screen.getByRole("button", { name: "Open notifications" })],
+      ["+N more", () => screen.getByRole("button", { name: "+3 more" })],
+    ])("leaves focus to where %s goes", (_name, control) => {
+      useUIStore.setState({ openNotificationCenter: vi.fn() });
+      const dismiss = vi.fn();
+      render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [makeRow()], overflowCount: 3 })} />
+      );
+      flushEntry();
+
+      focus(outside);
+      const target = control();
+      focus(target);
+      const restore = vi.spyOn(outside, "focus");
+      fireEvent.click(target, { detail: 1 });
+
+      expect(dismiss).toHaveBeenCalledOnce();
+      expect(restore).not.toHaveBeenCalled();
+    });
+
+    it("leaves Escape to the rest of the app while focus is elsewhere", () => {
+      const dismiss = vi.fn();
+      const fallback = vi.fn(() => true);
+      registerEscapeFallback(fallback);
+      renderWithEscape(makeState({ dismiss, rows: [makeRow()] }));
+      flushEntry();
+
+      focus(screen.getByLabelText("Pin summary"));
+      focus(outside);
+      pressEscape();
+
+      expect(dismiss).not.toHaveBeenCalled();
+      // Fallbacks run only on an empty stack, so the card must not be on it.
+      expect(fallback).toHaveBeenCalledOnce();
+    });
+
+    it("lets go when a replacement summary takes the focused row away", () => {
+      // Removing the focused node fires no blur, so the pause would otherwise
+      // stick and the card would keep claiming Escape from the whole app.
+      const dismiss = vi.fn();
+      const { rerender } = renderWithEscape(
+        makeState({
+          dismiss,
+          entries: [makeEntry({ id: "a" })],
+          rows: [makeRow({ key: "worktree:wt-1" })],
+        })
+      );
+      flushEntry();
+
+      focus(screen.getByRole("button", { name: /feature-test/ }));
+      rerender(
+        <>
+          <EscapeHost />
+          <ReEntrySummary
+            state={makeState({
+              dismiss,
+              entries: [makeEntry({ id: "b" })],
+              rows: [makeRow({ key: "worktree:wt-2", label: "other-worktree" })],
+            })}
+          />
+        </>
+      );
+      expect(screen.getByRole("status").contains(document.activeElement)).toBe(false);
+
+      pressEscape();
+      expect(dismiss).not.toHaveBeenCalled();
+      advance(AUTO_DISMISS_MS);
+      expect(dismiss).toHaveBeenCalledOnce();
+    });
+
+    it("stays paused when brought back mid-exit with focus still inside", () => {
+      const dismiss = vi.fn();
+      const shown = makeState({ dismiss, entries: [makeEntry({ id: "a" })], rows: [makeRow()] });
+      const { rerender } = render(<ReEntrySummary state={shown} />);
+      flushEntry();
+
+      focus(screen.getByLabelText("Pin summary"));
+      rerender(
+        <ReEntrySummary
+          state={makeState({ visible: false, dismiss, rows: [], overflowCount: 0, shownAt: 0 })}
+        />
+      );
+      advance(Math.floor(UI_EXIT_DURATION / 2));
+      rerender(<ReEntrySummary state={shown} />);
+      flushEntry();
+
+      advance(AUTO_DISMISS_MS + 2000);
+      expect(dismiss).not.toHaveBeenCalled();
+
+      focus(outside);
+      advance(AUTO_DISMISS_MS);
+      expect(dismiss).toHaveBeenCalledOnce();
+    });
+
+    it("starts the next summary unpaused after one dismissed with focus inside", () => {
+      // End to end: whatever focus did on the way out (jsdom has no inert focus
+      // fixup), the next summary must still auto-dismiss.
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary
+          state={makeState({ dismiss, entries: [makeEntry({ id: "a" })], rows: [makeRow()] })}
+        />
+      );
+      flushEntry();
+
+      focus(screen.getByLabelText("Pin summary"));
+      rerender(
+        <ReEntrySummary
+          state={makeState({ visible: false, dismiss, rows: [], overflowCount: 0, shownAt: 0 })}
+        />
+      );
+      advance(UI_EXIT_DURATION);
+      expect(screen.queryByRole("status")).toBeNull();
+
+      rerender(
+        <ReEntrySummary
+          state={makeState({
+            dismiss,
+            entries: [makeEntry({ id: "b" })],
+            rows: [makeRow({ key: "worktree:wt-2" })],
+          })}
+        />
+      );
+      flushEntry();
+      dismiss.mockClear();
+
+      advance(AUTO_DISMISS_MS);
+      expect(dismiss).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("cut-off rows (#17272)", () => {
+    // jsdom lays nothing out. Every element measures 100px wide; one whose whole
+    // text is listed here overflows it, so a span can be cut off while the row
+    // button around it (whose text is the whole line) fits.
+    const clipped = new Set<string>();
+
+    beforeEach(() => {
+      vi.mocked(TooltipContent).mockClear();
+      Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+        configurable: true,
+        get: () => 100,
+      });
+      Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+        configurable: true,
+        get(this: HTMLElement) {
+          return clipped.has(this.textContent ?? "") ? 300 : 100;
+        },
+      });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
+      Reflect.deleteProperty(HTMLElement.prototype, "scrollWidth");
+      clipped.clear();
+    });
+
+    // The mocked TooltipContent renders nothing; read what each one was handed.
+    const disclosedText = () =>
+      vi.mocked(TooltipContent).mock.calls.map(([props]) => {
+        const { container, unmount } = render(<>{props.children}</>);
+        const text = container.textContent ?? "";
+        unmount();
+        return text;
+      });
+    const discloses = (text: string) => disclosedText().some((t) => t.includes(text));
+
+    const LONG_LABEL = "feature-a-very-long-worktree-name";
+    const LONG_TITLE = "Build failed after the dependency upgrade";
+    const longRow = () => makeRow({ label: LONG_LABEL, highlightTitle: LONG_TITLE });
+
+    it("discloses the full name and title when only the name is cut off", () => {
+      clipped.add(LONG_LABEL);
+      render(
+        <ReEntrySummary
+          state={makeState({
+            rows: [
+              longRow(),
+              makeRow({ key: "worktree:wt-2", label: "short", highlightTitle: "Fits" }),
+            ],
+          })}
+        />
+      );
+
+      const text = disclosedText().find((t) => t.includes(LONG_LABEL));
+      expect(text).toContain(LONG_TITLE);
+      // The row beside it fits and offers nothing.
+      expect(discloses("short")).toBe(false);
+    });
+
+    it("discloses the row when only its title is cut off", () => {
+      clipped.add(LONG_TITLE);
+      render(<ReEntrySummary state={makeState({ rows: [longRow()] })} />);
+
+      const text = disclosedText().find((t) => t.includes(LONG_TITLE));
+      expect(text).toContain(LONG_LABEL);
+    });
+
+    it("discloses nothing while the row fits", () => {
+      render(<ReEntrySummary state={makeState({ rows: [longRow()] })} />);
+
+      expect(discloses(LONG_LABEL)).toBe(false);
+    });
+
+    it("drops the disclosure while the card slides out", () => {
+      clipped.add(LONG_LABEL);
+      const dismiss = vi.fn();
+      const { rerender } = render(
+        <ReEntrySummary state={makeState({ dismiss, rows: [longRow()] })} />
+      );
+      flushEntry();
+      expect(discloses(LONG_LABEL)).toBe(true);
+      vi.mocked(TooltipContent).mockClear();
+
+      rerender(
+        <ReEntrySummary
+          state={makeState({ visible: false, dismiss, rows: [], overflowCount: 0, shownAt: 0 })}
+        />
+      );
+
+      // Still rendering its latched rows, but no longer offering their text.
+      expect(screen.getByText(LONG_LABEL)).toBeTruthy();
+      expect(discloses(LONG_LABEL)).toBe(false);
+    });
   });
 
   describe("exit animation (#11163)", () => {

@@ -1,18 +1,26 @@
 import * as fs from "fs/promises";
+import type { Dir, Dirent } from "fs";
 import * as path from "path";
 import { createStrictExitGit } from "../utils/hardenedGit.js";
 import { Cache } from "../utils/cache.js";
 import { logWarn } from "../utils/logger.js";
 import { isPathInside } from "../../shared/utils/path.js";
-import type { Dirent } from "fs";
 
 interface FileListCacheEntry {
   files: string[];
   normalizedFiles: string[];
   basenameStarts: Int32Array;
   shortestFiles?: string[];
+  /** `shortestFiles` without directory entries, for a files-only empty query. */
+  shortestOnlyFiles?: string[];
   lastSearchQuery?: string;
   lastSearchCandidates?: number[];
+  /**
+   * Built by the first natural-language search against this listing and
+   * dropped with it, so a project that never resolves a spoken file name never
+   * pays for one.
+   */
+  naturalLanguageIndex?: NaturalLanguageIndex;
 }
 
 /**
@@ -52,8 +60,14 @@ const FILE_LIST_CACHE = new Cache<string, FileListCacheEntry>({
   maxSize: 30,
   defaultTTL: FILE_LIST_TTL_MS,
 });
+/**
+ * Also the fence. A load commits its index only while it is still this map's
+ * value for its cwd, and every invalidation deletes the entry, so a load the
+ * invalidation overtook can never commit: its key is gone, or a newer load has
+ * taken it. Holding the fence in the entry itself means invalidating a cwd
+ * nobody is loading stores nothing, and the map drains as loads settle.
+ */
 const FILE_LIST_IN_FLIGHT = new Map<string, Promise<FileListCacheEntry>>();
-const FILE_LIST_EPOCHS = new Map<string, number>();
 
 let fileListSweepTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -103,24 +117,24 @@ function scopesOverlap(a: string, b: string): boolean {
 }
 
 /**
- * Drop one already-resolved cwd.
- *
- * The epoch is bumped even when nothing was cached: a load already in flight
- * captured the previous value and `getFiles` refuses to commit a result whose
- * captured epoch has moved. Epochs are deliberately never pruned — deleting one
- * would let a fenced load's captured value compare equal again through the
- * `?? 0` default and reseed the cache with a listing from before the change.
+ * Drop one already-resolved cwd: its index, and the in-flight entry that a load
+ * still running needs in order to commit (see `FILE_LIST_IN_FLIGHT`).
  */
 function invalidateResolvedCwd(resolvedCwd: string): void {
   FILE_LIST_CACHE.invalidate(resolvedCwd);
   FILE_LIST_IN_FLIGHT.delete(resolvedCwd);
-  FILE_LIST_EPOCHS.set(resolvedCwd, (FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) + 1);
 }
 
 const MAX_RESULTS_DEFAULT = 50;
 const MAX_RESULTS_LIMIT = 100;
 const MAX_QUERY_LENGTH = 256;
 const MAX_FALLBACK_FILES = 20_000;
+// Raw entries a directory handle reads per call. The walker pulls them one at a
+// time and stops at the cap, so a directory far wider than the remaining budget
+// costs at most one batch of surplus reads rather than every entry it holds.
+// Kept small because a filesystem that reports no entry type has each batch
+// resolved with synchronous lstat calls on this thread.
+const FALLBACK_READ_BATCH = 32;
 
 // Names hard-skipped by the fallback walker only. Git mode honours .gitignore via
 // --exclude-standard, so these are unnecessary there. Includes a few well-known
@@ -175,7 +189,9 @@ function clampInt(value: unknown, min: number, max: number, fallback: number): n
 
 function normalizeQuery(rawQuery: string): string {
   const trimmed = rawQuery.trim().slice(0, MAX_QUERY_LENGTH);
-  let normalized = trimmed;
+  // Indexed paths are POSIX-style everywhere; only Windows treats `\` as a
+  // separator, so POSIX keeps matching a literal backslash in a filename.
+  let normalized = process.platform === "win32" ? trimmed.replace(/\\/g, "/") : trimmed;
   if (normalized.startsWith("./")) normalized = normalized.slice(2);
   if (normalized.startsWith("/")) normalized = normalized.slice(1);
   return normalized.replace(/\/+/g, "/");
@@ -228,7 +244,14 @@ function buildScoringInputs(files: string[]): {
  * The empty-query ranking, cut at the largest page any caller can ask for, so
  * every limit is a prefix of one cached list rather than of its own selection.
  */
-function shortestFilesFor(entry: FileListCacheEntry): string[] {
+function shortestFilesFor(entry: FileListCacheEntry, filesOnly: boolean): string[] {
+  if (filesOnly) {
+    entry.shortestOnlyFiles ??= selectShortestFiles(
+      entry.files.filter((file) => !file.endsWith("/")),
+      MAX_RESULTS_LIMIT
+    );
+    return entry.shortestOnlyFiles;
+  }
   entry.shortestFiles ??= selectShortestFiles(entry.files, MAX_RESULTS_LIMIT);
   return entry.shortestFiles;
 }
@@ -309,13 +332,18 @@ function findWorstIdx(best: ScoredMatch[]): number {
   return worstIdx;
 }
 
-function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number): string[] {
+function pickTopMatches(
+  entry: FileListCacheEntry,
+  query: string,
+  limit: number,
+  filesOnly = false
+): string[] {
   const queryLower = normalizeQuery(query).toLowerCase();
   const normalizedQuery = queryLower.endsWith("/") ? queryLower.slice(0, -1) : queryLower;
   const effectiveLimit = clampInt(limit, 1, MAX_RESULTS_LIMIT, MAX_RESULTS_DEFAULT);
 
   if (normalizedQuery.length === 0) {
-    return shortestFilesFor(entry).slice(0, effectiveLimit);
+    return shortestFilesFor(entry, filesOnly).slice(0, effectiveLimit);
   }
 
   const best: ScoredMatch[] = [];
@@ -338,7 +366,10 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
       entry.basenameStarts[fileIdx]
     );
     if (score === null) continue;
+    // Recorded before the files-only skip: the next query narrows from this
+    // list whatever it asks for, and must still find the directories.
     matchingCandidates.push(fileIdx);
+    if (filesOnly && file.endsWith("/")) continue;
 
     const match = { file, score };
     if (best.length < effectiveLimit) {
@@ -368,31 +399,60 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
     const dir = queue.pop();
     if (!dir) break;
 
-    let entries: Array<Dirent>;
+    let handle: Dir;
     try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
+      handle = await fs.opendir(dir, { bufferSize: FALLBACK_READ_BATCH });
     } catch {
       continue;
     }
 
-    for (const entry of entries) {
-      if (FALLBACK_SKIP_NAMES.has(entry.name)) continue;
-      const absolute = path.join(dir, entry.name);
-      const relative = path.relative(cwd, absolute);
-      // APFS stores filenames as NFD on macOS; normalise to match the NFC paths
-      // git produces via core.precomposeunicode.
-      const relativePosix = toPosixPath(relative).normalize("NFC");
+    // The handle's iterator closes the handle when it finishes or is returned, so
+    // nothing here calls `close`. Entries are on disk order, not the name order
+    // `readdir` sorts into: only a capped walk can tell, and it keeps whichever
+    // entries the filesystem lists first.
+    const entries = handle[Symbol.asyncIterator]();
+    try {
+      while (true) {
+        let step: IteratorResult<Dirent>;
+        try {
+          step = await entries.next();
+        } catch {
+          // A read that fails part-way, whatever the error, keeps the entries
+          // already taken from it. Only the read is guarded: an error thrown by
+          // the body below is a bug here, and rejects instead of caching a
+          // silently partial index.
+          break;
+        }
+        if (step.done) break;
+        const entry = step.value;
 
-      if (entry.isDirectory()) {
-        results.push(`${relativePosix}/`);
-        queue.push(absolute);
+        if (FALLBACK_SKIP_NAMES.has(entry.name)) continue;
+        const absolute = path.join(dir, entry.name);
+        const relative = path.relative(cwd, absolute);
+        // APFS stores filenames as NFD on macOS; normalise to match the NFC paths
+        // git produces via core.precomposeunicode.
+        const relativePosix = toPosixPath(relative).normalize("NFC");
+
+        if (entry.isDirectory()) {
+          results.push(`${relativePosix}/`);
+          queue.push(absolute);
+          if (results.length >= MAX_FALLBACK_FILES) break;
+          continue;
+        }
+
+        if (!entry.isFile()) continue;
+        results.push(relativePosix);
         if (results.length >= MAX_FALLBACK_FILES) break;
-        continue;
       }
-
-      if (!entry.isFile()) continue;
-      results.push(relativePosix);
-      if (results.length >= MAX_FALLBACK_FILES) break;
+    } finally {
+      // Closes the handle on the cap break or a throwing body; after exhaustion
+      // or a failed read the iterator has already finished and this does nothing.
+      try {
+        await entries.return?.();
+      } catch {
+        // A close that fails leaves nothing to recover, and must not replace the
+        // error of the body that was already unwinding.
+      }
     }
   }
 
@@ -404,8 +464,11 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
     });
   }
 
+  // Disk order is not name order, so paths the collator calls equal (zero-width
+  // joiners, soft hyphens) are ordered by raw string rather than by where the
+  // filesystem happened to list them.
   const collator = getPathCollator();
-  return results.sort((a, b) => collator.compare(a, b));
+  return results.sort((a, b) => collator.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 async function loadGitFiles(cwd: string): Promise<string[]> {
@@ -471,65 +534,230 @@ const NL_STOP_WORDS = new Set([
   "this",
 ]);
 
-function splitCamelCase(name: string): string[] {
-  return name
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
-    .replace(/([a-zA-Z])([0-9])/g, "$1 $2")
-    .replace(/([0-9])([a-zA-Z])/g, "$1 $2")
-    .split(/[\s_\-./]+/)
-    .filter(Boolean)
-    .map((w) => w.toLowerCase());
+const UNICODE_SPACE = /\s/;
+
+function isWordSeparator(code: number): boolean {
+  if (code < 128) {
+    return (
+      code === 32 ||
+      (code >= 9 && code <= 13) ||
+      code === 95 ||
+      code === 45 ||
+      code === 46 ||
+      code === 47
+    );
+  }
+  return UNICODE_SPACE.test(String.fromCharCode(code));
 }
 
-function scorePathNaturalLanguage(tokens: string[], file: string): number | null {
-  if (tokens.length === 0) return null;
+const isLower = (code: number): boolean => code >= 97 && code <= 122;
+const isUpper = (code: number): boolean => code >= 65 && code <= 90;
+const isDigit = (code: number): boolean => code >= 48 && code <= 57;
 
-  const lastSlash = file.lastIndexOf("/");
-  const basename = file.slice(lastSlash + 1);
-  const nameWithoutExt = basename.replace(/\.[^.]+$/, "");
-  const words = splitCamelCase(nameWithoutExt);
-
-  let matched = 0;
-  for (const token of tokens) {
-    if (
-      words.some(
-        (w) =>
-          w === token ||
-          (token.length >= 3 && w.length >= 3 && (w.startsWith(token) || token.startsWith(w)))
-      )
-    ) {
-      matched++;
+/**
+ * Lowercase words of a name, split at `\s`, `_`, `-`, `.` and `/`, at a
+ * lower-to-upper step (`fooBar`), before the last capital of an acronym that
+ * runs into a word (`HTMLParser`), and between letters and digits (`s3Client`).
+ * ASCII letters only, as the regex passes this replaced did. One scan with no
+ * intermediate strings, because a natural-language index runs it over every
+ * basename in the tree.
+ *
+ * @internal Exported for tests only.
+ */
+export function splitCamelCase(name: string): string[] {
+  const words: string[] = [];
+  let start = 0;
+  for (let i = 0; i <= name.length; i++) {
+    if (i === name.length) {
+      if (i > start) words.push(name.slice(start, i).toLowerCase());
+      break;
+    }
+    const code = name.charCodeAt(i);
+    if (isWordSeparator(code)) {
+      if (i > start) words.push(name.slice(start, i).toLowerCase());
+      start = i + 1;
+      continue;
+    }
+    if (i === start) continue;
+    const prev = name.charCodeAt(i - 1);
+    const boundary =
+      (isLower(prev) && isUpper(code)) ||
+      (isUpper(prev) && isUpper(code) && i + 1 < name.length && isLower(name.charCodeAt(i + 1))) ||
+      ((isLower(prev) || isUpper(prev)) && isDigit(code)) ||
+      (isDigit(prev) && (isLower(code) || isUpper(code)));
+    if (boundary) {
+      words.push(name.slice(start, i).toLowerCase());
+      start = i;
     }
   }
-
-  if (matched === 0) return null;
-  return matched / tokens.length;
+  return words;
 }
 
+function wordMatchesToken(word: string, token: string): boolean {
+  return (
+    word === token ||
+    (token.length >= 3 && word.length >= 3 && (word.startsWith(token) || token.startsWith(word)))
+  );
+}
+
+/**
+ * Every file's basename words, split once per index rather than once per
+ * description. Words are interned: a file holds ids into `vocabulary`, so a
+ * description is compared against each distinct word once, however many files
+ * share it, and the index costs a few bytes per word rather than an array of
+ * strings per file.
+ */
+interface NaturalLanguageIndex {
+  vocabulary: string[];
+  /** File `i`'s word ids are `fileWords[wordStarts[i]]` up to `wordStarts[i + 1]`; none for a directory. */
+  wordStarts: Int32Array;
+  fileWords: Int32Array;
+}
+
+/** The basename less its last extension: `a.test.ts` is `a.test`, `.env` is empty, `Makefile` and `notes.` stay whole. */
+function nameWithoutExtension(file: string): string {
+  const name = file.slice(file.lastIndexOf("/") + 1);
+  const dot = name.lastIndexOf(".");
+  return dot !== -1 && dot < name.length - 1 ? name.slice(0, dot) : name;
+}
+
+function buildNaturalLanguageIndex(files: string[]): NaturalLanguageIndex {
+  const vocabulary: string[] = [];
+  const wordIds = new Map<string, number>();
+  const wordStarts = new Int32Array(files.length + 1);
+  let fileWords = new Int32Array(Math.max(16, files.length * 4));
+  let wordCount = 0;
+
+  const append = (wordId: number): void => {
+    if (wordCount === fileWords.length) {
+      const grown = new Int32Array(fileWords.length * 2);
+      grown.set(fileWords);
+      fileWords = grown;
+    }
+    fileWords[wordCount++] = wordId;
+  };
+
+  for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+    wordStarts[fileIdx] = wordCount;
+    const file = files[fileIdx];
+    if (file.endsWith("/")) continue;
+
+    for (const word of splitCamelCase(nameWithoutExtension(file))) {
+      let wordId = wordIds.get(word);
+      if (wordId === undefined) {
+        wordId = vocabulary.push(word) - 1;
+        wordIds.set(word, wordId);
+      }
+      append(wordId);
+    }
+  }
+  wordStarts[files.length] = wordCount;
+
+  return { vocabulary, wordStarts, fileWords: fileWords.slice(0, wordCount) };
+}
+
+/**
+ * The `limit` best files for a description, best first, in the order a stable
+ * sort by score then path length would give them.
+ *
+ * Every file is scored against the same token list, so comparing matched-token
+ * counts orders exactly as comparing `matched / tokens.length` did, without
+ * floating point. The file index is the stability of that sort made explicit:
+ * with it the order is total, and the first `limit` of a total order are the
+ * `limit` smallest, which a bounded heap finds without sorting every match.
+ */
 function pickTopNaturalLanguageMatches(
-  files: string[],
+  entry: FileListCacheEntry,
   description: string,
   limit: number
 ): string[] {
-  const rawTokens = description
+  const tokens = description
     .toLowerCase()
     .split(/\s+/)
     .filter((t) => t.length > 0 && !NL_STOP_WORDS.has(t))
     .flatMap((t) => splitCamelCase(t));
 
-  if (rawTokens.length === 0) return [];
+  if (tokens.length === 0) return [];
 
-  const scored: Array<{ file: string; score: number; pathLen: number }> = [];
-  for (const file of files) {
-    if (file.endsWith("/")) continue;
-    const score = scorePathNaturalLanguage(rawTokens, file);
-    if (score === null) continue;
-    scored.push({ file, score, pathLen: file.length });
+  const index = (entry.naturalLanguageIndex ??= buildNaturalLanguageIndex(entry.files));
+  const { vocabulary, wordStarts, fileWords } = index;
+
+  // A repeated token counts once per occurrence, as it always has: its weight
+  // is how many times the description says it.
+  const tokenWeights = new Map<string, number>();
+  for (const token of tokens) tokenWeights.set(token, (tokenWeights.get(token) ?? 0) + 1);
+  const distinctTokens = [...tokenWeights.keys()];
+  const weights = distinctTokens.map((token) => tokenWeights.get(token)!);
+
+  const files = entry.files;
+  const matchedOf = new Int32Array(files.length);
+
+  // Tokens are matched thirty-two at a time: bit `t` of `tokenMasks[wordId]` is
+  // set when the word matches the group's token `t`. A file's matched tokens
+  // are the OR of its words' masks, so a token two of its words match
+  // (`ProfileProfiles`) still counts once. One mask array is reused for every
+  // group, so the scratch stays at four bytes a word and a file however long
+  // the description.
+  const tokenMasks = new Int32Array(vocabulary.length);
+  for (let first = 0; first < distinctTokens.length; first += 32) {
+    const groupSize = Math.min(32, distinctTokens.length - first);
+    if (first > 0) tokenMasks.fill(0);
+    for (let wordId = 0; wordId < vocabulary.length; wordId++) {
+      for (let t = 0; t < groupSize; t++) {
+        if (wordMatchesToken(vocabulary[wordId], distinctTokens[first + t])) {
+          tokenMasks[wordId] |= 1 << t;
+        }
+      }
+    }
+    for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+      let bits = 0;
+      const end = wordStarts[fileIdx + 1];
+      for (let i = wordStarts[fileIdx]; i < end; i++) bits |= tokenMasks[fileWords[i]];
+      while (bits !== 0) {
+        const lowest = bits & -bits;
+        matchedOf[fileIdx] += weights[first + 31 - Math.clz32(lowest)];
+        bits ^= lowest;
+      }
+    }
   }
 
-  scored.sort((a, b) => b.score - a.score || a.pathLen - b.pathLen);
-  return scored.slice(0, limit).map((s) => s.file);
+  const compare = (a: number, b: number): number =>
+    matchedOf[b] - matchedOf[a] || files[a].length - files[b].length || a - b;
+
+  // A max-heap of the best files seen so far: its root is the worst of them.
+  const heap: number[] = [];
+  const siftDown = (): void => {
+    let parent = 0;
+    while (true) {
+      const left = parent * 2 + 1;
+      const right = left + 1;
+      let worst = parent;
+      if (left < heap.length && compare(heap[left], heap[worst]) > 0) worst = left;
+      if (right < heap.length && compare(heap[right], heap[worst]) > 0) worst = right;
+      if (worst === parent) return;
+      [heap[parent], heap[worst]] = [heap[worst], heap[parent]];
+      parent = worst;
+    }
+  };
+
+  for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+    if (matchedOf[fileIdx] === 0) continue;
+    if (heap.length < limit) {
+      let child = heap.push(fileIdx) - 1;
+      while (child > 0) {
+        const parent = (child - 1) >> 1;
+        if (compare(heap[child], heap[parent]) <= 0) break;
+        [heap[parent], heap[child]] = [heap[child], heap[parent]];
+        child = parent;
+      }
+      continue;
+    }
+    if (compare(fileIdx, heap[0]) >= 0) continue;
+    heap[0] = fileIdx;
+    siftDown();
+  }
+
+  return heap.sort(compare).map((fileIdx) => files[fileIdx]);
 }
 
 export class FileSearchService {
@@ -542,14 +770,19 @@ export class FileSearchService {
     }
   }
 
-  async search(payload: { cwd: string; query: string; limit?: number }): Promise<string[]> {
+  async search(payload: {
+    cwd: string;
+    query: string;
+    limit?: number;
+    filesOnly?: boolean;
+  }): Promise<string[]> {
     try {
       const resolvedCwd = path.resolve(payload.cwd);
       const limit = clampInt(payload.limit, 1, MAX_RESULTS_LIMIT, MAX_RESULTS_DEFAULT);
 
       const entry = await this.getFiles(resolvedCwd);
 
-      return pickTopMatches(entry, payload.query, limit);
+      return pickTopMatches(entry, payload.query, limit, payload.filesOnly === true);
     } catch {
       return [];
     }
@@ -566,7 +799,7 @@ export class FileSearchService {
 
       const entry = await this.getFiles(resolvedCwd);
 
-      return pickTopNaturalLanguageMatches(entry.files, payload.description, limit);
+      return pickTopNaturalLanguageMatches(entry, payload.description, limit);
     } catch {
       return [];
     }
@@ -590,9 +823,7 @@ export class FileSearchService {
    */
   invalidateUnder(root: string): void {
     const resolvedRoot = path.resolve(root);
-    // The root itself always, cached or not, so this keeps `invalidate`'s
-    // fencing contract for a load in flight against the root.
-    const targets = new Set<string>([resolvedRoot]);
+    const targets = new Set<string>();
 
     // `Cache.forEach` skips expired entries without deleting them, so sweep
     // first: an expired descendant would otherwise be invisible here and
@@ -622,15 +853,38 @@ export class FileSearchService {
   }
 
   /**
+   * How many cwd keys the index cache and the in-flight loads hold between
+   * them, for tests that check invalidation leaves nothing behind once loads
+   * settle.
+   */
+  getRetainedKeyCount(): number {
+    return FILE_LIST_CACHE.size() + FILE_LIST_IN_FLIGHT.size;
+  }
+
+  /**
+   * The natural-language word index cached for `cwd`, if one has been built,
+   * as an opaque handle: tests compare it by identity to tell an index reused
+   * from one rebuilt. Read without touching the cache's recency or hit counts.
+   */
+  peekNaturalLanguageIndex(cwd: string): object | undefined {
+    const resolvedCwd = path.resolve(cwd);
+    let index: object | undefined;
+    FILE_LIST_CACHE.forEach((entry, key) => {
+      if (key === resolvedCwd) index = entry.naturalLanguageIndex;
+    });
+    return index;
+  }
+
+  /**
    * Drop every index and stop the sweep.
    *
    * For tests and perf fixtures. The app has no need of it: the timer is
-   * `unref()`'d and disarms itself once the cache drains. In-flight keys are
-   * fenced rather than merely forgotten, so a load still settling cannot reseed
-   * the cache after teardown.
+   * `unref()`'d and disarms itself once the cache drains. Clearing the
+   * in-flight map is what fences a load still settling, so it cannot reseed the
+   * cache after teardown.
    */
   dispose(): void {
-    for (const key of [...FILE_LIST_IN_FLIGHT.keys()]) invalidateResolvedCwd(key);
+    FILE_LIST_IN_FLIGHT.clear();
     FILE_LIST_CACHE.clear();
     disarmFileListSweep();
   }
@@ -672,7 +926,6 @@ export class FileSearchService {
       return existing;
     }
 
-    const epoch = FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0;
     const loadPromise: Promise<FileListCacheEntry> = this.loadFileList(resolvedCwd)
       .then((loaded) => {
         const { normalizedFiles, basenameStarts } = buildScoringInputs(loaded);
@@ -681,7 +934,7 @@ export class FileSearchService {
           normalizedFiles,
           basenameStarts,
         };
-        if ((FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) === epoch) {
+        if (FILE_LIST_IN_FLIGHT.get(resolvedCwd) === loadPromise) {
           FILE_LIST_CACHE.set(resolvedCwd, entry);
           armFileListSweep();
         }

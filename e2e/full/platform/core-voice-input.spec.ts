@@ -407,7 +407,10 @@ test.describe.serial("E2E: Voice Input — Realtime IPC and settings UI", () => 
 
       await expect(window.getByText("Speech-to-text", { exact: true })).toBeVisible();
       await expect(
-        window.getByText("Real-time transcription with your own provider API key.", { exact: true })
+        window.getByText(
+          "Real-time transcription on this computer, or with your own provider API key.",
+          { exact: true }
+        )
       ).toBeVisible();
 
       // While disabled, the API key field is not rendered. Pin the placeholder's

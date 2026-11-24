@@ -17,6 +17,7 @@ import {
 } from "@shared/types/agentSessionSchemas";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { AgentLaunchManyArgsSchema } from "@shared/types/mcpBatch";
+import { UpdateInstalledObservationSchema } from "@shared/types/terminalStatusSchemas";
 import {
   AwaitedReplySchema,
   REPLY_WAIT_MAX_SECONDS,
@@ -30,8 +31,10 @@ import {
 } from "@shared/utils/launchInNewWorktree";
 import { WorktreeCreationSourceSchema } from "./workflowCreationActionArgs";
 import {
+  AgentAddAccountArgsSchema,
   AgentCreatePresetArgsSchema,
   AgentDeletePresetArgsSchema,
+  AgentListAccountsArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
   AgentUpdatePresetArgsSchema,
@@ -344,6 +347,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Launch terminal",
     description:
       "Open a plain shell terminal with no agent attached, for running ordinary commands. Use an agent launch instead when the intent is to start an AI CLI. This creates a visible panel and starts a shell process, so it consumes resources until closed.",
+    paletteDescription: "Open a plain shell with no agent attached",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -373,10 +377,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus next waiting agent",
     description:
       "Move keyboard focus to the next agent that is blocked waiting on the user, so it can be answered. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are waiting and why.",
+    paletteDescription: "Focus the next agent that's waiting on you",
     category: "agent",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["blocked"],
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.focusNextWaiting", args, ctx, callbacks),
   }));
@@ -386,6 +392,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus next waiting agent (all projects)",
     description:
       "Jump to the next project with a waiting agent. Cycles across all projects in sidebar order, wrapping around.",
+    paletteDescription: "Jump to the next project with a waiting agent, in sidebar order",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -399,6 +406,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus next working agent",
     description:
       "Move keyboard focus to the next agent that is currently working, to watch its progress. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are working.",
+    paletteDescription: "Focus the next agent that's working",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -412,6 +420,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus next agent",
     description:
       "Move keyboard focus to the next agent panel in order, cycling back to the first at the end. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
+    paletteDescription: "Focus the next agent panel, wrapping to the first",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -467,6 +476,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       spawnedAt: z.number().nullable(),
       terminalId: z.string().nullable(),
       found: z.boolean(),
+      updateInstalled: UpdateInstalledObservationSchema.optional(),
     }),
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.getState", args, ctx, callbacks),
@@ -506,7 +516,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.resume",
     title: "Resume agent session",
     description:
-      "Relaunch one closed agent session by exact id and return its panel. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A repeat call brings the live panel forward, not a second agent. Opens off-screen unless that worktree is active.",
+      "Relaunch one closed agent session by exact id and return its panel. It relaunches in the worktree it was recorded in, so one recorded outside the named worktree is refused. A live panel already holding it is returned, wherever it is filed. Opens off-screen unless that worktree is active.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -750,6 +760,106 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       runAgentAction("agent.listPresets", args, ctx, callbacks),
   }));
 
+  // Every `accountId` on the surface is one of these (#17079). Identity only:
+  // an account's folder holds its login and names the user's home.
+  actions.set("agent.listAccounts", () => ({
+    id: "agent.listAccounts",
+    title: "List agent accounts",
+    description:
+      "List an agent's saved accounts: the ids a launch's accountId takes. With worktreeId, also which account a launch there uses when it names no account or preset, and why.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: AgentListAccountsArgsSchema,
+    examples: [
+      {
+        args: { agentId: "claude", worktreeId: "wt-1" },
+        description: "Find Claude's account ids and the one a launch in wt-1 signs in as",
+      },
+    ],
+    resultSchema: z.object({
+      accounts: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          isDefault: z.boolean().describe("The agent's Default account in Settings."),
+        })
+      ),
+      worktreeLaunch: z
+        .object({
+          accountId: z
+            .string()
+            .nullable()
+            .optional()
+            .describe("null: no saved account; the preset's env may still name a folder."),
+          source: z.enum(["worktree", "preset", "agentDefault", "cliDefault"]).optional(),
+          presetId: z.string().optional().describe("The preset whose pin chose it."),
+          missing: z.literal(true).optional().describe("No such account: a launch is refused."),
+          presetsComplete: z
+            .boolean()
+            .describe("false: a preset is loading; with no accountId, ask again."),
+        })
+        .optional(),
+    }),
+    mcpOutputSchema: true,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.listAccounts", args, ctx, callbacks),
+  }));
+
+  // Confirm tier with a row per account (#17079): the dialog names each folder
+  // before anything is made, the person unticks what they don't want, and the
+  // run adds only the ticked rows. No grant or Never ask stands in for that.
+  // Closed to plugins and palette-hidden, like the preset writes.
+  actions.set("agent.addAccount", () => ({
+    id: "agent.addAccount",
+    title: "Add agent accounts",
+    description:
+      "Add accounts to agents that sign in through a folder, once the user ticks each one with its folder shown. Reports each row's account id or why it failed; launch with that accountId to sign in.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Each account is a folder the agent keeps its login in, and a launch on it signs in as whoever logs in there.",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["account", "login", "add", "folder", "sign in"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentAddAccountArgsSchema,
+    examples: [
+      {
+        args: {
+          accounts: [
+            { agentId: "claude", name: "Work", folder: { kind: "create" } },
+            {
+              agentId: "codex",
+              name: "Team",
+              folder: { kind: "existing", path: "/Users/me/.codex-team" },
+            },
+          ],
+        },
+        description: "A new Claude folder and an existing Codex one, in one approval",
+      },
+    ],
+    resultSchema: z.object({
+      accounts: z.array(
+        z.object({
+          index: z.number().int().describe("The row's position in the request, from 0."),
+          agentId: z.string(),
+          status: z
+            .enum(["added", "declined", "failed", "notAttempted"])
+            .describe("declined: the user unticked it; notAttempted: the call ran out of time."),
+          accountId: z.string().optional().describe("Launch with this accountId to sign in."),
+          name: z.string().optional(),
+          error: z.string().optional(),
+        })
+      ),
+    }),
+    mcpOutputSchema: true,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.addAccount", args, ctx, callbacks),
+  }));
+
   // The user-preset writes (#16047). Confirm tier, so an agent's call raises
   // the host's dialog with the exact change (`resolveMcpConfirmPreviewTarget`),
   // or rides the person's own grant or skip preference, never the model's say.
@@ -861,6 +971,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     title: "Focus previous agent",
     description:
       "Move keyboard focus to the previous agent panel in order, cycling to the last at the beginning. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
+    paletteDescription: "Focus the previous agent panel, wrapping to the last",
     category: "agent",
     kind: "command",
     danger: "safe",

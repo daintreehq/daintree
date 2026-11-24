@@ -10,7 +10,16 @@ import {
   SquareMenu,
   SquareTerminal,
 } from "lucide-react";
-import { FolderTree, Folders, History, Package, Plus, Telescope } from "@/components/icons";
+import {
+  DecisionsIcon,
+  FolderTree,
+  Folders,
+  History,
+  Link,
+  Package,
+  Plus,
+  Telescope,
+} from "@/components/icons";
 import { BUILT_IN_AGENT_IDS, isBuiltInAgentId } from "@shared/config/agentIds";
 import type { AnyToolbarButtonId, ToolbarPinnedState } from "@/../../shared/types/toolbar";
 // `@shared/...` because these are value imports — the type-only spelling above
@@ -109,10 +118,21 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
     icon: GitPullRequest,
     description: "Issues, PRs, and commits",
   },
+  "links-launcher": {
+    label: "Links",
+    icon: Link,
+    description:
+      "This project's links, your own, the active worktree's pull request and deployments, and dev servers across worktrees",
+  },
   canopy: {
     label: "Canopy",
     icon: Telescope,
     description: "Every agent's screen, read and ordered by what it needs",
+  },
+  "decisions-inbox": {
+    label: "Decisions inbox",
+    icon: DecisionsIcon,
+    description: "Every question your agents asked through Decisions, and how many wait on you",
   },
   "notification-center": {
     label: "Notifications",
@@ -161,7 +181,7 @@ export const TOOLBAR_BUTTON_METADATA: Partial<Record<AnyToolbarButtonId, Toolbar
  * and the row reads `[launcher] │ [agents] │ [panels]`.
  *
  * `signals` comes last: the buttons whose marks answer "is anything asking for
- * me, wrong, or unread" — Canopy, the bell, Problems. One
+ * me, wrong, or unread" — Canopy, the Decisions inbox, the bell, Problems. One
  * cluster at the strip's outer edge, so the eye has one place to check rather
  * than a mark that could be anywhere in a run of tools. The right side reads
  * `[forge stats, tools] │ [signals]`.
@@ -191,6 +211,7 @@ const BUILT_IN_TOOLBAR_GROUPS: ReadonlyMap<AnyToolbarButtonId, ToolbarButtonGrou
   ["browser", "panels"],
   ["dev-server", "panels"],
   ["canopy", "signals"],
+  ["decisions-inbox", "signals"],
   ["notification-center", "signals"],
   ["problems", "signals"],
 ]);

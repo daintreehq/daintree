@@ -1,7 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../config/agentRegistry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/agentRegistry.js")>();
+  return {
+    ...actual,
+    getEffectiveAgentConfig: (id: string) =>
+      id === "lineless"
+        ? { capabilities: { noInputLineWhileWorking: true } }
+        : actual.getEffectiveAgentConfig(id),
+  };
+});
+
 import {
   ASSISTANT_SEND_GATE,
   EXACT_PROMPT_GATE,
+  composerSendHoldCause,
   decisionGateOptionsFor,
   evaluateWakeGate,
   isAtChoiceDialog,
@@ -148,6 +161,46 @@ describe("decisionGateOptionsFor (#16282)", () => {
     }
   });
 
+  it("never queues behind a run's startup, before it has been seen at its prompt (#18014)", () => {
+    const starting = { ...WORKING, promptUnseen: true };
+    for (const agentId of ["claude", "codex"]) {
+      const options = decisionGateOptionsFor(agentId);
+      expect(evaluateWakeGate({ ...starting, detectedAgentId: agentId }, options)).toEqual({
+        kind: "hold",
+        reason: "working",
+      });
+      // The same run in a turn after its prompt has been seen queues as before.
+      expect(evaluateWakeGate({ ...WORKING, detectedAgentId: agentId }, options)).toEqual({
+        kind: "ready",
+      });
+    }
+    expect(
+      evaluateWakeGate(starting, { ...decisionGateOptionsFor("claude"), acceptWorking: true })
+    ).toEqual({ kind: "hold", reason: "working" });
+  });
+
+  it("never takes a prompt read before the run began as its prompt (#18014)", () => {
+    // An agent that took over the pty keeps its predecessor's reading until it settles.
+    const inherited = { ...AT_PROMPT, promptUnseen: true };
+    for (const options of [
+      {},
+      EXACT_PROMPT_GATE,
+      ASSISTANT_SEND_GATE,
+      decisionGateOptionsFor("claude"),
+    ]) {
+      expect(evaluateWakeGate(inherited, options)).toEqual({
+        kind: "blocked",
+        reason: "not-at-prompt",
+      });
+    }
+    expect(
+      evaluateWakeGate(
+        { ...inherited, waitingReason: "question" },
+        decisionGateOptionsFor("claude")
+      )
+    ).toEqual({ kind: "blocked", reason: "not-at-prompt" });
+  });
+
   it("leaves every other gate blind to the hybrid input", () => {
     const draft = { ...AT_PROMPT, hasComposerDraft: true };
     expect(evaluateWakeGate(draft)).toEqual({ kind: "ready" });
@@ -170,5 +223,43 @@ describe("isAtChoiceDialog (#16209)", () => {
     expect(isAtChoiceDialog({ ...AT_DIALOG, detectedAgentId: undefined })).toBe(false);
     expect(isAtChoiceDialog({ ...AT_DIALOG, isExited: true })).toBe(false);
     expect(isAtChoiceDialog({ ...AT_DIALOG, hasPty: false })).toBe(false);
+  });
+});
+
+describe("composerSendHoldCause (#16872)", () => {
+  const WORKING: WakeGateSnapshot = { ...AT_PROMPT, agentState: "working" };
+  const AT_DIALOG: WakeGateSnapshot = { ...AT_PROMPT, waitingReason: "approval" };
+
+  it("holds at a choice dialog, whatever the CLI", () => {
+    expect(composerSendHoldCause(AT_DIALOG)).toBe("choice-dialog");
+    expect(composerSendHoldCause({ ...AT_DIALOG, detectedAgentId: "antigravity" })).toBe(
+      "choice-dialog"
+    );
+  });
+
+  it("holds mid-turn only for a CLI known to take down its input line", () => {
+    expect(composerSendHoldCause({ ...WORKING, detectedAgentId: "lineless" })).toBe(
+      "no-input-line"
+    );
+    for (const agentId of ["claude", "codex", "antigravity", "gemini", "unknown-cli"]) {
+      expect(composerSendHoldCause({ ...WORKING, detectedAgentId: agentId })).toBeNull();
+    }
+  });
+
+  it("sends at once at a prompt, a prose question, an error, idle, and in a shell", () => {
+    expect(composerSendHoldCause(AT_PROMPT)).toBeNull();
+    expect(composerSendHoldCause({ ...AT_PROMPT, waitingReason: "question" })).toBeNull();
+    expect(composerSendHoldCause({ ...AT_PROMPT, waitingReason: "error" })).toBeNull();
+    expect(composerSendHoldCause({ ...AT_PROMPT, agentState: "idle" })).toBeNull();
+    expect(composerSendHoldCause({ ...AT_DIALOG, detectedAgentId: undefined })).toBeNull();
+  });
+
+  it("sends at once to a pane gone or going", () => {
+    for (const snapshot of [AT_DIALOG, { ...WORKING, detectedAgentId: "lineless" }]) {
+      expect(composerSendHoldCause({ ...snapshot, hasPty: false })).toBeNull();
+      expect(composerSendHoldCause({ ...snapshot, isExited: true })).toBeNull();
+      expect(composerSendHoldCause({ ...snapshot, isTrashed: true })).toBeNull();
+      expect(composerSendHoldCause({ ...snapshot, isClosing: true })).toBeNull();
+    }
   });
 });

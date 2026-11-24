@@ -439,6 +439,19 @@ describe("isIpcEnvelope", () => {
 });
 
 describe("AppError details allowlist", () => {
+  it("carries a too-large refusal's size and nothing else (#17336)", () => {
+    const serialized = serializeError(
+      Object.assign(new Error("x"), {
+        details: { code: "FILE_TOO_LARGE", sizeBytes: 1_048_576, filePath: "/Users/me/a.csv" },
+      })
+    );
+    expect(serialized.details).toEqual({ code: "FILE_TOO_LARGE", sizeBytes: 1_048_576 });
+    for (const sizeBytes of [-1, 1.5, Number.MAX_SAFE_INTEGER + 2, "12", null]) {
+      expect(pickAppErrorDetails({ code: "FILE_TOO_LARGE", sizeBytes })).toBeUndefined();
+    }
+    expect(pickAppErrorDetails({ code: "FILE_TOO_LARGE" })).toBeUndefined();
+  });
+
   it("rebuilds a held project's details, dropping extra fields and unknown reasons (#16724)", () => {
     const serialized = serializeError(
       Object.assign(new Error("x"), {

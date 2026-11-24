@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useImperativeHandle, type ReactNode, type Ref } from "react";
 import { render, act, cleanup, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ContextMenuItem } from "@/components/ui/context-menu";
@@ -19,6 +19,8 @@ import {
 } from "@/components/Panel/gridGroupTabReorder";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { diffFontStyle } from "@/components/Worktree/diffFontSize";
+import type { DiffFontSize } from "@/store/preferencesStore";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
 // `showRestoreControl`, which hid the inline "Move to grid" button on a docked
@@ -135,7 +137,7 @@ const { setMarkdownFontSizeMock, setDiffWrapLinesMock, setMarkdownWrapLinesMock 
   })
 );
 // Mutable so a test can seed an explicit wrap override; `null` is auto (#12170).
-const preferences = { diffWrapLines: null as boolean | null };
+const preferences = { diffWrapLines: null as boolean | null, diffFontSize: "m" as DiffFontSize };
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (state: unknown) => unknown) =>
     selector({
@@ -146,6 +148,7 @@ vi.mock("@/store/preferencesStore", () => ({
       diffViewType: "unified",
       diffWrapLines: preferences.diffWrapLines,
       setDiffWrapLines: setDiffWrapLinesMock,
+      diffFontSize: preferences.diffFontSize,
       diffIgnoreWhitespace: false,
     }),
 }));
@@ -223,6 +226,13 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+// The toolbar's save-a-copy hand-off in a remote window; the save itself is
+// hostFileSave's own business.
+const saveHostFileMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/hostFileSave", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/services/hostFileSave")>()),
+  saveHostFile: saveHostFileMock,
+}));
 // Captures the props FilePane hands the rendered viewer so the #11255 release
 // chain (FilePane → MarkdownViewer.onRendered → the height pin) is observable;
 // without this the wiring could be deleted with every test still green.
@@ -263,12 +273,14 @@ vi.mock("@/components/Markdown/MarkdownTextSizeControl", () => ({
   ),
   MarkdownTextSizeMenuItems: () => null,
 }));
+const codeOpenSearchMock = vi.hoisted(() => vi.fn());
 vi.mock("@/components/FileViewer/CodeViewer", () => ({
   // Surfaces `content` so a re-read's result is observable — the only way to
   // tell a stale settle apart from a fresh one (#11451).
-  CodeViewer: (props: { content?: string }) => (
-    <div data-testid="code-viewer-mock" data-content={props.content ?? ""} />
-  ),
+  CodeViewer: (props: { content?: string; ref?: Ref<{ openSearch: () => void }> }) => {
+    useImperativeHandle(props.ref, () => ({ openSearch: codeOpenSearchMock }));
+    return <div data-testid="code-viewer-mock" data-content={props.content ?? ""} />;
+  },
 }));
 // Typed rather than bare vi.fn() so reading .mock.calls needs no `as` cast
 // (which would regress the no-unsafe-type-assertion ratchet).
@@ -454,6 +466,7 @@ afterEach(() => {
   setDiffWrapLinesMock.mockReset();
   setMarkdownWrapLinesMock.mockReset();
   preferences.diffWrapLines = null;
+  preferences.diffFontSize = "m";
   markdownViewerProps.current = null;
   lifecycleListeners.clear();
   dockState.activeDockTerminalId = null;
@@ -1407,8 +1420,8 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     expect(markdownViewerProps.current?.cacheBust).toBeDefined();
   });
 
-  // The toolbar's open button follows the view: rendered HTML opens in the
-  // browser, everything else in the editor.
+  // The toolbar's open button follows the file's type, as in the file
+  // browser's viewer: HTML opens in the browser whichever view is showing.
   async function clickOpen(label: string) {
     const button = await screen.findByLabelText(label);
     await act(async () => {
@@ -1426,17 +1439,18 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     );
   });
 
-  it("opens source HTML in the editor", async () => {
+  it("opens source HTML in the browser too, as the file browser does (#16917)", async () => {
     renderPane("/repo/dist/report.html", "source");
-    await clickOpen("Open in editor");
+    await clickOpen("Open in browser");
     expect(dispatchMock).toHaveBeenCalledWith(
-      "file.openInEditor",
+      "file.openInBrowser",
       { path: "/repo/dist/report.html" },
       { source: "user" }
     );
+    expect(screen.queryByLabelText("Open in editor")).toBeNull();
   });
 
-  it("retries a failed browser open as a browser open even after the view switches to source", async () => {
+  it("keeps a failed browser open, and its retry, on the browser after the view switches to source", async () => {
     dispatchMock.mockResolvedValue({
       ok: false,
       error: { code: "EXECUTION_ERROR", message: "Launch failed" },
@@ -1444,9 +1458,8 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
     const { container, rerender } = renderPane("/repo/dist/report.html", "rendered");
     await clickOpen("Open in browser");
 
-    // Flip the live view to source so the toolbar's own open button now targets
-    // the editor — the banner's Retry must still fire the browser open it owns,
-    // not follow the live target. Same file, so the failure banner survives.
+    // Flip the live view to source. Same file, so the failure banner survives,
+    // and its Retry still fires the browser open it owns.
     panelsById["file-1"] = {
       id: "file-1",
       kind: "file",
@@ -1467,8 +1480,9 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
         </TooltipProvider>
       );
     });
-    // The live open button really did change target away from browser.
-    expect(await screen.findByLabelText("Open in editor")).toBeTruthy();
+    // The open target follows the file, not the view.
+    expect(await screen.findByLabelText("Open in browser")).toBeTruthy();
+    expect(screen.queryByLabelText("Open in editor")).toBeNull();
 
     // Cleared so the assertion can't be satisfied by the original failed open.
     dispatchMock.mockClear();
@@ -1484,6 +1498,102 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
       "file.openInBrowser",
       { path: "/repo/dist/report.html" },
       { source: "user" }
+    );
+  });
+});
+
+// #16917: the file panel and the file browser's viewer answer the same file the
+// same way — which app it opens in, and which mode it opens in when picked.
+describe("FilePane parity with the file browser's viewer (#16917)", () => {
+  function renderFile(filePath: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath };
+    return render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title={filePath.split("/").pop() ?? filePath}
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+  }
+
+  it("opens a raster image in the default app rather than the editor", async () => {
+    renderFile("/repo/assets/logo.png");
+    const toolbar = await screen.findByRole("toolbar", { name: "File viewer controls" });
+    expect(within(toolbar).queryByRole("button", { name: "Open in editor" })).toBeNull();
+
+    await act(async () => {
+      within(toolbar)
+        .getByRole("button", { name: "Open in default app" })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.openInBrowser",
+      { path: "/repo/assets/logo.png" },
+      { source: "user" }
+    );
+  });
+
+  it("keeps code on the editor", async () => {
+    renderFile("/repo/src/index.ts");
+    const toolbar = await screen.findByRole("toolbar", { name: "File viewer controls" });
+
+    await act(async () => {
+      within(toolbar)
+        .getByRole("button", { name: "Open in editor" })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.openInEditor",
+      { path: "/repo/src/index.ts" },
+      { source: "user" }
+    );
+  });
+
+  describe("picking a file", () => {
+    function renderEmpty() {
+      worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo", worktreeChanges: null });
+      panelsById["file-1"] = { id: "file-1", kind: "file", worktreeId: "wt-1" };
+      render(
+        <TooltipProvider>
+          <FilePane
+            id="file-1"
+            title="File"
+            isFocused={false}
+            location="grid"
+            onFocus={() => {}}
+            onClose={() => {}}
+          />
+        </TooltipProvider>
+      );
+    }
+
+    // Source is left unset rather than written, so a built-in viewer can still
+    // claim the file once it has loaded (#17336).
+    it.each([
+      ["docs/spec.md", "rendered"],
+      ["dist/report.html", null],
+      ["src/index.ts", null],
+    ])(
+      "opens %s in its type's own mode (%s, unset for Source), in the same write as the path",
+      async (path, mode) => {
+        searchMock.mockResolvedValue({ files: [path] });
+        renderEmpty();
+        const row = await screen.findByRole("option", { name: path });
+
+        await act(async () => {
+          row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+
+        expect(setFilePanelPathMock).toHaveBeenCalledWith("file-1", `/repo/${path}`, mode);
+        expect(setFileViewModeMock).not.toHaveBeenCalled();
+      }
     );
   });
 });
@@ -1632,6 +1742,48 @@ describe("FilePane rendered-swap height hold (#11255)", () => {
   });
 });
 
+// #16877: a viewer dialog's pane and the grid pane under it are both focused,
+// so only the one inside the modal that holds the keys may open its find bar.
+describe("FilePane Cmd+F under a modal (#16877)", () => {
+  it("keeps a covered pane's find bar shut and opens the one inside the modal", async () => {
+    codeOpenSearchMock.mockClear();
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/src/a.ts" };
+    const { container } = render(
+      <TooltipProvider>
+        <FilePane
+          id="file-1"
+          title="a.ts"
+          isFocused={true}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </TooltipProvider>
+    );
+    await screen.findByTestId("code-viewer-mock");
+
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    const button = document.createElement("button");
+    modal.appendChild(button);
+    document.body.appendChild(modal);
+    try {
+      button.focus();
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      expect(codeOpenSearchMock).not.toHaveBeenCalled();
+
+      modal.appendChild(container);
+      button.focus();
+      window.dispatchEvent(new Event("daintree:find-in-panel"));
+      expect(codeOpenSearchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      document.body.appendChild(container);
+      modal.remove();
+    }
+  });
+});
+
 // #11274: a file with local worktree changes gets a third "Diff" option, so the
 // user can see what changed without leaving the viewer. Availability is derived
 // per file — Rendered and Diff are independent capabilities.
@@ -1648,13 +1800,13 @@ describe("FilePane diff mode (#11274)", () => {
     worktreeState.worktrees.set(WORKTREE_ID, worktree);
   }
 
-  function paneElement() {
+  function paneElement(isFocused = false) {
     return (
       <TooltipProvider>
         <FilePane
           id="file-1"
           title="index.ts"
-          isFocused={false}
+          isFocused={isFocused}
           location="grid"
           onFocus={() => {}}
           onClose={() => {}}
@@ -1667,6 +1819,7 @@ describe("FilePane diff mode (#11274)", () => {
     filePath?: string;
     worktreeId?: string | undefined;
     fileViewMode?: string;
+    isFocused?: boolean;
   }) {
     const filePath = options.filePath ?? "/repo/src/index.ts";
     panelsById["file-1"] = {
@@ -1676,7 +1829,7 @@ describe("FilePane diff mode (#11274)", () => {
       worktreeId: "worktreeId" in options ? options.worktreeId : WORKTREE_ID,
       fileViewMode: options.fileViewMode,
     };
-    const view = render(paneElement());
+    const view = render(paneElement(options.isFocused));
     // Flush the file read and the lazy diff chunk so no state update lands
     // outside act(). Can't wait on readMock — an image short-circuits before it.
     await act(async () => {});
@@ -2370,6 +2523,172 @@ describe("FilePane diff mode (#11274)", () => {
 
       expect(viewerWrap()).toBe("true");
       expect(wrapButton().getAttribute("aria-pressed")).toBe("true");
+    });
+  });
+
+  // The diff panel's size preference reaches this surface's diff too (#16917).
+  describe("diff font size", () => {
+    function bodyFontSize(): string {
+      return screen.getByTestId("file-pane-body").style.getPropertyValue("--diff-font-size");
+    }
+
+    it.each<DiffFontSize>(["s", "l"])(
+      "sizes the diff by the shared diffFontSize preference (%s)",
+      async (size) => {
+        preferences.diffFontSize = size;
+        seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+        useDiffContentMock.mockReturnValue({
+          content: "@@ -1 +1 @@",
+          stale: false,
+          retry: vi.fn(),
+        });
+        await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "diff" });
+        expect(await screen.findByTestId("diff-viewer-mock")).toBeTruthy();
+
+        expect(bodyFontSize()).toBe(diffFontStyle(size)["--diff-font-size"]);
+      }
+    );
+
+    it("leaves Source untouched by the diff's size", async () => {
+      preferences.diffFontSize = "l";
+      seedWorktree([{ path: "/repo/src/index.ts", status: "modified" }]);
+      await renderPane({ filePath: "/repo/src/index.ts", fileViewMode: "source" });
+      expect(await screen.findByTestId("code-viewer-mock")).toBeTruthy();
+
+      expect(bodyFontSize()).toBe("");
+    });
+  });
+
+  // A commit or revert leaves the file clean and takes Diff, and its segment,
+  // out from under whoever was holding it; focus must not fall to <body> (#16917).
+  describe("focus when Diff vanishes", () => {
+    async function renderDiff(filePath: string, isFocused: boolean) {
+      seedWorktree([{ path: filePath, status: "modified" }]);
+      useDiffContentMock.mockReturnValue({ content: "@@ -1 +1 @@", stale: false, retry: vi.fn() });
+      return renderPane({ filePath, fileViewMode: "diff", isFocused });
+    }
+
+    async function renderFocusedDiff(filePath: string, isFocused: boolean) {
+      const view = await renderDiff(filePath, isFocused);
+      const diffSegment = screen.getByRole("radio", { name: "Diff" });
+      act(() => diffSegment.focus());
+      expect(document.activeElement).toBe(diffSegment);
+      return view;
+    }
+
+    function expectDiffGone() {
+      expect(screen.queryByRole("radio", { name: "Diff" })).toBeNull();
+      expect(screen.getByRole("radio", { name: "Source" }).getAttribute("aria-checked")).toBe(
+        "true"
+      );
+    }
+
+    async function goClean(rerender: (ui: ReactNode) => void, isFocused: boolean) {
+      seedWorktree([]);
+      await act(async () => {
+        rerender(paneElement(isFocused));
+      });
+    }
+
+    it("lands on the selected segment when the toggle survives", async () => {
+      const { rerender } = await renderFocusedDiff("/repo/docs/spec.md", true);
+
+      await goClean(rerender, true);
+
+      expect(screen.queryByRole("radio", { name: "Diff" })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Source" }));
+      // The clamp is still derived: the persisted Diff choice is not rewritten.
+      expect(setFileViewModeMock).not.toHaveBeenCalled();
+    });
+
+    it("lands on the path pill when the whole toggle goes with Diff", async () => {
+      const { rerender } = await renderFocusedDiff("/repo/src/index.ts", true);
+
+      await goClean(rerender, true);
+
+      expect(screen.queryAllByRole("radio")).toEqual([]);
+      expect(document.activeElement?.hasAttribute("data-toolbar-path")).toBe(true);
+    });
+
+    // The panel store selects a pane on click, so a keyboard user can tab into
+    // one without selecting it; the focus they brought is what counts.
+    it("follows keyboard focus into a pane that was never selected", async () => {
+      const { rerender } = await renderFocusedDiff("/repo/docs/spec.md", false);
+
+      await goClean(rerender, false);
+
+      expectDiffGone();
+      expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Source" }));
+    });
+
+    // Below the segments' width the mode control is a menu in a portal, outside
+    // the pane's DOM; focus in it is still this pane's.
+    it("hands focus back when it sat in the toolbar's portalled mode menu", async () => {
+      const narrow = vi
+        .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+        .mockReturnValue(new DOMRect(0, 0, 340, 30));
+      try {
+        const { rerender } = await renderDiff("/repo/src/index.ts", false);
+        const trigger = await screen.findByRole("button", { name: /^View mode: Diff$/ });
+        await act(async () => {
+          fireEvent.keyDown(trigger, { key: "Enter" });
+        });
+        const menu = await screen.findByRole("menu");
+        expect(menu.contains(document.activeElement)).toBe(true);
+
+        await goClean(rerender, false);
+
+        expect(screen.queryByRole("menu")).toBeNull();
+        expect(screen.queryByRole("button", { name: /^View mode/ })).toBeNull();
+        expect(document.activeElement?.hasAttribute("data-toolbar-path")).toBe(true);
+      } finally {
+        narrow.mockRestore();
+      }
+    });
+
+    it("leaves focus alone in a pane it never entered", async () => {
+      const { rerender } = await renderDiff("/repo/docs/spec.md", true);
+      expect(document.activeElement).toBe(document.body);
+
+      await goClean(rerender, true);
+
+      expectDiffGone();
+      expect(document.activeElement).toBe(document.body);
+    });
+
+    it("leaves focus alone once a press elsewhere has moved the user on", async () => {
+      const { rerender } = await renderFocusedDiff("/repo/docs/spec.md", true);
+      const elsewhere = document.createElement("div");
+      document.body.appendChild(elsewhere);
+      try {
+        // A press on something unfocusable leaves focus on <body>, exactly
+        // where a removed segment drops it.
+        fireEvent.pointerDown(elsewhere);
+        act(() => screen.getByRole("radio", { name: "Diff" }).blur());
+        expect(document.activeElement).toBe(document.body);
+
+        await goClean(rerender, true);
+
+        expectDiffGone();
+        expect(document.activeElement).toBe(document.body);
+      } finally {
+        elsewhere.remove();
+      }
+    });
+
+    it("leaves focus alone when it already sits elsewhere", async () => {
+      const { rerender } = await renderFocusedDiff("/repo/docs/spec.md", true);
+      const outside = document.createElement("button");
+      document.body.appendChild(outside);
+      try {
+        act(() => outside.focus());
+
+        await goClean(rerender, true);
+
+        expect(document.activeElement).toBe(outside);
+      } finally {
+        outside.remove();
+      }
     });
   });
 
@@ -4028,9 +4347,13 @@ describe("FilePane edit mode (#12323)", () => {
     worktreeId?: string | undefined;
     fileViewMode?: string;
     content?: string;
+    byteLength?: number;
     location?: "grid" | "dialog";
   }) {
-    readMock.mockResolvedValue({ content: options.content ?? "# Plan\n" });
+    readMock.mockResolvedValue({
+      content: options.content ?? "# Plan\n",
+      ...(options.byteLength === undefined ? {} : { byteLength: options.byteLength }),
+    });
     panelsById["file-1"] = {
       id: "file-1",
       kind: "file",
@@ -4089,6 +4412,27 @@ describe("FilePane edit mode (#12323)", () => {
     seedWorktree();
     fileEditorState.resolved = { maxBytes: 4 };
     await renderPane({ content: "# a long enough file\n" });
+    expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+  });
+
+  it("judges the byte ceiling by the bytes the read reported, not the decoded text", async () => {
+    seedWorktree();
+    fileEditorState.resolved = { maxBytes: 4 };
+    // Three characters, but the read counted more bytes on disk than the
+    // editor takes (a BOM, invalid sequences): the read is the authority.
+    const over = await renderPane({ content: "abc", byteLength: 5 });
+    expect(toggleLabels()).toEqual(["Source", "Rendered"]);
+    over.unmount();
+
+    await renderPane({ content: "# long decoded text\n", byteLength: 4 });
+    expect(toggleLabels()).toEqual(["Source", "Rendered", "Edit"]);
+  });
+
+  it("counts the text's UTF-8 bytes when the read reports none", async () => {
+    seedWorktree();
+    fileEditorState.resolved = { maxBytes: 4 };
+    // Two characters, six bytes.
+    await renderPane({ content: "€€" });
     expect(toggleLabels()).toEqual(["Source", "Rendered"]);
   });
 
@@ -4226,8 +4570,60 @@ describe("FilePane edit mode (#12323)", () => {
       });
     });
     expect(screen.getByTestId("file-pane-dirty").getAttribute("aria-label")).toBe(
-      "Unsaved changes, file changed on disk"
+      "Unsaved changes — file changed on disk"
     );
+  });
+
+  // A file Source refuses only for its size still opens in an editor with room.
+  it("keeps Edit on offer for a file refused only for its size", async () => {
+    seedWorktree();
+    readMock.mockRejectedValue(
+      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+        code: "FILE_TOO_LARGE",
+        sizeBytes: 600 * 1024,
+      })
+    );
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "source",
+    };
+    render(paneElement());
+    await act(async () => {});
+    expect(screen.getByRole("radio", { name: "Edit" })).toBeTruthy();
+  });
+
+  // A file that grows past Source's cap now surfaces the refusal (#17336), but
+  // a standing draft is document state and Rendered keeps previewing it.
+  it("keeps previewing a draft in Rendered when the file grows too large to read", async () => {
+    seedWorktree();
+    useFileDocumentStore.getState().setFileDocument("file-1", {
+      identityKey: "doc",
+      draftText: "# Plan (edited)\n",
+      dirty: true,
+      conflict: false,
+      save: async () => ({ status: "saved" as const }),
+      discard: async () => {},
+    });
+    readMock.mockRejectedValue(
+      new ClientAppError("FILE_TOO_LARGE", "too big", undefined, {
+        code: "FILE_TOO_LARGE",
+        sizeBytes: 600 * 1024,
+      })
+    );
+    panelsById["file-1"] = {
+      id: "file-1",
+      kind: "file",
+      filePath: "/repo/docs/spec.md",
+      worktreeId: WORKTREE_ID,
+      fileViewMode: "rendered",
+    };
+    render(paneElement());
+    await act(async () => {});
+    expect(markdownViewerProps.current?.content).toBe("# Plan (edited)\n");
+    expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
   });
 
   // #13920: the host refuses a save from a view another screen drives.
@@ -4418,22 +4814,180 @@ describe("FilePane edit mode (#12323)", () => {
       expect(screen.queryByTestId("file-editor-picker")).toBeNull();
     });
 
-    it("draws only the plugin viewer when the host's own reader refused the file", async () => {
+    function refusedFor(sizeBytes: number | null) {
+      readMock.mockRejectedValue(
+        new ClientAppError(
+          "FILE_TOO_LARGE",
+          "too big",
+          undefined,
+          sizeBytes === null ? undefined : { code: "FILE_TOO_LARGE", sizeBytes }
+        )
+      );
+    }
+
+    function seedRefusedCsv(sizeBytes: number | null, fileViewMode?: string) {
       seedWorktree();
       fileEditorState.resolved = null;
-      fileEditorState.plugin.view = [candidate("acme.csv", "Acme CSV", "view")];
-      readMock.mockRejectedValue(new ClientAppError("FILE_TOO_LARGE", "too big"));
+      const viewer = candidate("acme.csv", "Acme CSV", "view");
+      viewer.editor.maxBytes = 2 * 1024 * 1024;
+      fileEditorState.plugin.view = [viewer];
+      refusedFor(sizeBytes);
       panelsById["file-1"] = {
         id: "file-1",
         kind: "file",
         filePath: "/repo/data/table.csv",
         worktreeId: WORKTREE_ID,
-        fileViewMode: "rendered",
+        fileViewMode,
       };
+    }
+
+    it("draws only the plugin viewer when the host's own reader refused a file it fits", async () => {
+      // Exactly the viewer's ceiling still fits.
+      seedRefusedCsv(2 * 1024 * 1024, "rendered");
       render(paneElement());
       await act(async () => {});
       expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
       expect(screen.queryByTestId("file-pane-unavailable")).toBeNull();
+    });
+
+    it("never offers a viewer a refused file is too large for", async () => {
+      seedRefusedCsv(3 * 1024 * 1024, "rendered");
+      render(paneElement());
+      await act(async () => {});
+      expect(await screen.findByTestId("file-pane-unavailable")).toBeTruthy();
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+    });
+
+    it("offers no viewer on a refusal that doesn't say how large the file is", async () => {
+      seedRefusedCsv(null, "rendered");
+      render(paneElement());
+      await act(async () => {});
+      expect(await screen.findByTestId("file-pane-unavailable")).toBeTruthy();
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+    });
+
+    it("points a Source too large to show at the viewer that fits it", async () => {
+      seedRefusedCsv(1024 * 1024, "source");
+      render(paneElement());
+      await act(async () => {});
+      const unavailable = await screen.findByTestId("file-pane-unavailable");
+      expect(unavailable.textContent).toContain("Too large for Source");
+      expect(unavailable.textContent).toContain("Acme CSV");
+      await act(async () => {
+        screen.getByRole("button", { name: "Show in Rendered" }).click();
+      });
+      expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "rendered");
+    });
+
+    it("opens an unset mode in a built-in viewer, and in Source for an installed one", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [
+        { ...candidate("daintree.csv-viewer", "CSV viewer", "view"), builtin: true },
+      ];
+      await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      expect(fileEditorState.pluginHostProps.at(-1)).toMatchObject({
+        candidate: expect.objectContaining({ choiceId: "daintree.csv-viewer/main" }),
+      });
+      cleanup();
+
+      fileEditorState.pluginHostProps = [];
+      fileEditorState.plugin.view = [candidate("acme.csv", "Acme CSV", "view")];
+      await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+      expect(radioLabels()).toEqual(["Source", "Rendered · Acme CSV"]);
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+    });
+
+    it("keeps Source once it is picked over a built-in viewer", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [
+        { ...candidate("daintree.csv-viewer", "CSV viewer", "view"), builtin: true },
+      ];
+      const view = await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+      expect(await screen.findByTestId("plugin-file-editor-mock")).toBeTruthy();
+      await act(async () => {
+        screen.getByRole("radio", { name: "Source" }).click();
+      });
+      expect(setFileViewModeMock).toHaveBeenCalledWith("file-1", "source");
+
+      panelsById["file-1"] = { ...panelsById["file-1"]!, fileViewMode: "source" };
+      view.rerender(paneElement());
+      await act(async () => {});
+      expect(screen.queryByTestId("plugin-file-editor-mock")).toBeNull();
+      expect(screen.getByRole("radio", { name: "Source" }).getAttribute("aria-checked")).toBe(
+        "true"
+      );
+    });
+
+    it("keeps a file the read found isn't UTF-8 out of the viewer, through a refresh", async () => {
+      seedWorktree();
+      fileEditorState.resolved = null;
+      fileEditorState.plugin.view = [
+        { ...candidate("daintree.csv-viewer", "CSV viewer", "view"), builtin: true },
+      ];
+      readMock.mockResolvedValue({ content: "caf\ufffd\n", byteLength: 5, encoding: "invalid" });
+      panelsById["file-1"] = {
+        id: "file-1",
+        kind: "file",
+        filePath: "/repo/data/legacy.csv",
+        worktreeId: WORKTREE_ID,
+      };
+      render(paneElement());
+      await act(async () => {});
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+
+      let finish: (value: unknown) => void = () => {};
+      readMock.mockImplementationOnce(() => new Promise((resolve) => (finish = resolve)));
+      await act(async () => {
+        screen.getByRole("button", { name: "Refresh" }).click();
+      });
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+      await act(async () => finish({ content: "caf\ufffd\n", byteLength: 5, encoding: "invalid" }));
+      expect(fileEditorState.pluginHostProps).toHaveLength(0);
+    });
+
+    describe("which viewer an unset mode opens", () => {
+      const builtin = () => ({
+        ...candidate("daintree.csv-viewer", "CSV viewer", "view"),
+        builtin: true,
+      });
+      const installed = () => candidate("acme.csv", "Acme CSV", "view");
+
+      async function openUnset() {
+        seedWorktree();
+        fileEditorState.resolved = null;
+        // Installed first, the order the candidates sort in by id.
+        fileEditorState.plugin.view = [installed(), builtin()];
+        await renderPane({ filePath: "/repo/data/table.csv", content: "a,b\n" });
+        await act(async () => {});
+      }
+
+      const mounted = () =>
+        (fileEditorState.pluginHostProps.at(-1)?.candidate as { choiceId?: string } | undefined)
+          ?.choiceId;
+
+      it("is the built-in while the answers are still loading", async () => {
+        useFileEditorChoicesStore.setState({ choices: {}, loaded: false });
+        await openUnset();
+        expect(mounted()).toBe("daintree.csv-viewer/main");
+      });
+
+      it("is the built-in when nothing is remembered", async () => {
+        await openUnset();
+        expect(mounted()).toBe("daintree.csv-viewer/main");
+      });
+
+      it("is the remembered viewer when the user picked an installed one", async () => {
+        useFileEditorChoicesStore.setState({
+          choices: { "view:csv": "acme.csv/main" },
+          loaded: true,
+        });
+        await openUnset();
+        expect(mounted()).toBe("acme.csv/main");
+      });
     });
 
     it("never offers plugin editors in the read-only dialog", async () => {
@@ -4752,7 +5306,8 @@ describe("FilePane file menu on its content (#13423)", () => {
         isDirectory: false,
         status: "modified",
       },
-      expect.objectContaining({ hasChanges: true })
+      // `Open file` would open a dialog onto the file this pane is showing.
+      expect.objectContaining({ hasChanges: true, showOpenFile: false })
     );
     // The pane's own prefix rides above the shared items.
     expect(screen.getByRole("menuitem", { name: "Show in file browser" })).toBeTruthy();
@@ -4916,7 +5471,22 @@ describe("FilePane in a remote window (#13925)", () => {
   it("offers a copy saved here instead of the default app for a file it can't play", async () => {
     const { container } = renderRemote("/srv/app/media/demo.mov");
     await act(async () => {});
-    expect(screen.getByRole("button", { name: /^Save to this/ })).toBeTruthy();
+    const body = screen.getByTestId("file-pane-unavailable");
+    expect(within(body).getByRole("button", { name: /^Save to this/ })).toBeTruthy();
     expect(container.textContent).not.toMatch(/default app/);
+
+    // The toolbar's own open action makes the same substitution (#16917).
+    const toolbar = screen.getByRole("toolbar", { name: "File viewer controls" });
+    await act(async () => {
+      within(toolbar)
+        .getByRole("button", { name: /^Save to this/ })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(saveHostFileMock).toHaveBeenCalledWith("/srv/app/media/demo.mov");
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "file.openInBrowser",
+      expect.anything(),
+      expect.anything()
+    );
   });
 });

@@ -3,7 +3,7 @@
  *
  * Everything that floats over the workbench — toasts, the re-entry summary,
  * the terminal find bar and scroll pill, the artifact overlay, the getting-
- * started checklist, the side sheets (theme browser, Portal, assistant), a
+ * started checklist, the side sheets (theme browser, assistant), a
  * canonical popover, the toolbar-settings drag overlay and a settings
  * choicebox — is meant to share one elevation vocabulary: radius, border,
  * background and shadow. The only honest review lays them side by side, in a
@@ -27,7 +27,6 @@
  *   artifact     the artifact overlay expanded over a terminal
  *   checklist    the getting-started checklist
  *   themebrowser the theme browser side sheet (full window)
- *   portal       the Portal dock side sheet (full window)
  *   assistant    the assistant (help) panel (full window)
  *   popover      the notification center popover, the canonical popover reference
  *   toolbardrag  Settings → Toolbar mid-drag of a button (the drag overlay)
@@ -654,30 +653,6 @@ async function captureTheme(app: ElectronApplication, page: Page, theme: Theme):
     await expect
       .poll(() => page.locator("html").getAttribute("data-theme"), { timeout: 5000 })
       .toBe(theme.id);
-  });
-
-  await step(page, "portal", mode, async () => {
-    const region = page.locator(SEL.portal.region);
-    try {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        if (await region.isVisible().catch(() => false)) break;
-        const result = await dispatchAction(page, "portal.toggle");
-        if (result.ok === false) throw new Error(`portal.toggle failed: ${result.error?.message}`);
-        await region.waitFor({ state: "visible", timeout: T_LONG }).catch(() => {});
-      }
-      await region.waitFor({ state: "visible", timeout: 2000 });
-      await expectOnScreen(page, region, "portal dock");
-      await expect(region.getByRole("button", { name: "Close portal" })).toBeVisible();
-      await settle(page, 1200);
-      await blur(page);
-      await parkPointer(page);
-      await snapWindow(page, shot("08", "portal-dock-sheet"));
-    } finally {
-      if (await region.isVisible().catch(() => false)) {
-        await dispatchAction(page, "portal.toggle").catch(() => {});
-        await region.waitFor({ state: "hidden", timeout: 5000 }).catch(() => {});
-      }
-    }
   });
 
   await step(page, "assistant", mode, async () => {

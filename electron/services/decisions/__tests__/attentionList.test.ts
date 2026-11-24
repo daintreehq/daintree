@@ -9,20 +9,25 @@ import {
 } from "@daintreehq/decisions-client";
 import {
   HANDLED_ANSWERS_META_KEY,
+  answerNeedsAttention,
   answerPreviewOf,
+  attentionQuestion,
+  attentionToken,
   copiedAnswerText,
   heldFollowUps,
   isHandled,
   markAnswerHandled,
   needsAttention,
   questionLine,
+  questionReference,
   readHandledAnswers,
+  readableText,
   resumableReason,
   threadNeedsAttention,
   withoutHandled,
 } from "../attentionList.js";
 import { DECISION_BLOCK_START, DECISION_FOLLOWUP_START } from "../answerNotice.js";
-import { entry, message, messages, row as baseRow } from "./questionRows.js";
+import { DECLINE, SECRET, entry, message, messages, row as baseRow } from "./questionRows.js";
 
 /**
  * A question id as the library mints it: long enough for the id pattern the
@@ -75,6 +80,217 @@ describe("needs attention", () => {
     expect(needsAttention(row(4, { delivery_status: "needs-attention", history_only: true }))).toBe(
       false
     );
+  });
+
+  it("never asks a person about their own decline, however its notice stopped, and counts it handled (#17234)", () => {
+    const declined = {
+      local_status: "cancelled" as const,
+      answers_json: serializeAnswers([entry(DECLINE)]),
+    };
+    for (const delivery_status of ["needs-attention", "delivery-uncertain"] as const) {
+      const r = row(1, { ...declined, delivery_status });
+      expect(answerNeedsAttention(r, new Map())).toBe(false);
+      expect(threadNeedsAttention(r, new Map())).toBe(false);
+      // Handled with nothing marked, so it keeps nothing of its question waiting.
+      expect(isHandled(r, new Map())).toBe(true);
+      expect(withoutHandled([r], new Map())).toEqual([]);
+    }
+  });
+});
+
+describe("questions over without an answer (#18021)", () => {
+  const EXPIRY = {
+    entry_id: "expiry-1",
+    kind: "expired" as const,
+    action: "expire" as const,
+    source: "system" as const,
+    sealed: null,
+  };
+  const UNPUBLISHED = { ...EXPIRY, entry_id: "unpublished-1", kind: "unpublished" as const };
+  const STALLS = [
+    { delivery_status: "needs-attention", error_code: "pane_gone" },
+    { delivery_status: "delivery-uncertain", error_code: "inject_ambiguous" },
+  ] as const;
+  const over = (r: QuestionRow) => {
+    expect(answerNeedsAttention(r, new Map())).toBe(false);
+    expect(threadNeedsAttention(r, new Map())).toBe(false);
+    // Handled with nothing marked, as a decline is: it keeps nothing of its question waiting.
+    expect(isHandled(r, new Map())).toBe(true);
+    expect(withoutHandled([r], new Map())).toEqual([]);
+  };
+
+  it("never asks a person about an expiry's or a never-published notice, however it stopped", () => {
+    for (const stall of STALLS) {
+      over(
+        row(1, {
+          ...stall,
+          local_status: "expired",
+          answers_json: serializeAnswers([entry(EXPIRY)]),
+        })
+      );
+      over(
+        row(2, {
+          ...stall,
+          local_status: "publish-failed",
+          answers_json: serializeAnswers([entry(UNPUBLISHED)]),
+        })
+      );
+      // A reopened round that expired again: its earlier round's notice was withdrawn, or,
+      // left marked as a store may hold it, is never typed again either.
+      for (const deliver of [false, true]) {
+        over(
+          row(3, {
+            ...stall,
+            local_status: "expired",
+            question_revision: 2,
+            answers_json: serializeAnswers([
+              entry({ ...EXPIRY, deliver }),
+              entry({ ...EXPIRY, entry_id: "expiry-2", revision: 2 }),
+            ]),
+          })
+        );
+      }
+    }
+  });
+
+  it("never asks a person about a withdrawn question, whatever its answer's delivery was", () => {
+    for (const stall of STALLS) {
+      // The library drops everything not yet typed and leaves the stopped status.
+      over(
+        row(1, {
+          ...stall,
+          local_status: "cancelled",
+          answers_json: serializeAnswers([entry({ deliver: false })]),
+        })
+      );
+      // Declined, reopened, then withdrawn: the decline no longer closed it, the withdrawal did.
+      over(
+        row(2, {
+          ...stall,
+          local_status: "cancelled",
+          question_revision: 2,
+          answers_json: serializeAnswers([entry({ ...DECLINE, deliver: false })]),
+        })
+      );
+      // A follow-up the person wrote is dropped with it, held or not.
+      over(
+        row(3, {
+          ...stall,
+          local_status: "cancelled",
+          answers_json: serializeAnswers([entry({ deliver: false })]),
+          messages_json: messages({
+            delivery: { status: "needs-attention", deliver: false },
+          }),
+        })
+      );
+    }
+  });
+
+  it("still asks about an answer of an earlier round left to type, and keeps the person's own follow-up", () => {
+    const expired = {
+      local_status: "expired" as const,
+      delivery_status: "needs-attention" as const,
+      error_code: "pane_gone",
+      question_revision: 2,
+    };
+    const answerLeft = row(1, {
+      ...expired,
+      answers_json: serializeAnswers([
+        entry(),
+        entry({ ...EXPIRY, entry_id: "expiry-2", revision: 2 }),
+      ]),
+    });
+    expect(answerNeedsAttention(answerLeft, new Map())).toBe(true);
+    expect(isHandled(answerLeft, new Map())).toBe(false);
+    // A stall only an answer can carry is an answer's, whatever entries the row still holds.
+    const refused = row(2, {
+      ...expired,
+      error_code: "answer_unreadable",
+      answers_json: serializeAnswers([entry({ ...EXPIRY, revision: 2 })]),
+    });
+    expect(answerNeedsAttention(refused, new Map())).toBe(true);
+    // An uncertain write could have been an untyped answer's, handled or not.
+    const mixed = row(3, {
+      ...expired,
+      delivery_status: "delivery-uncertain",
+      answers_json: serializeAnswers([
+        entry({ deliver: false }),
+        entry({ ...EXPIRY, entry_id: "expiry-2", revision: 2 }),
+      ]),
+    });
+    expect(answerNeedsAttention(mixed, new Map())).toBe(true);
+    // Without its own untyped notice, what stopped is something else.
+    const typed = row(4, {
+      ...expired,
+      answers_json: serializeAnswers([entry({ ...EXPIRY, revision: 2, delivered: true })]),
+    });
+    expect(answerNeedsAttention(typed, new Map())).toBe(true);
+    // A deadline that closed no round of the question's settles nothing.
+    expect(
+      answerNeedsAttention(row(5, { ...expired, local_status: "publish-failed" }), new Map())
+    ).toBe(true);
+    // Nor does a notice of a round since replaced, of either kind, untyped as it is.
+    for (const [local_status, notice] of [
+      ["expired", EXPIRY],
+      ["publish-failed", UNPUBLISHED],
+    ] as const) {
+      const stale = row(6, {
+        ...expired,
+        local_status,
+        answers_json: serializeAnswers([entry(notice)]),
+      });
+      expect(answerNeedsAttention(stale, new Map()), local_status).toBe(true);
+    }
+    // Only an uncertain write could have been the untyped answer's: stopped, the notice is all.
+    expect(isHandled({ ...mixed, delivery_status: "needs-attention" }, new Map())).toBe(true);
+  });
+
+  it("keeps the notice with the person's follow-up still to be typed, held or waiting, so they go back together", () => {
+    for (const [local_status, notice] of [
+      ["expired", EXPIRY],
+      ["publish-failed", UNPUBLISHED],
+    ] as const) {
+      const closed = {
+        local_status,
+        delivery_status: "needs-attention" as const,
+        error_code: "pane_gone",
+        answers_json: serializeAnswers([entry({ ...notice, event_seq: 5 })]),
+      };
+      // Sent before the deadline, as a closed thread takes none; or after it, as the library
+      // would hold one behind the stopped notice.
+      for (const event_seq of [4, 6]) {
+        for (const stall of STALLS) {
+          const held = row(1, {
+            ...closed,
+            ...stall,
+            messages_json: messages({
+              message_id: "m-1",
+              event_seq,
+              delivery: { status: "needs-attention", error_code: "pane_gone" },
+            }),
+          });
+          expect(answerNeedsAttention(held, new Map())).toBe(true);
+          expect(heldFollowUps(held).map((m) => m.message_id)).toEqual(["m-1"]);
+          expect(withoutHandled([held], new Map())).toEqual([held]);
+        }
+        // Received and never held, it is still the person's words waiting with it.
+        for (const stall of STALLS) {
+          const waiting = row(2, { ...closed, ...stall, messages_json: messages({ event_seq }) });
+          expect(answerNeedsAttention(waiting, new Map())).toBe(true);
+          expect(withoutHandled([waiting], new Map())).toEqual([waiting]);
+        }
+      }
+      // One already typed, or that the person handled, holds nothing.
+      over(
+        row(3, {
+          ...closed,
+          messages_json: messages(
+            { message_id: "m-typed", delivery: { status: "terminal-delivered" } },
+            { message_id: "m-handled", delivery: { status: "needs-attention", deliver: false } }
+          ),
+        })
+      );
+    }
   });
 });
 
@@ -181,9 +397,29 @@ describe("follow-ups that need a person (#16231)", () => {
     // Each follow-up says whether the answer came before it.
     expect(text).toContain("before answering");
     expect(text).toContain("about a decision already made");
+    // Both from the phone.
+    expect(text.match(/^sent_from: phone$/gm)).toHaveLength(2);
+    expect(text).not.toContain("sent_from: computer");
     expect(text.split(FOLLOWUP_BLOCK_END)).toHaveLength(3);
     expect(text).not.toContain("decision-injection");
     expect(text).not.toContain("injection_id");
+  });
+
+  it("copies a follow-up written on the computer as sent from it (#17238)", () => {
+    const fromComputer = message({
+      message_id: "0193f1a2b3c4d5e6aaaa000000000003",
+      event_seq: 10,
+      signer_device_id: "dev_owner_1",
+      signer_role: "owner-desktop",
+    });
+    const text = copiedAnswerText(
+      row(41),
+      [],
+      [{ message: fromComputer, text: "From the desk." }]
+    )!;
+    expect(text).toContain("source: human\nsent_from: computer\n");
+    expect(text).toContain("The person sent this from their computer before answering.");
+    expect(text).not.toContain("sent_from: phone");
   });
 
   it("copies a thread longer than one typed chunk could hold", () => {
@@ -202,11 +438,235 @@ describe("follow-ups that need a person (#16231)", () => {
   });
 });
 
+describe("a notice a reopen replaced (#17944)", () => {
+  /** An expiry of round 1 that stopped, then a reopen to round 2 that withdrew it, its status left as it was. */
+  const reopened = (over: Partial<QuestionRow> = {}) =>
+    row(1, {
+      question_revision: 2,
+      local_status: "open",
+      delivery_status: "needs-attention",
+      error_code: "pane_gone",
+      answers_json: serializeAnswers([
+        entry({ entry_id: "a-1", revision: 1, delivered: true }),
+        entry({
+          entry_id: "x-1",
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          revision: 1,
+          sealed: null,
+          deliver: false,
+        }),
+      ]),
+      ...over,
+    });
+
+  it("leaves no stall for a person, and keeps the open question in every feed", () => {
+    const rows = [reopened()];
+    // Every entry of the newest round isn't a replaced closure: an answer there was typed.
+    expect(answerNeedsAttention(rows[0]!, new Map())).toBe(true);
+    const closureOnly = reopened({
+      answers_json: serializeAnswers([
+        entry({ entry_id: "a-0", revision: 0, delivered: true }),
+        entry({
+          entry_id: "x-1",
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          revision: 1,
+          sealed: null,
+          deliver: false,
+        }),
+      ]),
+    });
+    expect(answerNeedsAttention(closureOnly, new Map())).toBe(false);
+    expect(threadNeedsAttention(closureOnly, new Map())).toBe(false);
+    expect(isHandled(closureOnly, new Map())).toBe(false);
+    expect(withoutHandled([closureOnly], new Map())).toEqual([closureOnly]);
+  });
+
+  it("still shows a stall an answer the new round couldn't take caused", () => {
+    const rejected = reopened({
+      error_code: "unknown_option",
+      answers_json: serializeAnswers([
+        entry({
+          entry_id: "x-1",
+          kind: "expired",
+          action: "expire",
+          source: "system",
+          revision: 1,
+          sealed: null,
+          deliver: false,
+        }),
+      ]),
+    });
+    expect(answerNeedsAttention(rejected, new Map())).toBe(true);
+  });
+
+  it("gives a confirmation's token ids and states only, and a new one once the row asks something else", () => {
+    const held = attention(1);
+    const token = attentionToken(held, new Map());
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(token).not.toContain(SECRET);
+    expect(
+      attentionToken({ ...held, origin: { ...held.origin, pane_id: "pane-b" } }, new Map())
+    ).not.toBe(token);
+    expect(attentionToken({ ...held, error_code: "relaunched" }, new Map())).toBe(token);
+    const corrected = {
+      ...held,
+      answers_json: serializeAnswers([
+        entry({ revision: 1, delivered: true }),
+        entry({ entry_id: "entry-2", revision: 2, correction: true }),
+      ]),
+    };
+    expect(attentionToken(corrected, new Map())).not.toBe(token);
+    expect(attentionToken({ ...held, delivery_status: "delivery-uncertain" }, new Map())).not.toBe(
+      token
+    );
+  });
+});
+
 describe("questionLine", () => {
   it("keeps the first non-empty line, as inert text", () => {
     expect(questionLine("\n\n  Drop the index?\nMore context")).toBe("Drop the index?");
     expect(questionLine("Use \u001b[31mred\u001b[0m?")).toBe("Use red?");
     expect(questionLine("   \n  ")).toBeNull();
+  });
+
+  it("drops Markdown syntax and keeps the text", () => {
+    expect(questionLine("**Decision needed:** drop the index?")).toBe(
+      "Decision needed: drop the index?"
+    );
+    expect(questionLine("## Drop `idx_users`?")).toBe("Drop idx_users?");
+    expect(questionLine("- [the plan](https://x.test/p) is _ready_?")).toBe("the plan is ready?");
+    expect(questionLine("snake_case_name stays")).toBe("snake_case_name stays");
+  });
+
+  it("keeps literal identifiers, expressions and trailing marks", () => {
+    expect(questionLine("Keep foo__bar__baz?")).toBe("Keep foo__bar__baz?");
+    expect(questionLine("Use `2**3**4`?")).toBe("Use 2**3**4?");
+    expect(questionLine("Keep the trailing `#`")).toBe("Keep the trailing #");
+    expect(questionLine("\u001b[31m[the plan](https://x.test)\u001b[0m?")).toBe("the plan?");
+    expect(questionLine("Use [the plan](https://e.com/a_(b))?")).toBe("Use the plan?");
+  });
+
+  it("skips rules and fence openers and stays fast on long lines", () => {
+    expect(questionLine("Context\n===\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine('## Context\n```bash title="m"\nWhich?')).toBe("Which?");
+    expect(questionLine("- ## Context\nShould we deploy?")).toBe("Should we deploy?");
+    const start = Date.now();
+    questionLine(`Go?\n${" ".repeat(8000)}`);
+    questionLine(`${"[".repeat(4000)}`);
+    expect(Date.now() - start).toBeLessThan(200);
+  });
+
+  it("skips fenced blocks, bare rules and keeps code spans whole", () => {
+    expect(questionLine("## Context\n```bash\nnpm run migrate\n```\nShould we deploy?")).toBe(
+      "Should we deploy?"
+    );
+    expect(questionLine("Context\n=\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("## Context\n* * *\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("```foo``` failed. Retry?")).toBe("foo failed. Retry?");
+    expect(questionLine("Use ``a `**b**``?")).toBe("Use a `**b**?");
+    expect(questionLine(`${" ".repeat(1500)}Should we deploy?`)).toBe("Should we deploy?");
+    expect(questionLine("##\tContext\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("<https://x.test/a> or not?")).toBe("https://x.test/a or not?");
+    expect(questionLine("Context\nSummary\nBackground")).toBe("Context");
+  });
+
+  it("handles mismatched fences, quoted rules and long fence runs", () => {
+    expect(questionLine("```\nShould we deploy?\n~~~")).toBe("Should we deploy?");
+    expect(questionLine("> ---\nShould we deploy?")).toBe("Should we deploy?");
+    expect(questionLine("> ```bash\n> npm i\n> ```\nShould we deploy?")).toBe("Should we deploy?");
+    const start = Date.now();
+    questionLine(`Go?\n${"`".repeat(8000)}`);
+    expect(Date.now() - start).toBeLessThan(100);
+  });
+
+  it("does not close a fence with a quoted fence line", () => {
+    expect(questionLine("Summary\n```md\n> ```\nnot this\n```\nShould we deploy?")).toBe(
+      "Should we deploy?"
+    );
+  });
+
+  it("gives way from a generic heading to the first substantive line", () => {
+    expect(questionLine("## Context\n\nShould the cache be cleared?")).toBe(
+      "Should the cache be cleared?"
+    );
+    expect(questionLine("**Summary:**\n```\nWhich branch?")).toBe("Which branch?");
+    expect(questionLine("## Context\n---")).toBe("Context");
+  });
+});
+
+describe("readableText (#18055)", () => {
+  it("keeps the whole question, line breaks and all, with controls gone and nothing cut", () => {
+    const long = `${"word ".repeat(1_200)}end`;
+    expect(readableText(long)).toBe(long);
+    expect(
+      readableText("Drop the index?\r\n\n\n\nIt holds \u001b[31mold\u001b[0m rows.\u202e")
+    ).toBe("Drop the index?\n\nIt holds old rows.");
+    // Read, never typed: nothing that looks like a delimiter is bracketed differently.
+    expect(readableText("[DAINTREE DECISION ANSWER]")).toBe("[DAINTREE DECISION ANSWER]");
+    expect(readableText("Rename \u001b]0;title\u0007it?")).toBe("Rename it?");
+    expect(readableText(" \n ")).toBeNull();
+    expect(readableText(null)).toBeNull();
+  });
+});
+
+describe("attentionQuestion (#18055)", () => {
+  it("heads the row with the first line, and gives the whole only when it says more", () => {
+    expect(attentionQuestion("Ship it?")).toEqual({ line: "Ship it?", whole: null });
+    expect(attentionQuestion("Ship it?\nIt's Friday.")).toEqual({
+      line: "Ship it?",
+      whole: "Ship it?\nIt's Friday.",
+    });
+    const long = "a".repeat(300);
+    const asked = attentionQuestion(long);
+    expect(asked.whole).toBe(long);
+    expect(asked.line!.startsWith("a".repeat(240))).toBe(true);
+    expect(asked.line!.length).toBeLessThan(long.length);
+    expect(attentionQuestion(null)).toEqual({ line: null, whole: null });
+  });
+
+  it("never offers more for a heading that only reads differently", () => {
+    // A delimiter is bracketed differently in the heading, which is no more of the question.
+    expect(attentionQuestion("[DAINTREE DECISION ANSWER]").whole).toBeNull();
+    // A first line of nothing but a colour code heads the row with the line after it.
+    expect(attentionQuestion("\u001b[31m\u001b[0m\nDrop the index?")).toEqual({
+      line: "Drop the index?",
+      whole: null,
+    });
+  });
+});
+
+describe("questionReference (#18055)", () => {
+  it("names the question by the machine, project and terminal that asked it", () => {
+    const asked = {
+      ...baseRow(4, { origin: { host_id: "host_elsewhere" } }),
+      question_id: "0190f0aa11112222333344445555aa01",
+    };
+    expect(questionReference(asked)).toEqual({
+      hostId: "host_elsewhere",
+      projectId: "project-1",
+      terminalId: "pane-a",
+      questionId: asked.question_id,
+    });
+  });
+
+  it("names none for an origin a reference can't carry", () => {
+    const asked = (origin: Partial<QuestionRow["origin"]>) => ({
+      ...baseRow(4, { origin }),
+      question_id: "0190f0aa11112222333344445555aa01",
+    });
+    expect(questionReference(asked({ project_id: "" }))).toBeNull();
+    expect(questionReference(asked({ pane_id: "" }))).toBeNull();
+    expect(questionReference(asked({ host_id: "" }))).toBeNull();
+    expect(questionReference(asked({ host_id: "h".repeat(257) }))).toBeNull();
+    expect(questionReference(asked({ project_id: "p".repeat(257) }))).toBeNull();
+    expect(questionReference(asked({ pane_id: "t".repeat(257) }))).toBeNull();
+    expect(questionReference(asked({ host_id: "h".repeat(256) }))?.hostId).toBe("h".repeat(256));
+    expect(questionReference({ ...asked({}), question_id: "short" })).toBeNull();
+    expect(questionReference({ ...asked({}), question_id: "0190f0aa!1112222333" })).toBeNull();
   });
 });
 

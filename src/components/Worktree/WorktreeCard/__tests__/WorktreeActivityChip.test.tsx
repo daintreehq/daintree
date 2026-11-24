@@ -14,6 +14,18 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
+const forgeAvatar = vi.hoisted(() => ({
+  url: undefined as string | undefined,
+  calls: [] as Array<{ email: string | undefined; cwd: string | undefined }>,
+}));
+
+vi.mock("@/hooks/useForgeAuthorAvatar", () => ({
+  useForgeAuthorAvatar: (args: { email: string | undefined; cwd: string | undefined }) => {
+    forgeAvatar.calls.push(args);
+    return forgeAvatar.url;
+  },
+}));
+
 const NOW = new Date("2025-06-15T12:00:00Z").getTime();
 const human = { name: "Jane Doe", email: "jane@example.com" };
 
@@ -43,6 +55,8 @@ describe("WorktreeActivityChip", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
+    forgeAvatar.url = undefined;
+    forgeAvatar.calls = [];
   });
 
   afterEach(() => {
@@ -82,6 +96,24 @@ describe("WorktreeActivityChip", () => {
     // Compact "3h" is not what a screen reader should say.
     expect(time.getAttribute("aria-label")).toBe("3 hours ago");
     expect(time.getAttribute("dateTime")).toBe(new Date(NOW - 3 * 3_600_000).toISOString());
+  });
+
+  it("looks up the author's forge avatar only once the commit card opens (#17072)", () => {
+    forgeAvatar.url = "https://avatars.example/jane";
+    renderChip({
+      lastActivityTimestamp: NOW - 3 * 3_600_000,
+      lastCommitTimestampMs: NOW - 3 * 3_600_000,
+      author: human,
+      forgeAvatarCwd: "/repo/wt",
+    });
+    expect(forgeAvatar.calls).toHaveLength(0);
+
+    act(() => {
+      fireEvent.focus(chip()!);
+    });
+    expect(forgeAvatar.calls.at(-1)).toEqual({ email: human.email, cwd: "/repo/wt" });
+    const sources = [...document.querySelectorAll("img")].map((img) => img.getAttribute("src"));
+    expect(sources).toContain("https://avatars.example/jane");
   });
 
   it("opens the commit card on keyboard focus and closes it on Escape", () => {

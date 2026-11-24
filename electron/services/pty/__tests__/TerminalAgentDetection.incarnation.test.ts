@@ -185,4 +185,61 @@ describe("agent incarnation across a same-pty relaunch", () => {
 
     expect(observed).toEqual([{ launchGeneration: 4, agentIncarnation: 1 }]);
   });
+
+  it.each([
+    ["not yet seen", true],
+    ["already seen", undefined],
+  ] as const)(
+    "leaves a launched agent's first prompt as it was when detection confirms it: %s (#18014)",
+    (_label, promptUnseen) => {
+      const terminal: TerminalInfo = { ...terminalInfo(), promptUnseen };
+      handleAgentDetection(host(terminal), claudeRunning, SPAWNED_AT);
+      expect(terminal.promptUnseen).toBe(promptUnseen);
+    }
+  );
+
+  it("awaits the first prompt of each new run in the same pty (#18014)", () => {
+    const terminal = terminalInfo();
+    const h = host(terminal);
+    const codexRunning: DetectionResult = {
+      ...claudeRunning,
+      agentType: "codex",
+      processIconId: "codex",
+      processName: "codex",
+    };
+    handleAgentDetection(h, claudeRunning, SPAWNED_AT);
+    expect(terminal.promptUnseen).toBeUndefined();
+
+    // Another agent takes the pane: what was seen at the old prompt was the old agent's.
+    handleAgentDetection(h, codexRunning, SPAWNED_AT);
+    expect(terminal.promptUnseen).toBe(true);
+
+    // Quit and relaunched in the same shell: a new run.
+    delete terminal.promptUnseen;
+    handleAgentDetection(h, backAtShell, SPAWNED_AT);
+    handleAgentDetection(h, claudeRunning, SPAWNED_AT);
+    expect(terminal.promptUnseen).toBe(true);
+  });
+
+  it.each([
+    ["no state yet", undefined],
+    // A title report can mark the shell working before detection catches up.
+    ["a state a title report set first", "working"],
+  ] as const)(
+    "awaits the first prompt of an agent started by hand in a plain shell, with %s (#18014)",
+    (_label, agentState) => {
+      const terminal = {
+        ...terminalInfo(),
+        launchAgentId: undefined,
+        agentState,
+        analysisEnabled: false,
+      } as unknown as TerminalInfo;
+      const h = { ...host(terminal), hasActivityMonitor: false };
+
+      handleAgentDetection(h, claudeRunning, SPAWNED_AT);
+
+      expect(terminal.agentState).toBe(agentState ?? "idle");
+      expect(terminal.promptUnseen).toBe(true);
+    }
+  );
 });

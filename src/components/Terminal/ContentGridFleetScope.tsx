@@ -8,7 +8,7 @@ import { COMFORTABLE_PANEL_HEIGHT_PX, MIN_TERMINAL_WIDTH_PX } from "@/lib/termin
 import { GridNotificationBar } from "./GridNotificationBar";
 import { GridPanel } from "./GridPanel";
 import { GridShell } from "./GridShell";
-import { ContentGridEmptyState } from "./ContentGridEmptyState";
+import { ContentGridEmptyStateGate } from "./ContentGridEmptyStateGate";
 import { pixelSnapTransform, type ContentGridContext } from "./useContentGridContext";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -53,13 +53,13 @@ export function ContentGridFleetScope({
   // getBoundingClientRect on any commit whose layoutDependency changed — or is
   // undefined. Without a key, every fleet-subtree commit (focus, agent-state,
   // title) forces a per-panel layout read on the same frame the WebGL canvas
-  // composites. Derive the key from exactly what moves a fleet panel's box:
-  // column count + container width (column widths derive from it, shifting the
-  // origin of every non-first column) + the ordered panel-id set. Mirrors
-  // ContentGridDefault's gridLayoutDependency, including the gridWidth term.
+  // composites. Derive the key from the discrete changes that move a fleet
+  // panel: column count + the ordered panel-id set. The container width stays
+  // out, as in ContentGridDefault's gridLayoutDependency: it changes on every
+  // frame of a resize drag, and panels follow it directly rather than through
+  // a FLIP restarted per pixel.
   const fleetLayoutDependency = [
     ctx.fleetGridCols,
-    ctx.gridWidth ?? 0,
     ctx.fleetPanels.map((p) => p.id).join(","),
   ].join("|");
 
@@ -101,7 +101,7 @@ export function ContentGridFleetScope({
         >
           {ctx.fleetPanels.length === 0 ? (
             <div className="col-span-full row-span-full">
-              <ContentGridEmptyState
+              <ContentGridEmptyStateGate
                 hasLaunchTarget={ctx.hasActiveWorktree}
                 hasProjectContext={ctx.projectName !== null}
                 hasWorktrees={ctx.hasWorktrees}

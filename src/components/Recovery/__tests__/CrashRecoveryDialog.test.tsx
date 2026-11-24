@@ -767,6 +767,11 @@ describe("CrashRecoveryDialog", () => {
     await waitFor(() => {
       expect(screen.getByTestId("copy-stack-button").textContent).toContain("Copied");
     });
+    expect(screen.getByTestId("copy-stack-button").getAttribute("aria-label")).toBe("Copy stack");
+    const sizers = Array.from(
+      screen.getByTestId("copy-stack-button").querySelectorAll("[data-label]")
+    ).map((el) => el.getAttribute("data-label"));
+    expect(sizers).toEqual(expect.arrayContaining(["Copy stack", "Copied"]));
     // Report button still shows its default label
     expect(screen.getByTestId("report-button").textContent).toContain("Report this crash");
   });

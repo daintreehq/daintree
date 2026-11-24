@@ -123,8 +123,13 @@ export function shouldTrimAnalysisSession(input: AnalysisSessionTrimInput): bool
 export interface PluginWorkerIdleInput {
   isBuiltin: boolean;
   devMode: boolean;
-  /** Manifest-declared panel contributions — open panels are invisible to main. */
-  panelContributionCount: number;
+  /**
+   * The plugin's views open in a renderer right now: grid panels in any live
+   * phase (a hidden or trashed panel can come back without reopening) plus
+   * views mounted outside the grid. A disposed worker would leave an open
+   * view's pushes and subscriptions silently dead.
+   */
+  liveViewConsumerCount: number;
   /** Manifest-declared MCP server contributions. */
   mcpServerContributionCount: number;
   /** Declared `onStartupFinished` — the plugin asked to run in the background. */
@@ -157,8 +162,8 @@ export interface PluginWorkerIdleInput {
  *
  * Every disqualifier is a live surface a disposed worker would silently break:
  * built-ins have no worker; dev workers own their reload cycle via the file
- * watcher; panel plugins may have an open panel main can't see; MCP plugins may
- * be serving an agent; pending invokes / spawned processes / fs watchers /
+ * watcher; an open panel or hosted view still talks to its worker; MCP plugins
+ * may be serving an agent; pending invokes / spawned processes / fs watchers /
  * unfinished plugin tasks are work in flight. Manifest-declared palette
  * commands do NOT disqualify — they re-bind lazily on first dispatch, which
  * re-forks the worker on demand.
@@ -169,9 +174,7 @@ export function canDisposeIdlePluginWorker(input: PluginWorkerIdleInput): {
 } {
   if (input.isBuiltin) return { ok: false, reason: "builtin runs in-process" };
   if (input.devMode) return { ok: false, reason: "dev worker owns its reload cycle" };
-  if (input.panelContributionCount > 0) {
-    return { ok: false, reason: "contributes panels (open state unknown)" };
-  }
+  if (input.liveViewConsumerCount > 0) return { ok: false, reason: "views open" };
   if (input.mcpServerContributionCount > 0) {
     return { ok: false, reason: "contributes MCP servers" };
   }

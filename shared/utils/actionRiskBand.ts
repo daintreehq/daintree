@@ -4,7 +4,6 @@ export const RISK_BAND_OPEN_WORLD_CATEGORIES: ReadonlySet<string> = new Set([
   "browser",
   "devServer",
   "forge",
-  "portal",
   "voice",
   "system",
 ]);

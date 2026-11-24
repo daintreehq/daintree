@@ -7,6 +7,7 @@ export const HOST_METRICS_METHOD_CHANNELS = {
   listWorktrees: "host-metrics:list-worktrees",
   linkActivity: "host-metrics:link-activity",
   processInventory: "host-metrics:process-inventory",
+  setFollowing: "host-metrics:set-following",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof HOST_METRICS_METHOD_CHANNELS;

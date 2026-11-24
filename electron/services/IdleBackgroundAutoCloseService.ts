@@ -81,6 +81,7 @@ type SkipReason =
   | IdleShellSkipReason
   | "mcp-dispatch"
   | "dictation"
+  | "worktree-creation"
   | "ineligible"
   | "coordination-hold"
   | "plugin-work";
@@ -500,6 +501,11 @@ export class IdleBackgroundAutoCloseService {
    * way out but a project-to-project switch, so on its own it read a project
    * left a minute ago as hours idle. A recent open still counts, though — the
    * legacy single-view switch moves nothing but the DB pointer.
+   *
+   * Counts only time the machine was awake (#17222), like the idle-shell gate:
+   * a project left just before the lid closed overnight is not hours idle on
+   * wake. A visit stamped after the sweep's `now` is a visit, whatever the
+   * awake clock reads by the time a re-check runs.
    */
   private isWithinIdleThreshold(
     projectId: string,
@@ -508,7 +514,7 @@ export class IdleBackgroundAutoCloseService {
     thresholdMs: number
   ): boolean {
     const idleSince = Math.max(this.visibilityClock.lastVisibleAt(projectId), lastOpened);
-    return now - idleSince < thresholdMs;
+    return idleSince > now || this.awakeSince(idleSince) < thresholdMs;
   }
 
   private async checkAndClose(): Promise<void> {
@@ -798,8 +804,8 @@ export class IdleBackgroundAutoCloseService {
     if (!fresh.lastOpened || fresh.lastOpened <= 0) return null;
     // Read the active set first: it is what stamps a visit that came and went
     // during the caller's await, and the age check below has to see that stamp.
-    // Such a stamp postdates the sweep's `now`, so the age goes negative and the
-    // project stays put.
+    // Such a stamp postdates the sweep's `now`, which the age check reads as a
+    // visit, so the project stays put.
     if (this.collectActiveProjectIds().has(projectId)) return null;
     if (this.isWithinIdleThreshold(projectId, fresh.lastOpened, now, thresholdMs)) return null;
     return fresh;
@@ -935,7 +941,9 @@ export class IdleBackgroundAutoCloseService {
     const workspace = evaluateWorkspace(read);
     if (!workspace.ok) return { status: "skipped", reason: workspace.reason };
     const worktreePaths = workspace.value;
-    const resources = await probeResourceConfig(project.path, worktreePaths);
+    const resources = await probeResourceConfig(project.path, worktreePaths, {
+      projectSettingsPath: projectStore.projectSettingsFilePath(projectId),
+    });
     if (resources === "configured") return { status: "skipped", reason: "resource-configured" };
     if (resources === "unknown") return { status: "skipped", reason: "resource-unknown" };
     const gitBlock = evaluateGit(

@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const SITE_PREVIEW_METHOD_CHANNELS = {
   detach: "site-preview:detach",
   setMode: "site-preview:set-mode",
+  setPaused: "site-preview:set-paused",
   clearSelection: "site-preview:clear-selection",
   clearHover: "site-preview:clear-hover",
 } as const satisfies Record<string, keyof IpcInvokeMap>;

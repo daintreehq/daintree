@@ -294,6 +294,12 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
     "This remote is set up as a mirror (remote.<name>.mirror), which pushes every ref at once. Daintree only pushes the branch it showed, so push from a terminal, or turn mirroring off for this remote.",
   "push-review-stale":
     "The branch, its commits or its push destination changed after the push was reviewed, so nothing was pushed. Review the push again to see what it would publish now.",
+  "commit-review-stale":
+    "The staged changes, the branch or its tip changed after the commit was reviewed, so nothing was committed or pushed. Commit and push again to review what is staged now.",
+  "pull-rebase-review-stale":
+    "The worktree switched branches or gained commits after the pull and rebase was previewed, so nothing was rebased. Pull and rebase again to see what it would replay now.",
+  "repo-operation-changed":
+    "Daintree couldn't confirm the operation in progress is the one you chose: it ended, another replaced it, or it couldn't be identified. Nothing was changed. Check the worktree and choose again.",
   "pathspec-invalid": "The specified ref or path does not exist.",
   "lfs-missing": "Git LFS objects are missing — install git-lfs and run 'git lfs pull'.",
   "lfs-quota-exceeded":
@@ -318,7 +324,12 @@ const RECOVERY_ACTIONS: Partial<Record<GitOperationReason, RecoveryAction>> = {
   // Pushing again opens a fresh review, which is the only thing that can cover
   // what the branch holds now.
   "push-review-stale": { label: "Review push", actionId: "git.push" },
+  // Same reasoning: a fresh confirm is the only thing that can cover what the
+  // branch holds now, so this reopens it rather than retrying the stale pin.
+  "pull-rebase-review-stale": { label: "Pull and rebase", actionId: "git.pullRebase" },
   "conflict-unresolved": { label: "Resolve conflicts", actionId: "worktree.openReviewHub" },
+  // Shows the operation that is there now, never a replay of the refused one.
+  "repo-operation-changed": { label: "Open Review Hub", actionId: "worktree.openReviewHub" },
   "dubious-ownership": { label: "Trust this repo", actionId: "git.markSafeDirectory" },
 };
 

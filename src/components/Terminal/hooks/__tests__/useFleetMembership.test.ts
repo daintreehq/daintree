@@ -14,6 +14,19 @@ function mount(id: string, options?: { isolated?: boolean }) {
 }
 
 const arm = (ids: string[]) => act(() => useFleetArmingStore.getState().armIds(ids));
+const REMOTE = "host-fleet:studio:r-1";
+const armRemote = (key = REMOTE) =>
+  act(() =>
+    useFleetArmingStore.getState().armCrossHostTarget({
+      key,
+      hostId: "studio",
+      hostName: "Studio",
+      terminalId: key.slice(key.lastIndexOf(":") + 1),
+      title: "remote",
+    })
+  );
+const disarmRemote = (key = REMOTE) =>
+  act(() => useFleetArmingStore.getState().disarmCrossHostTarget(key));
 
 describe("useFleetMembership", () => {
   beforeEach(() => {
@@ -39,6 +52,23 @@ describe("useFleetMembership", () => {
     expect(hook.result.current).toEqual({ isArmed: true, isFleetComposing: false });
 
     arm([]);
+    expect(hook.result.current).toEqual({ isArmed: false, isFleetComposing: false });
+  });
+
+  it("counts another host's agents as fleet members (#17182)", () => {
+    const { hook } = mount("a");
+    arm(["a"]);
+    armRemote();
+    expect(hook.result.current).toEqual({ isArmed: true, isFleetComposing: true });
+
+    disarmRemote();
+    expect(hook.result.current).toEqual({ isArmed: true, isFleetComposing: false });
+  });
+
+  it("never composes an unarmed pane because another host's agents are armed", () => {
+    const { hook } = mount("a");
+    armRemote();
+    armRemote("host-fleet:studio:r-2");
     expect(hook.result.current).toEqual({ isArmed: false, isFleetComposing: false });
   });
 
@@ -85,5 +115,25 @@ describe("useFleetMembership", () => {
 
     expect(bystander.counter.renders).toBe(bystanderBase);
     expect(isolated.counter.renders).toBe(isolatedBase);
+  });
+
+  it("re-renders on another host's agents only when they move the pane across two members", () => {
+    arm(["a"]);
+    const member = mount("a");
+    const bystander = mount("z");
+    const [memberBase, bystanderBase] = [member.counter.renders, bystander.counter.renders];
+
+    armRemote();
+    expect(member.counter.renders).toBe(memberBase + 1);
+
+    armRemote("host-fleet:studio:r-2");
+    expect(member.counter.renders).toBe(memberBase + 1);
+
+    disarmRemote("host-fleet:studio:r-2");
+    expect(member.counter.renders).toBe(memberBase + 1);
+    disarmRemote();
+    expect(member.counter.renders).toBe(memberBase + 2);
+
+    expect(bystander.counter.renders).toBe(bystanderBase);
   });
 });

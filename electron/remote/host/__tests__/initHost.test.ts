@@ -32,6 +32,18 @@ import type { HostSessionContext } from "../HostServer.js";
 import { ASSISTANT_SWEEP_MS, initRemoteHostsHost } from "../initHost.js";
 import { LinkMethod } from "../linkMethods.js";
 import { events } from "../../../services/events.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 /** PtyClient's spawn registry, its inventory, and the events the host follows. */
 class FakePty extends EventEmitter {

@@ -9,6 +9,7 @@ const { fenceInputOnOwnerChange } = await import("../globalAssistant.js");
 function makeService() {
   return new GlobalAssistantService({
     agentId: async () => "claude",
+    canRun: async () => true,
     provision: async () => ({ sessionId: "s", sessionPath: "/g", token: "t", mcpUrl: null }),
     takeResume: async () => null,
     releaseResume: async () => {},

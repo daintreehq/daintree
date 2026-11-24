@@ -80,6 +80,7 @@ function install(
   };
   const voiceDictionary = {
     add: vi.fn(),
+    importTerms: vi.fn(),
     remove: vi.fn(),
     update: vi.fn(),
     acceptSuggestion: vi.fn(),
@@ -148,6 +149,38 @@ describe("dictationBlockers", () => {
     expect(openai.join(" ")).toContain("OpenAI");
     expect(deepgram.join(" ")).toContain("Deepgram");
     expect(grok.join(" ")).toContain("xAI API key");
+  });
+
+  it("asks for the on-device model, never a key, when transcribing on this computer", () => {
+    const local = {
+      transcriptionProvider: "local",
+      openaiApiKey: "",
+      deepgramApiKey: "",
+      xaiApiKey: "",
+    } as const;
+    const status = (state: "absent" | "ready" | "unsupported" | "downloading") => ({
+      state,
+      totalBytes: 10,
+      receivedBytes: 0,
+    });
+    expect(dictationBlockers(local, "granted", status("absent"))).toEqual([
+      "download the on-device model",
+    ]);
+    expect(dictationBlockers(local, "granted", status("downloading"))).toEqual([
+      "download the on-device model",
+    ]);
+    expect(dictationBlockers(local, "granted", status("ready"))).toEqual([]);
+    // Not known yet, or still being checked: not a blocker the page can name.
+    expect(dictationBlockers(local, "granted", null)).toEqual([]);
+    expect(dictationBlockers(local, "granted", { ...status("ready"), state: "checking" })).toEqual(
+      []
+    );
+    expect(dictationBlockers(local, "granted", { ...status("ready"), state: "failed" })).toEqual([
+      "download the on-device model",
+    ]);
+    expect(dictationBlockers(local, "granted", status("unsupported"))).toEqual([
+      "choose another provider",
+    ]);
   });
 
   it("reports nothing it cannot observe: a present key and an undecided mic are not blockers", () => {
@@ -1043,28 +1076,44 @@ describe("VoiceInputSettingsTab dictionary", () => {
     expect(api.setSettings).not.toHaveBeenCalled();
   });
 
-  it("adds pasted lines, comma lists and heard -> Term pairs as imports", async () => {
-    const add = vi
-      .fn()
-      .mockResolvedValue({ dictionary: [], suggestedDictionary: [], conflicts: [] });
-    install({}, {}, { add });
+  it("adds pasted lines, comma lists and heard -> Term pairs as one import", async () => {
+    const importTerms = vi.fn().mockResolvedValue({
+      dictionary: [
+        { ...term("Vite"), source: "imported" },
+        { ...term("Daintree"), source: "imported" },
+        { ...term("Tailwind"), source: "imported" },
+        { ...term("Zustand"), heardAs: ["zoo stand", "zu stand"], source: "imported" },
+      ],
+      suggestedDictionary: [],
+      conflicts: [],
+    });
+    const add = vi.fn();
+    install({}, {}, { add, importTerms });
     render(<VoiceInputSettingsTab />);
     await openPage();
 
-    fireEvent.change(await termField(), {
-      target: { value: "Vite, Daintree\nzoo stand -> Zustand\nzu stand -> zustand" },
+    const input = await termField();
+    fireEvent.change(input, {
+      target: { value: "Vite, Daintree\nTailwind\nzoo stand -> Zustand\nzu stand -> zustand" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
 
-    await waitFor(() => expect(add).toHaveBeenCalledTimes(3));
-    const imported = { source: "imported", heardAsConflict: "skip" };
-    expect(add).toHaveBeenNthCalledWith(1, { term: "Vite", heardAs: [], ...imported });
-    expect(add).toHaveBeenNthCalledWith(2, { term: "Daintree", heardAs: [], ...imported });
-    expect(add).toHaveBeenNthCalledWith(3, {
-      term: "Zustand",
-      heardAs: ["zoo stand", "zu stand"],
-      ...imported,
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Remove Zustand" })).toBeTruthy()
+    );
+    expect(screen.getByRole("button", { name: "Remove Vite" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove Tailwind" })).toBeTruthy();
+    expect(input.value).toBe("");
+    expect(importTerms).toHaveBeenCalledTimes(1);
+    expect(importTerms).toHaveBeenCalledWith({
+      entries: [
+        { term: "Vite", heardAs: [] },
+        { term: "Daintree", heardAs: [] },
+        { term: "Tailwind", heardAs: [] },
+        { term: "Zustand", heardAs: ["zoo stand", "zu stand"] },
+      ],
     });
+    expect(add).not.toHaveBeenCalled();
   });
 
   it("adds heard -> Term as a rule on the term and shows it on the row", async () => {

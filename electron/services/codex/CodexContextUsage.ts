@@ -19,7 +19,7 @@ import { createContextUsageLanes } from "../contextUsageLanes.js";
 import type { PtyClient } from "../PtyClient.js";
 import { subagentTerminalAgentId } from "../subagentTerminalAgent.js";
 import { readCodexContextUsage } from "./CodexRolloutReader.js";
-import { observeCodexRollout } from "./CodexSessionFileProbe.js";
+import { observeCodexRollout, type CodexRolloutObservation } from "./CodexSessionFileProbe.js";
 
 /**
  * A reading that hasn't answered by now answers that the rollout couldn't be
@@ -28,14 +28,86 @@ import { observeCodexRollout } from "./CodexSessionFileProbe.js";
  */
 export const CODEX_CONTEXT_USAGE_HOST_DEADLINE_MS = 5_000;
 
+/**
+ * How long a probe that found no rollout answers for the same run of a pane,
+ * from when it answered. A turn's two reads come 1.5 s apart, and each would
+ * otherwise list the pane's processes and files again to find nothing (#17044).
+ */
+export const CODEX_PROBE_MISS_REUSE_MS = 3_000;
+
+/**
+ * Misses that a second listing a moment later would repeat. `pane-changed` is
+ * not one: the process was replaced mid-listing, and its successor is worth a
+ * look. A rollout found is never reused either, because after `/clear` the old
+ * one is still on disk under the same identity, and only a fresh listing shows
+ * that Codex has moved on to another.
+ */
+const REUSABLE_MISSES: ReadonlySet<AgentSessionFileUnknownReason> = new Set([
+  "not-observed",
+  "unverified",
+  "ambiguous",
+  "probe-failed",
+]);
+
 type TerminalQueries = Pick<PtyClient, "getTerminalAsync" | "getTerminalInfo">;
 type TerminalRecord = NonNullable<Awaited<ReturnType<PtyClient["getTerminalAsync"]>>>;
+
+/** One probe per run of a pane at a time, and its miss for a moment after. */
+export interface CodexProbeMemo {
+  observe(
+    terminalId: string,
+    run: string,
+    probe: () => Promise<CodexRolloutObservation>
+  ): Promise<CodexRolloutObservation>;
+}
+
+interface ProbeEntry {
+  run: string;
+  probe: Promise<CodexRolloutObservation>;
+  /** When a reusable miss answered; null while the probe runs. */
+  missedAt: number | null;
+}
+
+/** Nothing runs between reads: expired misses are dropped by the next one. */
+export function createCodexProbeMemo(now: () => number = () => performance.now()): CodexProbeMemo {
+  const entries = new Map<string, ProbeEntry>();
+  return {
+    observe(terminalId, run, probe) {
+      const at = now();
+      for (const [id, entry] of entries) {
+        if (entry.missedAt !== null && at - entry.missedAt >= CODEX_PROBE_MISS_REUSE_MS) {
+          entries.delete(id);
+        }
+      }
+      const current = entries.get(terminalId);
+      if (current?.run === run) return current.probe;
+
+      const entry: ProbeEntry = { run, probe: Promise.resolve().then(probe), missedAt: null };
+      // A probe for a run since replaced settles without touching its successor's entry.
+      const forget = () => {
+        if (entries.get(terminalId) === entry) entries.delete(terminalId);
+      };
+      entry.probe.then((observed) => {
+        if (observed.status === "unknown" && REUSABLE_MISSES.has(observed.reason)) {
+          if (entries.get(terminalId) === entry) entry.missedAt = now();
+        } else {
+          forget();
+        }
+      }, forget);
+      entries.set(terminalId, entry);
+      return entry.probe;
+    },
+  };
+}
+
+const probes = createCodexProbeMemo();
 
 export interface CodexContextUsageDeps {
   ptyClient?: TerminalQueries | null;
   platform?: NodeJS.Platform;
   observe?: typeof observeCodexRollout;
   read?: typeof readCodexContextUsage;
+  probes?: CodexProbeMemo;
 }
 
 function unavailable(reason: AgentContextUsageUnavailableReason): AgentContextUsageResult {
@@ -92,7 +164,17 @@ export async function readCodexPaneContextUsage(
     return unavailable("provider-mismatch");
   }
   signal.throwIfAborted();
-  const observed = await (deps.observe ?? observeCodexRollout)(info.ptyPid);
+  const { ptyPid } = info;
+  const run = JSON.stringify([
+    ptyPid,
+    record.spawnedAt,
+    record.launchGeneration,
+    record.agentIncarnation,
+    record.agentSessionId ?? null,
+  ]);
+  const observed = await (deps.probes ?? probes).observe(terminalId, run, () =>
+    (deps.observe ?? observeCodexRollout)(ptyPid)
+  );
   if (observed.status !== "observed") return unavailable(fromProbe(observed.reason));
   signal.throwIfAborted();
 

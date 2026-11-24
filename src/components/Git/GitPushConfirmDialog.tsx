@@ -20,7 +20,10 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isClientGitError } from "@/utils/clientGitError";
-import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
+import {
+  declineFailedGitPushConfirmation,
+  useGitPushConfirmStore,
+} from "@/store/gitPushConfirmStore";
 import {
   buildGitRemoteOperationPreview,
   formatGitPushDestination,
@@ -424,6 +427,7 @@ export function GitPushConfirmDialog() {
       variant="component"
       componentName="GitPushConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => declineFailedGitPushConfirmation(requestSeq)}
     >
       <GitPushConfirmDialogInner />
     </ErrorBoundary>

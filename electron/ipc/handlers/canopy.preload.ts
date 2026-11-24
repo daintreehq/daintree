@@ -28,6 +28,7 @@ export const CANOPY_METHOD_CHANNELS = {
   runBranch: "canopy:run-branch",
   searchScreens: "canopy:search-screens",
   readInputLines: "canopy:read-input-lines",
+  readWorktrees: "canopy:read-worktrees",
   watchTerminal: "canopy:watch-terminal",
   watchAssistantTerminal: "canopy:watch-assistant-terminal",
   resolveAssistant: "canopy:resolve-assistant",

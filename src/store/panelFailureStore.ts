@@ -211,8 +211,11 @@ export function observePanelFailures(
 ): void {
   if (panelsById === prevPanelsById) return;
   const { observeRecord } = usePanelFailureStore.getState();
-  for (const [panelId, panel] of Object.entries(panelsById)) {
-    if (prevPanelsById?.[panelId] === panel) continue;
+  // A key walk rather than `Object.entries`: a write usually replaces one
+  // record, and the rest only cost a reference check.
+  for (const panelId in panelsById) {
+    const panel = panelsById[panelId];
+    if (panel === undefined || prevPanelsById?.[panelId] === panel) continue;
     observeRecord(panelId, readPanelFailureMarks(panel));
   }
 }

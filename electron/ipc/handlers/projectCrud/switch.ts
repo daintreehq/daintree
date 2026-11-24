@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { CHANNELS } from "../../channels.js";
-import { typedHandleWithContext, broadcastToRenderer } from "../../utils.js";
+import { typedHandleWithContext } from "../../utils.js";
 import {
   getWindowForWebContents,
   getProjectForWebContents,
@@ -69,6 +69,7 @@ import type {
 import type { TabGroup } from "../../../../shared/types/panel.js";
 import type { ProjectFocusOnActivateIntent } from "../../../../shared/types/ipc/project.js";
 import { supersedePendingHostSwitch } from "../../../window/windowHost.js";
+import { beginWindowSwitch, isCurrentWindowSwitch } from "../../../window/windowSwitchEpochs.js";
 
 export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -117,7 +118,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
       // sender's view→project binding can be moved by a concurrent switch in the
       // same window. Throwing here simply discards it, and everything with a side
       // effect the sender couldn't undo still lies further down.
-      await assertProjectRepositoryIntact(project);
+      await assertProjectRepositoryIntact(project, isWarmActivation(operation));
       await assertMemoryAdmitsColdOpen(operation, options?.ignoreMemoryPressure);
 
       const { outgoingProjectId, projectViewManager: pvm } = operation;
@@ -239,7 +240,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
 
     const releaseClaim = claimProjectActivation(projectId, operation.windowId);
     try {
-      await assertProjectRepositoryIntact(project);
+      await assertProjectRepositoryIntact(project, isWarmActivation(operation));
       await assertMemoryAdmitsColdOpen(operation, options?.ignoreMemoryPressure);
 
       const { outgoingProjectId, projectViewManager: pvm } = operation;
@@ -397,13 +398,6 @@ function markMainReceived(trace: ProjectSwitchTrace, operation: SwitchOperation)
   });
 }
 
-// Monotonic per-window switch epoch. A swap-failure restore (below) is
-// deferred until the failed target's early worktree load settles; by then a
-// newer switch may own the window, and restoring the old mapping would
-// clobber it. Bumped at every activateProjectView entry; the restore only
-// runs if its epoch is still current.
-const windowSwitchEpochs = new Map<number, number>();
-
 const pendingOutgoingPersists = new Map<string, Promise<void>>();
 
 function trackOutgoingPersist(projectId: string | null, persist: Promise<void>): void {
@@ -444,13 +438,29 @@ function trackOutgoingPersist(projectId: string | null, persist: Promise<void>):
  *   classifier's "not a repository" verdict throws. A dead mount, a permissions
  *   blip or a missing git binary answers `"unknown"` or throws its own code, and
  *   activation proceeds exactly as before rather than prompting to give up a
- *   project's git identity on the strength of a transient failure.
+ *   project's git identity on the strength of a transient failure;
+ * - a warm switch to a view this window already holds reuses a marker seen
+ *   within {@link GIT_MARKER_REUSE_MS} and re-probes it in the background
+ *   instead (#17039). A marker that vanished is dropped from the cache by
+ *   that probe, so the next switch in blocks on the full check again: a
+ *   project already loaded on screen is let back in once, never indefinitely.
  */
-async function assertProjectRepositoryIntact(project: Project): Promise<void> {
+async function assertProjectRepositoryIntact(project: Project, warm = false): Promise<void> {
   if (project.gitBacked === false) return;
   // A project still awaiting its clone has no folder yet by design (#16352).
   if (isAwaitingClone(project)) return;
-  if ((await probeGitMarker(project.path)) !== "missing") return;
+  const verifiedAt = presentGitMarkers.get(project.path);
+  if (warm && verifiedAt !== undefined && Date.now() - verifiedAt < GIT_MARKER_REUSE_MS) {
+    revalidateGitMarker(project.path);
+    return;
+  }
+  const probe = await probeGitMarker(project.path);
+  if (probe === "present") {
+    presentGitMarkers.set(project.path, Date.now());
+    return;
+  }
+  presentGitMarkers.delete(project.path);
+  if (probe !== "missing") return;
 
   const classification = await projectStore.classifyGitBacking(project.path);
   if (classification.gitBacked) return;
@@ -460,6 +470,33 @@ async function assertProjectRepositoryIntact(project: Project): Promise<void> {
     message: `Not a git repository: ${project.path}`,
     context: { projectPath: project.path },
   });
+}
+
+const GIT_MARKER_REUSE_MS = 60_000;
+/** When each project root's `.git` was last seen by a blocking probe. */
+const presentGitMarkers = new Map<string, number>();
+
+/**
+ * Only ever forgets: a background probe that resolves after a newer blocking
+ * one must not re-vouch for a marker that probe already found gone.
+ */
+function revalidateGitMarker(projectPath: string): void {
+  probeGitMarker(projectPath).then(
+    (probe) => {
+      if (probe !== "present") presentGitMarkers.delete(projectPath);
+    },
+    () => presentGitMarkers.delete(projectPath)
+  );
+}
+
+/** The sender's window already holds a live, loaded view of the incoming project. */
+function isWarmActivation(operation: SwitchOperation): boolean {
+  return hasReusableProjectView(operation.projectViewManager, operation.incomingProjectId);
+}
+
+/** Test seam: forget every cached `.git` verdict. */
+export function resetGitMarkerCacheForTesting(): void {
+  presentGitMarkers.clear();
 }
 
 async function awaitPendingOutgoingPersist(projectId: string): Promise<void> {
@@ -798,11 +835,11 @@ async function activateProjectView(
     markPerformance(name, { switchId: trace.switchId, projectId, ...meta });
   };
 
-  let switchEpoch = 0;
-  if (windowId !== undefined) {
-    switchEpoch = (windowSwitchEpochs.get(windowId) ?? 0) + 1;
-    windowSwitchEpochs.set(windowId, switchEpoch);
-  }
+  // A swap-failure restore (below) is deferred until the failed target's early
+  // worktree load settles; by then a newer switch may own the window, and
+  // restoring the old mapping would clobber it. The restore only runs if this
+  // switch is still the window's current one.
+  const switchEpoch = windowId !== undefined ? beginWindowSwitch(windowId) : 0;
 
   // Start the workspace-host git load CONCURRENTLY with the view swap. The two
   // have no data dependency (loadProject takes explicit path + windowId), and
@@ -893,7 +930,7 @@ async function activateProjectView(
       void (loadWorktrees ?? Promise.resolve())
         .catch(() => {})
         .then(() => {
-          if (windowSwitchEpochs.get(windowId) !== switchEpoch) return undefined;
+          if (!isCurrentWindowSwitch(windowId, switchEpoch)) return undefined;
           if (previousPath === project.path) return undefined; // mapping already correct
           if (previousPath) {
             return worktreeService.loadProject(previousPath, windowId);
@@ -940,18 +977,21 @@ async function activateProjectView(
   }
 
   // Mutually exclusive with scratch: switching to a project clears any
-  // active scratch pointer + notifies renderers so palette/UI state stays
-  // coherent. Without this, `currentScratchId` would linger in app_state
-  // and `scratchStore.getCurrentScratch()` would return stale data.
+  // active scratch pointer. Without this, `currentScratchId` would linger in
+  // app_state and `scratchStore.getCurrentScratch()` would return stale data.
   // Wrapped because some test environments don't initialize the shared DB —
   // a project switch must not fail because optional cross-store cleanup did.
   try {
     if (scratchStore.getCurrentScratchId() !== null) {
       scratchStore.clearCurrentScratch();
-      broadcastToRenderer(CHANNELS.SCRATCH_ON_SWITCH, { scratch: null, switchId: "" });
     }
   } catch (err) {
     console.warn("[ProjectSwitch] Failed to clear active scratch:", err);
+  }
+  // Only the view this window now shows hears that it holds no scratch. A
+  // broadcast would also clear the scratch another window is showing (#17186).
+  if (!view.webContents.isDestroyed()) {
+    view.webContents.send(CHANNELS.SCRATCH_ON_SWITCH, { scratch: null, switchId: "" });
   }
 
   // Update the main process global state. The outgoing id comes from the
@@ -1088,11 +1128,11 @@ async function activateProjectView(
       awaitingClone &&
       windowId !== undefined &&
       !isAwaitingClone(projectStore.getProjectById(projectId)) &&
-      windowSwitchEpochs.get(windowId) === switchEpoch
+      isCurrentWindowSwitch(windowId, switchEpoch)
     ) {
       try {
         await deps.worktreeService.loadProject(project.path, windowId);
-        if (windowSwitchEpochs.get(windowId) === switchEpoch && !view.webContents.isDestroyed()) {
+        if (isCurrentWindowSwitch(windowId, switchEpoch) && !view.webContents.isDestroyed()) {
           deps.worktreeService.attachDirectPort(windowId, view.webContents);
           const host = deps.worktreeService.getHostForProject(project.path);
           if (host && deps.worktreePortBroker) {

@@ -94,14 +94,16 @@ type ConfirmDialogBaseProps = {
   /**
    * Forwarded to {@link AppDialog.restoreFocusTo}: a logical successor to
    * receive focus when the trigger has unmounted before close (e.g. the row a
-   * destructive confirm just deleted). Falls back to the app shell when absent
-   * or disconnected.
+   * destructive confirm just deleted). Falls back to the dialog still open
+   * underneath, or the app shell, when absent or disconnected.
    */
   restoreFocusTo?: RestoreFocusTarget;
   /** Forwarded to {@link AppDialog.preferRestoreFocusTo}. */
   preferRestoreFocusTo?: boolean;
+  /** Forwarded to {@link AppDialog.restoreFocusOnClose}. */
+  restoreFocusOnClose?: boolean;
   /** Forwarded to {@link AppDialog.onCloseComplete}. */
-  onCloseComplete?: () => void;
+  onCloseComplete?: (restoreSkippedFocus?: () => void) => void;
   /**
    * Forwarded to {@link AppDialog.Footer.hint}: a subdued status line rendered
    * beside the action row. Use it to say why the primary action is currently
@@ -180,6 +182,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     focusResetKey,
     restoreFocusTo,
     preferRestoreFocusTo,
+    restoreFocusOnClose,
     onCloseComplete,
     hasPreview = false,
     size = "sm",
@@ -308,6 +311,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       focusResetKey={focusResetKey}
       restoreFocusTo={restoreFocusTo}
       preferRestoreFocusTo={preferRestoreFocusTo}
+      restoreFocusOnClose={restoreFocusOnClose}
       onCloseComplete={onCloseComplete}
     >
       <AppDialog.Header>
@@ -361,6 +365,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
             isCooldownActive ||
             (isBusy && !isConfirmLoading),
           intent: variant === "destructive" ? "destructive" : "default",
+          ignoresRepeatPress: true,
         }}
       />
     </AppDialog>

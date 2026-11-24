@@ -81,6 +81,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
       e.preventDefault();
       setIsResizing(true);
       resizeStartY.current = e.clientY;

@@ -123,29 +123,36 @@ describe("SetupDiagnostics", () => {
     await expect(diagnostics.sink.hasMarker(target, "inj_9999999999")).resolves.toBe(false);
   });
 
-  it("counts only a person's answer as answered, never an expiry notice", async () => {
-    const diagnostics = new SetupDiagnostics();
-    const terminal = diagnostics.open("host_a", () => {});
-    terminal.expect("q_setup_check");
-    const expiry = batchNotices(
-      [
-        formatAnswerNotice({
-          kind: "expired",
-          questionId: "q_setup_check",
-          revision: 1,
-          source: "human",
-          injectionId: "inj_expired_01",
-        }),
-      ],
-      Number.MAX_SAFE_INTEGER
-    )[0]!;
+  it.each([
+    ["an expiry", "expired"],
+    ["a person's decline (#17234)", "declined"],
+  ] as const)(
+    "counts only a person's answer as answered, never %s notice",
+    async (_label, kind) => {
+      const diagnostics = new SetupDiagnostics();
+      const terminal = diagnostics.open("host_a", () => {});
+      terminal.expect("q_setup_check");
+      const closed = batchNotices(
+        [
+          formatAnswerNotice({
+            kind,
+            questionId: "q_setup_check",
+            revision: 1,
+            source: "human",
+            injectionId: "inj_closed_001",
+          }),
+        ],
+        Number.MAX_SAFE_INTEGER
+      )[0]!;
 
-    await expect(
-      diagnostics.sink.inject(targetOf(terminal.origin), expiry, "inj_expired_01")
-    ).resolves.toMatchObject({ outcome: "delivered" });
+      await expect(
+        diagnostics.sink.inject(targetOf(terminal.origin), closed, "inj_closed_001")
+      ).resolves.toMatchObject({ outcome: "delivered" });
 
-    expect(terminal.answerTypedFor("q_setup_check")).toBeUndefined();
-  });
+      expect(terminal.view()!.screen).toContain(`status: ${kind}`);
+      expect(terminal.answerTypedFor("q_setup_check")).toBeUndefined();
+    }
+  );
 
   it("refuses another question's answer, a notice for another injection, and text that isn't one", async () => {
     const diagnostics = new SetupDiagnostics();

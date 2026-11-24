@@ -27,6 +27,13 @@ export const PLUGIN_INVOKE_DEFAULT_TIMEOUT_MS = 5 * 60_000;
  */
 export const PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS = 3000;
 
+/**
+ * How long a plugin's cloud provider has to answer one call (#17351),
+ * activating the plugin included. The same as a built-in provider's request
+ * timeout; waiting for a machine to come up is the lifecycle's, between calls.
+ */
+export const PLUGIN_CLOUD_PROVIDER_CALL_TIMEOUT_MS = 30_000;
+
 /** Serialized size ceiling for the arguments of one invoke. */
 export const PLUGIN_INVOKE_MAX_ARGS_BYTES = 4 * MiB;
 

@@ -593,6 +593,7 @@ export const systemClient = asyncNoop;
 export const terminalClient = asyncNoop;
 export const projectClient = asyncNoop;
 export const watchdogClient = asyncNoop;
+export const cloudHostsClient = asyncNoop;
 export default asyncNoop;
 `;
 

@@ -48,7 +48,7 @@ let safeBootPromise: Promise<SafeBootResult> | null = null;
 
 /**
  * Fire `app:boot` exactly once and cache the in-flight promise. Called at
- * module-eval time from `main.tsx` so the IPC round-trip overlaps React parse
+ * module-eval time from the project shell so the IPC round-trip overlaps React parse
  * and the first commit instead of waiting for a mount effect (#8820). The
  * promise reference is stable across renders, which is mandatory for `use()` —
  * a fresh reference would re-suspend the consumer on every render.

@@ -76,6 +76,10 @@ export {
   ContextProviderContributionSchema,
   FileDecorationContributionSchema,
   WorktreeDeleteNotesContributionSchema,
+  CLOUD_PROVIDER_CONTRIBUTION_MAX,
+  CloudCredentialFieldSchema,
+  CloudProviderCapabilitiesSchema,
+  CloudProviderContributionSchema,
   FILE_EDITOR_MAX_BYTES_CEILING,
   FileEditorContributionSchema,
 } from "./plugin/providers.js";

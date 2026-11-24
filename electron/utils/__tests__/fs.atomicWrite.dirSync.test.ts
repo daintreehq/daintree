@@ -43,7 +43,7 @@ vi.mock("fs", async (importOriginal) => {
   };
 });
 
-import { resilientAtomicWriteFile, resilientAtomicWriteFileSync } from "../fs.js";
+import { resilientAtomicWriteFile, resilientAtomicWriteFileSync, syncFileSync } from "../fs.js";
 
 describe("syncParentDirectory", () => {
   let tmpDir: string;
@@ -103,6 +103,15 @@ describe("syncParentDirectory", () => {
     await resilientAtomicWriteFile(target, "data");
 
     expect(mockedClose).toHaveBeenCalled();
+  });
+
+  it("skips the parent sync when not durable", async () => {
+    const target = path.join(tmpDir, "test.json");
+    await resilientAtomicWriteFile(target, "data", "utf-8", { durable: false });
+
+    expect(mockedOpen).not.toHaveBeenCalled();
+    expect(readFileSync(target, "utf8")).toBe("data");
+    expect(readdirSync(tmpDir)).toEqual(["test.json"]);
   });
 
   it("opens correct parent dir for nested paths", async () => {
@@ -283,5 +292,44 @@ describe("resilientAtomicWriteFileSync durability", () => {
       expect(syncTap.openSync).not.toHaveBeenCalled();
       expect(readFileSync(target, "utf8")).toBe("not durable");
     });
+  });
+});
+
+describe("syncFileSync", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), "daintree-filesync-test-"));
+    vi.clearAllMocks();
+  });
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("flushes a file that exists, leaving its contents alone", () => {
+    const target = path.join(tmpDir, "session.restore");
+    writeFileSync(target, "screen");
+
+    expect(syncFileSync(target)).toBe(true);
+
+    expect(syncTap.openSync).toHaveBeenCalledWith(target, "r+");
+    expect(syncTap.fsyncSync).toHaveBeenCalledTimes(1);
+    expect(readFileSync(target, "utf8")).toBe("screen");
+  });
+
+  it("reports a missing file without flushing anything", () => {
+    expect(syncFileSync(path.join(tmpDir, "gone.restore"))).toBe(false);
+    expect(syncTap.fsyncSync).not.toHaveBeenCalled();
+  });
+
+  it("rethrows a failed flush", () => {
+    const target = path.join(tmpDir, "session.restore");
+    writeFileSync(target, "screen");
+    syncTap.fsyncSync.mockImplementationOnce(() => {
+      throw Object.assign(new Error("EIO"), { code: "EIO" });
+    });
+
+    expect(() => syncFileSync(target)).toThrow("EIO");
   });
 });

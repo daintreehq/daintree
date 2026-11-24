@@ -57,8 +57,6 @@ export interface DocumentRecord {
    * the disk version over a conflict, discarding a draft.
    */
   loadGeneration: number;
-  /** Bumped when the draft text moved, so a sibling view can catch up. */
-  textVersion: number;
 }
 
 interface DocumentStateStore {
@@ -80,7 +78,6 @@ export function createDocumentRecord(identity: DocumentIdentity): DocumentRecord
     error: null,
     storageWarning: null,
     loadGeneration: 0,
-    textVersion: 0,
   };
 }
 

@@ -14,6 +14,7 @@ import { openDaintreeTour, TOUR_COMPLETED_EVENT, tourIdOf } from "./tourEvents";
 // The registry hands out summaries only: this card renders at startup, and the
 // full definition pulls the narration, cue manifest and parser in with it.
 import { getTour } from "./tourRegistry";
+import { resumeChapter } from "./tourResume";
 
 /** How long the "find it in Help" note stays after the invitation is turned down. */
 const DISMISSED_NOTE_MS = 8000;
@@ -36,10 +37,11 @@ function daintreeSummary(): TourSummary {
 
 export function inviteStateFor(tour: TourOnboardingState): { kind: "hidden" } | Offer {
   if (tour.completed || tour.dismissed) return { kind: "hidden" };
-  if (tour.lastChapter > 0 && tour.lastChapter < daintreeSummary().chapterTitles.length) {
-    return { kind: "resume", chapter: tour.lastChapter };
-  }
-  return { kind: "invite" };
+  // The same placement the dialog opens at, so the card never offers a chapter it won't play.
+  const summary = daintreeSummary();
+  const chapters = (summary.chapterIds ?? summary.chapterTitles).map((id) => ({ id }));
+  const chapter = resumeChapter(tour, chapters, summary.version);
+  return chapter > 0 ? { kind: "resume", chapter } : { kind: "invite" };
 }
 
 /**

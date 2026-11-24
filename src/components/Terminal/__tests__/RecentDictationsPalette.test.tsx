@@ -204,6 +204,17 @@ describe("RecentDictationsPalette", () => {
     expect(recovery.copyRecentDictation).toHaveBeenCalledWith(NEWER, "original");
   });
 
+  it("uses the original with Alt from the results region too", async () => {
+    const input = renderPalette();
+    const region = input
+      .closest('[role="dialog"]')!
+      .querySelector<HTMLElement>('[role="group"][tabindex="0"]')!;
+    await act(async () => {
+      fireEvent.keyDown(region, { key: "Enter", altKey: true });
+    });
+    expect(recovery.insertRecentDictation).toHaveBeenCalledWith(NEWER, "original");
+  });
+
   it("finds a dictation by a word only its original has", async () => {
     const input = renderPalette();
     await act(async () => {

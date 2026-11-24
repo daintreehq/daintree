@@ -20,6 +20,21 @@ export const OTHER_PROJECTS_SORT_MODES = PROJECT_LIST_SORT_MODES;
 
 export type OtherProjectsSortMode = ProjectListSortMode;
 
+// Built once: `localeCompare` with an options argument constructs a fresh
+// collator per call, which dominates a sort of a few hundred projects.
+const NAME_COLLATOR = new Intl.Collator(undefined, { sensitivity: "base" });
+const DEFAULT_COLLATOR = new Intl.Collator();
+
+/** Display-name order shared by every project ranking path, so they cannot disagree. */
+export function compareProjectNames(a: string, b: string): number {
+  return NAME_COLLATOR.compare(a, b);
+}
+
+/** Default-sensitivity order: accents and case still separate strings, unlike the name order. */
+export function compareProjectStrict(a: string, b: string): number {
+  return DEFAULT_COLLATOR.compare(a, b);
+}
+
 export const DEFAULT_OTHER_PROJECTS_SORT_MODE: OtherProjectsSortMode = "mostUsed";
 
 /**
@@ -58,9 +73,9 @@ export function compareProjectsByMode(
   mode: OtherProjectsSortMode
 ): number {
   if (mode === "alphabetical") {
-    const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    const byName = compareProjectNames(a.name, b.name);
     if (byName !== 0) return byName;
-    return a.id.localeCompare(b.id);
+    return compareProjectStrict(a.id, b.id);
   }
 
   // Most used keeps frecency as the primary key; Recent drops it entirely and
@@ -70,7 +85,7 @@ export function compareProjectsByMode(
     return b.frecencyScore - a.frecencyScore;
   }
   if (a.lastOpened !== b.lastOpened) return b.lastOpened - a.lastOpened;
-  const byName = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  const byName = compareProjectNames(a.name, b.name);
   if (byName !== 0) return byName;
-  return a.id.localeCompare(b.id);
+  return compareProjectStrict(a.id, b.id);
 }

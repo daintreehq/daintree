@@ -3,6 +3,7 @@ import type {
   ClaudeUsageWindow,
 } from "../../../shared/types/ipc/agentQuota.js";
 import { stripAnsi } from "./AgentPatternDetector.js";
+import { instantsOf, wallTime, zoneFormat, type WallTime } from "./zonedWallTime.js";
 
 /**
  * A Claude Code usage message as printed (#15727). `resetText` is terminal
@@ -25,20 +26,27 @@ const SCAN_LINES = 12;
  */
 const RIGHT_EDGE_SLACK = 4;
 
+// Glyphs reach the String.raw patterns as `${}` strings, which the build
+// escapes; a tagged template's own text ships as written, and one glyph there
+// makes the pty host's whole chunk a two-byte string (#17023).
 // What Claude draws a usage message behind: the tool-result gutter, a box or
 // border, a warning sign. The diff, list, quote and prompt markers the
 // rate-limit patterns also accept ("-", "*", ">", "❯") stay out: a message
 // behind one is someone's text.
-const CHROME = String.raw`[\s│┃╎╭╰─⎿⚠]*`;
+const CHROME_GLYPHS = "│┃╎╭╰─⎿⚠";
 // Border glyphs Claude may draw after a notification ("… ▔").
-const TRAILING_BORDER = String.raw`[\s▔▁─━╮╯╗╝│┃]*`;
+const BORDERS = "▔▁─━╮╯╗╝│┃";
+const APOSTROPHES = "'’";
+const SEPARATORS = "·∙•";
+const CHROME = String.raw`[\s${CHROME_GLYPHS}]*`;
+const TRAILING_BORDER = String.raw`[\s${BORDERS}]*`;
 const WINDOW = String.raw`(5[ -]?hour|session|weekly|opus|sonnet|fable)`;
-const YOUVE = String.raw`you(?:['’]ve|\s+have)`;
+const YOUVE = String.raw`you(?:[${APOSTROPHES}]ve|\s+have)`;
 // A message ends its row or runs into " · resets …" / " · <hint>" segments;
 // anything else after the limit is a sentence about one.
-const TAIL = String.raw`(?:${TRAILING_BORDER}$|\s*[·∙•]\s*(.*)$)`;
+const TAIL = String.raw`(?:${TRAILING_BORDER}$|\s*[${SEPARATORS}]\s*(.*)$)`;
 const SEGMENT_SEPARATOR = /[·∙•]/;
-const BORDER_GLYPHS = new Set("▔▁─━╮╯╗╝│┃");
+const BORDER_GLYPHS = new Set(BORDERS);
 // Claude's own segments never quote; code holding a message as a string does.
 const CODE_DELIMITER = /["`]/;
 const MESSAGE_START = /^(?:you|over|approaching)\b/i;
@@ -273,72 +281,6 @@ function parseResetText(text: string): ParsedReset | null {
     minute: m,
     zone,
   };
-}
-
-interface WallTime {
-  year: number;
-  month: number;
-  day: number;
-  hour: number;
-  minute: number;
-}
-
-const zoneFormats = new Map<string, Intl.DateTimeFormat>();
-
-function zoneFormat(zone: string | undefined): Intl.DateTimeFormat | null {
-  const key = zone ?? "";
-  let format = zoneFormats.get(key);
-  if (format === undefined) {
-    try {
-      format = new Intl.DateTimeFormat("en-US", {
-        timeZone: zone,
-        hourCycle: "h23",
-        year: "numeric",
-        month: "numeric",
-        day: "numeric",
-        hour: "numeric",
-        minute: "numeric",
-      });
-    } catch {
-      return null;
-    }
-    zoneFormats.set(key, format);
-  }
-  return format;
-}
-
-function wallTime(epoch: number, format: Intl.DateTimeFormat): WallTime {
-  const parts = Object.fromEntries(
-    format.formatToParts(epoch).map((part) => [part.type, Number(part.value)])
-  );
-  return {
-    year: parts.year!,
-    month: parts.month! - 1,
-    day: parts.day!,
-    hour: parts.hour! % 24,
-    minute: parts.minute!,
-  };
-}
-
-function wallAsUtc(wall: WallTime): number {
-  return Date.UTC(wall.year, wall.month, wall.day, wall.hour, wall.minute);
-}
-
-const DAY_MS = 86_400_000;
-
-/**
- * Every instant a zone's clock reads `wall`, earliest first: none in a
- * daylight-saving gap, two in a fold. Each candidate takes the zone's offset
- * from a day either side and is kept only if the clock reads `wall` there.
- */
-function instantsOf(wall: WallTime, format: Intl.DateTimeFormat): number[] {
-  const target = wallAsUtc(wall);
-  const instants = new Set<number>();
-  for (const probe of [target - DAY_MS, target, target + DAY_MS]) {
-    const instant = target - (wallAsUtc(wallTime(probe, format)) - probe);
-    if (wallAsUtc(wallTime(instant, format)) === target) instants.add(instant);
-  }
-  return [...instants].sort((a, b) => a - b);
 }
 
 /**

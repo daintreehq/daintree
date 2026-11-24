@@ -1,12 +1,22 @@
 import { randomUUID } from "node:crypto";
 import {
+  GLOBAL_STANDBY_TOOLS,
   globalAssistantMayRelay,
+  globalAssistantSessionNumber,
+  globalStandbyMayRelay,
   isGlobalAssistantId,
+  isGlobalAssistantSlot,
 } from "../../../shared/config/globalAssistant.js";
+import {
+  ASSISTANT_GLOBAL_CLOSE_CONFIRMATION,
+  ASSISTANT_GLOBAL_CLOSE_TOOL,
+  ASSISTANT_PRESET_MOVE_DELEGATE,
+} from "../../../shared/config/assistantConfirmationDelegation.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
 import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../shared/utils/launchInNewWorktree.js";
 import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../shared/types/terminalExitWait.js";
+import { CLAUDE_UPDATE_AFTER_APPROVAL_MS } from "../../../shared/types/claudeUpdateApply.js";
 import { WORKTREE_RETIRE_OWNED_TOOL } from "../../services/mcp-server/sessionToolIds.js";
 import {
   MCP_DISPATCH_TIMEOUT_MS,
@@ -18,6 +28,7 @@ import {
   type HostBringBackArgs,
   type HostBringBackResult,
   type HostCallArgs,
+  type HostCallInnerResult,
   type HostCallResult,
   type HostControlOutcome,
   type HostControlOutcomeCode,
@@ -45,8 +56,14 @@ import {
   type HostThrowawayRefusal,
 } from "../../../shared/types/hostThrowaway.js";
 import type { HostBringBackAnswer } from "../../../shared/types/hostWake.js";
-import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
+import {
+  HostSettingsRequests,
+  type HostSettingsRequestDeps,
+  type WindowApprovalAnswer,
+} from "./HostSettingsRequests.js";
+import type { PreparedAssistantDelegation } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import { HostWatches, type AgentWatchRead, type HostWatchListener } from "./HostWatches.js";
+import type { AssistantPluginNotifications } from "../../services/assistantPluginNotifications.js";
 import type { AgentWaitingListener } from "../metrics/agentWaiting.js";
 import { runHostBringBack } from "./hostBringBack.js";
 import { runHostStatus } from "./hostStatus.js";
@@ -102,12 +119,13 @@ import {
   type ProjectPage,
 } from "./hostProjectInventory.js";
 import { MAX_LISTED_PROJECTS } from "../host/linkMethods.js";
-import type { HostControlLinkClient } from "./HostControlLinkClient.js";
+import type { HostControlLinkClient, RelayCallCancel } from "./HostControlLinkClient.js";
 import type { AssistantEnsureRequest } from "../projects/HostSwitchService.js";
 import {
   MAX_RELAY_ARGS_BYTES,
   MAX_RELAY_RUN_MS,
   RELAY_NOTICE_WINDOW_MS,
+  RelayCancelUnconfirmedError,
   type McpCallAnswer,
   type RelayApproveAnswer,
   type RelayApprovePayload,
@@ -126,8 +144,9 @@ import {
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
 import { OWNED_RESOURCE_TOOLS } from "../../services/mcp-server/sessionCallOwnership.js";
 import { HOST_ALWAYS_ASKS_ACTION_IDS } from "../client/hostDispatchableActions.js";
-import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
+import type { McpDelegationOffer } from "../../../shared/types/ipc/mcpServer.js";
 import { createLogger } from "../../utils/logger.js";
+import { isPluginAssistantReachAction } from "../../services/plugin/pluginAssistantReach.js";
 
 const logger = createLogger("main:HostCallRuntime");
 
@@ -177,6 +196,8 @@ export interface LocalHostReach {
   /** When this machine took that sample, on its own clocks. */
   summaryReceipt?(summary: HostMetricsSummary): SummaryReceipt | null;
   relayCall(request: RelayCallRequest): Promise<McpCallAnswer>;
+  /** Stops one of its relayed calls (#17985); false when it couldn't. Absent, nothing stops one. */
+  cancelCall?(helpSessionId: string, callId: string): boolean;
   /** A throwaway tool on this machine (#14446); absent, it runs none. */
   throwawayCall?(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
   /** Its workers and assistants, as `host.list` shows them with `includeAgents` (#14160). */
@@ -192,6 +213,17 @@ export interface OpenRun {
   sessionId: string;
   terminalId: string;
   launchGeneration: number;
+  /**
+   * The conversation its lane runs, as main minted it (#17919): a host holds
+   * what the run makes there under it, so the conversation resumed keeps it.
+   */
+  conversationOwnershipId?: string;
+  /**
+   * A global assistant session that isn't coordinating (#18143): its calls
+   * are held to the standby reads and carry no conversation, so no host binds
+   * it to one while it can't act.
+   */
+  standby?: true;
 }
 
 export interface HostCallRuntimeDeps {
@@ -266,7 +298,7 @@ export interface HostCallRuntimeDeps {
    * host's own preview. Null when it couldn't be asked there; absent, no host
    * is ever answered.
    */
-  askApproval?(ask: RelayApprovalQuestion): Promise<McpConfirmationDecision | null>;
+  askApproval?(ask: RelayApprovalQuestion): Promise<WindowApprovalAnswer | null>;
   /**
    * Whether a help session's assistant runs its call to `calledActionId`
    * with Daintree's confirmations skipped here (#15698, #16752): the person's
@@ -274,6 +306,23 @@ export interface HostCallRuntimeDeps {
    * says. Absent, or throwing, every relayed call that would ask still asks.
    */
   confirmationsSkipped?(helpSessionId: string, calledActionId: string): boolean;
+  /**
+   * "Don't ask again for this kind of action" for a dialog about a help
+   * session's call to `calledActionId` (#16752): this machine's preference
+   * for that session's assistant, never a host's. Null when it can't be
+   * offered; absent, or throwing, nothing is.
+   */
+  prepareDelegation?(
+    helpSessionId: string,
+    calledActionId: string
+  ): PreparedAssistantDelegation | null;
+  /**
+   * Whether a help session's assistant may run its call to `calledActionId`
+   * unasked once the view holding the pane finds it that pane's next own
+   * fallback step (#17917): this machine's own preference, read at each
+   * dispatch. Absent, or throwing, the call asks.
+   */
+  checksNextFallback?(helpSessionId: string, calledActionId: string): boolean;
   /**
    * Makes sure one of this machine's projects is on a host, with no window
    * (#14140): the Shell's switch service. Absent, no project is ever brought.
@@ -299,6 +348,12 @@ export interface HostCallRuntimeDeps {
    * never dials, holds or wakes a host. Absent, no agent watch is armed.
    */
   watchAgents?(listener: AgentWaitingListener): () => void;
+  /**
+   * Plugins' notifications marked for an assistant, for `host.watch` on them
+   * (#18154): loaded the first time a run arms for them or reads one. Absent,
+   * neither is offered.
+   */
+  pluginNotifications?(): Promise<AssistantPluginNotifications>;
   /**
    * A host's agent terminals as it lists them, over a link already up; it
    * never dials a host. What tells agents this Shell's assistants launched
@@ -342,6 +397,8 @@ const LAUNCHED_AGENTS_READ_TIMEOUT_MS = 10_000;
 const MAX_PROMPTED_TERMINALS = 512;
 /** First sends whose time a resend reports under (#16169); the oldest go first. */
 const MAX_CALL_TIMES = 512;
+/** Calls whose cancel went out, remembered past their answer for a host's dispatch still on its way. */
+const MAX_CANCELLED_CALLS = 256;
 /**
  * Prompts remembered per host terminal, newest kept: ones that ran apart from
  * ones still unanswered, so a burst of calls refused later never pushes out
@@ -373,6 +430,8 @@ export interface RelayApprovalQuestion {
    * the host's own wait for the answer. Absent from a host too old to say.
    */
   holdUntil?: number;
+  /** "Don't ask again for this kind of action", for the tool the assistant called (#16752). */
+  delegation?: McpDelegationOffer;
 }
 
 /** A relayed call out to a host right now, and the run here that made it. */
@@ -400,6 +459,17 @@ interface CallInFlight {
   skipNotes: Set<() => void>;
   /** Sends of it still out, a resend's included; the record goes with the last. */
   sends: number;
+  /** One of its sends was cancelled (#17985): nothing asked about it is approved after. */
+  cancelled: boolean;
+}
+
+/** A host's dispatch into this Shell's view, naming one of this Shell's own calls. */
+interface RelayedDispatch {
+  callId: string;
+  helpSessionId: string;
+  projectId: string;
+  actionId: string;
+  args: unknown;
 }
 
 /**
@@ -407,6 +477,18 @@ interface CallInFlight {
  * the ones its own form of the action can preview with no view there.
  */
 const RELAY_APPROVABLE: ReadonlySet<string> = new Set(["worktree.delete"]);
+
+/**
+ * The global Assistant's close of finished agents it didn't launch (#16750),
+ * by the action a host asks about and the tool the call must have been: one
+ * owned close, asked about as the close it stands in for, or a batch asked
+ * about whole. Only a host's ask that says how it read each stop is one of
+ * these, and only about a call the global Assistant made.
+ */
+const GLOBAL_CLOSE_ASKS: ReadonlyMap<string, string> = new Map([
+  ["terminal.close", ASSISTANT_GLOBAL_CLOSE_TOOL],
+  ["terminal.closeMany", "terminal.closeMany"],
+]);
 
 /** What a host's MCP server runs a call with: its arguments less the request's own keys. */
 function relayedActionArgs(args: Record<string, unknown>): Record<string, unknown> {
@@ -471,7 +553,18 @@ function runsAsCall(call: CallInFlight, actionId: string, args: unknown): boolea
  * in for, on the same id and nothing else.
  */
 function asksAboutCall(call: CallInFlight, payload: RelayApprovePayload): boolean {
-  if (!RELAY_APPROVABLE.has(payload.actionId)) return false;
+  const closeTool = GLOBAL_CLOSE_ASKS.get(payload.actionId);
+  if (closeTool !== undefined) {
+    if (
+      payload.closeClass === undefined ||
+      call.tool !== closeTool ||
+      !isGlobalAssistantId(call.run.projectId)
+    ) {
+      return false;
+    }
+  } else if (payload.closeClass !== undefined || !RELAY_APPROVABLE.has(payload.actionId)) {
+    return false;
+  }
   if (canonicalArgsHash(payload.actionId, payload.args) !== payload.argsHash) return false;
   return runsAsCall(call, payload.actionId, payload.args);
 }
@@ -618,7 +711,14 @@ const CALL_NO_HOST_DETAIL = "This Shell has no host with that id. List the hosts
 const CALL_OWN_PROJECT_DETAIL =
   "That is this assistant's own project, so nothing was run. Call its tools directly; local reaches this machine's other projects.";
 const CALL_GLOBAL_WITHHELD_DETAIL =
-  "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, and closes, restarts or deletes only what it launched there or the user handed it. Ask the user to do it.";
+  "The global assistant can't do that in a project, so nothing was run. Beyond reads, it prompts, presses keys in and interrupts agents with the owned tools, closes finished ones with `terminal.closeOwned` or `terminal.closeMany`, applies an update Claude Code offers with `terminal.applyClaudeUpdateOwned`, and restarts or deletes only what it launched there. Ask the user to do it.";
+/** Why a global assistant session that isn't coordinating was refused (#18143). */
+function notCoordinatingDetail(slot: number): string {
+  const name = isGlobalAssistantSlot(slot)
+    ? `Global assistant session ${globalAssistantSessionNumber(slot)}`
+    : "This global assistant session";
+  return `${name} isn't coordinating, so it acts on no worker: the other session leads the work, and holds what this one launched before. Nothing was sent. It can still read with ${[...GLOBAL_STANDBY_TOOLS].join(", ")}. The person can hand coordination to it from the Assistant panel.`;
+}
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
 const CALL_NOT_SENT_DETAIL =
@@ -627,6 +727,18 @@ const CALL_RESEND_DISCONNECTED_DETAIL =
   "The host can't be reached right now. Resend under the same callId once it is back; it never runs twice.";
 const CALL_UNKNOWN_DETAIL =
   "The host no longer holds a record of this callId, so it may or may not have run. Check what it would have changed before running it again as a new call.";
+/** What a call cancelled before its tool ran answers (#17985): an answer, saying nothing ran. */
+const CALL_CANCELLED_BEFORE_RESULT: HostCallInnerResult = {
+  isError: true,
+  structured: { code: "CANCELLED", dispatched: false },
+  text: "The call was cancelled before it reached the tool, so nothing ran.",
+};
+const CALL_CANCELLED_AFTER_DETAIL =
+  "The call was cancelled after it reached the tool. The host told the tool to stop, but it may have acted first. A resend under this callId reads this same answer.";
+const CALL_RESEND_CANCELLED_DETAIL =
+  "This resend was cancelled before it went out, so it says nothing about the call: it may have run. Resend under this callId to read what the host did; it never runs twice.";
+const CALL_CANCEL_UNCONFIRMED_DETAIL =
+  "The call was cancelled after it was sent, and the host didn't confirm it stopped: an older host runs a call until it is done or out of time. It may have run. Resend under this callId to read what it did; it never runs twice.";
 const CALL_CONFLICT_DETAIL =
   "That callId was already used for a different call. Resend only the exact call it named, or make a new call.";
 const CALL_ID_TAKEN_DETAIL =
@@ -722,6 +834,8 @@ const RELAY_MIN_RUN_MS = MCP_REMOTE_DISPATCH_TIMEOUT_MS + RELAY_RUN_MARGIN_MS;
 const THROWAWAY_MIN_RUN_MS = 90_000;
 /** Runs a create, a setup wait and a launch in sequence on its host (#15738). */
 const LAUNCH_IN_NEW_WORKTREE_TOOL = "agent.launchInNewWorktree";
+/** Asks the person, then waits for a pane's empty prompt to type `/restart` (#17908). */
+const CLAUDE_UPDATE_TOOL = "terminal.applyClaudeUpdateOwned";
 /** How much longer than the host's own deadline the Shell waits for the answer. */
 const RELAY_ANSWER_GRACE_MS = 15_000;
 
@@ -762,6 +876,11 @@ export function relayRunMs(
     if (tool === WORKTREE_RETIRE_OWNED_TOOL) {
       wanted =
         (wanted > 0 ? wanted : DEFAULT_TERMINAL_EXIT_WAIT_MS) + MCP_REMOTE_DISPATCH_TIMEOUT_MS;
+    }
+    // An update's approval, then its wait for the empty prompt and the read
+    // of Claude's answer (#17908), one after the other.
+    if (tool === CLAUDE_UPDATE_TOOL) {
+      wanted = MCP_REMOTE_DISPATCH_TIMEOUT_MS + CLAUDE_UPDATE_AFTER_APPROVAL_MS;
     }
     wanted = Math.max(wanted, replyMs);
   }
@@ -947,6 +1066,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly prompted = new Map<string, PromptMark[]>();
   /** When each call was first sent, by host, session and call, so its answer got later still dates from then. */
   private readonly callTimes = new Map<string, number>();
+  /** By host, help session and callId: calls whose cancel went to their host (#17985). */
+  private readonly cancelledCalls = new Map<string, true>();
   /** Each help session's throwaway runs on hosts, to hold their links and release them when it ends. */
   private readonly throwawaySessions = new Map<string, ThrowawaySession>();
   /** Agents this Shell's assistants launched on hosts, to hold their links while they may run (#16492). */
@@ -961,6 +1082,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * its end reaches them: a held message is never typed after it.
    */
   private readonly heldSendHosts = new Map<string, Set<HostId>>();
+  /**
+   * Each global session's acting calls in flight, stopped together when
+   * coordination leaves it (#18143). Made at its first such call and dropped
+   * once used, so a session given coordination back starts with a new one.
+   */
+  private readonly standDowns = new Map<string, AbortController>();
   private disposed = false;
   /** `host.list`'s waits for a dialed host's first summary, each ended at once by dispose. */
   private readonly sampleWaits = new Set<() => void>();
@@ -989,6 +1116,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           return false;
         }
       },
+      prepareDelegation: (helpSessionId) =>
+        this.prepareDelegation(helpSessionId, HOST_SETTINGS_TOOL),
       now: () => this.now(),
       newId: () => this.newId(),
     });
@@ -1004,6 +1133,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
               this.watchAgentsRead(hostId, options),
           }
         : {}),
+      ...(deps.pluginNotifications ? { pluginNotifications: deps.pluginNotifications } : {}),
+      // A global session standing by is never handed work its coordinator should get (#18143).
+      mayTakeWork: (run) => this.caller(run.sessionId)?.standby !== true,
       ...(deps.local ? { localName: () => deps.local!.name() } : {}),
       ...(deps.queueNotice ? { queueNotice: deps.queueNotice } : {}),
       now: () => this.now(),
@@ -1127,7 +1259,100 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * preference, read now: nothing the host sends turns it on. The host is
    * the connection's, never the payload's.
    */
-  skipsRelayedDispatch(
+  skipsRelayedDispatch(hostId: HostId, dispatch: RelayedDispatch): boolean {
+    const call = this.relayedDispatchCall(hostId, dispatch);
+    if (call === undefined || !this.skipsConfirmations(call, dispatch.actionId)) return false;
+    this.grantSkip(call);
+    return true;
+  }
+
+  /**
+   * Whether a host's dispatch, matched to one of this Shell's own calls as
+   * {@link skipsRelayedDispatch} matches it, is a preset move its view may
+   * run unasked if that view finds it the pane's next own fallback step
+   * (#17917). The call's one ask goes to that view, which either runs the
+   * move or asks itself. Answers with what to call once the view says it ran
+   * the move, bound to this call's own record so a resend that replaces it
+   * under the id can't take the note; null when nothing is offered.
+   */
+  offersNextFallback(hostId: HostId, dispatch: RelayedDispatch): (() => void) | null {
+    if (dispatch.actionId !== ASSISTANT_PRESET_MOVE_DELEGATE) return null;
+    const call = this.relayedDispatchCall(hostId, dispatch);
+    if (call === undefined) return null;
+    let offered: boolean;
+    try {
+      offered = this.deps.checksNextFallback?.(call.helpSessionId, call.tool) === true;
+    } catch (error) {
+      logger.warn("Couldn't read the assistant's confirmations preference", { error });
+      return null;
+    }
+    if (!offered) return null;
+    call.asked = true;
+    return () => {
+      if (!call.skipped) this.grantSkip(call);
+      // A resend of this very call to the same host, recorded afresh after
+      // another send replaced this record under the id, joined the same run.
+      const current = this.callsInFlight.get(dispatch.callId);
+      if (
+        current !== undefined &&
+        current !== call &&
+        current.hostId === call.hostId &&
+        current.helpSessionId === call.helpSessionId &&
+        sameCall(current, call) &&
+        !current.skipped
+      ) {
+        this.grantSkip(current);
+      }
+    };
+  }
+
+  /**
+   * Whether a host's dispatch into this Shell's view names one of this
+   * Shell's own calls to that host that its caller cancelled (#17985): the
+   * view runs nothing more of it, asked or not. The host is the connection's.
+   */
+  cancelledRelayedCall(hostId: HostId, call: { callId: string; helpSessionId: string }): boolean {
+    const out = this.callsInFlight.get(call.callId);
+    if (
+      out?.cancelled === true &&
+      out.hostId === hostId &&
+      out.helpSessionId === call.helpSessionId
+    ) {
+      return true;
+    }
+    // Kept past the call's answer: a dispatch the host sent before it stopped may still come.
+    return this.cancelledCalls.has(`${hostId}\u0000${call.helpSessionId}\u0000${call.callId}`);
+  }
+
+  /** The call a host's dispatch runs, while it may still be answered without asking. */
+  private relayedDispatchCall(hostId: HostId, dispatch: RelayedDispatch): CallInFlight | undefined {
+    const call = this.callsInFlight.get(dispatch.callId);
+    if (
+      this.disposed ||
+      call === undefined ||
+      call.asked ||
+      call.cancelled ||
+      call.hostId !== hostId ||
+      call.helpSessionId !== dispatch.helpSessionId ||
+      call.projectId !== dispatch.projectId ||
+      !runsAsCall(call, dispatch.actionId, dispatch.args) ||
+      !this.stillRunning(call.run) ||
+      !this.controlOn(hostId)
+    ) {
+      return undefined;
+    }
+    return call;
+  }
+
+  /**
+   * "Don't ask again for this kind of action" on the dialog a host's dispatch
+   * into this Shell's view raises (#16752), for one of this Shell's own
+   * assistants' calls, matched exactly as {@link skipsRelayedDispatch}
+   * matches it and settled on the tool the assistant called. Its commit
+   * writes only while that call is still out from the run that made it and
+   * the person's control switch for the host is still on. Null otherwise.
+   */
+  relayedDelegation(
     hostId: HostId,
     dispatch: {
       callId: string;
@@ -1136,24 +1361,59 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       actionId: string;
       args: unknown;
     }
-  ): boolean {
+  ): PreparedAssistantDelegation | null {
     const call = this.callsInFlight.get(dispatch.callId);
     if (
       this.disposed ||
       call === undefined ||
-      call.asked ||
       call.hostId !== hostId ||
       call.helpSessionId !== dispatch.helpSessionId ||
       call.projectId !== dispatch.projectId ||
+      HOST_ALWAYS_ASKS_ACTION_IDS.has(dispatch.actionId) ||
       !runsAsCall(call, dispatch.actionId, dispatch.args) ||
       !this.stillRunning(call.run) ||
-      !this.controlOn(hostId) ||
-      !this.skipsConfirmations(call, dispatch.actionId)
+      !this.controlOn(hostId)
     ) {
-      return false;
+      return null;
     }
-    this.grantSkip(call);
-    return true;
+    return this.callDelegation(call, dispatch.callId);
+  }
+
+  /**
+   * The hand-over a dialog about `call` may offer, whose commit holds only
+   * while the call is still the one out under `callId`, from a run still
+   * running, with the host's control switch on.
+   */
+  private callDelegation(
+    call: CallInFlight,
+    callId: string,
+    calledActionId: string = call.tool
+  ): PreparedAssistantDelegation | null {
+    const prepared = this.prepareDelegation(call.helpSessionId, calledActionId);
+    if (prepared === null) return null;
+    return {
+      offer: prepared.offer,
+      approved: () => prepared.approved(),
+      commit: () =>
+        this.callsInFlight.get(callId) === call &&
+        !call.cancelled &&
+        this.stillRunning(call.run) &&
+        this.controlOn(call.hostId) &&
+        prepared.commit(),
+    };
+  }
+
+  /** The hand-over a dialog may offer, or null when it can't be read or offered. */
+  private prepareDelegation(
+    helpSessionId: string,
+    calledActionId: string
+  ): PreparedAssistantDelegation | null {
+    try {
+      return this.deps.prepareDelegation?.(helpSessionId, calledActionId) ?? null;
+    } catch (error) {
+      logger.warn("Couldn't read the assistant's confirmations preference", { error });
+      return null;
+    }
   }
 
   /** Spends a call's one ask on the skip, and tells every send of it still out. */
@@ -1172,10 +1432,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * hand over that. Callers have already matched the dispatch to the call. A
    * failed read keeps the dialog.
    */
-  private skipsConfirmations(call: CallInFlight, actionId: string): boolean {
+  private skipsConfirmations(
+    call: CallInFlight,
+    actionId: string,
+    calledActionId: string = call.tool
+  ): boolean {
     if (HOST_ALWAYS_ASKS_ACTION_IDS.has(actionId)) return false;
     try {
-      return this.deps.confirmationsSkipped?.(call.helpSessionId, call.tool) === true;
+      return this.deps.confirmationsSkipped?.(call.helpSessionId, calledActionId) === true;
     } catch (error) {
       logger.warn("Couldn't read the assistant's confirmations preference", { error });
       return false;
@@ -1329,6 +1593,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       ask === undefined ||
       call === undefined ||
       call.asked ||
+      call.cancelled ||
       call.hostId !== hostId ||
       call.helpSessionId !== payload.helpSessionId ||
       call.projectId !== payload.projectId ||
@@ -1339,15 +1604,27 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       return answer("refused");
     }
     call.asked = true;
+    // A close of finished agents is one kind of action however it was called
+    // (#16750), so a batch answers to the same tick as one close. One the host saw
+    // stopped on an error is the person's alone: no skip and no tick reach
+    // it, and its dialog offers none.
+    const personOnly = payload.closeClass === "requires-person";
+    const calledActionId =
+      payload.closeClass !== undefined ? ASSISTANT_GLOBAL_CLOSE_CONFIRMATION : call.tool;
     // The person's own "Never ask" covers their assistant's call on a host as
     // it does one here (#15698): nobody is asked, and the host is told so.
-    if (this.skipsConfirmations(call, payload.actionId)) {
+    if (!personOnly && this.skipsConfirmations(call, payload.actionId, calledActionId)) {
       this.grantSkip(call);
       return answer("skip-preference");
     }
-    let decision: McpConfirmationDecision | null;
+    // Settled on the tool the assistant called (#16752), never the action
+    // the host asks about: an owned delete is asked about as `worktree.delete`.
+    const delegation = personOnly
+      ? null
+      : this.callDelegation(call, payload.callId, calledActionId);
+    let reply: WindowApprovalAnswer | null;
     try {
-      decision = await ask({
+      reply = await ask({
         hostId,
         helpSessionId: payload.helpSessionId,
         actionId: payload.actionId,
@@ -1357,19 +1634,27 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         ...("holdBudgetMs" in payload
           ? { holdUntil: remoteHoldUntil(receivedAt, payload.holdBudgetMs) }
           : {}),
+        ...(delegation !== null ? { delegation: delegation.offer } : {}),
       });
     } catch (error) {
       logger.warn("Asking about a host's call failed", { error });
-      decision = null;
+      reply = null;
     }
+    const decision = reply?.decision ?? null;
     // The call can end, or its run be replaced, while the person decides.
     if (
       decision === "approved" &&
       (this.callsInFlight.get(payload.callId) !== call ||
+        call.cancelled ||
         !this.stillRunning(call.run) ||
         !this.controlOn(hostId))
     ) {
       return answer("refused");
+    }
+    // The host is told only the decision; the tick is this Shell's own.
+    if (decision === "approved" && reply?.delegate === true && delegation !== null) {
+      delegation.approved();
+      delegation.commit();
     }
     return answer(decision ?? "refused");
   }
@@ -1574,6 +1859,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    */
   endHelpSession(helpSessionId: string): void {
     this.hostWatches.endSession(helpSessionId);
+    this.standDowns.delete(helpSessionId);
     const session = this.throwawaySessions.get(helpSessionId);
     this.throwawaySessions.delete(helpSessionId);
     const held = this.heldSendHosts.get(helpSessionId);
@@ -1586,6 +1872,29 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         logger.debug("Couldn't release a host's throwaway runs", { hostId, error });
       });
     }
+  }
+
+  /**
+   * Coordination left this global session (#18143): its acting calls still in
+   * flight are cancelled, as its own cancel would, so none that hasn't gone
+   * out is sent, and a host stops what it can of one that has. What one
+   * already did stays done, and a launch that lands late is the work's.
+   */
+  standDown(helpSessionId: string): void {
+    const controller = this.standDowns.get(helpSessionId);
+    this.standDowns.delete(helpSessionId);
+    controller?.abort();
+    // Nor is it handed plugins' notifications its coordinator should get (#18154).
+    this.hostWatches.standDown(helpSessionId);
+  }
+
+  private withStandDown(helpSessionId: string, signal: AbortSignal | undefined): AbortSignal {
+    let controller = this.standDowns.get(helpSessionId);
+    if (controller === undefined) {
+      controller = new AbortController();
+      this.standDowns.set(helpSessionId, controller);
+    }
+    return signal === undefined ? controller.signal : AbortSignal.any([signal, controller.signal]);
   }
 
   /**
@@ -1606,6 +1915,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     for (const read of this.launchedAgentReads.values()) read.end?.();
     this.launchedAgentReads.clear();
     this.heldSendHosts.clear();
+    this.standDowns.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
     this.noticePins.clear();
@@ -1613,6 +1923,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.seenNotices.clear();
     this.prompted.clear();
     this.callTimes.clear();
+    this.cancelledCalls.clear();
     this.lastAgents.clear();
     this.agentsEpochs.clear();
     this.settingsRequests.dispose();
@@ -1640,6 +1951,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     context: HostCallContext
   ): Promise<HostControlOutcome<HostCallResult>> {
     return this.settle(helpSessionId, async (caller) => {
+      // Before anything is noted, pinned or sent, resends and throwaways included.
+      if (caller.standby === true && !globalStandbyMayRelay(args.tool)) {
+        return {
+          ...this.outcomeWith("policy_rejected", notCoordinatingDetail(caller.slot)),
+          callId: args.callId ?? null,
+          result: null,
+        };
+      }
       const projectId = args.projectId;
       if (args.throwaway === true || projectId === undefined) {
         return this.callThrowaway(helpSessionId, caller, args, context);
@@ -1677,13 +1996,31 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
       }
       // The global assistant acts only on what it launched or was handed
-      // (#14161), on any host: anything not allowed is refused.
-      if (isGlobalAssistantId(caller.projectId) && !globalAssistantMayRelay(args.tool)) {
+      // (#14161), on any host: anything not allowed is refused. On this
+      // machine it also reaches the plugin actions that opted into
+      // `assistantReach` (#18153), as live as the project's own gate reads them.
+      if (
+        isGlobalAssistantId(caller.projectId) &&
+        !globalAssistantMayRelay(args.tool) &&
+        !(local && isPluginAssistantReachAction(args.tool))
+      ) {
         return { ...this.outcomeWith("policy_rejected", CALL_GLOBAL_WITHHELD_DETAIL), ...unsent };
       }
+      // A global session's acting call also stops when coordination leaves it (#18143).
+      const signal =
+        isGlobalAssistantId(caller.projectId) && !globalStandbyMayRelay(args.tool)
+          ? this.withStandDown(helpSessionId, context.signal)
+          : context.signal;
       const toolArgs = args.args ?? {};
       if (Buffer.byteLength(JSON.stringify(toolArgs), "utf8") > MAX_RELAY_ARGS_BYTES) {
         return { ...this.outcomeWith("too_large", CALL_TOO_LARGE_DETAIL), ...unsent };
+      }
+      // Cancelled before it went out (#17985): nothing is sent or kept. A first
+      // send never ran; a resend learns nothing of the call it resends.
+      if (signal?.aborted) {
+        return resend
+          ? { ...this.outcomeWith("ambiguous", CALL_RESEND_CANCELLED_DETAIL), ...sent }
+          : { ...this.ok(), ...unsent, result: CALL_CANCELLED_BEFORE_RESULT };
       }
       // Decided in the same turn as the pin is taken, so calls at once can't overfill it.
       if (!resend && relayCallArmsNotice(args.tool, toolArgs) && !this.roomForPin()) {
@@ -1709,6 +2046,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         runMs,
         // From the runtime's own lane, so no argument the model passes can set or clear it.
         ...(isGlobalAssistantId(caller.projectId) ? { global: true as const } : {}),
+        ...(caller.conversationOwnershipId !== undefined
+          ? { conversationId: caller.conversationOwnershipId }
+          : {}),
       };
       const noted = resend
         ? NOTHING_NOTED
@@ -1722,30 +2062,50 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         }
         hosts.add(args.hostId);
       }
-      const sendDone = this.trackSend(
-        callId,
-        {
-          hostId: args.hostId,
-          helpSessionId,
-          projectId,
-          tool: args.tool,
-          args: toolArgs,
-          tier: context.tier,
-          run: caller,
-        },
-        context.noteSkipPreference
-      );
+      const record = {
+        hostId: args.hostId,
+        helpSessionId,
+        projectId,
+        tool: args.tool,
+        args: toolArgs,
+        tier: context.tier,
+        run: caller,
+      };
+      const sendDone = this.trackSend(callId, record, context.noteSkipPreference);
+      // A cancel stops the call this help session holds under the callId on its
+      // host (#17985). Once it goes, nothing asked about that call is approved,
+      // and nothing of it a host dispatches here later runs.
+      const inFlight = this.callsInFlight.get(callId);
+      const cancel: RelayCallCancel | undefined =
+        signal !== undefined
+          ? {
+              signal,
+              onCancel: () => {
+                if (inFlight !== undefined) inFlight.cancelled = true;
+                remember(this.cancelledCalls, callKey, true, MAX_CANCELLED_CALLS);
+              },
+            }
+          : undefined;
       let answer: McpCallAnswer;
+      // The host answered, but didn't take the cancel: kept for what it ran, said as unknown.
+      let cancelUnconfirmed = false;
       try {
         answer = local
-          ? await local.relayCall(payload)
+          ? await this.relayLocal(local, payload, cancel)
           : await this.requireClient().relayCall(
               args.hostId,
               payload,
-              runMs + RELAY_ANSWER_GRACE_MS
+              runMs + RELAY_ANSWER_GRACE_MS,
+              cancel
             );
       } catch (error) {
-        return this.sendFailure(error, host, callId, resend, noted);
+        // A first send that never went out ran nothing: no later dispatch under the id is its.
+        if (!resend && codeOf(error) === "CANCELLED") this.cancelledCalls.delete(callKey);
+        if (!(error instanceof RelayCancelUnconfirmedError) || error.answer === undefined) {
+          return this.sendFailure(error, host, callId, resend, noted);
+        }
+        answer = error.answer;
+        cancelUnconfirmed = true;
       } finally {
         sendDone();
       }
@@ -1782,6 +2142,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           if (pin?.hostId === args.hostId && pin.run.sessionId === helpSessionId) {
             noteAnswered(pin, answer.result);
           }
+          // It ran on past its cancel: what it did is kept above, and a resend reads it.
+          if (cancelUnconfirmed) {
+            return { ...this.outcomeWith("ambiguous", CALL_CANCEL_UNCONFIRMED_DETAIL), ...sent };
+          }
           return { ...this.ok(), callId, result: answer.result };
         }
         case "unknown":
@@ -1790,6 +2154,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         case "conflict":
           noted.ran();
           return { ...this.outcomeWith("conflict", CALL_CONFLICT_DETAIL), ...sent };
+        // What the host saw of its Shell's cancel (#17985), never a claim the tool did nothing.
+        case "cancelled":
+          if (answer.dispatch === "before") {
+            noted.notRun();
+            return { ...this.ok(), ...sent, result: CALL_CANCELLED_BEFORE_RESULT };
+          }
+          noted.ran();
+          return { ...this.outcomeWith("ambiguous", CALL_CANCELLED_AFTER_DETAIL), ...sent };
         case "refused": {
           noted.notRun();
           const { code, detail } =
@@ -1802,13 +2174,39 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   }
 
   /**
+   * One of this machine's own relayed calls (#14024), stopped in process when
+   * its cancel aborts (#17985), as a host stops one on MCP_CANCEL.
+   */
+  private async relayLocal(
+    local: LocalHostReach,
+    payload: RelayCallRequest,
+    cancel: RelayCallCancel | undefined
+  ): Promise<McpCallAnswer> {
+    const signal = cancel?.signal;
+    const sent: { taken: boolean | null } = { taken: null };
+    const onAbort = () => {
+      cancel?.onCancel?.();
+      sent.taken = local.cancelCall?.(payload.helpSessionId, payload.callId) ?? false;
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    let answer: McpCallAnswer;
+    try {
+      answer = await local.relayCall(payload);
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+    if (sent.taken === false) throw new RelayCancelUnconfirmedError(answer);
+    return answer;
+  }
+
+  /**
    * Counts one send out to its host until `done`: a resend while its first
    * send is still out is the same call and shares that record, so an approval
    * the host is asking for still counts.
    */
   private trackSend(
     callId: string,
-    record: Omit<CallInFlight, "asked" | "sends" | "skipped" | "skipNotes">,
+    record: Omit<CallInFlight, "asked" | "sends" | "skipped" | "skipNotes" | "cancelled">,
     noteSkip?: () => void
   ): () => void {
     const { hostId, helpSessionId } = record;
@@ -1817,7 +2215,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const inFlight: CallInFlight =
       sharing !== undefined && sharing.hostId === hostId && sharing.helpSessionId === helpSessionId
         ? sharing
-        : { ...record, asked: false, sends: 0, skipped: false, skipNotes: new Set() };
+        : {
+            ...record,
+            asked: false,
+            sends: 0,
+            skipped: false,
+            skipNotes: new Set(),
+            cancelled: false,
+          };
     inFlight.sends += 1;
     if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
     // Each send's own, so a send that settled, having written its record, is
@@ -1857,6 +2262,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       case "OUTCOME_UNKNOWN":
         noted.ran();
         return { ...this.outcomeWith("ambiguous", CALL_AMBIGUOUS_DETAIL), ...sent };
+      // Cancelled before it went out (#17985): a resend learns nothing of its call.
+      case "CANCELLED":
+        noted.notRun();
+        return resend
+          ? { ...this.outcomeWith("ambiguous", CALL_RESEND_CANCELLED_DETAIL), ...sent }
+          : { ...this.ok(), ...unsent, result: CALL_CANCELLED_BEFORE_RESULT };
+      case "CANCEL_UNCONFIRMED":
+        noted.ran();
+        return { ...this.outcomeWith("ambiguous", CALL_CANCEL_UNCONFIRMED_DETAIL), ...sent };
       // Never written to the link: a first send is simply not sent.
       case "HOST_DISCONNECTED":
         noted.notRun();
@@ -2070,6 +2484,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           case "HOST_VERSION_MISMATCH":
           case "HOST_MODE_OFF":
           case "HOST_SSH_ACCESS_DENIED":
+          case "HOST_CONNECTION_UNUSABLE":
             return { ...this.outcomeWith("disconnected", ENSURE_DISCONNECTED_DETAIL), ...none };
           case "VALIDATION":
           case "NOT_FOUND":
@@ -2110,13 +2525,23 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     );
   }
 
-  /** Arms, cancels or lists the calling run's own host watches (#14463), agent watches too (#16188). */
+  /**
+   * Arms, cancels or lists the calling run's own host watches (#14463), agent
+   * watches (#16188) and plugin-notification watches too, and reads a plugin
+   * notification given to it (#18154).
+   */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>> {
-    return this.settle(helpSessionId, async (caller) =>
-      args.operation === "arm" && args.agentsWaiting === true
-        ? this.hostWatches.armAgents(caller, args)
-        : this.hostWatches.run(caller, args)
-    );
+    return this.settle(helpSessionId, async (caller) => {
+      if (args.operation === "read")
+        return this.hostWatches.read(caller, args.notificationId ?? "");
+      if (args.operation === "arm" && args.agentsWaiting === true) {
+        return this.hostWatches.armAgents(caller, args);
+      }
+      if (args.operation === "arm" && args.pluginNotifications === true) {
+        return this.hostWatches.armPlugins(caller, args);
+      }
+      return this.hostWatches.run(caller, args);
+    });
   }
 
   /**

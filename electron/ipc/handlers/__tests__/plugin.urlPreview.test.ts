@@ -35,7 +35,9 @@ const capConsentMock = vi.hoisted(() => ({
 const rateLimiterMock = vi.hoisted(() => ({ dropPlugin: vi.fn() }));
 // The catalog client is exercised in its own suite; here it answers whatever
 // each case says the freshly fetched catalog holds.
-const catalogMock = vi.hoisted(() => ({ lookup: vi.fn(), lookupUpdate: vi.fn() }));
+const catalogMock = vi.hoisted(() => ({ lookup: vi.fn(), lookupUpdate: vi.fn(), browse: vi.fn() }));
+// Which catalog each read asked for (#17434): undefined is Daintree's own.
+const catalogFor = vi.hoisted(() => vi.fn((_sourceUrl?: string) => catalogMock));
 const serviceRef = vi.hoisted(() => ({
   current: null as unknown,
   // Holds the next service lookup, which is where the preview's probe starts.
@@ -126,6 +128,7 @@ vi.mock("../../../services/PluginMcpSupervisor.js", () => ({
     callTool: vi.fn(),
     restart: vi.fn(),
     removeState: vi.fn(),
+    removeStatesWhere: vi.fn(),
     list: vi.fn(() => []),
     getStderr: vi.fn(() => ({ pluginId: "", serverId: "", lines: [], totalLines: 0 })),
   }),
@@ -136,7 +139,7 @@ vi.mock("../../../services/plugin-mcp/instances.js", () => ({
 }));
 vi.mock("../../../services/plugin/PluginCatalogService.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/plugin/PluginCatalogService.js")>()),
-  getPluginCatalogService: () => catalogMock,
+  getPluginCatalogService: catalogFor,
 }));
 vi.mock("../../../services/plugin-capability/instances.js", () => ({
   getPluginCapabilityConsentService: () => capConsentMock,
@@ -151,6 +154,7 @@ vi.mock("../plugin/service.js", () => ({
     return {
       waitForCatalog: async () => {},
       getPluginsRoot: () => service.getPluginsRoot(),
+      getInstalledCatalog: (pluginId: string) => service.getInstalledCatalog(pluginId),
       installPlugin: (...args: Parameters<PluginService["installPlugin"]>) =>
         service.installPlugin(...args),
     };
@@ -161,6 +165,7 @@ import { PluginService } from "../../../services/PluginService.js";
 import * as PluginArchive from "../../../services/PluginArchive.js";
 import { pluginInstallJobs } from "../../../services/plugin/PluginInstallJobRegistry.js";
 import {
+  handleBrowseCatalog,
   handleCancelInstall,
   handleInstall,
   handleInstallFromCatalog,
@@ -1086,5 +1091,442 @@ describe("a catalog install's update (#16781)", () => {
     });
     expect(await installedDir("acme.listed")).toBe(true);
     expect(await downloadsLeft()).toEqual([]);
+  });
+});
+
+describe("a catalog the person added (#17434)", () => {
+  const SOURCE = "https://plugins.example.org/catalog.json";
+  const REPO = "https://github.com/acme/listed";
+  const LOCAL = { event: {}, webContentsId: 7 } as never;
+  const REMOTE = { event: null, webContentsId: -7 } as never;
+
+  beforeEach(() => {
+    // A refusal before the lookup leaves its queued answer behind otherwise.
+    catalogMock.lookup.mockReset();
+    catalogMock.lookupUpdate.mockReset();
+    catalogMock.browse.mockReset();
+  });
+
+  async function release(version: string) {
+    const archive = await makeArchive({ name: "acme.listed", version });
+    const entry = {
+      id: "acme.listed",
+      repo: REPO,
+      version,
+      url: `${REPO}/releases/download/v${version}/acme.listed-${version}.dntr`,
+      sha256: await sha256(archive),
+      capabilities: [],
+    };
+    return { archive, entry };
+  }
+
+  function lists(...entries: Array<Record<string, unknown>>) {
+    for (const entry of entries) {
+      catalogMock.lookup.mockResolvedValueOnce({ status: "listed", entry, fetchedAt: 1 });
+    }
+  }
+
+  function addSource(...sources: string[]) {
+    storeMock._state.set("pluginCatalogSources", sources);
+  }
+
+  async function reviewFrom(sourceUrl: string | undefined, version = "1.0.0") {
+    const result = await handlePreviewFromCatalog({
+      pluginId: "acme.listed",
+      version,
+      ...(sourceUrl === undefined ? {} : { sourceUrl }),
+    });
+    if (result.status !== "preview") throw new Error(JSON.stringify(result));
+    return result.preview;
+  }
+
+  function confirmReview(preview: PluginUrlInstallPreview, replaces: boolean) {
+    return handleInstallFromCatalog({
+      pluginId: preview.catalog!.id,
+      version: preview.catalog!.version,
+      repo: preview.catalog!.repo,
+      ...(preview.catalog!.sourceUrl === undefined
+        ? {}
+        : { sourceUrl: preview.catalog!.sourceUrl }),
+      ...(preview.replacesCatalog === undefined
+        ? {}
+        : { replacesCatalog: preview.replacesCatalog }),
+      expected: approval(preview, replaces),
+    });
+  }
+
+  async function installFrom(sourceUrl: string | undefined) {
+    const { archive, entry } = await release("1.0.0");
+    lists(entry, entry);
+    servesInOrder(archive, archive);
+    const result = await confirmReview(await reviewFrom(sourceUrl), false);
+    expect(result).toEqual({ status: "installed", pluginId: "acme.listed" });
+    catalogMock.lookup.mockReset();
+    catalogFor.mockClear();
+    netFetch.mockReset();
+  }
+
+  it("reads a release from the catalog the person added, and records that catalog", async () => {
+    addSource(SOURCE);
+    const { archive, entry } = await release("1.0.0");
+    lists(entry, entry);
+    servesInOrder(archive, archive);
+
+    const preview = await reviewFrom(`${SOURCE}#listing`);
+    expect(catalogFor).toHaveBeenCalledWith(SOURCE);
+    expect(preview.catalog).toEqual({
+      id: "acme.listed",
+      version: "1.0.0",
+      repo: REPO,
+      sourceUrl: SOURCE,
+    });
+
+    expect(await confirmReview(preview, false)).toEqual({
+      status: "installed",
+      pluginId: "acme.listed",
+    });
+    expect(catalogFor).toHaveBeenLastCalledWith(SOURCE);
+    expect(record("acme.listed")?.catalog).toEqual({
+      id: "acme.listed",
+      version: "1.0.0",
+      repo: REPO,
+      sourceUrl: SOURCE,
+    });
+  });
+
+  it("refuses a catalog the person hasn't added before anything is fetched", async () => {
+    addSource("https://other.example.com/catalog.json");
+    const preview = await handlePreviewFromCatalog({ pluginId: "acme.listed", sourceUrl: SOURCE });
+    expect(failureCode(preview)).toBe("catalog_source_unknown");
+
+    const install = await handleInstallFromCatalog({
+      pluginId: "acme.listed",
+      version: "1.0.0",
+      repo: REPO,
+      sourceUrl: SOURCE,
+      expected: { kind: "install", pluginId: "acme.listed", archiveHash: "a".repeat(64) },
+    });
+    expect(failureCode(install)).toBe("catalog_source_unknown");
+    expect(catalogFor).not.toHaveBeenCalled();
+    expect(netFetch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a malformed catalog rather than reading Daintree's", async () => {
+    const result = await handlePreviewFromCatalog({
+      pluginId: "acme.listed",
+      sourceUrl: "http://plugins.example.org/catalog.json",
+    });
+    expect(failureCode(result)).toBe("catalog_not_listed");
+    expect(catalogFor).not.toHaveBeenCalled();
+  });
+
+  it("reads Daintree's own catalog for its URL in any spelling, added or not", async () => {
+    const { archive, entry } = await release("1.0.0");
+    lists(entry);
+    servesInOrder(archive);
+    const { PLUGIN_CATALOG_URL } = await import("../../../../shared/config/pluginCatalog.js");
+    const preview = await reviewFrom(`${PLUGIN_CATALOG_URL.toLowerCase()}#top`);
+    expect(catalogFor).toHaveBeenCalledWith(undefined);
+    expect(preview.catalog?.sourceUrl).toBeUndefined();
+  });
+
+  it("takes a remote window's word for its own list: its machine checked it before forwarding", async () => {
+    const { archive, entry } = await release("1.0.0");
+    lists(entry);
+    servesInOrder(archive);
+    const result = await handlePreviewFromCatalogOp(REMOTE, {
+      pluginId: "acme.listed",
+      version: "1.0.0",
+      sourceUrl: SOURCE,
+    });
+    expect(result.status).toBe("preview");
+    expect(catalogFor).toHaveBeenCalledWith(SOURCE);
+  });
+
+  it("still holds a local window to this machine's list", async () => {
+    const result = await handlePreviewFromCatalogOp(LOCAL, {
+      pluginId: "acme.listed",
+      version: "1.0.0",
+      sourceUrl: SOURCE,
+    });
+    expect(failureCode(result)).toBe("catalog_source_unknown");
+  });
+
+  it("names the other catalog a preview replaces, and refuses a confirm that didn't see it", async () => {
+    await installFrom(undefined);
+    addSource(SOURCE);
+    const next = await release("1.0.0");
+    lists(next.entry);
+    servesInOrder(next.archive);
+
+    const preview = await reviewFrom(SOURCE);
+    expect(preview.installedOnDisk).toBe(true);
+    expect(preview.replacesCatalog).toEqual({});
+
+    // A confirm that says it replaces nothing from another catalog is refused
+    // under the install lock, and the Daintree copy stays.
+    lists(next.entry);
+    servesInOrder(next.archive);
+    const unseen = await handleInstallFromCatalog({
+      pluginId: "acme.listed",
+      version: "1.0.0",
+      repo: REPO,
+      sourceUrl: SOURCE,
+      expected: approval(preview, true),
+    });
+    expect(failureCode(unseen)).toBe("archive_mismatch");
+    expect(JSON.stringify(unseen)).toContain("changed catalogs since this was reviewed");
+    expect(record("acme.listed")?.catalog?.sourceUrl).toBeUndefined();
+
+    lists(next.entry);
+    servesInOrder(next.archive);
+    expect(await confirmReview(preview, true)).toEqual({
+      status: "installed",
+      pluginId: "acme.listed",
+    });
+    expect(record("acme.listed")?.catalog?.sourceUrl).toBe(SOURCE);
+  });
+
+  it("refuses a listing install over a copy that came from another catalog since it was reviewed", async () => {
+    // The review saw a fresh install; another window then installed this id from SOURCE.
+    addSource(SOURCE);
+    const own = await release("1.0.0");
+    lists(own.entry);
+    servesInOrder(own.archive);
+    const preview = await reviewFrom(undefined);
+    expect(preview.replacesCatalog).toBeUndefined();
+
+    await installFrom(SOURCE);
+    lists(own.entry);
+    servesInOrder(own.archive);
+    const result = await handleInstallFromCatalog({
+      pluginId: "acme.listed",
+      version: "1.0.0",
+      repo: REPO,
+      expected: approval(preview, true),
+    });
+    expect(failureCode(result)).toBe("archive_mismatch");
+    expect(JSON.stringify(result)).toContain("changed catalogs since this was reviewed");
+    expect(record("acme.listed")?.catalog?.sourceUrl).toBe(SOURCE);
+  });
+
+  it("checks and applies updates from the recorded catalog, even once it's off the list", async () => {
+    addSource(SOURCE);
+    await installFrom(SOURCE);
+    addSource();
+    const next = await release("1.0.1");
+    catalogMock.lookupUpdate.mockResolvedValueOnce({
+      status: "update",
+      entry: next.entry,
+      fetchedAt: 2,
+    });
+    servesInOrder(next.archive, next.archive);
+
+    const offer = await service.checkForUpdate("acme.listed");
+    if (offer.status !== "available") throw new Error(JSON.stringify(offer));
+    expect(catalogFor).toHaveBeenCalledWith(SOURCE);
+    expect(offer.catalog).toEqual({
+      id: "acme.listed",
+      version: "1.0.1",
+      repo: REPO,
+      sourceUrl: SOURCE,
+    });
+
+    lists(next.entry);
+    const result = await handleInstallFromCatalog({
+      pluginId: "acme.listed",
+      version: "1.0.1",
+      repo: REPO,
+      sourceUrl: SOURCE,
+      intent: "update",
+      expected: { kind: "update", pluginId: "acme.listed", archiveHash: offer.archiveHash },
+    });
+    expect(result).toEqual({ status: "installed", pluginId: "acme.listed" });
+    // The confirm read the recorded catalog too, though it's off the list now.
+    expect(catalogFor).toHaveBeenLastCalledWith(SOURCE);
+    expect(record("acme.listed")?.catalog).toMatchObject({ version: "1.0.1", sourceUrl: SOURCE });
+  });
+
+  it("never lets an update move a plugin to another catalog", async () => {
+    addSource(SOURCE);
+    await installFrom(SOURCE);
+    for (const sourceUrl of [undefined, "https://other.example.com/catalog.json"]) {
+      const result = await handleInstallFromCatalog({
+        pluginId: "acme.listed",
+        version: "1.0.1",
+        repo: REPO,
+        ...(sourceUrl === undefined ? {} : { sourceUrl }),
+        intent: "update",
+        expected: { kind: "update", pluginId: "acme.listed", archiveHash: "b".repeat(64) },
+      });
+      expect(failureCode(result)).toBe("catalog_mismatch");
+    }
+    expect(catalogFor).not.toHaveBeenCalled();
+    expect(netFetch).not.toHaveBeenCalled();
+  });
+
+  it("checks an install whose record names no catalog against Daintree's, as before", async () => {
+    await installFrom(undefined);
+    expect(record("acme.listed")?.catalog).not.toHaveProperty("sourceUrl");
+    catalogMock.lookupUpdate.mockResolvedValueOnce({ status: "current", fetchedAt: 2 });
+    expect(await service.checkForUpdate("acme.listed")).toEqual({ status: "up-to-date" });
+    expect(catalogFor).toHaveBeenCalledTimes(1);
+    expect(catalogFor.mock.calls[0]?.[0]).toBeUndefined();
+  });
+
+  it("reads another spelling of a recorded catalog as that catalog, for checks and confirms alike", async () => {
+    addSource(SOURCE);
+    await installFrom(SOURCE);
+    const plugins = storeMock._state.get("plugins") as {
+      installed: Record<string, InstalledPluginRecord>;
+    };
+    plugins.installed["acme.listed"].catalog = {
+      ...plugins.installed["acme.listed"].catalog!,
+      sourceUrl: "https://PLUGINS.example.org:443/catalog.json",
+    };
+    const next = await release("1.0.1");
+    catalogMock.lookupUpdate.mockResolvedValueOnce({
+      status: "update",
+      entry: next.entry,
+      fetchedAt: 2,
+    });
+    servesInOrder(next.archive, next.archive);
+    const offer = await service.checkForUpdate("acme.listed");
+    if (offer.status !== "available") throw new Error(JSON.stringify(offer));
+    expect(offer.catalog?.sourceUrl).toBe(SOURCE);
+
+    lists(next.entry);
+    const result = await handleInstallFromCatalog({
+      pluginId: "acme.listed",
+      version: "1.0.1",
+      repo: REPO,
+      sourceUrl: SOURCE,
+      intent: "update",
+      expected: { kind: "update", pluginId: "acme.listed", archiveHash: offer.archiveHash },
+    });
+    expect(result).toEqual({ status: "installed", pluginId: "acme.listed" });
+  });
+
+  it("refuses an update once another window replaced the copy with a URL install", async () => {
+    addSource(SOURCE);
+    await installFrom(SOURCE);
+    const next = await release("1.0.1");
+    const byUrl = await makeArchive({ name: "acme.listed", version: "1.0.5" });
+    // The update was offered while the copy came from SOURCE; a URL install lands first.
+    servesInOrder(byUrl);
+    expect(
+      await handleInstallFromUrl(URL, undefined, {
+        kind: "update",
+        pluginId: "acme.listed",
+        archiveHash: await sha256(byUrl),
+      })
+    ).toEqual({ status: "installed", pluginId: "acme.listed" });
+
+    const result = await handleInstallFromCatalog({
+      pluginId: "acme.listed",
+      version: "1.0.1",
+      repo: REPO,
+      sourceUrl: SOURCE,
+      intent: "update",
+      expected: { kind: "update", pluginId: "acme.listed", archiveHash: next.entry.sha256 },
+    });
+    expect(failureCode(result)).toBe("catalog_mismatch");
+    expect(catalogMock.lookup).not.toHaveBeenCalled();
+
+    // The same under the install lock, for a URL install that lands after
+    // the confirm's own check: the update never switches the copy back.
+    const locked = await service.installPlugin(next.archive, {
+      source: "catalog",
+      catalog: { id: "acme.listed", version: "1.0.1", repo: REPO, sourceUrl: SOURCE },
+      catalogReplaces: null,
+      catalogUpdate: true,
+      expected: { kind: "update", pluginId: "acme.listed", archiveHash: next.entry.sha256 },
+    });
+    expect(failureCode(locked)).toBe("archive_mismatch");
+    expect(JSON.stringify(locked)).toContain("no longer installed from the catalog");
+    expect(record("acme.listed")).toMatchObject({ source: "url", originalUrl: URL });
+  });
+
+  it("refuses an update that would move a copy back past a newer release from its catalog", async () => {
+    addSource(SOURCE);
+    await installFrom(SOURCE);
+    const reviewed = await release("1.0.1");
+    const newer = await release("1.0.2");
+    // Another window installs 1.0.2 from the same catalog while 1.0.1's update is under review.
+    lists(newer.entry, reviewed.entry);
+    servesInOrder(newer.archive, reviewed.archive);
+    expect(
+      await handleInstallFromCatalog({
+        pluginId: "acme.listed",
+        version: "1.0.2",
+        repo: REPO,
+        sourceUrl: SOURCE,
+        intent: "update",
+        expected: { kind: "update", pluginId: "acme.listed", archiveHash: newer.entry.sha256 },
+      })
+    ).toEqual({ status: "installed", pluginId: "acme.listed" });
+
+    // An installed manifest whose version can't be read still doesn't let it through.
+    const manifestPath = path.join(pluginsRoot, "acme.listed", "plugin.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    await fs.writeFile(manifestPath, JSON.stringify({ ...manifest, version: "not a version" }));
+    const result = await handleInstallFromCatalog({
+      pluginId: "acme.listed",
+      version: "1.0.1",
+      repo: REPO,
+      sourceUrl: SOURCE,
+      intent: "update",
+      expected: { kind: "update", pluginId: "acme.listed", archiveHash: reviewed.entry.sha256 },
+    });
+    expect(failureCode(result)).toBe("archive_mismatch");
+    expect(JSON.stringify(result)).toContain("v1.0.2");
+    expect(record("acme.listed")?.catalog).toMatchObject({ version: "1.0.2", sourceUrl: SOURCE });
+  });
+
+  it("browses Daintree's catalog and each added one, one failure hiding none", async () => {
+    addSource(SOURCE, "https://broken.example.com/catalog.json");
+    catalogMock.browse
+      .mockResolvedValueOnce({ status: "available", listings: [], fetchedAt: 1, stale: false })
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce({ status: "unavailable", failure: "invalid" });
+
+    const result = await handleBrowseCatalog(LOCAL);
+
+    expect(catalogFor.mock.calls.map(([sourceUrl]) => sourceUrl)).toEqual([
+      undefined,
+      SOURCE,
+      "https://broken.example.com/catalog.json",
+    ]);
+    // Daintree's own keeps the shape an older Daintree reads; added ones ride beside it.
+    expect(result).toEqual({
+      status: "available",
+      listings: [],
+      fetchedAt: 1,
+      stale: false,
+      added: [
+        { sourceUrl: SOURCE, result: { status: "unavailable", failure: "unreachable" } },
+        {
+          sourceUrl: "https://broken.example.com/catalog.json",
+          result: { status: "unavailable", failure: "invalid" },
+        },
+      ],
+    });
+  });
+
+  it("browses the list a remote window's machine sends, checked, not this host's own", async () => {
+    addSource("https://host-only.example.com/catalog.json");
+    catalogMock.browse.mockResolvedValue({ status: "unavailable", failure: "unreachable" });
+    const result = await handleBrowseCatalog(REMOTE, {
+      sourceUrls: [SOURCE, `${SOURCE}#dup`, "https://127.0.0.1/catalog.json", 5 as never],
+    });
+    expect(catalogFor.mock.calls.map(([sourceUrl]) => sourceUrl)).toEqual([undefined, SOURCE]);
+    expect(result).toEqual({
+      status: "unavailable",
+      failure: "unreachable",
+      added: [{ sourceUrl: SOURCE, result: { status: "unavailable", failure: "unreachable" } }],
+    });
   });
 });

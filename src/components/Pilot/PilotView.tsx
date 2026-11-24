@@ -360,7 +360,7 @@ function GroupHeader({
         <ChevronRight
           aria-hidden="true"
           data-testid="pilot-group-drill"
-          className="h-3 w-3 shrink-0 text-text-muted"
+          className="h-3 w-3 shrink-0 text-text-secondary"
         />
       )}
     </div>
@@ -396,7 +396,7 @@ function WorktreeGroupHeader({
       data-testid="pilot-worktree-header"
       className="flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none"
     >
-      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
+      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-text-secondary")}>
         <Glyph className="h-2.5 w-2.5" aria-hidden="true" />
       </div>
 
@@ -571,9 +571,9 @@ function RunRow({
       )}
 
       {/*
-        The agent's own word that it needs the user, in the same slot: it
-        outranks a reading and a park outranks it, so none of the three share
-        a row.
+        The agent's own word that it needs the user, or what Decisions
+        recorded, in the same slot: each outranks a reading and a park outranks
+        both, so none of them share a row.
       */}
       {row.agentReport !== null && (
         <span
@@ -615,10 +615,10 @@ function RunRow({
           data-testid="pilot-row-age"
           className={cn(
             "shrink-0 text-right text-2xs leading-none tabular-nums",
-            row.ageLabel === null ? "min-w-[3.5rem] text-text-secondary" : "text-state-waiting"
+            row.ageLabel === "quiet" ? "text-state-waiting" : "min-w-[3.5rem] text-text-secondary"
           )}
         >
-          {row.ageLabel === null ? row.age : `${row.ageLabel} ${row.age}`}
+          {row.ageLabel === null ? row.age : `${row.ageLabel} ${row.age}`.trim()}
         </span>
       )}
     </div>
@@ -1403,13 +1403,16 @@ export function PilotView() {
       );
       return;
     }
+    const { runId, workspaceId, worktreeId } = row.item.run;
     void actionService.dispatch("pilot.openRun", {
-      runId: row.item.run.runId,
+      runId,
       // Read off the RUN, never off the group. A group id names a project on
       // one axis and a worktree on the other, so the row's own workspace is the
       // only field that answers this question in both — and it is the field
       // that was authoritative even when the two happened to coincide.
-      workspaceId: row.item.run.workspaceId,
+      workspaceId,
+      // Where to land if the run exits while its project opens (#17592).
+      ...(worktreeId !== undefined ? { worktreeId } : {}),
     });
   }, []);
 
@@ -1526,6 +1529,12 @@ export function PilotView() {
    */
   const drillWorktreeCount = hasNarrowing ? 0 : viewWorktreeCount;
 
+  const wakeRun = useCallback((runId: string) => {
+    safeFireAndForget(window.electron.fleet.unsnoozeRun(runId), {
+      context: "PilotView unsnoozeRun",
+    });
+  }, []);
+
   /**
    * Alt+Enter on the highlighted row opens the park editor — a second verb on
    * the same selection, so it lives beside Enter in both key paths rather
@@ -1541,6 +1550,20 @@ export function PilotView() {
         togglePluginShelf(selectedRow.item);
         return true;
       }
+      // A held chord is one gesture: consumed before the band is read, or the
+      // repeat after a wake would land on the now-unsnoozed row and open the
+      // park editor.
+      if (event.repeat) {
+        event.preventDefault();
+        return true;
+      }
+      // Waking needs no healthy snapshot: Main lets a snooze be lifted while
+      // the fleet is unreadable.
+      if (selectedRow.item.band === "snoozed") {
+        event.preventDefault();
+        wakeRun(selectedRow.item.run.runId);
+        return true;
+      }
       // No parking from retained data: Main rejects a park it cannot validate
       // against a healthy snapshot, so offering the editor over a stale fleet
       // would collect a note and then bounce it.
@@ -1549,7 +1572,7 @@ export function PilotView() {
       setParkTargetId(selectedRow.item.run.runId);
       return true;
     },
-    [selectedRow, snapshot]
+    [selectedRow, snapshot, wakeRun]
   );
 
   /**
@@ -1869,11 +1892,13 @@ export function PilotView() {
       ? null
       : selectedRow.item.run === undefined
         ? (PLUGIN_SHELF_VERB[selectedRow.item.band] ?? "to park")
-        : status.kind !== "live"
-          ? null
-          : selectedRow.item.band === "parked"
-            ? "to edit park"
-            : "to park";
+        : selectedRow.item.band === "snoozed"
+          ? "to wake now"
+          : status.kind !== "live"
+            ? null
+            : selectedRow.item.band === "parked"
+              ? "to edit park"
+              : "to park";
 
   // The drill verb rides the same "is a row actually actionable" gating as the
   // other two, and disappears with the target itself — a hint naming a chord
@@ -2278,6 +2303,7 @@ export function PilotView() {
             onPark={() => {
               if (selectedRow?.kind === "item") {
                 if (selectedRow.item.run === undefined) togglePluginShelf(selectedRow.item);
+                else if (selectedRow.item.band === "snoozed") wakeRun(selectedRow.item.run.runId);
                 else setParkTargetId(selectedRow.item.run.runId);
               }
               // Every footer control hands focus back for the same reason: it

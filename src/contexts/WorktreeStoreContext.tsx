@@ -85,6 +85,8 @@ interface WorktreeTickEvent {
 }
 
 /** Whether this view runs on another machine, reached over a host link. */
+type IssueAssociations = Awaited<ReturnType<typeof worktreeClient.getAllIssueAssociations>>;
+
 function isRemoteView(): boolean {
   const id = typeof window === "undefined" ? undefined : window.__DAINTREE_HOST_ID__?.id;
   return typeof id === "string" && id !== LOCAL_HOST_ID;
@@ -260,7 +262,12 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       return applied;
     };
 
-    function fetchInitialState() {
+    /**
+     * `overtaken` carries the associations of an attempt a live update
+     * overtook, so the retry has no wait between its response and the apply
+     * for another update to overtake it in.
+     */
+    function fetchInitialState(overtaken?: { associations: IssueAssociations | undefined }) {
       generation += 1;
       const thisGen = generation;
       // Only show loading spinner on cold start (no cached data).
@@ -291,7 +298,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       // cached associations" failure semantics, and it prevents an unhandled
       // rejection when the handler below returns early (generation/isReady
       // guards) and never awaits the promise.
-      const associationsPromise = worktreeClient.getAllIssueAssociations().catch(() => undefined);
+      const associationsPromise = overtaken
+        ? Promise.resolve(overtaken.associations)
+        : worktreeClient.getAllIssueAssociations().catch(() => undefined);
 
       // Tracked to the end of the chain, so an MCP dispatch arriving on a port
       // this fetch was started for runs against the applied snapshot (#13348).
@@ -369,10 +378,14 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
             // seq without advancing), so it must still apply — otherwise cold
             // start never initializes and an epoch-change re-hydrate is silently
             // swallowed (#8403 review findings #1, #2). A differing epoch means
-            // the host restarted and always wins. On cold start we still must
-            // hydrate, so retry (the generation guard prevents stale overlaps).
+            // the host restarted and always wins. Retry rather than drop it:
+            // a cold start must still hydrate, and a store re-hydrating after a
+            // port gap (a cached view coming back) still lacks what it missed
+            // meanwhile, which the live update alone doesn't carry. The retry
+            // reuses these associations, so a steady stream of updates cannot
+            // overtake it too. The generation guard prevents stale overlaps.
             if (compareVersion(snapshotVersion, store.getState().version) < 0) {
-              if (!store.getState().isInitialized) fetchInitialState();
+              fetchInitialState({ associations });
               return;
             }
 

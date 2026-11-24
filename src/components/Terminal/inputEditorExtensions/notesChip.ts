@@ -1,5 +1,5 @@
 import { EditorView, Decoration, WidgetType, closeHoverTooltips } from "@codemirror/view";
-import { StateEffect, StateField, type EditorState } from "@codemirror/state";
+import { StateEffect, StateField, type EditorState, type Text } from "@codemirror/state";
 import { pluralize } from "@/lib/pluralize";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
 import {
@@ -92,9 +92,10 @@ function describeToken(
   return { label: fileName ? `${fileName} · ${status}` : status, description };
 }
 
-function buildTokens(text: string, source: PendingDiffNotes | null): NotesChipToken[] {
+function buildTokens(doc: Text, source: PendingDiffNotes | null): NotesChipToken[] {
+  // A composer that can't take notes draws no chips, so the draft is never read whole.
   if (!source) return [];
-  const tokens = getAllAtNotesTokens(text);
+  const tokens = getAllAtNotesTokens(doc.toString());
   const allocated = allocateDiffNotes(tokens, source.sendable);
   return tokens.map((token, index) => {
     const notes = allocated[index]!;
@@ -147,7 +148,7 @@ class NotesChipWidget extends WidgetType {
 
 export const notesChipField = StateField.define<NotesChipState>({
   create(state) {
-    return { source: null, tokens: buildTokens(state.doc.toString(), null) };
+    return { source: null, tokens: buildTokens(state.doc, null) };
   },
   update(value, tr) {
     let source = value.source;
@@ -155,7 +156,8 @@ export const notesChipField = StateField.define<NotesChipState>({
       if (effect.is(setDiffNotesChipSource)) source = effect.value;
     }
     if (!tr.docChanged && source === value.source) return value;
-    return { source, tokens: buildTokens(tr.state.doc.toString(), source) };
+    if (!source && !value.source) return value;
+    return { source, tokens: buildTokens(tr.state.doc, source) };
   },
   provide: (f) => [
     EditorView.decorations.of((view) => {

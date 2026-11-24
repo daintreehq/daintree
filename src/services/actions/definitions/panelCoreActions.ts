@@ -2,12 +2,16 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useErrorStore } from "@/store/errorStore";
-import { usePortalStore } from "@/store/portalStore";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore, findPanelDialogsOfKind } from "@/store/panelDialogStore";
 import { usePluginPanelOpenRequestStore } from "@/store/pluginPanelOpenRequestStore";
 import type { DialogSize } from "@/components/ui/AppDialog";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
+import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
+import { fieldOutranksClose, takeUndoCloseKeyPress } from "@/services/terminal/undoCloseKey";
+import { undoFieldText } from "@/services/terminal/closeUndoOrder";
+import { undoCloseMenuStep } from "@/services/terminal/undoCloseMenu";
+import { isForegroundDispatch } from "./dispatchSource";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import {
   getPanelKindConfig,
@@ -104,11 +108,6 @@ export function registerPanelCoreActions(
         })
       ),
       dock: z.object({ panelCount: z.number() }),
-      portal: z.object({
-        isOpen: z.boolean(),
-        tabCount: z.number(),
-        activeTabId: z.string().nullable(),
-      }),
       focusedPanelId: z.string().nullable(),
       maximizedPanelId: z.string().nullable(),
     }),
@@ -132,8 +131,6 @@ export function registerPanelCoreActions(
         panels = panels.filter((p) => p.location !== "trash" && p.location !== "background");
       }
 
-      const portalState = usePortalStore.getState();
-
       return {
         panels: panels.map((p) => ({
           id: p.id,
@@ -147,11 +144,6 @@ export function registerPanelCoreActions(
         })),
         dock: {
           panelCount: panels.filter((p) => p.location === "dock").length,
-        },
-        portal: {
-          isOpen: portalState.isOpen,
-          tabCount: portalState.tabs.length,
-          activeTabId: portalState.activeTabId,
         },
         focusedPanelId: state.focusedId ?? null,
         maximizedPanelId: state.maximizedId ?? null,
@@ -382,6 +374,55 @@ export function registerPanelCoreActions(
     },
   }));
 
+  actions.set("panel.undoClose", () => ({
+    id: "panel.undoClose",
+    title: "Undo close",
+    description:
+      "Reopen the panels the person last closed in this project, newest first: in place with their process while the trash holds them, or an agent's own conversation resumed once it has let them go. Closes made by an agent, MCP client or plugin aren't included.",
+    paletteDescription: "Reopen the panels last closed, newest first",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["reopen", "restore", "trash", "closed", "undo"],
+    // Undo takes back a person's own close; a plugin closed nothing of theirs.
+    denyPluginDispatch: true,
+    run: async (_args: unknown, ctx) => {
+      // Read before any await: both belong to this press.
+      const viaKey = takeUndoCloseKeyPress();
+      const pressedIn = document.activeElement;
+      // Undo takes back what the person did, so only the person can ask.
+      if (!isForegroundDispatch(ctx.dispatchSource)) return;
+      // Edit > Undo, chosen while it named a close (#17108): the text-undo
+      // key's own item, so it follows the key's rules.
+      const viaMenu = ctx.dispatchSource === "menu";
+      const viaTextUndo = viaKey || viaMenu;
+      // A close still waiting to commit isn't in the history yet.
+      flushOptimisticCloses();
+      // The label was read before the choice reached here. Typing newer than
+      // the close since, or the close gone, and Undo is the field's again.
+      if (viaMenu && undoCloseMenuStep() === null) {
+        undoFieldText(pressedIn);
+        return;
+      }
+      const { undoLastClose } = await import("@/services/terminal/panelCloseUndo");
+      // Pressed as text undo, a close with nothing left falls through to an
+      // older one only while nothing newer than that one waits in the focused
+      // field; otherwise the press goes to that field's own undo.
+      await undoLastClose(
+        viaTextUndo
+          ? {
+              yieldsTo: (step) => fieldOutranksClose(pressedIn, step.seq),
+              // Only while the keyboard is still where the key was pressed.
+              onYield: () => {
+                if (document.activeElement === pressedIn) undoFieldText(pressedIn);
+              },
+            }
+          : {}
+      );
+    },
+  }));
+
   actions.set("panel.toggleDiagnostics", () => ({
     id: "panel.toggleDiagnostics",
     title: "Toggle diagnostics",
@@ -436,20 +477,6 @@ export function registerPanelCoreActions(
     run: async () => {
       useDiagnosticsStore.getState().openDock("problems");
       useErrorStore.getState().promoteErrors();
-    },
-  }));
-
-  actions.set("panel.togglePortal", () => ({
-    id: "panel.togglePortal",
-    title: "Toggle portal",
-    description: "Toggle the portal panel",
-    category: "panel",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    keywords: ["web", "embed", "browser", "dock"],
-    run: async () => {
-      window.dispatchEvent(new CustomEvent("daintree:toggle-portal"));
     },
   }));
 }

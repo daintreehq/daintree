@@ -20,6 +20,8 @@ import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { RecipeImportDialog } from "@/components/TerminalRecipe/RecipeImportDialog";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { InlineError } from "@/components/ui/field";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TerminalRecipe, Worktree } from "@/types";
 import { logError } from "@/utils/logger";
@@ -120,9 +122,10 @@ export function RecipesTab({
     setIsRecipeEditorOpen(true);
   };
 
+  // The recipe stays through the editor's exit so its title doesn't flip to
+  // "Create recipe" on the way out; each opening sets it afresh.
   const handleRecipeEditorClose = () => {
     setIsRecipeEditorOpen(false);
-    setEditingRecipe(undefined);
   };
 
   const requestDelete = (recipeId: string) => {
@@ -257,14 +260,11 @@ export function RecipesTab({
                     <div className="flex items-start gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="text-sm font-medium text-text-primary truncate">
-                                {recipe.name}
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">{recipe.name}</TooltipContent>
-                          </Tooltip>
+                          <TruncatedTooltip content={recipe.name} side="bottom">
+                            <span className="text-sm font-medium text-text-primary truncate">
+                              {recipe.name}
+                            </span>
+                          </TruncatedTooltip>
                           {(() => {
                             const scopeInfo = getRecipeScope(recipe, resolveWorktreeName);
                             return <Badge size="xs">{scopeInfo.label}</Badge>;
@@ -383,11 +383,7 @@ export function RecipesTab({
       <ConfirmDialog
         isOpen={recipeToDelete !== null}
         title={`Delete '${recipes.find((r) => r.id === recipeToDelete)?.name ?? "recipe"}'?`}
-        description={
-          deleteError
-            ? `Error: ${deleteError}`
-            : "Deletes this recipe — the terminals it launches and their settings. Committed in-repo recipes in .daintree/recipes/ can be restored from git; recipes stored only on this machine can't be recovered."
-        }
+        description="Deletes this recipe — the terminals it launches and their settings. Committed in-repo recipes in .daintree/recipes/ can be restored from git; recipes stored only on this machine can't be recovered."
         confirmLabel={deleteError ? "Retry delete" : "Delete recipe"}
         variant="destructive"
         isBusy={isDeleting}
@@ -401,7 +397,9 @@ export function RecipesTab({
           setRecipeToDelete(null);
           setDeleteError(null);
         }}
-      />
+      >
+        {deleteError && <InlineError role="alert">{deleteError}</InlineError>}
+      </ConfirmDialog>
 
       <RecipeImportDialog
         isOpen={showImportDialog}

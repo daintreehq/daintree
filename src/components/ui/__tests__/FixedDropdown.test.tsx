@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, act } from "@testing-library/react";
-import { useContext, useState } from "react";
+import { render, act, cleanup } from "@testing-library/react";
+import { useContext, useEffect, useState } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { FixedDropdown, FixedDropdownVisibleContext } from "../fixed-dropdown";
 import { _resetForTests } from "@/lib/escapeStack";
@@ -667,27 +667,30 @@ describe("FixedDropdown right-edge anchor (issue #6800)", () => {
 
   afterEach(() => {
     _resetForTests();
-    document.documentElement.style.removeProperty("--portal-right-offset");
     document.documentElement.style.removeProperty("--right-obstruction-offset");
   });
 
-  it("anchors right edge to --portal-right-offset, not --right-obstruction-offset", () => {
+  it("anchors its right edge under the button, not past the Assistant", () => {
     // Toolbar dropdowns sit above the main flex row. The Assistant is a flex
-    // sibling of <main>, not an overlay — it doesn't cover the toolbar. Only
-    // the body-portaled Portal (web chat) needs to push toolbar dropdowns
-    // left. Using --right-obstruction-offset would shift dropdowns left by
-    // Assistant width too, which is the bug from #6800.
+    // sibling of <main>, not an overlay — it doesn't cover the toolbar, so
+    // --right-obstruction-offset would shift dropdowns left by its width for
+    // nothing, which is the bug from #6800.
+    // A button near the window's right edge, closer to it than the Assistant is wide.
+    const right = window.innerWidth - 20;
+    const anchor = anchorRef.current;
+    if (!anchor) throw new Error("anchor not created");
+    const rect = { x: right - 32, y: 0, top: 0, right, bottom: 40, left: right - 32 };
+    anchor.getBoundingClientRect = () => ({ ...rect, width: 32, height: 40, toJSON: () => rect });
+    document.documentElement.style.setProperty("--right-obstruction-offset", "400px");
     render(
       <FixedDropdown open={true} onOpenChange={onOpenChange} anchorRef={anchorRef}>
         <div data-testid="dropdown-body">Content</div>
       </FixedDropdown>
     );
 
-    const portal = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
-    expect(portal).not.toBeNull();
-    const rightStyle = portal?.style.right ?? "";
-    expect(rightStyle).toContain("var(--portal-right-offset");
-    expect(rightStyle).not.toContain("--right-obstruction-offset");
+    const panel = document.querySelector('[data-testid="dropdown-body"]')?.parentElement;
+    expect(panel).not.toBeNull();
+    expect(panel?.style.right).toBe("20px");
   });
 });
 
@@ -963,5 +966,192 @@ describe("FixedDropdown drag-region opt-out (issue #12347)", () => {
     if (!(viewportWrapper instanceof HTMLElement)) throw new Error("portal wrapper not rendered");
     expect(viewportWrapper.className).toContain("inset-0");
     expect(viewportWrapper.className.split(/\s+/)).not.toContain("app-no-drag");
+  });
+});
+
+describe("FixedDropdown restoreFocusOnClose (issue #17203)", () => {
+  let anchor: HTMLButtonElement;
+  let anchorRef: React.RefObject<HTMLElement | null>;
+
+  beforeEach(() => {
+    _resetForTests();
+    setOverlayStackLength(0);
+    anchorRef = createAnchor();
+    anchor = anchorRef.current as HTMLButtonElement;
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    cleanup();
+    _resetForTests();
+    vi.useRealTimers();
+    document.body.innerHTML = "";
+  });
+
+  // A parent that commits every close the dropdown asks for, like a real one,
+  // unless told to refuse them.
+  function Controlled({
+    restore,
+    refuse = false,
+    openRef,
+  }: {
+    restore?: boolean;
+    refuse?: boolean;
+    openRef?: { current: ((open: boolean) => void) | null };
+  }) {
+    const [open, setOpen] = useState(true);
+    useEffect(() => {
+      if (openRef) openRef.current = setOpen;
+    });
+    return (
+      <>
+        <Dispatcher />
+        <FixedDropdown
+          open={open}
+          onOpenChange={(next) => {
+            if (!refuse) setOpen(next);
+          }}
+          anchorRef={anchorRef}
+          restoreFocusOnClose={restore}
+          keepMounted
+        >
+          <input data-testid="inside" />
+        </FixedDropdown>
+      </>
+    );
+  }
+
+  function inside(): HTMLInputElement {
+    const el = document.querySelector<HTMLInputElement>('[data-testid="inside"]');
+    if (!el) throw new Error("dropdown body not rendered");
+    return el;
+  }
+
+  function pressOutside(): void {
+    const canvas = document.createElement("div");
+    document.body.appendChild(canvas);
+    act(() => {
+      canvas.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+  }
+
+  it("does nothing unless the consumer opts in", () => {
+    render(<Controlled />);
+    act(() => inside().focus());
+    const focusSpy = vi.spyOn(anchor, "focus");
+
+    pressOutside();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns focus ringless a task after a press outside left it stranded", () => {
+    render(<Controlled restore />);
+    act(() => inside().focus());
+    const focusSpy = vi.spyOn(anchor, "focus");
+
+    pressOutside();
+    expect(focusSpy).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+  });
+
+  it("leaves focus to a modal that rose over it, even before the modal takes it", () => {
+    const { rerender } = render(<Controlled restore />);
+    act(() => inside().focus());
+    act(() => {
+      vi.advanceTimersByTime(GRACE_MS + 1);
+    });
+    const focusSpy = vi.spyOn(anchor, "focus");
+
+    setOverlayStackLength(1);
+    rerender(<Controlled restore />);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(document.querySelector('[data-testid="inside"]')).not.toBeNull();
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("restores nothing for Escape once the anchor has left the document", () => {
+    render(<Controlled restore />);
+    act(() => inside().focus());
+    const focusSpy = vi.spyOn(anchor, "focus");
+    anchor.remove();
+
+    pressEscape();
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("forgets a close the parent refused", () => {
+    const openRef: { current: ((open: boolean) => void) | null } = { current: null };
+    const { rerender } = render(<Controlled restore refuse openRef={openRef} />);
+    act(() => inside().focus());
+    const focusSpy = vi.spyOn(anchor, "focus");
+
+    pressEscape();
+    rerender(<Controlled restore openRef={openRef} />);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    act(() => openRef.current?.(false));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("cancels the deferred restore when the dropdown reopens inside the task", () => {
+    const openRef: { current: ((open: boolean) => void) | null } = { current: null };
+    render(<Controlled restore openRef={openRef} />);
+    act(() => inside().focus());
+    const focusSpy = vi.spyOn(anchor, "focus");
+
+    pressOutside();
+    act(() => openRef.current?.(true));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("cancels the deferred restore on unmount", () => {
+    const { unmount } = render(<Controlled restore />);
+    act(() => inside().focus());
+    const focusSpy = vi.spyOn(anchor, "focus");
+
+    pressOutside();
+    unmount();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(focusSpy).not.toHaveBeenCalled();
+  });
+
+  it("restores nothing for a close the parent made on its own", () => {
+    const openRef: { current: ((open: boolean) => void) | null } = { current: null };
+    render(<Controlled restore openRef={openRef} />);
+    act(() => inside().focus());
+    const focusSpy = vi.spyOn(anchor, "focus");
+    // Stranded on the body, so a restore on every close would show.
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(document.activeElement).toBe(document.body);
+
+    act(() => openRef.current?.(false));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+
+    expect(focusSpy).not.toHaveBeenCalled();
   });
 });

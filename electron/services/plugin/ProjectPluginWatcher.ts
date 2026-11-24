@@ -146,6 +146,8 @@ interface WatchState {
    */
   forceReconcile: boolean;
   rearmAttempts: number;
+  /** Re-issued whenever observation breaks, so a caller can tell an unbroken watch from a recovered one. */
+  observationToken: number;
   /** `performance.now()` when the current subscription was adopted. */
   armedAt: number | null;
   arming: boolean;
@@ -256,6 +258,7 @@ function sentinelRelevantNames(watchedDir: string, pluginsRoot: string): Set<str
  */
 export class ProjectPluginWatcher {
   private readonly states = new Map<string, WatchState>();
+  private nextObservationToken = 0;
   private readonly timings: ProjectPluginWatcherTimings;
   private disposed = false;
 
@@ -295,6 +298,7 @@ export class ProjectPluginWatcher {
       sentinelTimerMs: 0,
       forceReconcile: false,
       rearmAttempts: 0,
+      observationToken: ++this.nextObservationToken,
       armedAt: null,
       arming: false,
       timer: null,
@@ -329,6 +333,22 @@ export class ProjectPluginWatcher {
     this.disposed = true;
     for (const state of [...this.states.values()]) this.teardown(state);
     this.states.clear();
+  }
+
+  /**
+   * Stable for as long as this project's plugins folder has been watched, or
+   * its absence sentinelled, without a break; null while it is not observed.
+   * Every (re-)arm seeds its baseline from disk without reconciling it, so a
+   * change made around one is only caught by a full open: a token that moved
+   * is the caller's cue to run it. A sentinel only vouches for a folder that
+   * is still absent — once it exists, only a subscription observes it.
+   */
+  observationToken(projectId: string): number | null {
+    const state = this.states.get(projectId);
+    if (!state || state.stopped || state.arming) return null;
+    if (state.subscription) return state.observationToken;
+    if (!state.sentinel && !state.sentinelTimer) return null;
+    return existsSync(state.pluginsRoot) ? null : state.observationToken;
   }
 
   /** Is a live subscription held for this project? Tests and diagnostics only. */
@@ -482,6 +502,9 @@ export class ProjectPluginWatcher {
       return;
     }
     state.subscription = subscription;
+    // A fresh subscription seeds its baseline from disk without reconciling
+    // it, whether it replaced a sentinel or a broken subscription.
+    state.observationToken = ++this.nextObservationToken;
     // Not a budget reset: that waits until this subscription has proven it
     // stays up (see `rearmAfterError`).
     state.armedAt = performance.now();
@@ -599,6 +622,7 @@ export class ProjectPluginWatcher {
       state.rearmAttempts = 0;
     }
     state.armedAt = null;
+    state.observationToken = ++this.nextObservationToken;
     const subscription = state.subscription;
     state.subscription = null;
     if (subscription) {

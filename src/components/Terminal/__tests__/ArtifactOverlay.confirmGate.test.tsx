@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ReactNode } from "react";
 import type { Artifact } from "@shared/types";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { readFile } from "fs/promises";
 import { resolve as resolvePath } from "path";
 import {
@@ -14,6 +15,7 @@ import {
   PATCH_ROW_CLASS,
 } from "../ArtifactOverlay";
 
+const originalAnnounce = useAnnouncerStore.getState().announce;
 const applyPatch = vi.fn();
 const copyToClipboard = vi.fn();
 const applyAllPatches = vi.fn();
@@ -260,6 +262,81 @@ describe("ArtifactOverlay keeps keyboard focus through its own actions", () => {
     await act(async () => {
       finish(true);
     });
+  });
+});
+
+describe("ArtifactOverlay Copy confirmation", () => {
+  afterEach(() => {
+    useAnnouncerStore.setState({ announce: originalAnnounce });
+  });
+
+  const sizerLabels = (button: HTMLElement) =>
+    Array.from(button.querySelectorAll("[data-label]")).map((el) => el.getAttribute("data-label"));
+
+  it("keeps its name and width and announces the copy once", async () => {
+    copyToClipboard.mockResolvedValue(true);
+    const announce = vi.fn();
+    useAnnouncerStore.setState({ announce });
+    renderOverlay();
+    fireEvent.click(screen.getByText("patch-a.diff"));
+    const copy = within(rowFor("patch-a.diff")).getByRole("button", { name: "Copy" });
+    announce.mockClear();
+
+    await act(async () => {
+      fireEvent.click(copy);
+    });
+
+    expect(copyToClipboard).toHaveBeenCalledTimes(1);
+    expect(copyToClipboard).toHaveBeenCalledWith(PATCH_A);
+    expect(copy.textContent).toContain("Copied");
+    expect(copy.getAttribute("aria-label")).toBe("Copy");
+    expect(sizerLabels(copy)).toEqual(expect.arrayContaining(["Copy", "Copied"]));
+    expect(within(rowFor("patch-a.diff")).queryByText("Copied to clipboard")).toBeNull();
+    expect(announce).toHaveBeenCalledTimes(1);
+    expect(announce).toHaveBeenCalledWith("Copied", "polite");
+  });
+
+  it("states a refused copy once, in the row, and clears it when a retry lands", async () => {
+    copyToClipboard.mockResolvedValueOnce(false).mockResolvedValue(true);
+    const announce = vi.fn();
+    useAnnouncerStore.setState({ announce });
+    renderOverlay();
+    fireEvent.click(screen.getByText("patch-a.diff"));
+    const copy = within(rowFor("patch-a.diff")).getByRole("button", { name: "Copy" });
+    announce.mockClear();
+
+    await act(async () => {
+      fireEvent.click(copy);
+    });
+
+    expect(within(rowFor("patch-a.diff")).getByText(/Couldn't copy to the clipboard/)).toBeTruthy();
+    expect(copy.textContent).toBe("Copy");
+    expect(announce).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(copy);
+    });
+
+    expect(within(rowFor("patch-a.diff")).queryByText(/Couldn't copy to the clipboard/)).toBeNull();
+    expect(copy.textContent).toContain("Copied");
+  });
+
+  it("keeps the refusal when the row is collapsed while the copy is in flight", async () => {
+    let finish: (ok: boolean) => void = () => undefined;
+    copyToClipboard.mockReturnValue(new Promise<boolean>((resolve) => (finish = resolve)));
+    renderOverlay();
+    fireEvent.click(screen.getByText("patch-a.diff"));
+    await act(async () => {
+      fireEvent.click(within(rowFor("patch-a.diff")).getByRole("button", { name: "Copy" }));
+    });
+
+    fireEvent.click(screen.getByText("patch-a.diff"));
+    await act(async () => {
+      finish(false);
+    });
+    fireEvent.click(screen.getByText("patch-a.diff"));
+
+    expect(within(rowFor("patch-a.diff")).getByText(/Couldn't copy to the clipboard/)).toBeTruthy();
   });
 });
 

@@ -1,19 +1,17 @@
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
-import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
-import { gateDescription, proxyAllowlistText } from "./policyCopy";
+import { UNGATED_QUESTION_TEXT, gateDescription } from "./policyCopy";
 import type { UseDecisionsPolicyResult } from "./useDecisionsPolicy";
 
 /**
  * Policy: who may answer (#16013). The workflow gates are Daintree's and only
- * shown here; the one thing to change is whether a question without a
- * registered gate may take a proxy answer, off unless the person turns it on.
+ * shown here. Whether a question without one may take a proxy answer follows
+ * the decision model's one choice to answer automatically (#18062), so this
+ * section says where that is rather than offering a second switch for it.
  */
 export function DecisionsPolicySection({ policy: read }: { policy: UseDecisionsPolicyResult }) {
-  const { policy, loadError, pending, saveFailure, reload, setProxyAllowlisted } = read;
-  const allowed = pending ?? policy?.proxyAllowlisted ?? false;
-  const locked = policy === null || pending !== null;
+  const { policy, loadError, reload } = read;
 
   return (
     <SettingsSection
@@ -42,26 +40,12 @@ export function DecisionsPolicySection({ policy: read }: { policy: UseDecisionsP
         </SettingsGroup>
       )}
       <SettingsGroup>
-        <SettingsSwitchCard
-          id="decisions-proxy-allowlist"
-          title="Allow proxy answers"
-          subtitle={proxyAllowlistText(policy?.gates ?? [])}
-          isEnabled={allowed}
-          onChange={() => void setProxyAllowlisted(!allowed)}
-          disabled={locked}
-          isModified={policy?.proxyAllowlisted === true}
-          onReset={() => void setProxyAllowlisted(false)}
+        <SettingsRow
+          id="decisions-policy-ungated"
+          label="Questions without a gate"
+          description={UNGATED_QUESTION_TEXT}
         />
       </SettingsGroup>
-      {saveFailure && (
-        <SettingsLoadErrorBanner
-          title={
-            saveFailure.allowed ? "Couldn't allow proxy answers" : "Couldn't stop proxy answers"
-          }
-          message={saveFailure.message}
-          onRetry={() => void setProxyAllowlisted(saveFailure.allowed)}
-        />
-      )}
     </SettingsSection>
   );
 }

@@ -5,6 +5,7 @@ import type {
   McpApprovalScope,
   McpBearerIdentity,
   McpConfirmationDecision,
+  McpDelegationOffer,
   McpRequester,
   McpSessionOrigin,
 } from "@shared/types/ipc/mcpServer";
@@ -200,6 +201,12 @@ export interface PendingMcpConfirm {
    */
   offerSessionApproval?: boolean;
   /**
+   * Offer "Don't ask again for this kind of action" beside the ordinary
+   * approval (#16752). Set only by main, only for its own assistant's call,
+   * and display only: main keeps which action and whose preference.
+   */
+  delegationOffer?: McpDelegationOffer;
+  /**
    * Why this dialog is asking (#12692). `above-tier` is an agent pane calling
    * something its project's MCP tier does not cover on its own, which the
    * dialog says in so many words — the action may well be harmless, and the
@@ -291,6 +298,11 @@ export interface McpConfirmSelectableTarget {
   kindLabel: string;
   /** Whether an agent session is mid-work in this panel right now. */
   agentRunning: boolean;
+  /**
+   * What the row does, shown in full in place of the id (#17079): an account
+   * row names the folder it makes or uses, which is what the person approves.
+   */
+  detail?: string;
 }
 
 /**
@@ -313,9 +325,10 @@ export interface McpConfirmResolution {
   selectedTargetIds?: readonly string[];
   /**
    * Present only on an approval of a dialog that offered the session scope
-   * (#12692), and `session` only when the user chose it.
+   * (#12692) or a hand-over (#16752), and only when the user chose it.
    */
-  scope?: McpApprovalScope; /**
+  scope?: McpApprovalScope;
+  /**
    * Present only on a timeout of a request whose window was never on screen
    * while it asked: nobody could have answered it, so nothing was declined.
    */
@@ -597,6 +610,9 @@ export const useMcpConfirmStore = create<McpConfirmState & McpConfirmActions>((s
       ...(approved && current.offerSessionApproval === true && scope === "session"
         ? { scope: "session" as const }
         : {}),
+      ...(approved && current.delegationOffer !== undefined && scope === "delegate"
+        ? { scope: "delegate" as const }
+        : {}),
       ...(decision === "timeout" && unseen === true ? { unseen: true as const } : {}),
     });
     advance(set, queue);
@@ -651,6 +667,20 @@ function updateItem(
 /** Patch one request in place, current or queued; a no-op once it has gone. */
 function patchItem(requestId: string, patch: Partial<PendingMcpConfirm>): void {
   updateItem(requestId, (item) => ({ ...item, ...patch }));
+}
+
+/**
+ * Answer a request whose dialog failed to render (#17204), so the queue moves
+ * on and the bridge stops waiting. A live request is rejected, as Cancel would;
+ * `drop` would forget it without an answer and leave the bridge's await
+ * pending. An expired one was already answered as a timeout, so it only
+ * closes. A no-op unless `requestId` is still the one in front.
+ */
+export function declineFailedMcpConfirmation(requestId: string): void {
+  const state = useMcpConfirmStore.getState();
+  if (state.current === null || state.current.requestId !== requestId) return;
+  if (state.current.expired === true) state.dismiss(requestId);
+  else state.resolveCurrent("rejected");
 }
 
 /**

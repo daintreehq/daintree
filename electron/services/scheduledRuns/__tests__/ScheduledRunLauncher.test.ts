@@ -39,7 +39,8 @@ let recorder: {
   registerSkip: ReturnType<typeof vi.fn>;
   get: ReturnType<typeof vi.fn>;
   settle: ReturnType<typeof vi.fn>;
-  listBySchedule: ReturnType<typeof vi.fn>;
+  findIdByOccurrence: ReturnType<typeof vi.fn>;
+  listOpenBySchedule: ReturnType<typeof vi.fn>;
   beginReplacement: ReturnType<typeof vi.fn>;
   handleSessionCaptured: ReturnType<typeof vi.fn>;
 };
@@ -107,7 +108,17 @@ beforeEach(() => {
     registerSkip: vi.fn(),
     get: vi.fn((runId: string) => history.find((recorded) => recorded.id === runId) ?? null),
     settle: vi.fn(),
-    listBySchedule: vi.fn(() => history),
+    findIdByOccurrence: vi.fn(
+      (scheduleId: string, key: string) =>
+        history.find(
+          (recorded) => recorded.scheduleId === scheduleId && recorded.origin.occurrenceKey === key
+        )?.id ?? null
+    ),
+    listOpenBySchedule: vi.fn((scheduleId: string) =>
+      history.filter(
+        (recorded) => recorded.scheduleId === scheduleId && recorded.settlement.state === "open"
+      )
+    ),
     beginReplacement: vi.fn(() => null),
     handleSessionCaptured: vi.fn(),
   };

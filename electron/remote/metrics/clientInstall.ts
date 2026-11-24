@@ -5,10 +5,18 @@ import type {
 } from "../../../shared/types/ipc/hostMetrics.js";
 import type { HostId } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import {
+  areHostFiguresFollowed,
+  onHostFiguresDemandChange,
+} from "../../services/hostFiguresDemand.js";
 import { createLogger } from "../../utils/logger.js";
 import { getAllAppWebContents } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
 import { store } from "../../store.js";
+import {
+  isAgentUsageTrackingEnabled,
+  onAgentUsageTrackingChanged,
+} from "../../services/agentUsage/AgentUsageTracking.js";
 import { setHostAgentsSource } from "../client/initClient.js";
 import { showHostAttentionBanner } from "../hybrid/notifications.js";
 import { registerRemoteService } from "../runtime.js";
@@ -132,12 +140,14 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
     manager: options.manager,
     registry: options.registry,
     localLoop: getLocalSummaryLoop(),
+    figuresDemand: { followed: areHostFiguresFollowed, onChange: onHostFiguresDemandChange },
     emit(event) {
       for (const wc of getAllAppWebContents()) sendTo(wc, event);
     },
     deliverAttention,
     // Judged by this machine's settings, as its own agents' waits are (#14701).
     waitingPolicy: () => waitingPolicy(store.get("notificationSettings"), new Date()),
+    agentUsageTracking: isAgentUsageTrackingEnabled,
     local: {
       listFleetTargets: listLocalFleetTargets,
       submitFleet: submitLocalFleet,
@@ -154,10 +164,15 @@ export function installHostMetricsClient(options: InstallHostMetricsClientOption
     },
   });
   client.start();
+  // Turned back on, only what hosts send from then on is shown (#17981).
+  const offTracking = onAgentUsageTrackingChanged((enabled) => {
+    if (!enabled) client.forgetAgentUsage();
+  });
   const unregister = registerRemoteService("hostMetrics", client);
   setHostAgentsSource((hostId) => client.observedAgents(hostId));
   return () => {
     live = false;
+    offTracking();
     setHostAgentsSource(null);
     unregister();
     client.dispose();

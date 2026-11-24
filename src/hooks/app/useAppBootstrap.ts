@@ -16,6 +16,7 @@ import { useClearSwitchBusyStateOnReveal } from "./useClearSwitchBusyStateOnReve
 import { usePluginDeepLink } from "./usePluginDeepLink";
 import { usePluginArchiveInstallIntent } from "./usePluginArchiveInstallIntent";
 import { useNotificationHistoryPruning } from "./useNotificationHistoryPruning";
+import { useNotificationSnoozeExpiry } from "./useNotificationSnoozeExpiry";
 import { useMissingPrerequisiteWarning } from "./useMissingPrerequisiteWarning";
 import { useUpdateListener } from "@/hooks/useUpdateListener";
 import { useProjectLayoutSeed } from "@/hooks/useProjectLayoutSeed";
@@ -37,7 +38,6 @@ import {
   preloadPilotView,
   preloadShortcutReferenceDialog,
   preloadThemePalette,
-  preloadPortalDock,
 } from "@/lazyPanels";
 import { preloadCommonPanes } from "@/panels/registry";
 
@@ -148,6 +148,7 @@ export function useAppBootstrap() {
   useProjectApplicationWelcome(isStateLoaded);
   useForgeEnableRecommendation(isStateLoaded && idleHousekeepingReady);
   useNotificationHistoryPruning();
+  useNotificationSnoozeExpiry();
   // Gated on the idle flag so the prerequisite probe — which spawns
   // subprocesses and awaits refreshPath()'s 10s budget — lands after first
   // paint rather than on the boot path (#11763).
@@ -172,14 +173,13 @@ export function useAppBootstrap() {
       // Everyday surfaces whose first open otherwise suspends into React's
       // 300ms reveal throttle: the panel dialog host (review hub, file and
       // diff dialogs), the pane kinds, overview, all-agents view, shortcut
-      // reference, theme picker and portal.
+      // reference and theme picker.
       preloadPanelDialogHost().catch(() => {});
       preloadCommonPanes().catch(() => {});
       preloadWorktreeOverviewModal().catch(() => {});
       preloadPilotView().catch(() => {});
       preloadShortcutReferenceDialog().catch(() => {});
       preloadThemePalette().catch(() => {});
-      preloadPortalDock().catch(() => {});
       // Warm the shared Radix overlay primitives chunk (`radix-deferred`) so the
       // ProjectSwitcherPalette popover and context menus are ready on first
       // interaction in a freshly loaded project view. Otherwise this chunk is

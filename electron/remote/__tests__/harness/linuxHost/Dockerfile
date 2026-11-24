@@ -1,6 +1,8 @@
 # The machine a fresh Host install lands on: sshd and an unprivileged user, git
 # for its projects, the libraries Daintree's deb declares
-# (electron-builder.config.cjs, deb.depends), and no Daintree. No systemd either: `standins/` answers for it (see systemctl).
+# (electron-builder.config.cjs, deb.depends), and no Daintree. No init system
+# either, as on Agent 37 and most container sandboxes: no systemctl, loginctl or
+# /run/user, so setup starts Host mode as it does on any machine without systemd.
 FROM ubuntu:24.04 AS host
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -13,7 +15,6 @@ RUN apt-get update \
 # A password that can't be typed, not a locked account: without PAM, sshd turns locked accounts away.
 RUN useradd --create-home --uid 1500 --shell /bin/bash --password '*' daintree-e2e \
   && mkdir -p /run/sshd
-COPY standins/systemctl standins/loginctl standins/journalctl /usr/local/bin/
 COPY sshd_config /etc/ssh/sshd_config.d/10-e2e.conf
 COPY entrypoint.sh /usr/local/sbin/e2e-entrypoint
 ENTRYPOINT ["/usr/local/sbin/e2e-entrypoint"]

@@ -81,6 +81,8 @@ import {
 
 const WT = "/home/user/project-wt";
 const SETTLE_MS = 50;
+/** Past the wait a foreground read gives a capture before it goes out without it. */
+const DEADLINE_WAIT_MS = 2_000;
 const COMMIT = "a1b2c3d4e5f6a7b8c9d0a1b2c3d4e5f6a7b8c9d0";
 const PROJECT = "p".repeat(64);
 
@@ -95,6 +97,7 @@ const status: StagingStatus = {
   pushDestination: { remote: "origin", branch: "feature/test" },
   pullSource: { remote: "origin", branch: "feature/test" },
   repoState: "DIRTY",
+  repoOperationId: null,
   rebaseStep: null,
   rebaseTotalSteps: null,
   rebaseSequence: null,
@@ -309,15 +312,20 @@ describe("Review Hub review marks (#14585)", () => {
     renderHub();
     await markButtonReady();
 
-    // Refresh sends a status read at once, beside a new capture. The capture
-    // lands before the read answers: what it holds may have arrived after the
-    // read, so the read must still show the capture from before it went out.
+    // Refresh's read waits on a new capture, but only so long: a slow one lets
+    // the read go out first. The capture lands before the read answers: what
+    // it holds may have arrived after the read, so the read must still show
+    // the capture from before it went out.
     const read = deferred<StagingStatus>();
     const slowCapture = deferred<ReviewMarkCaptureOutcome>();
     getStagingStatus.mockReturnValueOnce(read.promise);
     bridge.capture.mockReturnValueOnce(slowCapture.promise);
+    const reads = getStagingStatus.mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(bridge.capture).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(getStagingStatus).toHaveBeenCalledTimes(reads + 1), {
+      timeout: DEADLINE_WAIT_MS,
+    });
     // The reads that follow the capture stay out, so only the first answers.
     getStagingStatus.mockReturnValue(new Promise(() => {}));
     await act(async () => slowCapture.resolve(captured("c3")));
@@ -533,6 +541,16 @@ describe("Review Hub review marks (#14585)", () => {
     expect(screen.queryByTestId("review-hub-review-mark-since")).toBeNull();
   });
 
+  it("gives the clear action a 24px target that leaves the line's height alone", async () => {
+    useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+    renderHub();
+
+    const clear = await screen.findByTestId("review-hub-review-mark-clear");
+    expect(clear.className).toContain("min-h-6");
+    expect(clear.className).toContain("min-w-6");
+    expect(clear.className).toContain("-my-1");
+  });
+
   it("clears the mark and drops the line once the host says it's gone", async () => {
     useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
     bridge.clear.mockResolvedValue({ status: "cleared", snapshot: snapshot({}, 3) });
@@ -584,7 +602,7 @@ describe("Review Hub review marks (#14585)", () => {
     }
   );
 
-  it("reads status twice on open: once straight away, once after the capture", async () => {
+  it("reads status once on open, after a capture that lands in time", async () => {
     renderHub();
     await markButtonReady();
     // Long enough for any read the lane would still send to have gone out.
@@ -592,8 +610,8 @@ describe("Review Hub review marks (#14585)", () => {
       await new Promise((resolve) => setTimeout(resolve, SETTLE_MS));
     });
 
-    // Staging status is rate limited on the host; the lane adds one read per capture.
-    expect(getStagingStatus).toHaveBeenCalledTimes(2);
+    // Staging status is rate limited on the host; the opening's read is the capture's.
+    expect(getStagingStatus).toHaveBeenCalledTimes(1);
     expect(bridge.capture).toHaveBeenCalledTimes(1);
   });
 
@@ -602,10 +620,18 @@ describe("Review Hub review marks (#14585)", () => {
       status: "saved",
       snapshot: snapshot({ [WT]: summary(1) }, 1),
     } satisfies ReviewMarkSaveOutcome);
+    // A slow capture lets the opening's read go out without it.
+    const slowCapture = deferred<ReviewMarkCaptureOutcome>();
+    bridge.capture.mockReturnValueOnce(slowCapture.promise);
     const firstRead = deferred<StagingStatus>();
     getStagingStatus.mockReturnValueOnce(firstRead.promise);
     renderHub();
+    await waitFor(() => expect(getStagingStatus).toHaveBeenCalledTimes(1), {
+      timeout: DEADLINE_WAIT_MS,
+    });
+    await act(async () => slowCapture.resolve(captured("c1")));
     const button = await markButtonReady();
+    expect(getStagingStatus).toHaveBeenCalledTimes(2);
 
     // The read sent before the capture landed answers after the one sent after it.
     await act(async () => firstRead.resolve(status));
@@ -800,6 +826,37 @@ describe("Review Hub review marks (#14585)", () => {
       push.mockRestore();
     });
 
+    it("opens a deleted file's diff as deleted (#17582)", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      const result = comparable(["src/own.ts", "src/gone.ts"], 0);
+      if (result.state !== "comparable") throw new Error("expected comparable");
+      // A committed deletion: the reviewed side had the file, the current side does not.
+      Object.assign(result.files[1]!, {
+        status: "deleted" as const,
+        index: "changed" as const,
+        reviewed: {
+          kind: "unlisted" as const,
+          entry: { mode: "100644" as const, oid: "a".repeat(40) },
+        },
+      });
+      bridge.compare.mockResolvedValue({ status: "compared", markRevision: 2, result });
+      const dialogs = usePanelDialogStore.getState();
+      const open = vi.spyOn(dialogs, "openPanelDialog").mockResolvedValue("diff-panel");
+      const push = vi.spyOn(dialogs, "pushPanelDialog").mockResolvedValue("diff-panel");
+      renderHub();
+      fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+      await screen.findByTestId("since-review-files-branch");
+
+      const rows = screen.getAllByTestId("since-review-file-row");
+      fireEvent.click(rows.find((row) => row.textContent?.includes("gone.ts"))!);
+
+      await waitFor(() => expect(open.mock.calls.length + push.mock.calls.length).toBe(1));
+      const options = (open.mock.calls[0] ?? push.mock.calls[0])![0];
+      expect(options).toMatchObject({ filePath: "src/gone.ts", fileStatus: "deleted" });
+      open.mockRestore();
+      push.mockRestore();
+    });
+
     // The selection is the hub's record of the open diff; a move resets it, and
     // dropping it closes the diff the previous worktree opened (#16793).
     it("closes a since-review diff opened for the previous worktree when the hub moves", async () => {
@@ -855,6 +912,56 @@ describe("Review Hub review marks (#14585)", () => {
           />
         );
         await waitFor(() => expect(closeById).toHaveBeenCalledWith("diff-panel"));
+        expect(openDiff).toHaveBeenCalledTimes(1);
+      } finally {
+        act(() => {
+          usePanelDialogStore.setState(initial, true);
+        });
+      }
+    });
+
+    // The diff layers over the hub, and the hub's capture listener still hears
+    // its keys: an open since-review diff has to read as the overlay it is, the
+    // way a working-tree or base-branch one does.
+    it("answers Escape under an open since-review diff by closing the diff, not the hub", async () => {
+      useReviewMarksStore.setState({ marks: { [WT]: summary(2) }, revision: 2, loaded: true });
+      bridge.compare.mockResolvedValue({
+        status: "compared",
+        markRevision: 2,
+        result: comparable(["src/own.ts"]),
+      });
+      const initial = usePanelDialogStore.getState();
+      const openDiff = vi.fn(async () => {
+        usePanelDialogStore.setState({ dialogStack: ["review-1", "diff-panel"] });
+        return "diff-panel";
+      });
+      const closeById = vi.fn((id: string) => {
+        const { dialogStack } = usePanelDialogStore.getState();
+        if (dialogStack.includes(id)) {
+          usePanelDialogStore.setState({ dialogStack: dialogStack.filter((d) => d !== id) });
+        }
+      });
+      usePanelDialogStore.setState({
+        dialogStack: ["review-1"],
+        openPanelDialog: openDiff,
+        pushPanelDialog: openDiff,
+        closePanelDialogById: closeById,
+      });
+      const onClose = vi.fn();
+      try {
+        render(
+          <ReviewHubContent isOpen={true} worktreePath={WT} panelId="review-1" onClose={onClose} />
+        );
+        fireEvent.click(await screen.findByTestId("review-hub-review-mark-open"));
+        fireEvent.click((await screen.findAllByTestId("since-review-file-row"))[0]!);
+        await waitFor(() =>
+          expect(usePanelDialogStore.getState().dialogStack).toEqual(["review-1", "diff-panel"])
+        );
+
+        fireEvent.keyDown(document.body, { key: "Escape" });
+
+        await waitFor(() => expect(closeById).toHaveBeenCalledWith("diff-panel"));
+        expect(onClose).not.toHaveBeenCalled();
         expect(openDiff).toHaveBeenCalledTimes(1);
       } finally {
         act(() => {

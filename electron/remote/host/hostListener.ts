@@ -1,4 +1,5 @@
 import os from "node:os";
+import path from "node:path";
 import { app } from "electron";
 import { BUILD_COMMIT } from "../buildGate.js";
 import {
@@ -8,6 +9,7 @@ import {
 import { createDriveLeaseGate, getDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { createLeaseTargetResolvers } from "../../services/driveLeaseTargetResolvers.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
+import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import {
   notifyMcpDriveTargetChange,
   setMcpDriveTargetResolver,
@@ -25,6 +27,7 @@ import { installPluginParityHost } from "../plugins/parity/install.js";
 import { installSettingsCopyHost } from "../settingsCopy/install.js";
 import { installSettingsControlHost } from "../settingsControl/install.js";
 import { installHostPortService } from "../ports/hostPorts.js";
+import { installHostAgentForwarding } from "../agentForwarding/hostForwarder.js";
 import { installProjectsHost } from "../projects/hostInstall.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import {
@@ -38,6 +41,8 @@ import { getHostPreviousEnd } from "../../services/hostPreviousEnd.js";
 import { hostLaunchCommand, hostLocation } from "./hostLocation.js";
 import type { HostSocketLocation } from "./hostSocketPath.js";
 import { initRemoteHostsHost } from "./initHost.js";
+import { installHostIdle } from "./hostIdle.js";
+import { installMachineKeeperHost } from "./machineKeeperHost.js";
 import {
   installHostMetricsHost,
   installLinkActivityHost,
@@ -178,6 +183,8 @@ async function buildHostListener(
   // new link (and closed expired endpoints) by the time ours run.
   const host = initRemoteHostsHost(server);
   teardowns.push(() => host.dispose());
+  // When this machine last saw work, with or without a Shell attached (#17357).
+  teardowns.push(installHostIdle(host.sessionHost));
   teardowns.push(() => disposeAllTerminalBridges());
 
   teardowns.push(
@@ -236,13 +243,22 @@ async function buildHostListener(
         caller: relayCallerOf(spec),
       });
     },
-    retirePrincipal: (senderId, helpSessionId) => {
+    retirePrincipal: (senderId, helpSessionId, keepConversation) => {
       void import("../../services/McpServerService.js")
         .then(({ mcpServerService }) =>
-          mcpServerService.retireRelayPrincipal(senderId, helpSessionId)
+          mcpServerService.retireRelayPrincipal(senderId, helpSessionId, keepConversation)
         )
         .catch((error: unknown) => {
           logger.warn("Couldn't retire a relay principal", { error });
+        });
+    },
+    forgetConversation: (senderId, conversationId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) =>
+          mcpServerService.forgetRelayConversation(senderId, conversationId)
+        )
+        .catch((error: unknown) => {
+          logger.warn("Couldn't forget a relay conversation", { error });
         });
     },
     watchingNoticeCalls: async (senderId, helpSessionId) => {
@@ -262,6 +278,25 @@ async function buildHostListener(
   teardowns.push(() => uploads.dispose());
   // Port forwards and project moves are per session, not per endpoint.
   teardowns.push(installHostPortService(server));
+  // A socket per project carrying ssh-agent requests to the Shell driving it (#17432).
+  const agentForwarding = installHostAgentForwarding({
+    server,
+    lease: getDriveLeaseService(),
+    socketDir: path.join(location.dir, "agent"),
+    // A driver's view leaving, or its link dropping, makes its lease reserved
+    // with no holder change to say so.
+    onRouteMaybeChanged: (listener) => {
+      const offs = [
+        getEndpointRegistry().onChange(listener),
+        host.sessionHost.onTransportChange(() => listener()),
+      ];
+      return () => {
+        for (const off of offs) off();
+      };
+    },
+  });
+  teardowns.push(() => agentForwarding.dispose());
+  teardowns.push(registerRemoteService("agentForwardingHost", agentForwarding));
   // A Shell's assistant bringing a project here asks under the same setting (#14140).
   teardowns.push(
     installProjectsHost(server, undefined, () => getHelpAssistantSettings().acceptRemoteControl)
@@ -272,6 +307,9 @@ async function buildHostListener(
   teardowns.push(installSettingsCopyHost(server));
   // This machine's own settings, read and changed by name when a Shell asks (#14167).
   teardowns.push(installSettingsControlHost(server));
+  // A cloud machine renewing and stopping itself by its idle clock, with the key a Shell hands it
+  // (#17361), and the claim a Shell makes before acting on this host's idleness (#17922).
+  teardowns.push(installMachineKeeperHost(server));
   // Plugin prompts go to the project's driving frontend; view bundles are
   // served per endpoint alongside its other streams.
   teardowns.push(installPluginHost());

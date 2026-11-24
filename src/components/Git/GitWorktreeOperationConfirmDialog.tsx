@@ -19,17 +19,23 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isClientGitError } from "@/utils/clientGitError";
-import { useGitWorktreeOperationConfirmStore } from "@/store/gitWorktreeOperationConfirmStore";
+import {
+  declineFailedGitWorktreeOperationConfirmation,
+  useGitWorktreeOperationConfirmStore,
+} from "@/store/gitWorktreeOperationConfirmStore";
 import {
   GIT_REMOTE_COMMIT_PREVIEW_MAX,
   type GitBaseIntegrationCommitPreview,
+  type RepoOperationPin,
 } from "@shared/types/git";
 import type { StagingStatus } from "@shared/types";
 import {
   OPERATION_LABEL,
   buildAbortDescription,
+  buildInProgressDescription,
   toRepoOperationState,
 } from "@/components/Git/repoOperationCopy";
+import { pluralize } from "@/lib/pluralize";
 
 /** Everything the handler will serve, so the tail is a rare cap rather than a routine count. */
 const PREVIEW_COMMIT_LIMIT = GIT_REMOTE_COMMIT_PREVIEW_MAX;
@@ -250,6 +256,38 @@ function GitWorktreeOperationConfirmDialogInner() {
     // over a settled read that found no operation is an approval the surface
     // cannot honour.
     const nothingInProgress = status !== null && freshOperation === null;
+    // What an approval binds the abort to (#17559): the operation this read
+    // found, by identity rather than kind, so one that replaces it while the
+    // dialog sits open, even the same merge started again, is refused rather
+    // than discarded under this approval. Approving is impossible without one:
+    // a failed read, or an operation the read could not identify, leaves
+    // nothing to bind to, and an abort of "whatever is there" is the bug.
+    const pin: RepoOperationPin | null =
+      status && freshOperation && status.repoOperationId
+        ? { operation: freshOperation, operationId: status.repoOperationId }
+        : null;
+    const unidentified = status !== null && freshOperation !== null && pin === null;
+    const notice = loadError ? (
+      <PreviewNotice
+        tone="error"
+        title={`Couldn't read the ${label} in progress`}
+        onRetry={loadPreview}
+        retryTestId="git-abort-operation-retry"
+      >
+        {loadError}
+      </PreviewNotice>
+    ) : unidentified ? (
+      <PreviewNotice
+        tone="error"
+        title={`Couldn't identify the ${label} in progress`}
+        onRetry={loadPreview}
+        retryTestId="git-abort-operation-retry"
+        testId="git-abort-operation-unidentified"
+      >
+        Aborting needs to know which {label} it ends, so another one started meanwhile isn&apos;t
+        aborted by mistake. Retry once the worktree has settled.
+      </PreviewNotice>
+    ) : null;
     return (
       <ConfirmDialog
         isOpen={true}
@@ -260,33 +298,53 @@ function GitWorktreeOperationConfirmDialogInner() {
             ? "This worktree is no longer mid-operation — it finished or was already resolved."
             : status && freshOperation
               ? buildAbortDescription(freshOperation, status)
-              : loadError
-                ? `Couldn't read what this would discard. Aborting still ends the in-progress ${label}.`
-                : `Discards the in-progress ${label}.`
+              : `Discards the in-progress ${label}.`
         }
         confirmLabel={nothingInProgress ? "Close" : `Abort ${label}`}
         cancelLabel="Keep working"
-        variant="destructive"
-        // Held until this request's own read settles: the counts in the
-        // description are the whole reason to confirm, and approving before
-        // they land is approving a blank.
-        confirmDisabled={nothingInProgress || (!isSettled && !loadError)}
+        // A Close that only declines carries no danger to style.
+        variant={nothingInProgress ? "default" : "destructive"}
+        hasPreview={notice !== null}
+        // Held until this request's own read settles and identifies the
+        // operation: the counts in the description are the whole reason to
+        // confirm, and the identity is what the abort is checked against.
+        // With nothing in progress the primary is a Close, which declines.
+        confirmDisabled={!nothingInProgress && pin === null}
         hint={
-          !isSettled && !loadError && showPendingHint ? "Checking what this would discard…" : null
+          notice
+            ? "Retry to check again"
+            : !isSettled && showPendingHint
+              ? "Checking what this would discard…"
+              : null
         }
-        onConfirm={() => resolveConfirmation(!nothingInProgress)}
-      />
+        onConfirm={() => {
+          if (nothingInProgress) resolveConfirmation(false);
+          else if (pin) resolveConfirmation(true, null, pin);
+        }}
+      >
+        {notice && <PreviewFrame>{notice}</PreviewFrame>}
+      </ConfirmDialog>
     );
   }
 
   const copy = COPY[request.kind];
   const preview = loaded?.kind === "base-integration" ? loaded.preview : null;
   const commits = preview?.commits ?? null;
-  const isLoaded = isSettled && preview !== null;
-  const total = preview?.total ?? 0;
-  const behind = preview?.behind ?? 0;
   const compareRef = preview?.compareRef ?? null;
   const branch = preview?.branch ?? null;
+  // What the write would refuse on right now, read by the same predicates it
+  // refuses with (#17189). Only from this request's own settled answer.
+  const blocker = isSettled ? (preview?.blocker ?? null) : null;
+  const halted = blocker?.reason === "operation-in-progress" ? blocker : null;
+  const isBaseCheckedOut = blocker?.reason === "base-checked-out";
+  // A halted operation and a checked-out base stop the read before anything is
+  // measured, so there is no range to show and no target to name.
+  const isStopped = halted !== null || isBaseCheckedOut;
+  const total = preview?.total ?? null;
+  const behind = preview?.behind ?? null;
+  // Unmeasured is `null`, never zero: a range the read never took must not
+  // read as "nothing to integrate".
+  const isMeasured = isSettled && preview !== null && behind !== null && total !== null;
 
   // "Nothing to do" is `behind === 0` for BOTH kinds, and deliberately not
   // `commits.length === 0`. `behind` counts what the base has that this branch
@@ -298,33 +356,113 @@ function GitWorktreeOperationConfirmDialogInner() {
   // equivalent patches, measures empty while the rebase still moves it onto the
   // base. Reading that as "up to date" would disable the primary on an
   // operation that does something.
-  const isNothingToDo = isLoaded && behind === 0;
+  const isNothingToDo = isMeasured && behind === 0;
   const isBehindWithNothingToReplay =
-    isLoaded && request.kind === "rebase-onto-base" && commits?.length === 0 && behind > 0;
+    isMeasured && request.kind === "rebase-onto-base" && commits?.length === 0 && behind > 0;
+  const hasIncoming = isMeasured && !isNothingToDo;
+
+  // A dirty or conflicted tree only matters when there is something to
+  // integrate. Over a branch already level with the base, "commit or stash
+  // first" sends the user off to do work that ends in "nothing to do".
+  const treeBlocker =
+    hasIncoming && (blocker?.reason === "conflicts" || blocker?.reason === "uncommitted-changes")
+      ? blocker
+      : null;
 
   // A base ref nobody can name can't be approved — the handler refuses the
   // operation anyway, and guessing `origin` is the bug (#11746). The read fails
   // CLOSED on that case, so an unresolvable ref arrives here as `loadError`
   // rather than as a loaded preview; the `isSettled` half is what stops an
-  // unsettled or failed read from being approved.
-  const confirmDisabled = !isSettled || preview === null || isNothingToDo;
+  // unsettled or failed read from being approved. Any blocker holds it too:
+  // the write would refuse, and approving into a failure toast is the bug.
+  const confirmDisabled = !isMeasured || isNothingToDo || blocker !== null;
 
   // Names the one unmet prerequisite rather than leaving a dead button to be
   // read as arbitrary. Ordered by which the user can act on first.
   const blockedReason = loadError
     ? "Retry the preview to continue"
-    : isNothingToDo
-      ? "Already up to date with the base branch"
-      : showPendingHint
-        ? "Checking what this would change…"
-        : null;
+    : halted
+      ? `Finish the ${OPERATION_LABEL[halted.operation].toLowerCase()} to continue`
+      : isBaseCheckedOut
+        ? "Check out another branch to continue"
+        : isNothingToDo
+          ? "Already up to date with the base branch"
+          : treeBlocker?.reason === "conflicts"
+            ? "Resolve the conflicts to continue"
+            : treeBlocker
+              ? "Commit or stash to continue"
+              : showPendingHint
+                ? "Checking what this would change…"
+                : null;
+
+  // Every blocker offers Retry: each can clear while the dialog stays open — an
+  // agent commits, a halted rebase is continued, another branch is checked out.
+  const notice = loadError ? (
+    <PreviewNotice
+      tone="error"
+      title={copy.readFailure}
+      onRetry={loadPreview}
+      retryTestId="git-base-integration-retry"
+    >
+      {loadError}
+    </PreviewNotice>
+  ) : halted ? (
+    <PreviewNotice
+      tone="error"
+      title={`${OPERATION_LABEL[halted.operation]} in progress`}
+      onRetry={loadPreview}
+      retryTestId="git-base-integration-operation-retry"
+      testId="git-base-integration-operation-in-progress"
+    >
+      {buildInProgressDescription(halted.operation, halted.rebaseStep, halted.rebaseTotalSteps)}
+    </PreviewNotice>
+  ) : isBaseCheckedOut ? (
+    <PreviewNotice
+      tone="error"
+      title="Base branch checked out"
+      onRetry={loadPreview}
+      retryTestId="git-base-integration-base-checked-out-retry"
+      testId="git-base-integration-base-checked-out"
+    >
+      This worktree has {preview?.baseBranch ?? baseBranch} itself checked out, and integrating the
+      base branch never writes to the base branch. Check out the branch you want to update, then
+      retry.
+    </PreviewNotice>
+  ) : treeBlocker?.reason === "conflicts" ? (
+    <PreviewNotice
+      tone="error"
+      title={pluralize(treeBlocker.count, "unresolved conflict")}
+      onRetry={loadPreview}
+      retryTestId="git-base-integration-conflicts-retry"
+      testId="git-base-integration-conflicts"
+    >
+      Git won&apos;t integrate the base branch while files are still in conflict. Resolve and stage
+      them in Review Hub, then commit or stash and retry.
+    </PreviewNotice>
+  ) : treeBlocker ? (
+    <PreviewNotice
+      tone="error"
+      title={pluralize(treeBlocker.count, "uncommitted change")}
+      onRetry={loadPreview}
+      retryTestId="git-base-integration-dirty-retry"
+      testId="git-base-integration-dirty"
+      // A plain `git stash` leaves untracked files behind, and they block this
+      // too, so the stash named is the one that clears them.
+      command="git stash push --include-untracked"
+    >
+      Git won&apos;t integrate the base branch over uncommitted changes, untracked files included.
+      Commit them, or stash everything before you retry:
+    </PreviewNotice>
+  ) : null;
 
   return (
     <ConfirmDialog
       isOpen={true}
       onClose={() => resolveConfirmation(false)}
       title={copy.title}
-      description={<span>{copy.description}</span>}
+      // Withheld only where the read stopped: with no range below it, the
+      // description would explain an operation the frame says can't start.
+      description={isStopped ? undefined : <span>{copy.description}</span>}
       confirmLabel={copy.confirmLabel}
       cancelLabel="Cancel"
       variant="destructive"
@@ -346,40 +484,35 @@ function GitWorktreeOperationConfirmDialogInner() {
       }
     >
       <PreviewFrame>
-        {loadError && (
-          <PreviewNotice
-            tone="error"
-            title={copy.readFailure}
-            onRetry={loadPreview}
-            retryTestId="git-base-integration-retry"
-          >
-            {loadError}
-          </PreviewNotice>
-        )}
+        {notice}
         {/* Subject first, then target: the pair reads in the order the
             operation happens. Same local-then-base order for both kinds, with
             the labels carrying the direction — Rewrites/Onto for a replay,
-            Into/From for an integration. */}
-        <PreviewSummary testId="git-base-integration-summary">
-          <SummaryRow label={copy.subjectLabel}>
-            {branch && isSettled ? (
-              <RefChip value={branch} />
-            ) : !isSettled && !loadError ? (
-              <Bone className="w-40" />
-            ) : (
-              <MissingValue />
-            )}
-          </SummaryRow>
-          <SummaryRow label={copy.targetLabel}>
-            {compareRef && isSettled ? (
-              <RefChip value={compareRef} />
-            ) : !isSettled && !loadError ? (
-              <Bone className="w-48" />
-            ) : (
-              <MissingValue />
-            )}
-          </SummaryRow>
-        </PreviewSummary>
+            Into/From for an integration. Left out where the read stopped: the
+            notice names what it found, and a row of blanks would only repeat
+            that nothing was measured. */}
+        {!isStopped && (
+          <PreviewSummary testId="git-base-integration-summary">
+            <SummaryRow label={copy.subjectLabel}>
+              {branch && isSettled ? (
+                <RefChip value={branch} />
+              ) : !isSettled && !loadError ? (
+                <Bone className="w-40" />
+              ) : (
+                <MissingValue />
+              )}
+            </SummaryRow>
+            <SummaryRow label={copy.targetLabel}>
+              {compareRef && isSettled ? (
+                <RefChip value={compareRef} />
+              ) : !isSettled && !loadError ? (
+                <Bone className="w-48" />
+              ) : (
+                <MissingValue />
+              )}
+            </SummaryRow>
+          </PreviewSummary>
+        )}
 
         {!isSettled && !loadError && (
           <PreviewSkeleton label={copy.loadingLabel} testId="git-base-integration-loading" />
@@ -391,8 +524,8 @@ function GitWorktreeOperationConfirmDialogInner() {
           </PreviewNote>
         )}
 
-        {isLoaded && !isNothingToDo && (
-          <PreviewSectionHeading label={copy.commitsHeading} count={total} />
+        {hasIncoming && (
+          <PreviewSectionHeading label={copy.commitsHeading} count={total ?? undefined} />
         )}
 
         {isBehindWithNothingToReplay && (
@@ -402,19 +535,20 @@ function GitWorktreeOperationConfirmDialogInner() {
           </PreviewNote>
         )}
 
-        {isLoaded && !isNothingToDo && commits !== null && commits.length > 0 && (
+        {hasIncoming && commits !== null && commits.length > 0 && (
           <CommitRows
             commits={commits}
-            total={total}
+            total={total ?? commits.length}
             label={`${copy.commitsHeading}${compareRef ? ` — ${compareRef}` : ""}`}
             rowTestId="git-base-integration-commit-row"
           />
         )}
       </PreviewFrame>
-      {/* Gated on there actually being something to integrate: a caution about
-          conflicts under a panel that has just said nothing would move is the
+      {/* Gated on there actually being something to integrate, and on nothing
+          blocking it: a caution about conflicts under a panel that has just
+          said nothing would move, or that the operation can't start, is the
           same contradiction it exists to avoid. */}
-      {isLoaded && !isNothingToDo && (
+      {hasIncoming && blocker === null && (
         <p className="text-2xs text-text-secondary">{copy.footnote}</p>
       )}
     </ConfirmDialog>
@@ -431,6 +565,7 @@ export function GitWorktreeOperationConfirmDialog() {
       variant="component"
       componentName="GitWorktreeOperationConfirmDialog"
       resetKeys={[requestSeq]}
+      onError={() => declineFailedGitWorktreeOperationConfirmation(requestSeq)}
     >
       <GitWorktreeOperationConfirmDialogInner />
     </ErrorBoundary>

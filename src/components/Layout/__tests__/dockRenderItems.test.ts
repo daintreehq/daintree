@@ -12,6 +12,8 @@ import {
   collectDockPanels,
   filterRailDockPanels,
   planDockChipMove,
+  selectDockRenderDescriptors,
+  dockRenderDescriptorsEqual,
   type DockMembershipState,
 } from "../dockRenderItems";
 
@@ -623,5 +625,75 @@ describe("planDockChipMove", () => {
 
     expect(planDockChipMove(panelIds, items, "a", 1)).toEqual(["b", "a"]);
     expect(idsOf(items)).toEqual(["a", "b"]);
+  });
+});
+
+describe("selectDockRenderDescriptors", () => {
+  const state = (panels: PtyPanelData[], tabGroups = NO_GROUPS) => ({
+    panelIds: panels.map((p) => p.id),
+    panelIdsByWorktreeId: {},
+    panelsById: Object.fromEntries(panels.map((p) => [p.id, p])) as Record<string, PanelInstance>,
+    trashedTerminals: new Map<string, unknown>(),
+    tabGroups,
+  });
+
+  it("describes the rail by ids and groups, never panel records", () => {
+    const a = terminal("a");
+    const b = terminal("b");
+    const c = terminal("c");
+    const grouped = group(["b", "c"], "c");
+    const result = selectDockRenderDescriptors(state([a, b, c], groupMap(grouped)), undefined, []);
+
+    expect(result.map((item) => item.panelIds)).toEqual([["a"], ["b", "c"]]);
+    expect(result[1]!.group.activeTabId).toBe("c");
+  });
+
+  it("stays equal when a panel's own fields change, as a status flush rewrites them", () => {
+    const before = selectDockRenderDescriptors(
+      state([terminal("a"), terminal("b")]),
+      undefined,
+      []
+    );
+    const streaming = { ...terminal("a"), activityHeadline: "Reading files" } as PtyPanelData;
+    const after = selectDockRenderDescriptors(state([streaming, terminal("b")]), undefined, []);
+
+    expect(dockRenderDescriptorsEqual(before, after)).toBe(true);
+  });
+
+  it("differs on membership, order, grouping and the active tab", () => {
+    const panels = [terminal("a"), terminal("b"), terminal("c")];
+    const base = selectDockRenderDescriptors(state(panels), undefined, []);
+
+    expect(
+      dockRenderDescriptorsEqual(
+        base,
+        selectDockRenderDescriptors(state([panels[0]!, panels[1]!]), undefined, [])
+      )
+    ).toBe(false);
+    expect(
+      dockRenderDescriptorsEqual(
+        base,
+        selectDockRenderDescriptors(state([panels[1]!, panels[0]!, panels[2]!]), undefined, [])
+      )
+    ).toBe(false);
+    const grouped = selectDockRenderDescriptors(
+      state(panels, groupMap(group(["a", "b"], "a"))),
+      undefined,
+      []
+    );
+    expect(dockRenderDescriptorsEqual(base, grouped)).toBe(false);
+    expect(
+      dockRenderDescriptorsEqual(
+        grouped,
+        selectDockRenderDescriptors(state(panels, groupMap(group(["a", "b"], "b"))), undefined, [])
+      )
+    ).toBe(false);
+  });
+
+  it("drops panels the help lanes own", () => {
+    const result = selectDockRenderDescriptors(state([terminal("a"), terminal("b")]), undefined, [
+      "b",
+    ]);
+    expect(result.map((item) => item.panelIds)).toEqual([["a"]]);
   });
 });

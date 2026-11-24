@@ -9,6 +9,7 @@ import {
   disposeStore,
   expectedExposedIds,
   forbiddenCallSample,
+  fullTierCallBattery,
   loadMcpModules,
   loadRealManifest,
   MCP_TIERS,
@@ -337,4 +338,32 @@ describe("mcp session scenario family", () => {
       expect(scenario.warmups ?? 0).toBeGreaterThan(0);
     }
   });
+
+  it(
+    "admits every call in PERF-282's battery, naming any tool that refuses",
+    async () => {
+      // A self-gated tool left in the battery refuses this probe, which
+      // PERF-282 can only report as a bare miss count (#17996).
+      const { mods, manifest } = await harness();
+      const battery = fullTierCallBattery(manifest);
+      expect(battery.length).toBeGreaterThan(0);
+      const session = await openSession(mods, manifest, { tier: "full" });
+      try {
+        const refused: string[] = [];
+        for (const [index, toolId] of battery.entries()) {
+          const nonce = `perf-282-guard-${index}`;
+          const outcome = await probeCall(session, toolId, {
+            perfNonce: nonce,
+            requestKey: nonce,
+            _meta: { progressToken: nonce },
+          });
+          if (!outcome.ok) refused.push(`${toolId}: ${outcome.code}`);
+        }
+        expect(refused).toEqual([]);
+      } finally {
+        await session.close();
+      }
+    },
+    BUNDLE_TIMEOUT_MS
+  );
 });

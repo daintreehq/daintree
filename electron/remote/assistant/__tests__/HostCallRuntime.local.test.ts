@@ -24,6 +24,7 @@ import {
   type LocalMcpRelay,
 } from "../localMcpRelay.js";
 import type { RelayMcpSession, RelayMcpSessionSpec } from "../mcpRelayExecutor.js";
+import { setPluginAssistantReachSource } from "../../../services/plugin/pluginAssistantReach.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -57,6 +58,8 @@ interface OpenedSession {
   spec: RelayMcpSessionSpec;
   closed: boolean;
   calls: Array<{ tool: string; args: Record<string, unknown>; callId: string }>;
+  /** Each call's own stop, which a cancel pulls (#17985). */
+  signals: Array<AbortSignal | undefined>;
 }
 
 describe("HostCallRuntime reaching this machine's other projects (#14024)", () => {
@@ -99,12 +102,13 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       machineName: () => "greg-mbp",
       hasProject: async (projectId) => projects.some((project) => project.id === projectId),
       openSession: async (spec) => {
-        const session: OpenedSession = { spec, closed: false, calls: [] };
+        const session: OpenedSession = { spec, closed: false, calls: [], signals: [] };
         opened.push(session);
         return {
           isOpen: () => !session.closed,
-          callTool: async (tool, args, { callId }) => {
+          callTool: async (tool, args, { callId, signal }) => {
             session.calls.push({ tool, args, callId });
+            session.signals.push(signal);
             return answer(session);
           },
           close: () => {
@@ -135,7 +139,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       queueNotice: (lane, wake) => queued.push({ lane, wake }),
       askApproval: async (question) => {
         asked.push(question);
-        return "approved";
+        return { decision: "approved" };
       },
       local: {
         name: () => "greg-mbp",
@@ -143,6 +147,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         latestSummary: () => latestSummary?.() ?? null,
         summaryReceipt: (summary) => summaryReceipt?.(summary) ?? null,
         relayCall: (payload) => local.relayCall(payload),
+        cancelCall: (helpSessionId, callId) => local.cancelCall(helpSessionId, callId),
       },
       now: () => 1000,
       newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
@@ -486,6 +491,50 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       ]);
     });
 
+    it("stops the call's tool in process when its caller cancels it (#17985)", async () => {
+      answer = (session) =>
+        new Promise((_resolve, reject) => {
+          session.signals.at(-1)?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          });
+        });
+      const controller = new AbortController();
+      const pending = runtime.call("a", LIST, { tier: "full", signal: controller.signal });
+      await vi.waitFor(() => expect(opened[0]?.calls).toHaveLength(1));
+
+      controller.abort();
+      const settled = await pending;
+
+      expect(opened[0]!.signals[0]?.aborted).toBe(true);
+      expect(settled).toMatchObject({
+        ok: true,
+        value: {
+          outcome: "ambiguous",
+          callId: "00000000-0000-4000-8000-000000000001",
+          result: null,
+        },
+      });
+      if (!settled.ok) throw new Error("refused");
+      // The relay here took the cancel, so this is what it saw, not an unconfirmed cancel.
+      expect(settled.value.detail).toMatch(/told the tool to stop/);
+      // Its answer is held for a resend, which runs nothing again.
+      await expect(
+        runtime.call(
+          "a",
+          { ...LIST, callId: "00000000-0000-4000-8000-000000000001" },
+          {
+            tier: "full",
+          }
+        )
+      ).resolves.toMatchObject({ ok: true, value: { outcome: "ambiguous" } });
+      expect(opened[0]!.calls).toHaveLength(1);
+    });
+
+    it("takes no cancel once this machine's relay is gone (#17985)", () => {
+      local.dispose();
+      expect(local.cancelCall("a", "00000000-0000-4000-8000-000000000001")).toBe(false);
+    });
+
     it("answers a tool with no output schema in its structured half (#15730)", async () => {
       const value = {
         commands: [
@@ -556,6 +605,231 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           ["g", true],
         ]);
         expect(opened[0]!.calls[0]!.args).toEqual({ owned: true, global: true });
+      });
+    });
+
+    // #18153: the global Assistant reaches a plugin's opted-in action on this machine only.
+    describe("a plugin action that opted into assistantReach (#18153)", () => {
+      const REACH = "acme.stages.resume";
+      const RESUME = { hostId: "local", projectId: "proj-2", tool: REACH, args: { stageId: "s1" } };
+      let uninstall: () => void = () => {};
+
+      beforeEach(() => {
+        uninstall = setPluginAssistantReachSource({
+          has: (id) => id === REACH,
+          ids: () => [REACH],
+        });
+        const global = { ...RUN_A, projectId: GLOBAL_ASSISTANT_ID, terminalId: "t-g" };
+        runs.set("g", { ...global, sessionId: "g" });
+        runs.set("standby", { ...global, slot: 1, sessionId: "standby", standby: true });
+        relayCall.mockResolvedValue({
+          status: "done",
+          result: { isError: false, structured: null, text: "ok" },
+        });
+      });
+
+      afterEach(() => uninstall());
+
+      it.each(["core", "full"] as const)(
+        "sends the global Assistant's call into the project, marked global, at %s",
+        async (tier) => {
+          const settled = await runtime.call("g", RESUME, { tier });
+
+          expect(settled).toMatchObject({ ok: true, value: { outcome: "ok" } });
+          expect(opened).toHaveLength(1);
+          expect(opened[0]!.spec).toMatchObject({
+            projectId: "proj-2",
+            tier,
+            global: true,
+            local: true,
+          });
+          expect(opened[0]!.calls.map((call) => call.tool)).toEqual([REACH]);
+        }
+      );
+
+      it("reads the plugin's opt-in again at each call", async () => {
+        await runtime.call("g", RESUME, { tier: "core" });
+        uninstall();
+        const settled = await runtime.call("g", RESUME, { tier: "core" });
+
+        expect(settled).toMatchObject({ ok: true, value: { outcome: "policy_rejected" } });
+        expect(opened.flatMap((session) => session.calls)).toHaveLength(1);
+      });
+
+      it("refuses it on another machine, from a session that isn't coordinating, and once unnamed", async () => {
+        const refused = [
+          await runtime.call(
+            "g",
+            { ...RESUME, hostId: "studio", projectId: "host-p" },
+            {
+              tier: "core",
+            }
+          ),
+          await runtime.call("standby", RESUME, { tier: "core" }),
+        ];
+        uninstall();
+        refused.push(await runtime.call("g", RESUME, { tier: "core" }));
+
+        for (const settled of refused) {
+          expect(settled).toMatchObject({ ok: true, value: { outcome: "policy_rejected" } });
+        }
+        expect(opened).toEqual([]);
+        expect(relayCall).not.toHaveBeenCalled();
+      });
+    });
+
+    // #17919: what the caller's conversation makes is held under it, here and on a host.
+    describe("whose conversation the call is (#17919)", () => {
+      beforeEach(() => {
+        runs.set("a", { ...RUN_A, conversationOwnershipId: "conv-a" });
+        runs.set("b", { ...RUN_A, sessionId: "b", terminalId: "t-b" });
+        relayCall.mockResolvedValue({
+          status: "done",
+          result: { isError: false, structured: null, text: "ok" },
+        });
+      });
+
+      it("names the lane's conversation from main's own record of the run, never the model's", async () => {
+        const spoof = { ...LIST, conversationId: "forged", args: { conversationId: "forged" } };
+        await runtime.call("a", spoof as unknown as typeof LIST, { tier: "core" });
+        await runtime.call("b", spoof as unknown as typeof LIST, { tier: "core" });
+        const remote = { ...LIST, hostId: "studio", projectId: "host-p" };
+        await runtime.call("a", remote, { tier: "core" });
+        await runtime.call("b", remote, { tier: "core" });
+
+        expect(
+          opened.map((session) => [session.spec.helpSessionId, session.spec.conversationId])
+        ).toEqual([
+          ["a", "conv-a"],
+          ["b", undefined],
+        ]);
+        expect(relayCall.mock.calls.map(([, payload]) => payload.conversationId)).toEqual([
+          "conv-a",
+          undefined,
+        ]);
+      });
+    });
+
+    // #18143: of two global sessions, only the one that coordinates acts on workers.
+    describe("a global session that isn't coordinating (#18143)", () => {
+      const SEND = {
+        hostId: "local",
+        projectId: "proj-2",
+        tool: "terminal.sendCommandOwned",
+        args: { terminalId: "worker-1", command: "carry on" },
+      };
+      const global = { ...RUN_A, projectId: GLOBAL_ASSISTANT_ID, terminalId: "t-g" };
+
+      beforeEach(() => {
+        runs.set("lead", { ...global, sessionId: "lead", conversationOwnershipId: "work" });
+        runs.set("standby", { ...global, slot: 1, sessionId: "standby", standby: true });
+        relayCall.mockResolvedValue({
+          status: "done",
+          result: { isError: false, structured: null, text: "ok" },
+        });
+      });
+
+      it("refuses its acting calls here and on a host, sending and noting nothing", async () => {
+        const calls = [
+          SEND,
+          { ...SEND, hostId: "studio", projectId: "host-p" },
+          { ...SEND, tool: "agent.launch", args: { agentId: "claude" } },
+          { ...SEND, tool: "terminal.readLastMessageOwned", args: { terminalId: "worker-1" } },
+          // A resend is refused as the first send would be.
+          { ...SEND, callId: "00000000-0000-4000-8000-0000000000aa" },
+          {
+            hostId: "studio",
+            throwaway: true,
+            tool: "throwaway.launch",
+            args: { agentId: "codex" },
+          },
+        ];
+        for (const call of calls) {
+          const settled = await runtime.call("standby", call as typeof SEND, { tier: "full" });
+          expect(settled).toMatchObject({
+            ok: true,
+            value: {
+              outcome: "policy_rejected",
+              detail: expect.stringContaining("Global assistant session 2 isn't coordinating"),
+              result: null,
+            },
+          });
+        }
+
+        expect(opened).toEqual([]);
+        expect(relayCall).not.toHaveBeenCalled();
+        expect(asked).toEqual([]);
+      });
+
+      it("lets it read, and the session that coordinates act under the work's conversation", async () => {
+        const read = await runtime.call("standby", LIST, { tier: "core" });
+        const status = await runtime.call(
+          "standby",
+          { ...LIST, tool: "terminal.getStatus", args: { terminalId: "worker-1" } },
+          { tier: "core" }
+        );
+        const acted = await runtime.call("lead", SEND, { tier: "full" });
+
+        for (const settled of [read, status, acted]) {
+          expect(settled).toMatchObject({ ok: true });
+          if (settled.ok) expect(settled.value.outcome).not.toBe("policy_rejected");
+        }
+        expect(
+          opened.map((session) => [session.spec.helpSessionId, session.spec.conversationId])
+        ).toEqual([
+          ["standby", undefined],
+          ["lead", "work"],
+        ]);
+        expect(opened[1]!.calls.map((call) => call.tool)).toEqual(["terminal.sendCommandOwned"]);
+      });
+
+      it("cancels the acting calls a session still has in flight once coordination leaves it", async () => {
+        const pending: Array<() => void> = [];
+        answer = () =>
+          new Promise((resolve) => pending.push(() => resolve({ content: [], isError: false })));
+        const acting = runtime.call("lead", SEND, { tier: "full" });
+        const reading = runtime.call("lead", LIST, { tier: "full" });
+        await vi.waitFor(() => expect(opened.flatMap((session) => session.calls)).toHaveLength(2));
+        const signalFor = (tool: string) => {
+          for (const session of opened) {
+            const at = session.calls.findIndex((call) => call.tool === tool);
+            if (at >= 0) return session.signals[at];
+          }
+          throw new Error(`no ${tool} call`);
+        };
+
+        runtime.standDown("lead");
+
+        expect(signalFor("terminal.sendCommandOwned")?.aborted).toBe(true);
+        expect(signalFor("terminal.list")?.aborted).toBe(false);
+        for (const release of pending.splice(0)) release();
+        await Promise.all([acting, reading]);
+
+        // Given coordination back, its next acting call runs unstopped.
+        const again = runtime.call(
+          "lead",
+          { ...SEND, args: { terminalId: "worker-2", command: "go" } },
+          {
+            tier: "full",
+          }
+        );
+        await vi.waitFor(() => expect(opened.flatMap((session) => session.calls)).toHaveLength(3));
+        const last = opened.flatMap((session) => session.signals).at(-1);
+        expect(last?.aborted).toBe(false);
+        for (const release of pending.splice(0)) release();
+        await again;
+      });
+
+      it("lets it read a throwaway run's status, which isn't refused as not coordinating", async () => {
+        const settled = await runtime.call(
+          "standby",
+          { hostId: "studio", throwaway: true, tool: "throwaway.status", args: { runId: "r" } },
+          { tier: "core" }
+        );
+
+        expect(settled.ok && settled.value.detail).not.toEqual(
+          expect.stringContaining("isn't coordinating")
+        );
       });
     });
 

@@ -363,18 +363,17 @@ async function launchInScheduleTurn<View>(
     }
   };
 
-  const history = recorder.listBySchedule(scheduleId);
   const { occurrenceKey } = origin;
   if (occurrenceKey !== null) {
     // Before anything with side effects: a precondition, or closing a run.
-    const existing = history.find((run) => run.origin.occurrenceKey === occurrenceKey);
-    if (existing) return { status: "already-recorded", runId: existing.id };
+    const existingId = recorder.findIdByOccurrence(scheduleId, occurrenceKey);
+    if (existingId !== null) return { status: "already-recorded", runId: existingId };
   }
 
   // Overlap reads the settlement axis, a fact: a run is open until its exit,
   // a handback or another settlement says otherwise, whatever its pane or
   // agent looks like. Newest first, as the history lists them.
-  const openRuns = history.filter((run) => run.settlement.state === "open");
+  const openRuns = recorder.listOpenBySchedule(scheduleId);
   const policy = schedule.policies.overlap;
   let replacing: ScheduledRun[] = [];
   if (openRuns.length > 0 && policy !== "start-another") {

@@ -122,6 +122,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    nonRepeatable: true,
     run: async () => {
       window.dispatchEvent(new CustomEvent("daintree:open-log-level-palette"));
     },
@@ -461,8 +462,12 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     dangerRationale:
       "Drops every captured event from the inspector view and main's in-memory capture buffer. There is no undo.",
     run: async () => {
-      useEventStore.getState().clearEvents();
+      // Main first, as in logs.clear: wiping the store up front would lose the
+      // rows and selection even when the clear fails. Only what was on screen
+      // when it started goes, so events pushed while main clears survive.
+      const captured = new Set(useEventStore.getState().events.map((e) => e.id));
       await eventInspectorClient.clear();
+      useEventStore.getState().removeEvents(captured);
     },
   }));
 

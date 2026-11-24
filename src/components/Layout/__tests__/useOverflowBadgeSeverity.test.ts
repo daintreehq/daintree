@@ -12,7 +12,7 @@
  * appears in `overflowIds` — no branch in the hook handles it.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { AgentState, AgentAvailabilityState, CliAvailability } from "@shared/types";
 
 let mockPanelsById: Record<string, unknown> = {};
@@ -78,6 +78,7 @@ import {
   useOverflowAgentObservations,
   useOverflowBadgeSeverity,
 } from "../useOverflowBadgeSeverity";
+import { useDecisionsInboxStore } from "@/store/decisionsInboxStore";
 
 function makePanel(overrides: {
   id: string;
@@ -133,6 +134,63 @@ describe("useOverflowBadgeSeverity", () => {
     expect(
       renderHook(() => useOverflowBadgeSeverity(["copy-tree"], 0, 2)).result.current
     ).toBeNull();
+  });
+
+  it("marks questions waiting on the person only while the inbox button is folded in and the inbox is closed", () => {
+    const severity = (ids: Parameters<typeof useOverflowBadgeSeverity>[0], waiting: number) =>
+      renderHook(() => useOverflowBadgeSeverity(ids, 0, 0, false, false, waiting)).result.current;
+    expect(severity(["decisions-inbox"], 2)).toBe("waiting");
+    expect(severity(["decisions-inbox"], 0)).toBeNull();
+    expect(severity(["copy-tree"], 2)).toBeNull();
+
+    // One array across renders, as the toolbar holds it, so only the store's change can move the result.
+    const folded: Parameters<typeof useOverflowBadgeSeverity>[0] = ["decisions-inbox"];
+    const mounted = renderHook(() => useOverflowBadgeSeverity(folded, 0, 0, false, false, 2));
+    expect(mounted.result.current).toBe("waiting");
+    try {
+      act(() => useDecisionsInboxStore.setState({ isOpen: true }));
+      expect(mounted.result.current).toBeNull();
+    } finally {
+      act(() => useDecisionsInboxStore.setState({ isOpen: false }));
+    }
+    expect(mounted.result.current).toBe("waiting");
+  });
+
+  it("warns of a delivery stopped on the person's answer while the inbox button is folded in and the inbox is closed (#18045)", () => {
+    const severity = (
+      ids: Parameters<typeof useOverflowBadgeSeverity>[0],
+      waiting: number,
+      stopped: number
+    ) =>
+      renderHook(() => useOverflowBadgeSeverity(ids, 0, 0, false, false, waiting, stopped)).result
+        .current;
+    expect(severity(["decisions-inbox"], 0, 1)).toBe("warning");
+    // One mark on the trigger: a question to answer outranks the warning.
+    expect(severity(["decisions-inbox"], 2, 1)).toBe("waiting");
+    expect(severity(["copy-tree"], 0, 1)).toBeNull();
+
+    const folded: Parameters<typeof useOverflowBadgeSeverity>[0] = ["decisions-inbox"];
+    const mounted = renderHook(() => useOverflowBadgeSeverity(folded, 0, 0, false, false, 0, 1));
+    expect(mounted.result.current).toBe("warning");
+    try {
+      act(() => useDecisionsInboxStore.setState({ isOpen: true }));
+      expect(mounted.result.current).toBeNull();
+    } finally {
+      act(() => useDecisionsInboxStore.setState({ isOpen: false }));
+    }
+    expect(mounted.result.current).toBe("warning");
+
+    // One mount, the overflow ids held: only the stopped count moves the result.
+    const live = renderHook(
+      ({ stopped }: { stopped: number }) =>
+        useOverflowBadgeSeverity(folded, 0, 0, false, false, 0, stopped),
+      { initialProps: { stopped: 0 } }
+    );
+    expect(live.result.current).toBeNull();
+    live.rerender({ stopped: 1 });
+    expect(live.result.current).toBe("warning");
+    live.rerender({ stopped: 0 });
+    expect(live.result.current).toBeNull();
   });
 
   it("returns critical when problems is overflowed and errorCount > 0", () => {

@@ -56,14 +56,23 @@ export type ManualRedirectFetch = ((url: string, init?: RequestInit) => Promise<
  * after the headers errors the body with the signal's reason, and a body
  * cancelled or destroyed before its end cancels the request: Electron's
  * `IncomingMessage` can't do that itself, so the connection would otherwise
- * stay open. A request body is refused, since no redirect-following caller
- * could resend one.
+ * stay open. A request body is refused when Electron may follow redirects,
+ * since nothing could resend it on the next hop; a string body goes out when the
+ * caller follows none (`manual` or `error`), as Jira's API calls need.
  */
 export function createManualRedirectFetch(netRequest: NetRequest): ManualRedirectFetch {
   const manualFetch = (url: string, init: RequestInit = {}) =>
     new Promise<Response>((resolve, reject) => {
-      if (init.body != null) {
-        reject(new TypeError("A request body can't be sent through the manual-redirect fetch"));
+      const body = init.body ?? undefined;
+      if (
+        body !== undefined &&
+        (typeof body !== "string" || (init.redirect ?? "follow") === "follow")
+      ) {
+        reject(
+          new TypeError(
+            "Only a string body, on a request that follows no redirects, can be sent through the manual-redirect fetch"
+          )
+        );
         return;
       }
       const signal = init.signal ?? undefined;
@@ -164,7 +173,8 @@ export function createManualRedirectFetch(netRequest: NetRequest): ManualRedirec
         release();
         reject(err);
       });
-      clientRequest.end();
+      if (body === undefined) clientRequest.end();
+      else clientRequest.end(body);
     });
   return manualFetch as ManualRedirectFetch;
 }

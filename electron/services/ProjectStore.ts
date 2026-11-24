@@ -12,6 +12,11 @@ import type {
   RecipeNameCollision,
 } from "../types/index.js";
 import type { NotificationSettings, VoiceDictionaryEntry } from "../../shared/types/ipc/api.js";
+import type {
+  ProjectLinkActor,
+  ProjectLinkChange,
+  ProjectLinksChangeResult,
+} from "../../shared/types/projectLinks.js";
 import type { AgentPreset } from "../../shared/config/agentRegistry.js";
 import path from "path";
 import fs from "fs/promises";
@@ -39,6 +44,7 @@ import {
   mintProjectId,
   isValidProjectId,
   getProjectStateDir,
+  settingsFilePath,
 } from "./projectStorePaths.js";
 import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
@@ -153,6 +159,27 @@ function rowToRepoStats(row: ProjectRow): ProjectRepoStats | null {
     prCount: readPersistedCount(row.statsPrCount),
     providerId: typeof row.statsProviderId === "string" ? row.statsProviderId : null,
     lastUpdated: readPersistedCount(row.statsLastUpdated),
+  };
+}
+
+/**
+ * Most used first. Raw scores are snapshots frozen at different lastAccessedAt
+ * dates and must never be compared directly, so both decay to one shared `now`.
+ * Ties keep the input order, which callers presort on the raw score.
+ */
+function byDecayedFrecency(now: number) {
+  return (
+    a: {
+      frecencyScore?: number | null;
+      lastAccessedAt?: number | null;
+      lastOpened?: number | null;
+    },
+    b: { frecencyScore?: number | null; lastAccessedAt?: number | null; lastOpened?: number | null }
+  ): number => {
+    const scoreA = decayFrecencyScore(a.frecencyScore ?? 0, a.lastAccessedAt ?? 0, now);
+    const scoreB = decayFrecencyScore(b.frecencyScore ?? 0, b.lastAccessedAt ?? 0, now);
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    return (b.lastOpened ?? 0) - (a.lastOpened ?? 0);
   };
 }
 
@@ -299,6 +326,10 @@ export class ProjectStore {
     // manager — so this one routes both kinds by id shape (#11821) rather than
     // a second observer replacing this one.
     this.stateManager.setStatePersistedObserver((workspaceId, state) => {
+      // The pre-write invalidation can't fence a hover that starts while the
+      // write is out, since reads still return the replaced state until now,
+      // and a stop clears state without saving any.
+      invalidatePrefetchCache(workspaceId);
       this.persistResumableAgentCount(workspaceId, state);
       this.notifyStatePersistedListeners(workspaceId, state);
     });
@@ -695,6 +726,8 @@ export class ProjectStore {
        * (kept by id) come with it.
        */
       fresh?: boolean;
+      /** Called when this call inserted the row, rather than finding or relocating one. */
+      onCreated?: () => void;
     }
   ): Promise<Project> {
     // A project still awaiting its clone has no folder to classify. Opening its
@@ -730,7 +763,9 @@ export class ProjectStore {
             return this.touchExistingProject(existing, { gitBacked: false });
           }
         } else if (options?.gitBacked === false) {
-          return this.insertLightweightProject(lightweight, options.groupId);
+          const inserted = this.insertLightweightProject(lightweight, options.groupId);
+          options.onCreated?.();
+          return inserted;
         }
       }
 
@@ -828,6 +863,7 @@ export class ProjectStore {
       })
       .run();
     this.notifyRegistryListeners();
+    options?.onCreated?.();
 
     return project;
   }
@@ -1176,6 +1212,8 @@ export class ProjectStore {
       { behavior: "immediate" }
     );
     if (removed.changes > 0) this.notifyRegistryListeners();
+    // Adding the same folder back gives it the same id.
+    invalidatePrefetchCache(projectId);
     // A launch still waiting to spawn would register a run for a project that's gone.
     cancelScheduledLaunches({ projectId });
     // Those runs, open ones included, will never end now.
@@ -1468,6 +1506,51 @@ export class ProjectStore {
   }
 
   /**
+   * Every project as host metrics read it, in `getAllProjects()` order (#17798).
+   *
+   * Not `getAllProjects()`, for the reason `getProjectSummaries()` gives: the
+   * five-second sample would demote every remote activation it read. Nothing is
+   * written. The current project reads as active, as the repair would leave it,
+   * so a stored status that disagrees with the pointer doesn't change which
+   * projects count as open.
+   */
+  getProjectInventory(): Array<{ id: string; name: string; path: string; status: string | null }> {
+    const currentProjectId = this.getCurrentProjectId();
+    const rows = getSharedDb()
+      .select({
+        id: projectsTable.id,
+        name: projectsTable.name,
+        path: projectsTable.path,
+        status: projectsTable.status,
+        frecencyScore: projectsTable.frecencyScore,
+        lastAccessedAt: projectsTable.lastAccessedAt,
+        lastOpened: projectsTable.lastOpened,
+      })
+      .from(projectsTable)
+      // The same pre-order `getAllProjects()` sorts from, so ties fall the same way.
+      .orderBy(desc(projectsTable.frecencyScore), desc(projectsTable.lastOpened))
+      .all();
+    const now = Date.now();
+    return rows
+      .map((row) => ({
+        row,
+        // `rowToProject()`'s fallbacks, so a malformed row sorts where `getAllProjects()` puts it.
+        score: decayFrecencyScore(
+          typeof row.frecencyScore === "number" ? row.frecencyScore : FRECENCY_COLD_START,
+          typeof row.lastAccessedAt === "number" ? row.lastAccessedAt : 0,
+          now
+        ),
+      }))
+      .sort((a, b) => b.score - a.score || (b.row.lastOpened ?? 0) - (a.row.lastOpened ?? 0))
+      .map(({ row }) => ({
+        id: row.id,
+        name: row.name,
+        path: row.path,
+        status: row.id === currentProjectId ? "active" : row.status,
+      }));
+  }
+
+  /**
    * A project opened here from another machine's window: status and the same
    * frecency bump a local switch gives it, so "Most used" counts remote use.
    * The global current-project pointer names this machine's own window and is
@@ -1557,19 +1640,28 @@ export class ProjectStore {
       );
     }
 
-    // The SQL orderBy pre-sorts on the raw persisted score, but raw scores are
-    // snapshots frozen at different lastAccessedAt dates and must never be
-    // compared directly — decay both to one shared `now` first. One `now` for
-    // the whole list keeps the comparison internally consistent.
     const projects = rows.map(rowToProject);
-    const now = Date.now();
-    projects.sort((a, b) => {
-      const scoreA = decayFrecencyScore(a.frecencyScore ?? 0, a.lastAccessedAt ?? 0, now);
-      const scoreB = decayFrecencyScore(b.frecencyScore ?? 0, b.lastAccessedAt ?? 0, now);
-      if (scoreA !== scoreB) return scoreB - scoreA;
-      return (b.lastOpened ?? 0) - (a.lastOpened ?? 0);
-    });
+    projects.sort(byDecayedFrecency(Date.now()));
     return projects;
+  }
+
+  /**
+   * Every project id in `getAllProjects()` order, read without its status
+   * repair or full rows. The stats poll asks the host about an unowned terminal
+   * in this order, since the first project its cwd matches claims it (#17806).
+   */
+  getRankedProjectIds(): string[] {
+    const rows = getSharedDb()
+      .select({
+        id: projectsTable.id,
+        frecencyScore: projectsTable.frecencyScore,
+        lastAccessedAt: projectsTable.lastAccessedAt,
+        lastOpened: projectsTable.lastOpened,
+      })
+      .from(projectsTable)
+      .orderBy(desc(projectsTable.frecencyScore), desc(projectsTable.lastOpened))
+      .all();
+    return rows.sort(byDecayedFrecency(Date.now())).map((row) => row.id);
   }
 
   async getProjectByPath(projectPath: string): Promise<Project | null> {
@@ -1603,22 +1695,30 @@ export class ProjectStore {
   }
 
   /**
-   * Acknowledgement watermarks for the completed-agent tallies: project id →
-   * epoch ms up to which the user has seen that project's completions. Only
-   * projects with a stamp appear. Read on every stats compute, so it selects
-   * the two columns it needs rather than hydrating full rows.
+   * Every project's id beside its raw acknowledgement watermark, in one
+   * statement and in no particular order: what the stats poll needs on each
+   * tick (#17806). Not `getAllProjects()`, whose status repair, row hydration
+   * and frecency ranking the poll would pay for and discard, and whose repair
+   * would undo the `active` a remote switch just wrote.
    */
-  getLastCompletionSeenMap(): Map<string, number> {
-    const db = getSharedDb();
-    const rows = db
+  getCompletionWatermarks(): Array<{ id: string; lastCompletionSeenAt: number | null }> {
+    return getSharedDb()
       .select({
         id: projectsTable.id,
         lastCompletionSeenAt: projectsTable.lastCompletionSeenAt,
       })
       .from(projectsTable)
       .all();
+  }
+
+  /**
+   * Acknowledgement watermarks for the completed-agent tallies: project id →
+   * epoch ms up to which the user has seen that project's completions. Only
+   * projects with a stamp appear.
+   */
+  getLastCompletionSeenMap(): Map<string, number> {
     const map = new Map<string, number>();
-    for (const row of rows) {
+    for (const row of this.getCompletionWatermarks()) {
       if (typeof row.lastCompletionSeenAt === "number" && row.lastCompletionSeenAt > 0) {
         map.set(row.id, row.lastCompletionSeenAt);
       }
@@ -1739,8 +1839,9 @@ export class ProjectStore {
     // after tearing down its runtimes), never this closed-project reattach path
     // — repointing a live view/host/PTY from here would strand them on the old
     // path (#11282). This single-window pointer only catches the last-focused
-    // window; the authoritative open-anywhere fork lives at the IPC boundary
-    // (`collectActiveProjectIds`), which routes open projects to the coordinator.
+    // window; the authoritative fork lives in the coordinator, which routes any
+    // project holding live runtimes (shown anywhere, or kept warm in the
+    // background) to its pipeline.
     if (projectId === this.getCurrentProjectId()) {
       throw new Error("Cannot relocate the currently active project");
     }
@@ -1762,9 +1863,10 @@ export class ProjectStore {
    * via {@link relocateProject} (folder moved externally), or the phase-3
    * relocation coordinator after its own same-volume `fs.rename`.
    *
-   * Split out from `relocateProject` so the coordinator can relocate an OPEN
-   * project while PRESERVING its `status` (forcing `"closed"` would make the
-   * visible project and the DB row disagree); `relocateProject` always closes.
+   * Split out from `relocateProject` so the coordinator can relocate a project
+   * holding live runtimes with the status it decided for it (forcing `"closed"`
+   * would make a visible or backgrounded project and the DB row disagree);
+   * `relocateProject` always closes.
    *
    * `expectedOldPath` guards a concurrent move: if the row no longer points where
    * the caller captured it, the state rebase would run against a stale old root,
@@ -2051,6 +2153,11 @@ export class ProjectStore {
     return this.settingsManager.saveProjectSettings(projectId, settings);
   }
 
+  /** The file {@link saveProjectSettings} writes, or null for an invalid id. */
+  projectSettingsFilePath(projectId: string): string | null {
+    return settingsFilePath(this.projectsConfigDir, projectId);
+  }
+
   async changeLocalVoiceDictionary(
     projectId: string,
     apply: (entries: VoiceDictionaryEntry[]) => VoiceDictionaryEntry[]
@@ -2060,6 +2167,18 @@ export class ProjectStore {
 
   async addBrowserAllowedHost(projectId: string, hostname: string): Promise<string[]> {
     return this.settingsManager.addBrowserAllowedHost(projectId, hostname);
+  }
+
+  async setRemoveMergedWorktrees(projectId: string, enabled: boolean): Promise<void> {
+    return this.settingsManager.setRemoveMergedWorktrees(projectId, enabled);
+  }
+
+  async changeLinks(
+    projectId: string,
+    actor: ProjectLinkActor,
+    change: ProjectLinkChange
+  ): Promise<ProjectLinksChangeResult> {
+    return this.settingsManager.changeLinks(projectId, actor, change);
   }
 
   /**

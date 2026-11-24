@@ -10,6 +10,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import { TERMINAL_CONFIG_METHOD_CHANNELS } from "./terminalConfig.preload.js";
 import { terminalCustomSchemesWriteSchema } from "../../schemas/customSchemes.js";
 import { notifyTerminalConfigChanged, readTerminalConfig } from "../../services/terminalConfig.js";
+import { getActiveMemoryLeakAutoRestart } from "../../services/MemoryLeakAutoRestartService.js";
 
 export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () => void {
   const namespace = defineIpcNamespace({
@@ -148,6 +149,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.resourceMonitoringEnabled", enabled);
+          getActiveMemoryLeakAutoRestart()?.policyChanged();
           notifyTerminalConfigChanged("resourceMonitoringEnabled");
           deps?.ptyClient?.setResourceMonitoring(enabled);
         }
@@ -160,6 +162,7 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.memoryLeakDetectionEnabled", enabled);
+          getActiveMemoryLeakAutoRestart()?.policyChanged();
           notifyTerminalConfigChanged("memoryLeakDetectionEnabled");
         }
       ),
@@ -181,7 +184,20 @@ export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () =
             return;
           }
           store.set("terminalConfig.memoryLeakAutoRestartThresholdMb", thresholdMb);
+          getActiveMemoryLeakAutoRestart()?.policyChanged();
           notifyTerminalConfigChanged("memoryLeakAutoRestartThresholdMb");
+        }
+      ),
+      // Thrown, not dropped: the Settings switch turns on only once this
+      // saved, so a refused value must reach it as a failure.
+      setOsc52ClipboardEnabled: op(
+        TERMINAL_CONFIG_METHOD_CHANNELS.setOsc52ClipboardEnabled,
+        async (enabled: boolean) => {
+          if (typeof enabled !== "boolean") {
+            throw new Error(`Invalid terminal osc52ClipboardEnabled: ${String(enabled)}`);
+          }
+          store.set("terminalConfig.osc52ClipboardEnabled", enabled);
+          notifyTerminalConfigChanged("osc52ClipboardEnabled");
         }
       ),
       setCachedProjectViews: op(

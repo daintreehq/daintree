@@ -3,6 +3,7 @@ import { isElectronAvailable } from "./useElectron";
 import { idleBackgroundAutoCloseClient } from "@/clients/idleBackgroundAutoCloseClient";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
+import { hostScopedKey } from "@/hooks/useHostPlatform";
 import { formatMemory } from "@/components/Project/ProjectResourceBadge.utils";
 import type { IdleBackgroundClosedProjectEntry } from "@shared/types";
 
@@ -70,6 +71,11 @@ export function useIdleBackgroundCloseNotifications(): void {
         message,
         inboxMessage: message,
         priority: "low",
+        // Every project view hears the broadcast; one row per sweep, whichever
+        // view files it first.
+        historyId: hostScopedKey(
+          `idle-background-closed:${payload.timestamp}:${projects.map((p) => p.projectId).join(",")}`
+        ),
         // Ambient host/resource-management event (memory reclaim), like the
         // disk-space warnings — routes via EVENT_POLICY's "host" kind.
         context: {

@@ -85,11 +85,16 @@ const PTY_FIELD_CLASSIFICATION = {
   // Conversation origin and the recovery hold (#12434) — a held pane must stay
   // held across a restart instead of launching fresh.
   conversationCwd: true,
+  // The account folder a kept conversation is stored in (#17087), written
+  // beside the session id it belongs to.
+  conversationStore: true,
   restoreRecovery: true,
   // How restore last rebuilt the pane and the plugin hold (#14017) — a pane
   // held across restarts keeps the state last seen before the first of them.
   restoreProvenance: true,
   lastAgentObservation: true,
+  // What was seen when Main last stopped the pane (#17886), kept only while held.
+  stopObservation: true,
   launchedByPluginId: true,
   holdOnRestart: true,
   // The terminal's own notes (#12835) — persisted so they outlive a restart.
@@ -182,6 +187,9 @@ const PTY_FIELD_CLASSIFICATION = {
   // the host re-derives from zero for every new one, so persisting it would
   // restore a session count for a session that no longer exists.
   agentIncarnation: false,
+  // Update-installed footer (#17905) — a live reading of the running agent,
+  // cleared with its run, so it is never persisted.
+  updateInstalled: false,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not the PTY serializer.
   createdAt: false,
@@ -350,6 +358,7 @@ const DIFF_FIELD_CLASSIFICATION = {
   changeSet: false,
   // Cursor into that runtime set — meaningless without it, so it dies with it.
   viewedKey: false,
+  fileSide: false,
 } as const satisfies Record<keyof DiffPanelData, boolean>;
 
 // ── File browser field classification ────────────────────────────────
@@ -481,12 +490,14 @@ const terminalFixture: PtySerializeInput = {
   agentState: "idle",
   lastStateChange: 1_700_000_000_000,
   conversationCwd: "/home/origin",
+  conversationStore: { sessionId: "session-abc", configDir: "/home/me/.claude-company" },
   restoreProvenance: {
     at: 1_700_000_000_002,
     disposition: "resume",
     lastSeen: { agentState: "idle", at: 1_699_999_999_000 },
   },
   lastAgentObservation: { agentState: "idle", at: 1_700_000_000_003 },
+  stopObservation: { agentState: "working", at: 1_699_999_999_500 },
   launchedByPluginId: "acme.orchestrator",
   holdOnRestart: true,
   scratchpad: { content: "- check CI", collapsed: true, width: 320 },
@@ -665,11 +676,13 @@ describe("panel serializer field coverage", () => {
       string,
       unknown
     >;
-    // A held pane writes no process state, so the hold is covered by its own
-    // fixture below rather than alongside a live session.
+    // A held pane writes no process state, so the hold, and the stop it keeps
+    // until it runs, are covered by its own fixture below.
     assertCovers("terminal serializer", output, persistedKeys(PTY_FIELD_CLASSIFICATION), {}, [
       "restoreRecovery",
+      "stopObservation",
     ]);
+    expect(output).not.toHaveProperty("stopObservation");
   });
 
   it("terminal serializer persists a recovery hold without the process state it replaces (#12434)", () => {
@@ -683,15 +696,41 @@ describe("panel serializer field coverage", () => {
     >;
     expect(output.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
     expect(output.conversationCwd).toBe("/home/origin");
+    // Its store goes only with the conversation the hold offers (#17087).
+    expect(output).not.toHaveProperty("conversationStore");
     // What was last observed for the pane outlives its process (#14017).
     expect(output.restoreProvenance).toEqual(terminalFixture.restoreProvenance);
     expect(output.lastAgentObservation).toEqual(terminalFixture.lastAgentObservation);
+    // It has run nothing since it was stopped (#17886).
+    expect(output).toHaveProperty("stopObservation", {
+      agentState: "working",
+      at: 1_699_999_999_500,
+    });
     // So is what the run it holds was first asked (#14592).
     expect(output.firstPrompt).toEqual(terminalFixture.firstPrompt);
     expect(output).not.toHaveProperty("agentSessionId");
     expect(output).not.toHaveProperty("agentState");
     expect(output).not.toHaveProperty("lastStateChange");
     expect(output).not.toHaveProperty("exitCode");
+  });
+
+  it("terminal serializer writes a conversation's store only beside that conversation (#17087)", () => {
+    const serialize = getPanelKindConfig("terminal")!.serialize!;
+    const store = { sessionId: "session-held", configDir: "/home/me/.claude-company" };
+
+    const moved = serialize({ ...terminalFixture, agentSessionId: "session-new" }) as Record<
+      string,
+      unknown
+    >;
+    expect(moved).not.toHaveProperty("conversationStore");
+
+    const heldFixture: PtySerializeInput = {
+      ...terminalFixture,
+      conversationStore: store,
+      restoreRecovery: { reason: "sibling-owns-resume-latest-slot", sessionId: "session-held" },
+    };
+    const held = serialize(heldFixture) as Record<string, unknown>;
+    expect(held.conversationStore).toEqual(store);
   });
 
   it("browser serializer covers every persisted browser field", () => {
@@ -757,14 +796,23 @@ describe("panel serializer field coverage", () => {
   it("diff serializer omits the runtime change set and its cursor", () => {
     const withChangeSet: DiffPanelData = {
       ...diffFixture,
-      changeSet: [{ path: "src/app.ts", status: "modified", viewedKey: "modified:src/app.ts" }],
-      viewedKey: "modified:src/app.ts",
+      changeSet: [
+        {
+          path: "src/app.ts",
+          status: "modified",
+          viewedKey: "working-tree:src/app.ts",
+          side: "unstaged",
+        },
+      ],
+      viewedKey: "working-tree:src/app.ts",
+      fileSide: "unstaged",
     };
     const output = getPanelKindConfig("diff")!.serialize!(withChangeSet) as Record<string, unknown>;
     expect(output).not.toHaveProperty("changeSet");
     // The cursor points into that set, so persisting it would resurrect a
     // position in a change set the restored panel no longer has.
     expect(output).not.toHaveProperty("viewedKey");
+    expect(output).not.toHaveProperty("fileSide");
   });
 });
 

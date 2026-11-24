@@ -3,6 +3,7 @@ import {
   Copy,
   CornerDownRight,
   ExternalLink,
+  GitCommitHorizontal,
   GitPullRequest,
   MoreHorizontal,
   FolderGit2,
@@ -15,6 +16,8 @@ import {
   MockMenu,
   MockSearchField,
   MockSpotlight,
+  MockStreamingLines,
+  MockTyping,
   reveal,
   useMockCursor,
 } from "@daintreehq/tour/kit";
@@ -22,24 +25,44 @@ import {
   ANCHOR,
   MockApp,
   MockCIGlyph,
-  MockEmptyGrid,
   MockGrid,
   MockPane,
   MockWorktreeCard,
 } from "@daintreehq/tour/mock-app";
 import { useCue } from "@daintreehq/tour/react";
+import { ReviewHub, type ReviewFile } from "./ReviewHub";
 
 const ISSUES = ANCHOR["forge-issues"];
-const LIST = { x: 290, y: ISSUES.y + 14, width: 216 };
+const LIST = { x: ISSUES.x - 153, y: ISSUES.y + 14, width: 216 };
 // Clicking an issue opens it on the forge; a worktree comes from the row's
 // actions menu. #51 is the second row; the menu opens under its button.
-const ISSUE_MENU = { x: 487, y: 91 };
+const ISSUE_MENU = { x: LIST.x + LIST.width - 19, y: 91 };
 const ROW_MENU = { x: ISSUE_MENU.x - 132, y: ISSUE_MENU.y + 10, width: 140 };
 const CREATE_ITEM = { anchor: "issue-actions-0", dx: -20 };
 
 const DIALOG = { x: 230, y: 90, width: 250 };
 const CREATE_BUTTON = { anchor: "github-create" };
 const BRANCH = "feature/issue-51-dark-mode-for-settings";
+
+const PANE_INPUT = { anchor: "claude-input", dx: -154, dy: 6 };
+const REQUEST = "Commit, push and open the PR";
+const REQUEST_TYPED = { cue: "pr", offset: 0.3 } as const;
+const COMMIT_ICON = { anchor: "review-commit" };
+const COMMIT_BUTTON = { anchor: "review-commit-push", dx: 13, dy: 5 };
+const PUSH_CONFIRM = { anchor: "review-push-confirm" };
+// "Steps you through every change": a file opens its diff dialog, whose ›
+// steps to the next file; closing it is back in the Hub to commit.
+const FIRST_FILE = { anchor: "review-file-0", dx: -30 };
+const NEXT_FILE = { anchor: "review-diff-next" };
+const CLOSE_DIFF = { anchor: "review-diff-close" };
+// The message is written as Review Hub opens, before the pointer goes to the files.
+const MESSAGE_TYPED = { cue: "diff", offset: -0.7 } as const;
+
+const FILES: readonly ReviewFile[] = [
+  { name: "SettingsPage.tsx", added: 31, removed: 6 },
+  { name: "useTheme.ts", added: 18, removed: 2 },
+  { name: "settings.css", added: 22, removed: 0 },
+];
 
 const ISSUES_LIST = [
   ["#52 Checkout total rounds wrong", "2h"],
@@ -55,8 +78,24 @@ export const CURSOR: readonly CursorStep[] = [
   { cue: "pick", offset: 0.5, at: { anchor: "issue-51-menu" }, click: true },
   { cue: "choose", at: CREATE_ITEM },
   { cue: "choose", offset: 0.5, at: CREATE_ITEM, click: true },
-  { cue: "create", at: CREATE_BUTTON },
-  { cue: "create", offset: 0.6, at: CREATE_BUTTON, click: true },
+  // The form is already on screen as the voice says the branch is named.
+  { cue: "create", offset: -0.6, at: CREATE_BUTTON },
+  { cue: "create", at: CREATE_BUTTON, click: true },
+  { cue: "ask", offset: -0.5, at: PANE_INPUT },
+  { cue: "ask", at: PANE_INPUT, click: true },
+  { cue: "files", offset: 0.2, at: COMMIT_ICON },
+  { cue: "open", offset: 0.4, at: COMMIT_ICON, click: true },
+  { cue: "diff", offset: -0.6, at: FIRST_FILE },
+  { cue: "diff", offset: -0.1, at: FIRST_FILE, click: true },
+  { cue: "diff", offset: 0.05, at: NEXT_FILE },
+  { cue: "diff", offset: 0.55, at: NEXT_FILE, click: true },
+  { cue: "diff", offset: 0.65, at: CLOSE_DIFF },
+  { cue: "diff", offset: 1.15, at: CLOSE_DIFF, click: true },
+  { cue: "commit", offset: -0.45, at: COMMIT_BUTTON },
+  { cue: "commit", offset: 0.2, at: COMMIT_BUTTON, click: true },
+  // Commit & push opens the push confirm; its button names the destination.
+  { cue: "commit", offset: 0.5, at: PUSH_CONFIRM },
+  { cue: "commit", offset: 1.0, at: PUSH_CONFIRM, click: true },
 ];
 
 export function GitHubScene() {
@@ -64,15 +103,42 @@ export function GitHubScene() {
   const listOpen = useCue("list", 0.6);
   const rowMenu = useCue("pick", 0.6);
   const dialog = useCue("choose", 0.6);
-  const created = useCue("create", 0.7);
+  const created = useCue("create", 0.2);
+  // "When the agent's done": its turn ends just before it's asked.
+  const agentDone = useCue("ask", -0.6);
+  const asking = useCue("ask", 0.2);
+  const sent = useCue("pr", 0.4);
+  const prOpened = useCue("pr", 1.2);
   const badge = useCue("badge");
   const checksPassed = useCue("badge", 1.8);
+  // "If you'd rather look first": the same card before anything was committed.
+  const lookFirst = useCue("files");
+  const opened = useCue("open", 0.6);
+  const typing = useCue("open", 1.0);
+  const diffOpen = useCue("diff", -0.05);
+  const nextFile = useCue("diff", 0.6);
+  const diffClosed = useCue("diff", 1.25);
+  const confirming = useCue("commit", 0.3);
+  const pushed = useCue("commit", 1.2);
   const cursor = useMockCursor({ x: 420, y: 200 }, CURSOR);
+
+  const showPr = badge && !lookFirst;
+  const paneState = sent && !prOpened ? "working" : agentDone ? "completed" : "working";
 
   return (
     <MockApp
       branch={created ? BRANCH : "main"}
-      focus={created ? ["sidebar"] : ["toolbar"]}
+      focus={
+        opened
+          ? ["grid"]
+          : lookFirst || badge
+            ? ["sidebar"]
+            : agentDone
+              ? ["grid"]
+              : created
+                ? ["sidebar", "grid"]
+                : ["toolbar"]
+      }
       worktrees={
         <>
           <MockWorktreeCard name="shop-app" branch="main" selected={!created} />
@@ -83,13 +149,26 @@ export function GitHubScene() {
             issueTitle="Dark mode for settings"
             branch={BRANCH}
             selected={created}
+            states={created ? [paneState] : []}
             className={reveal(created, "left")}
+            changes={lookFirst && !pushed ? "3 files +71/−8" : undefined}
+            action={
+              lookFirst && !pushed ? (
+                <span
+                  data-tour-anchor="review-commit"
+                  className="flex shrink-0 items-center text-[var(--color-state-active)]"
+                >
+                  <GitCommitHorizontal className="size-3" aria-hidden="true" />
+                </span>
+              ) : undefined
+            }
           >
             {/* The pull request sits under the issue, as the real card nests it. */}
             <span
               className={cn(
                 "flex items-center gap-1 pl-[18px] text-3xs text-text-secondary [&_svg]:size-2.5",
-                reveal(badge, "none")
+                reveal(showPr, "none"),
+                !showPr && lookFirst && "hidden"
               )}
             >
               <CornerDownRight aria-hidden="true" />
@@ -103,7 +182,32 @@ export function GitHubScene() {
       }
       grid={
         created ? (
-          <MockEmptyGrid label="Dark mode for settings" />
+          <MockGrid columns={1}>
+            <MockPane
+              agent="claude"
+              state={paneState}
+              focused={asking && !lookFirst}
+              input={
+                asking && !sent && !lookFirst ? (
+                  <MockTyping cue="ask" text={REQUEST} delay={0.2} finishBy={REQUEST_TYPED} />
+                ) : null
+              }
+            >
+              <MockLines widths={[82, 60, 90, 54]} />
+              {sent && !lookFirst && (
+                <MockStreamingLines cue="pr" delay={0.4} widths={[70, 48]} perSecond={3} />
+              )}
+              <span
+                className={cn(
+                  "flex items-center gap-1 text-3xs text-text-primary [&_svg]:size-2.5",
+                  reveal(prOpened && !lookFirst, "none")
+                )}
+              >
+                <GitPullRequest aria-hidden="true" />
+                Opened pull request #57
+              </span>
+            </MockPane>
+          </MockGrid>
         ) : (
           <MockGrid columns={1}>
             <MockPane agent="claude" state={null}>
@@ -112,10 +216,31 @@ export function GitHubScene() {
           </MockGrid>
         )
       }
+      overlay={
+        <ReviewHub
+          visible={opened}
+          branch={BRANCH}
+          files={FILES}
+          selected={diffOpen && !diffClosed ? (nextFile ? 1 : 0) : -1}
+          lastShown={nextFile ? 1 : 0}
+          message={
+            typing ? (
+              <MockTyping
+                cue="open"
+                text="Add dark mode to settings"
+                delay={1.0}
+                finishBy={MESSAGE_TYPED}
+              />
+            ) : null
+          }
+          confirming={confirming}
+          pushed={pushed}
+        />
+      }
     >
       <MockSpotlight
-        targets={badge ? ["worktree-issue-51"] : ["forge"]}
-        visible={(pill && !listOpen) || badge}
+        targets={lookFirst ? ["review-commit"] : badge ? ["worktree-issue-51"] : ["forge"]}
+        visible={(pill && !listOpen) || (badge && !opened)}
       />
       <MockMenu
         visible={listOpen && !dialog}
@@ -183,7 +308,8 @@ export function GitHubScene() {
           </span>
         </div>
       </div>
-      <MockCursor {...cursor} visible={cursor.visible && !created} />
+      {/* Its last target leaves with the confirm, so the pointer goes once the push lands. */}
+      <MockCursor {...cursor} visible={cursor.visible && !pushed} />
     </MockApp>
   );
 }

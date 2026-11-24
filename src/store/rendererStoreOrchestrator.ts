@@ -1,5 +1,6 @@
 import { shallow } from "zustand/shallow";
 import { usePanelStore } from "./panelStore";
+import { connectPanelCloseHistory } from "@/services/terminal/panelCloseHistory";
 import {
   useWorktreeSelectionStore,
   isMruRecordingSuppressed,
@@ -20,6 +21,9 @@ import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { subscribeDictationRangeTracking } from "./dictationRangeStore";
 import { subscribeRecentDictationsSync } from "@/services/recentDictations";
 import { forgetComposerSurfacePane, trackComposerSurface } from "@/lib/composerSurface";
+import { forgetComposerSnapshots } from "@/lib/composerRemount";
+import { isTerminalDraftKey } from "@/lib/draftKey";
+import { dropComposerHeldBack } from "@/components/Terminal/uploads/pendingUploads";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
 import { observePanelFailures, usePanelFailureStore } from "./panelFailureStore";
@@ -30,8 +34,6 @@ import { usePluginPanelOpenRequestStore } from "./pluginPanelOpenRequestStore";
 import { sameLayoutPanelIds, selectLayoutPanelIds, useLayoutUndoStore } from "./layoutUndoStore";
 import { useCliAvailabilityStore } from "./cliAvailabilityStore";
 import { useAgentSettingsStore } from "./agentSettingsStore";
-import { useHelpPanelStore } from "./helpPanelStore";
-import { usePortalStore } from "./portalStore";
 import {
   applicationDefaultRoute,
   selectProjectMainAreaRoute,
@@ -77,6 +79,7 @@ import { initAgentSettingsSync } from "@/services/agentSettingsSync";
 import { initPanelGridConfigSync } from "@/services/panelGridConfigSync";
 import { initKeybindingOverridesSync } from "@/services/keybindingOverridesSync";
 import { initAgentToolbarPinsSync } from "@/services/agentToolbarPinsSync";
+import { initAgentUsageTrackingSync } from "@/store/agentUsageTrackingStore";
 import { initAgentCliChoiceSync } from "@/services/agentCliChoiceSync";
 import { initAssistantIdentitySync } from "@/services/assistantIdentitySync";
 import {
@@ -112,6 +115,7 @@ export function initStoreOrchestrator(): () => void {
     const s = usePanelStore.getState();
     return { panelsById: s.panelsById, panelIds: s.panelIds, tabGroups: s.tabGroups };
   });
+  connectPanelCloseHistory(usePanelStore);
   setPanelStoreClearForSwitchAccessor((options) => {
     const state = usePanelStore.getState();
     if (options?.destroyInstances) {
@@ -474,6 +478,7 @@ export function initStoreOrchestrator(): () => void {
 
           for (const removedId of removedIds) {
             useTerminalInputStore.getState().clearTerminalState(removedId);
+            dropComposerHeldBack(removedId);
             useLastComposerSendStore.getState().clear(removedId);
             useConsoleCaptureStore.getState().removePane(removedId);
             // Prune the panel's resource-metrics entry. The PTY `onExit` path
@@ -617,6 +622,10 @@ export function initStoreOrchestrator(): () => void {
           for (const id of trashed.keys()) {
             if (!prevTrashed.has(id)) {
               removeArtifactsForTerminal(id);
+              // The draft stays for an undone close; the chips and uploads its
+              // composer kept across remounts don't (#16883).
+              forgetComposerSnapshots((key) => isTerminalDraftKey(key, id));
+              dropComposerHeldBack(id);
               // Closing is the end of a panel's header-button state, though the
               // id survives in the trash: an undone close must not bring back a
               // spinner for a refresh the old view started.
@@ -624,6 +633,10 @@ export function initStoreOrchestrator(): () => void {
               // The view's menu goes with it; the backend's list is the
               // backend's, and comes back with a restored panel.
               usePluginPanelMenuStore.getState().setViewItems(id, []);
+              // A dev preview's captured console rows. Its pane may already be
+              // unmounted (an inactive tab), so its own unmount cleanup cannot
+              // be relied on to notice the trash.
+              useConsoleCaptureStore.getState().removePane(id);
               // An open request the view never saw was meant for the panel
               // the user just closed; a restored one comes back as they left it.
               usePluginPanelOpenRequestStore.getState().clearPanel(id);
@@ -723,35 +736,14 @@ export function initStoreOrchestrator(): () => void {
 
   // 6. This machine's toolbar agent pins (#14702), kept current across views.
   disposables.add(toDisposable(initAgentToolbarPinsSync()));
+  // This machine's agent usage tracking switch (#17981), kept current across views.
+  disposables.add(toDisposable(initAgentUsageTrackingSync()));
   // The assistants' names and emoji (#16213), kept current across views.
   disposables.add(toDisposable(initAssistantIdentitySync()));
   // Which copy of each agent's CLI launches (#16399), kept current across views.
   disposables.add(toDisposable(initAgentCliChoiceSync()));
 
-  // 7. The Daintree Assistant and the web chat Portal share the right edge, so
-  //    only one is open at a time: opening either closes the other. Keyed on the
-  //    closed→open transition so every entry point (toolbar, keybinding, action,
-  //    MCP) is covered without either store importing its partner.
-  disposables.add(
-    toDisposable(
-      useHelpPanelStore.subscribe((state, prev) => {
-        if (state.isOpen && !prev.isOpen && usePortalStore.getState().isOpen) {
-          usePortalStore.getState().setOpen(false);
-        }
-      })
-    )
-  );
-  disposables.add(
-    toDisposable(
-      usePortalStore.subscribe((state, prev) => {
-        if (state.isOpen && !prev.isOpen && useHelpPanelStore.getState().isOpen) {
-          useHelpPanelStore.getState().setOpen(false);
-        }
-      })
-    )
-  );
-
-  // 8. Flush the MRU debounce once nobody can see this view, or its latest
+  // 7. Flush the MRU debounce once nobody can see this view, or its latest
   //    write is stranded when the user switches projects, closes the window,
   //    or quits within the debounce window (#9914). A project switch caches
   //    the view, which fires no `visibilitychange` (a cached view reports
@@ -777,7 +769,7 @@ export function initStoreOrchestrator(): () => void {
   if (isViewUnobservable()) void flushMru();
 
   // Focused panel kind for `host.onDidChangeFocusedPanel` (#13221). Main
-  // combines it with window and Portal focus, which it observes itself.
+  // combines it with window focus, which it observes itself.
   disposables.add(toDisposable(subscribeFocusedPanelReporter()));
 
   // The host's assistant agent and default terminal agent (#13345).
@@ -804,7 +796,7 @@ export function initStoreOrchestrator(): () => void {
 export function destroyStoreOrchestrator(): void {
   // Kept out of the DisposableStore on purpose: only `destroyStoreOrchestrator`
   // cancels the pending debounce. HMR teardown (`import.meta.hot.dispose` in
-  // `main.tsx`) calls the cleanup fn directly and intentionally does NOT cancel,
+  // `projectShell.tsx`) calls the cleanup fn directly and intentionally does NOT cancel,
   // matching pre-refactor behavior.
   debouncedPersistMruList.cancel();
   cleanupFn?.();

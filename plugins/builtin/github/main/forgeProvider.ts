@@ -3,6 +3,7 @@ import type {
   AuthValidation,
   AvatarCapability,
   ChecksCapability,
+  DeploymentsCapability,
   Credentials,
   FirstPageSnapshot,
   ForgeProviderImpl,
@@ -30,8 +31,16 @@ import { cloneCapability } from "./GitHubClone.js";
 import { credentialImportCapability } from "./GitHubCliCredential.js";
 import { validateGitHubToken } from "./GitHubToken.js";
 import { parseGitHubRepoUrl } from "./GitHubRepoContext.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
-import { clearPRCaches, repoEventsETagCache } from "./GitHubCaches.js";
+import { gitHubRateLimitService, rateLimitServiceForHost } from "./GitHubRateLimitService.js";
+import { cacheOwner, clearPRCaches, repoEventsETagCache } from "./GitHubCaches.js";
+import {
+  GITHUB_COM_HOST,
+  getEnterpriseHost,
+  githubWebBase,
+  isServedGitHubHost,
+} from "./GitHubHost.js";
+import { missingTokenMessage } from "./queryInfra.js";
+import type { RepoContext } from "./types.js";
 import {
   fetchActivityProbe,
   getFirstPageCacheForContext,
@@ -56,6 +65,7 @@ import {
   findPRsByBranchesImpl,
   getCIStatusImpl,
   getChecksImpl,
+  getDeploymentsImpl,
   findPRsByNumbersImpl,
   findIssuesByNumbersImpl,
   findReferencesByNumbersImpl,
@@ -111,6 +121,10 @@ const checksCapability: ChecksCapability = {
   getChecks: getChecksImpl,
 };
 
+const deploymentsCapability: DeploymentsCapability = {
+  getDeployments: getDeploymentsImpl,
+};
+
 // Thin pass-through over `GitHubAuth.getConfigAsync()` — reuses the same
 // cached `username`/`avatarUrl` and the `pendingValidation` singleflight so a
 // cold-start probe (token present, cache empty) coalesces with any other
@@ -118,8 +132,12 @@ const checksCapability: ChecksCapability = {
 // expects a `ForgeUser`, so the GitHub `{ login, avatarUrl }` shape is
 // projected and the raw `GitHubTokenConfig` stays inside the auth module.
 const identityCapability: IdentityCapability = {
-  async getCurrentUser(): Promise<ForgeUser | null> {
-    const config = await GitHubAuth.getConfigAsync();
+  // Each host has its own account: on an Enterprise Server repository the
+  // viewer is that server's login, never github.com's.
+  async getCurrentUser(repo?: RepoRef): Promise<ForgeUser | null> {
+    const host = repo?.host ?? GITHUB_COM_HOST;
+    if (!isServedGitHubHost(host)) return null;
+    const config = await GitHubAuth.getConfigAsync(host);
     if (!config.username) return null;
     return {
       login: config.username,
@@ -129,20 +147,24 @@ const identityCapability: IdentityCapability = {
   },
 };
 
+function toContext(repo: RepoRef): RepoContext {
+  return { host: repo.host, owner: repo.owner, repo: repo.repo };
+}
+
 // Tooltip lookups route through the context-variant cores (dedicated
 // short-TTL tooltip caches + per-number singleflight). Tooltips are
 // best-effort by contract, so every failure collapses to `null` here.
 const tooltipCapability: TooltipCapability = {
   async getIssueTooltip(repo: RepoRef, issueNumber: number): Promise<IssueTooltipData | null> {
     try {
-      return await getIssueTooltipForContext({ owner: repo.owner, repo: repo.repo }, issueNumber);
+      return await getIssueTooltipForContext(toContext(repo), issueNumber);
     } catch {
       return null;
     }
   },
   async getPRTooltip(repo: RepoRef, prNumber: number): Promise<PRTooltipData | null> {
     try {
-      return await getPRTooltipForContext({ owner: repo.owner, repo: repo.repo }, prNumber);
+      return await getPRTooltipForContext(toContext(repo), prNumber);
     } catch {
       return null;
     }
@@ -155,8 +177,8 @@ const tooltipCapability: TooltipCapability = {
  * block is active. Local-git facts (commit count) are deliberately absent —
  * the host computes those itself.
  */
-function toForgeRepoCounts(result: RepoStatsAndPageResult): ForgeRepoCounts {
-  const rateLimitState = gitHubRateLimitService.getState();
+function toForgeRepoCounts(result: RepoStatsAndPageResult, host: string): ForgeRepoCounts {
+  const rateLimitState = rateLimitServiceForHost(host).getState();
   return {
     issueCount: result.stats?.issueCount ?? null,
     prCount: result.stats?.prCount ?? null,
@@ -186,12 +208,11 @@ function toStatsPage<TIn, TOut>(
 
 const repoStatsCapability: RepoStatsCapability = {
   async getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot> {
-    const result = await getRepoStatsAndPageForContext(
-      { owner: repo.owner, repo: repo.repo },
-      { bypassCache: opts?.bypassCache === true }
-    );
+    const result = await getRepoStatsAndPageForContext(toContext(repo), {
+      bypassCache: opts?.bypassCache === true,
+    });
     return {
-      counts: toForgeRepoCounts(result),
+      counts: toForgeRepoCounts(result, repo.host),
       issues: result.issues ? toStatsPage(result.issues, gitHubIssueToForgeIssue) : null,
       prs: result.prs ? toStatsPage(result.prs, gitHubPRToForgePR) : null,
       source: result.source,
@@ -199,7 +220,7 @@ const repoStatsCapability: RepoStatsCapability = {
   },
 
   async getFirstPageCache(repo: RepoRef): Promise<FirstPageSnapshot | null> {
-    const payload = await getFirstPageCacheForContext({ owner: repo.owner, repo: repo.repo });
+    const payload = await getFirstPageCacheForContext(toContext(repo));
     if (!payload) return null;
     return {
       issues: toStatsPage(payload.issues, gitHubIssueToForgeIssue),
@@ -215,10 +236,9 @@ const projectHealthCapability: ProjectHealthCapability = {
     repo: RepoRef,
     opts?: { bypassCache?: boolean }
   ): Promise<{ health: ProjectHealthSnapshot | null; error?: string }> {
-    const result = await getProjectHealthForContext(
-      { owner: repo.owner, repo: repo.repo },
-      { bypassCache: opts?.bypassCache === true }
-    );
+    const result = await getProjectHealthForContext(toContext(repo), {
+      bypassCache: opts?.bypassCache === true,
+    });
     if (!result.health) {
       return { health: null, ...(result.error ? { error: result.error } : {}) };
     }
@@ -240,7 +260,13 @@ const projectHealthCapability: ProjectHealthCapability = {
 };
 
 const avatarCapability: AvatarCapability = {
-  resolveAuthorAvatar: (email: string) => resolveAuthorAvatar(email),
+  // The lookup searches github.com's users by email. An Enterprise Server
+  // author's address must not leave for github.com, and a public account
+  // with that address isn't the server's user anyway.
+  resolveAuthorAvatar: (email: string, repo?: RepoRef) =>
+    repo && repo.host.toLowerCase() !== GITHUB_COM_HOST
+      ? Promise.resolve(null)
+      : resolveAuthorAvatar(email),
   getCacheGeneration: getAuthorAvatarGeneration,
 };
 
@@ -305,8 +331,13 @@ function toAuthValidation(result: GitHubTokenValidation): AuthValidation {
 }
 
 export const githubForgeProvider: ForgeProviderImpl = {
+  // github.com's token, else the Enterprise Server one. Its callers ask
+  // whether the provider can authenticate at all; every request picks the
+  // token for its own repository's host instead.
   async getCredentials(): Promise<Credentials | null> {
-    const token = GitHubAuth.getToken();
+    const enterpriseHost = getEnterpriseHost();
+    const token =
+      GitHubAuth.getToken() ?? (enterpriseHost ? GitHubAuth.getToken(enterpriseHost) : undefined);
     if (!token) return null;
     return { kind: "bearer", value: token };
   },
@@ -333,7 +364,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
     const parsed = parseGitHubRepoUrl(url);
     if (!parsed) return null;
     return {
-      host: "github.com",
+      host: parsed.host,
       owner: parsed.owner,
       repo: parsed.repo,
       rawData: { url },
@@ -357,11 +388,11 @@ export const githubForgeProvider: ForgeProviderImpl = {
   getRepoMetadata: getRepoMetadataImpl,
 
   buildIssueUrl(repo: RepoRef, number: number): string {
-    return `https://github.com/${repo.owner}/${repo.repo}/issues/${number}`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/issues/${number}`;
   },
 
   buildPRUrl(repo: RepoRef, number: number): string {
-    return `https://github.com/${repo.owner}/${repo.repo}/pull/${number}`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/pull/${number}`;
   },
 
   // GitHub's bare `/issues` list already scopes to `is:issue is:open`, so the
@@ -372,7 +403,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   // have no bare-URL equivalent, so they stay as `q` qualifiers even without a
   // query (#9986).
   buildIssuesUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
-    const base = `https://github.com/${repo.owner}/${repo.repo}/issues`;
+    const base = `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/issues`;
     const query = options?.query;
     const state = options?.state;
     const qParts: string[] = [];
@@ -386,7 +417,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   // Mirrors buildIssuesUrl with the `is:pr` type qualifier; bare `/pulls`
   // already scopes to `is:pr is:open`. See buildIssuesUrl for the rationale.
   buildPRsUrl(repo: RepoRef, options?: { query?: string; state?: string }): string {
-    const base = `https://github.com/${repo.owner}/${repo.repo}/pulls`;
+    const base = `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/pulls`;
     const query = options?.query;
     const state = options?.state;
     const qParts: string[] = [];
@@ -398,19 +429,19 @@ export const githubForgeProvider: ForgeProviderImpl = {
   },
 
   buildCommitsUrl(repo: RepoRef, branch?: string): string {
-    const base = `https://github.com/${repo.owner}/${repo.repo}/commits`;
+    const base = `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/commits`;
     return branch ? `${base}/${encodeURIComponent(branch)}` : base;
   },
 
   buildRepoUrl(repo: RepoRef): string {
-    return `https://github.com/${repo.owner}/${repo.repo}`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}`;
   },
 
   // Each ref is encoded on its own so the `...` separator stays literal, and a
   // `#` or `%` in a branch name can't end or corrupt the path.
   buildNewPRUrl(repo: RepoRef, refs: { base: string; head: string }): string {
     const range = `${encodeURIComponent(refs.base)}...${encodeURIComponent(refs.head)}`;
-    return `https://github.com/${repo.owner}/${repo.repo}/compare/${range}?expand=1`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/compare/${range}?expand=1`;
   },
 
   // GitHub's `Files changed` view deep-links to a specific file via a
@@ -422,7 +453,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   // anchor to the current diff on the PR's "Files changed" tab.
   buildPRFileUrl(repo: RepoRef, number: number, path: string): string {
     const hash = createHash("sha256").update(path, "utf8").digest("hex");
-    return `https://github.com/${repo.owner}/${repo.repo}/pull/${number}/files#diff-${hash}`;
+    return `${githubWebBase(repo.host)}/${repo.owner}/${repo.repo}/pull/${number}/files#diff-${hash}`;
   },
 
   createIssue: createIssueImpl,
@@ -458,12 +489,12 @@ export const githubForgeProvider: ForgeProviderImpl = {
   },
 
   async getRepoActivityProbe(repo: RepoRef): Promise<{ freshnessToken: string }> {
-    const token = GitHubAuth.getToken();
+    const token = GitHubAuth.getToken(repo.host);
     if (!token) {
-      throw new Error("GitHub token not configured");
+      throw new Error(missingTokenMessage(repo.host));
     }
-    const probe = await fetchActivityProbe(token, repo.owner, repo.repo);
-    const cacheKey = `${repo.owner}/${repo.repo}`;
+    const probe = await fetchActivityProbe(token, toContext(repo));
+    const cacheKey = `${cacheOwner(repo)}/${repo.repo}`;
     // The REST events probe returns either a fresh ETag (`changed`) or signals
     // "nothing new since the cached ETag" (`unchanged`); either way the latest
     // ETag is what the host should byte-compare. On `unknown` the probe has no
@@ -483,6 +514,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
   reviews: reviewCapability,
   issueComments: issueCommentCapability,
   checks: checksCapability,
+  deployments: deploymentsCapability,
   autoMerge: { enable: enableAutoMergeImpl, disable: disableAutoMergeImpl },
   identity: identityCapability,
   tooltips: tooltipCapability,

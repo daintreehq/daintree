@@ -12,9 +12,11 @@
   background-image: var(--toolbar-noise, var(--chrome-noise-texture));
   background-blend-mode: soft-light;
   box-shadow: var(--toolbar-shadow, none);
-  -webkit-backdrop-filter: blur(var(--theme-material-blur))
-    saturate(var(--theme-material-saturation));
-  backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
+  /* No backdrop-filter. The strip heads the window in normal flow, so nothing
+     ever sits behind it but the page root's flat fill, and every built-in
+     theme paints it opaque on top of that. A blur there had nothing to blur,
+     yet it still made Chromium render an offscreen backdrop pass for the
+     strip beside the terminals' WebGL canvases. */
 }
 
 /* ── Remote window ──
@@ -185,20 +187,15 @@
   color: var(--remote-chip-quiet-ink, var(--theme-text-secondary));
 }
 
-/* ── backdrop-filter fallbacks ──
- * The translucent material relies on GPU compositing and ignores the OS
- * "reduce transparency" accessibility preference. Engines without
- * backdrop-filter would render the toolbar over a near-transparent base;
- * users who set Reduce Transparency (macOS) / Transparency effects off
- * (Windows) explicitly want solid chrome. Both fall back to the opaque
- * surface token already used by the data-performance-mode override. The
- * two gates are independent — a GPU-capable machine can still have
- * Reduce Transparency enabled — so they are separate at-rules, not nested.
+/* ── Solid-chrome fallbacks ──
+ * Users who set Reduce Transparency (macOS) / Transparency effects off
+ * (Windows) or Increase Contrast explicitly want solid chrome, so a theme's
+ * translucent `--toolbar-bg` gives way to the opaque surface token, the same
+ * one the data-performance-mode override uses. The two preferences are
+ * independent, so they are separate at-rules, not nested.
  */
-@supports not (backdrop-filter: blur(1px)) {
+@media (prefers-reduced-transparency: reduce) {
   .surface-toolbar {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
     background-color: var(--theme-surface-toolbar);
   }
 
@@ -208,22 +205,8 @@
   }
 }
 
-@media (prefers-reduced-transparency: reduce) {
-  .surface-toolbar {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    background-color: var(--theme-surface-toolbar);
-  }
-
-  .surface-toolbar[data-remote-window] {
-    --remote-occluder: var(--theme-surface-toolbar);
-  }
-}
-
 @media (prefers-contrast: more) {
   .surface-toolbar {
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
     background-color: var(--theme-surface-toolbar);
   }
 }

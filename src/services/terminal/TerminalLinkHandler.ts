@@ -1,16 +1,9 @@
-import { systemClient } from "@/clients";
-import { actionService } from "@/services/ActionService";
 import { isLocalhostUrl, normalizeBrowserUrl } from "@/components/Browser/browserUtils";
 import { usePanelStore } from "@/store/panelStore";
 import { isMac } from "@/lib/platform";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
-import {
-  isBrowserPanel,
-  isGridPanelLocation,
-  isPtyPanel,
-  type PanelInstance,
-} from "@shared/types/panel";
+import { isPtyPanel } from "@shared/types/panel";
 import { isLocalHostId, type HostId } from "@shared/types/remoteHosts";
 import {
   hostForwardFailure,
@@ -19,6 +12,9 @@ import {
   resolveTerminalLinkForHost,
 } from "./remoteLoopbackLinks";
 import { activatePluginUrlLink } from "./pluginTerminalLinks";
+import { openUrlExternally, pickReusableBrowser, showPanelAt } from "@/services/openLinkUrl";
+
+const LOG_PREFIX = "[TerminalLinkHandler]";
 
 export interface OpenLinkOptions {
   /**
@@ -31,34 +27,6 @@ export interface OpenLinkOptions {
    * this view's: Canopy shows other hosts' runs, and their `localhost` is theirs.
    */
   hostId?: HostId;
-}
-
-/**
- * The browser pane a modifier-clicked localhost link takes over: the most
- * recently used one in the worktree that activating can bring on screen.
- * Trashed, parked and dialog panes stay in `panelIds`, and navigating one looks
- * to the user like the click did nothing (#14965). A pane never used, or tied,
- * keeps `panelIds` order behind any used one.
- */
-function pickReusableBrowser(
-  panelIds: readonly string[],
-  panelsById: Readonly<Record<string, PanelInstance>>,
-  worktreeId: string | null
-): PanelInstance | undefined {
-  let best: PanelInstance | undefined;
-  let bestUsedAt = 0;
-  for (const id of panelIds) {
-    const panel = panelsById[id];
-    if (!panel || !isBrowserPanel(panel) || (panel.worktreeId ?? null) !== worktreeId) continue;
-    if (!isGridPanelLocation(panel.location) && panel.location !== "dock") continue;
-    const stamp = panel.lastActiveAt;
-    const usedAt = stamp !== undefined && Number.isFinite(stamp) && stamp > 0 ? stamp : 0;
-    if (best === undefined || usedAt > bestUsedAt) {
-      best = panel;
-      bestUsedAt = usedAt;
-    }
-  }
-  return best;
 }
 
 export class TerminalLinkHandler {
@@ -141,22 +109,7 @@ export class TerminalLinkHandler {
       );
 
       if (existingBrowser) {
-        store.setBrowserUrl(existingBrowser.id, normalized.url);
-        // A group renders its stored tab over the focused one, so a pane behind
-        // another tab would take focus and stay hidden.
-        const group = store.getPanelGroup(existingBrowser.id);
-        if (group) store.setActiveTab(group.id, existingBrowser.id);
-        store.activateTerminal(existingBrowser.id);
-        // The store only records the address; the pane navigates (and, on a host, forwards) on this.
-        actionService
-          .dispatch(
-            "browser.navigate",
-            { url: normalized.url, terminalId: existingBrowser.id },
-            { source: "user" }
-          )
-          .catch((error) =>
-            logError("[TerminalLinkHandler] Failed to navigate the browser", error)
-          );
+        showPanelAt(existingBrowser.id, normalized.url, LOG_PREFIX);
       } else {
         void store.addPanel({
           kind: "browser",
@@ -172,14 +125,6 @@ export class TerminalLinkHandler {
 
   private openExternal(url: string): void {
     const normalizedUrl = /^https?:\/\//i.test(url) ? url : `https://${url}`;
-    actionService
-      .dispatch("system.openExternal", { url: normalizedUrl }, { source: "user" })
-      .then((result) => {
-        if (result.ok) return;
-        return systemClient.openExternal(normalizedUrl);
-      })
-      .catch((error) => {
-        logError("[TerminalLinkHandler] Failed to open URL", error);
-      });
+    openUrlExternally(normalizedUrl, LOG_PREFIX);
   }
 }

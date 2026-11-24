@@ -28,6 +28,11 @@ export const CLOCK_DRIFT_MS = 10_000;
 export const UNRECORDED_RETRY_MS = 60_000;
 /** A project whose schedules haven't answered by then counts as unread, so one read can't hold up the rest. */
 export const READ_TIMEOUT_MS = 10_000;
+/**
+ * The first wait before the project list is read again after it couldn't be.
+ * Each failure doubles it, up to {@link UNRECORDED_RETRY_MS}.
+ */
+export const INVENTORY_RETRY_MS = 1_000;
 
 /** The parts of the run history the scheduler reads and writes. */
 export interface ScheduledRunSchedulerRecorder {
@@ -45,7 +50,10 @@ export interface ScheduledRunSchedulerLaunch {
 }
 
 export interface ScheduledRunSchedulerDeps {
-  /** Every local project; schedules of projects added later arrive through the store's changes. */
+  /**
+   * Every local project, read again until it answers; schedules of projects
+   * added later arrive through the store's changes.
+   */
   readonly listProjectIds: () => readonly string[];
   readonly projectExists: (projectId: string) => boolean;
   readonly listSchedules: (projectId: string) => Promise<SchedulesSnapshot>;
@@ -128,6 +136,20 @@ export class ScheduledRunScheduler {
   /** Projects whose schedules couldn't be read, and when they're read again. */
   private readonly unread = new Set<string>();
   private nextReadAt = 0;
+  /**
+   * The wait before the project list is read again, while it couldn't be.
+   * Null once it was read, even when it held no project.
+   */
+  private inventoryRetryMs: number | null = null;
+  private nextInventoryAt = 0;
+  /**
+   * Each project's read still running underneath, however long ago its wait
+   * ran out. A retry joins it rather than queueing another behind it in the
+   * store, so a stalled filesystem holds at most one read per project.
+   */
+  private readonly reading = new Map<string, Promise<void>>();
+  /** Ends each first read's wait, so a dispose during startup leaves no timer behind. */
+  private readonly firstReadWaits = new Set<() => void>();
   private timer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribe: (() => void) | null = null;
   private started = false;
@@ -167,14 +189,10 @@ export class ScheduledRunScheduler {
     this.unsubscribe = this.deps.subscribeSchedules((snapshot) => {
       if (this.holdRead(snapshot)) this.requestPass();
     });
-    let projectIds: readonly string[] = [];
-    try {
-      projectIds = this.deps.listProjectIds();
-    } catch (error) {
-      this.logWarn("[ScheduledRuns] Couldn't list projects for their schedules:", error);
-    }
+    const projectIds = this.listProjects() ?? [];
     this.nextReadAt = this.monotonicNow() + UNRECORDED_RETRY_MS;
-    await this.readProjects(projectIds);
+    await Promise.all(projectIds.map((projectId) => this.awaitFirstRead(projectId)));
+    if (this.disposed) return;
     this.read = true;
     this.requestPass();
   }
@@ -212,6 +230,8 @@ export class ScheduledRunScheduler {
     this.clearTimer();
     this.unsubscribe?.();
     this.unsubscribe = null;
+    for (const finish of [...this.firstReadWaits]) finish();
+    this.reading.clear();
     await this.draining;
   }
 
@@ -262,41 +282,92 @@ export class ScheduledRunScheduler {
    * meanwhile was missed; a read still running after that marks nothing.
    */
   private holdRead(snapshot: SchedulesSnapshot): boolean {
-    const late = this.unread.delete(snapshot.projectId);
+    // Nobody watched a project the list couldn't name either.
+    const unlisted = this.inventoryRetryMs !== null && !this.projects.has(snapshot.projectId);
+    const late = this.unread.delete(snapshot.projectId) || unlisted;
     if (!this.hold(snapshot)) return false;
     if (late) for (const schedule of snapshot.schedules) this.markUnwatched(schedule.id);
     return true;
   }
 
-  private async readProjects(projectIds: readonly string[]): Promise<void> {
-    await Promise.all(
-      projectIds.map(async (projectId) => {
-        const held = this.projects.get(projectId);
-        try {
-          this.holdRead(await this.readSchedules(projectId));
-        } catch (error) {
-          // A change that arrived while the read failed already holds what it would have.
-          if (this.projects.get(projectId) === held) this.unread.add(projectId);
-          this.logWarn(`[ScheduledRuns] Couldn't read project ${projectId}'s schedules:`, error);
-        }
-      })
-    );
+  /**
+   * Every local project, or null when the list couldn't be read: then it's
+   * read again after a wait that doubles with each failure.
+   */
+  private listProjects(): readonly string[] | null {
+    try {
+      const projectIds = this.deps.listProjectIds();
+      this.inventoryRetryMs = null;
+      return projectIds;
+    } catch (error) {
+      this.logWarn("[ScheduledRuns] Couldn't list projects for their schedules:", error);
+      this.inventoryRetryMs =
+        this.inventoryRetryMs === null
+          ? INVENTORY_RETRY_MS
+          : Math.min(this.inventoryRetryMs * 2, UNRECORDED_RETRY_MS);
+      this.nextInventoryAt = this.monotonicNow() + this.inventoryRetryMs;
+      return null;
+    }
   }
 
-  private readSchedules(projectId: string): Promise<SchedulesSnapshot> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error(`no answer within ${READ_TIMEOUT_MS} ms`)),
-        READ_TIMEOUT_MS
-      );
-      let read: Promise<SchedulesSnapshot>;
-      try {
-        read = Promise.resolve(this.deps.listSchedules(projectId));
-      } catch (error) {
-        read = Promise.reject(error);
-      }
-      read.then(resolve, reject).finally(() => clearTimeout(timer));
+  /**
+   * Waits at most {@link READ_TIMEOUT_MS} for a project's first read, so one
+   * read can't hold up the rest. One that hasn't answered by then leaves the
+   * project unread, and is still held whenever it lands.
+   */
+  private awaitFirstRead(projectId: string): Promise<void> {
+    const held = this.projects.get(projectId);
+    const reading = this.readProject(projectId);
+    return new Promise((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        this.firstReadWaits.delete(finish);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        finish();
+        if (this.projects.get(projectId) === held) this.unread.add(projectId);
+        this.logWarn(
+          `[ScheduledRuns] Couldn't read project ${projectId}'s schedules:`,
+          new Error(`no answer within ${READ_TIMEOUT_MS} ms`)
+        );
+      }, READ_TIMEOUT_MS);
+      this.firstReadWaits.add(finish);
+      reading.then(finish, finish);
     });
+  }
+
+  /**
+   * Reads a project's schedules, or joins the read of them still running.
+   * What it returns is held whenever it lands, and the newer of it and a
+   * change wins; a failure leaves the project unread unless a change arrived
+   * meanwhile.
+   */
+  private readProject(projectId: string): Promise<void> {
+    const running = this.reading.get(projectId);
+    if (running) return running;
+    const held = this.projects.get(projectId);
+    let read: Promise<SchedulesSnapshot>;
+    try {
+      read = Promise.resolve(this.deps.listSchedules(projectId));
+    } catch (error) {
+      read = Promise.reject(error);
+    }
+    const reading = (async () => {
+      try {
+        const snapshot = await read;
+        if (!this.disposed && this.holdRead(snapshot)) this.requestPass();
+      } catch (error) {
+        if (this.disposed) return;
+        // A change that arrived while the read failed already holds what it would have.
+        if (this.projects.get(projectId) === held) this.unread.add(projectId);
+        this.logWarn(`[ScheduledRuns] Couldn't read project ${projectId}'s schedules:`, error);
+      } finally {
+        this.reading.delete(projectId);
+      }
+    })();
+    this.reading.set(projectId, reading);
+    return reading;
   }
 
   private requestPass(): void {
@@ -327,18 +398,35 @@ export class ScheduledRunScheduler {
     this.clearTimer();
     if (this.isShuttingDown() || !this.read) return;
     this.noteClock();
+    if (this.inventoryRetryMs !== null && this.monotonicNow() >= this.nextInventoryAt) {
+      const listed = this.listProjects();
+      if (listed) {
+        // Read now, and as late: nobody watched them while the list was unread.
+        for (const projectId of listed) {
+          if (!this.projects.has(projectId)) this.unread.add(projectId);
+        }
+        this.nextReadAt = this.monotonicNow();
+      }
+    }
     if (this.unread.size > 0 && this.monotonicNow() >= this.nextReadAt) {
       this.nextReadAt = this.monotonicNow() + UNRECORDED_RETRY_MS;
-      await this.readProjects([...this.unread]);
-      if (this.disposed || this.isShuttingDown()) return;
+      // Not waited for: a read that lands asks for its own pass, so a stalled
+      // one holds up no other project's schedules.
+      for (const projectId of [...this.unread]) {
+        if (this.reading.has(projectId)) {
+          this.logWarn(`[ScheduledRuns] Still waiting on project ${projectId}'s schedules`);
+        } else {
+          void this.readProject(projectId);
+        }
+      }
     }
     if (!this.hasEnabledSchedule()) {
-      // No history opened, and no timer unless a project is still to be read:
-      // nothing can come due.
+      // No history opened, and no timer unless a project or the list is
+      // still to be read: nothing can come due.
       this.recoverAll = false;
       this.osLaunchAt = null;
       this.unwatched.clear();
-      if (this.unread.size > 0) this.arm(SCHEDULER_TICK_MS);
+      if (this.unread.size > 0 || this.inventoryRetryMs !== null) this.arm(SCHEDULER_TICK_MS);
       return;
     }
     const recorder = await this.deps.getRecorder();
@@ -365,7 +453,6 @@ export class ScheduledRunScheduler {
           this.retryAfter.delete(schedule.id);
         }
         const unwatchedThrough = this.unwatched.get(schedule.id) ?? null;
-        this.unwatched.delete(schedule.id);
         const missedThrough = this.recoverAll ? Number.POSITIVE_INFINITY : unwatchedThrough;
         let decision: Decision;
         try {
@@ -378,16 +465,20 @@ export class ScheduledRunScheduler {
           );
         } catch (error) {
           this.logWarn(`[ScheduledRuns] Couldn't evaluate schedule ${schedule.id}:`, error);
+          // Nobody looked at it this time either, so what came due by now stays missed.
+          this.markUnwatched(schedule.id);
           continue;
         }
-        if (decision.kind === "launch") {
-          this.launch(projectId, schedule.id, decision.origin);
-          continue;
-        }
+        // Kept until the schedule is settled, so a skip that throws leaves it missed.
         if (
           decision.kind === "skip" &&
           !this.skip(recorder, projectId, schedule, decision.origin)
         ) {
+          continue;
+        }
+        this.unwatched.delete(schedule.id);
+        if (decision.kind === "launch") {
+          this.launch(projectId, schedule.id, decision.origin);
           continue;
         }
         const due = decision.kind === "wait" ? decision.nextDueAt : this.nextAfter(schedule, now);
@@ -576,7 +667,9 @@ export class ScheduledRunScheduler {
   private arm(delayMs: number): void {
     this.clearTimer();
     if (this.disposed) return;
-    const delay = Math.min(Math.max(delayMs, 0), SCHEDULER_TICK_MS);
+    const listAt =
+      this.inventoryRetryMs === null ? Infinity : this.nextInventoryAt - this.monotonicNow();
+    const delay = Math.min(Math.max(Math.min(delayMs, listAt), 0), SCHEDULER_TICK_MS);
     this.timer = setTimeout(() => {
       this.timer = null;
       this.requestPass();

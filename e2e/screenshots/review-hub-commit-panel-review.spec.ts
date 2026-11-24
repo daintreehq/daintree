@@ -390,7 +390,7 @@ test("review hub commit panel review — every state of the commit composer", as
         await featureCard.click({ button: "right" });
         await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: T_MEDIUM });
         const reviewTrigger = page.getByRole("menuitem", { name: /^Review$/ }).first();
-        const reviewItem = page.getByRole("menuitem", { name: /^Review worktree$/ }).first();
+        const reviewItem = page.getByRole("menuitem", { name: /^Open Review Hub$/ }).first();
         await reviewTrigger.hover();
         if (!(await reviewItem.isVisible().catch(() => false))) await reviewTrigger.click();
         await reviewItem.click();

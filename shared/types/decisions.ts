@@ -1,3 +1,5 @@
+import type { DeliverySubject } from "../utils/decisionsDeliveryReasons.js";
+
 /**
  * Daintree Decisions, as kept in settings (#15998): one global switch on the
  * owner's machine, and the non-secret record of which relay this machine talks
@@ -26,9 +28,12 @@ export interface DecisionsSettings {
    */
   hostId: string | null;
   /**
-   * Whether a question with no trusted workflow gate may accept a proxy
-   * answer (the client library's `proxyAllowlisted`). Off unless the person
-   * turns it on.
+   * Whether the person chose to let the decision model answer in their place
+   * (#18062): set by choosing a confidence under Answer automatically, and
+   * cleared by choosing not to. The model arms only with it, and a question
+   * with no trusted workflow gate may take a proxy answer (the client
+   * library's `proxyAllowlisted`) only while the model is armed. Off unless
+   * the person chooses.
    */
   proxyAllowlisted: boolean;
   /**
@@ -113,6 +118,24 @@ export interface DecisionsSettings {
    * Null until they first agree.
    */
   terminalSnapshotsConsentedAt: number | null;
+  /**
+   * Whether this computer, as the owner, tells the relay while the person is
+   * at it (#17240), so the relay briefly holds a new question's first phone
+   * push and sends none if it's answered here first. Reported only while
+   * desktop notifications are on, so the person is told here instead. On
+   * unless the person turns it off, so a setting saved before the field
+   * existed reads as on.
+   */
+  holdPhonePushes: boolean;
+  /**
+   * Whether this computer, as the owner, asks the relay to tell the person's
+   * phone that an agent stopped (#17319): one of its own agents settled as
+   * completed or exited while the person was away and outside quiet hours.
+   * The push carries nothing about which agent, where or how many. Off unless
+   * the person turns it on, so a setting saved before the field existed reads
+   * as off. Standalone: it doesn't need desktop notifications on.
+   */
+  agentStoppedPushes: boolean;
 }
 
 /**
@@ -142,6 +165,12 @@ export interface DecisionsRecoveryKitRecord {
   relayOrigin: string;
   installationId: string;
   deviceId: string;
+  /**
+   * The fingerprint of the stored keys the kit was checked against (#18064),
+   * dropped when the key file changes or is removed. Absent on a record from
+   * before the field, or one whose keys changed while it was checked.
+   */
+  keys?: string;
 }
 
 /** A finished setup check, recorded by the identity it checked: when, and the step that failed if one did. */
@@ -200,6 +229,16 @@ export interface DecisionsStatus {
   consentedAt?: number;
   /** Terminal snapshots are on (#16228); absent while off. */
   terminalSnapshots?: true;
+  /** Holding phone pushes while the person is here is turned off (#17240); absent while on. */
+  holdPhonePushes?: false;
+  /** Telling the phone when an agent stops is turned on (#17319); absent while off. */
+  agentStoppedPushes?: true;
+  /**
+   * Settings → Notifications has desktop notifications turned off, so no
+   * question shows here and no presence is reported to hold a phone push
+   * (#18061); absent while on.
+   */
+  desktopNotifications?: false;
   /**
    * This computer's Decisions key file exists. Read only while on, from the
    * file's presence alone, so it never asks the keychain. With no relay set
@@ -218,6 +257,21 @@ export interface DecisionsStatus {
    * identity, or its key file is known to be gone.
    */
   recoveryKitVerifiedAt?: number;
+  /**
+   * The verified kit holds every key this computer's key file holds now
+   * (#18064). A rotation, revocation or any other change to the stored keys
+   * since the verification clears it while `recoveryKitVerifiedAt` stays, so
+   * the kit row can say a new one is needed and erasing the keys asks for the
+   * stronger confirmation.
+   */
+  recoveryKitCurrent?: true;
+  /**
+   * What this computer's key file, and any keys an interrupted deletion set
+   * aside, hold now, as an opaque version; absent when neither exists or they
+   * weren't read (#18064). An erasure names the version its confirmation
+   * showed, and main erases nothing once it differs.
+   */
+  keysVersion?: string;
   /**
    * The latest setup check that ran to the end for the relay set up here
    * (#16024). Absent until one has, or while its key file is known to be gone.
@@ -379,8 +433,6 @@ export interface DecisionsWorkflowGate {
 /** The rules questions are asked under on this computer, as main applies them. */
 export interface DecisionsPolicy {
   gates: DecisionsWorkflowGate[];
-  /** Whether a question without a registered gate may accept a proxy answer, when its agent allows one. */
-  proxyAllowlisted: boolean;
   /**
    * How long a question with no origin gate waits when its agent sets no
    * expiry, in ms, or null for no expiry: the saved setting, as the library's
@@ -477,6 +529,11 @@ export type DecisionsRelayCheck =
       result: "incompatible" | "claim-not-configured" | "unclaimed" | "claimed";
       origin: string;
       compatibility: DecisionsRelayCompatibility;
+      /**
+       * Its `/info` doesn't list `agent-stopped-push-v1`, so it won't tell a
+       * phone an agent stopped (#18061); absent when it does.
+       */
+      advertisesAgentStoppedPushes?: false;
     };
 
 /**
@@ -656,10 +713,51 @@ export type DecisionsRelayDeleteResult =
  *   to tell which. Deleting again finishes or undoes it, and so does the next
  *   start when files were set aside. Decisions holds no store until then.
  */
+/**
+ * How the person confirmed erasing this computer's keys (#18064). `oneClick`:
+ * Settings showed no keys here, or a current recovery kit holding them, so a
+ * click was enough. Main then erases nothing while the key file holds keys no
+ * current kit covers, read once pending key writes have settled, since a
+ * rotation from another window can land between the confirm and the erase.
+ */
+export interface DecisionsKeyErasurePayload {
+  oneClick: boolean;
+  /**
+   * The relay the confirmation named, null for none. Main erases nothing once
+   * another is recorded, as when a second window disconnected and set one up
+   * while this one's dialog was open.
+   */
+  relayOrigin: string | null;
+  /** The `keysVersion` the confirmation showed, null for none. */
+  keys: string | null;
+}
+
+/**
+ * `keys-changed` (#18064): the confirm was one click, but the key file holds
+ * keys no current recovery kit covers, so nothing was deleted.
+ */
 export type DecisionsLocalDeleteResult =
   | { result: "deleted"; status: DecisionsStatus }
-  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" | "model" }
+  | { result: "failed"; reason: "disk-pressure" | "storage" | "keys" | "model" | "keys-changed" }
   | { result: "incomplete"; erased: boolean | null; status: DecisionsStatus };
+
+/**
+ * What removing this computer's settled questions observed (#18033): the
+ * answered, declined, withdrawn, expired and never-sent questions it asked
+ * whose deliveries are finished, with their answers and follow-ups. Open
+ * questions, stopped deliveries, anything still to be sent or typed, the
+ * keys, the relay record, enrolled Hosts and the decision model stay, and
+ * nothing is sent anywhere.
+ *
+ * - `removed`: `count` questions were removed; 0 when none was ready.
+ * - `failed`: nothing was removed (`disk-pressure`: writes are refused while
+ *   disk space is critical; `storage`: the database refused;
+ *   `store-unavailable`: the stored history couldn't be opened when
+ *   Decisions started).
+ */
+export type DecisionsHistoryRemoveResult =
+  | { result: "removed"; count: number }
+  | { result: "failed"; reason: "disk-pressure" | "storage" | "store-unavailable" };
 
 /**
  * Saving a recovery kit for this computer's identity (#16007). The
@@ -737,14 +835,47 @@ export interface PaneDecisionQuestion {
   askedAt: string;
   /** ISO 8601 as recorded; null when the question never expires. */
   expiresAt: string | null;
+  /** Advisory while its round only offers advice; absent from a Host from before it (#18054). */
+  replyMode?: "advisory" | "blocking";
+  /**
+   * A withdrawal (`withdrawing`) or the person's decline (`declining`)
+   * started on the machine that owns the pane and not yet confirmed by the
+   * relay (#18052), whichever view it was started from; absent otherwise,
+   * and from a Host from before it.
+   */
+  closing?: "withdrawing" | "declining";
+}
+
+/**
+ * An answered question whose agent asked the person for a reply they haven't
+ * given yet (#18052): back in Needs you, and answered on the thread.
+ */
+export interface PaneDecisionReplyRequest {
+  questionId: string;
+  alias: number;
+  /** When the agent asked for the reply, ISO 8601 as recorded. */
+  requestedAt: string;
+}
+
+/**
+ * A follow-up from the person, received for the pane and not yet typed into
+ * it (#18052), on a question with no answer of its own still to type.
+ */
+export interface PaneDecisionFollowUp {
+  questionId: string;
+  alias: number;
 }
 
 /** Something received for the pane that has not been typed into it yet. */
 export interface PaneDecisionWaiting {
   questionId: string;
   alias: number;
-  /** An answer (or correction), or only the notice that the question expired unanswered. */
-  kind: "answer" | "expired";
+  /**
+   * An answer (or correction), or only the notice that the question expired
+   * unanswered, or (#17943) that its deadline passed before it ever reached
+   * the relay, so no phone showed it.
+   */
+  kind: "answer" | "expired" | "never-published";
   deliveryStatus: Exclude<DecisionDeliveryStatus, "needs-attention" | "delivery-uncertain">;
 }
 
@@ -756,6 +887,12 @@ export interface PaneDecisionAttention {
   deliveryStatus: "needs-attention" | "delivery-uncertain";
   /** The library's code for why (`pane_gone`, `inject_ambiguous`, …); `unspecified` when none was recorded. */
   reason: string;
+  /**
+   * What of the question needs a person, as the list of answers needing
+   * attention and its notification name it (#18054); absent from a Host from
+   * before it, which reads as the answer.
+   */
+  subject?: DeliverySubject;
 }
 
 /**
@@ -770,6 +907,14 @@ export interface PaneDecisionState {
   openQuestions: PaneDecisionQuestion[];
   waitingAnswers: PaneDecisionWaiting[];
   needsAttention: PaneDecisionAttention[];
+  /**
+   * Its answered questions waiting on the person's reply (#18052). Omitted
+   * when there are none, and by a Host from before it: a list of its own,
+   * so an older view never offers to dismiss an answered question.
+   */
+  replyRequests?: PaneDecisionReplyRequest[];
+  /** The person's follow-ups waiting to be typed in, one per question (#18052); omitted as `replyRequests` is. */
+  waitingFollowUps?: PaneDecisionFollowUp[];
   /**
    * Increases with every change, so a late snapshot never overwrites a newer
    * push. Never behind the sender's wall clock in ms, so a restarted Host's

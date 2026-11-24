@@ -621,19 +621,21 @@ export function RecentDictationsPalette() {
     [results, selectedIndex, pick]
   );
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      // The preview scrolls from the search field, which keeps the keyboard.
-      if (e.key === "PageDown" || e.key === "PageUp") {
-        const scroller = document.getElementById(PREVIEW_SCROLL_ID);
-        if (!scroller) return;
-        e.preventDefault();
-        const page = scroller.clientHeight * 0.85;
-        scroller.scrollBy({ top: e.key === "PageDown" ? page : -page, behavior: "instant" });
-        return;
-      }
-      // Alt+Enter is the same pick with the original; the palette's own Enter
-      // handling only knows about the copy modifier.
+  // The preview scrolls from the search field, which keeps the keyboard; on
+  // the results region the page keys page the list instead.
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "PageDown" && e.key !== "PageUp") return;
+    const scroller = document.getElementById(PREVIEW_SCROLL_ID);
+    if (!scroller) return;
+    e.preventDefault();
+    const page = scroller.clientHeight * 0.85;
+    scroller.scrollBy({ top: e.key === "PageDown" ? page : -page, behavior: "instant" });
+  }, []);
+
+  // Alt+Enter is the same pick with the original, from the field or the results
+  // region; the palette's own Enter handling only knows about the copy modifier.
+  const handleListKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
       if (e.key !== "Enter" || !e.altKey) return;
       e.preventDefault();
       e.stopPropagation();
@@ -739,6 +741,7 @@ export function RecentDictationsPalette() {
       onClose={close}
       onHoverIndex={setSelectedIndex}
       onKeyDown={handleKeyDown}
+      onListKeyDown={handleListKeyDown}
       getItemId={(item) => item.id}
       renderItem={renderItem}
       getFooter={getFooter}

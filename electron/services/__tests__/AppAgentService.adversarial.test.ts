@@ -34,6 +34,32 @@ function mockFetch(impl: typeof fetch) {
   globalThis.fetch = impl as typeof fetch;
 }
 
+describe("AppAgentService.setConfig (#17026)", () => {
+  it("writes a multi-field patch once, merged over the stored config", () => {
+    setConfig({ apiKey: "sk-valid", model: "gpt-foo", baseUrl: "https://old.example/v1" });
+
+    new AppAgentService().setConfig({
+      model: "gpt-bar",
+      baseUrl: "https://new.example/v1",
+      apiKey: undefined,
+    });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("appAgentConfig", {
+      apiKey: "sk-valid",
+      model: "gpt-bar",
+      baseUrl: "https://new.example/v1",
+    });
+  });
+
+  it("writes nothing for an empty or all-undefined patch", () => {
+    const service = new AppAgentService();
+    service.setConfig({});
+    service.setConfig({ model: undefined });
+
+    expect(storeMock.set).not.toHaveBeenCalled();
+  });
+});
+
 describe("AppAgentService adversarial", () => {
   it("hasApiKey returns false for whitespace-only keys", () => {
     setConfig({ apiKey: "   \t ", model: "x" });

@@ -65,6 +65,7 @@ const projectStoreMock = vi.hoisted(() => {
       }
     ),
     getAllProjects: vi.fn(() => []),
+    getCompletionWatermarks: vi.fn(() => []),
     getCurrentProject: vi.fn(() => null),
     updateProjectStatus: vi.fn(),
   };
@@ -152,6 +153,7 @@ beforeEach(() => {
   // than inheriting whichever answer the previous one installed.
   probeGitMarkerMock.mockResolvedValue("present");
   projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: true });
+  resetGitMarkerCacheForTesting();
 });
 
 vi.mock("../../../window/portDistribution.js", () => ({
@@ -188,8 +190,12 @@ import {
   resetProjectHistory,
 } from "../../../services/ProjectHistoryService.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
+import { getAllAppWebContents } from "../../../window/webContentsRegistry.js";
+import { scratchStore } from "../../../services/ScratchStore.js";
+import { beginWindowSwitch } from "../../../window/windowSwitchEpochs.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { createProjectCrudRegistrar } from "./helpers/projectCrudLifecycle.js";
+import { resetGitMarkerCacheForTesting } from "../projectCrud/switch.js";
 import { installRemoteProjectResidency } from "../../../remote/hybrid/residency.js";
 import type { HandlerDependencies } from "../../types.js";
 import type {
@@ -232,6 +238,12 @@ function makeWindowRegistry(contexts: WindowContext[]): WindowRegistry {
     },
   } as unknown as WindowRegistry;
 }
+
+// A cold switch with a ptyClient leaves a prefetched inventory and its expiry
+// timer behind; drop both so no test inherits another's.
+afterEach(() => {
+  _resetTerminalInventoryPrefetchForTests();
+});
 
 // #11136: the File-menu "Close Project" / "Project Settings…" gates are computed
 // when the menu is built, so every path that opens a project has to refresh them
@@ -624,6 +636,88 @@ describe("project switch/reopen refuses a row whose repository is gone (#11649)"
       expect.objectContaining({ code: "NOT_A_GIT_REPO" })
     );
     expect(resumeProject).not.toHaveBeenCalled();
+  });
+
+  // #17039: a warm switch to a view the window already holds no longer waits
+  // on a fresh `.git` stat when one was seen recently; the probe still runs,
+  // off the critical path, and a vanished marker is caught by the next switch.
+  describe.each(CHANNEL_CASES)("warm reuse of a recent marker (%s)", (channel) => {
+    function makeWarmPvm(state: "cached" | "loading" = "cached") {
+      return {
+        ...makePvm(),
+        getAllViews: vi.fn(() => [
+          {
+            projectId: "proj-gone",
+            state,
+            view: { webContents: { isDestroyed: () => false } },
+          },
+        ]),
+      };
+    }
+
+    it("does not block a warm switch on the probe once a marker was seen", async () => {
+      registerProject();
+      const handler = handlerFor(channel, makeWarmPvm());
+      await handler({ sender: { id: 10 } }, "proj-gone");
+      expect(probeGitMarkerMock).toHaveBeenCalledTimes(1);
+
+      // A probe that never answers would hang a blocking check forever.
+      probeGitMarkerMock.mockReturnValue(new Promise(() => {}));
+      await expect(handler({ sender: { id: 10 } }, "proj-gone")).resolves.toEqual(
+        expect.objectContaining({ outcome: "switched" })
+      );
+      // Still revalidated, just not awaited.
+      expect(probeGitMarkerMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("blocks the switch after a background probe finds the marker gone", async () => {
+      registerProject();
+      const pvm = makeWarmPvm();
+      const handler = handlerFor(channel, pvm);
+      await handler({ sender: { id: 10 } }, "proj-gone");
+
+      probeGitMarkerMock.mockResolvedValue("missing");
+      projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: false });
+      // Let back in once on the cached verdict; its background probe sees the loss.
+      await handler({ sender: { id: 10 } }, "proj-gone");
+      await new Promise((resolve) => setImmediate(resolve));
+      pvm.switchTo.mockClear();
+
+      await expect(handler({ sender: { id: 10 } }, "proj-gone")).rejects.toThrow(
+        expect.objectContaining({ code: "NOT_A_GIT_REPO" })
+      );
+      expect(pvm.switchTo).not.toHaveBeenCalled();
+    });
+
+    it("always blocks on the probe when the view is still loading", async () => {
+      registerProject();
+      const handler = handlerFor(channel, makeWarmPvm("loading"));
+      await handler({ sender: { id: 10 } }, "proj-gone");
+
+      probeGitMarkerMock.mockResolvedValue("missing");
+      projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: false });
+      await expect(handler({ sender: { id: 10 } }, "proj-gone")).rejects.toThrow(
+        expect.objectContaining({ code: "NOT_A_GIT_REPO" })
+      );
+    });
+
+    it("blocks on the probe once the cached verdict is older than a minute", async () => {
+      registerProject();
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      try {
+        const handler = handlerFor(channel, makeWarmPvm());
+        await handler({ sender: { id: 10 } }, "proj-gone");
+
+        now.mockReturnValue(1_000_000 + 60_001);
+        probeGitMarkerMock.mockResolvedValue("missing");
+        projectStoreMock.classifyGitBacking.mockResolvedValue({ gitBacked: false });
+        await expect(handler({ sender: { id: 10 } }, "proj-gone")).rejects.toThrow(
+          expect.objectContaining({ code: "NOT_A_GIT_REPO" })
+        );
+      } finally {
+        now.mockRestore();
+      }
+    });
   });
 
   it("probes the project's own root", async () => {
@@ -1907,6 +2001,30 @@ describe("project:switch concurrent worktree load", () => {
     expect(worktreeService.loadProject).not.toHaveBeenCalledWith("/projects/old", 7);
     expect(worktreeService.unregisterWindow).not.toHaveBeenCalled();
   });
+
+  it("skips the failure restore once the window has moved to a scratch (#17186)", async () => {
+    let rejectSwap: (err: Error) => void = () => {};
+    const failingSwap = new Promise<{ view: unknown; isNew: boolean }>((_resolve, reject) => {
+      rejectSwap = reject;
+    });
+    const { invoke, worktreeService } = setup({ switchTo: () => failingSwap });
+
+    const first = invoke();
+    await vi.waitFor(() => expect(worktreeService.loadProject).toHaveBeenCalledTimes(1));
+
+    // A scratch lands in the window, which starts a switch there the way
+    // `activateScratchInWindow` does, and releases the window's host.
+    beginWindowSwitch(7);
+
+    rejectSwap(new Error("load timeout"));
+    await expect(first).rejects.toThrow("load timeout");
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Re-attaching the old project behind the scratch would hold its host
+    // foreground for a window that no longer shows it.
+    expect(worktreeService.loadProject).not.toHaveBeenCalledWith("/projects/old", 7);
+    expect(worktreeService.unregisterWindow).not.toHaveBeenCalled();
+  });
 });
 
 describe("project:switch status timing (#12461)", () => {
@@ -2126,6 +2244,35 @@ describe("project:switch PROJECT_ON_SWITCH notification", () => {
     expect(idOf(first)).not.toBe(idOf(second));
   });
 
+  it("tells only the activated view that it holds no scratch (#17186)", async () => {
+    // Another window shows a scratch, the one the global pointer names.
+    const sibling = { id: 400, isDestroyed: () => false, send: vi.fn() };
+    vi.mocked(getAllAppWebContents).mockReturnValue([sibling] as never);
+    const currentScratchId = vi
+      .spyOn(scratchStore, "getCurrentScratchId")
+      .mockReturnValue("11111111-1111-4111-8111-111111111111");
+    const clearCurrentScratch = vi
+      .spyOn(scratchStore, "clearCurrentScratch")
+      .mockImplementation(() => undefined);
+    try {
+      const sendMock = await runActivation(CHANNELS.PROJECT_SWITCH);
+
+      expect(clearCurrentScratch).toHaveBeenCalled();
+      expect(sendMock).toHaveBeenCalledWith(CHANNELS.SCRATCH_ON_SWITCH, {
+        scratch: null,
+        switchId: "",
+      });
+      // That window keeps the scratch it shows.
+      expect(sibling.send.mock.calls.map(([channel]) => channel)).not.toContain(
+        CHANNELS.SCRATCH_ON_SWITCH
+      );
+    } finally {
+      vi.mocked(getAllAppWebContents).mockReturnValue([]);
+      currentScratchId.mockRestore();
+      clearCurrentScratch.mockRestore();
+    }
+  });
+
   it("emits PROJECT_ON_SWITCH on reopen as well", async () => {
     const sendMock = await runActivation(CHANNELS.PROJECT_REOPEN, { status: "background" });
 
@@ -2166,12 +2313,9 @@ describe("project:switch PTY port ordering (#10075)", () => {
 
     const ptyClient = {
       onProjectSwitch: vi.fn(),
-      getTerminalsForProjectAsync: vi.fn(async () => ["t1"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        projectId: "proj-new",
-        kind: "terminal",
-      })),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        { id: "t1", projectId: "proj-new", kind: "terminal" },
+      ]),
     };
     const worktreeService = {
       loadProject: vi.fn(opts.loadProject),
@@ -2532,12 +2676,9 @@ describe("project:switch terminal inventory prefetch", () => {
     projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
     const ptyClient = {
       onProjectSwitch: vi.fn(),
-      getTerminalsForProjectAsync: vi.fn(async () => ["t1"]),
-      getTerminalAsync: vi.fn(async (id: string) => ({
-        id,
-        projectId: "proj-new",
-        kind: "terminal",
-      })),
+      getProjectTerminalsAsync: vi.fn(async () => [
+        { id: "t1", projectId: "proj-new", kind: "terminal" },
+      ]),
     };
     const worktreeService = {
       loadProject: vi.fn(async () => undefined),
@@ -2570,8 +2711,8 @@ describe("project:switch terminal inventory prefetch", () => {
   it("starts the pty-host inventory fetch for a cold target before the swap", async () => {
     const { invoke, ptyClient, pvm } = setupWith(true);
     await invoke();
-    expect(ptyClient.getTerminalsForProjectAsync).toHaveBeenCalledWith("proj-new");
-    expect(ptyClient.getTerminalsForProjectAsync.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(ptyClient.getProjectTerminalsAsync).toHaveBeenCalledWith("proj-new");
+    expect(ptyClient.getProjectTerminalsAsync.mock.invocationCallOrder[0]).toBeLessThan(
       pvm.switchTo.mock.invocationCallOrder[0]!
     );
   });
@@ -2579,7 +2720,7 @@ describe("project:switch terminal inventory prefetch", () => {
   it("does not fetch the inventory for a target that already has a live view", async () => {
     const { invoke, ptyClient } = setupWith(false);
     await invoke();
-    expect(ptyClient.getTerminalsForProjectAsync).not.toHaveBeenCalled();
+    expect(ptyClient.getProjectTerminalsAsync).not.toHaveBeenCalled();
   });
 });
 

@@ -701,6 +701,31 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
     vi.useRealTimers();
   });
 
+  it("resolves an active-worktree-id reply to the request that asked for it (#17069)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+
+    const promise = host.sendWithResponse<{ worktreeId: string | null }>({
+      type: "get-active-worktree-id",
+      requestId: "active-id",
+    });
+    child.emit("message", {
+      type: "active-worktree-id",
+      requestId: "active-id",
+      worktreeId: "wt-b",
+    });
+
+    await expect(promise).resolves.toMatchObject({ worktreeId: "wt-b" });
+    host.dispose();
+  });
+
   it("exit handler rejects pending requests with BrokerError HOST_EXITED", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {

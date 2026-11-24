@@ -17,6 +17,7 @@ export type {
   GitStatusUnansweredReason,
   ConflictXYCode,
   ConflictedFileEntry,
+  ConflictSideChoice,
   RebaseAction,
   RebaseEntryState,
   RebaseEntry,
@@ -144,6 +145,7 @@ export type {
   TerminalInfoPayload,
   TerminalLocation,
   SemanticSearchMatch,
+  SemanticSearchResult,
   // CopyTree IPC types
   CopyTreeOptions,
   CopyTreeGeneratePayload,
@@ -194,7 +196,9 @@ export type {
   IssueNotFoundPayload,
   // Project close IPC types
   ProjectCloseResult,
+  ProjectSleepOptions,
   ProjectSleepResult,
+  SleepRequestWorking,
   ProjectStats,
   BulkProjectStatsEntry,
   BulkProjectStats,
@@ -306,6 +310,7 @@ export type {
   VoiceDictionaryEntry,
   VoiceDictionarySource,
   VoiceDictionaryState,
+  VoiceSessionVocabulary,
   VoiceDictionaryChange,
   ProjectVoiceDictionaryChange,
   HeardAsConflict,
@@ -378,6 +383,7 @@ export type {
   AgentSettingsEntry,
   AgentSettings,
   DangerousMode,
+  PermissionLevel,
   ResumeOnRestart,
   GenerateAgentCommandOptions,
   GenerateAgentFlagsOptions,
@@ -387,7 +393,11 @@ export type {
 export {
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
+  DEFAULT_AUTO_ARGS,
+  DANGEROUS_MODES,
+  isDangerousMode,
   getDefaultDangerousArgs,
+  getPermissionAutoArgs,
   getPluginBypassArgHistory,
   getAgentSettingsEntry,
   resolveEffectivePresetId,
@@ -409,9 +419,13 @@ export {
   isAgentBypassSupported,
   isAgentTerminalBypassSupported,
   resolveEffectiveBypass,
+  resolveEffectivePermissionLevel,
+  permissionArgsForLevel,
   resolveDangerousMode,
   combineDangerousModes,
   reconcileBypassFlags,
+  reconcilePermissionFlags,
+  userPermissionArgs,
   reconcileInlineModeFlag,
   resolveKeepDecorations,
   reconcileDecorationFlags,
@@ -553,30 +567,17 @@ export type {
   SpawnErrorCode,
 } from "./pty-host.js";
 
-// Portal types - browser dock
+// A project's own links (#17091)
 export type {
-  PortalLinkType,
-  PortalLink,
-  LinkTemplate,
-  PortalTab,
-  PortalBounds,
-  PortalNavEvent,
-  PortalTabHistory,
-  PortalCreatePayload,
-  PortalShowPayload,
-  PortalCloseTabPayload,
-  PortalNavigatePayload,
-} from "./portal.js";
-
-export {
-  LINK_TEMPLATES,
-  DEFAULT_SYSTEM_LINKS,
-  DEFAULT_PORTAL_TABS,
-  PORTAL_MIN_WIDTH,
-  PORTAL_MAX_WIDTH,
-  PORTAL_DEFAULT_WIDTH,
-  PORTAL_MIN_EDITOR_WIDTH,
-} from "./portal.js";
+  DeclaredProjectLink,
+  DeclaredProjectLinkSource,
+  ProjectLink,
+  ProjectLinkActor,
+  ProjectLinkChange,
+  ProjectLinkRefusal,
+  ProjectLinksChangePayload,
+  ProjectLinksChangeResult,
+} from "./projectLinks.js";
 
 // Voice types - canonical phase model for voice session and transcript lifecycle
 export type {
@@ -599,6 +600,8 @@ export type {
   VoiceKeytermSource,
   VoiceSentTerm,
   LastDictationTerms,
+  LocalSpeechModelState,
+  LocalSpeechModelStatus,
   VoiceSessionEndReason,
   VoiceStartOutcome,
   VoiceTranscriptPhase,

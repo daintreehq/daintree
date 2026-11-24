@@ -4,8 +4,6 @@ import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 import { terminalClient } from "@/clients";
-import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { TerminalRefreshTier } from "@/types";
 import {
   panelKindHasPty,
   normalizeDockLocation,
@@ -18,7 +16,7 @@ import {
   type PanelKind,
 } from "@shared/types/panel";
 import { saveNormalized, saveTabGroups } from "./persistence";
-import { optimizeForDock } from "./layout";
+import { applyGridPlacementTier, demoteForTrash, optimizeForDock } from "./layout";
 import { cancelReconnectErrorDebounce } from "./browser";
 import {
   stopDevPreviewByPanelId,
@@ -142,10 +140,7 @@ export const createTrashActions = (
     scheduleTrashExpiry(id, expiresAt);
 
     if (panelKindHasPty(terminal.kind ?? "terminal")) {
-      withTerminalService(
-        (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
-        id
-      );
+      demoteForTrash(id);
       return;
     }
   };
@@ -253,10 +248,7 @@ export const createTrashActions = (
     for (const id of trashPanelIds) {
       const terminal = state.panelsById[id];
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        withTerminalService(
-          (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
-          id
-        );
+        demoteForTrash(id);
       }
     }
   };
@@ -338,10 +330,7 @@ export const createTrashActions = (
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
-          withTerminalService(
-            (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
-            id
-          );
+          applyGridPlacementTier(id, restored ?? terminal, get().getPanelGroup(id));
         }
       }
       // A launch that waited for control in the trash starts once it is back,
@@ -475,10 +464,7 @@ export const createTrashActions = (
           if (restoreLocation === "dock") {
             optimizeForDock(id);
           } else {
-            withTerminalService(
-              (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
-              id
-            );
+            applyGridPlacementTier(id, terminal, get().getPanelGroup(id));
           }
         }
       }
@@ -530,11 +516,15 @@ export const createTrashActions = (
 
       scheduleTrashExpiry(id, expiresAt);
 
-      if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
-        withTerminalService(
-          (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
-          id
-        );
+      // The updater ignores an acknowledgement for a panel that is no longer in
+      // the trash (a restore won the race); demoting then would background a
+      // visible pane.
+      if (
+        get().panelsById[id]?.location === "trash" &&
+        terminal &&
+        panelKindHasPty(terminal.kind ?? "terminal")
+      ) {
+        demoteForTrash(id);
       }
     },
 
@@ -597,10 +587,7 @@ export const createTrashActions = (
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
-          withTerminalService(
-            (service) => service.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE),
-            id
-          );
+          applyGridPlacementTier(id, restored ?? terminal, get().getPanelGroup(id));
         }
       }
     },

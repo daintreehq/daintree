@@ -5,6 +5,7 @@ import type { PtyPanelData } from "@shared/types/panel";
 import {
   cancelPanelStatusBuffer,
   clearHeldDuration,
+  dropAllHeldDurations,
   enqueueActivityUpdate,
   enqueueFlowStatusUpdate,
   enqueueHeldDurationUpdate,
@@ -283,6 +284,35 @@ describe("panelStatusBuffer — held-duration batching", () => {
     expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
   });
 
+  it("drops every held duration at an event gap, and lets later samples set them", () => {
+    seedPanel("term-1", { heldDurationMs: 8000 });
+    seedPanel("term-2");
+    seedPanel("term-3");
+    enqueueHeldDurationUpdate("term-2", 3000);
+    const untouched = usePanelStore.getState().panelsById["term-3"];
+
+    dropAllHeldDurations();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBeUndefined();
+    raf.flushAll();
+    // The sample buffered before the gap is gone with it.
+    expect(getPtyPanel("term-2")?.heldDurationMs).toBeUndefined();
+    expect(usePanelStore.getState().panelsById["term-3"]).toBe(untouched);
+
+    enqueueHeldDurationUpdate("term-1", 10000);
+    raf.flushAll();
+    expect(getPtyPanel("term-1")?.heldDurationMs).toBe(10000);
+  });
+
+  it("writes nothing for a clear on a panel that holds no duration", () => {
+    // `pause-end` clears the field first; the gauge's own clear follows a
+    // tick later and must not hand subscribers a new panel object.
+    seedPanel("term-1");
+    const before = usePanelStore.getState().panelsById["term-1"];
+    clearHeldDuration("term-1");
+    raf.flushAll();
+    expect(usePanelStore.getState().panelsById["term-1"]).toBe(before);
+  });
+
   it("combines with activity + flow-status in a single flush", () => {
     seedPanel("term-1", { isVisible: true });
     enqueueActivityUpdate("term-1", "Working", "working", "interactive", "cmd");
@@ -295,5 +325,66 @@ describe("panelStatusBuffer — held-duration batching", () => {
     expect(t?.activityHeadline).toBe("Working");
     expect(t?.flowStatus).toBe("paused-backpressure");
     expect(t?.heldDurationMs).toBe(6000);
+  });
+});
+
+describe("panelStatusBuffer — no-op frames", () => {
+  it("does not copy the panel map when every patch is redundant", () => {
+    for (let i = 0; i < 100; i++) seedPanel(`t${i}`);
+    seedPanel("t0", {
+      activityHeadline: "h",
+      activityStatus: "working",
+      activityType: "interactive",
+      lastCommand: "ls",
+    });
+    seedPanel("t1", {
+      flowStatus: "paused-backpressure",
+      flowStatusTimestamp: 5,
+      heldDurationMs: 7,
+    });
+    seedPanel("t2", { runtimeStatus: "exited" });
+
+    let copies = 0;
+    const raw = usePanelStore.getState().panelsById;
+    const proxied = new Proxy(raw, {
+      ownKeys(target) {
+        copies++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    usePanelStore.setState({ panelsById: proxied });
+
+    enqueueActivityUpdate("t0", "h", "working", "interactive", "ls");
+    enqueueFlowStatusUpdate("t1", "paused-backpressure", 5);
+    enqueueFlowStatusUpdate("t2", "paused-backpressure", 9);
+    enqueueHeldDurationUpdate("t1", 7);
+    clearHeldDuration("t0");
+    enqueueActivityUpdate("missing", "h", "working", "interactive", "ls");
+    raf.flushAll();
+
+    expect(copies).toBe(0);
+    expect(usePanelStore.getState().panelsById).toBe(proxied);
+  });
+
+  it("folds several real changes in one frame into one state update", () => {
+    for (let i = 0; i < 3; i++) seedPanel(`t${i}`);
+    let copies = 0;
+    const proxied = new Proxy(usePanelStore.getState().panelsById, {
+      ownKeys(target) {
+        copies++;
+        return Reflect.ownKeys(target);
+      },
+    });
+    usePanelStore.setState({ panelsById: proxied });
+
+    enqueueActivityUpdate("t0", "a", "working", "interactive", undefined);
+    enqueueActivityUpdate("t1", "b", "working", "interactive", undefined);
+    enqueueFlowStatusUpdate("t0", "paused-backpressure", 5);
+    raf.flushAll();
+
+    expect(copies).toBe(1);
+    expect(getPtyPanel("t0")?.activityHeadline).toBe("a");
+    expect(getPtyPanel("t0")?.flowStatus).toBe("paused-backpressure");
+    expect(getPtyPanel("t1")?.activityHeadline).toBe("b");
   });
 });

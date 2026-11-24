@@ -22,7 +22,7 @@ export interface ReviewThreadFile {
   label: string | null;
 }
 
-function oneLine(raw: string, limit: number): string {
+export function oneLine(raw: string, limit: number): string {
   return boundedErrorText(sanitizeErrorText(raw).replace(/\s+/g, " ").trim(), limit);
 }
 
@@ -78,7 +78,7 @@ function escapeCodeUnits(match: string): string {
  * punctuation, so each escape is a valid one; a character outside the BMP is
  * written as its surrogate pair.
  */
-function toPasteSafeJson(value: unknown, indent?: number): string {
+export function toPasteSafeJson(value: unknown, indent?: number): string {
   return JSON.stringify(value, null, indent).replace(ESCAPE_IN_JSON, escapeCodeUnits);
 }
 

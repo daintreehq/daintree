@@ -473,13 +473,17 @@ describe("machineTimeZone", () => {
   });
 
   function stubMachineZone(timeZone: string | undefined) {
+    let reported = timeZone;
     const real = Intl.DateTimeFormat.prototype.resolvedOptions;
     vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockImplementation(function (
       this: Intl.DateTimeFormat
     ) {
       const options = real.call(this);
-      return { ...options, timeZone: timeZone as string };
+      return { ...options, timeZone: reported as string };
     });
+    return (next: string | undefined) => {
+      reported = next;
+    };
   }
 
   it("reads the zone the runtime reports", () => {
@@ -493,5 +497,25 @@ describe("machineTimeZone", () => {
     vi.restoreAllMocks();
     stubMachineZone("Not/A_Zone");
     expect(machineTimeZone()).toBe("UTC");
+  });
+
+  it("follows the runtime's zone as it changes, checking a zone only when it's new", () => {
+    const report = stubMachineZone("Asia/Tokyo");
+    expect(machineTimeZone()).toBe("Asia/Tokyo");
+    const constructed = vi.spyOn(Intl, "DateTimeFormat");
+    expect(machineTimeZone()).toBe("Asia/Tokyo");
+    expect(constructed).toHaveBeenCalledTimes(1);
+
+    report("Europe/London");
+    expect(machineTimeZone()).toBe("Europe/London");
+    report("Not/A_Zone");
+    expect(machineTimeZone()).toBe("UTC");
+    constructed.mockClear();
+    expect(machineTimeZone()).toBe("UTC");
+    expect(constructed).toHaveBeenCalledTimes(1);
+    report(undefined);
+    expect(machineTimeZone()).toBe("UTC");
+    report("Asia/Tokyo");
+    expect(machineTimeZone()).toBe("Asia/Tokyo");
   });
 });

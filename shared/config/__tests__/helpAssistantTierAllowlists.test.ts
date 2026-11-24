@@ -11,6 +11,7 @@ import {
   toNonRendererOwnedTools,
 } from "../helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../mcpExternalTierAllowlist.js";
+import { BUILT_IN_ACTION_IDS } from "../actionIds.js";
 
 describe("normalizeHelpAssistantTier", () => {
   it("passes the current tool sets through", () => {
@@ -121,6 +122,33 @@ describe("toNonRendererOwnedTools", () => {
     }
   });
 
+  it("offers the project link tools to the Assistant at core, and to no worker pane (#17091)", () => {
+    const isLinkTool = (id: string) => id.startsWith("project.links.");
+    const linkTools = BUILT_IN_ACTION_IDS.filter(isLinkTool);
+    // The Assistant keeps the whole list: dropping one verb strands the links it added.
+    expect([...linkTools].sort()).toEqual([
+      "project.links.add",
+      "project.links.list",
+      "project.links.remove",
+      "project.links.update",
+    ]);
+    expect(linkTools.filter((id) => !CORE_TIER_TOOLS.includes(id as never))).toEqual([]);
+    for (const tier of HELP_ASSISTANT_TIERS) {
+      const projected = toNonRendererOwnedTools(HELP_TIER_CUMULATIVE[tier]);
+      expect(projected.filter(isLinkTool), tier).toEqual([]);
+    }
+    expect(MCP_EXTERNAL_TIER_TOOLS.filter(isLinkTool)).toEqual([]);
+  });
+
+  it("keeps no project link tool under the Portal namespace (#17243)", () => {
+    expect(BUILT_IN_ACTION_IDS.filter((id) => id.startsWith("portal.projectLinks"))).toEqual([]);
+    expect(
+      [...CORE_TIER_TOOLS, ...RENDERER_OWNED_ORIGIN_ONLY_TOOLS].filter((id) =>
+        id.startsWith("portal.")
+      )
+    ).toEqual([]);
+  });
+
   it("gives other origins only the owned worktree delete at core", () => {
     const projected = toNonRendererOwnedTools(HELP_TIER_CUMULATIVE.core);
     expect(projected).toContain("worktree.deleteOwned");
@@ -208,5 +236,14 @@ describe("session continuity tier placement (#11908)", () => {
     // returns nothing — the reason #11908 added a deterministic action instead.
     expect(HELP_TIER_CUMULATIVE.full).not.toContain("terminal.resumeSessions");
     expect(external.has("terminal.resumeSessions")).toBe(false);
+  });
+
+  it("leaves the Decisions views off every tier, so no agent raises them in the user's window", () => {
+    // They only open the inbox or a question (#17236); a question is the
+    // person's to answer, and these are the person's ways to it.
+    for (const id of ["decisions.openInbox", "decisions.openNextQuestion"]) {
+      expect(HELP_TIER_CUMULATIVE.full, `${id} must stay off MCP`).not.toContain(id);
+      expect(external.has(id), `${id} must not reach external MCP clients`).toBe(false);
+    }
   });
 });

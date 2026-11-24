@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useId } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useId } from "react";
 import { InlineError } from "@/components/ui/field";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { RadioChoiceGroup, RadioChoiceRow, CHOICE_LABEL_INSET } from "@/components/ui/RadioChoice";
@@ -42,6 +42,15 @@ function describeViewer(viewer: PersistedImageViewer): string {
   return viewer.mode === "os" ? "OS default" : `Custom (${viewer.customCommand})`;
 }
 
+/** A choice the user made over what is saved, or over the suggestion while nothing is. */
+function isUnsavedChoice(viewer: PersistedImageViewer, saved: PersistedImageViewer | null) {
+  const accepted = saved ?? SUGGESTED_VIEWER;
+  return (
+    accepted.mode !== viewer.mode ||
+    (viewer.mode === "custom" && accepted.customCommand.trim() !== viewer.customCommand)
+  );
+}
+
 export function ImageViewerTab() {
   const commandFieldId = useId();
   const [mode, setMode] = useState<ImageViewerMode>("os");
@@ -56,6 +65,9 @@ export function ImageViewerTab() {
   // no preference yet: the OS default shown then is a suggestion, and saving it is
   // still a real first write.
   const [persisted, setPersisted] = useState<PersistedImageViewer | null>(null);
+  // The same, set as each Save lands: a close waiting on one reads it before
+  // `persisted` re-renders.
+  const persistedRef = useRef<PersistedImageViewer | null>(null);
   const isMountedRef = useRef(true);
 
   const activeProject = useProjectStore((s) => s.currentProject);
@@ -74,6 +86,7 @@ export function ImageViewerTab() {
     if (!activeProjectId) return;
     setMode("os");
     setCustomCommand("");
+    persistedRef.current = null;
     setPersisted(null);
     setSaveError(null);
     setLoadError(null);
@@ -95,7 +108,9 @@ export function ImageViewerTab() {
         if (pref) {
           setMode(pref.mode);
           setCustomCommand(pref.customCommand ?? "");
-          setPersisted({ mode: pref.mode, customCommand: pref.customCommand ?? "" });
+          const saved = { mode: pref.mode, customCommand: pref.customCommand ?? "" };
+          persistedRef.current = saved;
+          setPersisted(saved);
         }
       })
       .catch((err) => {
@@ -124,9 +139,9 @@ export function ImageViewerTab() {
     setSaveError(null);
   };
 
-  const save = async (): Promise<SettingsFlushFailure | undefined> => {
+  const save = async (viewer: PersistedImageViewer): Promise<SettingsFlushFailure | undefined> => {
     if (!activeProjectId || isLoading || loadError) return undefined;
-    if (mode === "custom" && !customCommand.trim()) {
+    if (viewer.mode === "custom" && !viewer.customCommand) {
       setCommandError("Enter the command that opens images");
       return { landOn: IMAGE_VIEWER_COMMAND_ID };
     }
@@ -137,8 +152,8 @@ export function ImageViewerTab() {
       // is invalidated on save. Bypassing it left other readers reading
       // stale data for up to the cache TTL.
       const preferredImageViewer = {
-        mode,
-        customCommand: mode === "custom" ? customCommand.trim() : undefined,
+        mode: viewer.mode,
+        customCommand: viewer.mode === "custom" ? viewer.customCommand : undefined,
       };
       await withProjectSettingsWrite(activeProjectId, async () => {
         const settings = await projectClient.getSettings(activeProjectId);
@@ -148,8 +163,9 @@ export function ImageViewerTab() {
         // stale cache here is what reverts this save on dialog close (#12326).
         patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
       });
+      persistedRef.current = viewer;
       if (!isMountedRef.current) return undefined;
-      setPersisted({ mode, customCommand: preferredImageViewer.customCommand ?? "" });
+      setPersisted(viewer);
       return undefined;
     } catch (err) {
       if (!isMountedRef.current) return undefined;
@@ -160,17 +176,30 @@ export function ImageViewerTab() {
     }
   };
 
-  // A close that lands during a Save reports that Save's outcome, not a success
-  // for a write that can still fail.
+  // What a Save of the fields as they stand writes.
+  const draft: PersistedImageViewer = {
+    mode,
+    customCommand: mode === "custom" ? customCommand.trim() : "",
+  };
+  const isReady = !isLoading && !loadError;
+
+  // The fields stay editable while a Save runs, so a close waiting on one reads them
+  // again when it lands rather than keeping what they held as the close began.
+  const latestDraftRef = useRef({ viewer: draft, isReady });
+  useLayoutEffect(() => {
+    latestDraftRef.current = { viewer: draft, isReady };
+  });
+
   const saveInFlightRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
-  const handleSave = () => {
+  const saveViewer = (viewer: PersistedImageViewer) => {
     if (!saveInFlightRef.current) {
-      saveInFlightRef.current = save().finally(() => {
+      saveInFlightRef.current = save(viewer).finally(() => {
         saveInFlightRef.current = null;
       });
     }
     return saveInFlightRef.current;
   };
+  const handleSave = () => saveViewer(draft);
 
   const accepted = persisted ?? SUGGESTED_VIEWER;
 
@@ -188,17 +217,30 @@ export function ImageViewerTab() {
 
   // Not the same as isDirty: Save may pin the suggestion shown to a project with no
   // preference, but only a choice the user made is a draft a close should keep.
-  const hasPendingDraft =
-    !isLoading &&
-    !loadError &&
-    (accepted.mode !== mode ||
-      (mode === "custom" && accepted.customCommand.trim() !== customCommand.trim()));
+  const hasPendingDraft = isReady && isUnsavedChoice(draft, persisted);
 
-  useSettingsTabFlush(
-    "integrations",
-    () => saveInFlightRef.current ?? (hasPendingDraft ? handleSave() : undefined),
-    hasPendingDraft || isSaving
-  );
+  // A close that lands during a Save reports that Save's outcome, not a success for
+  // a write that can still fail. Once it lands, whatever the fields hold by then is
+  // saved as well, until the newest draft is what is on disk.
+  const flushDraft = async (): Promise<SettingsFlushFailure | undefined> => {
+    // An unmounted page starts no write of its own: a newer one may already be queued.
+    while (isMountedRef.current) {
+      const running = saveInFlightRef.current;
+      if (running) {
+        const failure = await running;
+        if (failure) return failure;
+        continue;
+      }
+      const { viewer, isReady: ready } = latestDraftRef.current;
+      if (!ready || !isUnsavedChoice(viewer, persistedRef.current)) return undefined;
+      const failure = await saveViewer(viewer);
+      // A Save that wrote nothing (no project open) leaves nothing newer to wait for.
+      if (failure || persistedRef.current !== viewer) return failure;
+    }
+    return undefined;
+  };
+
+  useSettingsTabFlush("integrations", flushDraft, hasPendingDraft || isSaving);
 
   if (!activeProjectId) {
     return (

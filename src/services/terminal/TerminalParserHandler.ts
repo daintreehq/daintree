@@ -1,5 +1,7 @@
 import { ManagedTerminal } from "./types";
 import { getAgentConfig } from "@/config/agents";
+import { handleOsc52 } from "./osc52Clipboard";
+import { logWarn } from "@/utils/logger";
 
 // DEC private mode codes that switch to alternate screen buffer
 // Mode 47: Switch to alternate screen (older)
@@ -74,9 +76,18 @@ export class TerminalParserHandler {
       return; // Graceful degradation if proposed API missing
     }
 
-    // Block OSC 52 clipboard write sequences (defense-in-depth against pastejacking).
-    // Unconditional — all terminal kinds must block this attack vector.
-    const osc52Handler = terminal.parser.registerOscHandler(52, () => true);
+    // OSC 52 clipboard writes are blocked against pastejacking unless the
+    // user opted in, and then honoured only for a plain shell's focused pane
+    // just after real input in it (#17327). Always consumed, whatever the
+    // outcome, so no other handler ever sees one.
+    const osc52Handler = terminal.parser.registerOscHandler(52, (data) => {
+      try {
+        handleOsc52(this.managed, data);
+      } catch (error) {
+        logWarn("[OSC52] Couldn't handle a clipboard sequence", { error: String(error) });
+      }
+      return true;
+    });
     this.disposables.push(osc52Handler);
 
     // PTY data-loss marker. The pty-host drops bytes (drop-don't-block) during

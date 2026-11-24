@@ -13,42 +13,72 @@ export function resolveAgainstFile(filePath: string, target: string): string {
 
 export const HTTPish = /^(https?|mailto):/i;
 
+// A URL scheme, as opposed to a Windows drive path (`C:\…`, `C:/…`), which is a path.
+const OTHER_SCHEME = /^(?![a-z]:[\\/])[a-z][a-z\d+.-]*:/i;
+
+export type MarkdownLinkTarget =
+  { kind: "external"; url: string } | { kind: "file"; path: string; rootPath: string };
+
 /**
- * The host's link policy for Markdown documents, shared by the rendered
- * document and the Markdown editor's Mod+click (#12323). External links open
- * in the browser; repo links resolve against the document and open only when
- * the document's own root contains them. Markdown is untrusted content, so a
- * link must never become a lever for browsing outside the project.
+ * Where a Markdown link goes under the host's policy, or null when it goes
+ * nowhere. External links open in the browser; repo links resolve against the
+ * document and open only when the document's own root contains them. Every
+ * other scheme goes nowhere. Markdown is untrusted content, so a link must
+ * never become a lever for browsing outside the project.
  */
-export function activateMarkdownLink(
+export function resolveMarkdownLink(
   href: string | undefined,
   { filePath, rootPath }: { filePath: string; rootPath: string }
-): void {
-  // Same-document anchors: headings carry no ids (no rehype-slug), so
-  // there is nothing to scroll to — swallow instead of navigating.
-  if (!href || href.startsWith("#")) return;
-  if (HTTPish.test(href)) {
-    getPluginKitHost()
-      .dispatchAction("browser.openExternal", { url: href }, { source: "user" })
-      .catch((err) => logError("[markdownRenderPolicy] openExternal failed", err));
-    return;
-  }
-  // Protocol-relative ("//host/…") and other non-http schemes survive to
-  // here only as untrusted oddities — never treat them as local paths.
-  if (href.startsWith("//")) return;
+): MarkdownLinkTarget | null {
+  // Same-document anchors need the document they point into, which only the
+  // rendered document's own handler has (`onFragmentLink`) — never navigate.
+  if (!href || href.startsWith("#")) return null;
+  if (HTTPish.test(href)) return { kind: "external", url: href };
+  // Protocol-relative ("//host/…") and other schemes are untrusted oddities —
+  // never treat them as local paths.
+  if (href.startsWith("//") || OTHER_SCHEME.test(href)) return null;
   // Repo link — strip any query/fragment, resolve against the document,
   // and only open files the document's own root contains.
   const pathPart = href.split(/[?#]/, 1)[0];
-  if (!pathPart) return;
-  const absolute = resolveAgainstFile(filePath, pathPart);
-  if (!isPathInside(absolute, rootPath)) return;
-  // The check above is lexical; a directory symlink inside the root can still
+  if (!pathPart) return null;
+  // `my%20notes.md` names `my notes.md`, as it would in a browser. A malformed
+  // escape is read as written. Decoding comes before the root check, so an
+  // encoded `..%2F` is held to the root like a plain one.
+  let decoded = pathPart;
+  try {
+    decoded = decodeURIComponent(pathPart);
+  } catch {
+    // Keep the raw path.
+  }
+  const absolute = resolveAgainstFile(filePath, decoded);
+  if (!isPathInside(absolute, rootPath)) return null;
+  return { kind: "file", path: absolute, rootPath };
+}
+
+/**
+ * Follow a Markdown link under the host's policy, shared by the rendered
+ * document, the read-only Source view, and the Markdown editor's Mod+click
+ * (#12323).
+ */
+export function activateMarkdownLink(
+  href: string | undefined,
+  paths: { filePath: string; rootPath: string }
+): void {
+  const target = resolveMarkdownLink(href, paths);
+  if (!target) return;
+  if (target.kind === "external") {
+    getPluginKitHost()
+      .dispatchAction("browser.openExternal", { url: target.url }, { source: "user" })
+      .catch((err) => logError("[markdownRenderPolicy] openExternal failed", err));
+    return;
+  }
+  // The root check is lexical; a directory symlink inside the root can still
   // point anywhere. `confineToRoot` makes the viewer hold every read to this
   // root on the real path.
   getPluginKitHost()
     .dispatchAction(
       "file.view",
-      { path: absolute, rootPath, confineToRoot: true },
+      { path: target.path, rootPath: target.rootPath, confineToRoot: true },
       { source: "user" }
     )
     .catch((err) => logError("[markdownRenderPolicy] file.view failed", err));

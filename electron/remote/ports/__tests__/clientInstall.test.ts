@@ -1,5 +1,5 @@
 import http from "node:http";
-import type net from "node:net";
+import net from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hooks = vi.hoisted(() => ({
@@ -7,6 +7,7 @@ const hooks = vi.hoisted(() => ({
   isRemoteView: null as ((webContentsId: number) => boolean) | null,
   resolver: null as ((subdomain: string) => unknown) | null,
   localSubdomains: new Set<string>(),
+  localPorts: new Map<string, number>(),
   forwarded: null as ((call: unknown) => void) | null,
   sent: [] as unknown[],
 }));
@@ -33,7 +34,7 @@ vi.mock("../../../ipc/handlers/devPreview.js", () => ({
   getDevPreviewProxyPort: () => 43000,
   resolveLocalDevPreviewUpstream: (subdomain: string) =>
     hooks.localSubdomains.has(subdomain)
-      ? { kind: "ok", port: 5173, isHttps: false }
+      ? { kind: "ok", port: hooks.localPorts.get(subdomain) ?? 5173, isHttps: false }
       : { kind: "unknown-subdomain" },
   setRemoteDevPreviewResolver: (resolver: typeof hooks.resolver) => {
     hooks.resolver = resolver;
@@ -85,6 +86,7 @@ afterEach(async () => {
   client.close("done");
   hooks.sent.length = 0;
   hooks.localSubdomains.clear();
+  hooks.localPorts.clear();
   _resetRemoteServicesForTest();
   await removeTempDir(dir);
 });
@@ -327,6 +329,110 @@ describe("installPortForwardClient", () => {
     await waitFor(() => service.list().length === 0, 3_000);
   });
 
+  it("lets the stopped project's preview go when one view stops another project's server", async () => {
+    const views: Record<number, { hostId: string; projectId: string }> = {
+      9: { hostId: HOST, projectId: "alpha" },
+      11: { hostId: HOST, projectId: "beta" },
+    };
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => views[webContentsId]?.hostId ?? null,
+        projectForView: (webContentsId) => views[webContentsId] ?? null,
+        isKnownHost: (hostId) => hostId === HOST,
+        sessionFor: (hostId) => (hostId === HOST ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    // Both projects hold a panel with the same id, each with its own server.
+    hooks.localSubdomains.add("dp-alpha-panel");
+    hooks.localSubdomains.add("dp-beta-panel");
+    hooks.localPorts.set("dp-alpha-panel", 5173);
+    hooks.localPorts.set("dp-beta-panel", 6006);
+    for (const [webContentsId, projectId] of [
+      [9, "alpha"],
+      [11, "beta"],
+    ] as const) {
+      hooks.forwarded!({
+        hostId: HOST,
+        webContentsId,
+        hostProjectId: projectId,
+        channel: "dev-preview:ensure",
+        args: [{ panelId: "panel", projectId, cwd: "/x", devCommand: "npm run dev" }],
+      });
+    }
+    await (hooks.resolver!("dp-alpha-panel") as Promise<unknown>);
+    await (hooks.resolver!("dp-beta-panel") as Promise<unknown>);
+    expect(
+      service
+        .list()
+        .map((f) => f.remotePort)
+        .sort()
+    ).toEqual([5173, 6006]);
+
+    // Alpha's dev server dashboard stops beta's server.
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "alpha",
+      channel: "dev-preview:stop",
+      args: [{ panelId: "panel", projectId: "beta" }],
+    });
+    await waitFor(() => service.list().length === 1, 3_000);
+    expect(service.list()[0]?.remotePort).toBe(5173);
+  });
+
+  it("keeps another project's preview whose record has lapsed when a view stops it", async () => {
+    const views: Record<number, { hostId: string; projectId: string }> = {
+      9: { hostId: HOST, projectId: "alpha" },
+      11: { hostId: HOST, projectId: "beta" },
+    };
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => views[webContentsId]?.hostId ?? null,
+        projectForView: (webContentsId) => views[webContentsId] ?? null,
+        isKnownHost: (hostId) => hostId === HOST,
+        sessionFor: (hostId) => (hostId === HOST ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    hooks.localSubdomains.add("dp-beta-panel");
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 11,
+      hostProjectId: "beta",
+      channel: "dev-preview:ensure",
+      args: [{ panelId: "panel", projectId: "beta", cwd: "/x", devCommand: "npm run dev" }],
+    });
+    await (hooks.resolver!("dp-beta-panel") as Promise<unknown>);
+    expect(service.list()).toHaveLength(1);
+
+    // Enough newer registrations push beta's record out of the bounded registry.
+    for (let i = 0; i < 512; i++) {
+      hooks.forwarded!({
+        hostId: HOST,
+        webContentsId: 9,
+        hostProjectId: "alpha",
+        channel: "dev-preview:ensure",
+        args: [{ panelId: `p${i}`, projectId: "alpha", cwd: "/x", devCommand: "npm run dev" }],
+      });
+    }
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "alpha",
+      channel: "dev-preview:stop",
+      args: [{ panelId: "panel", projectId: "beta" }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(service.list()).toHaveLength(1);
+  });
+
   it("lets a worktree's previews go when its servers are stopped, and ignores another host's stop", async () => {
     const OTHER = "studio-02";
     cleanups.push(
@@ -388,6 +494,222 @@ describe("installPortForwardClient", () => {
     await (hooks.resolver!("dp-proj-panel") as Promise<unknown>);
     expect(service.list()).toHaveLength(1);
     stopWorktree();
+    await waitFor(() => service.list().length === 0, 3_000);
+  });
+
+  it("forgets a re-pointed host's forwards, a disconnected one's included, and its preview origins (#17207)", async () => {
+    const OTHER = "studio-02";
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await new Promise<number>((resolve) =>
+      upstream.listen(0, "127.0.0.1", () => resolve((upstream.address() as net.AddressInfo).port))
+    );
+    cleanups.push(() => upstream.close());
+    const views: Record<number, { hostId: string; projectId: string }> = {
+      9: { hostId: HOST, projectId: "proj" },
+      10: { hostId: OTHER, projectId: "proj" },
+    };
+    let current: LinkSession | null = client;
+    let other: LinkSession | null = null;
+    let inUse: ((hostId: string) => boolean) | null = null;
+    let sessionOpened: ((hostId: string, session: LinkSession) => void) | null = null;
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        onSessionOpened(listener) {
+          sessionOpened = listener;
+          return () => {};
+        },
+        hostForView: (webContentsId) => views[webContentsId]?.hostId ?? null,
+        projectForView: (webContentsId) => views[webContentsId] ?? null,
+        isKnownHost: (hostId) => hostId === HOST || hostId === OTHER,
+        sessionFor: (hostId) => (hostId === HOST ? current : hostId === OTHER ? other : null),
+        addUseCheck(check) {
+          inUse = check;
+          return () => {};
+        },
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    const gate = hooks.gate!;
+    const forward = await service.forward({ hostId: HOST, remotePort });
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "proj",
+      channel: "dev-preview:ensure",
+      args: [{ panelId: "panel", worktreeId: "wt-1" }],
+    });
+    // Another host's own preview, which forgetting this one leaves alone.
+    hooks.forwarded!({
+      hostId: OTHER,
+      webContentsId: 10,
+      hostProjectId: "else",
+      channel: "dev-preview:ensure",
+      args: [{ panelId: "panel" }],
+    });
+    expect(gate(9, "http://dp-proj-claimed.localhost:43000/")).toBe(true);
+    expect(gate(10, "http://dp-proj-panel.localhost:43000/")).toBe(false);
+    expect(gate(10, "http://dp-proj-claimed.localhost:43000/")).toBe(false);
+
+    // Re-pointing disconnects the old machine first: its stream forward is unlisted, its port still held.
+    client.close("re-pointed");
+    expect(service.list()).toEqual([]);
+    expect(inUse!(HOST)).toBe(true);
+
+    await service.forgetHost(HOST);
+
+    expect(inUse!(HOST)).toBe(false);
+    const free = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      free.once("error", reject);
+      free.listen(forward.localPort, "127.0.0.1", () => resolve());
+    });
+    await new Promise((resolve) => free.close(resolve));
+
+    // The new machine connects under the same id: nothing of the old one's comes back on it,
+    // and the proxy asks it nothing for the old machine's preview.
+    const next = await openSessionPair(dir);
+    cleanups.push(() => {
+      next.host.close("done");
+      next.client.close("done");
+    });
+    current = next.client;
+    other = next.client;
+    sessionOpened!(HOST, next.client);
+    expect(service.list()).toEqual([]);
+    expect(inUse!(HOST)).toBe(false);
+    expect(hooks.resolver!("dp-proj-panel")).toBeNull();
+    // Another host's project may claim either origin now.
+    expect(gate(10, "http://dp-proj-panel.localhost:43000/")).toBe(true);
+    expect(gate(10, "http://dp-proj-claimed.localhost:43000/")).toBe(true);
+    const elsewhere = hooks.resolver!("dp-else-panel") as Promise<unknown> | null;
+    expect(elsewhere).not.toBeNull();
+    await elsewhere;
+  });
+
+  it("forgets a removed host's preview origins along with its forwards", async () => {
+    const OTHER = "studio-02";
+    const upstream = http.createServer((_req, res) => res.end("ok"));
+    const remotePort = await new Promise<number>((resolve) =>
+      upstream.listen(0, "127.0.0.1", () => resolve((upstream.address() as net.AddressInfo).port))
+    );
+    cleanups.push(() => upstream.close());
+    const THIRD = "studio-03";
+    const views: Record<number, { hostId: string; projectId: string }> = {
+      9: { hostId: HOST, projectId: "proj" },
+      10: { hostId: OTHER, projectId: "side" },
+      12: { hostId: THIRD, projectId: "side" },
+    };
+    let known = true;
+    let hostsChanged: (() => void) | null = null;
+    let inUse: ((hostId: string) => boolean) | null = null;
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => views[webContentsId]?.hostId ?? null,
+        projectForView: (webContentsId) => views[webContentsId] ?? null,
+        isKnownHost: (hostId) =>
+          (known && (hostId === HOST || hostId === THIRD)) || hostId === OTHER,
+        onHostsChanged(listener) {
+          hostsChanged = listener;
+          return () => {};
+        },
+        addUseCheck(check) {
+          inUse = check;
+          return () => {};
+        },
+        sessionFor: (hostId) => (hostId === HOST || hostId === OTHER ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    const gate = hooks.gate!;
+    const forward = await service.forward({ hostId: HOST, remotePort });
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 9,
+      hostProjectId: "proj",
+      channel: "dev-preview:ensure",
+      args: [{ panelId: "panel" }],
+    });
+    const lookup = hooks.resolver!("dp-proj-panel") as Promise<unknown> | null;
+    expect(lookup).not.toBeNull();
+    await lookup;
+    // A host whose view only claimed an origin, never registering one: found through its claim alone.
+    expect(gate(12, "http://dp-side-claimed.localhost:43000/")).toBe(true);
+    expect(gate(10, "http://dp-side-claimed.localhost:43000/")).toBe(false);
+
+    known = false;
+    hostsChanged!();
+
+    expect(hooks.resolver!("dp-proj-panel")).toBeNull();
+    expect(gate(10, "http://dp-side-claimed.localhost:43000/")).toBe(true);
+    await waitFor(() => !inUse!(HOST), 3_000);
+    const free = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      free.once("error", reject);
+      free.listen(forward.localPort, "127.0.0.1", () => resolve());
+    });
+    await new Promise((resolve) => free.close(resolve));
+  });
+
+  it("lets a re-pointed host's preview go with the views and worktree that load it afterwards (#17207)", async () => {
+    const views: Record<number, { hostId: string; projectId: string }> = {
+      9: { hostId: HOST, projectId: "proj" },
+      11: { hostId: HOST, projectId: "proj" },
+    };
+    const gone = new Map<number, () => void>();
+    cleanups.push(
+      installPortForwardClient({
+        onEndpointOpened: () => () => {},
+        hostForView: (webContentsId) => views[webContentsId]?.hostId ?? null,
+        projectForView: (webContentsId) => views[webContentsId] ?? null,
+        isKnownHost: (hostId) => hostId === HOST,
+        sessionFor: (hostId) => (hostId === HOST ? client : null),
+        connectionFor: () => null,
+        clientDir: dir,
+        watchView(webContentsId, onGone) {
+          gone.set(webContentsId, onGone);
+          return () => gone.delete(webContentsId);
+        },
+      })
+    );
+    const service = getRemoteService("portForwards")!;
+    hooks.localSubdomains.add("dp-proj-panel");
+    const ensure = (webContentsId: number, worktreeId?: string) =>
+      hooks.forwarded!({
+        hostId: HOST,
+        webContentsId,
+        hostProjectId: "proj",
+        channel: "dev-preview:ensure",
+        args: [{ panelId: "panel", ...(worktreeId ? { worktreeId } : {}) }],
+      });
+    // The old machine's view started it in a worktree.
+    ensure(9, "wt-1");
+    await (hooks.resolver!("dp-proj-panel") as Promise<unknown>);
+    expect(service.list()).toHaveLength(1);
+
+    await service.forgetHost(HOST);
+    expect(service.list()).toEqual([]);
+
+    // The new machine's view starts the same origin with no worktree of the old one's.
+    ensure(11);
+    await (hooks.resolver!("dp-proj-panel") as Promise<unknown>);
+    expect(service.list()).toHaveLength(1);
+    hooks.forwarded!({
+      hostId: HOST,
+      webContentsId: 11,
+      hostProjectId: "proj",
+      channel: "dev-preview:stop-dev-server-by-worktree",
+      args: [{ worktreeId: "wt-1" }],
+    });
+    expect(service.list()).toHaveLength(1);
+
+    // Its only view now is the new one: the preview goes with it.
+    gone.get(11)!();
     await waitFor(() => service.list().length === 0, 3_000);
   });
 

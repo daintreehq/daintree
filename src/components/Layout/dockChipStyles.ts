@@ -16,9 +16,12 @@ export const DOCK_CHIP_CLASS =
 export const DOCK_CHIP_OPEN_CLASS =
   "bg-[var(--dock-item-bg-active)] hover:bg-[var(--dock-item-bg-active)] border-[var(--dock-item-border-active)] text-text-primary";
 
-/** An agent asking for input, while its chip is closed and highlights are on. */
+/**
+ * An agent asking for input, while its chip is closed and highlights are on.
+ * `dock-chip-waiting` is the hook dock.css keys the contrast-mode edge on.
+ */
 export const DOCK_CHIP_WAITING_CLASS =
-  "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]";
+  "dock-chip-waiting bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]";
 
 /**
  * The trailing agent-state glyph. 12px, as on every other surface that shows

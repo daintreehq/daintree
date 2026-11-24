@@ -200,7 +200,7 @@ describe("canDisposeIdlePluginWorker", () => {
   const idle = {
     isBuiltin: false,
     devMode: false,
-    panelContributionCount: 0,
+    liveViewConsumerCount: 0,
     mcpServerContributionCount: 0,
     startupActivation: false,
     eventSubscriptionCount: 0,
@@ -221,7 +221,8 @@ describe("canDisposeIdlePluginWorker", () => {
   it("rejects every live surface a dead worker would break", () => {
     expect(canDisposeIdlePluginWorker({ ...idle, isBuiltin: true }).ok).toBe(false);
     expect(canDisposeIdlePluginWorker({ ...idle, devMode: true }).ok).toBe(false);
-    expect(canDisposeIdlePluginWorker({ ...idle, panelContributionCount: 1 }).ok).toBe(false);
+    expect(canDisposeIdlePluginWorker({ ...idle, liveViewConsumerCount: 1 }).ok).toBe(false);
+    expect(canDisposeIdlePluginWorker({ ...idle, liveViewConsumerCount: 3 }).ok).toBe(false);
     expect(canDisposeIdlePluginWorker({ ...idle, mcpServerContributionCount: 1 }).ok).toBe(false);
     expect(canDisposeIdlePluginWorker({ ...idle, startupActivation: true }).ok).toBe(false);
     expect(canDisposeIdlePluginWorker({ ...idle, eventSubscriptionCount: 1 }).ok).toBe(false);

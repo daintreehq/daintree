@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 import {
   DEFAULT_KEYBINDINGS,
   KeybindingService,
@@ -301,23 +302,6 @@ describe("KeybindingService", () => {
     expect(match?.actionId).toBe("terminal.close");
   });
 
-  it("resolves Cmd+W to portal.closeTab (priority 20) over terminal.close (priority 10) in portal scope", () => {
-    setPlatform("MacIntel");
-
-    const service = new KeybindingService();
-    service.setScope("portal");
-
-    const event = createKeyboardEvent({
-      key: "w",
-      code: "KeyW",
-      metaKey: true,
-    });
-
-    const match = service.findMatchingAction(event);
-    expect(match?.actionId).toBe("portal.closeTab");
-    expect(match?.priority).toBe(20);
-  });
-
   it("resolves Cmd+K Cmd+W chord to terminal.closeAll, not terminal.close", () => {
     setPlatform("MacIntel");
 
@@ -370,25 +354,27 @@ describe("KeybindingService", () => {
   });
 
   describe("findConflicts scope filtering and chord shadowing", () => {
-    // Default `portal.closeTab` is bound to Cmd+W in "portal" scope.
-    // `worktreeGrid` and `portal` scopes are disjoint, so a grid-scoped Cmd+W
-    // candidate must not collide with `portal.closeTab` (it still collides
-    // with the global `terminal.close`, which fires everywhere).
+    // Default `devPreview.reloadPreview` is bound to Cmd+R in "dev-preview"
+    // scope. `worktreeGrid` and `dev-preview` scopes are disjoint, so a
+    // grid-scoped Cmd+R candidate must not collide with it, while a grid-scoped
+    // Cmd+W still collides with the global `terminal.close`, which fires
+    // everywhere.
     it("does not flag scope-disjoint bindings as conflicts", () => {
       const service = new KeybindingService();
 
-      const conflicts = service.findConflicts("Cmd+W", undefined, "worktreeGrid");
-      expect(conflicts.some((c) => c.actionId === "portal.closeTab")).toBe(false);
-      expect(conflicts.some((c) => c.actionId === "terminal.close")).toBe(true);
+      const disjoint = service.findConflicts("Cmd+R", undefined, "worktreeGrid");
+      expect(disjoint.some((c) => c.actionId === "devPreview.reloadPreview")).toBe(false);
+      const global = service.findConflicts("Cmd+W", undefined, "worktreeGrid");
+      expect(global.some((c) => c.actionId === "terminal.close")).toBe(true);
     });
 
     it("flags global-scoped candidates against any scope", () => {
       const service = new KeybindingService();
 
       // A "global" candidate would fire everywhere, so it must collide with the
-      // portal-scoped Cmd+W binding.
-      const conflicts = service.findConflicts("Cmd+W", undefined, "global");
-      expect(conflicts.some((c) => c.actionId === "portal.closeTab")).toBe(true);
+      // dev-preview-scoped Cmd+R binding.
+      const conflicts = service.findConflicts("Cmd+R", undefined, "global");
+      expect(conflicts.some((c) => c.actionId === "devPreview.reloadPreview")).toBe(true);
     });
 
     it("marks exact-combo collisions as kind: 'conflict'", () => {
@@ -558,14 +544,14 @@ describe("KeybindingService", () => {
       service.registerBinding({
         actionId: "terminal.redraw",
         combo: "Cmd+K Cmd+F12",
-        scope: "portal",
+        scope: "dev-preview",
         priority: 0,
       });
       const offersF12 = () =>
         service.getChordCompletions("Cmd+K").some((c) => /F12/.test(c.secondKey));
 
       expect(offersF12()).toBe(false);
-      service.setScope("portal");
+      service.setScope("dev-preview");
       expect(offersF12()).toBe(true);
     });
 
@@ -715,6 +701,42 @@ describe("KeybindingService", () => {
 
       expect(conflict?.combo).toBe("Cmd+Alt+Shift+J");
     });
+
+    it.each(["decisions.openInbox", "decisions.openNextQuestion"])(
+      "lists %s unbound, and fires it from a binding the person gives it",
+      (actionId) => {
+        setPlatform("MacIntel");
+        const service = new KeybindingService();
+        // Unbound on every platform's table, not just the one this run loaded.
+        for (const [isWindows, isLinux] of [
+          [false, false],
+          [true, false],
+          [false, true],
+        ] as const) {
+          const rows = buildDefaultKeybindings(isWindows, isLinux).filter(
+            (b) => b.actionId === actionId
+          );
+          expect(rows.length).toBeGreaterThan(0);
+          expect(rows.map((b) => b.combo).filter((combo) => combo !== "")).toEqual([]);
+        }
+        const rows = service
+          .getAllBindingsWithEffectiveCombos()
+          .filter((b) => b.actionId === actionId);
+        expect(rows.length).toBeGreaterThan(0);
+        expect(rows.map((b) => b.effectiveCombo).filter((combo) => combo !== "")).toEqual([]);
+        expect(service.findConflicts("Cmd+Alt+Shift+J")).toEqual([]);
+
+        seedOverride(service, actionId, ["Cmd+Alt+Shift+J"]);
+        const press = createKeyboardEvent({
+          key: "J",
+          code: "KeyJ",
+          metaKey: true,
+          altKey: true,
+          shiftKey: true,
+        });
+        expect(service.resolveKeybinding(press).match?.actionId).toBe(actionId);
+      }
+    );
   });
 
   describe("shortcut capture ownership", () => {
@@ -809,7 +831,7 @@ describe("KeybindingService", () => {
       expect(service.getLastInvalidKey()).toBe("Cmd+b");
     });
 
-    it("notifies listeners synchronously when lastInvalidKey is set via resolveKeybinding", () => {
+    it("notifies chord listeners synchronously when lastInvalidKey is set via resolveKeybinding", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
       startCmdKChord(service);
@@ -818,7 +840,7 @@ describe("KeybindingService", () => {
       // pattern reads getLastInvalidKey() inside the subscriber, so the field
       // MUST already be populated before clearPendingChord() fires the notify.
       let observedAtNotify: string | null | undefined;
-      service.subscribe(() => {
+      service.subscribeChord(() => {
         observedAtNotify = service.getLastInvalidKey();
       });
 
@@ -893,7 +915,7 @@ describe("KeybindingService", () => {
       expect(service.getLastInvalidKey()).toBeNull();
     });
 
-    it("clearLastInvalidKey resets to null and notifies listeners", () => {
+    it("clearLastInvalidKey resets to null and notifies chord listeners", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
       startCmdKChord(service);
@@ -902,7 +924,7 @@ describe("KeybindingService", () => {
       expect(service.getLastInvalidKey()).toBe("y");
 
       const listener = vi.fn();
-      service.subscribe(listener);
+      service.subscribeChord(listener);
 
       service.clearLastInvalidKey();
       expect(service.getLastInvalidKey()).toBeNull();
@@ -912,7 +934,7 @@ describe("KeybindingService", () => {
     it("clearLastInvalidKey is a no-op (no notify) when already null", () => {
       const service = new KeybindingService();
       const listener = vi.fn();
-      service.subscribe(listener);
+      service.subscribeChord(listener);
 
       service.clearLastInvalidKey();
       expect(listener).not.toHaveBeenCalled();
@@ -937,7 +959,7 @@ describe("KeybindingService", () => {
   });
 
   describe("popPendingChord", () => {
-    it("clears the pending chord and notifies listeners", () => {
+    it("clears the pending chord and notifies chord listeners", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
       const cmdK = createKeyboardEvent({
@@ -949,7 +971,7 @@ describe("KeybindingService", () => {
       expect(service.getPendingChord()).not.toBeNull();
 
       const listener = vi.fn();
-      service.subscribe(listener);
+      service.subscribeChord(listener);
 
       service.popPendingChord();
 
@@ -968,7 +990,7 @@ describe("KeybindingService", () => {
       service.resolveKeybinding(cmdK);
 
       const listener = vi.fn();
-      service.subscribe(listener);
+      service.subscribeChord(listener);
 
       service.popPendingChord();
       service.popPendingChord();
@@ -978,17 +1000,32 @@ describe("KeybindingService", () => {
     });
   });
 
-  describe("listener hygiene", () => {
-    function triggerNotify(service: KeybindingService): void {
-      const cmdK = createKeyboardEvent({
-        key: "k",
-        code: "KeyK",
-        metaKey: true,
-      });
-      service.resolveKeybinding(cmdK);
-      service.popPendingChord();
-    }
-
+  // Both channels share one notifier; each is driven by the changes it owns,
+  // two notifications per trigger.
+  describe.each([
+    {
+      channel: "chord",
+      listen: (service: KeybindingService, listener: () => void) =>
+        service.subscribeChord(listener),
+      triggerNotify: (service: KeybindingService) => {
+        service.resolveKeybinding(createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true }));
+        service.popPendingChord();
+      },
+    },
+    {
+      channel: "bindings",
+      listen: (service: KeybindingService, listener: () => void) => service.subscribe(listener),
+      triggerNotify: (service: KeybindingService) => {
+        service.registerBinding({
+          actionId: "test.hygiene",
+          combo: "Cmd+Alt+Shift+F11",
+          scope: "global",
+          priority: 1,
+        });
+        service.removeBinding("test.hygiene");
+      },
+    },
+  ])("listener hygiene ($channel)", ({ listen, triggerNotify }) => {
     it("isolates errors so a throwing listener does not stop subsequent listeners", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
@@ -999,9 +1036,9 @@ describe("KeybindingService", () => {
       });
       const after = vi.fn();
 
-      service.subscribe(before);
-      service.subscribe(thrower);
-      service.subscribe(after);
+      listen(service, before);
+      listen(service, thrower);
+      listen(service, after);
 
       triggerNotify(service);
 
@@ -1019,13 +1056,12 @@ describe("KeybindingService", () => {
       const service = new KeybindingService();
       const listener = vi.fn();
 
-      service.subscribe(listener);
-      service.subscribe(listener);
+      listen(service, listener);
+      listen(service, listener);
 
       triggerNotify(service);
 
       // Set dedup: the listener fires once per notification, not twice.
-      // triggerNotify produces 2 notifications (set + pop), so listener: 2 calls.
       expect(listener).toHaveBeenCalledTimes(2);
     });
 
@@ -1039,23 +1075,36 @@ describe("KeybindingService", () => {
         unsubscribeSelf?.();
       });
 
-      unsubscribeSelf = service.subscribe(selfRemover);
-      service.subscribe(after);
+      unsubscribeSelf = listen(service, selfRemover);
+      listen(service, after);
 
       triggerNotify(service);
 
       expect(selfRemover).toHaveBeenCalledTimes(1);
-      // `after` runs on both the set-pending and pop-pending notifications;
-      // mutating the underlying Set during notification must not break the
+      // Mutating the underlying Set during notification must not break the
       // current iteration's snapshot.
       expect(after).toHaveBeenCalledTimes(2);
+    });
+
+    it("still runs a listener another one unsubscribes mid-notification, then stops", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      let unsubscribeLater: (() => void) | null = null;
+      listen(service, () => unsubscribeLater?.());
+      const later = vi.fn();
+      unsubscribeLater = listen(service, later);
+
+      triggerNotify(service);
+
+      // The first notification was already under way when `later` left.
+      expect(later).toHaveBeenCalledTimes(1);
     });
 
     it("returns an unsubscribe that detaches the listener", () => {
       setPlatform("MacIntel");
       const service = new KeybindingService();
       const listener = vi.fn();
-      const unsubscribe = service.subscribe(listener);
+      const unsubscribe = listen(service, listener);
 
       triggerNotify(service);
       const initialCalls = listener.mock.calls.length;
@@ -1065,6 +1114,185 @@ describe("KeybindingService", () => {
       triggerNotify(service);
 
       expect(listener).toHaveBeenCalledTimes(initialCalls);
+    });
+  });
+
+  describe("peekKeybinding (#17108)", () => {
+    const cmdK = () => createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true });
+    const cmdZ = () => createKeyboardEvent({ key: "z", code: "KeyZ", metaKey: true });
+
+    it("names what a keystroke would run, as resolving it does", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      expect(service.peekKeybinding(cmdZ(), null)?.actionId).toBe(
+        service.resolveKeybinding(cmdZ()).match?.actionId
+      );
+      expect(service.peekKeybinding(cmdZ(), null)?.actionId).toBe("panel.undoClose");
+
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Z"] });
+      expect(service.peekKeybinding(cmdZ(), null)?.actionId).toBe("nav.toggleSidebar");
+    });
+
+    it("neither starts, completes nor cancels a chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const chord = vi.fn();
+      service.subscribeChord(chord);
+
+      expect(service.peekKeybinding(cmdK(), null)).toBeUndefined();
+      expect(service.getPendingChord()).toBeNull();
+
+      service.resolveKeybinding(cmdK());
+      const pending = service.getPendingChord();
+      chord.mockClear();
+      // A keystroke no chord completes would cancel a real one.
+      expect(service.peekKeybinding(cmdZ(), null)).toBeUndefined();
+      expect(service.getPendingChord()).toBe(pending);
+      expect(service.getLastInvalidKey()).toBeNull();
+      expect(chord).not.toHaveBeenCalled();
+    });
+
+    it("names the binding a pending chord's next key would complete, and leaves the chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.applyOverrides({ "panel.undoClose": ["Cmd+K Cmd+Z"] });
+      expect(service.peekKeybinding(cmdZ(), null)).toBeUndefined();
+
+      service.resolveKeybinding(cmdK());
+      const pending = service.getPendingChord();
+      expect(pending).not.toBeNull();
+      const chord = vi.fn();
+      service.subscribeChord(chord);
+
+      expect(service.peekKeybinding(cmdZ(), null)?.actionId).toBe("panel.undoClose");
+      expect(service.getPendingChord()).toBe(pending);
+      expect(chord).not.toHaveBeenCalled();
+      // The real keystroke completes it.
+      expect(service.resolveKeybinding(cmdZ()).match?.actionId).toBe("panel.undoClose");
+      expect(service.getPendingChord()).toBeNull();
+    });
+
+    it("hands the target it asks about to the when context", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const target = {} as Element;
+      const provider = vi.fn(() => ({ special: true }));
+      service.setWhenContextProvider(provider);
+      service.registerBinding({
+        actionId: "test.whenBound",
+        combo: "Cmd+Alt+Shift+F11",
+        scope: "global",
+        priority: 1,
+        when: "special",
+      });
+      const event = createKeyboardEvent({
+        key: "F11",
+        code: "F11",
+        metaKey: true,
+        altKey: true,
+        shiftKey: true,
+      });
+
+      expect(service.peekKeybinding(event, target)?.actionId).toBe("test.whenBound");
+      expect(provider).toHaveBeenCalledWith(event, target);
+    });
+  });
+
+  describe("chord state and bindings notify separately (#17059)", () => {
+    const cmdK = () => createKeyboardEvent({ key: "k", code: "KeyK", metaKey: true });
+
+    it("never wakes binding subscribers for a chord starting, failing, or being cancelled", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const bindings = vi.fn();
+      const chord = vi.fn();
+      service.subscribe(bindings);
+      service.subscribeChord(chord);
+
+      service.resolveKeybinding(cmdK());
+      service.resolveKeybinding(createKeyboardEvent({ key: "y", code: "KeyY" }));
+      expect(service.getLastInvalidKey()).toBe("y");
+      service.clearLastInvalidKey();
+      service.resolveKeybinding(cmdK());
+      service.clearPendingChord();
+
+      // Start, refuse "y", clear the echo, start again, cancel.
+      expect(chord).toHaveBeenCalledTimes(5);
+      expect(bindings).not.toHaveBeenCalled();
+    });
+
+    it("leaves chord subscribers alone for a binding change that keeps the chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.resolveKeybinding(cmdK());
+      const bindings = vi.fn();
+      const chord = vi.fn();
+      service.subscribe(bindings);
+      service.subscribeChord(chord);
+
+      service.registerBinding({
+        actionId: "test.separate",
+        combo: "Cmd+Alt+Shift+F11",
+        scope: "global",
+        priority: 1,
+      });
+
+      expect(bindings).toHaveBeenCalledTimes(1);
+      expect(chord).not.toHaveBeenCalled();
+      expect(service.getPendingChord()).not.toBeNull();
+    });
+
+    it("keeps the chord, and chord subscribers asleep, when the overrides are unchanged", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+      service.resolveKeybinding(cmdK());
+      const chord = vi.fn();
+      service.subscribeChord(chord);
+
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+
+      expect(service.getPendingChord()).not.toBeNull();
+      expect(chord).not.toHaveBeenCalled();
+    });
+
+    it("tells binding subscribers when a scope change moves an action's combo", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      const bindings = vi.fn(() => service.getEffectiveCombo("fleet.armFocused"));
+      const chord = vi.fn();
+      service.subscribe(bindings);
+      service.subscribeChord(chord);
+
+      service.setScope("worktreeGrid");
+      service.setScope("worktreeGrid");
+      expect(bindings).toHaveBeenCalledTimes(1);
+      expect(bindings).toHaveLastReturnedWith("X");
+
+      service.restoreScope("worktreeGrid");
+      expect(bindings).toHaveBeenCalledTimes(1);
+      service.restoreScope("worktreeGrid");
+      expect(bindings).toHaveBeenCalledTimes(2);
+      expect(bindings).toHaveLastReturnedWith("Cmd+J");
+      // No chord was pending, so there was nothing to tell its subscribers.
+      expect(chord).not.toHaveBeenCalled();
+    });
+
+    it("tells chord subscribers when new overrides drop the pending chord", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.resolveKeybinding(cmdK());
+      const bindings = vi.fn();
+      const chord = vi.fn(() => service.getPendingChord());
+      service.subscribe(bindings);
+      service.subscribeChord(chord);
+
+      service.applyOverrides({ "nav.toggleSidebar": ["Cmd+Shift+8"] });
+
+      expect(service.getPendingChord()).toBeNull();
+      expect(chord).toHaveBeenCalledTimes(1);
+      expect(chord).toHaveReturnedWith(null);
+      expect(bindings).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1127,9 +1355,9 @@ describe("KeybindingService", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       service.registerBinding({
-        actionId: "test.portalOnly",
+        actionId: "test.previewOnly",
         combo: "Cmd+Shift+F4",
-        scope: "portal",
+        scope: "dev-preview",
         priority: 0,
       });
       service.registerBinding({
@@ -1140,7 +1368,7 @@ describe("KeybindingService", () => {
       });
 
       expect(warnSpy).not.toHaveBeenCalled();
-      expect(service.getBinding("test.portalOnly")).toBeDefined();
+      expect(service.getBinding("test.previewOnly")).toBeDefined();
       expect(service.getBinding("test.gridOnly")).toBeDefined();
 
       warnSpy.mockRestore();
@@ -1151,14 +1379,14 @@ describe("KeybindingService", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
       service.registerBinding({
-        actionId: "test.portalStealsClaude",
+        actionId: "test.previewStealsClaude",
         combo: "Cmd+Alt+C",
-        scope: "portal",
+        scope: "dev-preview",
         priority: 0,
       });
 
       expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(service.getBinding("test.portalStealsClaude")).toBeUndefined();
+      expect(service.getBinding("test.previewStealsClaude")).toBeUndefined();
       expect(service.getBinding("agent.claude")?.combo).toBe("Cmd+Alt+C");
 
       warnSpy.mockRestore();
@@ -1258,8 +1486,8 @@ describe("KeybindingService", () => {
       // directly without going through registerBinding's guard, so this audit
       // is the only place that catches built-in collisions.
       //
-      // Intentional overlaps disambiguated by priority (e.g. terminal.close at
-      // priority 10 + portal.closeTab at priority 20 on "Cmd+W") are allowed
+      // Intentional overlaps disambiguated by priority (e.g. a global binding
+      // and a scoped one at a higher priority on the same combo) are allowed
       // because findMatchingAction picks the higher priority deterministically.
       // A silent shadow is two defaults with overlapping scope + identical
       // platform-normalized combo + identical priority — that's the failure
@@ -1446,14 +1674,14 @@ describe("KeybindingService", () => {
       expect(service.getPendingChord()).not.toBeNull();
 
       // First setScope changes scope and clears the chord (expected).
-      service.setScope("portal");
+      service.setScope("dev-preview");
       expect(service.getPendingChord()).toBeNull();
 
       // Re-establish a chord under the new scope, then push the same scope again.
       service.resolveKeybinding(cmdK);
       expect(service.getPendingChord()).not.toBeNull();
 
-      service.setScope("portal");
+      service.setScope("dev-preview");
 
       // Second push is the StrictMode/concurrent-instance case: scope didn't
       // change, so the chord must survive.
@@ -1464,16 +1692,16 @@ describe("KeybindingService", () => {
       const service = new KeybindingService();
       const stack = (service as unknown as { scopeStack: string[] }).scopeStack;
 
-      service.setScope("portal");
-      service.setScope("portal");
-      expect(stack.filter((s) => s === "portal").length).toBe(2);
+      service.setScope("dev-preview");
+      service.setScope("dev-preview");
+      expect(stack.filter((s) => s === "dev-preview").length).toBe(2);
 
-      service.restoreScope("portal");
-      expect(stack.filter((s) => s === "portal").length).toBe(1);
-      expect(service.getScope()).toBe("portal");
+      service.restoreScope("dev-preview");
+      expect(stack.filter((s) => s === "dev-preview").length).toBe(1);
+      expect(service.getScope()).toBe("dev-preview");
 
-      service.restoreScope("portal");
-      expect(stack.filter((s) => s === "portal").length).toBe(0);
+      service.restoreScope("dev-preview");
+      expect(stack.filter((s) => s === "dev-preview").length).toBe(0);
       expect(service.getScope()).toBe("global");
     });
   });
@@ -1921,20 +2149,6 @@ describe("KeybindingService", () => {
         createKeyboardEvent({ key: "F4", code: "F4", ctrlKey: true })
       );
       expect(match?.actionId).toBe("terminal.close");
-    });
-
-    it("resolves Ctrl+F4 to portal.closeTab (priority 20) over terminal.close (priority 10) in portal scope on Win32", async () => {
-      setPlatform("Win32");
-      vi.resetModules();
-      const { KeybindingService: WinKeybindingService } = await import("../KeybindingService");
-
-      const service = new WinKeybindingService();
-      service.setScope("portal");
-      const match = service.findMatchingAction(
-        createKeyboardEvent({ key: "F4", code: "F4", ctrlKey: true })
-      );
-      expect(match?.actionId).toBe("portal.closeTab");
-      expect(match?.priority).toBe(20);
     });
 
     it("does NOT resolve Ctrl+F4 to any action on macOS", async () => {

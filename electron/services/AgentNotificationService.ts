@@ -9,7 +9,7 @@ import { isRemoteEndpointHandle } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { projectStore } from "./ProjectStore.js";
-import { getPtyClient } from "../window/serviceRefs.js";
+import { getPtyClient, getRunAttentionServiceRef } from "../window/serviceRefs.js";
 import { isHostThrowawayTerminalId } from "../../shared/config/hostThrowaway.js";
 import { PanelRecordIndex, type PanelRecord } from "./agentNotificationPanels.js";
 import { soundService } from "./SoundService.js";
@@ -34,12 +34,42 @@ import {
   describeWaiting,
   describeWaitingMany,
 } from "../../shared/utils/waitingReasonDisplay.js";
+import type {
+  DecisionQuestionList,
+  DecisionQuestionListItem,
+} from "../../shared/types/decisionsQuestion.js";
+import {
+  deliveryReasonText,
+  deliverySubjectPlural,
+  stallSubject,
+} from "../../shared/utils/decisionsDeliveryReasons.js";
 
 /** A view on a remote Shell owns it: that Shell presents it, sound included. */
 function isRemoteNotificationOwner(
   ownerId: NotificationOwnerId | undefined
 ): ownerId is NotificationOwnerId {
   return ownerId !== undefined && isRemoteEndpointHandle(ownerId);
+}
+
+function decisionQuestionReplaceKey(key: string): string {
+  return `decisions-question:${key}`;
+}
+
+/** Who asked a Decisions question, and where, as its notifications name them. */
+function decisionQuestionSource(question: DecisionQuestionListItem): {
+  agent: string | undefined;
+  project: string | undefined;
+} {
+  const registry = getEffectiveRegistry();
+  return {
+    // The kind is the store's, so `constructor` must not reach Object's.
+    agent: Object.hasOwn(registry, question.agentKind)
+      ? registry[question.agentKind]?.name?.trim() || undefined
+      : undefined,
+    project:
+      question.projectLabel ??
+      projectStore.getProjectById(question.reference.projectId)?.name?.trim(),
+  };
 }
 
 const COMPLETION_DEBOUNCE_MS = 2000;
@@ -184,6 +214,19 @@ class AgentNotificationService {
     }
   > = [];
   private canopyAskTimer: NodeJS.Timeout | null = null;
+  /**
+   * When each agent's current turn began: the last time it went to work from
+   * anything else. A Decisions question asked since then is what ended the turn.
+   */
+  private turnStartedAt = new Map<string, number>();
+  /**
+   * When each terminal last asked a Decisions question this session, as the
+   * shared list (#17229) showed it. Kept when the list empties, so turning
+   * Decisions off doesn't bring back the banner its question replaced.
+   */
+  private decisionQuestionAskedAt = new Map<string, number>();
+  /** Stops following that list; its leaf is imported on demand, so this service adds no Decisions module to startup. */
+  private offDecisionQuestions: (() => void) | null = null;
   /** Tracks when each agent spawned to suppress sounds during the grace period */
   private agentSpawnTimestamps = new Map<string, number>();
   /** Timestamp when the service was initialized — sounds are suppressed during boot */
@@ -429,6 +472,16 @@ class AgentNotificationService {
     if (this.unsubscribers.length > 0) return;
 
     this.initializedAt = Date.now();
+    void import("./decisionsQuestionList.js").then(
+      ({ getDecisionQuestionList, onDecisionQuestionsChanged }) => {
+        if (this.unsubscribers.length === 0 || this.offDecisionQuestions !== null) return;
+        this.offDecisionQuestions = onDecisionQuestionsChanged((list) =>
+          this.noteDecisionQuestions(list)
+        );
+        this.noteDecisionQuestions(getDecisionQuestionList());
+      },
+      () => {}
+    );
 
     const unsubPersisted = projectStore.onProjectStatePersisted((workspaceId, state) =>
       this.panels.noteSaved(workspaceId, state)
@@ -446,6 +499,11 @@ class AgentNotificationService {
       const agentKey = payload.terminalId ?? payload.agentId;
       if (agentKey) {
         this.agentSpawnTimestamps.set(agentKey, Date.now());
+      }
+      // A new incarnation (a kill or exit cleared the last one's turn): what an earlier one
+      // asked under this terminal id ended none of its turns. A turn under way keeps its start.
+      if (payload.terminalId && !this.turnStartedAt.has(payload.terminalId)) {
+        this.turnStartedAt.set(payload.terminalId, Date.now());
       }
       // Its project's overrides, read now, are in by its first transition.
       if (payload.terminalId) this.loadPanelProject(payload.terminalId);
@@ -502,11 +560,22 @@ class AgentNotificationService {
       if (payload.terminalId) {
         this.agentSpawnTimestamps.delete(payload.terminalId);
         this.activeTerminalIds.delete(payload.terminalId);
+        this.turnStartedAt.delete(payload.terminalId);
         this.activeSeedTouched?.add(payload.terminalId);
         this.forgetPanelOwnership(payload.terminalId);
         this.projectByTerminal.delete(payload.terminalId);
         this.dismissWaitingAlerts(payload.terminalId);
       }
+    });
+
+    // Parking or snoozing takes a run out of attention until the user takes it
+    // back (#17192), so whatever is already up or on its way for it comes down
+    // now. Lifting either pages nothing by itself: the run's next transition does.
+    const unsubParkChanged = events.on("terminal:park-changed", (payload) => {
+      if (payload.parked) this.dismissPutAside(payload.id);
+    });
+    const unsubSnoozeChanged = events.on("terminal:snooze-changed", (payload) => {
+      if (payload.snoozed) this.dismissPutAside(payload.id);
     });
 
     this.unsubscribers.push(
@@ -515,7 +584,9 @@ class AgentNotificationService {
       unsubSpawned,
       unsubDetected,
       unsubExited,
-      unsubKilled
+      unsubKilled,
+      unsubParkChanged,
+      unsubSnoozeChanged
     );
 
     this.seedActiveAgents();
@@ -657,6 +728,15 @@ class AgentNotificationService {
     if (state === "exited" && terminalId) this.projectByTerminal.delete(terminalId);
     this.checkAllClear(state, previousState, terminalId, projectId);
     if (state === previousState) return;
+    if (terminalId && ACTIVE_AGENT_STATES.has(state) && !ACTIVE_AGENT_STATES.has(previousState)) {
+      this.turnStartedAt.set(terminalId, payload.timestamp);
+    }
+    // The turn this transition ends, if it ends one; unknown, it began no earlier than this service.
+    const turnStartedAt = terminalId
+      ? (this.turnStartedAt.get(terminalId) ?? this.initializedAt)
+      : undefined;
+    // A natural exit's `agent:exited` comes before this last transition, which still needs the turn.
+    if (state === "exited" && terminalId) this.turnStartedAt.delete(terminalId);
     // The project as resolved, retained or saved: a natural exit has no live one to read.
     if (projectId) this.loadProject(projectId);
 
@@ -680,6 +760,7 @@ class AgentNotificationService {
     // runtime-detected terminals share the same agentId value (e.g. both
     // detected as "claude"). #5773
     const key = terminalId ?? agentId ?? worktreeId ?? "agent";
+    const putAside = this.isPutAside(terminalId);
 
     // Cancel any pending completion timer for this agent when it leaves "completed"
     // (must run even when master toggle is off to prevent stale timers)
@@ -695,8 +776,9 @@ class AgentNotificationService {
       }
     }
 
-    // Track currently-waiting terminal IDs for escalation grouping
-    if (state === "waiting" && terminalId) {
+    // Track currently-waiting terminal IDs for escalation grouping. A run put
+    // aside stays out, so a sibling's grouped reminder never counts it.
+    if (state === "waiting" && terminalId && !putAside) {
       this.waitingTerminalIds.add(terminalId);
     }
 
@@ -736,8 +818,13 @@ class AgentNotificationService {
 
     // Schedule waiting escalation for docked agents (independent of watched status)
     // Suppress during spawn grace period — agents that initialize directly into waiting
-    // should not trigger escalation sounds.
-    if (state === "waiting" && terminalId && !this.isWithinSpawnGrace(agentId, terminalId)) {
+    // should not trigger escalation sounds. A run put aside gets no reminder.
+    if (
+      state === "waiting" &&
+      terminalId &&
+      !putAside &&
+      !this.isWithinSpawnGrace(agentId, terminalId)
+    ) {
       this.scheduleWaitingEscalation(
         terminalId,
         projectId,
@@ -751,6 +838,9 @@ class AgentNotificationService {
     if (state === "working" && previousState !== "working" && terminalId) {
       this.scheduleWorkingPulse(terminalId, projectId, settings);
     }
+
+    // Put aside: the cleanup above still ran, but no banner goes out for it.
+    if (putAside) return;
 
     // Skip if all OS notification types are disabled (off by default).
     if (!settings.completedEnabled && !settings.waitingEnabled) {
@@ -770,6 +860,7 @@ class AgentNotificationService {
         terminalId,
         agentId,
         ownerWebContentsId,
+        turnStartedAt,
       });
     } else if (
       state === "waiting" &&
@@ -887,17 +978,28 @@ class AgentNotificationService {
       terminalId?: string;
       agentId?: string;
       ownerWebContentsId?: NotificationOwnerId;
+      /** When the turn that finished began; a question asked since then replaces the banner. */
+      turnStartedAt?: number;
     }
   ): void {
     if (this.completionTimers.has(key)) {
       clearTimeout(this.completionTimers.get(key)!);
     }
 
-    const { worktreeId, terminalId, agentId, ownerWebContentsId } = target;
+    const { worktreeId, terminalId, agentId, ownerWebContentsId, turnStartedAt } = target;
     const timer = setTimeout(() => {
       this.completionTimers.delete(key);
+      if (this.isPutAside(terminalId)) return;
       const settings = this.settingsFor(this.emitOwner(terminalId, ownerWebContentsId), projectId);
       if (settings.enabled === false || !settings.completedEnabled) return;
+      // The turn ended on a question for the person (#17232): its own notification says so.
+      if (
+        terminalId &&
+        turnStartedAt !== undefined &&
+        this.askedDecisionQuestionSince(terminalId, turnStartedAt)
+      ) {
+        return;
+      }
       const label = this.getLabel(agentId, terminalId);
       this.completionBurstBuffer.push({
         title: "Agent finished",
@@ -953,6 +1055,7 @@ class AgentNotificationService {
       // quick waiting → working → waiting flap still delivers once the
       // renderer's one-shot unwatch has stopped a second entry being buffered.
       if (item.terminalId && !this.waitingTerminalIds.has(item.terminalId)) return false;
+      if (this.isPutAside(item.terminalId)) return false;
       // Canopy already paged for this wait.
       if (item.terminalId && this.canopyAnnouncedIds.has(item.terminalId)) return false;
       // The view it goes to now may be another machine's, with its own choices.
@@ -1077,6 +1180,7 @@ class AgentNotificationService {
     // during the wait counts, and one moved out of the dock or closed doesn't.
     const timer = setTimeout(() => {
       this.waitingEscalationTimers.delete(terminalId);
+      if (this.isPutAside(terminalId)) return;
       const ownerWebContentsId = this.resolveOwner(terminalId);
       const currentSettings = this.settingsFor(ownerWebContentsId, projectId);
       if (currentSettings.enabled === false) return;
@@ -1093,7 +1197,8 @@ class AgentNotificationService {
         (id) =>
           this.panels.get(id)?.location === "dock" &&
           this.recipientOf(this.resolveOwner(id)) === recipient &&
-          this.projectOf(id) === projectId
+          this.projectOf(id) === projectId &&
+          !this.isPutAside(id)
       );
 
       if (!isRemoteNotificationOwner(ownerWebContentsId)) {
@@ -1174,6 +1279,8 @@ class AgentNotificationService {
     const projectId = this.projectOf(ask.terminalId);
     if (this.settingsFor(this.resolveOwner(ask.terminalId), projectId).enabled === false) return;
     if (this.isWithinBootGrace() || this.isWithinSpawnGrace(ask.agentId, ask.terminalId)) return;
+    // Canopy reads parks and snoozes from the fleet snapshot, which can trail a fresh one.
+    if (this.isPutAside(ask.terminalId)) return;
     if (this.announcedWaitingIds.has(ask.terminalId)) return;
     if (this.isCanopyInFront(canopyOpenIn)) return;
     this.loadPanelProject(ask.terminalId);
@@ -1249,6 +1356,151 @@ class AgentNotificationService {
     );
   }
 
+  /**
+   * Whether the terminal asked a Decisions question at or after `since`, in
+   * any state since: one answered or withdrawn before the banner would show
+   * still ended the turn.
+   */
+  private askedDecisionQuestionSince(terminalId: string, since: number): boolean {
+    return (this.decisionQuestionAskedAt.get(terminalId) ?? -Infinity) >= since;
+  }
+
+  /** Each terminal's latest question asked this session; earlier ones can't have ended a turn seen here. */
+  private noteDecisionQuestions(list: DecisionQuestionList): void {
+    for (const question of list.questions) {
+      const askedAt = Date.parse(question.askedAt);
+      if (!Number.isFinite(askedAt) || askedAt < this.initializedAt) continue;
+      const { terminalId } = question.reference;
+      const latest = this.decisionQuestionAskedAt.get(terminalId);
+      if (latest === undefined || askedAt > latest) {
+        this.decisionQuestionAskedAt.set(terminalId, askedAt);
+      }
+    }
+  }
+
+  /** Reads the question's project's alert overrides before it shows, as an agent's own event does. */
+  async prepareDecisionQuestion(projectId: string): Promise<void> {
+    await projectStore.loadNotificationOverrides(projectId).catch(() => {});
+  }
+
+  /**
+   * Whether a Decisions question asked in `projectId` may raise a desktop
+   * notification (#17232). Only turning notifications off silences one: it is
+   * the agent asking the person outright, so the per-event switches, quiet
+   * hours and a session mute that hold back the inferred alerts don't.
+   */
+  decisionQuestionNotificationsOn(projectId: string): boolean {
+    return projectStore.getEffectiveNotificationSettings(projectId).enabled !== false;
+  }
+
+  /**
+   * An agent asked the person a Decisions question (#17232): one native
+   * notification on this computer, naming the agent, its project and the
+   * question's opening line, whatever terminal asked and whether anyone
+   * watches it. Never sent to a remote Shell. A click opens the question.
+   */
+  notifyDecisionQuestion(
+    question: DecisionQuestionListItem,
+    openingLine: string | null,
+    key: string
+  ): void {
+    const { reference } = question;
+    const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
+    if (settings.enabled === false) return;
+    this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
+    const source = decisionQuestionSource(question);
+    const agent = source.agent ?? "An agent";
+    const { project } = source;
+    notificationService.showNativeNotification(
+      project ? `Question from ${agent} in ${project}` : `Question from ${agent}`,
+      openingLine ?? "Open it to read what was asked.",
+      {
+        silent: true,
+        category: "waiting",
+        replaceKey: decisionQuestionReplaceKey(key),
+        onClick: () => notificationService.openDecisionQuestion(reference),
+      }
+    );
+  }
+
+  /**
+   * An agent's follow-up on an answered Decisions question asks the person
+   * for a reply (#17235): one native notification naming the agent and the
+   * question's opening line, under the same settings as a question's own. A
+   * click opens the question at that follow-up.
+   */
+  notifyDecisionReply(
+    question: DecisionQuestionListItem,
+    openingLine: string | null,
+    key: string
+  ): void {
+    const { reference, replyRequest } = question;
+    if (replyRequest === null) return;
+    const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
+    if (settings.enabled === false) return;
+    this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
+    const source = decisionQuestionSource(question);
+    const agent = source.agent ?? "An agent";
+    const { project } = source;
+    notificationService.showNativeNotification(
+      project ? `${agent} in ${project} wants a reply` : `${agent} wants a reply`,
+      openingLine ?? "Open the question to read the follow-up.",
+      {
+        silent: true,
+        category: "waiting",
+        replaceKey: decisionQuestionReplaceKey(key),
+        onClick: () => notificationService.openDecisionQuestion(reference, replyRequest),
+      }
+    );
+  }
+
+  /**
+   * Delivery stopped on a Decisions answer, a timeout notice in its place
+   * (#17944), or a follow-up after either, and a person decides what happens
+   * to it (#17235): one native notification giving the reason in the words
+   * the list of answers needing attention uses, under the same settings as a
+   * question's own, naming the Host that asked when it isn't this computer.
+   * Never the question's words or the agent's plan. A click opens the
+   * question in the inbox (#18048), which resolves this computer's stopped
+   * delivery in place and reads a Host's through its Host.
+   */
+  notifyDecisionStall(question: DecisionQuestionListItem, key: string): void {
+    const { reference, stall, standing, remoteHost } = question;
+    const subject = stallSubject(question);
+    if (stall === null || subject === null) return;
+    const settings = projectStore.getEffectiveNotificationSettings(reference.projectId);
+    if (settings.enabled === false) return;
+    this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
+    const { agent, project } = decisionQuestionSource(question);
+    const notice = subject.startsWith("timeout notice");
+    const plural = deliverySubjectPlural(subject);
+    const uncertain =
+      standing.kind === "needs-attention" && standing.deliveryStatus === "delivery-uncertain";
+    const what =
+      `${subject.charAt(0).toUpperCase()}${subject.slice(1)}` +
+      (agent ? ` ${notice ? "for" : "to"} ${agent}` : "") +
+      (project ? ` in ${project}` : "") +
+      (remoteHost ? ` on ${remoteHost.name}` : "");
+    notificationService.showNativeNotification(
+      uncertain
+        ? `${what} may or may not have been delivered`
+        : `${what} ${plural ? "need" : "needs"} attention`,
+      deliveryReasonText(stall.reason, subject, "away", remoteHost?.name ?? null) ??
+        `Daintree won't type ${plural ? "them" : "it"} in on its own.`,
+      {
+        silent: true,
+        category: "waiting",
+        replaceKey: decisionQuestionReplaceKey(key),
+        onClick: () => notificationService.openDecisionQuestion(reference),
+      }
+    );
+  }
+
+  /** Takes down a Decisions notification once what it said no longer holds. */
+  closeDecisionQuestion(key: string): void {
+    notificationService.closeNotificationByKey(decisionQuestionReplaceKey(key));
+  }
+
   acknowledgeWaiting(terminalId: string): void {
     this.dismissWaitingAlerts(terminalId);
   }
@@ -1268,6 +1520,32 @@ class AgentNotificationService {
     this.dropBufferedWaiting(terminalId);
     this.canopyAskBuffer = this.canopyAskBuffer.filter((ask) => ask.terminalId !== terminalId);
     notificationService.closeNotificationsForPanel(terminalId);
+  }
+
+  /**
+   * Parked or snoozed (#17192): the user took the run out of attention, so
+   * nothing pages for it until they take it back. Read live rather than
+   * mirrored, so a snooze that runs out stops applying with no event, as on
+   * every other surface. Before the attention service exists, nothing is.
+   */
+  private isPutAside(terminalId: string | undefined): boolean {
+    if (!terminalId) return false;
+    const attention = getRunAttentionServiceRef();
+    if (!attention) return false;
+    return attention.getParkRecord(terminalId) !== undefined || attention.isSnoozed(terminalId);
+  }
+
+  /** A run just put aside: its waiting alerts come down, and a finish still on its way is dropped. */
+  private dismissPutAside(terminalId: string): void {
+    this.dismissWaitingAlerts(terminalId);
+    const timer = this.completionTimers.get(terminalId);
+    if (timer) {
+      clearTimeout(timer);
+      this.completionTimers.delete(terminalId);
+    }
+    this.completionBurstBuffer = this.completionBurstBuffer.filter(
+      (item) => item.terminalId !== terminalId
+    );
   }
 
   private dropBufferedWaiting(terminalId: string): void {
@@ -1558,6 +1836,10 @@ class AgentNotificationService {
     this.completionBurstBuffer = [];
 
     this.waitingTerminalIds.clear();
+    this.turnStartedAt.clear();
+    this.offDecisionQuestions?.();
+    this.offDecisionQuestions = null;
+    this.decisionQuestionAskedAt.clear();
     this.agentSpawnTimestamps.clear();
     this.watchedPanelsByOwner.clear();
     this.ownersByPanel.clear();

@@ -96,7 +96,7 @@ When the cap is hit, deadlock detection is **off for the rest of the session**. 
 
 ### Corruption resilience — the rolling pair
 
-A single corrupt write must not destroy the only recovery snapshot. `takeBackup()` rotates current → `session-state.previous.json` **before** writing new current (Firefox-style pair). Every read path (`restoreBackup`, `readBackupInfo`, `readBackupFile`) falls back current → previous, and gates `hasBackup`/`exists` on actual _parseability_ — a stat-able but unparseable current is treated as missing so the UI never offers an unrestorable restore.
+A single corrupt write must not destroy the only recovery snapshot. `takeBackup()` rotates current → `session-state.previous.json` **before** writing new current (Firefox-style pair). Every read path (`restoreBackup`, `resolveBackup`) falls back current → previous, and gates `hasBackup`/`exists` on actual _parseability_ — a stat-able but unparseable current is treated as missing so the UI never offers an unrestorable restore.
 
 ### consumeMarker — preserving the crashed snapshot
 

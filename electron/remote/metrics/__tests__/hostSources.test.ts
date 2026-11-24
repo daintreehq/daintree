@@ -54,9 +54,11 @@ const DEFAULT_PROJECTS = [
   { id: "p1", path: "/p1", status: "active" },
   { id: "p2", path: "/p2", status: "background" },
 ];
+const getProjectInventory = vi.hoisted(() => vi.fn(() => store.projects));
+// Its status repair writes: a sample that reached it would demote a remote activation (#17798).
 const getAllProjects = vi.hoisted(() => vi.fn(() => store.projects));
 vi.mock("../../../services/ProjectStore.js", () => ({
-  projectStore: { getAllProjects },
+  projectStore: { getProjectInventory, getAllProjects },
 }));
 const scratches = vi.hoisted(() => ({ list: [] as Array<{ id: string }> }));
 vi.mock("../../../services/ScratchStore.js", () => ({
@@ -104,9 +106,22 @@ vi.mock("../../../services/projectAgentCounts.js", async (importOriginal) => {
   return { ...real, computeProjectAgentCounts: vi.fn(real.computeProjectAgentCounts) };
 });
 
-import { createHostSampleSources, observeAgents } from "../hostSources.js";
+import { createHostSampleSources, observeAgents, openProjects } from "../hostSources.js";
 import { computeProjectAgentCounts } from "../../../services/projectAgentCounts.js";
 import { setCanopyRefinementSource } from "../../../services/canopy/canopyRefinementSource.js";
+import { setDecisionAttention } from "../../../services/runAnswerAttentionSource.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../services/helpSessionRuntime.js";
+
+// The service publishes itself as its module loads; its mock is published in
+// its place, so code reading the loaded service finds the mock.
+beforeEach(async () => {
+  resetHelpSessionRuntimeForTests();
+  const { helpSessionService } = await import("../../../services/HelpSessionService.js");
+  publishHelpSessionService(helpSessionService);
+});
 
 const WORKING = {
   id: "t1",
@@ -120,8 +135,9 @@ const NOTHING_ASKED = { waiting: 0, blocked: 0, idle: 0 };
 
 beforeEach(() => {
   store.projects = DEFAULT_PROJECTS;
-  getAllProjects.mockReset();
-  getAllProjects.mockImplementation(() => store.projects);
+  getProjectInventory.mockReset();
+  getProjectInventory.mockImplementation(() => store.projects);
+  getAllProjects.mockClear();
   lease.holders = null;
   lease.away.clear();
   scratches.list = [];
@@ -129,6 +145,7 @@ beforeEach(() => {
   runs.handBacks = null;
   runs.attention = null;
   setCanopyRefinementSource(null);
+  setDecisionAttention(new Map());
   workspace.client = null;
   pty.client = {
     getAllTerminalsWithCompletenessAsync: vi.fn(async () => ({
@@ -205,6 +222,57 @@ describe("observeAgents", () => {
     });
   });
 
+  it("counts an agent asking through Decisions as asking, at work or stopped, and leaves its idle siblings settled", async () => {
+    const run = (id: string, over: object) => ({
+      id,
+      projectId: "p1",
+      kind: "terminal",
+      detectedAgentId: "claude",
+      spawnedAt: 1,
+      ...over,
+    });
+    pty.client!.getAllTerminalsWithCompletenessAsync.mockResolvedValue({
+      terminals: [
+        run("asking-at-work", { agentState: "working" }),
+        run("asking-directing", { agentState: "directing" }),
+        run("asked-and-stopped", { agentState: "completed" }),
+        run("parked-at-work", { agentState: "working" }),
+        run("snoozed-at-work", { agentState: "working" }),
+        run("idle", { agentState: "idle" }),
+        run("prompt", { agentState: "waiting", waitingReason: "prompt" }),
+      ],
+      degraded: false,
+      shardsTotal: 1,
+      shardsFailed: 0,
+    });
+    runs.attention = {
+      getActiveSnoozes: () => new Map([["snoozed-at-work", {}]]),
+      getAll: () => new Map([["parked-at-work", {}]]),
+    };
+    setDecisionAttention(
+      new Map(
+        [
+          "asking-at-work",
+          "asking-directing",
+          "asked-and-stopped",
+          "parked-at-work",
+          "snoozed-at-work",
+        ].map((id) => [
+          id,
+          // One asker at work holds only a stopped answer.
+          id === "asking-directing" ? { answers: 1, questions: 0 } : { answers: 0, questions: 1 },
+        ])
+      )
+    );
+
+    await expect(observeAgents()).resolves.toEqual({
+      working: 3,
+      waiting: 1,
+      idle: 2,
+      attention: { waiting: 3, blocked: 0, idle: 2 },
+    });
+  });
+
   it("is unknown when a shard didn't answer, rather than a partial count", async () => {
     // The shard that failed may hold the working agents; zero would let an update restart the host.
     pty.client!.getAllTerminalsWithCompletenessAsync.mockResolvedValue({
@@ -258,6 +326,69 @@ describe("createHostSampleSources", () => {
     });
   });
 
+  it("says the host stops its machine once idle only while its keeper holds a key (#17361)", async () => {
+    const { registerRemoteService } = await import("../../runtime.js");
+    const observation = {
+      idleAfterMinutes: 30,
+      lastWorkAt: 10,
+      busy: false,
+      idleEndsAt: 1_800_010,
+    };
+    const offIdle = registerRemoteService("hostIdle", {
+      observation: () => observation,
+    } as never);
+    let holds = false;
+    const asked: Array<number | null | undefined> = [];
+    const offKeeper = registerRemoteService("machineKeeper", {
+      stopsWhenIdle: (at?: number | null) => {
+        asked.push(at);
+        return holds;
+      },
+    } as never);
+    try {
+      const sources = createHostSampleSources();
+      expect(sources.idle?.()).toEqual(observation);
+      holds = true;
+      expect(sources.idle?.()).toEqual({ ...observation, stopsWhenIdle: true });
+      // Asked whether its key still works when the idle time ends, not just now.
+      expect(asked).toEqual([observation.idleEndsAt, observation.idleEndsAt]);
+    } finally {
+      offKeeper();
+      offIdle();
+    }
+  });
+
+  it("says the host stops its machine once idle while it may power the machine off (#17362)", async () => {
+    const { registerRemoteService } = await import("../../runtime.js");
+    const observation = {
+      idleAfterMinutes: 30,
+      lastWorkAt: 10,
+      busy: false,
+      idleEndsAt: 1_800_010,
+    };
+    const offIdle = registerRemoteService("hostIdle", {
+      observation: () => observation,
+    } as never);
+    let armed = false;
+    // Both keepers run on every host; Boat's holds no key here.
+    const offKeeper = registerRemoteService("machineKeeper", {
+      stopsWhenIdle: () => false,
+    } as never);
+    const offGuest = registerRemoteService("guestPowerOff", {
+      stopsWhenIdle: () => armed,
+    } as never);
+    try {
+      const sources = createHostSampleSources();
+      expect(sources.idle?.()).toEqual(observation);
+      armed = true;
+      expect(sources.idle?.()).toEqual({ ...observation, stopsWhenIdle: true });
+    } finally {
+      offGuest();
+      offKeeper();
+      offIdle();
+    }
+  });
+
   it("asks for agent CLIs itself when nothing has, so a windowless host lists them next sample", async () => {
     cli.service = {
       getAvailability: vi.fn(() => null),
@@ -287,6 +418,135 @@ describe("createHostSampleSources", () => {
     await expect(createHostSampleSources().projects()).resolves.toEqual({
       projectCount: 2,
       worktreeCount: 3,
+    });
+  });
+
+  describe("the cached worktree count (#17813)", () => {
+    const STATES: Record<string, number> = { "/p1": 3, "/p2": 1, "/p1-moved": 5 };
+    let clock = 0;
+    let sources: ReturnType<typeof createHostSampleSources>;
+    let ask: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      clock = 0;
+      sources = createHostSampleSources(() => clock);
+      ask = vi.fn(async (projectPath: string, projectId: string) => ({
+        status: "ok",
+        projectId,
+        states: Array.from({ length: STATES[projectPath] ?? 0 }, () => ({})),
+      }));
+      workspace.client = { getAllStatesForProjectResultAsync: ask };
+    });
+
+    it("drops a closed project's worktrees before the count expires", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      store.projects = [{ id: "p1", path: "/p1", status: "closed" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 0, worktreeCount: 0 });
+    });
+
+    it("counts the project that replaced another, though the project total is unchanged", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      store.projects = [{ id: "p2", path: "/p2", status: "active" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 1 });
+    });
+
+    it("counts a project again once its root moves", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      store.projects = [{ id: "p1", path: "/p1-moved", status: "active" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 5 });
+    });
+
+    it("asks again for a project re-added at the same root under a new id", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await sources.projects();
+      store.projects = [{ id: "p9", path: "/p1", status: "active" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      expect(ask).toHaveBeenLastCalledWith("/p1", "p9");
+      expect(ask).toHaveBeenCalledTimes(2);
+    });
+
+    it("reuses the count while the same projects stay open, whatever their order or status", async () => {
+      store.projects = [
+        { id: "p1", path: "/p1", status: "active" },
+        { id: "p2", path: "/p2", status: "background" },
+      ];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: 4 });
+      store.projects = [
+        { id: "p2", path: "/p2", status: "active" },
+        { id: "p1", path: "/p1", status: "background" },
+      ];
+      clock += 29_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: 4 });
+      expect(ask).toHaveBeenCalledTimes(2);
+
+      clock += 2_000;
+      ask.mockClear();
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: 4 });
+      expect(ask).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports a changed set it can't count as unknown, and asks again next sample", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      store.projects = [
+        { id: "p1", path: "/p1", status: "active" },
+        { id: "p2", path: "/p2", status: "active" },
+      ];
+      ask.mockImplementation(async (projectPath: string, projectId: string) =>
+        projectPath === "/p2"
+          ? { status: "unavailable", reason: "workspace-unavailable" }
+          : { status: "ok", projectId, states: [{}, {}, {}] }
+      );
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: null });
+
+      ask.mockClear();
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: null });
+      expect(ask).toHaveBeenCalledTimes(2);
+
+      ask.mockImplementation(async (projectPath: string, projectId: string) => ({
+        status: "ok",
+        projectId,
+        states: Array.from({ length: STATES[projectPath] ?? 0 }, () => ({})),
+      }));
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: 4 });
+    });
+
+    it("knows no open projects have no worktrees, with no workspace to ask", async () => {
+      workspace.client = null;
+      store.projects = [];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 0, worktreeCount: 0 });
+
+      workspace.client = { getAllStatesForProjectResultAsync: ask };
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 1, worktreeCount: 3 });
+      workspace.client = null;
+      store.projects = [{ id: "p1", path: "/p1", status: "closed" }];
+      clock += 1_000;
+      await expect(sources.projects()).resolves.toEqual({ projectCount: 0, worktreeCount: 0 });
+    });
+
+    it("keys a sample's own project list the same way", async () => {
+      store.projects = [{ id: "p1", path: "/p1", status: "active" }];
+      await expect(sources.beginSample!().projects()).resolves.toEqual({
+        projectCount: 1,
+        worktreeCount: 3,
+      });
+      store.projects = [{ id: "p2", path: "/p2", status: "background" }];
+      clock += 1_000;
+      await expect(sources.beginSample!().projects()).resolves.toEqual({
+        projectCount: 1,
+        worktreeCount: 1,
+      });
     });
   });
 
@@ -407,7 +667,7 @@ describe("one host-summary sample", () => {
       // A closed project's lease still counts, as it did when each reader listed its own.
       driver: holder(9),
     });
-    expect(getAllProjects).toHaveBeenCalledTimes(1);
+    expect(getProjectInventory).toHaveBeenCalledTimes(1);
     // Every registered project and scratch, not only the open ones.
     expect(vi.mocked(computeProjectAgentCounts).mock.calls[0]![0]).toEqual([
       "p1",
@@ -431,7 +691,32 @@ describe("one host-summary sample", () => {
       { projectId: "p1", projectName: "daintree", holder: holder(5), state: "away", awayUntil: 99 },
     ]);
     expect(readers.driver()).toEqual(holder(9));
-    expect(getAllProjects).toHaveBeenCalledTimes(1);
+    expect(getProjectInventory).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the projects only through the read-only inventory, never the status repair (#17798)", async () => {
+    // "site" was opened here from another machine: active beside the local pointer's project.
+    store.projects = [
+      { id: "p1", path: "/p1", status: "active", name: "daintree" },
+      { id: "p2", path: "/p2", status: "active", name: "site" },
+    ];
+    lease.holders = { p2: holder(9) };
+    const sources = createHostSampleSources();
+    const readers = sources.beginSample!();
+    await expect(readers.projects()).resolves.toEqual({ projectCount: 2, worktreeCount: null });
+    await expect(readers.agents()).resolves.toMatchObject({ working: 1 });
+    expect(readers.drivers!().map((driver) => driver.projectName)).toEqual(["site"]);
+    expect(readers.driver()).toEqual(holder(9));
+    expect(getProjectInventory).toHaveBeenCalledTimes(1);
+
+    // The readers outside a sample, and the worktree list and restart guard that share them.
+    await sources.projects();
+    await sources.agents();
+    sources.driver();
+    sources.drivers!();
+    expect(openProjects().map((project) => project.id)).toEqual(["p1", "p2"]);
+    await observeAgents();
+    expect(getAllProjects).not.toHaveBeenCalled();
   });
 
   it("passes over a holder the link couldn't carry, rather than losing the whole summary", async () => {
@@ -450,20 +735,21 @@ describe("one host-summary sample", () => {
     await expect(sampleOnce(sources)).resolves.toMatchObject({
       projects: { projectCount: 1 },
     });
-    expect(getAllProjects).toHaveBeenCalledTimes(2);
+    expect(getProjectInventory).toHaveBeenCalledTimes(2);
     expect(vi.mocked(computeProjectAgentCounts).mock.calls[1]![0]).toEqual(["p1"]);
   });
 
   it("is unknown everywhere the list was needed when the store fails, and asks once", async () => {
     lease.holders = { p1: holder(1) };
-    getAllProjects.mockImplementationOnce(() => {
+    getProjectInventory.mockImplementationOnce(() => {
       throw new Error("db locked");
     });
     const readers = createHostSampleSources().beginSample!();
     await expect(readers.agents()).rejects.toThrow("db locked");
     await expect(readers.projects()).rejects.toThrow("db locked");
     expect(() => readers.driver()).toThrow("db locked");
-    expect(getAllProjects).toHaveBeenCalledTimes(1);
+    expect(() => readers.drivers!()).toThrow("db locked");
+    expect(getProjectInventory).toHaveBeenCalledTimes(1);
   });
 
   it("shares the background pollers' terminal read", async () => {

@@ -1,0 +1,398 @@
+import { describe, expect, it } from "vitest";
+import { parseAnswers } from "@daintreehq/decisions-client";
+import {
+  NO_ADVISORY_HOST,
+  PLAN_REFUSED,
+  roundOf,
+  timeoutNoticeOf,
+  verifiedPlan,
+} from "../questionRound.js";
+import { DECLINE, answers, row } from "./questionRows.js";
+
+/** An envelope as the publisher stores it: only its clear AAD is read here. */
+function sealed(aad: Record<string, unknown>): string {
+  return JSON.stringify({ crypto_version: 1, aad, ciphertext: "x" });
+}
+
+const ADVISORY = sealed({ revision: 0, reply_mode: "advisory" });
+const BLOCKING = sealed({ revision: 0 });
+
+const EXPIRY = { entry_id: "expiry-1", kind: "expired" as const, action: "expire" as const };
+
+describe("roundOf (#17943)", () => {
+  it("reads a legacy question, and one whose envelope can't be parsed, as blocking", () => {
+    for (const content_sealed of [BLOCKING, '{"reply_mode": broken', null]) {
+      const question = row(1, { question_revision: 0, content_sealed });
+      expect(roundOf(question)).toEqual({
+        replyMode: "blocking",
+        closedReason: null,
+        closureNotice: null,
+      });
+    }
+  });
+
+  it("keeps an advisory round advisory once answered, and a reopened round blocking", () => {
+    const open = row(1, { question_revision: 0, content_sealed: ADVISORY });
+    expect(roundOf(open).replyMode).toBe("advisory");
+
+    // Answered in the advisory round: the answer moved the revision on, and accounts for it.
+    const answered = row(1, {
+      question_revision: 1,
+      content_sealed: ADVISORY,
+      local_status: "human-answered",
+      answers_json: answers({ revision: 0 }),
+    });
+    expect(roundOf(answered).replyMode).toBe("advisory");
+
+    // Reopened after that answer: a revision no answer accounts for always waits.
+    const reopened = row(1, {
+      question_revision: 2,
+      content_sealed: ADVISORY,
+      answers_json: answers({ revision: 0 }),
+    });
+    expect(roundOf(reopened).replyMode).toBe("blocking");
+  });
+
+  it("tells each way a question closes without an answer apart", () => {
+    const declined = row(1, {
+      local_status: "cancelled",
+      answers_json: answers({ ...DECLINE, revision: 1 }),
+    });
+    const withdrawn = row(2, { local_status: "cancelled" });
+    const expired = row(3, { local_status: "expired", answers_json: answers(EXPIRY) });
+    const neverPublished = row(4, {
+      local_status: "publish-failed",
+      answers_json: answers({ kind: "unpublished", action: "expire", source: "system" }),
+    });
+    const refused = row(5, { local_status: "publish-failed", error_code: "invalid_request" });
+
+    expect(roundOf(declined)).toMatchObject({
+      closedReason: "declined",
+      closureNotice: { delivery: "pending", disposition: null },
+    });
+    // A withdrawal types nothing into the terminal.
+    expect(roundOf(withdrawn)).toMatchObject({ closedReason: "withdrawn", closureNotice: null });
+    expect(roundOf(expired)).toMatchObject({
+      closedReason: "expired",
+      closureNotice: { delivery: "pending", disposition: null },
+    });
+    expect(roundOf(neverPublished)).toMatchObject({
+      closedReason: "never-published",
+      closureNotice: { delivery: "pending", disposition: null },
+    });
+    expect(roundOf(refused)).toMatchObject({ closedReason: null, closureNotice: null });
+  });
+
+  it("says how far the closing notice got, from the entry first and the row after", () => {
+    const expired = (entry: object, over: object = {}) =>
+      roundOf(
+        row(1, { local_status: "expired", answers_json: answers({ ...EXPIRY, ...entry }), ...over })
+      ).closureNotice?.delivery;
+
+    expect(expired({ delivered: true })).toBe("delivered");
+    expect(expired({ uncertain_injection_id: "inj-1" })).toBe("uncertain");
+    expect(expired({ deliver: false })).toBe("stopped");
+    expect(expired({}, { delivery_status: "delivery-uncertain" })).toBe("uncertain");
+    expect(expired({}, { delivery_status: "needs-attention" })).toBe("needs-attention");
+    expect(expired({})).toBe("pending");
+    // Delivered stays delivered whatever the row says since.
+    expect(expired({ delivered: true }, { delivery_status: "needs-attention" })).toBe("delivered");
+  });
+
+  it("never takes an earlier round's notice for the current one's", () => {
+    // Expired at revision 0, then reopened and expired again at 1: only the second is in force.
+    const reexpired = row(1, {
+      question_revision: 1,
+      local_status: "expired",
+      answers_json: answers(
+        { ...EXPIRY, revision: 0, delivered: true },
+        { ...EXPIRY, entry_id: "expiry-2", revision: 1 }
+      ),
+    });
+    expect(roundOf(reexpired).closureNotice?.delivery).toBe("pending");
+
+    // Reopened and open again: the old expiry describes nothing.
+    const reopened = row(1, {
+      question_revision: 1,
+      local_status: "open",
+      answers_json: answers({ ...EXPIRY, revision: 0 }),
+    });
+    expect(roundOf(reopened)).toMatchObject({ closedReason: null, closureNotice: null });
+  });
+
+  it("says what an advisory notice lets go ahead, never upgraded while untyped", () => {
+    const advisoryExpiry = (entry: object) =>
+      roundOf(
+        row(1, {
+          question_revision: 0,
+          content_sealed: ADVISORY,
+          local_status: "expired",
+          answers_json: answers({ ...EXPIRY, revision: 0, ...entry }),
+        })
+      ).closureNotice;
+
+    // Typed: it keeps what it said.
+    expect(advisoryExpiry({ advisory_disposition: "fallback-due", delivered: true })).toEqual({
+      delivery: "delivered",
+      disposition: "fallback-due",
+    });
+    // Untyped: it follows this Daintree, which lets no plan go ahead yet.
+    expect(advisoryExpiry({ advisory_disposition: "fallback-due" })).toEqual({
+      delivery: "pending",
+      disposition: "fallback-withheld",
+    });
+    // Recorded without one: typed as the ordinary expiry, which lets nothing go ahead.
+    expect(advisoryExpiry({})).toEqual({ delivery: "pending", disposition: "fallback-withheld" });
+
+    const unpublished = (entry: object, host = NO_ADVISORY_HOST) =>
+      roundOf(
+        row(1, {
+          question_revision: 0,
+          content_sealed: ADVISORY,
+          local_status: "publish-failed",
+          answers_json: answers({
+            kind: "unpublished",
+            action: "expire",
+            source: "system",
+            revision: 0,
+            ...entry,
+          }),
+        }),
+        undefined,
+        host
+      ).closureNotice?.disposition;
+    expect(unpublished({ fallback_due: true, delivered: true })).toBe("fallback-due");
+    // Possibly typed: it may have said the plan was due, so it keeps saying so.
+    expect(unpublished({ fallback_due: true, uncertain_injection_id: "inj-1" })).toBe(
+      "fallback-due"
+    );
+    // Untyped with its plan due: an uncertain write only the store's intents show could
+    // have said so, so what it says is unknown rather than withheld.
+    expect(unpublished({ fallback_due: true })).toBeNull();
+    expect(unpublished({ fallback_due: true }, { outcomes: true, allowed: false })).toBeNull();
+    expect(unpublished({ fallback_due: true }, { outcomes: false, allowed: true })).toBeNull();
+    // On a lifetime that lets it go ahead it says due either way, as `get_decision` does (#17942).
+    const capable = { outcomes: true, allowed: true };
+    expect(unpublished({ fallback_due: true }, capable)).toBe("fallback-due");
+    expect(unpublished({})).toBe("fallback-withheld");
+    expect(unpublished({}, capable)).toBe("fallback-withheld");
+  });
+
+  it("reads a decline from a source the library doesn't know as no one's, as the bridge does", () => {
+    const unknown = row(1, {
+      local_status: "cancelled",
+      answers_json: answers({ ...DECLINE, revision: 1, source: "proxy" }),
+    });
+    expect(roundOf(unknown)).toMatchObject({ closedReason: "withdrawn", closureNotice: null });
+  });
+
+  it("keeps a possibly typed notice uncertain once it's marked handled, and stopped only otherwise", () => {
+    const handled = (over: object) =>
+      roundOf(
+        row(1, {
+          local_status: "expired",
+          answers_json: answers({ ...EXPIRY, deliver: false }),
+          ...over,
+        })
+      ).closureNotice?.delivery;
+    expect(handled({ delivery_status: "delivery-uncertain" })).toBe("uncertain");
+    expect(handled({ delivery_status: "needs-attention" })).toBe("stopped");
+  });
+
+  it("finds no notice when only an earlier round's describes an expired question", () => {
+    const stale = row(1, {
+      question_revision: 2,
+      local_status: "expired",
+      answers_json: answers({ ...EXPIRY, revision: 1, delivered: true }),
+    });
+    expect(roundOf(stale)).toMatchObject({ closedReason: "expired", closureNotice: null });
+  });
+
+  it("counts answered revisions, not answers, when telling a reopened round", () => {
+    // Two answers at revision 0 account for one revision: revision 2 is a reopened round.
+    const reopened = row(1, {
+      question_revision: 2,
+      content_sealed: ADVISORY,
+      answers_json: answers({ revision: 0 }, { entry_id: "entry-2", revision: 0 }),
+    });
+    expect(roundOf(reopened).replyMode).toBe("blocking");
+  });
+
+  it("tells a delivered decline from a pending one", () => {
+    const declined = (delivered: boolean) =>
+      roundOf(
+        row(1, {
+          local_status: "cancelled",
+          answers_json: answers({ ...DECLINE, revision: 1, delivered }),
+        })
+      ).closureNotice?.delivery;
+    expect(declined(true)).toBe("delivered");
+    expect(declined(false)).toBe("pending");
+  });
+
+  it("has no notice for imported history", () => {
+    const delivered = { local_status: "expired" as const, answers_json: answers(EXPIRY) };
+    expect(roundOf(row(1, delivered)).closureNotice).not.toBeNull();
+    expect(roundOf(row(1, { ...delivered, history_only: true })).closureNotice).toBeNull();
+  });
+});
+
+describe("verifiedPlan (#17943)", () => {
+  const content = (over: object = {}) => ({
+    kind: "choice" as const,
+    planned_fallback: "Use the existing fixture",
+    ...over,
+  });
+
+  it("shows an advisory round's plan, and none for a blocking or reopened round", () => {
+    const advisory = row(1, { question_revision: 0, content_sealed: ADVISORY });
+    expect(verifiedPlan(advisory, [], content())).toBe("Use the existing fixture");
+
+    // A blocking question's stray plan means nothing.
+    const blocking = row(1, { question_revision: 0, content_sealed: BLOCKING });
+    expect(verifiedPlan(blocking, [], content())).toBeNull();
+
+    const reopened = row(1, { question_revision: 1, content_sealed: ADVISORY });
+    expect(verifiedPlan(reopened, [], content())).toBeNull();
+
+    // An envelope that claims advisory at another revision was never the advisory round.
+    const later = row(1, {
+      question_revision: 0,
+      content_sealed: sealed({ revision: 1, reply_mode: "advisory" }),
+    });
+    expect(verifiedPlan(later, [], content())).toBeNull();
+  });
+
+  it("refuses advisory content the protocol refuses: an approval, or no plan", () => {
+    const advisory = row(1, { question_revision: 0, content_sealed: ADVISORY });
+    expect(verifiedPlan(advisory, [], content({ kind: "approval" }))).toBe(PLAN_REFUSED);
+    expect(verifiedPlan(advisory, [], content({ planned_fallback: undefined }))).toBe(PLAN_REFUSED);
+    // A plan whose words happen to be the same as a refusal's name is still a plan.
+    expect(verifiedPlan(advisory, [], content({ planned_fallback: "refused" }))).toBe("refused");
+    // Refused in every round, so a reopen never reads it as ordinary.
+    const answered = row(1, {
+      question_revision: 2,
+      content_sealed: ADVISORY,
+      answers_json: answers({ revision: 0 }),
+    });
+    const entries = parseAnswers(answered.answers_json);
+    expect(verifiedPlan(answered, entries, content({ kind: "approval" }))).toBe(PLAN_REFUSED);
+    // The same round, valid: no plan once reopened, and the answered advisory round keeps it.
+    expect(verifiedPlan(answered, entries, content())).toBeNull();
+    const answeredInRound = row(1, {
+      question_revision: 1,
+      content_sealed: ADVISORY,
+      answers_json: answers({ revision: 0 }),
+    });
+    expect(
+      verifiedPlan(answeredInRound, parseAnswers(answeredInRound.answers_json), content())
+    ).toBe("Use the existing fixture");
+  });
+});
+
+describe("an advisory notice as the lifetime reading it stands (#17944)", () => {
+  const OWNER = { outcomes: true, allowed: true };
+  const expired = (entry: object = {}) =>
+    row(1, {
+      question_revision: 0,
+      content_sealed: ADVISORY,
+      local_status: "expired",
+      answers_json: answers({ ...EXPIRY, revision: 0, ...entry }),
+    });
+
+  it("says an untyped notice lets the plan go ahead while the lifetime still allows it, and never upgrades one", () => {
+    const due = expired({ advisory_disposition: "fallback-due" });
+    expect(roundOf(due, undefined, OWNER).closureNotice?.disposition).toBe("fallback-due");
+    // The policy no longer allows advice, or outcomes aren't delivered: it would be typed withheld.
+    expect(
+      roundOf(due, undefined, { outcomes: true, allowed: false }).closureNotice?.disposition
+    ).toBe("fallback-withheld");
+    expect(
+      roundOf(due, undefined, { outcomes: false, allowed: true }).closureNotice?.disposition
+    ).toBe("fallback-withheld");
+    // Recorded withheld stays withheld, whatever the lifetime allows.
+    expect(
+      roundOf(expired({ advisory_disposition: "fallback-withheld" }), undefined, OWNER)
+        .closureNotice?.disposition
+    ).toBe("fallback-withheld");
+    // Typed: it keeps what it said, whatever the lifetime allows now.
+    expect(
+      roundOf(expired({ advisory_disposition: "fallback-due", delivered: true }), undefined, {
+        outcomes: false,
+        allowed: false,
+      }).closureNotice?.disposition
+    ).toBe("fallback-due");
+  });
+
+  it("names the timeout notice with its round and deadline, and never a decline or a replaced round's", () => {
+    expect(
+      timeoutNoticeOf(
+        expired({ advisory_disposition: "fallback-due", created_at: "2026-11-01T09:45:00.000Z" }),
+        undefined,
+        OWNER
+      )
+    ).toEqual({
+      kind: "expired",
+      revision: 0,
+      deadline: "2026-11-01T09:45:00.000Z",
+      entryId: "expiry-1",
+      delivery: "pending",
+      disposition: "fallback-due",
+    });
+    const unpublished = row(1, {
+      question_revision: 0,
+      content_sealed: ADVISORY,
+      local_status: "publish-failed",
+      expires_at: "2026-11-01T09:30:00.000Z",
+      delivery_status: "needs-attention",
+      answers_json: answers({
+        entry_id: "unpublished-1",
+        kind: "unpublished",
+        action: "expire",
+        source: "system",
+        revision: 0,
+        sealed: null,
+      }),
+    });
+    expect(timeoutNoticeOf(unpublished)).toMatchObject({
+      kind: "never-published",
+      deadline: "2026-11-01T09:30:00.000Z",
+      delivery: "needs-attention",
+    });
+    // Untyped with its plan due: typed now, or as an uncertain write may already have, it says the same.
+    const due = {
+      ...unpublished,
+      answers_json: answers({
+        entry_id: "unpublished-1",
+        kind: "unpublished",
+        action: "expire",
+        source: "system",
+        revision: 0,
+        sealed: null,
+        fallback_due: true,
+      }),
+    };
+    expect(timeoutNoticeOf(due, undefined, OWNER)?.disposition).toBe("fallback-due");
+    expect(timeoutNoticeOf(due)?.disposition).toBeNull();
+    // A possibly typed advisory expiry keeps what it may have said, whatever the lifetime allows now.
+    expect(
+      roundOf(
+        expired({ advisory_disposition: "fallback-due", uncertain_injection_id: "inj-1" }),
+        undefined,
+        { outcomes: false, allowed: false }
+      ).closureNotice?.disposition
+    ).toBe("fallback-due");
+    const declined = row(1, {
+      local_status: "cancelled",
+      answers_json: answers({ ...DECLINE, revision: 1 }),
+    });
+    expect(timeoutNoticeOf(declined)).toBeNull();
+    const reopened = row(1, {
+      question_revision: 1,
+      local_status: "open",
+      answers_json: answers({ ...EXPIRY, revision: 0 }),
+    });
+    expect(timeoutNoticeOf(reopened)).toBeNull();
+    expect(timeoutNoticeOf({ ...expired(), history_only: true })).toBeNull();
+  });
+});

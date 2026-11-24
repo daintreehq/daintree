@@ -73,6 +73,7 @@ export function registerWorktreeServiceActions(
     title: "Refresh sidebar",
     description:
       "Re-read worktree state, pull requests and forge statistics from disk and the provider, discarding what is cached. Use this after changes made outside the app leave stale data on screen. It costs provider round trips against your rate limit, so prefer it over routine polling rather than as a habit.",
+    paletteDescription: "Re-read worktrees, pull requests and forge stats, skipping the cache",
     category: "worktree",
     kind: "command",
     danger: "safe",
@@ -139,6 +140,7 @@ export function registerWorktreeServiceActions(
     title: "Reconcile worktree list",
     description:
       "Force a full re-scan of worktrees. Recovers from a dark topology watcher that stopped reporting worktree changes.",
+    paletteDescription: "Re-scan every worktree when the list has stopped updating",
     category: "worktree",
     kind: "command",
     danger: "safe",
@@ -170,6 +172,7 @@ export function registerWorktreeServiceActions(
     title: "Restart workspace service",
     description:
       "Restart the workspace host. Available after the service has crashed and could not recover automatically.",
+    paletteDescription: "Restart the workspace host after it crashed and couldn't recover",
     category: "worktree",
     kind: "command",
     danger: "confirm",

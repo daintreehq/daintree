@@ -59,7 +59,7 @@ afterEach(() => {
 describe("FileEditorBanner", () => {
   it("points a plugin that couldn't start at Settings → Plugins, and opens it", async () => {
     const onEdit = vi.fn();
-    render(<FileEditorBanner filePath="/repo/README.md" content="# hi" onEdit={onEdit} />, {
+    render(<FileEditorBanner filePath="/repo/README.md" contentBytes={4} onEdit={onEdit} />, {
       wrapper: TooltipProvider,
     });
 

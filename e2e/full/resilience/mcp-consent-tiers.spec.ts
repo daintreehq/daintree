@@ -556,6 +556,7 @@ test.describe.serial("MCP: consent dialogs and project tiers, end to end", () =>
     const answer = await approved;
     expectToolSuccess(answer, FULL_ONLY_TOOL);
     expect(JSON.stringify(toolPayload(answer))).toContain(path.basename(repoA));
+    await expect(again).toHaveCount(0);
 
     // Same session, same tool: the approval covers it without asking again.
     const { reply, sawDialog } = await callWatchingForDialog(

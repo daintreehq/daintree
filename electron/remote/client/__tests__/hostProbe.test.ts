@@ -7,6 +7,7 @@ import {
   buildHostProbeScript,
   compareVersions,
   installMatches,
+  linuxHostDirShell,
   parseHostProbe,
   processStartShell,
   probeHost,
@@ -168,7 +169,8 @@ describe("parseHostProbe", () => {
     // A WSL distro booted without systemd runs WSL's own init as PID 1.
     expect(linux("init").advice.systemd).toBe(false);
     expect(parseHostProbe(MAC_OUTPUT).advice.systemd).toBeNull();
-    expect(buildHostProbeScript()).toContain("init $(head -c 64 /proc/1/comm");
+    expect(buildHostProbeScript()).toContain("pid1=$(head -c 64 /proc/1/comm");
+    expect(buildHostProbeScript()).toContain('echo "@@dt:init $pid1"');
   });
 
   it("reads whether Daintree has kept settings there, so has run as this user", () => {
@@ -288,7 +290,8 @@ describe("parseHostProbe", () => {
   it("counts only this SSH user's Daintree as running, never another user's", () => {
     const script = buildHostProbeScript();
     expect(script).toContain('pgrep -u "$(id -u)" -x Daintree >/dev/null');
-    expect(script).toContain('pgrep -u "$(id -u)" -x daintree >/dev/null');
+    // Linux lists them to pass over any its PID 1 left unreaped.
+    expect(script).toContain('for q in $(pgrep -u "$(id -u)" -x daintree 2>/dev/null)');
     expect(script).not.toMatch(/pgrep -x [Dd]aintree/);
   });
 
@@ -447,6 +450,35 @@ describe("probeHost", () => {
     expect(parsed?.advice.sleepDisabled).toBeNull();
     expect(parsed?.advice.linger).toBeNull();
     expect(result.suggestedCommands).toEqual([]);
+  });
+
+  it("starts on connect only on Linux reached over SSH or a cloud route with PID 1 seen not to be systemd", async () => {
+    const withInit = (init: string | null) =>
+      LINUX_OUTPUT.replace("@@dt:end", `${init === null ? "" : `@@dt:init ${init}\n`}@@dt:end`);
+    const startsOnConnect = async (
+      connection: Parameters<typeof probeHost>[0]["connection"],
+      stdout: string
+    ) =>
+      (await probeHost({ connection, shell: shellReturning({ stdout }), client: CLIENT })).result
+        .startsOnConnect;
+    expect(await startsOnConnect({ kind: "ssh", target: "box" }, withInit("docker-init"))).toBe(
+      true
+    );
+    expect(await startsOnConnect({ kind: "cloud", bindingId: "b1" }, withInit("node"))).toBe(true);
+    expect(await startsOnConnect({ kind: "ssh", target: "box" }, withInit("systemd"))).toBe(false);
+    // PID 1 unread keeps the service path.
+    expect(await startsOnConnect({ kind: "ssh", target: "box" }, withInit(null))).toBe(false);
+    // A WSL distro keeps its own path, systemd or not.
+    expect(await startsOnConnect({ kind: "wsl", distro: "Ubuntu" }, withInit("init"))).toBe(false);
+    expect(await startsOnConnect({ kind: "ssh", target: "mac" }, MAC_OUTPUT)).toBe(false);
+  });
+
+  it("looks for a Linux host where it listens, by the same test of PID 1 the host makes", () => {
+    const pick = linuxHostDirShell();
+    expect(pick).toBe(
+      'pid1=$(head -c 64 /proc/1/comm 2>/dev/null); if [ -n "$pid1" ] && [ "$pid1" != systemd ]; then d="$HOME/.cache/daintree/run"; else d="/run/user/$(id -u)/daintree"; fi'
+    );
+    expect(buildHostProbeScript()).toContain(`Linux) ${pick};`);
   });
 
   it("can't tell whether a host matches while its AppImages conflict", async () => {

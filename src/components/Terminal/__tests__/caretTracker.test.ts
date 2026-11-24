@@ -7,10 +7,10 @@ import { selectionAfterOutsideWrite } from "../inputEditorExtensions/composerHis
 import { readComposerSelection } from "@/lib/composerCaret";
 
 const views: EditorView[] = [];
-function mount(doc: string, panelId = "panel-1") {
+function mount(doc: string, panelId = "panel-1", resumed = false) {
   const view = new EditorView({
     parent: document.createElement("div"),
-    state: EditorState.create({ doc, extensions: [createCaretTracker(() => panelId)] }),
+    state: EditorState.create({ doc, extensions: [createCaretTracker(() => panelId, resumed)] }),
   });
   views.push(view);
   return view;
@@ -60,6 +60,13 @@ describe("createCaretTracker", () => {
     expect(readComposerSelection("panel-1", "one")).toEqual({ from: 2, to: 2 });
     second.destroy();
     expect(readComposerSelection("panel-1", "one")).toBeNull();
+  });
+
+  it("publishes unfocused when it resumes a composer that had published (#16883)", () => {
+    const view = mount("hello world", "panel-1", true);
+    expect(readComposerSelection("panel-1", "hello world")).toEqual({ from: 0, to: 0 });
+    view.dispatch({ selection: { anchor: 3, head: 6 } });
+    expect(readComposerSelection("panel-1", "hello world")).toEqual({ from: 3, to: 6 });
   });
 });
 

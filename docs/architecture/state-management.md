@@ -107,7 +107,7 @@ Two distinct persistence paths exist; do not conflate them.
 
 ### 1. Zustand `persist` → localStorage (`persistence/safeStorage.ts`)
 
-Settings-style stores opt in by wrapping their `create()` in the `persist` middleware with `storage: createSafeJSONStorage()`. ~13 stores do this (`preferencesStore`, `agentPreferencesStore`, `portalStore`, `commandHistoryStore`, `helpPanelStore`, `panelLimitStore`, `projectStore`, `toolbarPreferencesStore`, `worktreeFilterStore`, `twoPaneSplitStore`, `terminalSearchHistoryStore`, `urlHistoryStore`, `voiceRecordingStore`).
+Settings-style stores opt in by wrapping their `create()` in the `persist` middleware with `storage: createSafeJSONStorage()`. ~13 stores do this (`preferencesStore`, `agentPreferencesStore`, `portalStore`, `commandHistoryStore`, `helpPanelStore`, `panelLimitStore`, `projectStore`, `toolbarPreferencesStore`, `worktreeFilterStore`, `twoPaneSplitStore`, `terminalSearchHistoryStore`, `urlHistoryStore`, `voiceRecordingStore`, `globalLinksStore`).
 
 `createSafeJSONStorage()` hardens the default localStorage adapter:
 

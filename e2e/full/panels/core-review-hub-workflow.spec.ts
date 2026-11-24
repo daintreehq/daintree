@@ -661,9 +661,8 @@ test.describe("Core: Review Hub Workflow", () => {
       await expect(message).toBeVisible({ timeout: T_MEDIUM });
       await expect(message).toContainText("test: review hub push confirm flow");
       await expect(window.locator(SEL.reviewHub.pushConfirmBranch)).toContainText("main");
-      await expect(window.locator(SEL.reviewHub.pushConfirmDontAsk)).toBeVisible({
-        timeout: T_SHORT,
-      });
+      // main is protected: its push confirmation cannot be opted out of.
+      await expect(window.locator(SEL.reviewHub.pushConfirmDontAsk)).toHaveCount(0);
 
       // Cancelling leaves the commit unpushed and the primary action intact.
       await window.locator(SEL.confirmDialog.cancel).click();

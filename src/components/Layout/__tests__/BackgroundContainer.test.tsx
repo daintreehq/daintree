@@ -25,6 +25,7 @@ const selectWorktreeMock = vi.fn();
 const trackTerminalFocusMock = vi.fn();
 
 let mockTerminals: PanelInstance[] = [];
+const liveArgs: boolean[] = [];
 let mockBackgroundedTerminals = new Map<
   string,
   { groupRestoreId?: string; groupMetadata?: TrashedTerminalGroupMetadata }
@@ -33,7 +34,10 @@ let mockWatchedPanels = new Set<string>();
 let lastConfirmTitle: React.ReactNode = null;
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
-  useBackgroundedTerminals: () => mockTerminals,
+  useBackgroundedTerminals: (live: boolean) => {
+    liveArgs.push(live);
+    return mockTerminals;
+  },
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
@@ -170,6 +174,10 @@ vi.mock("@/lib/dialogEscapeBackstop", async (importOriginal) => ({
   markEscapeYieldedToDialog: (event: unknown) => markEscapeYieldedMock(event),
 }));
 
+const restoreProbe = vi.hoisted(() => ({
+  current: undefined as undefined | (() => HTMLElement | null),
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
@@ -178,6 +186,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     confirmLabel,
     onConfirm,
     onClose,
+    restoreFocusTo,
   }: {
     isOpen: boolean;
     title: React.ReactNode;
@@ -185,7 +194,9 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     confirmLabel: string;
     onConfirm: () => void;
     onClose: () => void;
+    restoreFocusTo?: () => HTMLElement | null;
   }) => {
+    restoreProbe.current = restoreFocusTo;
     // The real dialog keeps drawing these through its exit animation.
     lastConfirmTitle = title;
     if (!isOpen) return null;
@@ -216,6 +227,7 @@ vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
 }));
 
 import { BackgroundContainer } from "../BackgroundContainer";
+import { DockFocusLandmarkContext } from "../dockFocusHandoff";
 
 /** The fleet reporting an unread Canopy ask on each of these runs: the only waits counted. */
 function deliverAsks(ids: string[]) {
@@ -294,6 +306,13 @@ function focusInsideBackstopDialog() {
 }
 
 describe("BackgroundContainer", () => {
+  it("reads its members as a count while its popover is closed (#17053)", () => {
+    liveArgs.length = 0;
+    render(<BackgroundContainer />);
+    expect(liveArgs.length).toBeGreaterThan(0);
+    expect(liveArgs.every((live) => live === false)).toBe(true);
+  });
+
   it("stays mounted but hidden when there are no backgrounded terminals", () => {
     // The pill keeps its DOM node so the .dock-status-pill CSS can run the
     // display/opacity exit transition; visibility is gated by data-visible.
@@ -958,5 +977,98 @@ describe("BackgroundContainer", () => {
       expect(screen.getByRole("region", { name: "Group panels" })).toBeTruthy();
       expect(screen.queryByTestId("bg-watch-button")).toBeNull();
     });
+  });
+});
+
+describe("BackgroundContainer — focus when the pill hides (#16921)", () => {
+  const handoff = vi.fn();
+  const landmarkEl = document.createElement("button");
+  const withDock = (ui: React.ReactElement) => (
+    <DockFocusLandmarkContext.Provider value={{ handoff, resolve: () => landmarkEl }}>
+      <input data-testid="outside" />
+      {ui}
+    </DockFocusLandmarkContext.Provider>
+  );
+  const trigger = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>("button[aria-haspopup='dialog']")!;
+  /** A control in the popover that is not the trigger, as a row is. */
+  const insideControl = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll<HTMLElement>("button")).find(
+      (button) => button !== trigger(container)
+    )!;
+
+  beforeEach(() => handoff.mockClear());
+
+  it("hands focus to the dock when the pill hides under a focused trigger", () => {
+    mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
+    const view = render(withDock(<BackgroundContainer />));
+    act(() => trigger(view.container).focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<BackgroundContainer />));
+
+    expect(view.container.querySelector(".dock-status-pill")?.getAttribute("data-visible")).toBe(
+      "false"
+    );
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("tracks focus on a control inside the popover, not only on the trigger", () => {
+    mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
+    const view = render(withDock(<BackgroundContainer />));
+    act(() => insideControl(view.container).focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<BackgroundContainer />));
+
+    expect(handoff).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps focus while the count falls but the pill stays", () => {
+    mockTerminals = [
+      makeTerminal({ id: "t1", agentState: "idle" }),
+      makeTerminal({ id: "t2", agentState: "idle" }),
+    ];
+    const view = render(withDock(<BackgroundContainer />));
+    act(() => trigger(view.container).focus());
+
+    mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
+    view.rerender(withDock(<BackgroundContainer />));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger(view.container));
+  });
+
+  it("leaves focus where the user put it", () => {
+    mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
+    const view = render(withDock(<BackgroundContainer />));
+    act(() => trigger(view.container).focus());
+    act(() => screen.getByTestId("outside").focus());
+
+    mockTerminals = [];
+    view.rerender(withDock(<BackgroundContainer />));
+
+    expect(handoff).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByTestId("outside"));
+  });
+
+  it("restores the removal confirmation to the open popover, else the dock", () => {
+    mockTerminals = [makeTerminal({ id: "t1", agentState: "idle" })];
+    render(withDock(<BackgroundContainer />));
+    const restore = restoreProbe.current;
+    expect(restore).toBeDefined();
+    expect(restore?.()).toBe(landmarkEl);
+
+    const popover = document.createElement("div");
+    popover.id = "background-container-popover";
+    popover.setAttribute("data-state", "open");
+    document.body.appendChild(popover);
+    try {
+      expect(restore?.()).toBe(popover);
+      popover.setAttribute("data-state", "closed");
+      expect(restore?.()).toBe(landmarkEl);
+    } finally {
+      popover.remove();
+    }
   });
 });

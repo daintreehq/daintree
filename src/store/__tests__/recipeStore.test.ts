@@ -161,10 +161,11 @@ const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
 };
 
 import { RECIPE_DISPATCH_EXPIRED_REASON, useRecipeStore } from "../recipeStore";
+import { setCurrentProjectIdAccessor } from "../storeAccessors";
 import { usePanelLimitStore } from "../panelLimitStore";
 import { getPanelSlotReservations } from "../slices/panelRegistry/panelSlotReservations";
 import type { RecipeTerminal, TerminalRecipe } from "@shared/types/project";
-import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import { RecipeChangedSinceShownError, recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { RecipeImportDropsTerminalsError, RecipeImportInvalidError } from "@/utils/recipeImport";
 import {
   buildLaunchCommandFromFlags,
@@ -4538,6 +4539,194 @@ describe("recipeStore", () => {
     });
   });
 
+  describe("duplicateRecipe (#17200)", () => {
+    // The project the view shows, which the recipe store's own id has to agree with.
+    let liveProjectId: string | null = null;
+    beforeEach(() => {
+      liveProjectId = "proj-1";
+      setCurrentProjectIdAccessor(() => liveProjectId);
+    });
+    afterEach(() => {
+      setCurrentProjectIdAccessor(() => null);
+    });
+
+    const seed = (opts: {
+      global?: TerminalRecipe[];
+      project?: TerminalRecipe[];
+      inRepo?: TerminalRecipe[];
+      plugin?: TerminalRecipe[];
+      currentProjectId?: string | null;
+    }) => {
+      const global = opts.global ?? [];
+      const project = opts.project ?? [];
+      const inRepo = opts.inRepo ?? [];
+      const plugin = opts.plugin ?? [];
+      useRecipeStore.setState({
+        globalRecipes: global,
+        projectRecipes: project,
+        inRepoRecipes: inRepo,
+        pluginRecipes: plugin,
+        recipes: mergeRecipes(global, project, inRepo, plugin),
+        currentProjectId: opts.currentProjectId === undefined ? "proj-1" : opts.currentProjectId,
+      });
+    };
+    const team = (extra: Partial<TerminalRecipe> = {}): TerminalRecipe => ({
+      id: "inrepo-team",
+      name: "Team recipe",
+      scope: "inrepo",
+      terminals: [{ type: "terminal", command: "team-only" }],
+      createdAt: 200,
+      autoAssign: "prompt",
+      ...extra,
+    });
+
+    it("copies a team recipe into the open project's repo, never into Global", async () => {
+      seed({ inRepo: [team()] });
+
+      await useRecipeStore.getState().duplicateRecipe("inrepo-team");
+
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+      expect(updateInRepoRecipeMock).toHaveBeenCalledTimes(1);
+      const [projectId, copy] = updateInRepoRecipeMock.mock.calls[0]!;
+      expect(projectId).toBe("proj-1");
+      expect(copy).toMatchObject({
+        name: "Team recipe (Copy)",
+        projectId: "proj-1",
+        scope: "inrepo",
+        autoAssign: "prompt",
+        showInEmptyState: false,
+        terminals: [{ type: "terminal", command: "team-only" }],
+      });
+      expect(copy.id).not.toBe("inrepo-team");
+      expect(useRecipeStore.getState().globalRecipes).toEqual([]);
+      expect(useRecipeStore.getState().inRepoRecipes.map((r) => r.name)).toEqual([
+        "Team recipe",
+        "Team recipe (Copy)",
+      ]);
+    });
+
+    it("recognises a team recipe by its scope when its id is opaque", async () => {
+      seed({ inRepo: [team({ id: "recipe-opaque-id" })] });
+
+      await useRecipeStore.getState().duplicateRecipe("recipe-opaque-id");
+
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+      expect(updateInRepoRecipeMock.mock.calls[0]![0]).toBe("proj-1");
+    });
+
+    it("refuses a team recipe's copy once the view has dropped to no project, and writes nothing", async () => {
+      seed({ inRepo: [team()] });
+      liveProjectId = null;
+
+      await expect(useRecipeStore.getState().duplicateRecipe("inrepo-team")).rejects.toThrow(
+        "Open a project"
+      );
+
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it("copies the env values the team row's local mirror carries", async () => {
+      const mirror = team({
+        projectId: "proj-1",
+        terminals: [{ type: "terminal", command: "dev", env: { TOKEN: "local-secret" } }],
+      });
+      seed({
+        inRepo: [team({ terminals: [{ type: "terminal", command: "dev" }] })],
+        project: [mirror],
+      });
+
+      await useRecipeStore.getState().duplicateRecipe("inrepo-team");
+
+      const copy = updateInRepoRecipeMock.mock.calls[0]![1];
+      expect(copy.terminals[0].env).toEqual({ TOKEN: "local-secret" });
+    });
+
+    it("refuses a team recipe's copy when no project is open, and writes nothing", async () => {
+      seed({ inRepo: [team()], currentProjectId: null });
+
+      await expect(useRecipeStore.getState().duplicateRecipe("inrepo-team")).rejects.toThrow(
+        "Open a project"
+      );
+
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      expect(useRecipeStore.getState().globalRecipes).toEqual([]);
+      expect(useRecipeStore.getState().inRepoRecipes).toHaveLength(1);
+    });
+
+    it("copies the local row a team recipe overrides, not the team recipe", async () => {
+      const local: TerminalRecipe = {
+        id: "recipe-local-1",
+        name: "Shared Recipe",
+        projectId: "proj-1",
+        terminals: [{ type: "terminal", command: "local-only" }],
+        createdAt: 100,
+      };
+      seed({
+        project: [local],
+        inRepo: [
+          team({
+            id: "inrepo-shared-recipe",
+            name: "Shared Recipe",
+            terminals: [{ type: "terminal", command: "team-only" }],
+          }),
+        ],
+      });
+      expect(
+        useRecipeStore.getState().recipes.find((r) => r.id === "recipe-local-1")?.shadowedBy
+      ).toBe("Shared Recipe");
+
+      await useRecipeStore.getState().duplicateRecipe("recipe-local-1");
+
+      const copy = updateInRepoRecipeMock.mock.calls[0]![1];
+      expect(copy.name).toBe("Shared Recipe (Copy)");
+      expect(copy.terminals[0].command).toBe("local-only");
+    });
+
+    it("keeps a global recipe's copy global", async () => {
+      seed({ global: [{ ...team(), id: "g-1", scope: undefined, name: "Global recipe" }] });
+
+      await useRecipeStore.getState().duplicateRecipe("g-1");
+
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      expect(globalAddRecipeMock).toHaveBeenCalledTimes(1);
+      expect(globalAddRecipeMock.mock.calls[0]![0]).toMatchObject({
+        name: "Global recipe (Copy)",
+        projectId: undefined,
+      });
+    });
+
+    it("names a repeated copy past the ones already there", async () => {
+      seed({ inRepo: [team(), team({ id: "inrepo-copy", name: "Team recipe (Copy)" })] });
+
+      await useRecipeStore.getState().duplicateRecipe("inrepo-team");
+
+      expect(updateInRepoRecipeMock.mock.calls[0]![1].name).toBe("Team recipe (Copy 2)");
+    });
+
+    it("rejects a recipe that is not in the list", async () => {
+      seed({});
+
+      await expect(useRecipeStore.getState().duplicateRecipe("nope")).rejects.toThrow(
+        "Recipe nope not found"
+      );
+      expect(updateInRepoRecipeMock).not.toHaveBeenCalled();
+      expect(globalAddRecipeMock).not.toHaveBeenCalled();
+    });
+
+    it("rolls the copy back and rejects when it can't be saved", async () => {
+      seed({ inRepo: [team()] });
+      updateInRepoRecipeMock.mockRejectedValueOnce(new Error("EACCES"));
+
+      await expect(useRecipeStore.getState().duplicateRecipe("inrepo-team")).rejects.toThrow(
+        "EACCES"
+      );
+
+      expect(useRecipeStore.getState().inRepoRecipes.map((r) => r.name)).toEqual(["Team recipe"]);
+    });
+  });
+
   describe("file export/import", () => {
     it("exportRecipeToFile calls client with recipe name and JSON", async () => {
       useRecipeStore.setState({
@@ -4567,6 +4756,82 @@ describe("recipeStore", () => {
       expect(exportRecipeToFileMock).toHaveBeenCalledWith("My Recipe", expect.any(String));
       const json = JSON.parse(exportRecipeToFileMock.mock.calls[0]![1]);
       expect(json).not.toHaveProperty("projectId");
+    });
+
+    describe("a local recipe overridden by a team recipe (#17200)", () => {
+      const loadShadowedPair = async () => {
+        const localRecipe = {
+          id: "recipe-local-1",
+          name: "Shared Recipe",
+          projectId: "proj-1",
+          terminals: [{ type: "terminal" as const, command: "local-only" }],
+          createdAt: 100,
+        };
+        const teamRecipe = {
+          id: "inrepo-shared-recipe",
+          name: "Shared Recipe",
+          scope: "inrepo" as const,
+          terminals: [{ type: "terminal" as const, command: "team-only" }],
+          createdAt: 200,
+        };
+        globalGetRecipesMock.mockResolvedValueOnce([]);
+        getRecipesMock.mockResolvedValueOnce({ recipes: [localRecipe], collisions: [] });
+        getInRepoRecipesMock.mockResolvedValueOnce([teamRecipe]);
+        await useRecipeStore.getState().loadRecipes("proj-1");
+        expect(
+          useRecipeStore.getState().recipes.find((r) => r.id === localRecipe.id)?.shadowedBy
+        ).toBe("Shared Recipe");
+        return { localRecipe, teamRecipe };
+      };
+
+      it("exportRecipe copies the local row the user chose, not the team recipe", async () => {
+        const { localRecipe, teamRecipe } = await loadShadowedPair();
+
+        const local = JSON.parse(useRecipeStore.getState().exportRecipe(localRecipe.id)!);
+        expect(local.id).toBe(localRecipe.id);
+        expect(local.terminals[0].command).toBe("local-only");
+        expect(local).not.toHaveProperty("shadowedBy");
+        expect(local).not.toHaveProperty("projectId");
+
+        const team = JSON.parse(useRecipeStore.getState().exportRecipe(teamRecipe.id)!);
+        expect(team.id).toBe(teamRecipe.id);
+        expect(team.terminals[0].command).toBe("team-only");
+      });
+
+      it("exportRecipeToFile writes the local row the user chose, not the team recipe", async () => {
+        const { localRecipe } = await loadShadowedPair();
+
+        await useRecipeStore.getState().exportRecipeToFile(localRecipe.id);
+
+        expect(exportRecipeToFileMock).toHaveBeenCalledTimes(1);
+        const written = JSON.parse(exportRecipeToFileMock.mock.calls[0]![1]);
+        expect(written.id).toBe(localRecipe.id);
+        expect(written.terminals[0].command).toBe("local-only");
+      });
+
+      it("still runs the team recipe a shadowed row defers to", async () => {
+        const { localRecipe, teamRecipe } = await loadShadowedPair();
+
+        expect(useRecipeStore.getState().getRecipeById(localRecipe.id)?.id).toBe(teamRecipe.id);
+      });
+    });
+
+    it("exportRecipeToFile reports a cancelled picker as false, and a vanished row as an error", async () => {
+      const recipe = {
+        id: "r-3",
+        name: "Cancelled",
+        projectId: "proj-1",
+        terminals: [{ type: "terminal" as const }],
+        createdAt: 100,
+      };
+      useRecipeStore.setState({ recipes: [recipe], projectRecipes: [recipe], globalRecipes: [] });
+      exportRecipeToFileMock.mockResolvedValueOnce(false);
+
+      await expect(useRecipeStore.getState().exportRecipeToFile("r-3")).resolves.toBe(false);
+      await expect(useRecipeStore.getState().exportRecipeToFile("gone")).rejects.toThrow(
+        "Recipe gone not found"
+      );
+      expect(exportRecipeToFileMock).toHaveBeenCalledTimes(1);
     });
 
     it("round-trips an agent step's When done through export and import (#16172)", async () => {
@@ -5254,9 +5519,74 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
           expectedRecipe: { id: "acme.tools.review", terminalsDigest: "0000000000000000" },
         }
       )
-    ).rejects.toThrow("Recipe changed since it was shown");
+    ).rejects.toThrow(RecipeChangedSinceShownError);
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(addTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("runs the recipe a dialog showed while it still matches", async () => {
+    useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+    const results = await useRecipeStore.getState().runRecipeWithResults(
+      "acme.tools.review",
+      "/repo/wt",
+      "wt-1",
+      { branchName: "feature/x" },
+      {
+        expectedRecipe: {
+          id: "acme.tools.review",
+          terminalsDigest: recipeApprovalDigest(pluginRecipe().terminals),
+        },
+      }
+    );
+    expect(results.spawned.map((s) => s.index)).toEqual([0, 1]);
+    expect(addTerminalMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses as a change when the recipe a dialog showed is gone (#17447)", async () => {
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults(
+        "acme.tools.review",
+        "/repo/wt",
+        "wt-1",
+        {},
+        {
+          expectedRecipe: {
+            id: "acme.tools.review",
+            terminalsDigest: recipeApprovalDigest(pluginRecipe().terminals),
+          },
+        }
+      )
+    ).rejects.toThrow(RecipeChangedSinceShownError);
+    // Without an approval to honour, a missing recipe is still just missing.
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults("acme.tools.review", "/repo/wt", "wt-1", {})
+    ).rejects.toThrow("Recipe acme.tools.review not found");
+    expect(addTerminalMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the row the dialog showed now resolves to another recipe (#17447)", async () => {
+    const terminals = [{ type: "terminal" as const, command: "npm run dev", env: {} }];
+    const local = { id: "local-dev", name: "Dev", projectId: "p", terminals, createdAt: 0 };
+    const team = { id: "team-dev", name: "Dev", scope: "inrepo" as const, terminals, createdAt: 0 };
+    // Same terminals, so only the id says a team recipe took the row over.
+    useRecipeStore.setState({
+      recipes: [{ ...local, shadowedBy: "Dev" }, team],
+      inRepoRecipes: [team],
+    });
+
+    await expect(
+      useRecipeStore.getState().runRecipeWithResults(
+        "local-dev",
+        "/repo/wt",
+        "wt-1",
+        {},
+        {
+          expectedRecipe: { id: "local-dev", terminalsDigest: recipeApprovalDigest(terminals) },
+        }
+      )
+    ).rejects.toThrow(RecipeChangedSinceShownError);
+    expect(addTerminalMock).not.toHaveBeenCalled();
+    expect(useRecipeStore.getState().recipes.every((r) => r.lastUsedAt === undefined)).toBe(true);
   });
 
   it("won't save a recipe that uses plugin-only features as a team recipe", async () => {

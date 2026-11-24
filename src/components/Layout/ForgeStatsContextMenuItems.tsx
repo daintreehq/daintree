@@ -18,6 +18,12 @@ interface ForgeStatsContextMenuItemsProps {
   projectPath: string;
   /** Resolved forge provider's display name, or `null` when the project has none. */
   providerName: string | null;
+  /**
+   * Who serves the right-clicked pill's own list, when that isn't the code
+   * forge: a project's issues can come from another tracker (#13700). The
+   * repository entry stays the code forge's.
+   */
+  segmentProviderName?: string;
   /** The pill that was right-clicked; omitted for the indicators beside the pills. */
   segment?: ForgeStatsMenuSegment;
   /** Branch the commits pill lists, so the forge opens the same history. */
@@ -30,6 +36,7 @@ interface ForgeStatsContextMenuItemsProps {
 export function ForgeStatsContextMenuItems({
   projectPath,
   providerName,
+  segmentProviderName,
   segment,
   branch,
   canOpenRepo,
@@ -45,7 +52,7 @@ export function ForgeStatsContextMenuItems({
             args={segment === "commits" && branch ? { projectPath, branch } : { projectPath }}
           >
             <segmentItem.icon data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-            {`${segmentItem.label} on ${providerName}`}
+            {`${segmentItem.label} on ${segmentProviderName ?? providerName}`}
           </ContextMenuActionItem>
           <ContextMenuSeparator />
         </>

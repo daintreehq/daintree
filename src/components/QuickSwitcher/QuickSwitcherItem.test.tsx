@@ -111,6 +111,128 @@ describe("QuickSwitcherItem path evidence", () => {
   });
 });
 
+describe("QuickSwitcherItem custom worktree title", () => {
+  const path = "/Users/me/Projects/app-worktrees/wt-red";
+  const marked = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll("span"))
+      .filter((el) => el.children.length === 0 && el.className.includes("bg-overlay-medium"))
+      .map((el) => el.textContent);
+  // The qualifier is the one span in the headline line that caps its own width.
+  const qualifier = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>('span[class*="max-w-[50%]"]');
+  const headline = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>("span.font-medium");
+
+  function titled(overrides: Partial<QuickSwitcherItemData> = {}) {
+    return makeWorktreeItem({
+      title: "Release planning",
+      subtitle: path,
+      branchLabel: "feature/auth-refresh",
+      displaced: "feature/auth-refresh",
+      ...overrides,
+    });
+  }
+
+  const renderRow = (item: QuickSwitcherItemData, extra: Record<string, unknown> = {}) =>
+    render(<QuickSwitcherItem item={item} isSelected={false} onSelect={() => {}} {...extra} />);
+
+  it("shows the title, the branch it displaced beside it, and the path under it", () => {
+    const { container } = renderRow(titled());
+    expect(headline(container)?.textContent).toBe("Release planning");
+    expect(qualifier(container)?.textContent).toContain("feature/auth-refresh");
+    // The detail line is the shortened path; the mocked tooltip carries the full one.
+    const detail = Array.from(container.querySelectorAll("div")).find((el) =>
+      el.className.includes("mt-0.5")
+    );
+    expect(detail?.textContent).toContain("wt-red");
+    expect(detail?.textContent).not.toContain("/Users/me");
+  });
+
+  it("sets a custom title as a name and a bare branch as the mono identifier it is", () => {
+    const custom = renderRow(titled());
+    expect(headline(custom.container)?.className).not.toContain("font-mono");
+    custom.unmount();
+    const bare = renderRow(
+      makeWorktreeItem({ title: "feature/auth-refresh", branchLabel: "feature/auth-refresh" })
+    );
+    expect(headline(bare.container)?.className).toContain("font-mono");
+  });
+
+  it("marks a literal match on what the title displaced, with no Fuse ranges at all", () => {
+    // A detached row's qualifier is not its branch label, so this reads the rendered text.
+    const { container } = renderRow(
+      titled({ displaced: "detached at 0123456", branchLabel: "feature/auth-refresh" }),
+      { query: "0123456" }
+    );
+    expect(qualifier(container)?.querySelector(".bg-overlay-medium")?.textContent).toBe("0123456");
+    expect(marked(container)).toEqual(["0123456"]);
+  });
+
+  it("marks a fuzzy match on the displaced branch on the branch, never on the title", () => {
+    const { container } = renderRow(titled(), {
+      query: "authrefresh",
+      matches: [{ key: "displaced", indices: [[8, 11]], value: "feature/auth-refresh" }],
+    });
+    expect(marked(container)).toEqual(["auth"]);
+    expect(qualifier(container)?.querySelectorAll(".bg-overlay-medium")).toHaveLength(1);
+  });
+
+  it("marks a fuzzy match on the title on the title, and keeps title and branch ranges apart", () => {
+    const { container } = renderRow(
+      titled({ title: "Auth refresh notes", displaced: "feature/auth-refresh" }),
+      {
+        query: "authrefresh",
+        matches: [
+          { key: "title", indices: [[0, 3]], value: "Auth refresh notes" },
+          { key: "displaced", indices: [[8, 11]], value: "feature/auth-refresh" },
+        ],
+      }
+    );
+    expect(headline(container)?.querySelectorAll(".bg-overlay-medium")).toHaveLength(1);
+    expect(marked(container)).toEqual(["Auth", "auth"]);
+    expect(qualifier(container)?.querySelector(".bg-overlay-medium")?.textContent).toBe("auth");
+  });
+
+  it("keeps main's branch qualifier when it has no custom title", () => {
+    const { container } = renderRow(
+      makeWorktreeItem({ title: "daintree", isMainWorktree: true, branchLabel: "develop" })
+    );
+    expect(qualifier(container)?.textContent).toContain("develop");
+  });
+
+  it("gives an untitled linked worktree no qualifier, whatever its branch label says", () => {
+    const { container } = renderRow(
+      makeWorktreeItem({ title: "billing-dir", branchLabel: "feature/billing" })
+    );
+    expect(qualifier(container)).toBeNull();
+    expect(container.textContent).not.toContain("feature/billing");
+  });
+
+  it("adds no qualifier when the title is the branch itself, for linked and main alike", () => {
+    const linked = renderRow(
+      makeWorktreeItem({ title: "feature/auth", branchLabel: "feature/auth" })
+    );
+    expect(qualifier(linked.container)).toBeNull();
+    linked.unmount();
+    const main = renderRow(
+      makeWorktreeItem({ title: "develop", isMainWorktree: true, branchLabel: "develop" })
+    );
+    expect(qualifier(main.container)).toBeNull();
+  });
+
+  it("does not fall back to main's branch when a custom title displaced nothing", () => {
+    const { container } = renderRow(
+      makeWorktreeItem({
+        title: "detached at 0123456",
+        isMainWorktree: true,
+        branchLabel: "daintree",
+        displaced: null,
+      })
+    );
+    expect(qualifier(container)).toBeNull();
+  });
+});
+
 // The terminal row's state mark is the pane's own glyph (#16057): amber only
 // for an unread Canopy ask, never for a prompt that asks nothing.
 describe("QuickSwitcherItem agent mark from the fleet band", () => {

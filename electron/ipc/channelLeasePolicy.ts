@@ -36,6 +36,9 @@ export const CHANNEL_LEASE_POLICY = {
   // Host-wide agent settings, like `agent-settings:set` (#16040).
   "agent-accounts:add": "free",
   "agent-accounts:remove": "free",
+  "agent-accounts:rename": "free",
+  "agent-accounts:list-choices-away": "free",
+  "agent-accounts:apply-everywhere": "free",
   "agent-cli-copies:changed": "free",
   "agent-cli-copies:choose": "free",
   "agent-cli-copies:list": "free",
@@ -94,6 +97,7 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:mark-seen": "free",
   "canopy:note-sent": "free",
   "canopy:read-input-lines": "free",
+  "canopy:read-worktrees": "free",
   "canopy:refresh": "free",
   "canopy:rename": "driver",
   "canopy:rename-requested": "free",
@@ -150,6 +154,10 @@ export const CHANNEL_LEASE_POLICY = {
   "codex:list-subagents": "free",
   "codex:match-restore-sessions": "free",
   "codex:read-quota": "free",
+  "codex-limit-continue:changed": "free",
+  "codex-limit-continue:list": "free",
+  // The handler holds arming to the project's driver, as for a submit (#17909).
+  "codex-limit-continue:set": "handler",
   "codex:refresh-quota": "free",
   "codex:read-context-usage": "free",
   "codex:read-subagent-transcript": "free",
@@ -171,9 +179,16 @@ export const CHANNEL_LEASE_POLICY = {
   "copytree:inject": "driver",
   "copytree:progress": "free",
   "copytree:test-config": "free",
+  // A person managing a question in their Decisions inbox, as a phone does: no
+  // terminal, file or layout changes, and the pane that asked may be gone (#17099).
+  "decisions:cancel-question": "free",
   "decisions:get-pane-state": "free",
+  "decisions:get-question-content": "free",
+  "decisions:get-question-summaries": "free",
+  "decisions:get-question-image": "free",
   "decisions:report-composer-drafts": "free",
   "dev-preview:all-sessions-changed": "free",
+  "dev-preview:cancel-destructive-preview-sizes": "free",
   "dev-preview:ensure": "driver",
   "dev-preview:get-all-sessions": "free",
   "dev-preview:get-by-worktree": "free",
@@ -262,6 +277,7 @@ export const CHANNEL_LEASE_POLICY = {
   "forge:enable-auto-merge": "free",
   "forge:get-checks": "free",
   "forge:get-ci-status": "free",
+  "forge:get-deployments": "free",
   "forge:get-credential-status": "free",
   "forge:get-current-user": "free",
   "forge:get-first-page-cache": "free",
@@ -281,6 +297,7 @@ export const CHANNEL_LEASE_POLICY = {
   "forge:get-repo-metadata": "free",
   "forge:get-repo-stats": "free",
   "forge:get-new-pr-link": "free",
+  "forge:get-pull-request-term": "free",
   "forge:get-repo-url": "free",
   "forge:get-settings": "free",
   "forge:get-token-health": "free",
@@ -340,9 +357,11 @@ export const CHANNEL_LEASE_POLICY = {
   "git:stage-all": "driver",
   "git:stage-file": "driver",
   "git:stage-files": "driver",
+  "git:stage-hunks": "driver",
   "git:unstage-all": "driver",
   "git:unstage-file": "driver",
   "git:unstage-files": "driver",
+  "git:unstage-hunks": "driver",
   "global-env:get": "free",
   "global-env:set": "free",
   "global:add-recipe": "free",
@@ -361,12 +380,17 @@ export const CHANNEL_LEASE_POLICY = {
   "help:get-pinned-action-context": "free",
   "help:global-assistant-ensure": "free",
   "help:global-assistant-state": "free",
+  "help:global-assistant-list": "free",
+  "help:global-assistant-start-new": "free",
+  "help:global-assistant-set-coordinator": "free",
   "help:global-assistant-attach": "free",
   "help:global-assistant-detach": "free",
   "help:global-assistant-claim-input": "free",
   "help:global-assistant-release-input": "free",
   "help:global-assistant-input-eligible": "free",
   "help:global-assistant-restart": "free",
+  "help:global-assistant-can-run": "free",
+  "help:global-assistant-replace": "free",
   "help:global-assistant-discard": "free",
   "help:global-assistant-cancel-launch": "free",
   "help:global-assistant-changed": "free",
@@ -556,6 +580,7 @@ export const CHANNEL_LEASE_POLICY = {
   "plugin:report-panel-inventory": "free",
   "plugin:report-panel-lifecycle": "free",
   "plugin:report-unsaved-panels": "free",
+  "plugin:report-view-consumers": "free",
   "plugin:restart-worker": "free",
   "plugin:runtime-statuses-get": "free",
   "plugin:set-audit-enabled": "free",
@@ -632,6 +657,10 @@ export const CHANNEL_LEASE_POLICY = {
   "project-match:find-worktree-for-branch": "free",
   "project-match:scan": "free",
   "project-match:take-pending-setup": "driver",
+  "project-links:change": "driver",
+  "project-links:get-declared": "free",
+  "merged-worktree-cleanup:preview": "free",
+  "merged-worktree-cleanup:set-enabled": "driver",
   "project-presence:changed": "free",
   "project-presence:get-snapshot": "free",
   "project-presentation:answer-suggestion": "driver",
@@ -785,6 +814,7 @@ export const CHANNEL_LEASE_POLICY = {
   "terminal:release-worker-ingest-port": "free",
   "terminal:replay-history": "free",
   "terminal:request-worker-ingest-port": "free",
+  "terminal:reset-modes": "handler",
   "terminal:resize": "handler",
   "terminal:resource-metrics": "free",
   "terminal:restart-service": "driver",
@@ -870,10 +900,10 @@ export type LeaseArgPath = readonly [index: number, ...keys: string[]];
  *   with `when`, only for a call whose argument at `when.at` is `when.equals`,
  *   or, with `absent`, is missing (undefined or null).
  * - `optional: true` skips an argument that is absent; `optional: "caller"`
- *   falls back to the caller's project instead, and `"current-project"` to
- *   this Host's current project, for a handler that falls back to it.
- *   Otherwise an absent argument leaves the target unresolved, and the call
- *   is refused.
+ *   falls back to the caller's project instead, and `"caller-or-none"` to the
+ *   caller's project when it has one and to no project when it shows none,
+ *   for a handler that places the call the same way. Otherwise an absent
+ *   argument leaves the target unresolved, and the call is refused.
  * - `unowned: "allow"`: a path inside no registered project changes none.
  * - `missing: "allow"`: a terminal this Host confirms it no longer has changes
  *   none, for a call that only ends one: the pane closing after the host has
@@ -891,12 +921,12 @@ export type LeaseTargetSource =
   | {
       readonly from: "project" | "worktree";
       readonly at: LeaseArgPath;
-      readonly optional?: true | "caller" | "current-project";
+      readonly optional?: true | "caller" | "caller-or-none";
     }
   | {
       readonly from: "terminal";
       readonly at: LeaseArgPath;
-      readonly optional?: true | "caller" | "current-project";
+      readonly optional?: true | "caller" | "caller-or-none";
       readonly missing?: "allow";
     }
   | {
@@ -980,9 +1010,11 @@ export const CHANNEL_LEASE_TARGETS = {
   "git:stage-all": CWD_ARG,
   "git:stage-file": CWD_FIELD,
   "git:stage-files": CWD_FIELD,
+  "git:stage-hunks": CWD_FIELD,
   "git:unstage-all": CWD_ARG,
   "git:unstage-file": CWD_FIELD,
   "git:unstage-files": CWD_FIELD,
+  "git:unstage-hunks": CWD_FIELD,
   "help:adopt-detached-session": PROJECT_ARG,
   "help:discard-conversation": PROJECT_ARG,
   "help:provision-session": [
@@ -1023,6 +1055,8 @@ export const CHANNEL_LEASE_TARGETS = {
   "plugin:project-visibility-set": CALLER,
   "plugin:project-instance-set-enabled": CALLER,
   "project-match:take-pending-setup": PROJECT_FIELD,
+  "project-links:change": PROJECT_FIELD,
+  "merged-worktree-cleanup:set-enabled": PROJECT_FIELD,
   "project-presentation:answer-suggestion": CALLER,
   "project-presentation:reset-toolbar": CALLER,
   "project-presentation:set-featured-launch-entry": CALLER,
@@ -1061,9 +1095,10 @@ export const CHANNEL_LEASE_TARGETS = {
   "terminal:kill": ENDED_TERMINAL_ARG,
   "terminal:restart-service": [{ from: "every-project" }],
   "terminal:restore": TERMINAL_ARG,
-  // With no projectId the handler spawns into this Host's current project.
+  // With no projectId the handler spawns into the caller's project, or into
+  // none from a window that shows none.
   "terminal:spawn": [
-    { from: "project", at: [0, "projectId"], optional: "current-project" },
+    { from: "project", at: [0, "projectId"], optional: "caller-or-none" },
     { from: "path", at: [0, "cwd"], optional: true, unowned: "allow" },
   ],
   "terminal:trash": ENDED_TERMINAL_ARG,

@@ -5,10 +5,8 @@ import { panelKindHasPty, normalizeGroupDockLocation } from "@shared/config/pane
 import { getNarrowPanel } from "./selectors";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
-import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
-import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
-import { optimizeForDock } from "./layout";
+import { applyGridPlacementTier, optimizeForDock } from "./layout";
 import {
   deriveRuntimeStatus,
   dissolvePanelFromGroup,
@@ -448,10 +446,7 @@ export const createTabGroupActions = (
         if (effectiveLocation === "dock") {
           optimizeForDock(panelId);
         } else {
-          withTerminalService(
-            (service) => service.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE),
-            panelId
-          );
+          applyGridPlacementTier(panelId, terminal, get().getPanelGroup(panelId));
         }
       }
     }
@@ -540,10 +535,7 @@ export const createTabGroupActions = (
       if (targetLocation === "dock") {
         optimizeForDock(panelId);
       } else {
-        withTerminalService(
-          (service) => service.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE),
-          panelId
-        );
+        applyGridPlacementTier(panelId, terminal, get().getPanelGroup(panelId));
       }
     }
 

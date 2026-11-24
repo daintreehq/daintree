@@ -246,6 +246,60 @@ describe("commandHistoryStore persistence migration", () => {
     ]);
   });
 
+  it("keeps a sibling's prompts in a bucket both record into, as Canopy and the project's view do", async () => {
+    const backing = installLocalStorage({});
+    const { useCommandHistoryStore: store } = await import("../commandHistoryStore");
+    store.getState().recordPrompt("proj-a", "hello", "claude");
+
+    // Canopy's window records a reply to one of the project's runs meanwhile.
+    const disk = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      version: number;
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    disk.state.history["proj-a"] = [
+      { id: "canopy-1", prompt: "from canopy", agentId: "claude", addedAt: Date.now() + 1 },
+      ...disk.state.history["proj-a"]!,
+    ];
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // This view never saw it, and records into the same bucket.
+    store.getState().recordPrompt("proj-a", "world", "claude");
+
+    const written = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    expect(written.state.history["proj-a"]!.map((e) => e.prompt).sort()).toEqual([
+      "from canopy",
+      "hello",
+      "world",
+    ]);
+  });
+
+  it("keeps one entry for a prompt sent again, the newest, as recording does", async () => {
+    const backing = installLocalStorage({});
+    const { useCommandHistoryStore: store } = await import("../commandHistoryStore");
+    store.getState().recordPrompt("proj-a", "hello", "claude");
+    // Canopy's window, meanwhile: the same text broadcast to an armed set.
+    const disk = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      version: number;
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    disk.state.history["proj-a"] = [
+      { id: "fleet-1", prompt: "hello", agentId: "claude", addedAt: 1, armedIds: ["t1", "t2"] },
+      ...disk.state.history["proj-a"]!,
+    ];
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    // Sent again plainly, it replaces every older entry for that text.
+    store.getState().recordPrompt("proj-a", "hello", "claude");
+    const newest = store.getState().getProjectHistory("proj-a")[0]!;
+
+    const written = JSON.parse(backing.get(STORAGE_KEY)!) as {
+      state: { history: Record<string, PromptHistoryEntry[]> };
+    };
+    expect(written.state.history["proj-a"]!.map((e) => e.id)).toEqual([newest.id]);
+  });
+
   it("does not resurrect a project's history this view removed (#11351)", async () => {
     const backing = installLocalStorage({});
     const { useCommandHistoryStore: store } = await import("../commandHistoryStore");

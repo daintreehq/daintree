@@ -107,13 +107,16 @@ vi.mock("../forgeProviderRegistry.js", () => ({
 // Mocked so unload-cascade tests can simulate a throwing decoration unregister
 // without exercising the real (currently no-op) registry. Pre-existing tests
 // transitively touched these via unloadPlugin but never asserted call counts.
-vi.mock("../fileDecorationRegistry.js", () => ({
+vi.mock("../fileDecorationRegistry.js", async (importOriginal) => ({
   registerFileDecorationProviders: vi.fn(),
   registerFileDecorationProviderImpl: vi.fn(),
   unregisterFileDecorationProviders: vi.fn(),
   unregisterFileDecorationProviderImpls: vi.fn(),
   unregisterFileDecorationProviderImpl: vi.fn(),
   scopeMatchesPattern: vi.fn((s: string, p: string) => s === p),
+  // The real forge gate, so activation is filtered exactly as in production.
+  decorationServesForge: (await importOriginal<typeof import("../fileDecorationRegistry.js")>())
+    .decorationServesForge,
 }));
 
 // Mocked so MCP-server activation tests don't try to spawn real subprocesses
@@ -804,6 +807,48 @@ describe("Deferred activation — activatePlugin", () => {
     }
   });
 
+  it("a decoration pull wakes a forge-gated decorator only for its own forge (#17069)", async () => {
+    const projectId = "c".repeat(64);
+    const pluginDir = path.join(tmpDir, "gated-decorator");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({
+        name: "acme.gated-decorator",
+        version: "1.0.0",
+        main: "main.mjs",
+        contributes: {
+          forgeProviders: [{ id: "acmeforge", name: "Acme Forge", matches: ["acme.test"] }],
+          fileDecorationProviders: [{ id: "badges", scopes: ["s:1"], forgeProvider: "acmeforge" }],
+        },
+      })
+    );
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      "export function activate() { globalThis.__gatedDecoratorActivated = true; }"
+    );
+
+    try {
+      const service = new PluginService(tmpDir);
+      openedServices.push(service);
+      await service.initialize();
+
+      // Another forge's project, and a project with no forge at all.
+      await service.activatePluginsForFileDecorationScope("s:1", projectId, "acme.other.gitlab");
+      await service.activatePluginsForFileDecorationScope("s:1", projectId, null);
+      expect((globalThis as Record<string, unknown>).__gatedDecoratorActivated).toBeUndefined();
+
+      await service.activatePluginsForFileDecorationScope(
+        "s:1",
+        projectId,
+        "acme.gated-decorator.acmeforge"
+      );
+      expect((globalThis as Record<string, unknown>).__gatedDecoratorActivated).toBe(true);
+    } finally {
+      delete (globalThis as Record<string, unknown>).__gatedDecoratorActivated;
+    }
+  });
+
   it("commits the plugin to the map before publishing an addressable panel (#11728)", async () => {
     // The core invariant, asserted in a suite the PR gate actually runs — the
     // real-registry version of this lives in PluginService.integration.test.ts,
@@ -1168,6 +1213,79 @@ describe("Deferred activation — activatePlugin", () => {
       errorSpy.mockRestore();
     }
   }, 10_000);
+
+  it("a crash loop during the first activation caches nothing, so a retry forks afresh (#17211)", async () => {
+    const base = { hosts: devWorkerMock.instances.length, bridges: devWorkerMock.bridges.length };
+    const pluginDir = path.join(tmpDir, "loop-on-boot");
+    await fs.mkdir(pluginDir);
+    await fs.writeFile(
+      path.join(pluginDir, "plugin.json"),
+      JSON.stringify({ name: "acme.loop-on-boot", version: "1.0.0", main: "main.mjs" })
+    );
+    // The first activate() parks on a gate the test fails once the supervisor
+    // has given up — the order the real bridge sees: verdict, then rejection.
+    // Every later activate() finds no gate and succeeds.
+    await fs.writeFile(
+      path.join(pluginDir, "main.mjs"),
+      `export function activate() {
+        const gate = globalThis.__loopOnBootGate;
+        globalThis.__loopOnBootGate = undefined;
+        return gate;
+      }`
+    );
+    const globals = globalThis as unknown as { __loopOnBootGate?: Promise<void> };
+    let failBoot!: (err: Error) => void;
+    globals.__loopOnBootGate = new Promise<void>((_resolve, reject) => {
+      failBoot = reject;
+    });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const service = new PluginService(tmpDir);
+      openedServices.push(service);
+      await service.initialize();
+      const first = service.activatePlugin("acme.loop-on-boot");
+      // activate() taking the gate is what attaches a handler to it; rejecting
+      // any earlier would be an unhandled rejection.
+      await vi.waitFor(
+        () => {
+          expect(devWorkerMock.bridges[base.bridges]?.waitForActivation).toHaveBeenCalled();
+          expect(globals.__loopOnBootGate).toBeUndefined();
+        },
+        { timeout: 5_000 }
+      );
+      const host = devWorkerMock.instances[base.hosts];
+      const calls = host.on.mock.calls as unknown[][];
+      const onCrashLoop = calls.find(([event]) => event === "crash-loop")?.[1] as
+        ((code: number) => void) | undefined;
+      expect(onCrashLoop).toBeTypeOf("function");
+
+      onCrashLoop?.(139);
+      expect(host.dispose).toHaveBeenCalledTimes(1);
+      failBoot(new Error("worker gone"));
+      await first;
+
+      // The retired generation's late outcome neither restores the latch nor
+      // replaces the cause the panels show.
+      const internals = service as unknown as {
+        activatedPlugins: Set<string>;
+        activationPromises: Map<string, Promise<void>>;
+      };
+      expect(internals.activatedPlugins.has("acme.loop-on-boot")).toBe(false);
+      expect(internals.activationPromises.has("acme.loop-on-boot")).toBe(false);
+      const failed = service
+        .listPluginRuntimeStatuses()
+        .find((s) => s.pluginId === "acme.loop-on-boot")?.worker;
+      expect(failed).toMatchObject({ state: "failed", reason: "crash-loop" });
+
+      await service.activatePlugin("acme.loop-on-boot");
+      expect(devWorkerMock.instances).toHaveLength(base.hosts + 2);
+      expect(internals.activatedPlugins.has("acme.loop-on-boot")).toBe(true);
+    } finally {
+      errorSpy.mockRestore();
+      delete globals.__loopOnBootGate;
+    }
+  });
 
   it("a timed-out activation can be retried and succeed (#12275)", async () => {
     const pluginDir = path.join(tmpDir, "hanging-activate");

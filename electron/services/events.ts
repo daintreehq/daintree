@@ -7,7 +7,10 @@ import type {
   TerminalFlowStatus,
 } from "../../shared/types/pty-host.js";
 import type { ExitReason } from "./pty/types.js";
-import type { AgentEndObservation } from "../../shared/types/ipc/agent.js";
+import type {
+  AgentEndObservation,
+  AgentUpdateInstalledChangedPayload,
+} from "../../shared/types/ipc/agent.js";
 import type { ClaudeUsageObservation } from "../../shared/types/ipc/agentQuota.js";
 import type { ActionSource } from "../../shared/types/actions.js";
 
@@ -237,11 +240,23 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A pane's output showed an agent rate-limit banner",
   },
+  "agent:update-installed-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A Claude Code pane's update-installed footer was observed, or its run ended",
+  },
   "agent:claude-usage-observed": {
     category: "agent",
     requiresContext: false,
     requiresTimestamp: true,
     description: "A Claude Code pane showed a usage-limit message, as parsed fields",
+  },
+  "agent:codex-limit-stopped": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A Codex pane armed to continue at its limit's reset settled at its stop banner",
   },
   "agent:handback-observed": {
     category: "agent",
@@ -704,6 +719,13 @@ export type DaintreeEventMap = {
     previousState: AgentState;
     trigger: AgentStateChangeTrigger;
     confidence: number;
+    /**
+     * Present when the transition happened while Daintree was ending the
+     * terminal: its kill, or the graceful quit ahead of one. Such an edge is
+     * the terminal going away, not its agent settling, and the PTY's exit
+     * follows.
+     */
+    terminalClosing?: true;
     /** Terminal working directory (the worktree root in the typical case). */
     cwd?: string;
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
@@ -784,6 +806,13 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A Claude Code pane showed its "Update installed" footer, or what it says
+   * about `/restart` changed, or the run that showed it ended (#17905). The
+   * footer's text never leaves the pty host.
+   */
+  "agent:update-installed-changed": AgentUpdateInstalledChangedPayload;
+
+  /**
    * A Claude Code pane showed a usage message (#15727): the limit it names,
    * what it says about use and its reset, as parsed fields. The line itself
    * never leaves the pty host. Main records it for `agent.readQuota` and
@@ -792,6 +821,18 @@ export type DaintreeEventMap = {
   "agent:claude-usage-observed": ClaudeUsageObservation & {
     configDir: string | null;
     shell: string | null;
+    timestamp: number;
+  };
+
+  /**
+   * A Codex pane armed to continue at its limit's reset (#17909) settled at a
+   * stop banner: the process and the banner's sighting, never its text. It
+   * goes from the pty host to main's continuation service alone.
+   */
+  "agent:codex-limit-stopped": {
+    terminalId: string;
+    run: string;
+    seq: number;
     timestamp: number;
   };
 
@@ -1337,6 +1378,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "agent:state-transition-dropped",
   "agent:all-clear",
   "agent:rate-limit-observed",
+  "agent:update-installed-changed",
   "agent:handback-observed",
   "agent:detected",
   "agent:exited",
@@ -1366,6 +1408,7 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   // `agent-session:observed` is deliberately absent: its payload is nothing
   // but a resume credential, and the buffer feeds the event inspector.
   // `agent:claude-usage-observed` is absent: it never reaches main's bus.
+  // `agent:codex-limit-stopped` is absent for the same reason.
   // `agent:run-handback-observed` is absent too: it carries the agent's text.
   "agent-session:recorded",
   "scheduled-run:started",

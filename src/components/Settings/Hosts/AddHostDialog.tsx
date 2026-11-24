@@ -21,10 +21,19 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { isMac } from "@/lib/platform";
 import { appClient } from "@/clients/appClient";
+import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
+import { cloudStatusFor, useCloudHostsWhile } from "@/components/Hosts/cloud/cloudHostsState";
+import {
+  canStartMachine,
+  cloudProviderFor,
+  startBillingSentence,
+} from "@/components/Hosts/cloud/cloudHostLabels";
 import { remoteConnectionKind } from "@/lib/remoteHosts";
 import { mintOperationId } from "@/clients/operationsClient";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
+import { holdHostSetup, notePlacementFailure } from "@/components/Hosts/pendingPlacement";
+import { logWarn } from "@/utils/logger";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
@@ -55,9 +64,12 @@ import type {
 } from "@shared/types/ipc/remoteHosts";
 import { AddHostDiscovery } from "./AddHostDiscovery";
 import { AddHostNotes } from "./AddHostNotes";
+import { CloudSetupHostKey } from "./CloudHostKeyReview";
 import { WizardFooterActions, WizardStepBar, type WizardStepView } from "./AddHostWizardChrome";
 import { HostCommand } from "./HostCommand";
 import { SshRefusalHelp } from "./SshRefusalHelp";
+import { SshSignInDialog } from "./SshSignInDialog";
+import { useSshSignIn } from "./useSshSignIn";
 import {
   awaitFirstConnect,
   requestHostCopySettings,
@@ -74,6 +86,7 @@ import {
   namedProgressMessage,
   sshRefusalAdvice,
   hostModeSwitchedOn,
+  STARTS_ON_CONNECT_COVERAGE,
   installLabel,
   platformLabel,
   canWaitForIdle,
@@ -148,6 +161,13 @@ interface AddHostDialogProps {
     connection: HostConnection;
     intent?: "update" | "setup";
   } | null;
+  /** Offered while adding: leave this dialog for the cloud machine one instead. */
+  onChooseCloud?: () => void;
+  /**
+   * Set up an existing host that was just added (a new cloud machine): end by
+   * connecting it, as adding a host does, rather than closing.
+   */
+  connectWhenDone?: boolean;
 }
 
 /**
@@ -393,6 +413,13 @@ function isUsable(state: HostConnectionState): boolean {
   return state.status === "connected" || state.status === "driven-elsewhere";
 }
 
+/** Why a connect at the end of setup didn't bring the link up, for the worktree waiting on it. */
+function connectFailureText(state: HostConnectionState, hostName: string): string {
+  return state.status === "unreachable" && state.detail
+    ? `Couldn't connect: ${state.detail}`
+    : `Couldn't connect to ${hostName}`;
+}
+
 function ErrorLine({ message }: { message: string }) {
   return (
     <Callout severity="error" role="alert" className="mt-4 select-text">
@@ -411,6 +438,10 @@ type LocalUpdate =
 
 /** How long a check of this machine's updater spins before it is said to be quiet. */
 const LOCAL_UPDATE_QUIET_MS = 10_000;
+
+/** How often, and how many times, a new cloud machine that can't be reached yet is checked again: ten minutes. */
+const LOGIN_RECHECK_MS = 10_000;
+const LOGIN_RECHECKS = 60;
 
 /** What "Update this machine" led to, under the verdict that offered it. */
 function LocalUpdateStatus({ update }: { update: LocalUpdate }) {
@@ -468,7 +499,13 @@ function LocalUpdateStatus({ update }: { update: LocalUpdate }) {
   );
 }
 
-export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialogProps) {
+export function AddHostDialog({
+  isOpen,
+  onClose,
+  existing = null,
+  onChooseCloud,
+  connectWhenDone = false,
+}: AddHostDialogProps) {
   const [step, setStep] = useState<Step>(existing ? "check" : "discover");
   const [discovered, setDiscovered] = useState<DiscoveredHost[] | null>(null);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
@@ -478,15 +515,38 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   // On Windows a host is a WSL distro on this PC; elsewhere a machine reached over ssh.
   // An existing host keeps its own kind: its address is never read as another kind's.
   const viaWsl = (existing?.connection.kind ?? remoteConnectionKind()) === "wsl";
-  const makeConnection = (address: string) =>
-    viaWsl ? wslConnection(address) : sshConnection(address);
+  // A cloud host has no address to type: it is always its own binding.
+  const cloudExisting = existing?.connection.kind === "cloud" ? existing.connection : null;
+  const makeConnection = (address: string): HostConnection =>
+    cloudExisting ?? (viaWsl ? wslConnection(address) : sshConnection(address));
   const [target, setTarget] = useState(existing ? addressOf(existing.connection) : "");
   // What this dialog adds or updates.
   const connectionFor = () => makeConnection(target.trim());
+  // Signed in, ssh's master is up: the check rides it like any other call.
+  const signIn = useSshSignIn(() => check());
   const [name, setName] = useState(existing?.name ?? "");
   /** The user typed a name: a target typed or picked after that no longer renames the host. */
   const [nameEdited, setNameEdited] = useState(existing !== null);
   const [probe, setProbe] = useState<HostProbeResult | null>(null);
+  // A cloud machine just made can't be reached at first: its SSH server comes up after it reports
+  // running, and once its key is trusted it turns this device away until it has finished setting
+  // itself up. Its setup checks again for a while (null: not waiting; 0: stopped waiting).
+  const [loginRechecks, setLoginRechecks] = useState<number | null>(
+    cloudExisting && existing?.intent === "setup" ? LOGIN_RECHECKS : null
+  );
+  // A cloud machine can fall asleep or be stopped while setup waits on the person, and
+  // setup never dials one that is (a dial would wake it unasked). Followed only for a
+  // cloud host, so setup can offer the start itself rather than send them elsewhere.
+  const cloudHosts = useCloudHostsWhile(isOpen && cloudExisting !== null);
+  const machine = cloudExisting ? cloudStatusFor(cloudHosts.snapshot, existing?.hostId) : null;
+  const machineDown =
+    machine !== null && machine.providerUnavailable === null && canStartMachine(machine);
+  /** A start asked for from here: under way, or done with its fresh check still to run. */
+  const [machineStart, setMachineStart] = useState<"starting" | "started" | null>(null);
+  /** Why the provider refused that start: said with the offer, and gone with it. */
+  const [machineStartError, setMachineStartError] = useState<string | null>(null);
+  // A trust asks for a check as soon as none is running, and only while the dialog is open.
+  const [checkAfterTrust, setCheckAfterTrust] = useState(false);
   const [plan, setPlan] = useState<HostInstallPlan | null>(null);
   // The AppImage is the Linux build the release feed publishes a checksum for.
   const [linuxPackage, setLinuxPackage] = useState<LinuxPackagePreference>("appimage");
@@ -535,6 +595,21 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   const [refocusPackage, setRefocusPackage] = useState(false);
 
   const knownHosts = useRemoteHostsStore((s) => s.hosts);
+  // A worktree waiting for this setup: finishing connects, and the placement carries on from there.
+  const placement = existing
+    ? (knownHosts.find((entry) => entry.descriptor.id === existing.hostId)?.descriptor
+        .pendingPlacement ?? null)
+    : null;
+  const connectAtEnd = connectWhenDone || placement !== null;
+  // Offered once the step under way has settled, and never before the first check has
+  // answered; each screen then says whether what it does next needs the machine.
+  const machineRecovery =
+    machineStart === "starting" ||
+    (machineStart === null &&
+      machineDown &&
+      !busy &&
+      !connecting &&
+      (step !== "check" || probe !== null || error !== null));
   const discovering = !existing && discovered === null && discoverError === null;
   const showDiscovering = useDeferredLoading(discovering, UI_DOHERTY_THRESHOLD);
   const showConnecting = useDeferredLoading(connecting, UI_DOHERTY_THRESHOLD);
@@ -688,6 +763,17 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       ? null
       : (others.find((entry) => sameHostMachine(entry.descriptor.connection, typed)) ?? null);
 
+  /**
+   * A step that stopped, recorded on the worktree waiting for this setup from
+   * the step's own answer, so it lands even once the dialog has closed.
+   */
+  const noteFailure = (message: string) => {
+    if (existing === null || placement === null) return;
+    notePlacementFailure(existing.hostId, placement, message).catch((err: unknown) => {
+      logWarn("[Hosts] Couldn't record a setup failure on its pending placement", { err });
+    });
+  };
+
   const run = <T,>(
     work: () => Promise<T>,
     then: (value: T) => void,
@@ -703,31 +789,41 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       },
       (err: unknown) => {
         setBusy(false);
-        failed(
+        const message =
           isClientAppError(err) && err.userMessage
             ? err.userMessage
-            : clientErrorText(err, "Something went wrong"),
-          err
-        );
+            : clientErrorText(err, "Something went wrong");
+        // A run the person stopped hasn't failed.
+        if (!(isClientAppError(err) && err.code === "CANCELLED")) noteFailure(message);
+        failed(message, err);
       }
     );
   };
 
-  /** Add the host to the list once; every later step reuses that record. */
-  const save = (): Promise<SavedHost> => {
+  /**
+   * Add the host to the list once; every later step reuses that record. `seen`
+   * is the latest check when the caller has one newer than the dialog's.
+   */
+  const save = (seen: HostProbeResult | null = probe): Promise<SavedHost> => {
     if (savedHost) return Promise.resolve(savedHost);
-    saving.current ??= remoteHostsClient.add({ name: hostLabel, connection: connectionFor() }).then(
-      (descriptor) => {
-        const record = { hostId: descriptor.id, name: descriptor.name };
-        setSaved(record);
-        awaitFirstConnect(descriptor.id);
-        return record;
-      },
-      (err: unknown) => {
-        saving.current = null;
-        throw err;
-      }
-    );
+    saving.current ??= remoteHostsClient
+      .add({
+        name: hostLabel,
+        connection: connectionFor(),
+        ...(seen?.startsOnConnect === true ? { startsOnConnect: true } : {}),
+      })
+      .then(
+        (descriptor) => {
+          const record = { hostId: descriptor.id, name: descriptor.name };
+          setSaved(record);
+          awaitFirstConnect(descriptor.id);
+          return record;
+        },
+        (err: unknown) => {
+          saving.current = null;
+          throw err;
+        }
+      );
     return saving.current;
   };
 
@@ -747,7 +843,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     }
     // Adding: Host mode is on there for good, so Connect is next and the host is saved now.
     setStep("advise");
-    run(save, () => {});
+    run(
+      () => save(seen),
+      () => {}
+    );
   };
 
   const check = (nextTarget?: string) => {
@@ -767,6 +866,12 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     run(
       () => remoteHostsClient.probe(connection),
       (result) => {
+        if (!result.reachable) noteFailure(result.sshError ?? `Couldn't reach ${hostLabel}`);
+        // In: a later check that fails (after an install, say) is the person's, not first boot's.
+        else {
+          setLoginRechecks(null);
+          setCheckAfterTrust(false);
+        }
         setProbe(result);
         setLinuxPackage(result.install?.packaging === "deb" ? "deb" : "appimage");
         setApplying(null);
@@ -778,6 +883,71 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     );
   };
 
+  const recheckForLogin = useEffectEvent(() => {
+    setCheckAfterTrust(false);
+    setLoginRechecks((left) => (left === null ? null : Math.max(0, left - 1)));
+    check();
+  });
+  const unreachable = probe !== null && !probe.reachable;
+  const awaitingLogin = loginRechecks !== null && loginRechecks > 0 && unreachable;
+  // Said once the last check has answered, not while it runs.
+  const stoppedAwaitingLogin = loginRechecks === 0 && unreachable && !busy;
+  // A machine that's down, or starting or stopping by anyone's hand, turns every check away;
+  // a start from here owns the next one.
+  const machineHeld =
+    machineRecovery || machineStart !== null || (machine?.operation ?? null) !== null;
+  useEffect(() => {
+    // Only from the check itself: never pulls setup back once it has moved on to an install.
+    if (!isOpen || busy || step !== "check" || machineHeld || !(checkAfterTrust || awaitingLogin)) {
+      return undefined;
+    }
+    const timer = setTimeout(() => recheckForLogin(), checkAfterTrust ? 0 : LOGIN_RECHECK_MS);
+    return () => clearTimeout(timer);
+  }, [isOpen, busy, step, machineHeld, checkAfterTrust, awaitingLogin, probe, loginRechecks]);
+  const trustedHostKey = () => {
+    setLoginRechecks(LOGIN_RECHECKS);
+    setCheckAfterTrust(true);
+  };
+
+  /** Start the machine from here; setup carries on from a fresh check once it runs. */
+  const startMachine = () => {
+    if (!existing) return;
+    setMachineStart("starting");
+    setMachineStartError(null);
+    cloudHostsClient.startHost(existing.hostId).then(
+      () => {
+        // The answer can land before the picture that says it runs.
+        void cloudHosts.refresh();
+        setMachineStart("started");
+      },
+      (err: unknown) => {
+        const message =
+          isClientAppError(err) && err.userMessage
+            ? err.userMessage
+            : clientErrorText(err, "Couldn't start the machine");
+        setMachineStart(null);
+        setMachineStartError(message);
+        noteFailure(message);
+      }
+    );
+  };
+  // Back to the check, whatever step the machine went down on: what it finds decides what's next.
+  const resumeAfterStart = useEffectEvent(() => {
+    setMachineStart(null);
+    setMachineStartError(null);
+    setOutcome(null);
+    setCheckAfterTrust(false);
+    // Its SSH can come up after it reports running, as a new machine's does.
+    if (existing?.intent === "setup") setLoginRechecks(LOGIN_RECHECKS);
+    setStep("check");
+    setProbe(null);
+    check();
+  });
+  useEffect(() => {
+    if (!isOpen || machineStart !== "started" || busy || connecting) return;
+    resumeAfterStart();
+  }, [isOpen, machineStart, busy, connecting]);
+
   // An existing host is checked as the dialog opens: its target is already known.
   const autoChecked = useRef(false);
   const checkOnOpen = useEffectEvent(() => check());
@@ -786,6 +956,12 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     if (!isOpen || existingId === null || autoChecked.current) return;
     autoChecked.current = true;
     checkOnOpen();
+  }, [isOpen, existingId]);
+
+  // While it's open, a link that comes up (an update reconnects it) isn't the end of setup.
+  useEffect(() => {
+    if (!isOpen || existingId === null) return undefined;
+    return holdHostSetup(existingId);
   }, [isOpen, existingId]);
 
   const loadPlan = (
@@ -909,7 +1085,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         if (hostModeSwitchedOn(result.probe)) {
           setHostModeTurnedOn(true);
           setStep("advise");
-          run(save, () => {});
+          run(
+            () => save(result.probe),
+            () => {}
+          );
         }
       }
     );
@@ -917,7 +1096,10 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   /** Setup ends here, saved but not connected: nothing after Host mode applies without it. */
   const skipHostMode = () => {
     setSkipped(true);
-    run(save, () => setOutcome("skipped"));
+    run(
+      () => save(),
+      () => setOutcome("skipped")
+    );
   };
 
   /** Connect and end on what the link reported, not on the dial having started. */
@@ -935,6 +1117,7 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         setConnecting(false);
         if (!isUsable(state)) {
           setOutcome(state);
+          noteFailure(connectFailureText(state, host.name));
           return;
         }
         onClose();
@@ -946,14 +1129,21 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   };
 
   const finish = () => {
+    if (existing && connectAtEnd && !skipped && probe?.hostModeListening) {
+      connectSaved({ hostId: existing.hostId, name: existing.name });
+      return;
+    }
     if (existing) {
       onClose();
       return;
     }
-    run(save, (host) => {
-      if (skipped || !probe?.hostModeListening) setOutcome("skipped");
-      else connectSaved(host);
-    });
+    run(
+      () => save(),
+      (host) => {
+        if (skipped || !probe?.hostModeListening) setOutcome("skipped");
+        else connectSaved(host);
+      }
+    );
   };
 
   const cancelInstall = () => {
@@ -1012,6 +1202,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
   let body: React.ReactNode;
   // Setup over: the outcome takes the step bar's place.
   let finished = false;
+  // What this screen does next reaches the host, so a machine that's down stops it.
+  let needsMachine = true;
 
   /**
    * The footer while the host is ahead: "Update this machine" until it's
@@ -1395,6 +1587,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       disabled: busy || target.trim().length === 0 || nameError !== null || duplicate !== null,
       loading: busy,
     };
+    if (onChooseCloud && !existing) {
+      leading = { label: "Create a cloud machine instead", onClick: onChooseCloud, disabled: busy };
+    }
   } else if (step === "check") {
     // Setup starts a WSL distro's Host as a systemd user service, which has
     // nothing to run under without it; a Host already listening needs no setup.
@@ -1455,7 +1650,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
             Checking {hostLabel}
           </p>
           <p className="pl-5.5 text-xs text-text-secondary select-text [overflow-wrap:anywhere]">
-            {viaWsl ? `Starting the ${target} distribution` : `Over SSH as ${target}`}
+            {viaWsl
+              ? `Starting the ${target} distribution`
+              : cloudExisting
+                ? "Over SSH to the cloud machine"
+                : `Over SSH as ${target}`}
           </p>
         </div>
       ) : null
@@ -1464,7 +1663,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         {verdict === "unreachable" ? (
           <>
             <Verdict title={copy!.title}>
-              {viaWsl ? "The distribution didn't start." : `SSH as ${target} didn't connect.`}
+              {viaWsl
+                ? "The distribution didn't start."
+                : cloudExisting
+                  ? "SSH to the cloud machine didn't connect."
+                  : `SSH as ${target} didn't connect.`}
             </Verdict>
             {probe.sshError && (
               <pre className="mt-3 whitespace-pre-wrap rounded-[var(--radius-md)] bg-surface-input p-2 text-xs text-text-secondary select-text">
@@ -1481,8 +1684,47 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                 Daintree runs programs in the distribution with <code>wsl.exe</code>. Check that{" "}
                 <code>wsl -d {wslCommandArg(target)}</code> opens a shell there.
               </p>
+            ) : cloudExisting ? (
+              <>
+                {existingId !== null && (
+                  <CloudSetupHostKey
+                    hostId={existingId}
+                    onTrusted={trustedHostKey}
+                    // Only once no key waits on the person: until then, that's what setup is stopped on.
+                    note={
+                      awaitingLogin ? (
+                        <p
+                          className="mt-3 text-xs text-text-secondary"
+                          data-testid="add-host-awaiting-login"
+                        >
+                          A new machine can take a few minutes to start answering and finish setting
+                          up. Daintree checks again every 10 seconds.
+                        </p>
+                      ) : stoppedAwaitingLogin ? (
+                        <p
+                          className="mt-3 text-xs text-text-secondary"
+                          data-testid="add-host-stopped-awaiting-login"
+                        >
+                          Daintree stopped checking by itself. Check again once the machine has
+                          finished setting up.
+                        </p>
+                      ) : null
+                    }
+                  />
+                )}
+              </>
             ) : (
-              <SshRefusalHelp refusal={refusal} target={target} testId="add-host-ssh-refusal" />
+              <SshRefusalHelp
+                refusal={refusal}
+                target={target}
+                testId="add-host-ssh-refusal"
+                // Not while a check runs: its answer, not this one's, is the refusal to sign in past.
+                onSignIn={
+                  refusal === "login-refused" && !busy
+                    ? () => signIn.start(connectionFor())
+                    : undefined
+                }
+              />
             )}
           </>
         ) : (
@@ -1547,7 +1789,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     announce =
       verdict === "newer" && localUpdate?.phase === "failed"
         ? `Couldn't check for an update to this machine. ${localUpdate.message}`
-        : (copy?.title ?? (checking && showChecking ? `Checking ${hostLabel}` : ""));
+        : awaitingLogin
+          ? `Waiting for ${hostLabel} to finish setting up`
+          : (copy?.title ?? (checking && showChecking ? `Checking ${hostLabel}` : ""));
     if (!probe) {
       // The first check is running, or it couldn't run at all (said below).
       primary = checking ? undefined : checkAgain;
@@ -1567,6 +1811,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       leading = local.offerDowngrade ? downgrade : undefined;
       // A restart of this machine is offered, never landed on.
       focusCancel = localUpdate?.phase === "ready";
+      // The way on is this machine's update, which runs whatever the host's machine is doing.
+      needsMachine = false;
     } else if (verdict === "staged-ready") {
       primary = {
         label: "Install downloaded update",
@@ -1587,9 +1833,17 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       };
       // A different build still connects, best effort, with a warning.
       leading = continueAnyway;
+    } else if (verdict === "up-to-date" && existing && connectAtEnd) {
+      primary = {
+        label: "Connect",
+        onClick: () => connectSaved({ hostId: existing.hostId, name: existing.name }),
+        disabled: busy,
+        loading: connecting,
+      };
     } else if (verdict === "up-to-date" && existing) {
       primary = { label: "Done", onClick: onClose };
       secondary = undefined;
+      needsMachine = false;
     } else {
       // Host mode is left to set up there, or (adding) it's on and only needs saving.
       primary = {
@@ -1896,6 +2150,8 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       const local = localFooter();
       primary = local.primary;
       secondary = local.secondary;
+      // As on the check's newer verdict: the way on is this machine's update.
+      needsMachine = false;
       if (local.offerDowngrade)
         leading = {
           label: `Downgrade ${buttonHost}…`,
@@ -1952,15 +2208,21 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         )}
       </div>
     );
-    primary = { label: "Done", onClick: onClose };
+    primary = connectAtEnd
+      ? { label: "Done", onClick: finish, disabled: busy, loading: busy }
+      : { label: "Done", onClick: onClose };
     secondary = undefined;
     announce = title;
+    needsMachine = connectAtEnd;
   } else if (step === "enable") {
     const switchedOn = hostModeSwitchedOn(probe);
+    const onConnect = probe?.startsOnConnect === true;
     const enableBody = switchedOn ? (
       <p className="text-sm text-text-primary">
-        Host mode is on at {hostLabel} and starts {viaWsl ? "with it" : "at login there"}. This
-        machine can connect.
+        {onConnect
+          ? `Host mode is on at ${hostLabel} and runs in the background. ${STARTS_ON_CONNECT_COVERAGE}`
+          : `Host mode is on at ${hostLabel} and starts ${viaWsl ? "with it" : "at login there"}.`}{" "}
+        This machine can connect.
       </p>
     ) : (
       <div className="space-y-2 text-sm">
@@ -1972,9 +2234,11 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
         <p className="text-text-secondary">
           {probe?.platform === "darwin"
             ? "Daintree turns on Host mode there in the logged-in session and sets it to start at login. If it has never run on that Mac, open it once at the machine: macOS asks to approve a first launch."
-            : viaWsl
-              ? "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode, so it starts whenever the distribution does."
-              : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
+            : onConnect
+              ? `${hostLabel} has no systemd, so there's no Host mode service to install. Daintree starts Host mode there in the background instead. ${STARTS_ON_CONNECT_COVERAGE}`
+              : viaWsl
+                ? "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode, so it starts whenever the distribution does."
+                : "Daintree installs its Host mode service there (a systemd user unit), starts it, and turns on Host mode with start at login. It also asks the host to let the service run after you log out."}
         </p>
         {!existing && (
           <p className="text-xs text-text-secondary">
@@ -2016,7 +2280,9 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
                 : `${hostLabel} is ready to connect`}
           </p>
           <p className="text-text-secondary">
-            Host mode is on there and starts {viaWsl ? "with the distribution" : "at login"}.
+            {probe?.startsOnConnect === true
+              ? `Host mode is on there and runs in the background. ${STARTS_ON_CONNECT_COVERAGE}`
+              : `Host mode is on there and starts ${viaWsl ? "with the distribution" : "at login"}.`}
           </p>
         </div>
         <AddHostNotes
@@ -2034,11 +2300,82 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
       disabled: busy,
       loading: busy,
     };
+    // As finish decides: an existing host's Done connects only when setup ends connected.
+    needsMachine = !existing || (connectAtEnd && !skipped && probe?.hostModeListening === true);
     back = {
       label: "Back",
       onClick: () => setStep(hostModeTurnedOn ? "enable" : "check"),
       disabled: busy,
     };
+  }
+
+  // Ahead of the step, where what it does next needs the machine running.
+  const recovering =
+    machineRecovery && (machineStart === "starting" || (needsMachine && machine !== null));
+  if (recovering) {
+    leading = undefined;
+    back = undefined;
+    hint = undefined;
+    secondary = { label: "Close", onClick: onClose };
+    const startError = machineStartError && (
+      <InlineError role="alert" className="mt-3">
+        {machineStartError}
+      </InlineError>
+    );
+    if (machineStart === "starting" || !machine) {
+      const stage = machine?.operation?.stage || "Asking the provider to start it";
+      body = (
+        <div className="space-y-3" data-testid="add-host-machine-starting">
+          <p className="text-sm font-medium text-text-primary" aria-live="polite">
+            {stage}
+          </p>
+          <ProgressBar label="Machine progress" valueText={stage} />
+          <p className="text-xs text-text-secondary">
+            Setup carries on once it&apos;s running. Closing this doesn&apos;t stop the start:{" "}
+            {hostLabel}&apos;s row in Settings&nbsp;→&nbsp;Hosts follows it.
+          </p>
+        </div>
+      );
+      primary = undefined;
+      focusCancel = true;
+      screen = "machine:starting";
+      announce = `Starting ${hostLabel}'s machine`;
+    } else {
+      const title =
+        machine.machine === "error"
+          ? `${hostLabel}'s machine reported an error`
+          : `${hostLabel}'s machine is ${machine.asleep ? "asleep" : "stopped"}`;
+      body = (
+        <div data-testid="add-host-machine-down">
+          <Callout severity="warning" title={title}>
+            {machine.machine === "error" && machine.lastError
+              ? `${machine.lastError.message} `
+              : ""}
+            Setup can&apos;t reach it until it&apos;s running.{" "}
+            {startBillingSentence(
+              machine,
+              cloudProviderFor(cloudHosts.snapshot.providers, machine)
+            )}
+          </Callout>
+          {startError}
+        </div>
+      );
+      primary = { label: "Start machine", onClick: startMachine };
+      // Asking again reads its state and wakes nothing: for one woken some other way.
+      // What it finds replaces a failed connect's outcome, as a fresh check after a start does.
+      leading = {
+        label: "Check again",
+        onClick: () => {
+          setOutcome(null);
+          setMachineStartError(null);
+          check();
+        },
+      };
+      // It can open under a press meant for the step's own action: the start is a choice.
+      focusCancel = true;
+      screen = "machine:down";
+      announce = title;
+    }
   }
 
   // Each new view hands focus to its answer, the way the first one did: the
@@ -2054,43 +2391,62 @@ export function AddHostDialog({ isOpen, onClose, existing = null }: AddHostDialo
     ) : undefined;
 
   return (
-    <AppDialog
-      isOpen={isOpen}
-      onClose={onClose}
-      dismissible={!locked}
-      size="md"
-      initialFocus={screen === "discover" ? undefined : focusCancel ? "cancel" : "confirm"}
-      focusResetKey={screen}
-      data-testid="add-host-dialog"
-    >
-      <AppDialog.Header>
-        <AppDialog.Title>
-          {existing
-            ? `${existing.intent === "setup" ? "Set up" : "Update"} ${existing.name}`
-            : step === "discover"
-              ? "Add host"
-              : `Add ${hostLabel}`}
-        </AppDialog.Title>
-        <AppDialog.CloseButton />
-      </AppDialog.Header>
-      <AppDialog.Body>
-        {/* An existing host's flow branches on what the check finds: no fixed steps to show. */}
-        {!existing && step !== "done" && !finished && <WizardStepBar steps={steps} />}
-        {body}
-        {error && <ErrorLine message={error} />}
-        {/* No role: the discovery list's own status line stays the dialog's one status. */}
-        <p aria-live="polite" aria-atomic="true" className="sr-only">
-          {announce}
-        </p>
-      </AppDialog.Body>
-      <AppDialog.Footer
-        // A step with an alternative and three actions wraps it onto its own row when narrow.
-        className="flex-wrap gap-y-3"
-        leadingAction={leading}
-        hint={hint ?? savedHint}
+    <>
+      <AppDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        dismissible={!locked}
+        size="md"
+        initialFocus={screen === "discover" ? undefined : focusCancel ? "cancel" : "confirm"}
+        focusResetKey={screen}
+        data-testid="add-host-dialog"
       >
-        <WizardFooterActions dismiss={secondary} back={back} primary={primary} />
-      </AppDialog.Footer>
-    </AppDialog>
+        <AppDialog.Header>
+          <AppDialog.Title>
+            {existing
+              ? `${existing.intent === "setup" ? "Set up" : "Update"} ${existing.name}`
+              : step === "discover"
+                ? "Add host"
+                : `Add ${hostLabel}`}
+          </AppDialog.Title>
+          <AppDialog.CloseButton />
+        </AppDialog.Header>
+        <AppDialog.Body>
+          {/* An existing host's flow branches on what the check finds: no fixed steps to show. */}
+          {!existing && step !== "done" && !finished && <WizardStepBar steps={steps} />}
+          {placement && existing && (
+            <Callout severity="info" className="mb-4">
+              When setup finishes, {placement.label} opens on {existing.name}.
+            </Callout>
+          )}
+          {body}
+          {error && <ErrorLine message={error} />}
+          {/* No role: the discovery list's own status line stays the dialog's one status. */}
+          <p aria-live="polite" aria-atomic="true" className="sr-only">
+            {announce}
+          </p>
+        </AppDialog.Body>
+        <AppDialog.Footer
+          // Every button new when the start offer comes or goes, the leading one too: a press
+          // begun on one screen's action must never end on the other's.
+          key={recovering ? "machine" : "setup"}
+          // A step with an alternative and three actions wraps it onto its own row when narrow.
+          className="flex-wrap gap-y-3"
+          leadingAction={leading}
+          hint={hint ?? savedHint}
+        >
+          <WizardFooterActions dismiss={secondary} back={back} primary={primary} />
+        </AppDialog.Footer>
+      </AppDialog>
+      {isOpen && (
+        <SshSignInDialog
+          hostLabel={hostLabel}
+          state={signIn.state}
+          onAnswer={signIn.answer}
+          onRetry={() => signIn.start(connectionFor())}
+          onClose={signIn.close}
+        />
+      )}
+    </>
   );
 }

@@ -269,6 +269,27 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
     expect(terminal.getInfo().agentSessionId).toBe("abc-123");
   });
 
+  it("marks the terminal closing for exactly the attempt's duration (#17193)", async () => {
+    // The quit can settle the agent at its prompt before the kill lands; that
+    // edge has to read as the terminal closing, not the agent finishing.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles);
+    expect(terminal.getInfo().gracefullyClosing).toBeFalsy();
+
+    const shutdownPromise = terminal.gracefulShutdown();
+    expect(terminal.getInfo().gracefullyClosing).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    handles.emitData("claude --resume abc-123\n");
+    await expect(shutdownPromise).resolves.toBe("abc-123");
+    await Promise.resolve();
+
+    // The kill has taken over the mark, and nothing is left latched for a
+    // later attempt to inherit.
+    expect(terminal.getInfo().wasKilled).toBe(true);
+    expect(terminal.getInfo().gracefullyClosing).toBe(false);
+  });
+
   it("captures session ID when surrounded by ANSI erase sequences from the clear prelude", async () => {
     const handles = createMockPty();
     const terminal = createAgentTerminal(handles);
@@ -414,6 +435,11 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
 
     await expect(terminal.gracefulShutdown()).resolves.toBeNull();
     expect(handles.writeMock).not.toHaveBeenCalled();
+    // Nothing was killed here (the caller's fallback kill does that), so the
+    // closing mark must not outlive the attempt (#17193).
+    await Promise.resolve();
+    expect(terminal.getInfo().wasKilled).toBeFalsy();
+    expect(terminal.getInfo().gracefullyClosing).toBe(false);
   });
 
   it("skips the quit write when the agent demotes during the clear-delay window", async () => {

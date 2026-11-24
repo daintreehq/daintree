@@ -284,6 +284,17 @@ describe("prepareAtomicWriteFile", () => {
     );
   });
 
+  it("skips the temp's flush when not durable", async () => {
+    const writes = tapWriteFile();
+
+    const tempPath = await prepareAtomicWriteFile(path.join(tmpDir, "test.json"), "x", "utf-8", {
+      durable: false,
+    });
+
+    expect(readFileSync(tempPath, "utf-8")).toBe("x");
+    expect(writes).toHaveBeenCalledWith(tempPath, "x", expect.objectContaining({ flush: false }));
+  });
+
   posixIt("creates the temp at the requested mode", async () => {
     const writes = tapWriteFile();
     const tempPath = await prepareAtomicWriteFile(path.join(tmpDir, "secret.json"), "x", "utf-8", {

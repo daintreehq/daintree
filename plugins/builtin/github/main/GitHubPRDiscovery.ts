@@ -1,9 +1,12 @@
 import { GitHubAuth, GITHUB_API_TIMEOUT_MS, rateLimitAwareFetch } from "./GitHubAuth.js";
 import { buildBatchPRQuery } from "./GitHubQueries.js";
-import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
+import { rateLimitServiceForHost } from "./GitHubRateLimitService.js";
+import { githubApiBase } from "./GitHubHost.js";
+import { missingTokenMessage } from "./queryInfra.js";
 import { parseGitHubError, rateLimitMessage, rateLimitMeta } from "./GitHubErrors.js";
 import { getRepoContext, isRepoNotFoundError } from "./GitHubRepoContext.js";
 import {
+  cacheOwner,
   repoContextCache,
   prETagCache,
   branchListETagCache,
@@ -20,7 +23,13 @@ import type {
   PRSnapshot,
   PRTooltipData,
 } from "../../../../shared/types/forge.js";
-import type { PRCheckCandidate, PRCheckResult, BatchPRCheckResult, LinkedPR } from "./types.js";
+import type {
+  PRCheckCandidate,
+  PRCheckResult,
+  BatchPRCheckResult,
+  LinkedPR,
+  RepoContext,
+} from "./types.js";
 
 interface BatchPRTooltipFields {
   bodyText?: string | null;
@@ -261,14 +270,14 @@ async function mapWithConcurrency<T, R>(
  * invalidation between request start and response prevents a stale write.
  */
 export async function probeRepoPRListChange(
-  owner: string,
-  repo: string,
+  context: RepoContext,
   token: string
 ): Promise<"changed" | "unchanged" | "unknown"> {
-  const cacheKey = `${owner}/${repo}`;
+  const { owner, repo } = context;
+  const cacheKey = `${cacheOwner(context)}/${repo}`;
   const cachedETag = repoPRListETagCache.get(cacheKey);
   const versionAtStart = getETagCacheVersion();
-  const url = `https://api.github.com/repos/${owner}/${repo}/pulls?per_page=1&state=all&sort=updated&direction=desc`;
+  const url = `${githubApiBase(context.host)}/repos/${owner}/${repo}/pulls?per_page=1&state=all&sort=updated&direction=desc`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
@@ -344,18 +353,18 @@ interface OpenPRListItem {
  * Daintree tracks few PRs per worktree, so this is a rare, bounded cost.
  */
 export async function probeOpenPRList(
-  owner: string,
-  repo: string,
+  context: Pick<RepoContext, "host" | "owner" | "repo">,
   token: string,
   tracked: PRSnapshot[]
 ): Promise<PRListProbeResult> {
-  const block = gitHubRateLimitService.shouldBlockRequest("core");
+  const { owner, repo } = context;
+  const block = rateLimitServiceForHost(context.host).shouldBlockRequest("core");
   if (block.blocked) return { kind: "fallback" };
 
-  const cacheKey = `${owner}/${repo}`;
+  const cacheKey = `${cacheOwner(context)}/${repo}`;
   const cachedETag = openPRListETagCache.get(cacheKey);
   const versionAtStart = getETagCacheVersion();
-  const url = `https://api.github.com/repos/${owner}/${repo}/pulls?state=open&per_page=100`;
+  const url = `${githubApiBase(context.host)}/repos/${owner}/${repo}/pulls?state=open&per_page=100`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
@@ -466,15 +475,15 @@ export async function probeOpenPRList(
 }
 
 async function probePRChange(
-  owner: string,
-  repo: string,
+  context: RepoContext,
   prNumber: number,
   token: string
 ): Promise<"changed" | "unchanged" | "unknown"> {
-  const cacheKey = `${owner}/${repo}#${prNumber}`;
+  const { owner, repo } = context;
+  const cacheKey = `${cacheOwner(context)}/${repo}#${prNumber}`;
   const cachedETag = prETagCache.get(cacheKey);
   const versionAtStart = getETagCacheVersion();
-  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`;
+  const url = `${githubApiBase(context.host)}/repos/${owner}/${repo}/pulls/${prNumber}`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
@@ -509,16 +518,16 @@ async function probePRChange(
 }
 
 async function probeBranchPRListChange(
-  owner: string,
-  repo: string,
+  context: RepoContext,
   branchName: string,
   token: string
 ): Promise<"changed" | "unchanged" | "unknown"> {
-  const cacheKey = `${owner}/${repo}@${branchName}`;
+  const { owner, repo } = context;
+  const cacheKey = `${cacheOwner(context)}/${repo}@${branchName}`;
   const cachedETag = branchListETagCache.get(cacheKey);
   const versionAtStart = getETagCacheVersion();
   const headFilter = `${owner}:${encodeURIComponent(branchName)}`;
-  const url = `https://api.github.com/repos/${owner}/${repo}/pulls?head=${headFilter}&state=all`;
+  const url = `${githubApiBase(context.host)}/repos/${owner}/${repo}/pulls?head=${headFilter}&state=all`;
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
@@ -564,21 +573,19 @@ async function probeBranchPRListChange(
 }
 
 async function allKnownPRsUnchanged(
-  owner: string,
-  repo: string,
+  context: RepoContext,
   candidates: PRCheckCandidate[],
   token: string
 ): Promise<boolean> {
   const uniquePRNumbers = Array.from(new Set(candidates.map((c) => c.knownPRNumber!)));
   const probes = await mapWithConcurrency(uniquePRNumbers, (prNumber) =>
-    probePRChange(owner, repo, prNumber, token)
+    probePRChange(context, prNumber, token)
   );
   return probes.every((result) => result === "unchanged");
 }
 
 function prewarmPRTooltipCache(
-  owner: string,
-  repo: string,
+  context: RepoContext,
   results: Map<string, PRCheckResult>,
   requestedAt: number
 ): void {
@@ -586,7 +593,7 @@ function prewarmPRTooltipCache(
     const prNumber = result.pr?.number;
     const tooltipData = result.tooltipData;
     if (typeof prNumber !== "number" || !tooltipData) continue;
-    writePRTooltip(owner, repo, prNumber, tooltipData, requestedAt);
+    writePRTooltip(cacheOwner(context), context.repo, prNumber, tooltipData, requestedAt);
   }
 }
 
@@ -598,17 +605,18 @@ export async function batchCheckLinkedPRs(
     return { results: new Map() };
   }
 
-  const client = GitHubAuth.createClient();
-  if (!client) {
-    return { results: new Map(), error: "GitHub token not configured. Set it in Settings." };
-  }
-
   const context = await getRepoContext(cwd);
   if (!context) {
     return { results: new Map(), error: "Not a GitHub repository" };
   }
 
-  const rateLimitBlock = gitHubRateLimitService.shouldBlockRequest();
+  const client = GitHubAuth.createClient(context.host);
+  if (!client) {
+    return { results: new Map(), error: missingTokenMessage(context.host) };
+  }
+
+  const rateLimits = rateLimitServiceForHost(context.host);
+  const rateLimitBlock = rateLimits.shouldBlockRequest();
   if (rateLimitBlock.blocked && rateLimitBlock.reason && rateLimitBlock.resumeAt) {
     return {
       results: new Map(),
@@ -617,20 +625,20 @@ export async function batchCheckLinkedPRs(
     };
   }
 
-  const token = GitHubAuth.getToken();
+  const token = GitHubAuth.getToken(context.host);
 
   // Repo-level ETag probe: a single conditional GET against the pulls list. A
   // 304 means nothing changed across the whole repo, so the entire batch is
   // skipped before the (more expensive) per-PR / per-branch prefilters run.
   if (token !== undefined) {
-    const repoProbe = await probeRepoPRListChange(context.owner, context.repo, token);
+    const repoProbe = await probeRepoPRListChange(context, token);
     if (repoProbe === "unchanged") {
       return { results: new Map() };
     }
     // The probe hits the `core` REST bucket (not `graphql`); a 200 that consumed
     // a point may have tripped a block, so re-check that bucket before any
     // further work.
-    const postProbeBlock = gitHubRateLimitService.shouldBlockRequest("core");
+    const postProbeBlock = rateLimits.shouldBlockRequest("core");
     if (postProbeBlock.blocked && postProbeBlock.reason && postProbeBlock.resumeAt) {
       return {
         results: new Map(),
@@ -643,11 +651,11 @@ export async function batchCheckLinkedPRs(
   const allRevalidation =
     token !== undefined && candidates.every((c) => typeof c.knownPRNumber === "number");
   if (allRevalidation) {
-    const allUnchanged = await allKnownPRsUnchanged(context.owner, context.repo, candidates, token);
+    const allUnchanged = await allKnownPRsUnchanged(context, candidates, token);
     if (allUnchanged) {
       return { results: new Map() };
     }
-    const postProbeBlock = gitHubRateLimitService.shouldBlockRequest();
+    const postProbeBlock = rateLimits.shouldBlockRequest();
     if (postProbeBlock.blocked && postProbeBlock.reason && postProbeBlock.resumeAt) {
       return {
         results: new Map(),
@@ -675,7 +683,7 @@ export async function batchCheckLinkedPRs(
     if (probeableIndicesByBranch.size > 0) {
       const uniqueBranches = Array.from(probeableIndicesByBranch.keys());
       const probeResults = await mapWithConcurrency(uniqueBranches, (branch) =>
-        probeBranchPRListChange(context.owner, context.repo, branch, token)
+        probeBranchPRListChange(context, branch, token)
       );
       const skip = new Set<number>();
       for (let i = 0; i < uniqueBranches.length; i++) {
@@ -691,7 +699,7 @@ export async function batchCheckLinkedPRs(
       if (skip.size > 0) {
         candidatesForGraphQL = candidates.filter((_, idx) => !skip.has(idx));
       }
-      const postProbeBlock = gitHubRateLimitService.shouldBlockRequest("graphql");
+      const postProbeBlock = rateLimits.shouldBlockRequest("graphql");
       if (postProbeBlock.blocked && postProbeBlock.reason && postProbeBlock.resumeAt) {
         return {
           results: new Map(),
@@ -709,10 +717,10 @@ export async function batchCheckLinkedPRs(
       request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as Record<string, unknown>;
 
-    gitHubRateLimitService.updateFromGraphQL(response, "BATCH_DISCOVERY_PR_QUERY");
+    rateLimits.updateFromGraphQL(response, "BATCH_DISCOVERY_PR_QUERY");
 
     const results = parseBatchPRResponse(response, candidatesForGraphQL);
-    prewarmPRTooltipCache(context.owner, context.repo, results, requestedAt);
+    prewarmPRTooltipCache(context, results, requestedAt);
     return { results };
   } catch (error) {
     if (isRepoNotFoundError(error)) {
@@ -720,32 +728,40 @@ export async function batchCheckLinkedPRs(
       const freshContext = await getRepoContext(cwd);
       if (
         freshContext &&
-        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
+        (freshContext.host !== context.host ||
+          freshContext.owner !== context.owner ||
+          freshContext.repo !== context.repo)
       ) {
         try {
+          const retryClient = GitHubAuth.createClient(freshContext.host);
+          if (!retryClient) {
+            return { results: new Map(), error: missingTokenMessage(freshContext.host) };
+          }
           const retryRequestedAt = Date.now();
           const retryQuery = buildBatchPRQuery(
             freshContext.owner,
             freshContext.repo,
             candidatesForGraphQL
           );
-          const retryResponse = (await client(retryQuery, {
+          const retryResponse = (await retryClient(retryQuery, {
             request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
           })) as Record<string, unknown>;
-          gitHubRateLimitService.updateFromGraphQL(retryResponse, "BATCH_DISCOVERY_PR_RETRY");
-          const retryResults = parseBatchPRResponse(retryResponse, candidatesForGraphQL);
-          prewarmPRTooltipCache(
-            freshContext.owner,
-            freshContext.repo,
-            retryResults,
-            retryRequestedAt
+          rateLimitServiceForHost(freshContext.host).updateFromGraphQL(
+            retryResponse,
+            "BATCH_DISCOVERY_PR_RETRY"
           );
+          const retryResults = parseBatchPRResponse(retryResponse, candidatesForGraphQL);
+          prewarmPRTooltipCache(freshContext, retryResults, retryRequestedAt);
           return { results: retryResults };
         } catch (retryError) {
-          return { results: new Map(), error: parseGitHubError(retryError), ...rateLimitMeta() };
+          return {
+            results: new Map(),
+            error: parseGitHubError(retryError, freshContext.host),
+            ...rateLimitMeta(),
+          };
         }
       }
     }
-    return { results: new Map(), error: parseGitHubError(error), ...rateLimitMeta() };
+    return { results: new Map(), error: parseGitHubError(error, context.host), ...rateLimitMeta() };
   }
 }

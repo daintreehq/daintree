@@ -31,6 +31,8 @@ import type { DriveLeaseHolder, OperationOutcome } from "../../../shared/types/r
 import type { BranchCheck } from "../../../shared/types/ipc/hostSwitch.js";
 import type { Project } from "../../../shared/types/project.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { DEFAULT_PROJECT_EMOJI } from "../../../shared/utils/projectEmoji.js";
+import { normalizeProjectDisplay } from "../../../shared/utils/projectDisplay.js";
 import { classifyGitError } from "../../../shared/utils/gitOperationErrors.js";
 import {
   isSupportedCloneUrl,
@@ -285,6 +287,15 @@ export class ProjectAcrossHostsService {
     throw invalid("worktreePath is not a working tree of this project");
   }
 
+  /**
+   * Refuses unless `worktreePath` is one of this project's working trees, as
+   * git lists them: what a machine made for a worktree is marked with.
+   */
+  async requireProjectWorktree(projectId: unknown, worktreePath: unknown): Promise<void> {
+    const project = this.requireProject(projectId);
+    await this.resolveWorktree(project, worktreePath);
+  }
+
   // Source side
 
   async describeSource(payload: DescribeSourcePayload): Promise<SourceProjectDescription> {
@@ -346,6 +357,7 @@ export class ProjectAcrossHostsService {
     return {
       projectId: project.id,
       projectName: project.name,
+      display: { name: project.name, emoji: project.emoji, color: project.color || null },
       projectPath: project.path,
       worktreePath,
       branch: branchResult.branch,
@@ -732,6 +744,7 @@ export class ProjectAcrossHostsService {
           submodules,
           branch: payload.branch ?? null,
           setupRecipeId: payload.setupRecipeId ?? null,
+          display: normalizeProjectDisplay(payload.display),
         }),
       },
       (op) => {
@@ -787,7 +800,9 @@ export class ProjectAcrossHostsService {
       const parent = path.dirname(destination);
       const folderName = path.basename(destination);
       await fs.mkdir(parent, { recursive: true });
-      staging = await fs.mkdtemp(path.join(parent, `.${folderName}.daintree-clone-`));
+      // A fixed prefix: the folder's own name here would push a name that is
+      // valid on its own past the directory-entry limit.
+      staging = await fs.mkdtemp(path.join(parent, ".daintree-clone-"));
       const stagedRepo = path.join(staging, folderName);
 
       op.progress({ fraction: 0, stage: "cloning", message: "Cloning" });
@@ -842,7 +857,11 @@ export class ProjectAcrossHostsService {
       // Past this point the project exists on the host; a late cancel no longer undoes it.
       op.progress({ fraction: null, stage: "registering", message: "Adding the project" });
       // Cloned from another machine's word: a fresh identity, never an old project's.
-      const project = await this.deps.registerProject(destination, { fresh: true });
+      const project = this.showAsSource(
+        await this.deps.registerProject(destination, { fresh: true }),
+        payload.display,
+        "every-field"
+      );
 
       let branchResult: Pick<
         HostProjectOpened,
@@ -1056,14 +1075,57 @@ export class ProjectAcrossHostsService {
     }
   }
 
-  private async adoptCandidate(payload: OpenOnHostPayload): Promise<Project> {
-    if (payload.projectId) return this.requireProject(payload.projectId);
+  /**
+   * Show the source's name, emoji and colour on this host's copy. A project
+   * registered just now takes all three: nothing about it was chosen here
+   * yet. One this host already had takes only what is still at its default,
+   * so whatever its person changed on this host stays. Only the row changes,
+   * never `.daintree/project.json`, and a failure never costs the clone or
+   * open it rides on.
+   */
+  private showAsSource(
+    project: Project,
+    sent: unknown,
+    scope: "every-field" | "defaults-only"
+  ): Project {
+    const display = normalizeProjectDisplay(sent);
+    if (!display) return project;
+    const replaceable = (atDefault: boolean) => scope === "every-field" || atDefault;
+    const updates: Partial<Pick<Project, "name" | "emoji" | "color">> = {};
+    if (
+      display.name !== project.name &&
+      replaceable(project.name === path.basename(project.path))
+    ) {
+      updates.name = display.name;
+    }
+    if (display.emoji !== project.emoji && replaceable(project.emoji === DEFAULT_PROJECT_EMOJI)) {
+      updates.emoji = display.emoji;
+    }
+    const color = display.color ?? undefined;
+    if (color !== (project.color || undefined) && replaceable(!project.color)) {
+      updates.color = color;
+    }
+    if (Object.keys(updates).length === 0) return project;
+    try {
+      return this.deps.updateProjectDisplay(project.id, updates);
+    } catch (error) {
+      console.warn("[ProjectAcrossHosts] Couldn't show the source's project identity:", error);
+      return project;
+    }
+  }
+
+  private async adoptCandidate(
+    payload: OpenOnHostPayload
+  ): Promise<{ project: Project; registeredNow: boolean }> {
+    if (payload.projectId) {
+      return { project: this.requireProject(payload.projectId), registeredNow: false };
+    }
     if (typeof payload.path !== "string" || !path.isAbsolute(payload.path)) {
       throw invalid("path must be an absolute path");
     }
     const resolved = path.resolve(payload.path);
     const known = this.deps.listProjects().find((p) => path.resolve(p.path) === resolved);
-    if (known) return known;
+    if (known) return { project: known, registeredNow: false };
     await this.requireRepositoryFolder(resolved);
     const remoteUrls = Array.isArray(payload.remoteUrls) ? payload.remoteUrls : [];
     const check = await checkDestination(resolved, remoteUrls);
@@ -1074,7 +1136,15 @@ export class ProjectAcrossHostsService {
         userMessage: "That folder isn't a clone of this repository.",
       });
     }
-    return this.deps.registerProject(resolved);
+    // Registering can hand back a row it didn't make: a project that moved
+    // here, or one another registration of this folder made meanwhile.
+    let registeredNow = false;
+    const project = await this.deps.registerProject(resolved, {
+      onCreated: () => {
+        registeredNow = true;
+      },
+    });
+    return { project, registeredNow };
   }
 
   /**
@@ -1118,20 +1188,34 @@ export class ProjectAcrossHostsService {
     payload: OpenOnHostPayload,
     authority?: PlacementAuthority
   ): Promise<HostProjectOpened> {
-    const project = await this.adoptCandidate(payload);
+    const adopted = await this.adoptCandidate(payload);
+    if (payload.branch && authority?.beforeAnyChange === true) {
+      try {
+        authority.assertMayPlace(adopted.project.id);
+      } catch {
+        // Held by a window here: its person decides, so nothing about it changes.
+        return {
+          projectId: adopted.project.id,
+          projectPath: adopted.project.path,
+          projectName: adopted.project.name,
+          setupRecipeId: null,
+          worktreePath: null,
+          canCheckOutBranch: true,
+          branchNote: null,
+        };
+      }
+    }
+    const project = this.showAsSource(
+      adopted.project,
+      payload.display,
+      adopted.registeredNow ? "every-field" : "defaults-only"
+    );
     const base = {
       projectId: project.id,
       projectPath: project.path,
       projectName: project.name,
       setupRecipeId: null,
     };
-    if (payload.branch && authority?.beforeAnyChange === true) {
-      try {
-        authority.assertMayPlace(project.id);
-      } catch {
-        return { ...base, worktreePath: null, canCheckOutBranch: true, branchNote: null };
-      }
-    }
     const remoteName = await this.matchingRemote(project.path, payload.branchRemoteUrl ?? null);
     // Opening a copy as it is touches nothing; anything else refreshes it for what follows.
     if (remoteName && payload.navigateOnly !== true) {

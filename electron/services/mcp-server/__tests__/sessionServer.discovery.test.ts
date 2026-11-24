@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
+import {
+  ACTIONS_LIST_MAX_LIMIT,
+  ACTIONS_LIST_WALK_LIMIT,
+} from "../../../../shared/config/mcpIntrospection.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -830,6 +834,80 @@ describe("sessionServer introspection tier filtering", () => {
       expect(call[1]).toMatchObject({ category: "git", limit: 100 });
     }
     expect(calls.map((c) => (c[1] as { offset: number }).offset)).toEqual([0, 100]);
+  });
+
+  /** A view that answers main's walk with pages of the walk limit, as a local one does (#17036). */
+  function walkHonouringDeps(all: ActionManifestEntry[]) {
+    return fakeDeps({
+      sessionStore: fakeSessionStore("full"),
+      dispatchAction: vi.fn(
+        (
+          _id: string,
+          callArgs: unknown,
+          _confirmed?: boolean,
+          _authorization?: unknown,
+          _relayCallId?: string,
+          walk?: { actionsListWalk?: true }
+        ) => {
+          const { offset = 0, limit: asked = 50 } = callArgs as { offset?: number; limit?: number };
+          const limit = walk?.actionsListWalk ? ACTIONS_LIST_WALK_LIMIT : asked;
+          return Promise.resolve({
+            result: {
+              ok: true as const,
+              result: {
+                actions: all.slice(offset, offset + limit),
+                total: all.length,
+                limit,
+                offset,
+                hasMore: offset + limit < all.length,
+              },
+            },
+          });
+        }
+      ),
+    });
+  }
+
+  it("takes a local registry of hundreds of actions in one round trip (#17036)", async () => {
+    const denied = Array.from({ length: 505 }, (_, i) => entry(`git.denied${i}`));
+    const all = [...denied.slice(0, 300), entry("terminal.list"), ...denied.slice(300)];
+    const deps = walkHonouringDeps(all);
+    const server = createSessionServer("s1", deps);
+
+    const body = payload<{ actions: ActionManifestEntry[]; total: number; limit: number }>(
+      await callTool(server, { name: "actions.list", arguments: { limit: 5 } })
+    );
+
+    const calls = (deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    // The arguments stay inside the tool's public contract; the large page is
+    // asked for beside them, never through them.
+    expect(calls[0]![1]).toMatchObject({ offset: 0, limit: ACTIONS_LIST_MAX_LIMIT });
+    expect(calls[0]![5]).toEqual({ actionsListWalk: true });
+    // The caller still gets its own page of the permitted set.
+    expect(body.actions.map((a) => a.id)).toEqual(["terminal.list"]);
+    expect(body.total).toBe(1);
+    expect(body.limit).toBe(5);
+  });
+
+  it("moves on by the walk's page when a registry outgrows one (#17036)", async () => {
+    const all = [
+      ...Array.from({ length: ACTIONS_LIST_WALK_LIMIT + 50 }, (_, i) => entry(`git.denied${i}`)),
+      entry("terminal.list"),
+    ];
+    const deps = walkHonouringDeps(all);
+    const server = createSessionServer("s1", deps);
+
+    const body = payload<{ actions: ActionManifestEntry[] }>(
+      await callTool(server, { name: "actions.list" })
+    );
+
+    const calls = (deps.dispatchAction as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.map((c) => (c[1] as { offset: number }).offset)).toEqual([
+      0,
+      ACTIONS_LIST_WALK_LIMIT,
+    ]);
+    expect(body.actions.map((a) => a.id)).toEqual(["terminal.list"]);
   });
 
   it("walks past an empty actions.list page while the view reports more (#13350)", async () => {

@@ -17,15 +17,15 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { actionService } from "@/services/ActionService";
 import { ForgeStatsContextMenuItems } from "./ForgeStatsContextMenuItems";
 import { ForgeTokenCallout } from "./ForgeTokenCallout";
-import { classifyTokenError } from "@/lib/forgeErrors";
+import { classifyTokenError, type ForgeTokenErrorKind } from "@/lib/forgeErrors";
 import { usePRCircuitBreakerStore } from "@/store/prCircuitBreakerStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { useRepositoryStats } from "@/hooks/useRepositoryStats";
+import { useRepositoryStats, type FreshnessLevel } from "@/hooks/useRepositoryStats";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { useCanOpenForgeRepo } from "@/hooks/useCanOpenForgeRepo";
-import { useBuiltinView } from "@/registry/builtinRendererRegistry";
+import { preloadBuiltinView, useBuiltinView } from "@/registry/builtinRendererRegistry";
 import { ForgeStatusIndicator, type ForgeStatusIndicatorStatus } from "./ForgeStatusIndicator";
 import { forgeClient } from "@/clients/forgeClient";
 import { buildCacheKey, getCache, setCache } from "@/lib/forgeResourceCache";
@@ -49,7 +49,7 @@ import {
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { ForgeStatPill } from "./ForgeStatPill";
 import { ForgeStatsPlaceholder } from "./ForgeStatsPlaceholder";
-import { LocalCommitsDropdown } from "./LocalCommitsDropdown";
+import { LazyLocalCommitsDropdown, preloadLocalCommitsDropdown } from "./LazyLocalCommitsDropdown";
 
 // Hover-to-prefetch tuning. The prefetch fires immediately on pointerenter
 // (mouse only) — no debounce: hovering a toolbar pill is strong click intent,
@@ -103,6 +103,26 @@ const pillOverflowChars = (display: number | string | null) =>
 // figure: `Browse git commits (23,645)`.
 const exactSuffix = (display: number | string | null, noun?: string) =>
   display === null ? "" : ` (${formatExactCount(display)}${noun ? ` ${noun}` : ""})`;
+
+// A missing credential asks to be configured; one that exists but stopped
+// working asks to be reconnected. A remote window's data comes from the host's
+// own sign-in, so there the credential is named as the host's.
+const tokenPromptLabel = (
+  providerName: string,
+  remoteProviderName: string,
+  kind: ForgeTokenErrorKind | null,
+  items: string,
+  remoteHostName: string | null
+) => {
+  if (remoteHostName !== null) {
+    return `${forgeNotConnectedLabel(remoteProviderName, remoteHostName)}. Connect it to see ${items}`;
+  }
+  const verb =
+    kind !== null && kind !== "not-configured"
+      ? `Reconnect ${providerName}`
+      : `Configure ${providerName} token`;
+  return `${verb} to see ${items}`;
+};
 
 // Re-exported for external consumers (tests, rate-limit math)
 export { msUntilNextLabelChange } from "./RateLimitDetails";
@@ -162,19 +182,19 @@ export const ForgeStatsToolbarButton = memo(
     // A missing credential asks to be configured; one that exists but stopped
     // working asks to be reconnected, and also raises the pill's callout.
     const tokenErrorKind = isTokenError ? classifyTokenError(statsError) : null;
-    const tokenVerb =
-      tokenErrorKind !== null && tokenErrorKind !== "not-configured"
-        ? `Reconnect ${providerName}`
-        : `Configure ${providerName} token`;
     const [tokenCalloutOpen, setTokenCalloutOpen] = useState(false);
     const tokenCalloutId = useId();
     // A remote window's forge data comes from the host's own sign-in, so the missing
     // token is named as the host's; clicking still opens the connect flow, which saves there.
     const remoteHostName = useRemoteHostName();
     const tokenMissingLabel = (items: string) =>
-      remoteHostName === null
-        ? `${tokenVerb} to see ${items}`
-        : `${forgeNotConnectedLabel(providerEntry?.contribution.name ?? "Your code forge", remoteHostName)}. Connect it to see ${items}`;
+      tokenPromptLabel(
+        providerName,
+        providerEntry?.contribution.name ?? "Your code forge",
+        tokenErrorKind,
+        items,
+        remoteHostName
+      );
     const menuProviderName = forgeMode ? providerName : null;
     const { canOpenRepo, recheck: recheckRepoLink } = useCanOpenForgeRepo(
       currentProject?.path,
@@ -185,15 +205,49 @@ export const ForgeStatsToolbarButton = memo(
     const handleStatsMenuOpenChange = (open: boolean) => {
       if (open) recheckRepoLink();
     };
-    const DropdownView = useBuiltinView<ForgeStatsDropdownProps>(
-      providerEntry?.contribution.slots?.statsDropdown ?? ""
-    );
+    const statsDropdownSlot = providerEntry?.contribution.slots?.statsDropdown ?? "";
+    const DropdownView = useBuiltinView<ForgeStatsDropdownProps>(statsDropdownSlot);
     // The issues segment lists the issues provider's issues in that provider's
     // own view — the code forge's unless the project binds another (#13700).
-    const IssuesDropdownView = useBuiltinView<ForgeStatsDropdownProps>(
-      issuesProvider.entry?.contribution.slots?.statsDropdown ?? ""
-    );
+    const issuesStatsDropdownSlot = issuesProvider.entry?.contribution.slots?.statsDropdown ?? "";
+    const IssuesDropdownView = useBuiltinView<ForgeStatsDropdownProps>(issuesStatsDropdownSlot);
+    // Code, not data: a dropdown's chunk costs no forge quota, so any hover or
+    // focus of its pill warms it ahead of the click, keyboard and touch included.
+    // Each segment warms the view it would render.
+    const warmDropdownView = (segment: "issue" | "pr" | "commit") => {
+      if (segment === "issue") {
+        if (IssuesDropdownView) preloadBuiltinView(issuesStatsDropdownSlot);
+        return;
+      }
+      if (DropdownView && providerId) {
+        preloadBuiltinView(statsDropdownSlot);
+        return;
+      }
+      if (segment === "commit") preloadLocalCommitsDropdown();
+    };
     const issuesProviderId = issuesProvider.providerId;
+    // A project can bind its issues to another tracker (#13700). The issues
+    // pill then speaks for that tracker alone: its name, its credentials and
+    // its failures. The code forge's token, rate limit and outages are the PR
+    // pill's, and say nothing about whether the tracker can list issues.
+    const splitIssuesEntry =
+      issuesProviderId !== null && issuesProviderId !== providerId ? issuesProvider.entry : null;
+    const issuesSplit = splitIssuesEntry !== null;
+    const issuesProviderName = splitIssuesEntry?.contribution.name ?? providerName;
+    const issueError = issuesSplit ? (stats?.issueError ?? null) : null;
+    const issuesTokenErrorKind = issuesSplit ? classifyTokenError(issueError) : tokenErrorKind;
+    const issuesTokenError = issuesSplit ? issuesTokenErrorKind !== null : isTokenError;
+    const issuesTokenMissingLabel = issuesSplit
+      ? tokenPromptLabel(
+          issuesProviderName,
+          issuesProviderName,
+          issuesTokenErrorKind,
+          "issues",
+          remoteHostName
+        )
+      : tokenMissingLabel("issues");
+    const issuesSettingsProviderId = issuesSplit ? issuesProviderId : providerId;
+    const issuesOnTracker = issuesSplit ? ` on ${issuesProviderName}` : "";
 
     // Drives the tooltip aging copy ("updated 3m ago") without per-component
     // intervals — the ticker is shared, paused on hidden tabs, and tears down
@@ -270,6 +324,22 @@ export const ForgeStatsToolbarButton = memo(
     const statsRecencyFallback = stats?.stale ? null : lastUpdated;
     const issueCountRefreshedAt = stats?.issueCountRefreshedAt ?? statsRecencyFallback;
     const prCountRefreshedAt = stats?.prCountRefreshedAt ?? statsRecencyFallback;
+    // A split issues pill is as fresh as the tracker's own read: the code
+    // forge's outage or cached snapshot says nothing about whether the tracker
+    // answered. Ageing still follows the poll, since a poll that never landed
+    // re-read neither. A snapshot no poll produced (a persisted seed) says
+    // nothing about the tracker either, so it keeps the blend's freshness.
+    const issuesFreshnessLevel: FreshnessLevel = !issuesSplit
+      ? freshnessLevel
+      : issueError !== null
+        ? "errored"
+        : stats?.issueStale === true
+          ? "stale-disk"
+          : stats?.issueStale === false
+            ? freshnessLevel === "aging"
+              ? "aging"
+              : "fresh"
+            : freshnessLevel;
 
     // List-loaded counts reported by each dropdown's `onCountUpdate`. These
     // track what the dropdown actually lists (loaded first-page length +
@@ -453,9 +523,10 @@ export const ForgeStatsToolbarButton = memo(
     // panel they had open closes rather than lingering behind the token callout
     // and springing back once the token is repaired.
     useEffect(() => {
-      if (!isTokenError) return;
-      setIssuesOpen(false);
-      setPrsOpen(false);
+      if (issuesTokenError) setIssuesOpen(false);
+    }, [issuesTokenError]);
+    useEffect(() => {
+      if (isTokenError) setPrsOpen(false);
     }, [isTokenError]);
     useEffect(() => {
       onDataUnavailableChange?.(persistentErrorActive);
@@ -562,7 +633,7 @@ export const ForgeStatsToolbarButton = memo(
     const [prsPulseAt, setPrsPulseAt] = useState<number | null>(null);
 
     const showIssuesChip =
-      !isTokenError && issuesPulseAt !== null && !issuesOpen && (issueCount ?? 0) > 0;
+      !issuesTokenError && issuesPulseAt !== null && !issuesOpen && (issueCount ?? 0) > 0;
     const showPrsChip = !isTokenError && prsPulseAt !== null && !prsOpen && (prCount ?? 0) > 0;
 
     // Auto-clear each chip ACTIVITY_CHIP_TTL_MS after the most recent count
@@ -729,7 +800,14 @@ export const ForgeStatsToolbarButton = memo(
 
     const prefetchResourceList = useCallback(
       (type: "issue" | "pr") => {
-        if (!currentProject || isTokenError || rateLimitActive) return;
+        if (!currentProject) return;
+        // Each list is gated on its own provider: a split issues tracker
+        // neither shares the code forge's token nor spends its quota.
+        const blocked =
+          type === "issue"
+            ? issuesTokenError || (!issuesSplit && rateLimitActive)
+            : isTokenError || rateLimitActive;
+        if (blocked) return;
         // Open-state race guard: if a click opened the dropdown in the same
         // tick as this hover, re-check here so the prefetch doesn't fire a
         // duplicate request alongside the dropdown's own mount fetch.
@@ -839,6 +917,8 @@ export const ForgeStatsToolbarButton = memo(
       [
         currentProject,
         isTokenError,
+        issuesTokenError,
+        issuesSplit,
         rateLimitActive,
         handleIssueListCountUpdate,
         handlePrListCountUpdate,
@@ -1010,6 +1090,14 @@ export const ForgeStatsToolbarButton = memo(
         { source: "user" }
       );
     }, [providerId]);
+    const openIssuesSettingsForToken = useCallback(() => {
+      if (!issuesSettingsProviderId) return;
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "code-forge", subtab: issuesSettingsProviderId },
+        { source: "user" }
+      );
+    }, [issuesSettingsProviderId]);
 
     useImperativeHandle(
       ref,
@@ -1020,8 +1108,8 @@ export const ForgeStatsToolbarButton = memo(
           setCommitsOpen(false);
         },
         openIssues: () => {
-          if (isTokenError) {
-            openSettingsForToken();
+          if (issuesTokenError) {
+            openIssuesSettingsForToken();
             return;
           }
           // No dropdown view for the issues provider — route to its website,
@@ -1066,7 +1154,9 @@ export const ForgeStatsToolbarButton = memo(
       [
         stats,
         isTokenError,
+        issuesTokenError,
         openSettingsForToken,
+        openIssuesSettingsForToken,
         DropdownView,
         IssuesDropdownView,
         currentProject?.path,
@@ -1075,8 +1165,11 @@ export const ForgeStatsToolbarButton = memo(
 
     // A dash while counts load keeps the forge's own icon colour: grey icons are
     // what a missing token looks like, and a cold load must not pass for one.
-    const segmentTone = (display: number | string | null): "default" | "quiet" | "unavailable" =>
-      isTokenError
+    const segmentTone = (
+      display: number | string | null,
+      tokenError: boolean
+    ): "default" | "quiet" | "unavailable" =>
+      tokenError
         ? "unavailable"
         : display === null
           ? statsLoading
@@ -1136,9 +1229,11 @@ export const ForgeStatsToolbarButton = memo(
       const present = notes.filter((n): n is string => n !== null);
       return present.length > 0 ? ` · ${present.join(" · ")}` : "";
     };
+    // A split issues pill's failure is the tracker's, and its freshness suffix
+    // already says so; the code forge's notes are the PR pill's.
     const issuesStatusSuffix = statusSuffix([
       showIssuesChip ? "count increased recently" : null,
-      ...forgeStatusNotes,
+      ...(issuesSplit ? [] : forgeStatusNotes),
     ]);
     const prsStatusSuffix = statusSuffix([
       showPrsChip ? "count increased recently" : null,
@@ -1178,16 +1273,16 @@ export const ForgeStatsToolbarButton = memo(
             animKey={issueAnimKey}
             testId="forge-stat-pill-issues"
             ariaLabel={
-              isTokenError
-                ? tokenMissingLabel("issues")
-                : `${countName(issueDisplayCount, "open issue", "open issues", "open issues")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
+              issuesTokenError
+                ? issuesTokenMissingLabel
+                : `${countName(issueDisplayCount, "open issue", "open issues", "open issues")}${issuesOnTracker}${freshnessSuffix(issuesFreshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             tooltipContent={
-              isTokenError
-                ? tokenMissingLabel("issues")
-                : freshnessLevel === "fresh" && (issueDisplayCount !== null || statsLoading)
-                  ? `Browse ${providerName} issues${exactSuffix(issueDisplayCount, "open")}${issuesStatusSuffix}`
-                  : `${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
+              issuesTokenError
+                ? issuesTokenMissingLabel
+                : issuesFreshnessLevel === "fresh" && (issueDisplayCount !== null || statsLoading)
+                  ? `Browse ${issuesProviderName} issues${exactSuffix(issueDisplayCount, "open")}${issuesStatusSuffix}`
+                  : `${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}${issuesOnTracker}${freshnessSuffix(issuesFreshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={
@@ -1195,15 +1290,16 @@ export const ForgeStatsToolbarButton = memo(
                 segment="issues"
                 projectPath={currentProject.path}
                 providerName={menuProviderName}
+                segmentProviderName={splitIssuesEntry?.contribution.name}
                 canOpenRepo={canOpenRepo}
               />
             }
             icon={CircleDot}
             iconClassName="text-pr-open"
-            tooltipSuppressed={tokenCalloutOpen}
-            ariaDescribedBy={tokenCalloutOpen ? tokenCalloutId : undefined}
-            tone={segmentTone(issueDisplayCount)}
-            hasDisclosure={!isTokenError && Boolean(IssuesDropdownView)}
+            tooltipSuppressed={!issuesSplit && tokenCalloutOpen}
+            ariaDescribedBy={!issuesSplit && tokenCalloutOpen ? tokenCalloutId : undefined}
+            tone={segmentTone(issueDisplayCount, issuesTokenError)}
+            hasDisclosure={!issuesTokenError && Boolean(IssuesDropdownView)}
             dropdownContent={
               IssuesDropdownView && issuesProviderId ? (
                 <IssuesDropdownView
@@ -1227,9 +1323,9 @@ export const ForgeStatsToolbarButton = memo(
             onClick={() => {
               setPrsOpen(false);
               setCommitsOpen(false);
-              if (isTokenError) {
+              if (issuesTokenError) {
                 setIssuesOpen(false);
-                openSettingsForToken();
+                openIssuesSettingsForToken();
                 return;
               }
               // The issues provider contributes no dropdown view — route the
@@ -1257,14 +1353,12 @@ export const ForgeStatsToolbarButton = memo(
                 refreshStats();
               }
             }}
-            onOpenChange={(open) => {
-              setIssuesOpen(open);
-              if (!open) {
-                armTooltipFocusSuppression();
-                issuesButtonRef.current?.focus();
-              }
+            onOpenChange={setIssuesOpen}
+            onPointerEnter={(e) => {
+              warmDropdownView("issue");
+              handlePrefetchPointerEnter("issue", e);
             }}
-            onPointerEnter={(e) => handlePrefetchPointerEnter("issue", e)}
+            onFocus={() => warmDropdownView("issue")}
             activity={showIssuesChip}
           />
         ) : null}
@@ -1301,7 +1395,7 @@ export const ForgeStatsToolbarButton = memo(
             iconClassName="text-pr-merged"
             tooltipSuppressed={tokenCalloutOpen}
             ariaDescribedBy={tokenCalloutOpen ? tokenCalloutId : undefined}
-            tone={segmentTone(prDisplayCount)}
+            tone={segmentTone(prDisplayCount, isTokenError)}
             hasDisclosure={!isTokenError && Boolean(DropdownView)}
             dropdownContent={
               DropdownView && providerId ? (
@@ -1352,14 +1446,12 @@ export const ForgeStatsToolbarButton = memo(
                 refreshStats();
               }
             }}
-            onOpenChange={(open) => {
-              setPrsOpen(open);
-              if (!open) {
-                armTooltipFocusSuppression();
-                prsButtonRef.current?.focus();
-              }
+            onOpenChange={setPrsOpen}
+            onPointerEnter={(e) => {
+              warmDropdownView("pr");
+              handlePrefetchPointerEnter("pr", e);
             }}
-            onPointerEnter={(e) => handlePrefetchPointerEnter("pr", e)}
+            onFocus={() => warmDropdownView("pr")}
             activity={showPrsChip}
           />
         ) : null}
@@ -1419,7 +1511,7 @@ export const ForgeStatsToolbarButton = memo(
               // Commit history is local git data, so commits-only mode
               // (no forge provider) still gets a browsable dropdown
               // (issue #10414).
-              <LocalCommitsDropdown
+              <LazyLocalCommitsDropdown
                 cwd={activeWorktree?.path ?? currentProject.path}
                 branch={activeWorktree?.branch}
                 open={commitsOpen}
@@ -1437,13 +1529,9 @@ export const ForgeStatsToolbarButton = memo(
             setPrsOpen(false);
             setCommitsOpen((p) => !p);
           }}
-          onOpenChange={(open) => {
-            setCommitsOpen(open);
-            if (!open) {
-              armTooltipFocusSuppression();
-              commitsButtonRef.current?.focus();
-            }
-          }}
+          onPointerEnter={() => warmDropdownView("commit")}
+          onFocus={() => warmDropdownView("commit")}
+          onOpenChange={setCommitsOpen}
         />
         {rateLimitActive ? (
           <Tooltip
@@ -1544,9 +1632,10 @@ export const ForgeStatsToolbarButton = memo(
         {forgeMode && providerId && tokenErrorKind && tokenErrorKind !== "not-configured" ? (
           <ForgeTokenCallout
             id={tokenCalloutId}
-            anchorRef={issuesButtonRef}
+            anchorRef={issuesSplit ? prsButtonRef : issuesButtonRef}
             providerId={providerId}
             providerName={providerName}
+            restores={issuesSplit ? "pull request counts" : undefined}
             errorKind={tokenErrorKind}
             validating={statsValidating}
             onReconnect={openSettingsForToken}

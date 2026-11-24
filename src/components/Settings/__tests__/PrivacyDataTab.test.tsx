@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { PrivacyDataTab } from "../PrivacyDataTab";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -51,7 +51,7 @@ function createPrivacyApi(overrides: Partial<typeof window.electron.privacy> = {
     }),
     setTelemetryLevel: vi.fn().mockResolvedValue(undefined),
     setLogRetention: vi.fn().mockResolvedValue(undefined),
-    openDataFolder: vi.fn(),
+    openDataFolder: vi.fn().mockResolvedValue({ opened: true }),
     clearCache: vi.fn().mockResolvedValue({ cleared: 5, failed: 0 }),
     resetAllData: vi.fn(),
     ...overrides,
@@ -140,7 +140,7 @@ describe("PrivacyDataTab", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("reverts to latest successful value (stale closure proof)", async () => {
+  it("reverts a failed second change to the first, which saved", async () => {
     const setTelemetry = vi
       .fn()
       .mockResolvedValueOnce(undefined) // first call succeeds
@@ -174,11 +174,11 @@ describe("PrivacyDataTab", () => {
 
     // Second change: errors → full (fails)
     fireEvent.click(radio("Full usage"));
-    await waitFor(() => {
-      // Should revert to "errors" (the last successful value), NOT "off"
-      expect(radio("Errors only").checked).toBe(true);
-      expect(radio("Full usage").checked).toBe(false);
-    });
+    await screen.findByText("Telemetry level couldn't be saved");
+    // Back to "errors", which saved, not "off" from before it.
+    expect(radio("Errors only").checked).toBe(true);
+    expect(radio("Full usage").checked).toBe(false);
+    expect(setTelemetry.mock.calls).toEqual([["errors"], ["full"]]);
   });
 
   it("renders telemetry disclosure listing all allowlisted analytics events", async () => {
@@ -280,6 +280,106 @@ describe("PrivacyDataTab", () => {
     });
 
     expect(screen.queryByText(/What's collected at each level/i)).toBeNull();
+  });
+
+  it("opens the data folder and stays quiet when the OS accepts it", async () => {
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder" }));
+
+    await waitFor(() => expect(window.electron.privacy.openDataFolder).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Couldn't open the folder/)).toBeNull();
+  });
+
+  it("says beside the control when the OS refuses to open the data folder", async () => {
+    window.electron = {
+      privacy: createPrivacyApi({
+        openDataFolder: vi.fn().mockResolvedValue({ opened: false }),
+      }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder" }));
+
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
+  });
+
+  it("ignores a second click while the first open is pending, so an old refusal can't outlive a success", async () => {
+    let resolveOpen!: (r: { opened: boolean }) => void;
+    const openDataFolder = vi.fn(
+      () => new Promise<{ opened: boolean }>((resolve) => (resolveOpen = resolve))
+    );
+    window.electron = {
+      privacy: createPrivacyApi({ openDataFolder }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const button = await screen.findByRole("button", { name: "Open folder" });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(openDataFolder).toHaveBeenCalledTimes(1);
+
+    resolveOpen({ opened: false });
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
+
+    openDataFolder.mockResolvedValueOnce({ opened: true });
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText(/Couldn't open the folder/)).toBeNull());
+    expect(openDataFolder).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets the data folder open again after a rejected request and after a success", async () => {
+    const openDataFolder = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("IPC fail"))
+      .mockResolvedValueOnce({ opened: true })
+      .mockResolvedValueOnce({ opened: true });
+    window.electron = {
+      privacy: createPrivacyApi({ openDataFolder }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    const button = await screen.findByRole("button", { name: "Open folder" });
+    fireEvent.click(button);
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
+
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.queryByText(/Couldn't open the folder/)).toBeNull());
+    expect(openDataFolder).toHaveBeenCalledTimes(2);
+
+    fireEvent.click(button);
+    await waitFor(() => expect(openDataFolder).toHaveBeenCalledTimes(3));
+  });
+
+  it("says beside the control when the open request itself fails", async () => {
+    window.electron = {
+      privacy: createPrivacyApi({
+        openDataFolder: vi.fn().mockRejectedValue(new Error("IPC fail")),
+      }),
+      agentSessionHistory: createAgentSessionHistoryApi(),
+    } as unknown as typeof window.electron;
+
+    render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />, {
+      wrapper: TooltipProvider,
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Open folder" }));
+
+    expect(await screen.findByText(/Couldn't open the folder/)).toBeTruthy();
   });
 
   it("reverts log retention and says so beside it on IPC failure", async () => {
@@ -568,5 +668,235 @@ describe("PrivacyDataTab", () => {
     fireEvent.change(within(dialog).getByRole("textbox"), { target: { value: "Daintree" } });
     fireEvent.click(reset);
     expect(window.electron.privacy.resetAllData).toHaveBeenCalledTimes(1);
+  });
+
+  describe("two quick choices whose writes settle out of order", () => {
+    function deferredWrites() {
+      const pending: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
+      const send = vi.fn(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            pending.push({ resolve, reject });
+          })
+      );
+      /** Settles the nth write: resolved without an error, rejected with one. */
+      const settle = async (index: number, error?: unknown) => {
+        const write = pending[index];
+        if (!write) throw new Error(`write ${index} was never sent`);
+        await act(async () => (error === undefined ? write.resolve() : write.reject(error)));
+      };
+      return { send, settle };
+    }
+
+    const logRetentionOption = (label: string) =>
+      within(screen.getByRole("radiogroup", { name: "Log retention" })).getByRole("radio", {
+        name: label,
+      });
+    const sessionOption = (label: string) =>
+      within(screen.getByRole("radiogroup", { name: "Keep session history for" })).getByRole(
+        "radio",
+        { name: label }
+      );
+    const isChecked = (option: HTMLElement) => option.getAttribute("aria-checked") === "true";
+
+    async function renderTab(
+      subtab: "telemetry" | "storage",
+      apis: {
+        privacy?: Partial<typeof window.electron.privacy>;
+        sessions?: Partial<typeof window.electron.agentSessionHistory>;
+      }
+    ) {
+      Reflect.set(window, "electron", {
+        privacy: createPrivacyApi(apis.privacy),
+        agentSessionHistory: createAgentSessionHistoryApi(apis.sessions),
+      });
+      render(<PrivacyDataTab activeSubtab={subtab} onSubtabChange={vi.fn()} />, {
+        wrapper: TooltipProvider,
+      });
+      if (subtab === "telemetry") await waitFor(() => expect(radio("Off").checked).toBe(true));
+      else
+        await waitFor(() => {
+          expect(isChecked(logRetentionOption("30 days"))).toBe(true);
+          expect(isChecked(sessionOption("30 days"))).toBe(true);
+        });
+    }
+
+    it("keeps the newer telemetry level when the older write fails after it saved", async () => {
+      const writes = deferredWrites();
+      await renderTab("telemetry", { privacy: { setTelemetryLevel: writes.send } });
+
+      fireEvent.click(radio("Errors only"));
+      fireEvent.click(radio("Full usage"));
+      expect(writes.send).toHaveBeenCalledTimes(2);
+
+      await writes.settle(1);
+      await writes.settle(0, new Error("IPC fail"));
+
+      expect(radio("Full usage").checked).toBe(true);
+      expect(screen.queryByText("Telemetry level couldn't be saved")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    });
+
+    it("falls back to the older level still in flight when the newer write fails, and retries the newer one", async () => {
+      const writes = deferredWrites();
+      await renderTab("telemetry", { privacy: { setTelemetryLevel: writes.send } });
+
+      fireEvent.click(radio("Errors only"));
+      fireEvent.click(radio("Full usage"));
+
+      await writes.settle(1, new Error("IPC fail"));
+      expect(radio("Errors only").checked).toBe(true);
+      expect(screen.getByText("Telemetry level couldn't be saved")).toBeTruthy();
+
+      await writes.settle(0);
+      expect(radio("Errors only").checked).toBe(true);
+      expect(screen.getByText("Telemetry level couldn't be saved")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(writes.send).toHaveBeenCalledTimes(3);
+      expect(writes.send).toHaveBeenLastCalledWith("full");
+      expect(radio("Full usage").checked).toBe(true);
+    });
+
+    it("keeps the newer log retention when the older write fails after it saved", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { privacy: { setLogRetention: writes.send } });
+
+      fireEvent.click(logRetentionOption("90 days"));
+      fireEvent.click(logRetentionOption("7 days"));
+
+      await writes.settle(1);
+      await writes.settle(0, new Error("IPC fail"));
+
+      expect(isChecked(logRetentionOption("7 days"))).toBe(true);
+      expect(screen.queryByText("Log retention couldn't be saved")).toBeNull();
+    });
+
+    it("falls back past every failed log retention write, and retries only the newest", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { privacy: { setLogRetention: writes.send } });
+
+      fireEvent.click(logRetentionOption("90 days"));
+      fireEvent.click(logRetentionOption("7 days"));
+
+      await writes.settle(1, new Error("IPC fail"));
+      expect(isChecked(logRetentionOption("90 days"))).toBe(true);
+      await writes.settle(0, new Error("IPC fail"));
+      expect(isChecked(logRetentionOption("30 days"))).toBe(true);
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(writes.send).toHaveBeenCalledTimes(3);
+      expect(writes.send).toHaveBeenLastCalledWith(7);
+    });
+
+    it("drops the Retry once the value it would resend is in play again", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { privacy: { setLogRetention: writes.send } });
+
+      fireEvent.click(logRetentionOption("90 days"));
+      fireEvent.click(logRetentionOption("7 days"));
+      fireEvent.click(logRetentionOption("90 days"));
+
+      await writes.settle(2, new Error("IPC fail"));
+      expect(isChecked(logRetentionOption("7 days"))).toBe(true);
+      expect(screen.getByText("Log retention couldn't be saved")).toBeTruthy();
+
+      // The first write asked for 90 days too, and it's still on its way.
+      await writes.settle(1, new Error("IPC fail"));
+      expect(isChecked(logRetentionOption("90 days"))).toBe(true);
+      expect(screen.queryByText("Log retention couldn't be saved")).toBeNull();
+
+      await writes.settle(0);
+      expect(isChecked(logRetentionOption("90 days"))).toBe(true);
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    });
+
+    it("brings the Retry back when the older write for the same value fails too", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { privacy: { setLogRetention: writes.send } });
+
+      fireEvent.click(logRetentionOption("90 days"));
+      fireEvent.click(logRetentionOption("7 days"));
+      fireEvent.click(logRetentionOption("90 days"));
+      await writes.settle(2, new Error("IPC fail"));
+      await writes.settle(1, new Error("IPC fail"));
+      await writes.settle(0, new Error("IPC fail"));
+
+      expect(isChecked(logRetentionOption("30 days"))).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(writes.send).toHaveBeenCalledTimes(4);
+      expect(writes.send).toHaveBeenLastCalledWith(90);
+    });
+
+    it("keeps the newer session retention when the older write fails after it saved", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { sessions: { setRetentionDays: writes.send } });
+
+      // Both are longer windows, so each applies straight away without a confirm.
+      fireEvent.click(sessionOption("90 days"));
+      fireEvent.click(sessionOption("Keep forever"));
+
+      await writes.settle(1);
+      await writes.settle(0, new Error("IPC fail"));
+
+      expect(isChecked(sessionOption("Keep forever"))).toBe(true);
+      expect(screen.queryByText("Session history retention couldn't be saved")).toBeNull();
+    });
+
+    it("shows the host's refusal for the newer session retention and retries it once the older one saved", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { sessions: { setRetentionDays: writes.send } });
+
+      fireEvent.click(sessionOption("90 days"));
+      fireEvent.click(sessionOption("Keep forever"));
+
+      await writes.settle(1, new ClientAppError("DRIVEN_ELSEWHERE", "refused", TAKE_CONTROL));
+      expect(isChecked(sessionOption("90 days"))).toBe(true);
+      expect(screen.getByText(TAKE_CONTROL)).toBeTruthy();
+      await writes.settle(0);
+      expect(isChecked(sessionOption("90 days"))).toBe(true);
+
+      // Keep forever is still longer than what's saved, so the retry needs no confirm.
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(writes.send).toHaveBeenCalledTimes(3);
+      expect(writes.send).toHaveBeenLastCalledWith(0);
+    });
+
+    it("asks before shortening a longer window that is still being saved", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { sessions: { setRetentionDays: writes.send } });
+
+      fireEvent.click(sessionOption("90 days"));
+      fireEvent.click(sessionOption("Keep forever"));
+      // Main may already hold 90 days, so 30 days would delete sessions it keeps.
+      await writes.settle(1, new Error("IPC fail"));
+      fireEvent.click(sessionOption("30 days"));
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(/30 days instead of 90 days/)).toBeTruthy();
+      expect(writes.send).toHaveBeenCalledTimes(2);
+    });
+
+    it("names the window being replaced as it changes, and holds it while the shortening saves", async () => {
+      const writes = deferredWrites();
+      await renderTab("storage", { sessions: { setRetentionDays: writes.send } });
+
+      fireEvent.click(sessionOption("90 days"));
+      fireEvent.click(sessionOption("7 days"));
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText(/7 days instead of 90 days/)).toBeTruthy();
+
+      await writes.settle(0, new Error("IPC fail"));
+      expect(within(dialog).getByText(/7 days instead of 30 days/)).toBeTruthy();
+
+      fireEvent.click(within(dialog).getByRole("button", { name: "Shorten and delete" }));
+      await waitFor(() => expect(writes.send).toHaveBeenLastCalledWith(7));
+      expect(isChecked(sessionOption("7 days"))).toBe(true);
+      expect(within(dialog).getByText(/7 days instead of 30 days/)).toBeTruthy();
+
+      await writes.settle(1);
+      await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    });
   });
 });

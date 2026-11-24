@@ -116,11 +116,28 @@ export interface DecisionsHostRecord {
 }
 
 /**
+ * How a Host's own Decisions asks its agents' questions (#17942), as it
+ * reports it. Its own: none of this comes from this computer's settings, and
+ * a Host settles its questions from the relay itself, so it holds while this
+ * computer sleeps.
+ */
+export interface DecisionsHostQuestionPolicy {
+  /**
+   * Its agents may ask advisory questions: it signs their deadline, records
+   * it in its own store and types the outcome into the asking terminal itself.
+   */
+  advisoryQuestions: boolean;
+  /** How long a question asked there without a deadline waits, in ms; null for never. */
+  defaultQuestionExpiryMs: number | null;
+}
+
+/**
  * An enrolled Host's own Decisions, as the Host reports it (#16022):
  *
  * - `not-enrolled`: it holds no enrollment from this owner.
  * - `running`: it runs Decisions for its own panes; `connection` is its relay
- *   connection as it observes it.
+ *   connection as it observes it, and `questionPolicy` how it asks (#17942),
+ *   absent from a Host from before it.
  * - `owner-off`: the owner's Shell said Decisions is off, so it stopped. Its
  *   keys stay, so it carries on where it left off once Decisions is on again.
  * - `revoked`: the relay refused its device as revoked, so it stopped and
@@ -135,6 +152,7 @@ export type DecisionsHostRuntime =
         "not-connected" | "connecting" | "connected" | "reconnecting" | "replaced" | "revoked";
       nextAttemptAt?: number;
       problem?: DecisionsConnectionProblem;
+      questionPolicy?: DecisionsHostQuestionPolicy;
     }
   | { state: "owner-off"; deviceId: string; since: number }
   | { state: "revoked"; deviceId: string; since: number; credentialsRemoved: boolean };
@@ -173,8 +191,18 @@ export interface DecisionsHost {
  * The Hosts Settings shows: every connected one, and every one this computer
  * has enrolled or seen revoked. `not-set-up`: no relay identity of an owner here.
  */
-export type DecisionsHostsResult =
-  { result: "listed"; autoEnroll: boolean; hosts: DecisionsHost[] } | { result: "not-set-up" };
+export type DecisionsHostsResult = (
+  { result: "listed"; autoEnroll: boolean; hosts: DecisionsHost[] } | { result: "not-set-up" }
+) & {
+  /**
+   * The Hosts whose questions this computer's inbox lists now (#18049), by
+   * host-list id: each whose last report of its questions was taken,
+   * connected or not, and with no question in it or some, whether or not
+   * this computer can enroll Hosts now. A read through `listHosts` carries
+   * it; an answer to a Settings change may not.
+   */
+  inboxHostIds?: string[];
+};
 
 export interface EnrollDecisionsHostPayload {
   hostId: string;

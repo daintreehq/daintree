@@ -11,42 +11,78 @@ import { pluralize } from "@/lib/pluralize";
 export type DiffMode = "working-tree" | "base-branch" | "since-review";
 
 /**
- * Where Commit & push publishes, and the branch tip its confirm put on screen.
- * `reviewedHeadOid` is `null` only when the confirm was opted out and nothing
- * was previewed.
+ * Where Commit & push publishes, and what its confirm put on screen: the branch
+ * tip the commit goes on top of and the staged changes it is made from.
+ * `reviewed` is `null` only when the confirm was opted out and nothing was
+ * previewed.
  */
 export interface CommitPushTarget {
   branch: string;
   destination: GitPushDestination;
-  reviewedHeadOid: string | null;
+  reviewed: { headOid: string; stagedIdentity: string } | null;
 }
 
+/** The push to run after Commit & push's commit, or why none may run. */
+export type CommittedPush = { review: GitPushReview } | { withheld: string };
+
 /**
- * The push review for the commit Commit & push just made, or `null` when the
- * push must not run (#16790).
+ * The push review for the commit Commit & push just made, or why the push must
+ * not run (#16790, #17563).
  *
  * Pinned to that commit, so neither the push nor a Retry after it can publish
  * a commit an agent lands later: main refuses with `push-review-stale` once the
  * branch has moved past it. A confirmed push also requires the commit to sit
- * directly on the tip the confirm previewed. An agent commit landing while the
- * confirm was open would otherwise ride along beneath it, and a merge commit
- * would bring in history the preview never listed.
+ * directly on the tip the confirm previewed, and to hold exactly the staged
+ * changes it listed. An agent commit landing while the confirm was open would
+ * otherwise ride along beneath it, a merge commit would bring in history the
+ * preview never listed, and a restage after the commit's own check would be
+ * published under the name of a file the confirm showed.
  */
 export function reviewForCommittedPush(
   committed: GitCommitResult,
   target: CommitPushTarget
-): GitPushReview | null {
-  if (!committed.oid) return null;
-  if (target.reviewedHeadOid !== null) {
-    const [parent, ...rest] = committed.parentOids;
-    if (rest.length > 0 || parent !== target.reviewedHeadOid.toLowerCase()) return null;
+): CommittedPush {
+  if (!committed.oid) {
+    return { withheld: "The commit was made, but couldn't be read back to pin the push to it." };
   }
-  return { branch: target.branch, headOid: committed.oid, destination: target.destination };
+  if (target.reviewed !== null) {
+    const [parent, ...rest] = committed.parentOids;
+    if (rest.length > 0 || parent !== target.reviewed.headOid.toLowerCase()) {
+      return {
+        withheld:
+          "The branch moved while the push was being reviewed, so the commit sits on history the review didn't show.",
+      };
+    }
+    // Absent from a host that predates the check, `null` when unreadable:
+    // either way nothing shows the commit holds what was reviewed.
+    if (typeof committed.stagedIdentity !== "string") {
+      return {
+        withheld:
+          "The commit was made, but what it contains couldn't be checked against the review.",
+      };
+    }
+    if (committed.stagedIdentity !== target.reviewed.stagedIdentity) {
+      return {
+        withheld:
+          "The staged changes changed while the push was being reviewed, so the commit holds changes the review didn't show.",
+      };
+    }
+  }
+  return {
+    review: { branch: target.branch, headOid: committed.oid, destination: target.destination },
+  };
 }
 
 export interface PushErrorState {
   reason: GitOperationReason;
   rawMessage: string;
+  /**
+   * The sentence the banner shows in place of the reason's stock copy. Set
+   * only where the renderer itself withheld the push and knows exactly why
+   * (#17563): "the branch changed" would misdescribe a commit that holds
+   * other changes than the ones reviewed.
+   */
+  summary?: string;
   /** Captured `refs/remotes/origin/<branch>` SHA at push-rejection time. */
   leaseSha?: string;
   /** Local branch name resolved at push-rejection time. */
@@ -159,6 +195,24 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
     // button, so without this the banner asks for a review nothing offers.
     cta: { kind: "review-push", label: "Review push" },
   },
+  // Raised by the commit, before anything reaches the push, so it surfaces as
+  // the composer's commit error rather than this banner. Listed for the map's
+  // exhaustiveness; no CTA, since the composer's own button is the fresh review.
+  "commit-review-stale": {
+    message:
+      getGitRecoveryHint("commit-review-stale") ??
+      "The staged changes changed since the commit was reviewed. Nothing was committed or pushed.",
+    detailPolicy: "hide",
+  },
+  "pull-rebase-review-stale": {
+    message:
+      getGitRecoveryHint("pull-rebase-review-stale") ??
+      "The branch changed since the pull and rebase was previewed. Nothing was rebased.",
+    detailPolicy: "hide",
+    // Opens a fresh confirm rather than retrying: the preview it was approved
+    // against is exactly what went stale.
+    cta: { kind: "pull-rebase", label: "Pull and rebase" },
+  },
   "hook-rejected": {
     message: getGitRecoveryHint("hook-rejected") ?? "A server-side hook rejected the push.",
     detailPolicy: "collapse",
@@ -190,6 +244,12 @@ export const PUSH_BANNER_CONFIGS: Record<GitOperationReason, PushBannerConfig> =
     message:
       getGitRecoveryHint("conflict-unresolved") ?? "Resolve merge conflicts before continuing.",
     detailPolicy: "collapse",
+  },
+  "repo-operation-changed": {
+    message:
+      getGitRecoveryHint("repo-operation-changed") ??
+      "The Git operation in progress changed, so it was left alone.",
+    detailPolicy: "hide",
   },
   "pathspec-invalid": {
     message: getGitRecoveryHint("pathspec-invalid") ?? "The specified ref or path does not exist.",
@@ -252,7 +312,9 @@ export function getPushBannerConfig(
    */
   forgeProviderId?: string | null
 ): PushBannerConfig {
-  const base = PUSH_BANNER_CONFIGS[state.reason];
+  const base = state.summary
+    ? { ...PUSH_BANNER_CONFIGS[state.reason], message: state.summary }
+    : PUSH_BANNER_CONFIGS[state.reason];
   if (state.reason === "auth-failed") {
     return forgeProviderId
       ? {
@@ -289,23 +351,29 @@ export function getPushBannerConfig(
   return base;
 }
 
-const BASE_BRANCH_STATUS_CONFIG: Record<string, { label: string; bg: string; text: string }> = {
-  A: { label: "A", bg: "bg-status-success/15", text: "text-status-success-text" },
-  D: { label: "D", bg: "bg-status-error/15", text: "text-status-danger-text" },
-  M: { label: "M", bg: "bg-status-warning/15", text: "text-status-warning-text" },
-  R: { label: "R", bg: "bg-status-info/15", text: "text-status-info-text" },
-  C: { label: "C", bg: "bg-status-info/15", text: "text-status-info-text" },
-  U: { label: "U", bg: "bg-status-error/15", text: "text-status-danger-text" },
+const BASE_BRANCH_STATUS_CONFIG: Record<
+  string,
+  { label: string; word: string; bg: string; text: string }
+> = {
+  A: { label: "A", word: "Added", bg: "bg-status-success/15", text: "text-status-success-text" },
+  D: { label: "D", word: "Deleted", bg: "bg-status-error/15", text: "text-status-danger-text" },
+  M: { label: "M", word: "Modified", bg: "bg-status-warning/15", text: "text-status-warning-text" },
+  R: { label: "R", word: "Renamed", bg: "bg-status-info/15", text: "text-status-info-text" },
+  C: { label: "C", word: "Copied", bg: "bg-status-info/15", text: "text-status-info-text" },
+  T: { label: "T", word: "Type changed", bg: "bg-status-info/15", text: "text-status-info-text" },
+  U: { label: "U", word: "Unmerged", bg: "bg-status-error/15", text: "text-status-danger-text" },
 };
 
 export function getBaseBranchStatusConfig(status: string): {
   label: string;
+  word: string;
   bg: string;
   text: string;
 } {
   return (
     BASE_BRANCH_STATUS_CONFIG[status] ?? {
       label: status,
+      word: status,
       bg: "bg-tint/[0.06]",
       text: "text-text-primary",
     }

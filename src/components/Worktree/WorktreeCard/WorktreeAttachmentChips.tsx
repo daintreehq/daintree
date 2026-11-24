@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Button } from "../../ui/button";
+import { SpinningIcon } from "../../ui/SpinningIcon";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { failureLabel, visibleAttachmentChips, type AttachmentChipState } from "./attachmentState";
@@ -157,10 +158,13 @@ function AttachmentChip({
                   variant="ghost"
                   size="sm"
                   className="focus-visible:-outline-offset-2"
-                  disabled={busy}
-                  onClick={() => onAction(attachment.name, "status")}
+                  aria-disabled={busy || undefined}
+                  onClick={() => {
+                    if (busy) return;
+                    onAction(attachment.name, "status");
+                  }}
                 >
-                  <RefreshCw aria-hidden="true" />
+                  <SpinningIcon icon={RefreshCw} active={busy} aria-hidden="true" />
                   Check status
                 </Button>
               )}
@@ -168,8 +172,9 @@ function AttachmentChip({
                 variant="ghost"
                 size="sm"
                 className="focus-visible:-outline-offset-2"
-                disabled={busy}
+                aria-disabled={busy || undefined}
                 onClick={() => {
+                  if (busy) return;
                   setOpen(false);
                   onAction(attachment.name, "detach");
                 }}

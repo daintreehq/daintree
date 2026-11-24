@@ -33,7 +33,7 @@ type TerminalRecord = NonNullable<Awaited<ReturnType<PtyClient["getTerminalAsync
 
 export interface ClaudeContextUsageDeps {
   ptyClient?: TerminalQueries | null;
-  getClaudeProjectsRoot?: (terminalId: string) => string | null;
+  getClaudeProjectsRoot?: (terminalId: string, sessionId?: string) => string | null;
   read?: typeof readClaudeContextUsage;
 }
 
@@ -69,7 +69,10 @@ export async function readClaudePaneContextUsage(
   // The id was recorded for the run Daintree launched. A later run in the same
   // pane (Claude Code quit and started again) writes another session.
   if (!record.agentSessionId || record.agentIncarnation !== 0) return unavailable("no-session");
-  const projectsRoot = (deps.getClaudeProjectsRoot ?? getClaudePaneProjectsRoot)(terminalId);
+  const projectsRoot = (deps.getClaudeProjectsRoot ?? getClaudePaneProjectsRoot)(
+    terminalId,
+    record.agentSessionId
+  );
   if (!projectsRoot) return unavailable("store-unknown");
 
   const result = await (deps.read ?? readClaudeContextUsage)(

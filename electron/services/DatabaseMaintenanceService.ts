@@ -21,10 +21,16 @@ import type { DatabaseRecovery } from "../../shared/types/ipc/app.js";
 const TICK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const IDLE_THRESHOLD_S = 60; // 60 seconds of system idle
 // Shutdown has a 10s hard timeout, but a wedged DB worker only fails its request
-// after 30s (dbWorkerClient's REQUEST_TIMEOUT_MS) — so the wait for an in-flight
-// check has to be bounded well inside both. Timing out is safe: the candidate
-// probe in runBackup() still refuses to promote an unverified copy.
-const QUICK_CHECK_DRAIN_TIMEOUT_MS = 2000;
+// after 30s (dbWorkerClient's REQUEST_TIMEOUT_MS) — so the wait for in-flight
+// worker work has to be bounded well inside both. Timing out is safe: the
+// candidate probe in runBackup() still refuses to promote an unverified copy,
+// and the final backup writes its own candidate, never the worker's.
+const WORKER_DRAIN_TIMEOUT_MS = 2000;
+// Periodic candidates are written by the DB worker; the final one at quit by
+// main. Separate files, so a worker copy that outlived the shutdown drain can
+// never be written into while main promotes its own.
+const PERIODIC_CANDIDATE_SUFFIX = ".tmp";
+const FINAL_CANDIDATE_SUFFIX = ".final.tmp";
 // Verification failures are not proof the database is bad (a faulty write can
 // mangle only the copy), so a single one re-checks the live DB rather than
 // latching. Repeated ones mean something is durably wrong — stop rewriting the
@@ -77,6 +83,7 @@ class DatabaseMaintenanceService {
   // proof the live DB is bad, so they never force the next boot to recover.
   private backupsSuspended = false;
   private consecutiveVerifyFailures = 0;
+  private workerUnavailableLogged = false;
   private readonly suspensionListeners = new Set<BackupSuspensionListener>();
   private readonly suspensionsAnnounced = new Set<BackupSuspensionNotice["reason"]>();
 
@@ -252,22 +259,14 @@ class DatabaseMaintenanceService {
     // past shutdown's own 10s cap. Giving up early is safe — the candidate probe
     // below still refuses to promote an unverified copy.
     if (this.deferredQuickCheckInFlight) {
-      await Promise.race([
-        this.deferredQuickCheckInFlight.catch(() => undefined),
-        new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, QUICK_CHECK_DRAIN_TIMEOUT_MS);
-          timer.unref?.();
-        }),
-      ]);
+      await waitBounded(this.deferredQuickCheckInFlight);
     }
 
-    // Wait for any in-flight backup from a tick before proceeding
+    // A periodic backup still copying on the worker is abandoned: it is never
+    // promoted once dispose() has started (see runBackup), and the final
+    // backup below writes a candidate of its own.
     if (this.backupPromise) {
-      try {
-        await this.backupPromise;
-      } catch {
-        // ignore — backup errors already logged
-      }
+      await waitBounded(this.backupPromise);
     }
 
     // Final backup + TRUNCATE checkpoint (DB is NOT closed here —
@@ -330,10 +329,10 @@ class DatabaseMaintenanceService {
    *
    * The pending flag only clears on an exact "ok" — a check that never succeeded
    * must never look like one that did, so a worker-unavailable result leaves it
-   * set for a later idle tick to retry. That case still allows the backup: the
-   * candidate probe in runBackup() is the real guard against promoting a corrupt
-   * copy, and it catches on main exactly what the worker could not check here.
-   * Only confirmed corruption stops backups, via `backupsSuspended`.
+   * set for a later idle tick to retry. That case still allows the backup
+   * (which then skips itself while the worker is down): the candidate probe in
+   * runBackup() is the real guard against promoting a corrupt copy. Only
+   * confirmed corruption stops backups, via `backupsSuspended`.
    */
   private runDeferredQuickCheck(): Promise<boolean> | null {
     if (this.deferredQuickCheckInFlight) return this.deferredQuickCheckInFlight;
@@ -398,12 +397,14 @@ class DatabaseMaintenanceService {
   }
 
   /**
-   * `probeOnMain` is set by dispose(): shutdown.ts drains the DB worker before
-   * it calls us, so going through runDbWork there would spawn a fresh worker
-   * purely to tear it down. Probe directly instead — dispose() already accepts
-   * synchronous optimize + TRUNCATE on main.
+   * Periodic backups copy and verify on the DB worker, so the page copy and
+   * the candidate's fsync never stall main; when the worker can't take them,
+   * the backup is skipped rather than run here. `final` is set by dispose():
+   * shutdown.ts drains the DB worker before it calls us, so the last backup
+   * copies and probes on main, as dispose() already runs synchronous
+   * optimize + TRUNCATE there.
    */
-  private async runBackup(probeOnMain = false): Promise<void> {
+  private async runBackup(final = false): Promise<void> {
     if (this.backupPromise && !this.disposed) {
       // Another backup is already in flight from a tick — skip
       return this.backupPromise;
@@ -413,14 +414,15 @@ class DatabaseMaintenanceService {
     if (!sqlite) return;
 
     const backupPath = getBackupPath();
-    const tmpPath = backupPath + ".tmp";
+    const tmpPath = backupPath + (final ? FINAL_CANDIDATE_SUFFIX : PERIODIC_CANDIDATE_SUFFIX);
 
     try {
       // Pre-create the candidate owner-only so it is never world-readable during
       // the (potentially slow) page copy — the temp is a verbatim copy of the
       // whole database. "w" truncates any stale temp from a crashed run; better-
       // sqlite3 backs up correctly into a pre-existing empty file. POSIX-only.
-      if (process.platform !== "win32") {
+      // The worker creates its own candidate the same way.
+      if (final && process.platform !== "win32") {
         try {
           fs.closeSync(fs.openSync(tmpPath, "w", OWNER_RW_FILE_MODE));
         } catch {
@@ -428,23 +430,45 @@ class DatabaseMaintenanceService {
         }
       }
 
-      await sqlite.backup(tmpPath);
+      // sqlite.backup() copies pages verbatim and never validates them, so a
+      // corrupt source yields a corrupt copy with no error at all. Probe the
+      // candidate before it replaces the last known-good backup. Note this uses
+      // probeDbFile (the worker's probePath), NOT probeDb: probeDb is fail-open
+      // on unreadable files, and promoting an unverifiable candidate over the
+      // only good backup is exactly the destruction this guards against.
+      let verdict: DbProbeResult;
+      if (final) {
+        await sqlite.backup(tmpPath);
+        verdict = probeDbFile(tmpPath);
+      } else {
+        // The fallback never copies on main. A timed-out worker may still be
+        // writing the candidate, so it is left alone too: the next copy into it
+        // truncates it, and the worker removes one it failed to finish.
+        const result = await runDbWork<DbProbeResult | null>(
+          { op: "backup", destPath: tmpPath },
+          () => null
+        );
+        if (result === null) {
+          if (!this.workerUnavailableLogged) {
+            this.workerUnavailableLogged = true;
+            console.warn(
+              "[DatabaseMaintenance] Periodic backup skipped — DB worker unavailable; the final backup still runs at quit"
+            );
+          }
+          return;
+        }
+        // dispose() has started its own final backup; an older copy landing
+        // after it would replace the newer one.
+        if (this.disposed) {
+          this.discardTempBackup(tmpPath);
+          return;
+        }
+        verdict = result;
+      }
 
       // Re-assert owner-only after the copy (exactness + covers the win32/no-
       // precreate path) before the rename promotes it to the final .backup path.
       tightenFilePermissionsSync(tmpPath);
-
-      // sqlite.backup() copies pages verbatim and never validates them, so a
-      // corrupt source yields a corrupt copy with no error at all. Probe the
-      // candidate before it replaces the last known-good backup. Note this uses
-      // probeDbFile, NOT probeDb: probeDb is fail-open on unreadable files, and
-      // promoting an unverifiable candidate over the only good backup is exactly
-      // the destruction this guards against.
-      const verdict = probeOnMain
-        ? probeDbFile(tmpPath)
-        : await runDbWork<DbProbeResult>({ op: "probePath", dbPath: tmpPath }, () =>
-            probeDbFile(tmpPath)
-          );
 
       if (verdict !== "ok") {
         this.discardTempBackup(tmpPath);
@@ -501,6 +525,19 @@ class DatabaseMaintenanceService {
       console.warn(`[DatabaseMaintenance] Failed to remove temp backup ${tmpPath}:`, error);
     }
   }
+}
+
+function waitBounded(work: Promise<unknown>): Promise<void> {
+  return Promise.race([
+    work.then(
+      () => undefined,
+      () => undefined
+    ),
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, WORKER_DRAIN_TIMEOUT_MS);
+      timer.unref?.();
+    }),
+  ]);
 }
 
 let instance: DatabaseMaintenanceService | null = null;

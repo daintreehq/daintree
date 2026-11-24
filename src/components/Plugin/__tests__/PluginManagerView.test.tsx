@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { StrictMode, type ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
@@ -21,9 +21,20 @@ import type {
   PluginInstallError,
   SettingDefinition,
   PluginDeepLinkIntent,
+  PluginCatalogBrowseResult,
+  PluginCatalogsBrowseResult,
 } from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { getVisibleTabbableElements } from "@/lib/accessibility";
+import { nestedLayerOwnsEscape } from "@/lib/pluginManagerEscape";
+import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { usePanelStore } from "@/store/panelStore";
+
+/** Daintree's own catalog alone, as Browse reads it when no catalog was added. */
+function ownCatalog(result: PluginCatalogBrowseResult): PluginCatalogsBrowseResult {
+  return { ...result, added: [] };
+}
 
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -1132,6 +1143,118 @@ describe("PluginManagerView", () => {
     );
   });
 
+  describe("a plugin with cloud accounts (#17353)", () => {
+    const cloudAccounts = [
+      {
+        id: "ca_acmeplugin1",
+        name: "Work",
+        providerName: "EC2",
+        hosts: [
+          { hostId: "host-1", name: "build" },
+          { hostId: "host-2", name: "spare" },
+        ],
+      },
+      { id: "ca_acmeplugin2", name: "Personal", providerName: "EC2", hosts: [] },
+    ];
+
+    async function armUninstall() {
+      fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
+      await waitFor(() => expect(screen.getByText("Uninstall 'Acme Demo'?")).toBeTruthy());
+    }
+
+    it("asks whether to keep its cloud accounts, keeps them by default, and says the machines keep running", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ cloudAccounts }),
+      ]);
+      renderDialog();
+      await selectPlugin();
+      await armUninstall();
+
+      const choice = screen.getByTestId("plugin-uninstall-cloud-accounts");
+      expect(choice.textContent).toContain("Work");
+      expect(choice.textContent).toContain("build, spare");
+      expect(choice.textContent).toContain("Personal");
+      expect(choice.textContent).toMatch(/nothing is stopped or deleted at the provider/);
+      expect(choice.textContent).toMatch(/running keeps running/);
+      const keep = screen.getByRole("radio", { name: "Keep cloud accounts" }) as HTMLInputElement;
+      expect(keep.checked).toBe(true);
+      expect(
+        screen
+          .getByRole("radio", { name: "Remove cloud accounts" })
+          .getAttribute("aria-describedby")
+      ).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false)
+      );
+    });
+
+    it("removes exactly the accounts it listed when asked, and forgets the choice on cancel", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ cloudAccounts }),
+      ]);
+      renderDialog();
+      await selectPlugin();
+
+      await armUninstall();
+      fireEvent.click(screen.getByRole("radio", { name: "Remove cloud accounts" }));
+      const removing = screen.getByTestId("plugin-uninstall-cloud-accounts").textContent;
+      expect(removing).toContain("removes 2 hosts from the list");
+      expect(removing).toContain("Windows on those hosts return to this machine");
+      fireEvent.click(screen.getByRole("button", { name: "Keep plugin" }));
+
+      await armUninstall();
+      expect(
+        (screen.getByRole("radio", { name: "Keep cloud accounts" }) as HTMLInputElement).checked
+      ).toBe(true);
+      fireEvent.click(screen.getByRole("radio", { name: "Remove cloud accounts" }));
+      fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false, [
+          "ca_acmeplugin1",
+          "ca_acmeplugin2",
+        ])
+      );
+    });
+
+    it("starts a re-armed uninstall at Keep after another window's change closed the last one", async () => {
+      let provenanceChanged: () => void = () => {};
+      (window.electron.plugin.onProvenanceChanged as ReturnType<typeof vi.fn>).mockImplementation(
+        (listener: () => void) => {
+          provenanceChanged = listener;
+          return () => {};
+        }
+      );
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+        makePlugin({ cloudAccounts }),
+      ]);
+      renderDialog();
+      await selectPlugin();
+      await armUninstall();
+      fireEvent.click(screen.getByRole("radio", { name: "Remove cloud accounts" }));
+      act(() => provenanceChanged());
+      await waitFor(() => expect(screen.queryByText("Uninstall 'Acme Demo'?")).toBeNull());
+
+      await armUninstall();
+      expect(
+        (screen.getByRole("radio", { name: "Keep cloud accounts" }) as HTMLInputElement).checked
+      ).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Uninstall plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.uninstall).toHaveBeenCalledWith("acme.demo", false)
+      );
+    });
+
+    it("asks nothing about cloud accounts for a plugin without any", async () => {
+      (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
+      renderDialog();
+      await selectPlugin();
+      await armUninstall();
+      expect(screen.queryByTestId("plugin-uninstall-cloud-accounts")).toBeNull();
+    });
+  });
+
   it("resets the secrets checkbox after cancelling and re-arming uninstall", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([makePlugin()]);
     renderDialog();
@@ -1338,6 +1461,8 @@ describe("PluginManagerView", () => {
             pluginId: "acme.demo",
             version: "1.0.1",
             repo: REPO,
+            // An update is held to the catalog the installed copy came from (#17434).
+            intent: "update",
             expected: { kind: "update", pluginId: "acme.demo", archiveHash: REVIEWED_HASH },
           },
           expect.any(String)
@@ -1346,6 +1471,28 @@ describe("PluginManagerView", () => {
       expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledTimes(1);
       expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
       expect(screen.queryByText(/Install over HTTP/)).toBeNull();
+    });
+
+    it("holds an update from an added catalog to that catalog (#17434)", async () => {
+      const SOURCE = "https://plugins.example.org/catalog.json";
+      vi.mocked(window.electron.plugin.list).mockResolvedValue([
+        catalogPlugin({
+          catalog: { id: "acme.demo", version: "1.0.0", repo: REPO, sourceUrl: SOURCE },
+        }),
+      ]);
+      vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
+        ...offer(),
+        catalog: { id: "acme.demo", version: "1.0.1", repo: REPO, sourceUrl: SOURCE },
+      });
+      await checkSelected();
+
+      fireEvent.click(await screen.findByRole("button", { name: "Update plugin" }));
+      await waitFor(() =>
+        expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ sourceUrl: SOURCE, intent: "update", version: "1.0.1" }),
+          expect.any(String)
+        )
+      );
     });
 
     it("warns that an update from another repository is a different source, naming both", async () => {
@@ -2333,6 +2480,47 @@ describe("PluginManagerView", () => {
         expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
           { pluginId: "acme.demo", version: "2.3.4" },
           expect.any(String)
+        );
+      });
+
+      it("asks the catalog a link names, and installs from that catalog (#17434)", async () => {
+        const SOURCE = "https://plugins.example.org/catalog.json";
+        vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue({
+          status: "preview",
+          preview: {
+            url: CATALOG_URL,
+            archiveHash: PREVIEW_HASH,
+            installedOnDisk: false,
+            manifest: previewManifest(),
+            catalog: { id: "acme.demo", version: "1.0.0", repo: REPO, sourceUrl: SOURCE },
+          },
+        });
+        renderIntent({ action: "install-catalog", pluginId: "acme.demo", sourceUrl: SOURCE });
+
+        const dialog = await urlReviewDialog();
+        expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+          { pluginId: "acme.demo", sourceUrl: SOURCE },
+          expect.any(String)
+        );
+        // The curator, not Daintree, is named as the reviewer.
+        const source = within(dialog).getByTestId("archive-install-source").textContent ?? "";
+        expect(source).toContain(
+          "Listed by plugins.example.org/catalog.json from github.com/acme/demo"
+        );
+        expect(source).toMatch(/not Daintree/);
+
+        await approveUrlReview();
+        await waitFor(() =>
+          expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+            {
+              pluginId: "acme.demo",
+              version: "1.0.0",
+              repo: REPO,
+              sourceUrl: SOURCE,
+              expected: { kind: "install", pluginId: "acme.demo", archiveHash: PREVIEW_HASH },
+            },
+            expect.any(String)
+          )
         );
       });
 
@@ -3807,6 +3995,207 @@ describe("PluginManagerView settings deep link", () => {
   });
 });
 
+describe("PluginManagerView — return focus and keyboard containment (#16942)", () => {
+  const added: HTMLElement[] = [];
+  function add<T extends HTMLElement>(el: T): T {
+    document.body.appendChild(el);
+    added.push(el);
+    return el;
+  }
+
+  beforeEach(() => {
+    usePluginManagerStore.setState({
+      isOpen: false,
+      settingsRequest: null,
+      returnFocusTarget: null,
+    });
+  });
+
+  afterEach(() => {
+    added.splice(0).forEach((el) => el.remove());
+    usePanelStore.setState({ focusedId: null });
+  });
+
+  /**
+   * The app shell's first control: the last-resort target, kept distinct from
+   * every expected one so a test can't pass by landing there.
+   */
+  function addShell(): HTMLButtonElement {
+    const root = add(document.createElement("div"));
+    root.id = "root";
+    const shellControl = document.createElement("button");
+    shellControl.textContent = "Toggle sidebar";
+    root.appendChild(shellControl);
+    return shellControl;
+  }
+
+  /**
+   * Opens the manager the way a menu item's select handler does: the item
+   * holds focus as the action runs, and unmounts with its menu right after.
+   */
+  function openFromMenuItem(): HTMLButtonElement {
+    const trigger = add(document.createElement("button"));
+    trigger.id = "plugins-menu-trigger";
+    trigger.textContent = "Plugins";
+    const menu = add(document.createElement("div"));
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-labelledby", trigger.id);
+    const item = document.createElement("div");
+    item.setAttribute("role", "menuitem");
+    item.tabIndex = -1;
+    menu.appendChild(item);
+    item.focus();
+    act(() => usePluginManagerStore.getState().open());
+    menu.remove();
+    return trigger;
+  }
+
+  /** Opens it from a palette's input, which unmounts with the palette. */
+  function openFromPaletteInput() {
+    const input = add(document.createElement("input"));
+    input.focus();
+    act(() => usePluginManagerStore.getState().open());
+    input.remove();
+  }
+
+  async function renderOpenedView() {
+    renderDialog();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByLabelText("Search plugins"))
+    );
+  }
+
+  const nextFrame = () => act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+
+  it("hands focus back to the menu's trigger once the item that opened it has unmounted", async () => {
+    addShell();
+    const trigger = openFromMenuItem();
+    await renderOpenedView();
+
+    act(() => usePluginManagerStore.getState().close());
+
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+
+  it("waits a frame, until the workspace behind it is no longer inert, to hand focus back", async () => {
+    addShell();
+    const trigger = openFromMenuItem();
+    await renderOpenedView();
+
+    act(() => usePluginManagerStore.getState().close());
+
+    // The overlay claim's release, which lifts `inert` off the workspace,
+    // commits after the closing commit's effects.
+    expect(document.activeElement).not.toBe(trigger);
+    await nextFrame();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("hands focus to the focused panel when the palette that opened it is gone", async () => {
+    addShell();
+    const panel = add(document.createElement("div"));
+    panel.dataset.panelId = "panel-1";
+    panel.dataset.panelLocation = "grid";
+    const panelInput = document.createElement("textarea");
+    panel.appendChild(panelInput);
+    const focusPanel = vi.fn(() => {
+      panelInput.focus();
+      return document.activeElement === panelInput;
+    });
+    const unregister = registerPanelFocusHandler("panel-1", focusPanel);
+    usePanelStore.setState({ focusedId: "panel-1" });
+    try {
+      openFromPaletteInput();
+      await renderOpenedView();
+
+      act(() => usePluginManagerStore.getState().close());
+
+      await waitFor(() => expect(document.activeElement).toBe(panelInput));
+      expect(focusPanel).toHaveBeenCalledTimes(1);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("falls back to the app shell's first control rather than the body", async () => {
+    const shellControl = addShell();
+    openFromPaletteInput();
+    await renderOpenedView();
+
+    act(() => usePluginManagerStore.getState().close());
+
+    await waitFor(() => expect(document.activeElement).toBe(shellControl));
+  });
+
+  it("leaves focus the user has already moved somewhere usable", async () => {
+    addShell();
+    openFromMenuItem();
+    const elsewhere = add(document.createElement("button"));
+    await renderOpenedView();
+
+    act(() => {
+      usePluginManagerStore.getState().close();
+      elsewhere.focus();
+    });
+    await nextFrame();
+
+    expect(document.activeElement).toBe(elsewhere);
+  });
+
+  it("restores nothing when it reopens before the hand-back lands", async () => {
+    addShell();
+    const trigger = openFromMenuItem();
+    await renderOpenedView();
+
+    act(() => usePluginManagerStore.getState().close());
+    expect(document.activeElement).not.toBe(trigger);
+    act(() => usePluginManagerStore.getState().open());
+    await nextFrame();
+    await nextFrame();
+
+    expect(document.activeElement).not.toBe(trigger);
+    expect(screen.getByTestId("plugin-manager-view").contains(document.activeElement)).toBe(true);
+  });
+
+  it("wraps Tab and Shift+Tab at its edges instead of walking out of the view", async () => {
+    add(document.createElement("button")).textContent = "Outside";
+    usePluginManagerStore.setState({ isOpen: true });
+    await renderOpenedView();
+    const view = screen.getByTestId("plugin-manager-view");
+    const tabbables = getVisibleTabbableElements(view);
+    const first = tabbables[0]!;
+    const last = tabbables[tabbables.length - 1]!;
+    expect(first).not.toBe(last);
+
+    last.focus();
+    expect(fireEvent.keyDown(last, { key: "Tab" })).toBe(false);
+    expect(document.activeElement).toBe(first);
+
+    expect(fireEvent.keyDown(first, { key: "Tab", shiftKey: true })).toBe(false);
+    expect(document.activeElement).toBe(last);
+
+    // Between the edges the browser moves focus as usual.
+    first.focus();
+    expect(fireEvent.keyDown(first, { key: "Tab" })).toBe(true);
+    expect(document.activeElement).toBe(first);
+  });
+
+  it("marks itself open for nested layers' Escape only while it is open", async () => {
+    const listbox = add(document.createElement("div"));
+    listbox.setAttribute("role", "listbox");
+    listbox.setAttribute("data-state", "open");
+    const escape = () => new KeyboardEvent("keydown", { key: "Escape" });
+    usePluginManagerStore.setState({ isOpen: true });
+    await renderOpenedView();
+
+    expect(nestedLayerOwnsEscape(escape())).toBe(true);
+
+    act(() => usePluginManagerStore.getState().close());
+
+    expect(nestedLayerOwnsEscape(escape())).toBe(false);
+  });
+});
+
 describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
   const invoice: PluginUnsavedPanel = {
     panelId: "panel-1",
@@ -4200,19 +4589,21 @@ describe("PluginManagerView — unsaved plugin panels (#15031)", () => {
       .mockResolvedValueOnce([])
       .mockReturnValueOnce(read.promise)
       .mockResolvedValue([]);
-    window.electron.plugin.browseCatalog = vi.fn(async () => ({
-      status: "available" as const,
-      listings: [
-        {
-          id: "acme.other",
-          version: "1.0.0",
-          repo: "https://github.com/acme/other",
-          capabilities: [],
-        },
-      ],
-      fetchedAt: Date.now(),
-      stale: false as const,
-    }));
+    window.electron.plugin.browseCatalog = vi.fn(async () =>
+      ownCatalog({
+        status: "available" as const,
+        listings: [
+          {
+            id: "acme.other",
+            version: "1.0.0",
+            repo: "https://github.com/acme/other",
+            capabilities: [],
+          },
+        ],
+        fetchedAt: Date.now(),
+        stale: false as const,
+      })
+    );
     window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
       status: "cancelled" as const,
     }));
@@ -4264,12 +4655,14 @@ describe("PluginManagerView — Browse (#16782)", () => {
 
   beforeEach(() => {
     Element.prototype.scrollIntoView = vi.fn();
-    window.electron.plugin.browseCatalog = vi.fn(async () => ({
-      status: "available" as const,
-      listings: [LISTING],
-      fetchedAt: Date.now(),
-      stale: false as const,
-    }));
+    window.electron.plugin.browseCatalog = vi.fn(async () =>
+      ownCatalog({
+        status: "available" as const,
+        listings: [LISTING],
+        fetchedAt: Date.now(),
+        stale: false as const,
+      })
+    );
     window.electron.plugin.previewFromCatalog = vi.fn(async () => ({
       status: "preview" as const,
       preview: {
@@ -4363,6 +4756,70 @@ describe("PluginManagerView — Browse (#16782)", () => {
     expect(pluginRowButton("Acme Demo").getAttribute("aria-current")).toBe("true");
   });
 
+  it("replaces a copy from another catalog only after naming both catalogs (#17434)", async () => {
+    const SOURCE = "https://plugins.example.org/catalog.json";
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([
+      makePlugin({
+        source: "catalog",
+        catalog: { id: "acme.demo", version: "1.0.0", repo: REPO },
+      }),
+    ]);
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
+      status: "available",
+      listings: [LISTING],
+      fetchedAt: Date.now(),
+      stale: false,
+      added: [
+        {
+          sourceUrl: SOURCE,
+          result: {
+            status: "available",
+            listings: [{ ...LISTING, sourceUrl: SOURCE }],
+            fetchedAt: Date.now(),
+            stale: false,
+          },
+        },
+      ],
+    });
+    vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue({
+      status: "preview",
+      preview: {
+        url: `${REPO}/releases/download/v1.0.0/acme.demo-1.0.0.dntr`,
+        archiveHash: PREVIEW_HASH,
+        installedOnDisk: true,
+        manifest: previewManifest(),
+        catalog: { id: "acme.demo", version: "1.0.0", repo: REPO, sourceUrl: SOURCE },
+        replacesCatalog: {},
+      },
+    });
+    renderDialog();
+    await findPluginRowButton("Acme Demo");
+    await openBrowse();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Replace installed acme.demo with the listing from plugins.example.org/catalog.json",
+      })
+    );
+    const dialog = await urlReviewDialog();
+    expect(window.electron.plugin.previewFromCatalog).toHaveBeenCalledWith(
+      { pluginId: "acme.demo", version: "1.0.0", sourceUrl: SOURCE },
+      expect.any(String)
+    );
+    expect(within(dialog).getByTestId("plugin-install-catalog-switch").textContent).toBe(
+      "This replaces the copy installed from Daintree's catalog with the listing from plugins.example.org/catalog.json, and its updates will come from there."
+    );
+    expect(window.electron.plugin.installFromCatalog).not.toHaveBeenCalled();
+
+    await approveUrlReview();
+    await waitFor(() =>
+      expect(window.electron.plugin.installFromCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ sourceUrl: SOURCE, replacesCatalog: {} }),
+        expect.any(String)
+      )
+    );
+  });
+
   it("returns to Browse when the selection is cleared, and to the installed home when toggled off", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
     renderDialog();
@@ -4423,13 +4880,15 @@ describe("PluginManagerView — Browse (#16782)", () => {
   it.each(LINK_WORDED_FAILURES)(
     "words a %s refusal of a Browse preview for Browse, with no review left open",
     async (code, message) => {
-      vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
-        status: "available",
-        listings: [LISTING],
-        fetchedAt: Date.now() - 60 * 60 * 1000,
-        stale: true,
-        failure: "unreachable",
-      });
+      vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue(
+        ownCatalog({
+          status: "available",
+          listings: [LISTING],
+          fetchedAt: Date.now() - 60 * 60 * 1000,
+          stale: true,
+          failure: "unreachable",
+        })
+      );
       vi.mocked(window.electron.plugin.previewFromCatalog).mockResolvedValue({
         status: "failed",
         errors: [{ code, message }],
@@ -4464,12 +4923,17 @@ describe("PluginManagerView — Browse (#16782)", () => {
 
   it("won't start a Browse install over an uninstall that is waiting on its confirm", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
-    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
-      status: "available",
-      listings: [LISTING, { ...LISTING, id: "acme.other", repo: "https://github.com/acme/other" }],
-      fetchedAt: Date.now(),
-      stale: false,
-    });
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue(
+      ownCatalog({
+        status: "available",
+        listings: [
+          LISTING,
+          { ...LISTING, id: "acme.other", repo: "https://github.com/acme/other" },
+        ],
+        fetchedAt: Date.now(),
+        stale: false,
+      })
+    );
     renderDialog();
     await selectPlugin();
     fireEvent.click(await screen.findByRole("button", { name: "Uninstall Acme Demo" }));
@@ -4521,10 +4985,9 @@ describe("PluginManagerView — Browse (#16782)", () => {
 
   it("leaves the installed list alone when the catalog can't be read", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([makePlugin()]);
-    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue({
-      status: "unavailable",
-      failure: "unreachable",
-    });
+    vi.mocked(window.electron.plugin.browseCatalog).mockResolvedValue(
+      ownCatalog({ status: "unavailable", failure: "unreachable" })
+    );
     renderDialog();
     await findPluginRowButton("Acme Demo");
     fireEvent.click(browseButton());

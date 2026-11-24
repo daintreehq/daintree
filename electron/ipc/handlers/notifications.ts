@@ -20,12 +20,15 @@ import { getIpcDispatcher } from "../dispatcher.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import { typedHandle } from "../utils.js";
-import { sanitizeNotificationSettingsPatch } from "../../utils/notificationSettingsPatch.js";
+import {
+  notificationSettingsWritten,
+  sanitizeNotificationSettingsPatch,
+} from "../../utils/notificationSettingsPatch.js";
 import { shouldPlayUiFeedbackSound } from "../../utils/uiFeedbackSound.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 type AgentNotificationSingleton = typeof AgentNotificationServiceModule.agentNotificationService;
-type AllowedSoundFilesSet = typeof SoundServiceModule.ALLOWED_SOUND_FILES;
+type AllowedSoundFilesSet = typeof SoundServiceModule.PLAYABLE_SOUND_FILES;
 type SoundFilesMap = typeof SoundServiceModule.SOUND_FILES;
 
 let cachedAgentNotificationService: AgentNotificationSingleton | null = null;
@@ -35,6 +38,31 @@ async function getAgentNotificationService(): Promise<AgentNotificationSingleton
     cachedAgentNotificationService = mod.agentNotificationService;
   }
   return cachedAgentNotificationService;
+}
+
+/**
+ * Entries read from one report, far past any view's panes: what a renderer
+ * gone wrong can make main scan is bounded, valid or not.
+ */
+const MAX_WAITING_PANEL_ENTRIES = 10_000;
+/** Longer than any panel id; one past it is dropped rather than kept in memory. */
+const MAX_PANEL_ID_LENGTH = 1024;
+
+/** A view's report of its waiting panes, each id once; null when it isn't one. */
+function readNotificationState(raw: unknown): NotificationState | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const ids: unknown = (raw as { waitingPanelIds?: unknown }).waitingPanelIds;
+  if (!Array.isArray(ids)) return null;
+  const waitingPanelIds = new Set<string>();
+  for (const id of ids.slice(0, MAX_WAITING_PANEL_ENTRIES)) {
+    if (typeof id === "string" && id.length > 0 && id.length <= MAX_PANEL_ID_LENGTH) {
+      waitingPanelIds.add(id);
+    }
+  }
+  const membershipOnly = (raw as { membershipOnly?: unknown }).membershipOnly === true;
+  return membershipOnly
+    ? { waitingPanelIds: [...waitingPanelIds], membershipOnly }
+    : { waitingPanelIds: [...waitingPanelIds] };
 }
 
 let cachedAllowedSoundFiles: AllowedSoundFilesSet | null = null;
@@ -135,10 +163,9 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
     return ownerId;
   };
 
-  const handleNotificationUpdate = (
-    event: Electron.IpcMainEvent,
-    state: NotificationState
-  ): void => {
+  const handleNotificationUpdate = (event: Electron.IpcMainEvent, raw: unknown): void => {
+    const state = readNotificationState(raw);
+    if (state === null) return;
     notificationService.updateNotifications(trackOwner(event.sender), state);
   };
 
@@ -148,10 +175,12 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
 
   const handleSettingsSet = async (rawSettings: unknown): Promise<void> => {
     const allowed = sanitizeNotificationSettingsPatch(rawSettings, await allowedSoundFiles());
+    if (Object.keys(allowed).length === 0) return;
 
-    for (const [field, value] of Object.entries(allowed)) {
-      store.set(`notificationSettings.${field}`, value);
-    }
+    // One write for the whole patch: a set per field rewrote and fsynced all of
+    // config.json once per field.
+    store.set("notificationSettings", { ...store.get("notificationSettings"), ...allowed });
+    notificationSettingsWritten();
   };
 
   const handlePlaySound = async (soundFile: unknown): Promise<void> => {

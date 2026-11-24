@@ -449,6 +449,250 @@ describe("registerForgeDataHandlers", () => {
 
   // Distinct PR numbers per test for the same reason as getCIStatus above: the
   // checks single-flight is module-scoped and outlives an individual test.
+  describe("getDeployments", () => {
+    let appendSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      appendSpy = vi.spyOn(forgeAuditService, "appendRecord").mockImplementation(() => {});
+    });
+
+    const preview = {
+      id: "dep-1",
+      environment: "Preview – web",
+      state: "success" as const,
+      url: "https://web-abc123.vercel.app/",
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_060_000,
+      commitSha: "7c374c599f4404adf5a65210ac99e99776194eb9",
+      rawData: { id: "DE_x", payload: { token: "provider-internal" } },
+    };
+    const branchTarget = { kind: "branch", branch: "feature/login" } as const;
+
+    function withDeployments(result: unknown) {
+      return {
+        ...fakeImpl,
+        deployments: { getDeployments: vi.fn().mockResolvedValue(result) },
+      };
+    }
+
+    function useImpl(impl: unknown) {
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef,
+        impl: impl as unknown as ForgeProviderImpl,
+      });
+    }
+
+    const read = (cwd: string, target: unknown) =>
+      findHandler("forge:get-deployments")(null, { cwd, target });
+
+    it("delegates to the capability and strips rawData on the way out", async () => {
+      const failed = { ...preview, id: "dep-0", state: "failure" as const, url: undefined };
+      const impl = withDeployments({ deployments: [preview, failed] });
+      useImpl(impl);
+      registerForgeDataHandlers();
+
+      const result = await read("/repo-deploy-strip", branchTarget);
+
+      expect(impl.deployments.getDeployments).toHaveBeenCalledWith(repoRef, branchTarget);
+      expect(result).toStrictEqual({
+        deployments: [
+          {
+            id: "dep-1",
+            environment: "Preview – web",
+            state: "success",
+            url: "https://web-abc123.vercel.app/",
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_060_000,
+            commitSha: "7c374c599f4404adf5a65210ac99e99776194eb9",
+          },
+          {
+            id: "dep-0",
+            environment: "Preview – web",
+            state: "failure",
+            createdAt: 1_700_000_000_000,
+            updatedAt: 1_700_000_060_000,
+            commitSha: "7c374c599f4404adf5a65210ac99e99776194eb9",
+          },
+        ],
+      });
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          methodName: "getDeployments",
+          result: "success",
+          argsSummary: JSON.stringify({ target: "branch" }),
+        })
+      );
+    });
+
+    it("reports nothing, without asking anything, when the provider can't read deployments", async () => {
+      useImpl(fakeImpl);
+      registerForgeDataHandlers();
+
+      expect(await read("/repo-deploy-absent", branchTarget)).toEqual({ deployments: [] });
+      expect(appendSpy).not.toHaveBeenCalled();
+    });
+
+    it("passes a missing branch or PR through as null, apart from nothing deployed", async () => {
+      useImpl(withDeployments(null));
+      registerForgeDataHandlers();
+      expect(await read("/repo-deploy-missing", { kind: "pullRequest", prNumber: 42 })).toBeNull();
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          methodName: "getDeployments",
+          result: "not-found",
+          argsSummary: JSON.stringify({ target: "pullRequest", number: 42 }),
+        })
+      );
+
+      useImpl(withDeployments({ deployments: [] }));
+      expect(await read("/repo-deploy-none", branchTarget)).toEqual({ deployments: [] });
+    });
+
+    it.each([
+      ["a javascript: URL", "javascript:alert(1)"],
+      ["a file: URL", "file:///etc/passwd"],
+      ["a non-web scheme with a host", "ftp://web.example.test/build"],
+      ["a URL with a username", "https://user@web.example.test/"],
+      ["a URL with a password", "https://:secret@web.example.test/"],
+      ["an unparseable URL", "not a url"],
+    ])("drops %s but keeps the deployment", async (label, url) => {
+      useImpl(withDeployments({ deployments: [{ ...preview, url }] }));
+      registerForgeDataHandlers();
+
+      const result = (await read(`/repo-deploy-${label}`, branchTarget)) as {
+        deployments: Array<Record<string, unknown>>;
+      };
+
+      expect(result.deployments).toHaveLength(1);
+      expect(result.deployments[0]).not.toHaveProperty("url");
+      expect(result.deployments[0]).toMatchObject({ id: "dep-1", state: "success" });
+    });
+
+    it.each([
+      ["a local http URL with a port", "http://localhost:3000/app", "http://localhost:3000/app"],
+      ["an IPv6 host", "https://[::1]:8443/", "https://[::1]:8443/"],
+      ["a long signed URL", `https://web.example.test/?sig=${"a".repeat(3000)}`, null],
+    ])("keeps %s", async (label, url, expected) => {
+      useImpl(withDeployments({ deployments: [{ ...preview, url }] }));
+      registerForgeDataHandlers();
+
+      const result = (await read(`/repo-deploy-keep-${label}`, branchTarget)) as {
+        deployments: Array<{ url?: string }>;
+      };
+
+      expect(result.deployments[0]?.url).toBe(expected ?? url);
+    });
+
+    it("orders rows newest first whatever order the provider used", async () => {
+      const older = { ...preview, id: "older", createdAt: 1_000 };
+      const newer = { ...preview, id: "newer", createdAt: 2_000 };
+      const tied = { ...preview, id: "tied", createdAt: 1_000 };
+      useImpl(withDeployments({ deployments: [older, tied, newer] }));
+      registerForgeDataHandlers();
+
+      const result = (await read("/repo-deploy-order", branchTarget)) as {
+        deployments: Array<{ id: string }>;
+      };
+
+      expect(result.deployments.map((d) => d.id)).toEqual(["newer", "older", "tied"]);
+    });
+
+    it.each([
+      // eslint-disable-next-line no-sparse-arrays
+      ["a sparse list", { deployments: [, { ...preview }] }],
+      [
+        "a sparse list whose iterator skips the hole",
+        {
+          // eslint-disable-next-line no-sparse-arrays
+          deployments: Object.assign([, { ...preview }], {
+            *[Symbol.iterator]() {
+              yield { ...preview };
+            },
+          }),
+        },
+      ],
+      ["a non-array result", { deployments: "live" }],
+      ["a deployment without an id", { deployments: [{ ...preview, id: "" }] }],
+      ["a blank environment", { deployments: [{ ...preview, environment: "  " }] }],
+      ["an unknown state", { deployments: [{ ...preview, state: "deployed" }] }],
+      ["a non-numeric time", { deployments: [{ ...preview, createdAt: "2026-11-17" }] }],
+      ["a non-string ref", { deployments: [{ ...preview, ref: { name: "main" } }] }],
+    ])("rejects %s from the provider as an error", async (label, bad) => {
+      useImpl(withDeployments(bad));
+      registerForgeDataHandlers();
+
+      await expect(read(`/repo-deploy-${label}`, branchTarget)).rejects.toThrow(
+        /malformed deployment/
+      );
+      expect(appendSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ methodName: "getDeployments", result: "error" })
+      );
+    });
+
+    it("rejects when the forge can't be resolved rather than reporting nothing deployed", async () => {
+      resolveForCwdMock.mockRejectedValueOnce(new Error("No remote URL found for this repository"));
+      registerForgeDataHandlers();
+
+      await expect(read("/repo-deploy-unresolved", branchTarget)).rejects.toThrow(/No remote URL/);
+    });
+
+    it("accepts a branch name of exactly 1024 characters", async () => {
+      const impl = withDeployments({ deployments: [] });
+      useImpl(impl);
+      registerForgeDataHandlers();
+      const target = { kind: "branch", branch: "b".repeat(1024) };
+
+      await read("/repo-deploy-long-branch", target);
+
+      expect(impl.deployments.getDeployments).toHaveBeenCalledWith(repoRef, target);
+    });
+
+    it("rejects a provider failure rather than reporting nothing deployed", async () => {
+      useImpl({
+        ...fakeImpl,
+        deployments: { getDeployments: vi.fn().mockRejectedValue(new Error("Bad credentials")) },
+      });
+      registerForgeDataHandlers();
+
+      await expect(read("/repo-deploy-denied", branchTarget)).rejects.toThrow(/Bad credentials/);
+    });
+
+    it.each([
+      ["no target", undefined],
+      ["an unknown kind", { kind: "tag", branch: "v1" }],
+      ["a blank branch", { kind: "branch", branch: "  " }],
+      ["a zero PR number", { kind: "pullRequest", prNumber: 0 }],
+      ["a branch name past 1024 characters", { kind: "branch", branch: "b".repeat(1025) }],
+      ["a PR number past GraphQL's Int", { kind: "pullRequest", prNumber: 2_147_483_648 }],
+    ])("rejects %s before resolving a provider", async (_label, target) => {
+      registerForgeDataHandlers();
+
+      await expect(read("/repo-deploy-invalid", target)).rejects.toThrow(/Invalid/);
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
+    });
+
+    it("coalesces concurrent identical reads but not other targets or worktrees", async () => {
+      const impl = withDeployments({ deployments: [preview] });
+      useImpl(impl);
+      registerForgeDataHandlers();
+
+      await Promise.all([
+        read("/repo-deploy-coalesce", branchTarget),
+        read("/repo-deploy-coalesce", branchTarget),
+      ]);
+      expect(impl.deployments.getDeployments).toHaveBeenCalledTimes(1);
+
+      await Promise.all([
+        read("/repo-deploy-coalesce", { kind: "branch", branch: "feature/other" }),
+        read("/repo-deploy-coalesce", { kind: "pullRequest", prNumber: 9 }),
+        read("/repo-deploy-coalesce", { kind: "pullRequest", prNumber: 10 }),
+        read("/repo-deploy-coalesce-other", branchTarget),
+      ]);
+      expect(impl.deployments.getDeployments).toHaveBeenCalledTimes(5);
+    });
+  });
+
   describe("getChecks", () => {
     let appendSpy: ReturnType<typeof vi.spyOn>;
 
@@ -763,7 +1007,8 @@ describe("registerForgeDataHandlers", () => {
 
     const result = await findHandler("forge:get-current-user")(null, { cwd: "/repo" });
 
-    expect(implWithIdentity.identity.getCurrentUser).toHaveBeenCalledTimes(1);
+    // The viewer is asked for this repository: a provider can hold an account per host.
+    expect(implWithIdentity.identity.getCurrentUser).toHaveBeenCalledWith(repoRef);
     expect(result).toEqual(user);
   });
 
@@ -1521,7 +1766,8 @@ describe("issues bound to a separate provider (#13700)", () => {
 
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
-    expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12 });
+    expect(stats).toMatchObject({ issueCount: 7, prCount: 4, commitCount: 12, issueStale: false });
+    expect(stats).not.toHaveProperty("issueError");
     // No one repository reported both counts, so there is nothing to match
     // across hosts (#14199).
     expect(stats).not.toHaveProperty("repoKey");
@@ -1580,11 +1826,104 @@ describe("issues bound to a separate provider (#13700)", () => {
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
     expect(stats).toMatchObject({ issueCount: null, prCount: 4 });
+    // The failure is the tracker's, kept apart from the code forge's.
+    expect(stats).toMatchObject({ issueError: "issues provider unavailable" });
+    expect(stats).toMatchObject({ error: undefined });
     // A failed read must not overwrite the stored counts.
     expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
       "/repo",
       expect.not.objectContaining({ forge: expect.anything() })
     );
+  });
+
+  it("carries the issues provider's credential failure on its own field", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {
+        listIssues: vi.fn(),
+        buildIssuesUrl: () => "https://tracker.test/issues",
+        repoStats: {
+          getRepoStats: vi.fn(async () => {
+            throw new Error("No Tracker API key configured. Add one in Settings → Code forge.");
+          }),
+        },
+      },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({
+      issueCount: null,
+      prCount: 4,
+      issueError: "No Tracker API key configured. Add one in Settings → Code forge.",
+    });
+    expect(stats).toMatchObject({ error: undefined });
+  });
+
+  it("scrubs credentials a tracker's message echoes back before it leaves the process", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockRejectedValue(
+      new Error(
+        'The Beads server URL "https://alice:hunter2@beads.test" isn\'t an http(s) address.'
+      )
+    );
+    registerForgeDataHandlers();
+
+    const stats = (await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" })) as {
+      issueError?: string;
+    };
+
+    expect(stats.issueError).toContain("Beads server URL");
+    expect(stats.issueError).not.toContain("hunter2");
+  });
+
+  it("carries an error the issues provider reported in its snapshot", async () => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    resolveIssueOverrideForCwdMock.mockResolvedValue({
+      namespaceId: "acme.tracker.tracker",
+      repoRef: trackerRef,
+      impl: {
+        listIssues: vi.fn(),
+        repoStats: {
+          getRepoStats: vi.fn(async () => ({
+            counts: {
+              issueCount: 3,
+              prCount: null,
+              stale: true,
+              error: "Tracker rejected the API key",
+            },
+            source: "disk" as const,
+          })),
+        },
+      },
+      viaIssueOverride: true,
+    });
+    registerForgeDataHandlers();
+
+    const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+    expect(stats).toMatchObject({
+      issueCount: 3,
+      issueError: "Tracker rejected the API key",
+      issueStale: true,
+    });
+    expect(stats).toMatchObject({ error: undefined });
   });
 
   it("skips cold-start hydration from the code forge's cached issue page", async () => {
@@ -1638,7 +1977,8 @@ describe("issues bound to a separate provider (#13700)", () => {
 
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
-    expect(stats).toMatchObject({ issueCount: 3, prCount: 4 });
+    expect(stats).toMatchObject({ issueCount: 3, prCount: 4, issueStale: true });
+    expect(stats).not.toHaveProperty("issueError");
     expect(projectStoreMock.saveRepoStats).toHaveBeenCalledWith(
       "/repo",
       expect.not.objectContaining({ forge: expect.anything() })
@@ -1656,6 +1996,8 @@ describe("issues bound to a separate provider (#13700)", () => {
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
     expect(stats).toMatchObject({ issueCount: 99, prCount: 4 });
+    expect(stats).not.toHaveProperty("issueError");
+    expect(stats).not.toHaveProperty("issueStale");
   });
 });
 
@@ -1710,7 +2052,11 @@ describe("forge:resolve-author-avatar coalescing (#13598)", () => {
       Array.from({ length: 20 }, () => "https://avatars.test/dev.png")
     );
     expect(resolveAuthorAvatar).toHaveBeenCalledTimes(1);
-    expect(resolveAuthorAvatar).toHaveBeenCalledWith("dev@example.com");
+    // The repository travels with the email: a provider answers only from its own host.
+    expect(resolveAuthorAvatar).toHaveBeenCalledWith(
+      "dev@example.com",
+      expect.objectContaining({ host: "fake.test", owner: "acme", repo: "widgets" })
+    );
 
     // Only the one admitted lookup spent quota: 29 distinct emails still fit
     // the 30/min budget, and the 30th distinct one is refused.

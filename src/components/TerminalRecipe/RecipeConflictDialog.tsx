@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { useRecipeConflictStore } from "@/store/recipeConflictStore";
+import { cancelFailedRecipeConflict, useRecipeConflictStore } from "@/store/recipeConflictStore";
 
 /**
  * Refused-write surface for in-repo recipes. Covers both reasons the main
@@ -106,6 +106,7 @@ export function RecipeConflictDialog() {
       variant="component"
       componentName="RecipeConflictDialog"
       resetKeys={[requestSeq]}
+      onError={() => cancelFailedRecipeConflict(requestSeq)}
     >
       <RecipeConflictDialogInner />
     </ErrorBoundary>

@@ -4,6 +4,7 @@ import type { WhenClauseContext } from "@shared/utils/whenClause/types";
 
 const voice = vi.hoisted(() => ({
   initialize: vi.fn(),
+  adoptShortcutPress: vi.fn(),
   toggleFocusedPanel: vi.fn(async (_options?: { returnToTarget?: boolean }) => {}),
   stopAndSend: vi.fn(async () => {}),
 }));
@@ -90,6 +91,19 @@ describe("the Canopy window's dictation keys", () => {
     expect(voice.toggleFocusedPanel).toHaveBeenCalledTimes(2);
     expect(voice.toggleFocusedPanel).toHaveBeenLastCalledWith({ returnToTarget: true });
     expect(reached).toEqual([]);
+  });
+
+  // Dictation turned on in a project window after this one read its settings
+  // leaves the service's own listener deaf to the press (#17031).
+  it("hands the dictation key's press to the service before the toggle claims it", () => {
+    press(reply, "d");
+
+    expect(voice.adoptShortcutPress).toHaveBeenCalledWith(
+      expect.objectContaining({ code: "KeyD", released: false })
+    );
+    expect(voice.adoptShortcutPress.mock.invocationCallOrder[0]).toBeLessThan(
+      voice.toggleFocusedPanel.mock.invocationCallOrder[0]!
+    );
   });
 
   it("follows a rebound shortcut, and leaves the old one to the reply", () => {
@@ -428,8 +442,9 @@ describe("Cmd+W in the Canopy window (#16618)", () => {
   });
 
   it("leaves Cmd+W to another binding that outranks the close, closing nothing", () => {
-    // The portal's close-tab binding holds Cmd+W at a higher priority in its scope.
-    keybindingService.setScope("portal");
+    // Dev preview's reload, moved onto Cmd+W, keeps its higher priority in its scope.
+    keybindingService.applyOverrides({ "devPreview.reloadPreview": ["Cmd+W"] });
+    keybindingService.setScope("dev-preview");
     try {
       const inPane = press(paneReply, "w");
       const onList = press(document.body, "w");
@@ -440,7 +455,7 @@ describe("Cmd+W in the Canopy window (#16618)", () => {
       expect(trashed).toBe(0);
       expect(closeWindow).not.toHaveBeenCalled();
     } finally {
-      keybindingService.restoreScope("portal");
+      keybindingService.restoreScope("dev-preview");
     }
   });
 

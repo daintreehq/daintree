@@ -197,6 +197,9 @@ vi.mock("@/hooks/useCopyWithFeedback", () => ({
   useCopyWithFeedback: () => ({ copied: false, copy: copyMock }),
 }));
 
+import { actionService } from "@/services/ActionService";
+import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
+import { useProjectSleepWaitStore } from "@/store/projectSleepWaitStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -737,6 +740,36 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.removeConfirmProject).toBeNull();
     });
 
+    // The confirm renders in the view's modal layer above where the switcher
+    // opens, so a switcher opened under it would take focus and Escape from the
+    // dialog on screen (#16919).
+    it("won't open under a Close confirm it raised, and opens once it is answered", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+
+      await act(async () => {
+        result.current.removeProject("project-1");
+      });
+      expect(result.current.removeConfirmProject?.id).toBe("project-1");
+
+      act(() => {
+        result.current.toggle();
+      });
+      act(() => {
+        result.current.open("dropdown");
+      });
+      expect(result.current.isOpen).toBe(false);
+      expect(usePaletteStore.getState().activePaletteId).toBeNull();
+
+      act(() => {
+        result.current.setRemoveConfirmProject(null);
+      });
+      act(() => {
+        result.current.toggle();
+      });
+      expect(result.current.isOpen).toBe(true);
+      expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
+    });
+
     it("stop confirmation closes the active project so the renderer leaves project view", async () => {
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -893,94 +926,108 @@ describe("useProjectSwitcherPalette", () => {
       return result;
     }
 
-    it("D0: a background project with nothing running sleeps immediately", async () => {
-      getBulkStatsMock.mockResolvedValue(bulkStats());
-
-      const result = await openPalette();
-
-      await act(async () => {
-        await result.current.sleepProject("project-1");
-      });
-
-      expect(sleepProjectMock).toHaveBeenCalledWith("project-1");
-      expect(result.current.sleepConfirmProject).toBeNull();
-    });
-
-    it("D1: live processes open a confirm dialog before sleeping", async () => {
+    // The switcher hands Sleep to `project.sleep`, whose app-level dialog
+    // decides when to confirm and offers the wait for agents (#17882).
+    it("closes the picker and hands the sleep to project.sleep", async () => {
+      const dispatch = vi
+        .spyOn(actionService, "dispatch")
+        .mockResolvedValue({ ok: true, result: { slept: true } });
       getBulkStatsMock.mockResolvedValue(bulkStats({ processCount: 2, activeAgentCount: 1 }));
 
       const result = await openPalette();
-      await waitFor(() => {
-        expect(asProject(result.current.results[0]).processCount).toBe(2);
-      });
-
       await act(async () => {
         await result.current.sleepProject("project-1");
       });
 
-      // Snapshot captured, nothing slept yet.
-      expect(result.current.sleepConfirmProject?.id).toBe("project-1");
-      expect(result.current.sleepConfirmProject?.processCount).toBe(2);
+      expect(result.current.isOpen).toBe(false);
+      expect(dispatch).toHaveBeenCalledWith(
+        "project.sleep",
+        { projectId: "project-1" },
+        { source: "user" }
+      );
       expect(sleepProjectMock).not.toHaveBeenCalled();
-
-      await act(async () => {
-        await result.current.confirmSleep();
-      });
-
-      expect(sleepProjectMock).toHaveBeenCalledWith("project-1");
-      expect(result.current.sleepConfirmProject).toBeNull();
+      dispatch.mockRestore();
     });
 
-    it("D1: the project on screen confirms even with nothing running", async () => {
-      // Sleeping the active project tears down what the user is looking at and
-      // drops the window to the picker — worth a confirm on its own, where the
-      // "Free memory" action this replaces refused the active project outright.
-      projectState.currentProject = { id: "project-1" };
-      getBulkStatsMock.mockResolvedValue(bulkStats());
-
-      const result = await openPalette();
-
-      await act(async () => {
-        await result.current.sleepProject("project-1");
-      });
-
-      expect(sleepProjectMock).not.toHaveBeenCalled();
-      expect(result.current.sleepConfirmProject?.id).toBe("project-1");
-
-      await act(async () => {
-        await result.current.confirmSleep();
-      });
-
-      expect(sleepProjectMock).toHaveBeenCalledWith("project-1");
-    });
-
-    it("closes the dialog on failure and routes recovery through the error toast", async () => {
-      // The confirm dialog is not the retry surface: doSleepProject swallows the
-      // rejection and raises a toast carrying "Try again", so the dialog must
-      // not stay up holding a stale frozen snapshot.
+    it("routes a failed sleep to an error toast whose Try again dispatches again", async () => {
       notifyMock.mockClear();
-      sleepProjectMock.mockRejectedValue(new Error("sleep failed"));
+      const dispatch = vi.spyOn(actionService, "dispatch").mockResolvedValue({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "sleep failed" },
+      });
       getBulkStatsMock.mockResolvedValue(bulkStats({ processCount: 1 }));
 
       const result = await openPalette();
-
       await act(async () => {
         await result.current.sleepProject("project-1");
       });
-      expect(result.current.sleepConfirmProject?.id).toBe("project-1");
 
-      await act(async () => {
-        await result.current.confirmSleep();
-      });
-
-      expect(result.current.sleepConfirmProject).toBeNull();
-      expect(result.current.isSleepingProject).toBe(false);
       const errorCall = notifyMock.mock.calls.find(
         ([arg]) => (arg as { title?: string })?.title === "Couldn't sleep project"
       );
       expect(errorCall).toBeDefined();
-      const actions = (errorCall![0] as { actions?: Array<{ label: string }> }).actions ?? [];
-      expect(actions.map((action) => action.label)).toContain("Try again");
+      expect((errorCall![0] as { message?: string }).message).toBe("sleep failed");
+      const retry = (
+        errorCall![0] as { actions?: Array<{ label: string; onClick: () => Promise<void> }> }
+      ).actions?.find((action) => action.label === "Try again");
+      expect(retry).toBeDefined();
+
+      dispatch.mockResolvedValue({ ok: true, result: { slept: true } });
+      await act(async () => {
+        await retry!.onClick();
+      });
+      expect(dispatch).toHaveBeenCalledTimes(2);
+      dispatch.mockRestore();
+    });
+
+    it("won't open over the app-level Sleep dialog or a Sleep waiting on agents", async () => {
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      let answer!: Promise<boolean>;
+      act(() => {
+        answer = useProjectSleepConfirmStore.getState().requestConfirmation({
+          kind: "project",
+          projects: [],
+        });
+      });
+      act(() => {
+        result.current.toggle();
+      });
+      expect(result.current.isOpen).toBe(false);
+      act(() => {
+        useProjectSleepConfirmStore.getState().resolveConfirmation(false);
+      });
+      await answer;
+
+      act(() => {
+        useProjectSleepWaitStore
+          .getState()
+          .setRun({ id: 1, phase: "waiting", projects: [], pauseNote: false });
+      });
+      act(() => {
+        result.current.open();
+      });
+      expect(result.current.isOpen).toBe(false);
+      act(() => {
+        useProjectSleepWaitStore.getState().setRun(null);
+      });
+      act(() => {
+        result.current.open();
+      });
+      expect(result.current.isOpen).toBe(true);
+    });
+
+    it("does nothing for a project no longer in the list", async () => {
+      const dispatch = vi.spyOn(actionService, "dispatch");
+      getBulkStatsMock.mockResolvedValue(bulkStats());
+
+      const result = await openPalette();
+      await act(async () => {
+        await result.current.sleepProject("gone");
+      });
+
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(result.current.isOpen).toBe(true);
+      dispatch.mockRestore();
     });
   });
 
@@ -2892,6 +2939,100 @@ describe("useProjectSwitcherPalette", () => {
       expect(asProject(result.current.results[0]).waitingAgentCount).toBe(0);
       expect(asProject(result.current.results[1]).section).toBe("other");
       expect(asProject(result.current.results[1]).activeAgentCount).toBe(3);
+    });
+
+    it("opens the action palette's `/` as a fresh, held modal after the toolbar dropdown opened and closed", async () => {
+      const projects = [base("waiting"), base("idle")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        waiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+      };
+      // Both openings fetch bulk stats; answering with the store's own counts
+      // keeps the dropdown's fetch from erasing the wait before the modal opens.
+      answerBulkStatsLikeTheStore({ zeroFillRequested: true });
+
+      const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+
+      // The toolbar dropdown, opened and dismissed. Closing it leaves the
+      // shared controller in dropdown mode, where the store slot alone opens
+      // nothing.
+      act(() => {
+        result.current.open("dropdown");
+      });
+      await waitFor(() => {
+        expect(result.current.results).toHaveLength(2);
+      });
+      act(() => {
+        result.current.close();
+      });
+      expect(result.current.mode).toBe("dropdown");
+      expect(result.current.isOpen).toBe(false);
+
+      // What `/` in the action palette reaches: `onSearchProjects("")`, which
+      // the modal layer binds to this controller's modal `open`.
+      act(() => {
+        result.current.open("modal", { query: "" });
+      });
+
+      expect(result.current.mode).toBe("modal");
+      expect(result.current.isOpen).toBe(true);
+      expect(usePaletteStore.getState().activePaletteId).toBe("project-switcher");
+      expect(result.current.query).toBe("");
+      await waitFor(() => {
+        expect(result.current.results[0]!.id).toBe("waiting");
+      });
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("waiting");
+
+      // And the order is frozen for this session like any other opening's,
+      // while the rows' counts stay live.
+      act(() => {
+        projectStatsState.stats = {
+          waiting: { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+          idle: { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+        };
+        rerender();
+      });
+      expect(result.current.results.map((p) => p.id)).toEqual(["waiting", "idle"]);
+      expect(asProject(result.current.results[0]).section).toBe("attention");
+      expect(asProject(result.current.results[0]).waitingAgentCount).toBe(0);
+      expect(asProject(result.current.results[1]).waitingAgentCount).toBe(2);
+    });
+
+    it("starts the action palette's `/` on the opening's own row, not one a slot takeover left highlighted", async () => {
+      const projects = [base("waiting"), base("idle")];
+      projectState.projects = projects;
+      projectState.currentProject = null;
+      projectStatsState.stats = {
+        waiting: { activeAgentCount: 0, waitingAgentCount: 1, processCount: 0 },
+      };
+      answerBulkStatsLikeTheStore({ zeroFillRequested: true });
+
+      const { result } = renderHook(() => useProjectSwitcherPalette());
+      act(() => {
+        result.current.open("modal");
+      });
+      await waitFor(() => {
+        expect(result.current.results[0]!.id).toBe("waiting");
+      });
+      act(() => {
+        result.current.hoverRow("idle");
+      });
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("idle");
+
+      // The action palette takes the slot (its own chord), which closes the
+      // switcher without `close()`, so the highlight is still on `idle`.
+      act(() => {
+        usePaletteStore.getState().openPalette("action");
+      });
+      expect(result.current.isOpen).toBe(false);
+
+      // `/` from there: the controller's opening, which picks its own row.
+      act(() => {
+        result.current.open("modal", { query: "" });
+      });
+      expect(result.current.isOpen).toBe(true);
+      expect(result.current.results[result.current.selectedIndex]?.id).toBe("waiting");
     });
 
     it("regroups a project that registers while the session is still a guess", async () => {

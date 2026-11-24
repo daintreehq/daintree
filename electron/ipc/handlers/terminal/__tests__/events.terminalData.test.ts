@@ -67,14 +67,20 @@ const notifyPanelsChanged = vi.hoisted(() => vi.fn());
 vi.mock("../../../../services/DriveLeaseService.js", () => ({
   peekDriveLeaseService: () => ({ notifyPanelsChanged }),
 }));
+const runAttentionRef = vi.hoisted(() => ({
+  current: null as { handleTerminalExit: (id: string) => void } | null,
+}));
 vi.mock("../../../../window/serviceRefs.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../../window/serviceRefs.js")>()),
   getMcpServerServiceRef: () => serviceRef.current,
+  getRunAttentionServiceRef: () => runAttentionRef.current,
 }));
 
 import { CHANNELS } from "../../../channels.js";
 import { events, type DaintreeEventMap } from "../../../../services/events.js";
 import { registerTerminalEventHandlers } from "../events.js";
+import { RunAttentionService } from "../../../../services/RunAttentionService.js";
+import { bridgePtyEvent } from "../../../../services/pty/PtyEventsBridge.js";
 import { SPAWN_CONFIRMATION_TIMEOUT_MS, armSpawnConfirmation } from "../spawnConfirmation.js";
 import {
   clearPortHolderWebContents,
@@ -86,9 +92,12 @@ import {
   unregisterProjectView,
 } from "../../../../window/webContentsRegistry.js";
 import type { HandlerDependencies } from "../../../types.js";
+import { getEndpointRegistry } from "../../../endpointRegistry.js";
+import type { ClientEndpoint } from "../../../endpoint.js";
 
 beforeEach(() => {
   serviceRef.current = null;
+  runAttentionRef.current = null;
 });
 
 /**
@@ -152,6 +161,7 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
   beforeEach(() => {
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn((id: string) => (id === "term-a" ? "project-a" : null)),
+      isUnplacedTerminal: vi.fn((id: string) => id === "term-unplaced"),
     });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
@@ -287,6 +297,50 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
       ]);
     });
 
+    // #17926: no remote view is bound to it, so the unscoped remote fallback
+    // would push one window's shell to every Shell.
+    it("keeps a terminal placed in no project off remote views, and reaches every local one", () => {
+      const remote: ClientEndpoint = {
+        endpointId: "remote:s1:picker",
+        clientId: "client-b",
+        projectId: null,
+        kind: "remote-view",
+        handle: -7,
+        send: vi.fn(),
+        request: vi.fn(),
+        onClose: () => ({ dispose: () => undefined }),
+        isClosed: () => false,
+      };
+      getEndpointRegistry().add(remote);
+      try {
+        ptyClient.emit("data", "term-unplaced", "picker output", {
+          portDeliveredWebContentsIds: [activeA.id],
+        });
+        expect(remote.send).not.toHaveBeenCalled();
+        expect(dataSends(activeA)).toHaveLength(0);
+        for (const wc of [cachedB, activeB, cachedA]) {
+          expect(dataSends(wc)).toEqual([
+            [CHANNELS.TERMINAL_DATA, "term-unplaced", "picker output"],
+          ]);
+        }
+
+        // With no port taking it, the ordinary fallback reaches every local view.
+        ptyClient.emit("data", "term-unplaced", "prompt");
+        for (const wc of [activeA, cachedB, activeB, cachedA]) {
+          expect(dataSends(wc).filter((call) => call[2] === "prompt")).toEqual([
+            [CHANNELS.TERMINAL_DATA, "term-unplaced", "prompt"],
+          ]);
+        }
+        expect(remote.send).not.toHaveBeenCalled();
+
+        // One main can no longer place still reaches them, as before.
+        ptyClient.emit("data", "term-untracked", "late output");
+        expect(remote.send).toHaveBeenCalledTimes(1);
+      } finally {
+        getEndpointRegistry().remove(remote.endpointId);
+      }
+    });
+
     it("falls back to every app view when the terminal's project is unknown", () => {
       // A terminal main no longer tracks answers null — the fallback is what
       // keeps its late output from being swallowed.
@@ -363,7 +417,10 @@ describe("terminal event handlers — captured agent sessions (#12433)", () => {
     acceptCapturedAgentSession.mockReset();
     acceptObservedAgentSession.mockClear();
     releaseSupersededCapturedSession.mockReset();
-    ptyClient = Object.assign(new EventEmitter(), { getTerminalProjectId: vi.fn() });
+    ptyClient = Object.assign(new EventEmitter(), {
+      getTerminalProjectId: vi.fn(),
+      isUnplacedTerminal: vi.fn(() => false),
+    });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
 
@@ -435,6 +492,7 @@ describe("terminal event handlers — broadcast-write-result forwarding", () => 
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: (id: string) => PROJECTS[id] ?? null,
+      isUnplacedTerminal: () => false,
     });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
@@ -535,6 +593,7 @@ describe("terminal event handlers — fd-growth (#12520)", () => {
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn(),
+      isUnplacedTerminal: vi.fn(() => false),
     });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
@@ -664,6 +723,7 @@ describe("terminal event handlers — resize-result forwarding (#11641)", () => 
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn((id: string) => `project-for-${id}`),
+      isUnplacedTerminal: vi.fn(() => false),
     });
     dispose = registerTerminalEventHandlers({
       ptyClient,
@@ -794,6 +854,99 @@ describe("terminal exit forwarding during restart", () => {
 
     expect(broadcastToRenderer).not.toHaveBeenCalled();
   });
+
+  it("tells run attention a terminal ended, but not when it is only restarting (#17193)", () => {
+    const attention = { handleTerminalExit: vi.fn() };
+    runAttentionRef.current = attention;
+
+    // A restart keeps the id alive, so a run parked on it must keep waiting.
+    ptyClient.consumeRestartExitSuppression.mockReturnValueOnce(true);
+    ptyClient.emit("exit", "t1", 0);
+    expect(attention.handleTerminalExit).not.toHaveBeenCalled();
+
+    // A kill, a natural exit, and a session-preserving teardown all end it.
+    ptyClient.emit("exit", "t1", 0);
+    ptyClient.emit("exit", "t2", 0, 15, true);
+    expect(attention.handleTerminalExit.mock.calls).toEqual([["t1"], ["t2"]]);
+
+    dispose();
+    ptyClient.emit("exit", "t3", 0);
+    expect(attention.handleTerminalExit).toHaveBeenCalledTimes(2);
+    dispose = () => {};
+  });
+});
+
+describe("runs parked on a gate that is killed without going through trash (#17193)", () => {
+  // The real service, Main bus, bridge and exit handler; only the PTY client is
+  // fake, standing in for the host's wire.
+  let ptyClient: EventEmitter & { consumeRestartExitSuppression: ReturnType<typeof vi.fn> };
+  let dispose: () => void;
+  let service: RunAttentionService;
+  let released: Array<{ id: string; reason: string }>;
+  let stopListening: () => void;
+
+  function gateEdge(previousState: string, state: string, extra: Record<string, unknown> = {}) {
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "gate",
+      state,
+      previousState,
+      timestamp: 2_000,
+      trigger: "exit",
+      confidence: 1,
+      ...extra,
+    } as never);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    ptyClient = Object.assign(new EventEmitter(), {
+      consumeRestartExitSuppression: vi.fn().mockReturnValue(false),
+    });
+    dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
+    service = new RunAttentionService({ load: () => ({}), save: () => {} }, { now: () => 1_000 });
+    runAttentionRef.current = service;
+    released = [];
+    stopListening = events.on("terminal:park-released", (payload) => {
+      released.push({ id: payload.id, reason: payload.reason });
+    });
+    service.park("run", { gateRunId: "gate" });
+  });
+
+  afterEach(() => {
+    stopListening();
+    service.dispose();
+    dispose();
+  });
+
+  it.each(["waiting", "idle"])("releases them as gate-closed when a %s gate dies", () => {
+    ptyClient.emit("exit", "gate", 0);
+
+    expect(released).toEqual([{ id: "run", reason: "gate-closed" }]);
+  });
+
+  it.each(["working", "directing"])(
+    "releases them as gate-closed, not gate-ready, when a %s gate is killed",
+    (busyState) => {
+      gateEdge(busyState, "idle", { terminalClosing: true });
+      expect(released).toEqual([]);
+
+      ptyClient.emit("exit", "gate", 0);
+
+      expect(released).toEqual([{ id: "run", reason: "gate-closed" }]);
+    }
+  );
+
+  it("keeps them across a restart until the new process comes free", () => {
+    gateEdge("working", "idle", { terminalClosing: true });
+    ptyClient.consumeRestartExitSuppression.mockReturnValueOnce(true);
+    ptyClient.emit("exit", "gate", 0);
+    expect(released).toEqual([]);
+
+    gateEdge("working", "waiting", { trigger: "activity", timestamp: 3_000 });
+
+    expect(released).toEqual([{ id: "run", reason: "gate-ready" }]);
+  });
 });
 
 describe("terminal event handlers — spawn confirmation (#12754)", () => {
@@ -805,6 +958,7 @@ describe("terminal event handlers — spawn confirmation (#12754)", () => {
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn(() => "project-a"),
+      isUnplacedTerminal: vi.fn(() => false),
       consumeRestartExitSuppression: vi.fn(() => false),
     });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
@@ -887,6 +1041,7 @@ describe("terminal event handlers — submit-status forwarding (#11875)", () => 
     vi.clearAllMocks();
     ptyClient = Object.assign(new EventEmitter(), {
       getTerminalProjectId: vi.fn((id: string) => `project-for-${id}`),
+      isUnplacedTerminal: vi.fn(() => false),
     });
     dispose = registerTerminalEventHandlers({
       ptyClient,

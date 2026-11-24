@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describePluginInstallSource } from "../pluginInstallSource.js";
+import { describeCatalogSource, describePluginInstallSource } from "../pluginInstallSource.js";
 
 describe("describePluginInstallSource", () => {
   it("names a local archive by its file name alone", () => {
@@ -15,5 +15,24 @@ describe("describePluginInstallSource", () => {
     );
     expect(label).toBe("cdn.example.com/plugins/acme.dntr");
     expect(label).not.toMatch(/secret|frag|\?/);
+  });
+});
+
+describe("describeCatalogSource (#17434)", () => {
+  it("keeps the host and the path as they are", () => {
+    expect(describeCatalogSource("https://plugins.example.org/catalog.json")).toBe(
+      "plugins.example.org/catalog.json"
+    );
+    expect(describeCatalogSource("https://plugins.example.org/lists/")).toBe(
+      "plugins.example.org/lists/"
+    );
+    expect(describeCatalogSource("https://plugins.example.org/")).toBe("plugins.example.org");
+  });
+
+  it("marks a query without showing it, so two catalogs on one path stay apart", () => {
+    const withQuery = describeCatalogSource("https://plugins.example.org/c.json?token=secret");
+    expect(withQuery).toBe("plugins.example.org/c.json?…");
+    expect(withQuery).not.toContain("secret");
+    expect(withQuery).not.toBe(describeCatalogSource("https://plugins.example.org/c.json"));
   });
 });

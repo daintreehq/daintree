@@ -3,7 +3,7 @@ import { Callout } from "@/components/ui/Callout";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
@@ -39,7 +39,7 @@ const DESCRIPTION_MAX_HEIGHT = "max-h-[9rem]";
  * they are shown outright or offered behind a disclosure does.
  */
 const ARGS_PRE =
-  "text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle border border-tint/[0.08] rounded max-h-40 overflow-y-auto px-2 py-1.5 text-text-primary";
+  "text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle border border-border-default rounded-[var(--radius-md)] max-h-40 overflow-y-auto px-2 py-1.5 text-text-primary";
 
 /**
  * Singleton dialog driven by the plugin-MCP consent queue. Mounted once near
@@ -96,6 +96,7 @@ export function PluginMcpConfirmDialog() {
         variant="component"
         componentName="PluginMcpConfirmDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => usePluginMcpConfirmStore.getState().drop(resetKey))}
       >
         <ConfirmDialog
           isOpen={false}
@@ -126,6 +127,7 @@ export function PluginMcpConfirmDialog() {
       variant="component"
       componentName="PluginMcpConfirmDialog"
       resetKeys={[resetKey]}
+      onError={afterCatch(() => usePluginMcpConfirmStore.getState().drop(resetKey))}
     >
       <ConfirmDialog
         isOpen={true}
@@ -138,6 +140,9 @@ export function PluginMcpConfirmDialog() {
         variant={variant}
         hasPreview={hasScrollableContent}
         bodyResetKey={current.requestId}
+        // Without it, focus stays on the button that approved the last request,
+        // one Enter from approving this one once its cooldown clears.
+        focusResetKey={current.requestId}
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
         hint={<GateHint queueDepth={queueDepth} />}
@@ -236,10 +241,7 @@ function IdentityRow({
     <div className="flex items-baseline gap-2 text-xs">
       <span className="shrink-0 w-[5.5rem] text-text-secondary">{label}</span>
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
-        <span
-          className={cn("min-w-0 break-all text-text-primary", mono && "font-mono text-2xs")}
-          title={value}
-        >
+        <span className={cn("min-w-0 break-all text-text-primary", mono && "font-mono text-2xs")}>
           {value}
         </span>
         {trailing}
@@ -271,18 +273,8 @@ function ChangeNotice({ reason, tier }: { reason: string; tier: PluginMcpDangerT
   if (heading === null) return null;
 
   return (
-    <Callout severity={isRaisedDanger ? "danger" : "warning"}>
-      <div className="space-y-1">
-        <div
-          className={cn(
-            SECTION_LABEL_CLASS,
-            isRaisedDanger ? "text-status-danger" : "text-status-warning"
-          )}
-        >
-          {heading}
-        </div>
-        <div>{changeBodyFor(reason, tier)}</div>
-      </div>
+    <Callout severity={isRaisedDanger ? "danger" : "warning"} title={heading}>
+      {changeBodyFor(reason, tier)}
     </Callout>
   );
 }
@@ -426,7 +418,7 @@ function GateHint({ queueDepth }: { queueDepth: number }) {
     return (
       <span aria-live="polite" className="min-w-0 leading-tight">
         <span className="block">{pluralize(queueDepth, "more request")} waiting</span>
-        <span className="block">remembered until this tool changes</span>
+        <span className="block">Remembered until this tool changes</span>
       </span>
     );
   }

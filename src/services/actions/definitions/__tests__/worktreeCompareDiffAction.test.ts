@@ -34,7 +34,9 @@ const SAMPLE_RESULT: CrossWorktreeDiffResult = {
 
 const mockCompareWorktrees = vi.fn();
 
-function setWorktrees(entries: Array<{ id: string; path: string; branch?: string }>): void {
+function setWorktrees(
+  entries: Array<{ id: string; path: string; branch?: string; isDetached?: boolean }>
+): void {
   const map = new Map(entries.map((e) => [e.id, e]));
   mockGetCurrentViewStore.mockReturnValue({ getState: () => ({ worktrees: map }) });
 }
@@ -171,6 +173,20 @@ describe("worktree.compareDiff run() (#10684)", () => {
     const run = getRun();
     await expect(
       run({ worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never, {} as ActionContext)
+    ).rejects.toThrow(/detached HEAD/);
+    expect(mockCompareWorktrees).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["base", { left: true, right: false }],
+    ["compare-to", { left: false, right: true }],
+  ])("throws when the %s side is detached but retains its last branch name", async (_s, d) => {
+    setWorktrees([
+      { id: "wt-left", path: "/repo/left", branch: "feature/a", isDetached: d.left },
+      { id: "wt-right", path: "/repo/right", branch: "feature/b", isDetached: d.right },
+    ]);
+    await expect(
+      getRun()({ worktreeId: "wt-left", compareToWorktreeId: "wt-right" } as never, {} as never)
     ).rejects.toThrow(/detached HEAD/);
     expect(mockCompareWorktrees).not.toHaveBeenCalled();
   });

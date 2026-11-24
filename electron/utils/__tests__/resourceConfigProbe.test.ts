@@ -28,7 +28,13 @@ describe("probeResourceConfig", () => {
     writeFileSync(path.join(dir, ".daintree", file), content);
   }
 
-  const probe = () => probeResourceConfig(project, [worktree], home);
+  const projectSettings = () =>
+    path.join(root, "userData", "projects", "a".repeat(64), "settings.json");
+  const probe = () =>
+    probeResourceConfig(project, [worktree], {
+      homeDir: home,
+      projectSettingsPath: projectSettings(),
+    });
 
   it("is none when nothing declares a resource", async () => {
     expect(await probe()).toBe("none");
@@ -59,6 +65,16 @@ describe("probeResourceConfig", () => {
         writeFileSync(path.join(userDir, "settings.json"), '{"resourceEnvironment":{}}');
       },
     ],
+    [
+      "the project's saved settings",
+      () => {
+        mkdirSync(path.dirname(projectSettings()), { recursive: true });
+        writeFileSync(
+          projectSettings(),
+          '\uFEFF{"_schemaVersion":1,"resourceEnvironments":{"cloud":{"provision":["up"]}}}'
+        );
+      },
+    ],
   ])("is configured when %s declares one", async (_where, arrange) => {
     arrange();
     expect(await probe()).toBe("configured");
@@ -71,11 +87,25 @@ describe("probeResourceConfig", () => {
       mkdirSync(path.join(project, ".daintree"), { recursive: true });
       const fifo = path.join(project, ".daintree", "config.json");
       execFileSync("mkfifo", [fifo]);
-      expect(await probeResourceConfig(project, [worktree], home, 50)).toBe("unknown");
+      expect(await probeResourceConfig(project, [worktree], { homeDir: home, timeoutMs: 50 })).toBe(
+        "unknown"
+      );
       // Release the stalled read so it doesn't pin a threadpool slot.
       closeSync(openSync(fifo, "w"));
     }
   );
+
+  it("is none when the project's saved settings declare no resource", async () => {
+    mkdirSync(path.dirname(projectSettings()), { recursive: true });
+    writeFileSync(projectSettings(), '{"_schemaVersion":1,"runCommands":[]}');
+    expect(await probe()).toBe("none");
+  });
+
+  it("is unknown when the project's saved settings can't be parsed", async () => {
+    mkdirSync(path.dirname(projectSettings()), { recursive: true });
+    writeFileSync(projectSettings(), "{ not json");
+    expect(await probe()).toBe("unknown");
+  });
 
   it("is unknown when a config file can't be parsed", async () => {
     write(project, "config.json", "{ not json");

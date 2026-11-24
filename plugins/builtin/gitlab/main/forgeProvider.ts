@@ -1,5 +1,6 @@
 import type {
   AuthValidation,
+  ChecksCapability,
   Credentials,
   ForgeProviderImpl,
   ForgeUser,
@@ -31,7 +32,10 @@ import {
   clearGitLabCaches,
   findPRByBranchImpl,
   findPRsByBranchesImpl,
+  findPRsByNumbersImpl,
   getCIStatusImpl,
+  getCIStatusesImpl,
+  getChecksImpl,
   getGitLabCacheGeneration,
   getIssueImpl,
   getIssueTooltipImpl,
@@ -114,6 +118,10 @@ const identityCapability: IdentityCapability = {
       rawData: { source: "GitLabAuth.validated" },
     };
   },
+};
+
+const checksCapability: ChecksCapability = {
+  getChecks: getChecksImpl,
 };
 
 const tooltipCapability: TooltipCapability = {
@@ -252,6 +260,13 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
   findPRByBranch: findPRByBranchImpl,
   findPRsByBranches: findPRsByBranchesImpl,
   getCIStatus: getCIStatusImpl,
+  // One GraphQL read answers both, so polling K merge requests costs a query
+  // per chunk instead of an MR read and a pipeline read per MR. No open-list
+  // probe: revalidation re-reads tracked MRs through this batch instead.
+  batchLookups: {
+    findPRsByNumbers: findPRsByNumbersImpl,
+    getCIStatuses: getCIStatusesImpl,
+  },
   getRepoMetadata: getRepoMetadataImpl,
 
   buildIssueUrl(repo: RepoRef, number: number): string {
@@ -337,6 +352,7 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
   },
 
   identity: identityCapability,
+  checks: checksCapability,
   tooltips: tooltipCapability,
   releases: releaseCapability,
   repoStats: repoStatsCapability,

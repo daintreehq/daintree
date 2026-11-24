@@ -210,7 +210,11 @@ export const projectActionRuns = {
     // Parsed rather than asserted: this is the one action whose args arrive
     // from a click payload, and a parse both narrows the type and rejects a
     // malformed dispatch instead of trusting it.
-    const { runId, workspaceId: requestedWorkspaceId } = openRunArgs.parse(args);
+    const {
+      runId,
+      workspaceId: requestedWorkspaceId,
+      worktreeId: requestedWorktreeId,
+    } = openRunArgs.parse(args);
 
     // The workspace THIS view owns, not the one the app is globally pointed
     // at. `currentProject` is per-view — main answers `project:get-current`
@@ -298,7 +302,13 @@ export const projectActionRuns = {
     // incoming view applies once its state has hydrated. Closing first is
     // right here: the view holding this dialog is about to be replaced.
     usePilotStore.getState().close();
-    const focusIntent = { intent: "focus-panel", panelId: runId } as const;
+    // A blank id names no worktree, so it carries no fallback either.
+    const worktreeId = requestedWorktreeId?.trim() ? requestedWorktreeId : undefined;
+    const focusIntent = {
+      intent: "focus-panel",
+      panelId: runId,
+      ...(worktreeId !== undefined ? { worktreeId } : {}),
+    } as const;
 
     // Projects and scratches are disjoint id spaces with separate stores,
     // switch handlers and current-pointers (#11518), so the destination has
@@ -331,7 +341,11 @@ export const projectActionRuns = {
         label: "Try again",
         variant: "primary",
         onClick: () => {
-          void actionService.dispatch("pilot.openRun", { runId, workspaceId });
+          void actionService.dispatch("pilot.openRun", {
+            runId,
+            workspaceId,
+            ...(worktreeId !== undefined ? { worktreeId } : {}),
+          });
         },
       });
     }
@@ -499,8 +513,9 @@ export const projectActionRuns = {
     // renderer dialog a headless client can't click, so asking again would
     // hang past the dispatch deadline and could still fire afterwards (#11538).
     if (mayStopWork && ctx.dispatchSource !== "agent") {
-      const ok = await useProjectSleepConfirmStore.getState().requestConfirmation({
+      const choice = await useProjectSleepConfirmStore.getState().requestSleepChoice({
         kind: "project",
+        offerWhenIdle: true,
         projects: [
           {
             id,
@@ -513,10 +528,74 @@ export const projectActionRuns = {
           },
         ],
       });
-      if (!ok) return { slept: false };
+      if (!choice) return { slept: false };
+      if (choice.when === "idle") {
+        // The wait outlives this dispatch; its dialog reports what happens.
+        const { startSleepWait } = await import("@/services/projectSleepWait");
+        await startSleepWait([id], { pauseNote: choice.pauseNote });
+        return { slept: false };
+      }
     }
     await useProjectStore.getState().sleepProject(id);
     return { slept: true };
+  },
+
+  "project.sleepAll": async (_args: unknown, ctx: ActionContext) => {
+    // Every project's assistant is among the terminals this stops, so an agent
+    // sleeping them all would end its own session mid-call.
+    if (ctx.dispatchSource === "agent") {
+      throw new Error("Sleeping every project is only available to the user");
+    }
+    const store = useProjectStore.getState();
+    const currentId = store.currentProject?.id;
+    const open = store.projects.filter(
+      (p) => p.id === currentId || p.status === "active" || p.status === "background"
+    );
+    if (open.length === 0) {
+      notify({
+        type: "info",
+        priority: "high",
+        title: "No open projects",
+        message: "Every project is already asleep or closed.",
+        context: { eventKind: "uiFeedback" },
+      });
+      return { slept: false, count: 0 };
+    }
+    const stats = useProjectStatsStore.getState().stats;
+    const liveCounts = new Map<string, number>();
+    try {
+      for (const t of await terminalClient.getAll()) {
+        if (!t.projectId || t.isTrashed || t.hasPty === false) continue;
+        liveCounts.set(t.projectId, (liveCounts.get(t.projectId) ?? 0) + 1);
+      }
+    } catch {
+      // The preview falls back to the pushed counts.
+    }
+    const ids = open.map((p) => p.id);
+    const choice = await useProjectSleepConfirmStore.getState().requestSleepChoice({
+      kind: "all",
+      offerWhenIdle: true,
+      projects: open.map((p) => {
+        const entry = stats[p.id];
+        return {
+          id: p.id,
+          name: p.name,
+          path: p.path,
+          terminalCount: Math.max(entry?.processCount ?? 0, liveCounts.get(p.id) ?? 0),
+          activeAgentCount: entry?.activeAgentCount ?? 0,
+          waitingAgentCount: entry?.waitingAgentCount ?? 0,
+          isActive: p.id === currentId,
+        };
+      }),
+    });
+    if (!choice) return { slept: false, count: 0 };
+    const { startSleepWait, sleepProjectsInOrder } = await import("@/services/projectSleepWait");
+    if (choice.when === "idle") {
+      await startSleepWait(ids, { pauseNote: choice.pauseNote });
+      return { slept: false, count: 0 };
+    }
+    const count = await sleepProjectsInOrder(ids);
+    return { slept: count > 0, count };
   },
 
   "project.restart": async (args: unknown, ctx: ActionContext) => {
@@ -612,6 +691,13 @@ export const projectActionRuns = {
     delete sanitized.daintreeMcpTier;
     delete sanitized.daintreeMcpSkipConfirmations;
     delete sanitized.exposeDaintreeMcpToAgents;
+    // Standing consent to unattended removals (#17321): Project Settings only.
+    delete sanitized.removeMergedWorktrees;
+    // Changed only through the project link actions, which hold the Assistant
+    // to its own links; main keeps the stored list through a save anyway. The
+    // pre-#17243 key goes too, since a stored list under it is still read.
+    delete sanitized.links;
+    delete sanitized.portalLinks;
     const updated = { ...current, ...sanitized } as ProjectSettings;
     await projectClient.saveSettings(projectId, updated);
 

@@ -221,6 +221,7 @@ export const AGENT_PRESET_PORTABLE_FIELDS = [
   "fallbacks",
   "fallbackOnRateLimit",
   "keepConversationOnRateLimit",
+  "continueAtLimitReset",
 ] as const;
 
 /** An agent's own permission-bypass fields. */

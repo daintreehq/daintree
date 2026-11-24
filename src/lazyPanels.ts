@@ -210,6 +210,12 @@ export const LazyScheduleRunConfirmDialog = lazy(() =>
   }))
 );
 
+export const LazyGlobalAssistantReplaceConfirmDialog = lazy(() =>
+  import("./components/HelpPanel/GlobalAssistantReplaceConfirmDialog").then((m) => ({
+    default: m.GlobalAssistantReplaceConfirmDialog,
+  }))
+);
+
 export const LazyRecipeRunConfirmDialog = lazy(() =>
   import("./components/TerminalRecipe/RecipeRunConfirmDialog").then((m) => ({
     default: m.RecipeRunConfirmDialog,
@@ -312,6 +318,11 @@ export const LazyProjectSleepConfirmDialog = lazyWithPreload(
   (m) => m.ProjectSleepConfirmDialog
 );
 
+export const LazyWorktreeResourceTeardownConfirmDialog = lazyWithPreload(
+  () => import("./components/Worktree/WorktreeResourceTeardownConfirmDialog"),
+  (m) => m.WorktreeResourceTeardownConfirmDialog
+);
+
 export const LazyRecipeConflictDialog = lazyWithPreload(
   () => import("./components/TerminalRecipe/RecipeConflictDialog"),
   (m) => m.RecipeConflictDialog
@@ -323,11 +334,5 @@ export const LazyCrashRecoveryDialog = lazyWithPreload(
   (m) => m.CrashRecoveryDialog
 );
 export const preloadCrashRecoveryDialog = LazyCrashRecoveryDialog.preload;
-
-export const LazyPortalDock = lazyWithPreload(
-  () => import("./components/Portal/PortalDock"),
-  (m) => m.PortalDock
-);
-export const preloadPortalDock = LazyPortalDock.preload;
 
 export const loadMotionFeatures = () => import("./lib/motionFeatures").then((mod) => mod.default);

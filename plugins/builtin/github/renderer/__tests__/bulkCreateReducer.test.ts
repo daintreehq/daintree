@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   progressReducer,
-  getStageLabel,
   type ProgressState,
   type ItemStatus,
 } from "../components/bulkCreateReducer";
@@ -169,38 +168,45 @@ describe("progressReducer", () => {
   });
 });
 
-describe("getStageLabel", () => {
-  it("returns null for undefined status", () => {
-    expect(getStageLabel(undefined)).toBeNull();
+describe("progressReducer cancellation", () => {
+  it("waits in cancelling, then cancels what didn't finish while keeping landed worktrees", () => {
+    let state = progressReducer(emptyState(), { type: "START", issueNumbers: [1, 2, 3, 4] });
+    state = progressReducer(state, { type: "ITEM_SUCCEEDED", issueNumber: 1 });
+    state = progressReducer(state, {
+      type: "ITEM_FAILED",
+      issueNumber: 2,
+      error: "boom",
+      attempts: 1,
+    });
+    state = progressReducer(state, { type: "CANCEL_REQUESTED" });
+    expect(state.phase).toBe("cancelling");
+
+    // A create already underway still lands while the cancel drains.
+    state = progressReducer(state, {
+      type: "ITEM_WORKTREE_CREATED",
+      issueNumber: 3,
+      worktreeId: "wt-3",
+      worktreePath: "/wt/3",
+      branch: "feature/3",
+    });
+    state = progressReducer(state, { type: "CANCELLED" });
+
+    expect(state.phase).toBe("cancelled");
+    expect([1, 2, 3, 4].map((n) => state.items.get(n)!.stage)).toEqual([
+      "succeeded",
+      "failed",
+      "cancelled",
+      "cancelled",
+    ]);
+    expect(state.items.get(3)!.worktreeId).toBe("wt-3");
+    expect(state.items.get(4)!.worktreeId).toBeUndefined();
   });
 
-  it("returns label for worktree-creating", () => {
-    expect(getStageLabel(makeStatus({ stage: "worktree-creating" }))).toBe("Creating worktree…");
-  });
-
-  it("returns terminal spawn failed for failed+terminals", () => {
-    expect(getStageLabel(makeStatus({ stage: "failed", failedStep: "terminals" }))).toBe(
-      "Terminal spawn failed"
+  it("ignores a cancel for a run that isn't executing", () => {
+    const done = progressReducer(
+      progressReducer(emptyState(), { type: "START", issueNumbers: [1] }),
+      { type: "DONE" }
     );
-  });
-
-  it("returns missing terminals for failed+verification", () => {
-    expect(getStageLabel(makeStatus({ stage: "failed", failedStep: "verification" }))).toBe(
-      "Missing terminals"
-    );
-  });
-
-  it("returns assignment failed for failed+assignment", () => {
-    expect(getStageLabel(makeStatus({ stage: "failed", failedStep: "assignment" }))).toBe(
-      "Assignment failed"
-    );
-  });
-
-  it("returns null for generic failed without step", () => {
-    expect(getStageLabel(makeStatus({ stage: "failed" }))).toBeNull();
-  });
-
-  it("returns null for succeeded", () => {
-    expect(getStageLabel(makeStatus({ stage: "succeeded" }))).toBeNull();
+    expect(progressReducer(done, { type: "CANCEL_REQUESTED" })).toBe(done);
   });
 });

@@ -20,9 +20,8 @@ vi.mock("@/clients/appClient", () => ({
 describe("actionPrefsStore persistence — an undo while the reset is still writing", () => {
   it("persists the restored list, not the reset it undid", async () => {
     const { useActionPrefsStore } = await import("../actionPrefsStore");
+    // Hydration writes nothing back, so the reset below is the first write.
     useActionPrefsStore.getState().hydrateActionPrefs({ hiddenIds: ["a", "b"] });
-    await vi.waitFor(() => expect(disk.writes.length).toBeGreaterThan(0));
-    disk.writes.length = 0;
     disk.holding = true;
 
     // Reset, then Undo one command at a time, with every earlier write still

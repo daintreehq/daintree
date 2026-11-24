@@ -86,7 +86,7 @@ export async function runManagedFleetBroadcast(
   draft: string,
   targetIds: string[],
   perTargetOverrides?: Record<string, string>,
-  opts?: { isRetry?: boolean; draftPreview?: string; imagePaths?: readonly string[] }
+  opts?: { isRetry?: boolean; imagePaths?: readonly string[] }
 ): Promise<FleetExecutionResult> {
   // A newer broadcast pre-empts the in-flight one — leaving a stale controller
   // would race two runs against the shared progress store. Abort then take over.
@@ -96,12 +96,10 @@ export async function runManagedFleetBroadcast(
   const stopWatchingFleet = cancelWhenFleetEmpties(controller);
   // Zero-target dispatches (every pane went ineligible between snapshot and
   // send) are structural no-ops — don't mint a run record for them.
-  // `draftPreview` lets the retry path (empty draft, payload in overrides)
-  // still label its run with the literal being replayed.
   const runId =
     targetIds.length > 0
       ? useFleetRunStore.getState().beginRun(targetIds, {
-          draft: opts?.draftPreview ?? draft,
+          draft,
           isRetry: opts?.isRetry,
         })
       : null;
@@ -187,6 +185,14 @@ function buildBroadcastAnnouncement(
     }
     return `Broadcast cancelled — ${result.successCount} sent${skipped}`;
   }
+  if (result.successCount === 0) {
+    if (result.failureCount > 0) {
+      return `Broadcast not confirmed — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
+    }
+    return result.skippedCount > 0
+      ? `Broadcast not sent — ${pluralize(result.skippedCount, "terminal", "terminals")} skipped`
+      : "Broadcast not sent — no terminal took it";
+  }
   if (result.failureCount > 0) {
     return `Broadcast sent to ${result.successCount} — ${describeFailureSplit(permanent, transient)}${failedHostsSuffix(failedHosts)}${skipped}`;
   }
@@ -254,7 +260,7 @@ function applyFleetBroadcastOutcome(
         useFleetFailureStore.getState().dismissId(t.terminalId);
       }
     }
-  } else if (!result.cancelled) {
+  } else if (!result.cancelled && result.successCount > 0) {
     // A successful broadcast clears any stale failure dot on the targets it
     // reached — the partial-failure state from a prior attempt is now
     // resolved. A pane locked mid-broadcast was skipped, so its dot stays.
@@ -280,8 +286,9 @@ function applyFleetBroadcastOutcome(
   // existing context-injected sound — semantically a fleet broadcast
   // IS injecting the same context into N agents. SoundService handles
   // dampening/throttling and respects the user's UI-feedback toggle.
-  // Skip the chirp on cancel: the announcement is the feedback channel.
-  if (!result.cancelled) {
+  // Skip the chirp on cancel, and when nothing was delivered (every target
+  // skipped or rejected): the announcement is the feedback channel.
+  if (!result.cancelled && result.successCount > 0) {
     window.electron?.notification?.playUiEvent("context-injected").catch(() => {});
   }
 }
@@ -312,7 +319,7 @@ export async function sendDraftToFleet(text: string): Promise<boolean> {
   // One agent on another host is still a fleet worth messaging: this field is
   // the only way to reach it from here. A pane here has its own composer.
   const minimum = targets.every(isHostQualifiedTargetId) ? 1 : 2;
-  if (text.length === 0 || targets.length < minimum) return false;
+  if (text.trim().length === 0 || targets.length < minimum) return false;
   const result = await runManagedFleetBroadcast(text, targets);
   applyFleetBroadcastOutcome(text, result);
   return result.successCount > 0;
@@ -378,16 +385,18 @@ export function tryFleetBroadcastFromEditor(
   // the broadcast submits the user's intent as it stood at press time —
   // a popover-close effect that clears the overrides store mid-send can't
   // mutate what we already captured here. We deliberately do NOT re-read
-  // the live store inside `doSend`.
-  const overridesState = useFleetTargetOverridesStore.getState();
-  const initialOverrides = { ...overridesState.payloadOverrides };
-  const initialSkipped = new Set(overridesState.skippedIds);
+  // the live store inside `doSend`. The send lets go of exactly these
+  // edits once it settles, and of nothing set after them (#17518).
+  const overrides = useFleetTargetOverridesStore.getState().snapshot();
+  const consumeOverrides = () => useFleetTargetOverridesStore.getState().consumeSnapshot(overrides);
+  const initialOverrides = overrides.payloadOverrides;
+  const initialSkipped = overrides.skippedIds;
 
   // All eligible targets skipped → consume the Enter (so the single-pane
   // send doesn't also fire) without dispatching anything. The draft stays.
   if (targets.every((id) => initialSkipped.has(id))) {
     useAnnouncerStore.getState().announce("Broadcast skipped — all targets excluded", "polite");
-    useFleetTargetOverridesStore.getState().clear();
+    consumeOverrides();
     return true;
   }
 
@@ -421,7 +430,7 @@ export function tryFleetBroadcastFromEditor(
           .getState()
           .announce("Broadcast skipped — no eligible targets remain", "polite");
       } finally {
-        useFleetTargetOverridesStore.getState().clear();
+        consumeOverrides();
       }
       return;
     }
@@ -461,10 +470,11 @@ export function tryFleetBroadcastFromEditor(
         perTargetOverrides: effectiveOverrides,
       });
     } finally {
-      // Per-target overrides are ephemeral per-broadcast (#8691 constraint).
-      // Clear them so the next broadcast starts from the resolved defaults.
-      // Controller teardown is owned by `runManagedFleetBroadcast`.
-      useFleetTargetOverridesStore.getState().clear();
+      // Per-target overrides are ephemeral per-broadcast (#8691 constraint),
+      // so the next broadcast starts from the resolved defaults. An edit or
+      // exclusion made while this one was out is the next draft's, and it
+      // stays. Controller teardown is owned by `runManagedFleetBroadcast`.
+      consumeOverrides();
       const owned = latestEditorSend === send;
       if (owned) latestEditorSend = null;
       if (delivered && owned) onDelivered();

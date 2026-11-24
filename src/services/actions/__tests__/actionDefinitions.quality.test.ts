@@ -341,7 +341,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // conversation ends, that the user confirms, and that a handed-over pane is
   // refused — a caller missing the first sends the next step to an agent that
   // no longer has the brief.
-  const MAX_EXTERNAL_TOTAL_BYTES = 8_700;
+  // 8_700 → 9_000 for #17079, measured at 8_943 B (+356 over develop's 8_587):
+  // `agent.listAccounts`, the ids `agent.launch`'s `accountId` takes, and
+  // `terminal.restartOnAccountOwned`, the account twin of the preset move. The
+  // listing has to say what its worktree answer means; the move has to say the
+  // conversation ends, that the user confirms, and that a handed pane is refused.
+  const MAX_EXTERNAL_TOTAL_BYTES = 9_000;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
@@ -604,7 +609,22 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // over develop's 26_146): an assistant can reopen a stopped lane's kept
   // conversation. It has to say the conversation stays in its own slot, and that
   // it is refused rather than started fresh. Assistant-only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 26_400;
+  // 26_400 → 27_050 for the four `project.links.*` tools (#17091),
+  // measured at 27_039 B (+677 over develop's 26_362): the Assistant keeps a
+  // project's launchpad links. The prose has to say the add opens nothing and
+  // is shown to the user with an Undo, that it isn't an upsert, and that a link
+  // the user added or edited is refused as theirs. Assistant-only, off the
+  // external surface.
+  // 27_050 → 27_550 for #17079, measured at 27_513 B (+548 over develop's
+  // 26_965): the two external account tools above, plus `agent.addAccount`,
+  // in-app only. The add has to say the user ticks each account with its folder
+  // shown, and that the caller launches on the returned id to sign in.
+  // 27_550 → 27_750 for #17908, measured at 27_734 B (+221 over develop's
+  // 27_513): `terminal.applyClaudeUpdateOwned`, so an assistant can apply a
+  // Claude Code update. It has to say the user approves, that `/restart` goes in
+  // once and only at an empty prompt, and that the answer never claims the
+  // conversation came back. In-app only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 27_750;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1140,9 +1160,13 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killBatch",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.resetModes",
   "terminal.restartOnPreset",
   "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdate",
+  "terminal.applyClaudeUpdateOwned",
   "terminal.restartAll",
   "terminal.startHeld",
   "terminal.arm",
@@ -1162,7 +1186,6 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "fleet.deleteNamedFleet",
   "worktree.resource.teardown",
   "worktree.resource.openOnHost",
-  "portal.links.remove",
   "keybinding.resetAll",
   "logs.clear",
   "eventInspector.clear",
@@ -1170,6 +1193,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "project.sleepAll",
   "schedules.runNow",
   "recipe.delete",
   "recipe.run",
@@ -1180,6 +1204,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.addAccount",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -1218,6 +1243,7 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
+  "terminal.resetModes",
   "terminal.restartOnPreset",
   "terminal.restartOnAccount",
   "terminal.restartAll",
@@ -1226,7 +1252,6 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "worktree.sessions.trashAll",
   "worktree.sessions.restartAll",
   "worktree.sessions.clearHistory",
-  "worktree.resource.teardown",
   "worktree.resource.openOnHost",
   "keybinding.resetAll",
   "logs.clear",
@@ -1253,9 +1278,14 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "project.sleep",
   "project.sleepIdle",
   "project.restart",
+  "project.sleepAll",
   // Deferred-promise via scheduleRunConfirmStore (#15980); run() awaits the
   // app-level ScheduleRunConfirmDialog only when earlier runs are still open.
   "schedules.runNow",
+  // Deferred-promise via worktreeResourceTeardownConfirmStore (#16948); run()
+  // awaits the app-level WorktreeResourceTeardownConfirmDialog for every
+  // non-agent dispatch, the card's menu included.
+  "worktree.resource.teardown",
   // The fleet ribbon's own inline confirmation (useFleetPendingActionStore,
   // buildConfirmMessage), not a ConfirmDialog-family component.
   "fleet.kill",
@@ -1264,7 +1294,6 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Deleted at once with an Undo toast from the UI (exactly restorable, D0 there);
   // danger:"confirm" still gates agent and palette dispatch, which get no Undo.
   "fleet.deleteNamedFleet",
-  "portal.links.remove",
   // Deferred-promise via gitPushConfirmStore; action run() awaits confirmation
   // before calling IPC; GitPushConfirmDialog resolves the Promise.
   "git.push",
@@ -1288,8 +1317,8 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // mounted globally in ModalHostLayer, resolves the Promise.
   "git.discardFileChanges",
   "file.trash",
-  // Confirm in ProjectSwitcherPalette.tsx via removeConfirmProject state;
-  // action ID not co-located with the ConfirmDialog in that file.
+  // Confirm in ProjectSwitcherConfirmDialogs.tsx via removeConfirmProject state,
+  // mounted once in ModalHostLayer; action ID not co-located with the dialog.
   "project.remove",
   // MCP-only (#11909), and it never reaches a dialog under its own id: the main
   // process checks session ownership and then delegates to `worktree.delete`,
@@ -1301,6 +1330,14 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // Same shape (#14369): main checks the session launched the pane, then
   // delegates to `terminal.restartOnPreset`, whose confirm is wired above.
   "terminal.restartOnPresetOwned",
+  // Its account twin (#17079), delegating to `terminal.restartOnAccount`.
+  "terminal.restartOnAccountOwned",
+  // Same shape (#17908): main reads the pane, then delegates the approval to
+  // `terminal.applyClaudeUpdate`, and types `/restart` itself once it answers.
+  "terminal.applyClaudeUpdateOwned",
+  // That approval: dispatched only by main, never from the palette or a menu,
+  // so the dialog that gates it is `McpConfirmDialog` and nothing user-side.
+  "terminal.applyClaudeUpdate",
   // Agent/MCP-only confirm gate (#11346): arming reroutes the user's next
   // keystrokes to every armed terminal, so an external caller must pass the
   // host confirm dialog. Palette-hidden, and user-side arming goes through the
@@ -1332,6 +1369,10 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  // Agent/MCP-only and palette-hidden (#17079); Settings adds an account through
+  // its own dialog and the agentAccounts IPC. The confirm is the generic
+  // McpConfirmDialog's checklist, a row per account naming its folder.
+  "agent.addAccount",
   // ConfirmDialog with diff preview in ArtifactOverlay.tsx; the dispatch lives in
   // useArtifacts.ts (action ID not co-located with the dialog component).
   "artifact.applyPatch",
@@ -1481,6 +1522,9 @@ describe("destructive-action danger metadata", () => {
       "agent.createPreset": { agentId: "claude", name: "placeholder" },
       "agent.updatePreset": { agentId: "claude", presetId: "preset-placeholder", name: "p" },
       "agent.deletePreset": { agentId: "claude", presetId: "preset-placeholder" },
+      "agent.addAccount": {
+        accounts: [{ agentId: "claude", name: "placeholder", folder: { kind: "create" } }],
+      },
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
@@ -1648,6 +1692,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.sendKeysOwned": { terminalId: "t-placeholder", keys: ["Enter"] },
       "terminal.placeOwned": { terminalId: "t-placeholder", location: "dock" },
       "terminal.restartOnPresetOwned": { terminalId: "t-placeholder", presetId: "p-placeholder" },
+      "terminal.restartOnAccountOwned": { terminalId: "t-placeholder", accountId: "a-placeholder" },
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
       "agent.launchInNewWorktree": {
         source: { kind: "newBranch", branchName: "b-placeholder" },
@@ -1671,6 +1716,16 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
       "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
       "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },
+      "agent.addAccount": {
+        accounts: [{ agentId: "claude", name: "p-placeholder", folder: { kind: "create" } }],
+      },
+      "agent.moveTerminalsToAccount.claude": {},
+      "agent.moveTerminalsToAccount.codex": {},
+      "agent.moveTerminalsToAccount.kimi": {},
+      "agent.moveTerminalsToAccount.interpreter": {},
+      "project.links.add": { title: "Staging", url: "https://staging.example.com" },
+      "project.links.update": { id: "l-placeholder", title: "Staging" },
+      "project.links.remove": { id: "l-placeholder" },
     };
 
     // terminal.resendLastMessage gates on `isEnabled`, which runs before the
@@ -1745,6 +1800,33 @@ describe("agent.launch configuration from a plugin (#13762)", () => {
       }
     }
     expect(failures).toEqual([]);
+  });
+});
+
+describe("an assistant's hand-off from a plugin (#18140)", () => {
+  it("refuses one the CLI would read as an option under the real schema, before anything runs", async () => {
+    const { ActionService } = await import("../../ActionService");
+    const registry = await createActionRegistryWithRemoteHosts();
+    const service = new ActionService();
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+    for (const actionId of ["help.newSessionWithAgent", "help.replaceGlobalAssistant"] as const) {
+      for (const prompt of [" --dangerously-skip-permissions", "-p go"]) {
+        const result = await service.dispatch(
+          actionId,
+          { agentId: "codex", prompt },
+          { source: "plugin", confirmed: true }
+        );
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code: "CONFIRMATION_REQUIRED",
+            message: expect.stringContaining('prompt starting with "-"'),
+          },
+        });
+      }
+    }
   });
 });
 

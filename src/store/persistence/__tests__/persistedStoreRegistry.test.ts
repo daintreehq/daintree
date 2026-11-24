@@ -123,7 +123,6 @@ const EXPECTED_STORE_IDS = [
   "worktreeFilterStore",
   "commandHistoryStore",
   "helpPanelStore",
-  "portalStore",
   "twoPaneSplitStore",
   "preferencesStore",
   "panelLimitStore",
@@ -138,13 +137,13 @@ const EXPECTED_STORE_IDS = [
   "projectHomeStore",
   "applicationNavigationStore",
   "sidebarViewStore",
+  "globalLinksStore",
 ] as const;
 
 const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string> = {
   worktreeFilterStore: "daintree-worktree-filters",
   commandHistoryStore: "daintree-command-history",
   helpPanelStore: "help-panel-storage",
-  portalStore: "portal-storage",
   twoPaneSplitStore: "daintree-two-pane-split",
   preferencesStore: "daintree-preferences",
   panelLimitStore: "daintree-panel-limits",
@@ -160,6 +159,7 @@ const EXPECTED_STORAGE_KEYS: Record<(typeof EXPECTED_STORE_IDS)[number], string>
   applicationNavigationStore: "daintree-application-navigation",
   // One key per workspace; a test view has none.
   sidebarViewStore: "daintree-sidebar-view:default",
+  globalLinksStore: "daintree-global-links",
 };
 
 describe("persisted store inventory", () => {
@@ -170,7 +170,6 @@ describe("persisted store inventory", () => {
       import("../../worktreeFilterStore"),
       import("../../commandHistoryStore"),
       import("../../helpPanelStore"),
-      import("../../portalStore"),
       import("../../twoPaneSplitStore"),
       import("../../preferencesStore"),
       import("../../panelLimitStore"),
@@ -185,6 +184,7 @@ describe("persisted store inventory", () => {
       import("../../projectHomeStore"),
       import("../../applicationNavigationStore"),
       import("../../sidebarViewStore"),
+      import("../../globalLinksStore"),
     ]);
   });
 

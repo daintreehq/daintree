@@ -82,11 +82,13 @@ vi.mock("@/store/voiceRecordingStore", () => ({
 
 vi.mock("@/store/fleetArmingStore", () => ({
   useFleetArmingStore: Object.assign(
-    (selector: (s: { armedIds: Set<string> }) => unknown) =>
-      selector({ armedIds: new Set<string>() }),
-    { getState: () => ({ armedIds: new Set<string>() }) }
+    (selector: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) => unknown) =>
+      selector({ armedIds: new Set<string>(), crossHostTargets: [] }),
+    { getState: () => ({ armedIds: new Set<string>(), crossHostTargets: [] }) }
   ),
   isFleetArmEligible: () => false,
+  selectFleetMemberCount: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) =>
+    s.armedIds.size + s.crossHostTargets.length,
 }));
 
 vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({
@@ -253,7 +255,7 @@ describe("TerminalContextMenu More worktrees…, through the real overlays", () 
     await waitFor(() => expect(document.activeElement).toBe(pane));
   });
 
-  it("returns a pointer dismissal nowhere", async () => {
+  it("returns a pointer dismissal to the pane, ringless (#17202)", async () => {
     const pane = renderPane();
     await openPickerFromMenu(pane);
     await waitFor(() => expect(document.activeElement).toBe(searchField()));
@@ -261,7 +263,8 @@ describe("TerminalContextMenu More worktrees…, through the real overlays", () 
     const paneFocus = vi.spyOn(pane, "focus");
 
     // The whole press: Radix holds a primary-button outside press until its
-    // click, so the pointer-down alone dismisses nothing.
+    // click, so the pointer-down alone dismisses nothing. The picker is modal,
+    // so the press reaches nothing that could take focus in its place.
     fireEvent.pointerDown(document.body);
     fireEvent.mouseDown(document.body);
     fireEvent.pointerUp(document.body);
@@ -269,9 +272,9 @@ describe("TerminalContextMenu More worktrees…, through the real overlays", () 
     fireEvent.click(document.body);
 
     await waitFor(() => expect(searchField()).toBeNull());
-    await settle();
-    expect(paneFocus).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(document.body);
+    // The fallback runs a task behind Radix's own deferred close-autofocus.
+    await waitFor(() => expect(document.activeElement).toBe(pane));
+    expect(paneFocus.mock.calls).toEqual([[{ preventScroll: true, focusVisible: false }]]);
   });
 
   it("hands a plugin panel's worktree move to the picker (#12606)", async () => {

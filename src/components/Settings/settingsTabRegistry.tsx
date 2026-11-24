@@ -6,9 +6,9 @@ import {
   GitBranchPlus,
   History,
   LayoutGrid,
+  Link,
   Mic,
   Package,
-  PanelRight,
   PanelTop,
   Keyboard,
   ScrollText,
@@ -151,7 +151,7 @@ const importTerminalAppearanceTab = () => import("./TerminalAppearanceTab");
 const importTroubleshootingTab = () => import("./TroubleshootingTab");
 const importCodeForgeSettingsTab = () => import("./CodeForgeSettingsTab");
 const importNotificationSettingsTab = () => import("./NotificationSettingsTab");
-const importPortalSettingsTab = () => import("./PortalSettingsTab");
+const importLinksSettingsTab = () => import("./LinksSettingsTab");
 const importKeyboardShortcutsTab = () => import("./KeyboardShortcutsTab");
 const importWorktreeSettingsTab = () => import("./WorktreeSettingsTab");
 const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
@@ -197,7 +197,7 @@ const LazyNotificationSettingsTab = lazyWithPreload(
   importNotificationSettingsTab,
   (m) => m.NotificationSettingsTab
 );
-const LazyPortalSettingsTab = lazyWithPreload(importPortalSettingsTab, (m) => m.PortalSettingsTab);
+const LazyLinksSettingsTab = lazyWithPreload(importLinksSettingsTab, (m) => m.LinksSettingsTab);
 const LazyKeyboardShortcutsTab = lazyWithPreload(
   importKeyboardShortcutsTab,
   (m) => m.KeyboardShortcutsTab
@@ -324,6 +324,16 @@ const HOSTS_TAB = {
     "host mode",
     "install",
     "update",
+    "cloud",
+    "boat",
+    "agent 37",
+    "agent37",
+    "digitalocean",
+    "droplet",
+    "google cloud",
+    "compute engine",
+    "aws",
+    "ec2",
   ],
   sections: [
     {
@@ -332,6 +342,38 @@ const HOSTS_TAB = {
       title: "Remote hosts",
       description: "Add a host, rename it, change its SSH target, update its build or forget it",
       keywords: ["add host", "forget", "rename", "ssh target", "discover", "bonjour"],
+    },
+    {
+      id: "hosts-cloud-providers",
+      section: "Cloud providers",
+      title: "Cloud providers",
+      description:
+        "Connect a cloud provider account to create machines as hosts, start and stop them, and delete them when you're done",
+      keywords: [
+        "boat",
+        "agent 37",
+        "agent37",
+        "digitalocean",
+        "digital ocean",
+        "droplet",
+        "google cloud",
+        "gcp",
+        "compute engine",
+        "service account",
+        "aws",
+        "amazon",
+        "ec2",
+        "cloud",
+        "api key",
+        "access token",
+        "access key",
+        "provider",
+        "machine",
+        "vm",
+        "sandbox",
+        "instance",
+        "account",
+      ],
     },
     {
       id: "host-mode",
@@ -783,8 +825,49 @@ export const SETTINGS_REGISTRY = [
         section: "Sound",
         title: "Notification sound",
         description:
-          "Play a sound when notifications fire. Choose from chime, ping, complete, waiting, error, or pulse sounds.",
-        keywords: ["sound", "audio", "chime", "ping", "notification", "alert", "volume"],
+          "Play a sound when notifications fire. Choose chime, ping, complete, waiting, error, pulse, or your own audio file.",
+        keywords: ["sound", "audio", "chime", "ping", "notification", "alert", "custom", "file"],
+      },
+      {
+        id: "notifications-sound-volume",
+        section: "Sound",
+        title: "Notification volume",
+        description:
+          "How loud notification, working pulse and UI feedback sounds play, on top of the system volume.",
+        keywords: ["volume", "loud", "quiet", "level", "sound", "audio"],
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
+    id: "links",
+    scope: "global",
+    group: "General",
+    settings: ["storage:daintree-global-links"],
+    label: "Links",
+    icon: <Link className="w-4 h-4" />,
+    importKind: "lazy",
+    importer: LazyLinksSettingsTab.preload,
+    LazyComponent: LazyLinksSettingsTab,
+    searchNavDescription: "Your own links, offered in every project",
+    searchNavKeywords: ["links", "bookmarks", "urls", "launcher", "global"],
+    sections: [
+      {
+        id: "global-links",
+        section: "Your links",
+        title: "Your links",
+        description: "Add, edit, reorder, or turn off the links you keep for every project",
+        keywords: [
+          "links",
+          "custom links",
+          "global links",
+          "bookmarks",
+          "url",
+          "add",
+          "reorder",
+          "launcher",
+          "portal",
+        ],
       },
     ],
   } satisfies LazySettingsTabEntry,
@@ -920,6 +1003,7 @@ export const SETTINGS_REGISTRY = [
       "Scrollback history": SECTION_SETTINGS.scrollback,
       "Grid layout": SECTION_SETTINGS.gridLayout,
       "Screen reader mode": SECTION_SETTINGS.assistiveTechnology,
+      "Copying from programs": SECTION_SETTINGS.osc52Clipboard,
     },
     label: "Panel grid",
     icon: <LayoutGrid className="w-4 h-4" />,
@@ -1016,6 +1100,30 @@ export const SETTINGS_REGISTRY = [
           "nvda",
           "screenReaderMode",
           "assistive",
+        ],
+      },
+      {
+        id: "terminal-osc52-clipboard",
+        subtab: "clipboard",
+        subtabLabel: "Clipboard",
+        section: "Copying from programs",
+        title: "Let programs copy to the clipboard (OSC 52)",
+        description:
+          "Let tmux, Neovim, Zellij and fzf copy text from a shell, including over SSH, right after you type or click in it",
+        keywords: [
+          "clipboard",
+          "copy",
+          "osc 52",
+          "osc52",
+          "yank",
+          "tmux",
+          "neovim",
+          "vim",
+          "zellij",
+          "fzf",
+          "ssh",
+          "remote",
+          "pastejacking",
         ],
       },
       {
@@ -1369,6 +1477,7 @@ export const SETTINGS_REGISTRY = [
     sectionSettings: {
       Input: SECTION_SETTINGS.agentInput,
       "Prompt templates": SECTION_SETTINGS.promptTemplates,
+      Usage: SECTION_SETTINGS.agentUsage,
     },
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,
@@ -1406,7 +1515,7 @@ export const SETTINGS_REGISTRY = [
         section: "All agents",
         title: "Default agent",
         description:
-          'Agent used for the Daintree Assistant and automated workflows ("What\'s next?", onboarding, project explanations). Distinct from the Portal "Default new tab agent".',
+          'Agent used for the Daintree Assistant and automated workflows ("What\'s next?", onboarding, project explanations).',
         keywords: [
           "default",
           "agent",
@@ -1419,6 +1528,26 @@ export const SETTINGS_REGISTRY = [
           "launch",
           "keyboard shortcut",
           ...BUILT_IN_AGENT_IDS,
+        ],
+      },
+      {
+        id: "agents-usage-tracking",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Usage",
+        title: "Track agent usage",
+        description:
+          "Show each agent's usage in the sidebar, read in the background here and on linked hosts",
+        keywords: [
+          "usage",
+          "quota",
+          "limit",
+          "rate limit",
+          "sidebar",
+          "background",
+          "tracking",
+          "codex",
+          "claude",
         ],
       },
       {
@@ -1473,11 +1602,13 @@ export const SETTINGS_REGISTRY = [
         subtab: "claude",
         subtabLabel: "Claude",
         section: "Launch preset",
-        title: "Skip permissions",
-        description: "Auto-approve all agent actions without confirmation prompts",
+        title: "Permission prompts",
+        description: "Keep the CLI default, use the agent's Auto mode, or skip every prompt",
         keywords: [
           "permissions",
+          "auto",
           "auto-approve",
+          "skip",
           "confirm",
           "prompts",
           "dangerous",
@@ -1648,7 +1779,7 @@ export const SETTINGS_REGISTRY = [
         section: "External editor",
         title: "External editor",
         description:
-          "Configure external editor: VS Code, Cursor, Windsurf, Antigravity IDE, Zed, Neovim, WebStorm, Sublime Text, or custom",
+          "Configure external editor: VS Code, Cursor, Windsurf, Antigravity IDE, Zed, Neovim, a JetBrains IDE, Sublime Text, or custom",
         keywords: [
           "editor",
           "vscode",
@@ -1656,6 +1787,15 @@ export const SETTINGS_REGISTRY = [
           "zed",
           "neovim",
           "webstorm",
+          "jetbrains",
+          "intellij",
+          "pycharm",
+          "phpstorm",
+          "goland",
+          "rider",
+          "clion",
+          "datagrip",
+          "rubymine",
           "sublime",
           "external",
           "open",
@@ -1734,7 +1874,20 @@ export const SETTINGS_REGISTRY = [
         section: "Speech-to-text",
         title: "Transcription provider",
         description: "Choose which provider transcribes your microphone audio",
-        keywords: ["provider", "openai", "deepgram", "grok", "xai", "stt", "privacy", "audio"],
+        keywords: [
+          "provider",
+          "openai",
+          "deepgram",
+          "grok",
+          "xai",
+          "stt",
+          "privacy",
+          "audio",
+          "on device",
+          "local",
+          "offline",
+          "nemotron",
+        ],
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
       {
@@ -1859,44 +2012,6 @@ export const SETTINGS_REGISTRY = [
   ...(isRemoteShellSupported() ? [HOSTS_TAB] : []),
 
   {
-    id: "portal",
-    scope: "global",
-    group: "Integrations",
-    settings: ["storage:portal-storage"],
-    label: "Portal",
-    headerTitle: "Portal links",
-    icon: <PanelRight className="w-4 h-4" />,
-    importKind: "lazy",
-    importer: LazyPortalSettingsTab.preload,
-    LazyComponent: LazyPortalSettingsTab,
-    searchNavDescription: "Default and custom links for the portal browser panel",
-    searchNavKeywords: ["integrations", "portal", "links", "browser", "bookmarks"],
-    sections: [
-      {
-        id: "portal-default-agent",
-        section: "Default new tab agent",
-        title: "Default new tab agent",
-        description: "Choose which agent opens when you click the + button in the portal",
-        keywords: ["portal", "agent", "default", "new tab", "browser"],
-      },
-      {
-        id: "portal-default-links",
-        section: "Default links",
-        title: "Default links",
-        description: "System-provided links shown in the portal panel",
-        keywords: ["portal", "links", "default", "browser", "bookmarks"],
-      },
-      {
-        id: "portal-custom-links",
-        section: "Custom links",
-        title: "Custom links",
-        description: "Add custom URLs and links to the portal panel",
-        keywords: ["portal", "custom", "links", "url", "add", "bookmark"],
-      },
-    ],
-  } satisfies LazySettingsTabEntry,
-
-  {
     id: "mcp",
     scope: "global",
     group: "Integrations",
@@ -1964,6 +2079,9 @@ export const SETTINGS_REGISTRY = [
     scope: "global",
     group: "Integrations",
     settings: ["plugins", "pluginCapabilityConsent"],
+    sectionSettings: {
+      "Plugin catalogs": SECTION_SETTINGS.pluginCatalogs,
+    },
     label: "Plugins",
     icon: <Package className="w-4 h-4" />,
     importKind: "lazy",
@@ -2004,6 +2122,25 @@ export const SETTINGS_REGISTRY = [
           "uninstall",
           "extension",
           "addon",
+        ],
+      },
+      {
+        id: "plugins-catalogs",
+        section: "Plugin catalogs",
+        title: "Plugin catalogs",
+        description:
+          "Add catalogs beside Daintree's own for Browse to list. Whoever runs an added catalog reviews what it lists, not Daintree.",
+        keywords: [
+          "catalog",
+          "catalogs",
+          "source",
+          "sources",
+          "marketplace",
+          "curator",
+          "community",
+          "browse",
+          "plugin list",
+          "add catalog",
         ],
       },
     ],
@@ -2096,6 +2233,7 @@ export const SETTINGS_REGISTRY = [
     importer: LazyDecisionsSettingsTab.preload,
     LazyComponent: LazyDecisionsSettingsTab,
     needsOnClose: true,
+    needsIsActive: true,
     searchNavDescription:
       "Answer agents' questions from your phone, through a relay in your own Cloudflare account",
     searchNavKeywords: [
@@ -2189,11 +2327,70 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-rotate-keys",
+        section: "Encryption",
+        title: "Rotate keys",
+        description: "Replaces the shared encryption key without revoking any phone or Host",
+        keywords: ["encryption", "keys", "rotate", "rotation", "key", "e2ee", "secret", "security"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-agents",
+        section: "Agents",
+        // Not "Agents …": a title holding "agent" outranks Agents → Default agent for "agent".
+        title: "Who can ask you",
+        description:
+          "Which installed agents get ask_human when they launch, each switched on one at a time. Every agent is off until you switch it on",
+        keywords: [
+          "agents",
+          "ask_human",
+          "ask human",
+          "mcp",
+          "launch",
+          "switch",
+          "opt in",
+          "supported",
+          "claude",
+          "codex",
+          "gemini",
+          "qwen",
+          "opencode",
+          "copilot",
+          "amp",
+          "mistral",
+          "vibe",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-involvement",
+        section: "Involvement",
+        title: "How involved you want to be",
+        description:
+          "Whether agents ask you while they explore the options or consult other agents first and bring a recommendation, for good or for a while",
+        keywords: [
+          "involvement",
+          "involved",
+          "involve",
+          "recommend",
+          "recommendation",
+          "consult",
+          "explore",
+          "exploring",
+          "temporary",
+          "for a while",
+          "until",
+          "agents",
+          "preference",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-questions",
         section: "Questions",
         title: "Default question expiry",
         description:
-          "How long a question waits for your answer when its agent sets no expiry, never included, and what an expired one authorises",
+          "How long a question on this computer waits when its agent sets no time, never included, and what an expired one authorises",
         keywords: [
           "expiry",
           "expire",
@@ -2204,6 +2401,24 @@ export const SETTINGS_REGISTRY = [
           "authorise",
           "default",
           "never",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-questions-inbox",
+        section: "Questions",
+        title: "Inbox",
+        description:
+          "Every question your agents asked on this computer: what waits on you, what's being delivered, and what was decided",
+        keywords: [
+          "inbox",
+          "questions",
+          "all questions",
+          "history",
+          "answered",
+          "waiting",
+          "delivered",
+          "asked",
         ],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
@@ -2231,6 +2446,45 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
+        id: "decisions-hold-phone-pushes",
+        section: "Notifications",
+        title: "Hold phone notifications while I'm at this computer",
+        description:
+          "While desktop notifications are on, tells your relay whether you're here, so it waits up to two minutes before notifying your phone of a new question",
+        keywords: [
+          "presence",
+          "present",
+          "away",
+          "idle",
+          "phone",
+          "push",
+          "hold",
+          "delay",
+          "desktop",
+          "privacy",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-agent-stopped-pushes",
+        section: "Notifications",
+        title: "Notify my phone when an agent stops",
+        description:
+          "While you're away and outside quiet hours, your relay tells your phone only that an agent stopped, never which one. That covers this computer and the Remote Hosts it's connected to: one with a project open here, or with its notifications turned on.",
+        keywords: [
+          "phone",
+          "push",
+          "notification",
+          "finished",
+          "completed",
+          "stopped",
+          "done",
+          "away",
+          "mobile",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
         id: "decisions-policy",
         section: "Policy",
         title: "Workflow gates",
@@ -2240,12 +2494,21 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
-        id: "decisions-proxy-allowlist",
-        section: "Policy",
-        title: "Allow proxy answers",
+        id: "decisions-model",
+        section: "Decision model",
+        title: "Answer automatically",
         description:
-          "Whether a question without a registered workflow gate may accept a decision model's answer",
-        keywords: ["proxy", "allowlist", "decision model", "automatic", "answer", "policy"],
+          "Lets the decision model answer in your place once it's evaluated, labelled as a proxy's answer and never for a question only you can answer",
+        keywords: [
+          "proxy",
+          "allowlist",
+          "decision model",
+          "automatic",
+          "auto-answer",
+          "answer",
+          "threshold",
+          "confidence",
+        ],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
@@ -2288,10 +2551,38 @@ export const SETTINGS_REGISTRY = [
       },
       {
         id: "decisions-voice",
-        section: "Voice",
+        section: "Data",
         title: "Dictating answers",
         description: "Dictation in the phone app isn't end-to-end encrypted",
         keywords: ["voice", "dictation", "speech", "encrypted", "microphone"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-recovery-kit-save",
+        section: "Data",
+        title: "Recovery kit",
+        description:
+          "Save a file holding this computer's Decisions keys, locked with a passphrase, and verify it",
+        keywords: [
+          "recovery",
+          "recovery kit",
+          "kit",
+          "backup",
+          "restore",
+          "keys",
+          "passphrase",
+          "verify",
+          "lost",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-data-export",
+        section: "Data",
+        title: "Export decision history",
+        description:
+          "Saves every question and answer stored on this computer, with the audit log, to an encrypted file",
+        keywords: ["export", "history", "download", "audit", "log", "backup", "passphrase", "save"],
         requiresEnabled: DECISIONS_REQUIRES_ENABLED,
       },
       {
@@ -2605,7 +2896,8 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
 > = {
   "project:general": {
     tabLabel: "General",
-    searchNavDescription: "Project name, emoji, color, group, icon, and dev server configuration",
+    searchNavDescription:
+      "Project name, emoji, color, group, icon, dev server and project links configuration",
     searchNavKeywords: [
       "project",
       "name",
@@ -2615,6 +2907,7 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
       "icon",
       "theme",
       "dev server",
+      "portal",
     ],
     sections: [
       {
@@ -2652,6 +2945,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         title: "Dev server command",
         description: "Command to start the development server for live preview",
         keywords: ["dev", "server", "preview", "start", "command"],
+      },
+      {
+        id: "project-links",
+        section: "Project links",
+        title: "Project links",
+        description: "Addresses offered in this project's links launcher, such as staging",
+        keywords: ["links", "launcher", "staging", "production", "dashboard", "url"],
       },
       {
         id: "project-agent-integrations",
@@ -2746,6 +3046,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         title: "Path pattern",
         description: "Where this project's new worktrees are created, built from path variables",
         keywords: ["worktree", "path", "pattern", "location", "directory", "folder", "variables"],
+      },
+      {
+        id: "project-merged-worktrees",
+        section: "Merged worktrees",
+        title: "Remove worktrees once their PR has merged",
+        description: "Removes clean worktrees Daintree created a day after their PR merged",
+        keywords: ["merged", "cleanup", "remove", "delete", "prune", "worktree", "pr", "automatic"],
       },
       {
         // Id kept for deep links; the names follow the heading the page renders, which
@@ -2897,7 +3204,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   agents: <Plug className="w-5 h-5 text-text-secondary" />,
   assistant: <DaintreeIcon className="w-5 h-5 text-text-secondary" size={20} />,
   "code-forge": <GitPullRequest className="w-5 h-5 text-text-secondary" />,
-  portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
+  links: <Link className="w-5 h-5 text-text-secondary" />,
   toolbar: <PanelTop className="w-5 h-5 text-text-secondary" />,
   notifications: <Bell className="w-5 h-5 text-text-secondary" />,
   "import-export": <ArrowDownUp className="w-5 h-5 text-text-secondary" />,

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type MouseEvent, type Ref } from "react";
+import { useEffect, useRef, useState, type MouseEvent, type Ref } from "react";
 import {
   Clock,
   MoreHorizontal,
@@ -19,14 +19,16 @@ import { Button } from "@/components/ui/button";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { ARIA_DISABLED_CLASSES } from "@/components/ui/ariaDisabled";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
-import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
+import type {
+  NotificationHistoryAction,
+  NotificationHistoryEntry,
+} from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
-import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify";
-import type { ActionId } from "@shared/types/actions";
+import { EVENT_KIND_LABEL, isSilenceableEventKind, notify } from "@/lib/notify";
 import { projectIdFromPluginInstanceKey } from "@shared/types/plugin";
 import type { NotificationType } from "@/store/notificationStore";
 import { DURATION_150, DURATION_250 } from "@/lib/animationUtils";
-import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { copyWithToast } from "@/lib/copyWithToast";
 import {
   formatNotificationCountAriaLabel,
   formatNotificationCountGlyph,
@@ -55,7 +57,12 @@ import {
   useNotificationRowSource,
   useNotificationSource,
 } from "./notificationSource";
-import { goToNotificationSource } from "./notificationNavigation";
+import {
+  goToNotificationSource,
+  panelActionContext,
+  panelActionTarget,
+  runNotificationAction,
+} from "./notificationNavigation";
 import {
   NOTIFICATION_UNAVAILABLE_LABEL,
   hasNotificationAddress,
@@ -399,19 +406,21 @@ export function NotificationCenterEntry({
         {/* Untitled, the message is the row's headline, so it takes the
             title's ink and its unread weight; in secondary ink it read as the
             supporting line of a row that had none. */}
-        <p
-          className={cn(
-            "text-xs leading-snug break-words",
-            entry.title
-              ? "col-span-2 row-start-2 text-text-secondary"
-              : cn(
-                  "col-start-1 row-start-1 min-w-0 text-text-primary",
-                  isNew ? "font-semibold" : "font-normal"
-                )
-          )}
-        >
-          {entry.message}
-        </p>
+        {entry.title && entry.message === "" ? null : (
+          <p
+            className={cn(
+              "text-xs leading-snug break-words",
+              entry.title
+                ? "col-span-2 row-start-2 text-text-secondary"
+                : cn(
+                    "col-start-1 row-start-1 min-w-0 text-text-primary",
+                    isNew ? "font-semibold" : "font-normal"
+                  )
+            )}
+          >
+            {entry.message}
+          </p>
+        )}
         {showChip && !entry.title && (
           <CountBadge
             key={bumpKey}
@@ -471,56 +480,9 @@ export function NotificationCenterEntry({
         )}
         {entry.actions && entry.actions.length > 0 && (
           <div className="col-span-2 row-start-5 mt-1.5 flex flex-wrap gap-1.5">
-            {entry.actions.map((action, index) => {
-              const manifest = actionService.get(action.actionId as ActionId);
-              const isAvailable = manifest !== null && manifest.enabled;
-              const button = (
-                <Button
-                  // Same mapping as the toast, grid bar and inline banners: the
-                  // recommended action is outlined, the alternative is ghost,
-                  // and severity stays on the row's icon.
-                  variant={action.variant === "secondary" ? "ghost" : "outline"}
-                  size="xs"
-                  // Handle for the `forced-colors: active` block in index.css:
-                  // the UA flattens outline and ghost to the same border, so
-                  // this restores the primary's heavier one.
-                  data-notification-action={
-                    action.variant === "secondary" ? "secondary" : "primary"
-                  }
-                  aria-disabled={!isAvailable || undefined}
-                  onClick={
-                    isAvailable
-                      ? () =>
-                          void actionService.dispatch(
-                            action.actionId as ActionId,
-                            action.actionArgs
-                          )
-                      : undefined
-                  }
-                  // A list row takes the inline banner's trim: no raised shadow.
-                  className={cn(
-                    "px-2 shadow-none inset-shadow-none",
-                    !isAvailable && ARIA_DISABLED_CLASSES
-                  )}
-                >
-                  {action.label}
-                </Button>
-              );
-              const key = `${action.actionId}-${index}`;
-              // Why it can't run, on the button itself: it stays focusable
-              // through aria-disabled, so this costs no extra Tab stop, and a
-              // native title never showed on focus at all.
-              return isAvailable ? (
-                <Fragment key={key}>{button}</Fragment>
-              ) : (
-                <Tooltip key={key}>
-                  <TooltipTrigger asChild>{button}</TooltipTrigger>
-                  <TooltipContent side="top">
-                    {manifest?.disabledReason ?? "Action unavailable"}
-                  </TooltipContent>
-                </Tooltip>
-              );
-            })}
+            {entry.actions.map((action, index) => (
+              <RowActionButton key={`${action.actionId}-${index}`} action={action} entry={entry} />
+            ))}
           </div>
         )}
         {/* One stable rail — the row's trailing metadata and management
@@ -617,6 +579,71 @@ export function NotificationCenterEntry({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * One of the row's recovery actions. "Go to terminal" is judged by its panel,
+ * the way the row is: a trashed or vanished panel makes it unavailable with
+ * the row's own reason, rather than a button that runs and does nothing.
+ */
+function RowActionButton({
+  action,
+  entry,
+}: {
+  action: NotificationHistoryAction;
+  entry: NotificationHistoryEntry;
+}) {
+  const panelId = panelActionTarget(action);
+  const panelDestination = useNotificationDestination(
+    panelId ? panelActionContext(entry.context, panelId) : undefined
+  );
+  const manifest = panelId ? null : actionService.get(action.actionId);
+  let unavailableReason: string | null;
+  if (panelId) {
+    unavailableReason =
+      panelDestination.kind !== "none"
+        ? null
+        : NOTIFICATION_UNAVAILABLE_LABEL[panelDestination.reason ?? "gone"];
+  } else {
+    unavailableReason =
+      manifest !== null && manifest.enabled
+        ? null
+        : (manifest?.disabledReason ?? "Action unavailable");
+  }
+  const isAvailable = unavailableReason === null;
+  const button = (
+    <Button
+      // Same mapping as the toast, grid bar and inline banners: the
+      // recommended action is outlined, the alternative is ghost,
+      // and severity stays on the row's icon.
+      variant={action.variant === "secondary" ? "ghost" : "outline"}
+      size="xs"
+      // Handle for the `forced-colors: active` block in index.css:
+      // the UA flattens outline and ghost to the same border, so
+      // this restores the primary's heavier one.
+      data-notification-action={action.variant === "secondary" ? "secondary" : "primary"}
+      aria-disabled={!isAvailable || undefined}
+      onClick={
+        isAvailable
+          ? () => void runNotificationAction(action, { id: entry.id, context: entry.context })
+          : undefined
+      }
+      // A list row takes the inline banner's trim: no raised shadow.
+      className={cn("px-2 shadow-none inset-shadow-none", !isAvailable && ARIA_DISABLED_CLASSES)}
+    >
+      {action.label}
+    </Button>
+  );
+  // Why it can't run, on the button itself: it stays focusable through
+  // aria-disabled, so this costs no extra Tab stop, and a native title never
+  // showed on focus at all.
+  if (isAvailable) return button;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipContent side="top">{unavailableReason}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -782,7 +809,7 @@ function RowOptionsMenu({
     pluginProjectId ? s.projects.find((p) => p.id === pluginProjectId)?.name : undefined
   );
   const hasContextActions =
-    isNotificationEventKind(eventKind) || !!entry.context?.projectId || !!plugin;
+    isSilenceableEventKind(eventKind) || !!entry.context?.projectId || !!plugin;
   // Not on a filed row: the Snoozed tab never shows archived entries, so a
   // snooze set here vanished into neither tab.
   const supportsSnooze = !!entry.correlationId && !!onSnooze && !entry.archivedAt;
@@ -829,9 +856,6 @@ function RowOptionsMenu({
     });
     return () => cancelAnimationFrame(frame);
   }, [open, snoozeOnly]);
-  const { copy: copyCorrelationId } = useCopyWithFeedback({
-    announcement: "Correlation ID copied",
-  });
   const [reportInFlight, setReportInFlight] = useState(false);
 
   // Programmatic open from the parent's `h` keybinding. Open exactly once
@@ -860,7 +884,7 @@ function RowOptionsMenu({
 
   const handleCopyCorrelationId = () => {
     if (!entry.correlationId) return;
-    void copyCorrelationId(entry.correlationId);
+    copyWithToast("Correlation ID", entry.correlationId);
   };
 
   // The one row-menu item that takes you somewhere else. It only marks the
@@ -1058,11 +1082,11 @@ function RowOptionsMenu({
             {(hasTriageActions || supportsSnooze || supportsGoToSource) && hasContextActions && (
               <DropdownMenuSeparator />
             )}
-            {isNotificationEventKind(eventKind) && (
+            {isSilenceableEventKind(eventKind) && (
               <DropdownMenuItem
                 onSelect={() => {
                   const projectId = entry.context?.projectId;
-                  if (!isNotificationEventKind(eventKind)) return;
+                  if (!isSilenceableEventKind(eventKind)) return;
                   void actionService
                     .dispatch("project.silenceNotificationKind", { kind: eventKind, projectId })
                     .then(() => refreshProjectOverrides(projectId));

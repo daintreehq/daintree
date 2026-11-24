@@ -22,10 +22,14 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
+import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import {
   AutocompleteMenu,
   autocompleteOptionId,
+  firstEnabledIndex,
   getComboboxState,
+  stepAutocompleteIndex,
   type AutocompleteItem,
 } from "../AutocompleteMenu";
 
@@ -84,6 +88,54 @@ describe("AutocompleteMenu", () => {
       );
       expect(screen.getByRole("status").textContent).toContain("No matches");
       expect(screen.getByRole("status").textContent).toContain("Something to know");
+    });
+
+    it("is a button assistive tech can reach and press, named by its text", () => {
+      const onClick = vi.fn();
+      const hostClick = vi.fn();
+      render(
+        <div onClick={hostClick}>
+          <AutocompleteMenu
+            isOpen
+            items={rows}
+            selectedIndex={0}
+            onSelect={noop}
+            emptyMessage="No matches"
+            note={{ text: "Something to know", onClick }}
+          />
+        </div>
+      );
+
+      const note = screen.getByRole("button", { name: "Something to know" });
+      expect(note.getAttribute("aria-keyshortcuts")).toBeNull();
+      fireEvent.click(note);
+      expect(onClick).toHaveBeenCalledTimes(1);
+      // A host that refocuses its editor on click would take focus back from
+      // whatever the note opened.
+      expect(hostClick).not.toHaveBeenCalled();
+    });
+
+    it("shows, names and speaks the shortcut that runs it from the editor", () => {
+      const shortcut = "Cmd+Shift+,";
+      const mac = isMac();
+      const { container } = render(
+        <AutocompleteMenu
+          isOpen
+          items={[]}
+          selectedIndex={-1}
+          onSelect={noop}
+          emptyMessage="No matches"
+          note={{ text: "Something to know", onClick: noop, shortcut }}
+        />
+      );
+
+      // The chord on screen stays out of the button's name; the attribute carries it.
+      const note = screen.getByRole("button", { name: "Something to know" });
+      expect(note.getAttribute("aria-keyshortcuts")).toBe(comboToAriaKeyshortcuts(shortcut, mac));
+      expect(container.querySelector("[data-autocomplete-note] kbd")).not.toBeNull();
+      expect(screen.getByRole("status").textContent).toContain(
+        `Something to know, ${describeChord(shortcut, mac)}`
+      );
     });
 
     it("isn't drawn without one", () => {
@@ -469,6 +521,30 @@ describe("AutocompleteMenu", () => {
     expect(screen.getByRole("status").textContent).toBe("");
   });
 
+  it("does not move the selection onto a disabled row under the pointer", () => {
+    const onHoverIndex = vi.fn();
+    const items: AutocompleteItem[] = [
+      { key: "a", label: "alpha", insertText: "alpha" },
+      { key: "b", label: "beta", insertText: "beta", disabled: true },
+      { key: "c", label: "gamma", insertText: "gamma" },
+    ];
+    render(
+      <AutocompleteMenu
+        isOpen={true}
+        items={items}
+        selectedIndex={0}
+        onSelect={vi.fn()}
+        onHoverIndex={onHoverIndex}
+        emptyMessage="No matches"
+      />
+    );
+    const options = screen.getAllByRole("option");
+    fireEvent.pointerMove(options[1]!);
+    expect(onHoverIndex).not.toHaveBeenCalled();
+    fireEvent.pointerMove(options[2]!);
+    expect(onHoverIndex).toHaveBeenCalledWith(2);
+  });
+
   it("marks only stale rows disabled and ignores clicks on them", () => {
     const onSelect = vi.fn();
     const items: AutocompleteItem[] = [
@@ -772,6 +848,49 @@ describe("AutocompleteMenu", () => {
     });
   });
 
+  describe("firstEnabledIndex and stepAutocompleteIndex", () => {
+    const rows = (pattern: string): AutocompleteItem[] =>
+      [...pattern].map((c, i) => ({
+        key: `r${i}`,
+        label: `r${i}`,
+        insertText: `r${i}`,
+        disabled: c === "x",
+      }));
+
+    it("starts on the first enabled row, or the top when none is", () => {
+      expect(firstEnabledIndex(rows("xxo"))).toBe(2);
+      expect(firstEnabledIndex(rows("oxo"))).toBe(0);
+      expect(firstEnabledIndex(rows("xx"))).toBe(0);
+      expect(firstEnabledIndex([])).toBe(0);
+    });
+
+    it("steps over disabled rows in each direction, wrapping at the ends", () => {
+      const list = rows("oxoxo");
+      expect(stepAutocompleteIndex(list, 0, 1)).toBe(2);
+      expect(stepAutocompleteIndex(list, 2, 1)).toBe(4);
+      expect(stepAutocompleteIndex(list, 4, 1)).toBe(0);
+      expect(stepAutocompleteIndex(list, 4, -1)).toBe(2);
+      expect(stepAutocompleteIndex(list, 2, -1)).toBe(0);
+      expect(stepAutocompleteIndex(list, 0, -1)).toBe(4);
+    });
+
+    it("takes the first enabled row going down and the last going up from no selection", () => {
+      expect(stepAutocompleteIndex(rows("xoox"), -1, 1)).toBe(1);
+      expect(stepAutocompleteIndex(rows("xoox"), -1, -1)).toBe(2);
+      expect(stepAutocompleteIndex(rows("ooo"), -1, 1)).toBe(0);
+      expect(stepAutocompleteIndex(rows("ooo"), -1, -1)).toBe(2);
+    });
+
+    it("stays put on a lone row, an empty list, or when every row is disabled", () => {
+      expect(stepAutocompleteIndex(rows("o"), 0, 1)).toBe(0);
+      expect(stepAutocompleteIndex(rows("o"), 0, -1)).toBe(0);
+      expect(stepAutocompleteIndex([], 0, 1)).toBe(0);
+      expect(stepAutocompleteIndex(rows("xxx"), 1, 1)).toBe(1);
+      expect(stepAutocompleteIndex(rows("xxx"), 2, -1)).toBe(2);
+      expect(stepAutocompleteIndex(rows("xxx"), -1, 1)).toBe(-1);
+    });
+  });
+
   describe("getComboboxState", () => {
     const items: AutocompleteItem[] = [
       { key: "a", label: "alpha", insertText: "alpha" },
@@ -796,6 +915,13 @@ describe("AutocompleteMenu", () => {
       expect(getComboboxState({ ...base, isOpen: false }).activeOptionId).toBeNull();
       expect(
         getComboboxState({ ...base, isOpen: true, selectedIndex: -1 }).activeOptionId
+      ).toBeNull();
+    });
+
+    it("names no option while the selected one is disabled", () => {
+      const disabled = [items[0]!, { ...items[1]!, disabled: true }];
+      expect(
+        getComboboxState({ ...base, isOpen: true, items: disabled }).activeOptionId
       ).toBeNull();
     });
   });

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PluginCapabilityConfirmDialog,
+  presetBypassLabel,
   presetLaunchTitleFor,
 } from "../PluginCapabilityConfirmDialog";
 import type { PluginPresetLaunchSummary } from "@shared/utils/agentPresetLaunchConsent";
@@ -18,7 +19,6 @@ vi.mock("zustand/react/shallow", () => ({
 vi.mock("@/store", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/hooks", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, useOverlayState: () => {} };
@@ -54,14 +54,14 @@ const summary: PluginPresetLaunchSummary = {
   source: "project",
   args: ["--model", "glm"],
   dangerousMode: "inherit",
-  skipsPermissions: true,
+  permissionLevel: "skip",
   envNames: ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"],
   fallbacks: [
     {
       presetName: "Backup",
       args: ["--fast"],
       dangerousMode: "on",
-      skipsPermissions: true,
+      permissionLevel: "skip",
       envNames: ["BACKUP_KEY"],
     },
   ],
@@ -84,6 +84,7 @@ function ask(requestId: string, preset = summary) {
 afterEach(() => {
   act(() => __resetPluginCapabilityConfirmStoreForTesting());
   cleanup();
+  vi.useRealTimers();
 });
 
 describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () => {
@@ -111,7 +112,32 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
     expect(text).toContain("Skipped: the preset turns bypass on");
   });
 
+  it("says when the preset's panes continue by themselves at a usage limit (#17912)", () => {
+    act(() => {
+      void ask("preset-continue", {
+        ...summary,
+        agentId: "codex",
+        agentName: "Codex",
+        source: "custom",
+        continuesAtLimitReset: true,
+      });
+    });
+    render(<PluginCapabilityConfirmDialog />);
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Continues by itself once the limit resets"
+    );
+  });
+
+  it("says nothing about continuing for a preset that doesn't", () => {
+    act(() => {
+      void ask("preset-no-continue");
+    });
+    render(<PluginCapabilityConfirmDialog />);
+    expect(screen.getByRole("dialog").textContent).not.toContain("once the limit resets");
+  });
+
   it("answers approved-and-pin on allow and rejected on deny", async () => {
+    vi.useFakeTimers();
     let first!: ReturnType<typeof ask>;
     let second!: ReturnType<typeof ask>;
     act(() => {
@@ -127,25 +153,74 @@ describe("PluginCapabilityConfirmDialog — launching on a preset (#16324)", () 
     render(<PluginCapabilityConfirmDialog />);
 
     const allow = screen.getByRole("button", { name: "Allow and remember" });
+    // Held for a read before it can answer.
+    expect(allow.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_200);
+    });
+    const scroller = document.querySelector<HTMLElement>('[role="dialog"] .dialog-body-inset')!;
+    Object.defineProperty(scroller, "scrollTop", { value: 40, writable: true, configurable: true });
     act(() => {
       allow.focus();
       fireEvent.click(allow);
     });
     await expect(first).resolves.toBe("approved-and-pin");
+    // The next preset is read from the top, not from where the last one was left.
+    expect(scroller.isConnected).toBe(true);
+    expect(scroller.scrollTop).toBe(0);
     // The next prompt doesn't inherit focus on the button that approved the last.
-    await vi.waitFor(() =>
-      expect(document.activeElement).not.toBe(
-        screen.getByRole("button", { name: "Allow and remember" })
-      )
-    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(16);
+    });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Deny" }));
     // The next prompt names its own preset, not the one just approved.
     const next = screen.getByRole("dialog").textContent ?? "";
     expect(next).toContain("Danger zone");
     expect(next).toContain("Skipped: the preset turns bypass on");
+    // And is held for its own read: a press meant for the last one doesn't answer it.
+    expect(allow.getAttribute("aria-disabled")).toBe("true");
+    act(() => {
+      fireEvent.click(allow);
+    });
+    expect(usePluginCapabilityConfirmStore.getState().current?.requestId).toBe("preset-2");
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: "Deny" }));
     });
     await expect(second).resolves.toBe("rejected");
     expect(usePluginCapabilityConfirmStore.getState().current).toBeNull();
+  });
+});
+
+describe("presetBypassLabel — Auto (#17435)", () => {
+  it("names Auto whether the preset sets it or inherits it, and never calls it skipped", () => {
+    expect(presetBypassLabel({ dangerousMode: "auto", permissionLevel: "auto" }, "Codex")).toBe(
+      "Auto: the preset turns on Codex's Auto mode"
+    );
+    expect(presetBypassLabel({ dangerousMode: "inherit", permissionLevel: "auto" }, "Codex")).toBe(
+      "Auto: from Codex's settings"
+    );
+  });
+
+  it("names the CLI default, not a promise to ask, when Daintree adds no flag", () => {
+    for (const label of [
+      presetBypassLabel({ dangerousMode: "auto", permissionLevel: "cli-default" }, "Gemini"),
+      presetBypassLabel({ dangerousMode: "off", permissionLevel: "cli-default" }, "Claude"),
+      presetBypassLabel({ dangerousMode: "inherit", permissionLevel: "cli-default" }, "Claude"),
+    ]) {
+      expect(label.startsWith("CLI default: ")).toBe(true);
+    }
+  });
+
+  it("shows a fallback's Auto in the dialog itself", () => {
+    act(() => {
+      void ask("preset-auto", {
+        ...summary,
+        fallbacks: [{ ...summary.fallbacks[0]!, dangerousMode: "auto", permissionLevel: "auto" }],
+      });
+    });
+    render(<PluginCapabilityConfirmDialog />);
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Auto: the preset turns on Claude's Auto mode"
+    );
   });
 });

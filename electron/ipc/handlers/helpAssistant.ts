@@ -19,6 +19,7 @@ import { hasShellMetachar } from "../../../shared/utils/shellEscape.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { isHelpAssistantDaintreeConfirmations as isValidDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { sanitizeDelegatedConfirmations } from "../../../shared/config/assistantConfirmationDelegation.js";
+import { noteAssistantConfirmationsEdited } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import { applyModelIdPatch, sanitizeModelIdMap } from "../../utils/helpAssistantModels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
 import type {
@@ -219,7 +220,7 @@ export const helpAssistantNamespace = defineIpcNamespace({
         }
         let daintreeControlTurnedOn = false;
         let auditRetentionWritten: HelpAssistantAuditRetention | null = null;
-        let wrote = false;
+        const updates: Record<string, unknown> = {};
         for (const [field, value] of Object.entries(patch)) {
           if (value === undefined) continue;
           if (!KNOWN_KEYS.has(field)) continue;
@@ -265,10 +266,19 @@ export const helpAssistantNamespace = defineIpcNamespace({
           if (field === "auditRetention") {
             auditRetentionWritten = storedValue as HelpAssistantAuditRetention;
           }
-          store.set(`helpAssistant.${field}`, storedValue);
-          wrote = true;
+          updates[field] = storedValue;
         }
-        if (wrote) notifySettingsChanged();
+        if (Object.keys(updates).length > 0) {
+          // One write for the whole patch: a set per field rewrote and fsynced
+          // all of config.json once per field. Merged into what's stored so
+          // fields the settings UI never sends (identities, agentId) survive.
+          store.set("helpAssistant", { ...store.get("helpAssistant"), ...updates });
+          // A tick approved in a confirm dialog before this doesn't land (#16752).
+          if ("daintreeConfirmations" in updates || "daintreeConfirmationsExcept" in updates) {
+            noteAssistantConfirmationsEdited();
+          }
+          notifySettingsChanged();
+        }
 
         // Apply the new retention window to the assistant audit rings
         // immediately so a shortened (or "Off"→on) setting takes effect now,

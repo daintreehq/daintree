@@ -4,7 +4,6 @@ import {
   Keyboard,
   LayoutGrid,
   LifeBuoy,
-  PanelRight,
   Plug,
   Settings2,
   SlidersHorizontal,
@@ -31,7 +30,6 @@ export const SETTINGS_CONTEXT_MENU_TABS = [
   { tab: "terminal", label: "Panel grid", icon: LayoutGrid },
   { tab: "keyboard", label: "Keyboard", icon: Keyboard },
   { tab: "notifications", label: "Notifications", icon: Bell },
-  { tab: "portal", label: "Portal", icon: PanelRight },
 ] as const satisfies readonly { tab: string; label: string; icon: LucideIcon }[];
 
 export const SETTINGS_CONTEXT_MENU_TROUBLESHOOTING = {

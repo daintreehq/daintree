@@ -12,10 +12,12 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 
 interface SidebarWorktreeRowProps {
   worktreeId: string;
-  activeWorktreeId: string | null;
-  focusedWorktreeId: string | null;
-  keyboardCursorId: string | null;
-  totalWorktreeCount: number;
+  // Booleans, not the selection ids: memo then skips every row whose own state
+  // didn't change when the cursor or selection moves (#17072).
+  isActive: boolean;
+  isFocused: boolean;
+  isKeyboardCursor: boolean;
+  isSingleWorktree: boolean;
   selectWorktree: (id: string) => void;
   worktreeActions: WorktreeActions;
   availability: UseAgentLauncherReturn["availability"];
@@ -31,10 +33,10 @@ interface SidebarWorktreeRowProps {
 
 function SidebarWorktreeRow({
   worktreeId,
-  activeWorktreeId,
-  focusedWorktreeId,
-  keyboardCursorId,
-  totalWorktreeCount,
+  isActive,
+  isFocused,
+  isKeyboardCursor,
+  isSingleWorktree,
   selectWorktree,
   worktreeActions,
   availability,
@@ -98,10 +100,6 @@ function SidebarWorktreeRow({
 
   if (!worktree) return null;
 
-  const isActive = worktreeId === activeWorktreeId;
-  const isFocused = worktreeId === focusedWorktreeId;
-  const isKeyboardCursor = worktreeId === keyboardCursorId;
-  const isSingleWorktree = totalWorktreeCount === 1;
   const moveUpHandler = dragEnabled ? onMoveUp : undefined;
   const moveDownHandler = dragEnabled ? onMoveDown : undefined;
   const canMoveUp = dragEnabled && rowIndex > 0;

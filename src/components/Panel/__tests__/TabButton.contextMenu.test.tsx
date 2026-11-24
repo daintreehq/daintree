@@ -26,9 +26,12 @@ vi.mock("@/store/voiceRecordingStore", () => ({
     selector({ lockedTarget: null, recentTargets: [] }),
 }));
 vi.mock("@/store/fleetArmingStore", () => ({
-  useFleetArmingStore: (selector: (s: { armedIds: Set<string> }) => unknown) =>
-    selector({ armedIds: new Set<string>() }),
+  useFleetArmingStore: (
+    selector: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) => unknown
+  ) => selector({ armedIds: new Set<string>(), crossHostTargets: [] }),
   isFleetArmEligible: () => false,
+  selectFleetMemberCount: (s: { armedIds: Set<string>; crossHostTargets: unknown[] }) =>
+    s.armedIds.size + s.crossHostTargets.length,
 }));
 
 const panelsById = vi.hoisted(() => ({

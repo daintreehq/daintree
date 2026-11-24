@@ -22,6 +22,7 @@ import {
 import type {
   AddHostPayload,
   DiscoveredHost,
+  HostAgentForwardingCheck,
   HostInstallPlan,
   HostProbeResult,
   HostSetupTarget,
@@ -38,6 +39,10 @@ import type {
   PreparePluginViewPayload,
   SwitchWindowHostPayload,
   SwitchWindowHostResult,
+  AnswerSshSignInPayload,
+  CancelSshSignInPayload,
+  SshSignInResult,
+  StartSshSignInPayload,
   CancelPendingSwitchPayload,
   PendingHostSwitch,
   UpdateHostPayload,
@@ -51,6 +56,20 @@ function requireHostId(payload: unknown): string {
     throw new AppError({ code: "VALIDATION", message: "hostId is required" });
   }
   return hostId;
+}
+
+/**
+ * A cloud connection names a binding only the cloud lifecycle makes (through
+ * `cloud-hosts:create` / `import`); taken from a renderer it could point a
+ * host at another host's machine.
+ */
+function refuseCloudConnection(connection: unknown): void {
+  if ((connection as { kind?: unknown } | null | undefined)?.kind !== "cloud") return;
+  throw new AppError({
+    code: "VALIDATION",
+    message: "Cloud connections are made by the cloud host lifecycle",
+    userMessage: "Add a cloud machine from Settings → Hosts → Add host instead.",
+  });
 }
 
 /** This machine as a window's host: what a window that never attached anywhere reports. */
@@ -105,13 +124,17 @@ export const remoteHostsNamespace = defineIpcNamespace({
     ),
     add: op(
       REMOTE_HOSTS_METHOD_CHANNELS.add,
-      async (payload: AddHostPayload): Promise<HostDescriptor> =>
-        requireRemoteService("remoteHostsClient").add(payload)
+      async (payload: AddHostPayload): Promise<HostDescriptor> => {
+        refuseCloudConnection(payload?.connection);
+        return requireRemoteService("remoteHostsClient").add(payload);
+      }
     ),
     update: op(
       REMOTE_HOSTS_METHOD_CHANNELS.update,
-      async (payload: UpdateHostPayload): Promise<HostDescriptor> =>
-        requireRemoteService("remoteHostsClient").update(payload)
+      async (payload: UpdateHostPayload): Promise<HostDescriptor> => {
+        refuseCloudConnection(payload?.connection);
+        return requireRemoteService("remoteHostsClient").update(payload);
+      }
     ),
     forget: op(
       REMOTE_HOSTS_METHOD_CHANNELS.forget,
@@ -191,6 +214,35 @@ export const remoteHostsNamespace = defineIpcNamespace({
       REMOTE_HOSTS_METHOD_CHANNELS.cancelInstall,
       async (payload: { opId: OperationId }): Promise<boolean> =>
         getRemoteService("hostSetup")?.cancelInstall(payload) ?? false
+    ),
+    // A person's Sign in to a host ssh refused a batch login: the only ssh that
+    // may prompt, its prompts sent to the view that asked and answered only
+    // from there (#17322).
+    startSshSignIn: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.startSshSignIn,
+      async (ctx: IpcContext, payload: StartSshSignInPayload): Promise<SshSignInResult> => {
+        const view = ctx.event?.sender;
+        if (!view) {
+          throw new AppError({
+            code: "UNSUPPORTED",
+            message: "Signing in to a host needs a window on this machine",
+          });
+        }
+        return requireRemoteService("sshSignIn").startFromView(view, payload);
+      },
+      { withContext: true }
+    ),
+    answerSshSignIn: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.answerSshSignIn,
+      async (ctx: IpcContext, payload: AnswerSshSignInPayload): Promise<boolean> =>
+        getRemoteService("sshSignIn")?.answer(ctx.webContentsId, payload) ?? false,
+      { withContext: true }
+    ),
+    cancelSshSignIn: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.cancelSshSignIn,
+      async (ctx: IpcContext, payload: CancelSshSignInPayload): Promise<boolean> =>
+        getRemoteService("sshSignIn")?.cancel(ctx.webContentsId, payload) ?? false,
+      { withContext: true }
     ),
     startHostMode: op(
       REMOTE_HOSTS_METHOD_CHANNELS.startHostMode,
@@ -313,6 +365,12 @@ export const remoteHostsNamespace = defineIpcNamespace({
         return false;
       },
       { withContext: true }
+    ),
+    // What the agent forwarding switch shows: this computer's agent, and the host's IdentityAgent.
+    checkAgentForwarding: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.checkAgentForwarding,
+      async (payload: { hostId: string }): Promise<HostAgentForwardingCheck> =>
+        requireRemoteService("agentForwardingClient").check(requireHostId(payload))
     ),
     isInUse: op(REMOTE_HOSTS_METHOD_CHANNELS.isInUse, (): boolean => remoteHostsInUse()),
     getLocalHandshake: op(REMOTE_HOSTS_METHOD_CHANNELS.getLocalHandshake, (): HostHandshakeInfo =>

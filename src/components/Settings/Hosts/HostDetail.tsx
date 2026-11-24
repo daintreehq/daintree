@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FactSeparator } from "@/components/ui/FactSeparator";
@@ -23,19 +23,32 @@ import { HostPluginsSection } from "./HostPluginsSection";
 import { HostSessionsSection } from "./HostSessionsSection";
 import { HostCopySettingsSection } from "./HostCopySettingsSection";
 import { takeFirstConnect } from "./hostCopySettingsRequests";
+import type { HostUpdateIntent } from "./hostUpdateRequests";
 import type { HostPluginsSectionId } from "./hostPluginRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
+import { CloudMachineSection } from "./CloudMachineSection";
+import { RemoveCloudHostDialog } from "./RemoveCloudHostDialog";
+import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
+import { canDeleteMachines, cloudProviderFor } from "@/components/Hosts/cloud/cloudHostLabels";
 import { HostWakeSetup } from "./HostWakeSetup";
+import { HostAgentForwardingRow } from "./HostAgentForwardingRow";
 import { bringBackMessage, canBringBack, useHostBringBacks } from "./hostBringBack";
 import {
   buildLabel,
   connectionLabel,
   describeBuildDifference,
   platformLabel,
+  isLoginRefused,
   removeHostOutcome,
+  STARTS_ON_CONNECT_COVERAGE,
 } from "./hostLabels";
+import { SshSignInDialog } from "./SshSignInDialog";
+import { useSshSignIn } from "./useSshSignIn";
 import { describeHostForge } from "@/components/Hosts/hostForges";
+import { cancelPlacement, isSwitchFailure, placeAgain } from "@/components/Hosts/pendingPlacement";
+import { CancelCloudPlacementDialog } from "@/components/Hosts/CancelCloudPlacementDialog";
+import { isMadeForPlacement } from "@/components/Hosts/cloudWorktreePlacement";
 import { clientErrorText } from "@/utils/clientAppError";
 import { isWindows } from "@/lib/platform";
 import { currentHostId } from "@/hooks/useHostPlatform";
@@ -45,8 +58,11 @@ interface HostDetailProps {
   entry: HostListEntry;
   /** Back to the list; `viaKeyboard` decides whether focus lands visibly there. */
   onBack: (viaKeyboard?: boolean) => void;
-  /** Open straight into this host's update flow (the host chip's "Update …"). */
-  openUpdate?: boolean;
+  /**
+   * Open straight into this host's update flow (the host chip's "Update …"),
+   * or its setup (a worktree to open there once Daintree runs on it).
+   */
+  openUpdate?: boolean | HostUpdateIntent;
   /** Scroll to this section: its plugins (the switch notice's "Review") or their views (a blocked view's way here). */
   focusSection?: HostPluginsSectionId;
   /** Just added and connected: scroll to Copy settings and offer it. */
@@ -125,14 +141,44 @@ export function HostDetail({
   const hostName = descriptor.name;
   const headerOwnsBack = useSettingsSubpage({ title: hostName, parentLabel: "Hosts", onBack });
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const cloudSnapshot = useCloudHosts().snapshot;
+  const cloud = cloudStatusFor(cloudSnapshot, entry.descriptor.id);
+  const cloudProvider = cloudProviderFor(cloudSnapshot.providers, cloud);
+  const isCloud = entry.descriptor.connection.kind === "cloud";
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   // Why the update dialog is open, which names it: "Set up…" or "Check for update".
-  const [updateOpen, setUpdateOpen] = useState<"update" | "setup" | null>(
-    openUpdate ? "update" : null
+  const [updateOpen, setUpdateOpen] = useState<HostUpdateIntent | null>(
+    openUpdate === "setup" ? "setup" : openUpdate ? "update" : null
   );
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // A worktree waiting for this host's setup to finish before it opens here.
+  const placement = descriptor.pendingPlacement ?? null;
+  const [placementError, setPlacementError] = useState<string | null>(null);
+  // A machine made for the worktree: cancelling asks what becomes of it.
+  const [cancellingPlacement, setCancellingPlacement] = useState(false);
+  const cancelWaiting = () => {
+    setPlacementError(null);
+    if (placement?.createdMachine) {
+      setCancellingPlacement(true);
+      return;
+    }
+    cancelPlacement(descriptor.id).catch((err: unknown) =>
+      setPlacementError(clientErrorText(err, "Couldn't cancel"))
+    );
+  };
+  // A switch that already ran is asked for again; anything else goes through setup.
+  const retryWaiting = () => {
+    setPlacementError(null);
+    if (placement && isSwitchFailure(placement)) {
+      placeAgain(descriptor.id, placement).catch((err: unknown) =>
+        setPlacementError(clientErrorText(err, "Couldn't retry"))
+      );
+      return;
+    }
+    setUpdateOpen("setup");
+  };
   const bringBacks = useHostBringBacks();
   const bringing = bringBacks.isPending(descriptor.id);
   const bringBackSaid = bringing
@@ -144,8 +190,13 @@ export function HostDetail({
   // Only an ssh target can be changed here; another kind of connection is shown as it is.
   const sshTarget = sshTargetOf(descriptor.connection);
   const wslDistro = wslDistroOf(descriptor.connection);
-  const removeOutcome = removeHostOutcome(descriptor.connection, hostName);
+  const removeOutcome = removeHostOutcome(
+    descriptor.connection,
+    hostName,
+    descriptor.startsOnConnect === true
+  );
   const [changeTargetOpen, setChangeTargetOpen] = useState(false);
+  const changeTargetButtonRef = useRef<HTMLButtonElement | null>(null);
   const connected = connection.status === "connected";
   // What a host reports is about it now only while it is connected: kept from
   // before a drop, it would read as current. The overview's history keeps it.
@@ -157,6 +208,9 @@ export function HostDetail({
     connection.status === "driven-elsewhere" ||
     (connection.status === "unreachable" && connection.stoppedRetrying !== true);
   const hostModeOff = connection.status === "unreachable" && connection.hostModeOff === true;
+  const loginRefused = sshTarget !== null && isLoginRefused(connection);
+  // Signed in, ssh's master is up: the link dials again in batch mode and rides it.
+  const signIn = useSshSignIn(() => connect());
   const buildMismatch = connected ? (connection.buildMismatch ?? null) : null;
   const agentClis = [...(liveSummary?.agentClis ?? [])]
     .map((cli) => ({ ...cli, name: getAgentConfig(cli.agentId)?.name ?? cli.agentId }))
@@ -289,6 +343,16 @@ export function HostDetail({
         </div>
       )}
 
+      {/* The machine first: what it is doing and what it costs decide everything below. */}
+      {isCloud && (
+        <CloudMachineSection
+          hostId={descriptor.id}
+          hostName={hostName}
+          connected={connected}
+          liveSummary={liveSummary ?? null}
+        />
+      )}
+
       <SettingsSection title="Connection">
         <SettingsGroup>
           <SettingsInput
@@ -306,14 +370,19 @@ export function HostDetail({
               label="SSH target"
               description={sshTarget}
               control={
-                <Button variant="outline" size="sm" onClick={() => setChangeTargetOpen(true)}>
+                <Button
+                  ref={changeTargetButtonRef}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setChangeTargetOpen(true)}
+                >
                   Change target…
                 </Button>
               }
             />
           ) : wslDistro !== null ? (
             <SettingsRow label="WSL distribution" description={wslDistro} />
-          ) : (
+          ) : isCloud ? null : (
             <SettingsRow
               label="Address"
               description={formatHostConnection(descriptor.connection)}
@@ -330,7 +399,7 @@ export function HostDetail({
             }
             control={
               <div className="flex gap-2">
-                {(bringing || canBringBack(connection)) && (
+                {!isCloud && (bringing || canBringBack(connection)) && (
                   // Wakes it where a wake is set up below, then starts Daintree there if it can.
                   <Button
                     variant="outline"
@@ -344,7 +413,16 @@ export function HostDetail({
                     Bring back
                   </Button>
                 )}
-                {hostModeOff && (
+                {loginRefused && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => signIn.start(descriptor.connection)}
+                  >
+                    Sign in…
+                  </Button>
+                )}
+                {hostModeOff && !placement && (
                   // Setting up turns Host mode on there; Retry checks again as it is.
                   <Button variant="outline" size="sm" onClick={() => setUpdateOpen("setup")}>
                     Set up…
@@ -374,6 +452,36 @@ export function HostDetail({
               </div>
             }
           />
+          {placement && (
+            <SettingsRow
+              label="Waiting to open"
+              description={`${placement.label} opens here once setup finishes`}
+              error={
+                placementError ??
+                (placement.failure
+                  ? isSwitchFailure(placement)
+                    ? placement.failure.message
+                    : `Setup failed: ${placement.failure.message}`
+                  : undefined)
+              }
+              control={
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={retryWaiting}>
+                    {placement.failure ? "Retry" : "Set up…"}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={cancelWaiting}>
+                    Cancel
+                  </Button>
+                </div>
+              }
+            />
+          )}
+          {descriptor.startsOnConnect === true && (
+            <SettingsRow
+              label="Kept running"
+              description={`${hostName} has no systemd for a Host mode service, so Host mode runs in the background once started. ${STARTS_ON_CONNECT_COVERAGE}`}
+            />
+          )}
           <SettingsRow
             label="Daintree build"
             description={
@@ -437,6 +545,14 @@ export function HostDetail({
                   aria-describedby={descriptionId}
                 />
               )}
+            />
+          )}
+          {/* macOS and Linux Shells only for now (#17432). */}
+          {!isWindows() && (
+            <HostAgentForwardingRow
+              descriptor={descriptor}
+              hostName={hostName}
+              connected={connected}
             />
           )}
         </SettingsGroup>
@@ -533,8 +649,14 @@ export function HostDetail({
       <SettingsSection title="Remove host">
         <SettingsGroup>
           <SettingsRow
-            label={removeOutcome.label}
-            description="Its connection here closes, windows attached to it return to this machine, and it leaves your host list"
+            label={isCloud ? "Remove host" : removeOutcome.label}
+            description={
+              isCloud
+                ? cloudProvider && !canDeleteMachines(cloudProvider)
+                  ? `Its machine stays in your ${cloudProvider.name} account until you delete it in ${cloudProvider.name}'s console`
+                  : "Choose whether its machine stays in your cloud account or is deleted with it"
+                : "Its connection here closes, windows attached to it return to this machine, and it leaves your host list"
+            }
             error={removeError ?? undefined}
             control={
               <Button variant="ghost-danger" size="sm" onClick={() => setConfirmRemove(true)}>
@@ -545,8 +667,33 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
+      {cancellingPlacement && placement && (
+        <CancelCloudPlacementDialog
+          hostId={descriptor.id}
+          hostName={hostName}
+          label={placement.label}
+          status={cloud}
+          provider={cloudProvider}
+          initialChoice="keep"
+          madeForIt={isMadeForPlacement(cloud, placement)}
+          onClose={() => setCancellingPlacement(false)}
+          onDeleted={() => onBack(false)}
+        />
+      )}
+      {confirmRemove && isCloud && (
+        <RemoveCloudHostDialog
+          hostId={descriptor.id}
+          name={hostName}
+          status={cloud}
+          providerName={cloudProvider?.name ?? "the provider"}
+          provider={cloudProvider}
+          startsOnConnect={descriptor.startsOnConnect === true}
+          onClose={() => setConfirmRemove(false)}
+          onRemoved={() => onBack(false)}
+        />
+      )}
       <ConfirmDialog
-        isOpen={confirmRemove}
+        isOpen={confirmRemove && !isCloud}
         onClose={() => setConfirmRemove(false)}
         variant="destructive"
         title={`Remove '${hostName}' from this device?`}
@@ -557,10 +704,19 @@ export function HostDetail({
       >
         {removeError && <InlineError role="alert">{removeError}</InlineError>}
       </ConfirmDialog>
+      <SshSignInDialog
+        hostLabel={hostName}
+        state={signIn.state}
+        onAnswer={signIn.answer}
+        // The host's address now: it may have been changed since the last try.
+        onRetry={() => signIn.start(descriptor.connection)}
+        onClose={signIn.close}
+      />
       {changeTargetOpen && sshTarget !== null && (
         <ChangeHostTargetDialog
           isOpen
           onClose={() => setChangeTargetOpen(false)}
+          restoreFocusTo={changeTargetButtonRef}
           hostId={descriptor.id}
           hostName={hostName}
           currentTarget={sshTarget}

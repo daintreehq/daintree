@@ -39,10 +39,15 @@ export class AppAgentService {
 
   setConfig(config: Partial<AppAgentConfig>): void {
     if (!config || typeof config !== "object") return;
+    const updates: Record<string, unknown> = {};
     for (const [field, value] of Object.entries(config)) {
       if (value === undefined) continue;
-      store.set(`appAgentConfig.${field}`, value);
+      updates[field] = value;
     }
+    if (Object.keys(updates).length === 0) return;
+    // One write for the whole patch: a set per field rewrote and fsynced all of
+    // config.json once per field.
+    store.set("appAgentConfig", { ...store.get("appAgentConfig"), ...updates });
   }
 
   hasApiKey(): boolean {

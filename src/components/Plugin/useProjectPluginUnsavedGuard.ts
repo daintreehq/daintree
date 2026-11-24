@@ -1,6 +1,9 @@
 import { useRef, useState } from "react";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
-import type { ProjectPluginTrustDecision } from "@shared/types/plugin";
+import {
+  makeInstalledProjectInstanceKey,
+  type ProjectPluginTrustDecision,
+} from "@shared/types/plugin";
 import type { PluginUnsavedPanel } from "@shared/types/pluginUnsavedPanels";
 import {
   UNSAVED_READ_FAILED,
@@ -9,9 +12,15 @@ import {
   unsavedPanelKey,
 } from "./unsavedPluginPanels";
 
-/** A change to a project's own plugins that unloads what is running. */
+/**
+ * A change to a project's own plugins that unloads what is running. `instanceOff`
+ * stops this project's copy of an installed per-project package, so it carries
+ * the project whose copy it is: the key its panels report is built from it.
+ */
 export type ProjectPluginUnload =
-  { kind: "trustOff" } | { kind: "mute"; pluginId: string; displayName: string };
+  | { kind: "trustOff" }
+  | { kind: "mute"; pluginId: string; displayName: string }
+  | { kind: "instanceOff"; pluginId: string; displayName: string; projectId: string };
 
 /** An unload held for the user's Discard / Cancel because it would lose unsaved work. */
 export interface PendingProjectPluginUnload {
@@ -31,6 +40,11 @@ export const PROJECT_PLUGINS_UNSAVED_READ_FAILED =
  * so that key, never the manifest id, is what finds them.
  */
 function unloadTargets(unload: ProjectPluginUnload): string[] {
+  // Read whether or not the loaded list shows the instance: that list lags, and
+  // the read is an in-memory lookup on main.
+  if (unload.kind === "instanceOff") {
+    return [makeInstalledProjectInstanceKey(unload.projectId, unload.pluginId)];
+  }
   const targets: string[] = [];
   for (const plugin of useProjectPluginStore.getState().plugins) {
     if (plugin.state !== "active" || plugin.instanceId === undefined) continue;
@@ -67,32 +81,56 @@ async function readUnloadPanels(unload: ProjectPluginUnload): Promise<PluginUnsa
   }
 }
 
+/**
+ * The project the unload is about, as the store names it now. A per-project
+ * package follows the view, since its instance can run before the repository
+ * snapshot that sets `projectId` arrives.
+ */
+function currentProjectId(unload: ProjectPluginUnload): string | null {
+  const store = useProjectPluginStore.getState();
+  return unload.kind === "instanceOff" ? (store.viewProjectId ?? store.projectId) : store.projectId;
+}
+
 function submit(unload: ProjectPluginUnload): Promise<void> {
   const store = useProjectPluginStore.getState();
-  return unload.kind === "trustOff"
-    ? store.decide("disabled")
-    : store.setMuted(unload.pluginId, true);
+  switch (unload.kind) {
+    case "trustOff":
+      return store.decide("disabled");
+    case "mute":
+      return store.setMuted(unload.pluginId, true);
+    case "instanceOff":
+      return store.setInstanceEnabled(unload.pluginId, false);
+  }
 }
 
 /** A failed read stops the action where its own failures show, with the same retry. */
 function reportReadFailure(unload: ProjectPluginUnload): void {
   const store = useProjectPluginStore.getState();
-  if (unload.kind === "trustOff") {
-    store.reportFailure(
-      { action: "decide", decision: "disabled" },
-      PROJECT_PLUGINS_UNSAVED_READ_FAILED
-    );
-  } else {
-    store.reportFailure(
-      { action: "mute", pluginId: unload.pluginId, muted: true },
-      UNSAVED_READ_FAILED
-    );
+  switch (unload.kind) {
+    case "trustOff":
+      store.reportFailure(
+        { action: "decide", decision: "disabled" },
+        PROJECT_PLUGINS_UNSAVED_READ_FAILED
+      );
+      return;
+    case "mute":
+      store.reportFailure(
+        { action: "mute", pluginId: unload.pluginId, muted: true },
+        UNSAVED_READ_FAILED
+      );
+      return;
+    case "instanceOff":
+      store.reportFailure(
+        { action: "instanceEnabled", pluginId: unload.pluginId, enabled: false },
+        UNSAVED_READ_FAILED
+      );
   }
 }
 
 /**
- * Stand-ins for the store's `decide` and `setMuted` that ask before unloading a
- * project plugin whose panels hold unsaved work (#16656), the same Discard /
+ * Stand-ins for the store's `decide`, `setMuted` and `setInstanceEnabled` that
+ * ask before unloading a project plugin whose panels hold unsaved work (#16656),
+ * or this project's copy of a per-project package (#17215), the same Discard /
  * Cancel the plugin manager asks before disabling an installed plugin (#15031).
  * Turning the project's plugins off reads every loaded one; switching one off
  * reads that one. Anything that unloads nothing goes straight through.
@@ -120,7 +158,7 @@ export function useProjectPluginUnsavedGuard() {
       await submit(unload);
       return;
     }
-    const projectId = useProjectPluginStore.getState().projectId;
+    const projectId = currentProjectId(unload);
     readingRef.current = true;
     let panels: PluginUnsavedPanel[] | null;
     try {
@@ -130,7 +168,7 @@ export function useProjectPluginUnsavedGuard() {
     }
     // The view moved to another project while main answered: the click was
     // about plugins this store no longer describes.
-    if (useProjectPluginStore.getState().projectId !== projectId) return;
+    if (currentProjectId(unload) !== projectId) return;
     if (panels === null) {
       reportReadFailure(unload);
       return;
@@ -157,6 +195,24 @@ export function useProjectPluginUnsavedGuard() {
     await request({ kind: "mute", pluginId, displayName });
   };
 
+  const setInstanceEnabled = async (pluginId: string, enabled: boolean, displayName: string) => {
+    const store = useProjectPluginStore.getState();
+    if (enabled) return store.setInstanceEnabled(pluginId, true);
+    if (store.instanceToggling.has(pluginId)) return;
+    const projectId = store.viewProjectId ?? store.projectId;
+    // No project means no instance key to read, and an unread turn-off is the
+    // silent discard this guard exists to stop.
+    if (projectId === null) {
+      if (readingRef.current || pendingRef.current !== null) return;
+      store.reportFailure(
+        { action: "instanceEnabled", pluginId, enabled: false },
+        UNSAVED_READ_FAILED
+      );
+      return;
+    }
+    await request({ kind: "instanceOff", pluginId, displayName, projectId });
+  };
+
   const cancel = () => setPending(null);
 
   const confirm = async () => {
@@ -168,7 +224,7 @@ export function useProjectPluginUnsavedGuard() {
     const current = await readUnloadPanels(prompt.unload);
     if (confirmingRef.current === prompt) confirmingRef.current = null;
     if (pendingRef.current !== prompt) return;
-    if (useProjectPluginStore.getState().projectId !== prompt.projectId) {
+    if (currentProjectId(prompt.unload) !== prompt.projectId) {
       setPending(null);
       return;
     }
@@ -186,7 +242,7 @@ export function useProjectPluginUnsavedGuard() {
     await submit(prompt.unload);
   };
 
-  return { decide, setMuted, pending, confirm, cancel };
+  return { decide, setMuted, setInstanceEnabled, pending, confirm, cancel };
 }
 
 export type ProjectPluginUnsavedGuard = ReturnType<typeof useProjectPluginUnsavedGuard>;

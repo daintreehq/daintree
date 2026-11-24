@@ -14,6 +14,8 @@ import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.
 import { PTY_MIRROR_SCROLLBACK } from "../../../shared/config/scrollback.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 import type { HandbackTracker } from "./HandbackTracker.js";
+import type { UpdateInstalledObservation } from "../../../shared/types/ipc/agent.js";
+import type { UpdateFooterSighting } from "./claudeUpdateObservation.js";
 
 // Re-export PtyHostSpawnOptions as PtySpawnOptions for backward compatibility/internal usage
 export type PtySpawnOptions = PtyHostSpawnOptions;
@@ -59,10 +61,28 @@ export interface TerminalPublicState {
   /** Wall-clock timestamp when BootDetector first declared boot complete. */
   bootCompleteAt?: number;
   wasKilled?: boolean;
+  /**
+   * A graceful shutdown is quitting this terminal's agent ahead of the kill
+   * that ends it. Set for the attempt's duration only: `wasKilled` takes over
+   * once the kill lands.
+   */
+  gracefullyClosing?: boolean;
   isExited?: boolean;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /**
+   * An agent run started in this PTY and hasn't yet been observed waiting at
+   * its prompt or a question (#18014): what it shows may be a startup screen
+   * such as a trust prompt, not a turn. Absent once that wait is published.
+   */
+  promptUnseen?: true;
+  /**
+   * When `promptUnseen` was last set (#18018). Only an input row read off the
+   * screen after this clears it, so a reading made for the run before, however
+   * late it arrives, never does.
+   */
+  promptUnseenAt?: number;
   /**
    * When the visible content last changed, ignoring recognised spinner and
    * timer redraws (#12428). Absent until a change has been observed.
@@ -148,6 +168,11 @@ export interface TerminalPublicState {
    * spawn (#16269). Absent when the env names one that can't be resolved.
    */
   claudeConfigDir?: string;
+  /**
+   * The Codex home this terminal's launch env names, resolved once at spawn
+   * (#17318). Absent when the env names one that can't be resolved.
+   */
+  codexHome?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
@@ -188,6 +213,13 @@ export interface TerminalPublicState {
    * appearance, cleared in `AgentStateService`; ephemeral (not persisted).
    */
   usageLimitObservedAt?: number;
+  /**
+   * Claude Code's "Update installed" footer as this pane showed it (#17905).
+   * Kept while its run lives, on screen or not, and cleared when the run ends
+   * or changes; set and cleared only through `claudeUpdateObservation.ts`.
+   * Ephemeral (not persisted).
+   */
+  updateInstalled?: UpdateInstalledObservation;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
@@ -198,6 +230,8 @@ export interface TerminalPublicState {
   agentPresetColor?: string;
   /** User-originally-selected preset ID; immutable across fallback hops. */
   originalAgentPresetId?: string;
+  /** Fallback hops taken from the original preset, as the launch said (#17909). */
+  fallbackChainIndex?: number;
   /**
    * Launch generation adopted from Main's lifecycle ledger at spawn. Echoed on
    * `agent-session-captured` so Main can journal exactly-once per incarnation.
@@ -226,6 +260,8 @@ export interface TerminalRuntime {
  * runtime resources via TerminalProcess methods (getPid(), write(), etc.)
  */
 export interface TerminalInfo extends TerminalPublicState {
+  /** Placed in no project on purpose (#17926): its cwd never makes it a project's. */
+  unplaced?: true;
   // Runtime resources - access via TerminalProcess methods instead
   /** @deprecated Use TerminalProcess.getPtyProcess() internally */
   ptyProcess: pty.IPty;
@@ -249,6 +285,11 @@ export interface TerminalInfo extends TerminalPublicState {
    * terminal asks for one. Not persisted, not crossed over IPC.
    */
   handbackTracker?: HandbackTracker;
+  /**
+   * What the update-footer observer remembers between frames (#17905).
+   * Runtime-only; not persisted, not crossed over IPC.
+   */
+  updateFooterSighting?: UpdateFooterSighting;
   /**
    * Final serialized buffer captured when a preserved terminal exits and its
    * headless xterm is disposed to reclaim memory. Served by

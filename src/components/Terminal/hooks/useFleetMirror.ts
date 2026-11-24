@@ -1,9 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { EditorView } from "@codemirror/view";
 import { Transaction } from "@codemirror/state";
 import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { selectFleetMemberCount, useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetResolutionPreviewStore } from "@/store/fleetResolutionPreviewStore";
 import { useFleetTargetOverridesStore } from "@/store/fleetTargetOverridesStore";
 
@@ -38,20 +38,29 @@ export function useFleetMirror({
 }: UseFleetMirrorParams) {
   const isApplyingExternalValueRef = useRef(false);
   // Only the primary re-mirrors when membership changes; every other pane
-  // reads a constant, so a fleet change doesn't re-render its composer.
+  // reads a constant, so a fleet change doesn't re-render its composer. Another
+  // host's agents get no mirrored draft, but their preview rows rebuild here.
   const armedIds = useFleetArmingStore((s) => (isFleetPrimary ? s.armedIds : null));
+  const crossHostTargets = useFleetArmingStore((s) => (isFleetPrimary ? s.crossHostTargets : null));
 
-  // Primary → followers: write our current draft to each other armed pane's
-  // draft slot, holding each one's own draft the first time it's replaced.
+  const mirrorDraft = useCallback(
+    (draft: string) => {
+      if (isolated || !isFleetPrimary || disabled) return false;
+      const arming = useFleetArmingStore.getState();
+      if (!arming.armedIds.has(terminalId) || selectFleetMemberCount(arming) < 2) return false;
+      useTerminalInputStore
+        .getState()
+        .mirrorFleetDraft(terminalId, draft, arming.armedIds, projectId);
+      return true;
+    },
+    [isolated, isFleetPrimary, disabled, terminalId, projectId]
+  );
+
+  // Typing mirrors before React renders, avoiding a passive-effect update
+  // chain for every keystroke. This also covers membership and outside writes.
   useEffect(() => {
-    if (isolated || !isFleetPrimary || disabled) return;
-    // The fleet as it is now, not as it rendered: a fleet cleared since would
-    // otherwise get this draft, and holds nothing is left to release.
-    const liveArmedIds = useFleetArmingStore.getState().armedIds;
-    if (!liveArmedIds.has(terminalId) || liveArmedIds.size < 2) return;
-    useTerminalInputStore.getState().mirrorFleetDraft(terminalId, value, liveArmedIds, projectId);
-    useFleetResolutionPreviewStore.getState().setDraft(value);
-  }, [isFleetPrimary, value, armedIds, terminalId, projectId, isolated]);
+    if (mirrorDraft(value)) useFleetResolutionPreviewStore.getState().setDraft(value);
+  }, [mirrorDraft, value, armedIds, crossHostTargets]);
 
   // Follower ← primary: pull mirrored text into our local value + editor doc
   const externalDraftKey = projectId ? `${projectId}:${terminalId}` : terminalId;
@@ -122,5 +131,5 @@ export function useFleetMirror({
     }
   }, [isFleetPrimary, disabled, isolated]);
 
-  return { isApplyingExternalValueRef };
+  return { isApplyingExternalValueRef, mirrorDraft };
 }

@@ -18,6 +18,7 @@ vi.mock("../../utils/gitUtils.js", () => ({
 }));
 
 import { BaseDivergence, type BaseDivergenceHost } from "../BaseDivergence.js";
+import { RESOLUTION_MAX_AGE_MS, SharedBaseRefResolver } from "../SharedBaseRefResolver.js";
 import type { StatPrecheck } from "../StatPrecheck.js";
 
 function makeHost(overrides: Partial<BaseDivergenceHost> = {}): BaseDivergenceHost {
@@ -102,6 +103,13 @@ function installRepo(fixture: RepoFixture): void {
     }
     throw new Error(`unexpected git invocation: ${args.join(" ")}`);
   });
+}
+
+/** How many times a run asked git for exactly these leading arguments. */
+function gitCalls(...prefix: string[]): number {
+  return mockGitRaw.mock.calls.filter((call) =>
+    prefix.every((arg, i) => (call[0] as string[])[i] === arg)
+  ).length;
 }
 
 /** The `rev-list` ranges a run actually asked for, in order. */
@@ -374,6 +382,157 @@ describe("BaseDivergence", () => {
     const second = await divergence.compute(false);
     expect(second?.baseCompareRef).toBe("main");
     expect(second?.behindCount).toBe(1);
+  });
+
+  describe("linked worktrees sharing a repository", () => {
+    const commonDir = "/test/repo/.git";
+
+    function makeSiblingStatPrecheck(): StatPrecheck {
+      return {
+        resolveCommonDirAsync: vi.fn().mockResolvedValue(commonDir),
+        // No per-worktree config and no shared config file to scan, so every
+        // sibling reads the same effective config.
+        statMtime: vi.fn(async (path: string) =>
+          path.endsWith("config.worktree") || path === join(commonDir, "config") ? -1 : 1_000
+        ),
+      } as unknown as StatPrecheck;
+    }
+
+    function makeSibling(name: string, shared: SharedBaseRefResolver): BaseDivergence {
+      return new BaseDivergence(
+        makeHost({ branch: `feature/${name}`, path: `/test/${name}` }),
+        makeSiblingStatPrecheck(),
+        shared
+      );
+    }
+
+    beforeEach(() => {
+      mockGetGitDir.mockImplementation(async (path: string) =>
+        join(commonDir, "worktrees", path.split("/").pop()!)
+      );
+    });
+
+    it("resolves the base ref once and reads each worktree's own upstream", async () => {
+      installRepo({
+        remotes: ["origin", "upstream"],
+        remoteBaseRefs: ["refs/remotes/origin/main", "refs/remotes/upstream/main"],
+        symbolicRefs: { "@{u}": "refs/remotes/origin/unused" },
+        revList: { "upstream/main...HEAD": "4\t1\n" },
+        revParsePair: "abc\ndef\n",
+      });
+      // Each worktree's `@{u}` names its own branch, so a sibling's answer
+      // showing up anywhere would be visible.
+      mockCreateHardenedGit.mockImplementation((path: string) => ({
+        raw: async (args: string[]) => {
+          const out = await mockGitRaw(args);
+          return args[1] === "--symbolic-full-name" && args[2] === "@{u}"
+            ? `refs/remotes/origin/feature/${path.split("/").pop()}\n`
+            : out;
+        },
+      }));
+      const shared = new SharedBaseRefResolver();
+      const siblings = ["a", "b", "c"].map((name) => makeSibling(name, shared));
+
+      const results = await Promise.all(siblings.map((sibling) => sibling.compute(true)));
+
+      expect(gitCalls("remote")).toBe(1);
+      expect(gitCalls("for-each-ref")).toBe(1);
+      expect(gitCalls("rev-parse", "--symbolic-full-name", "main@{upstream}")).toBe(1);
+      expect(gitCalls("rev-parse", "--symbolic-full-name", "@{u}")).toBe(3);
+      expect(revListRanges()).toEqual([
+        "upstream/main...HEAD",
+        "upstream/main...HEAD",
+        "upstream/main...HEAD",
+      ]);
+      results.forEach((result, i) => {
+        const ownUpstream = `refs/remotes/origin/feature/${["a", "b", "c"][i]}`;
+        expect(result).toMatchObject({
+          baseCompareRef: "upstream/main",
+          behindCount: 4,
+          upstreamRef: ownUpstream,
+        });
+        expect(siblings[i]!.upstreamRef).toBe(ownUpstream);
+        expect(siblings[i]!.baseRemote).toBe("upstream");
+      });
+    });
+
+    it("asks only for the missing upstream again when its retry comes due", async () => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        installRepo({
+          remoteBaseRefs: ["refs/remotes/origin/main"],
+          revList: { "origin/main...HEAD": "0\t1\n" },
+        });
+        const divergence = makeSibling("a", new SharedBaseRefResolver());
+        const upstreamReads = () => gitCalls("rev-parse", "--symbolic-full-name", "@{u}");
+        await divergence.compute(true);
+        expect(divergence.upstreamRef).toBeNull();
+
+        now += 29_000;
+        await divergence.compute(true);
+        expect(upstreamReads()).toBe(1);
+
+        now += 1_000;
+        await divergence.compute(true);
+        expect(upstreamReads()).toBe(2);
+
+        // Still missing, so the next ask backs off to twice the wait.
+        now += 59_000;
+        await divergence.compute(true);
+        expect(upstreamReads()).toBe(2);
+        now += 1_000;
+        await divergence.compute(true);
+        expect(upstreamReads()).toBe(3);
+
+        expect(gitCalls("remote")).toBe(1);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+  });
+
+  describe("upstream resolution", () => {
+    it.each([
+      [
+        "picks up a repointed upstream at the age ceiling when several remotes could own it",
+        ["origin", "upstream"],
+        "refs/remotes/upstream/feature/x",
+      ],
+      [
+        "never re-reads a resolved upstream on a clock with a single remote",
+        ["origin"],
+        "refs/remotes/origin/feature/x",
+      ],
+    ])("%s", async (_, remotes, upstreamAfterCeiling) => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      const repo = (upstream: string) =>
+        installRepo({
+          remotes,
+          remoteBaseRefs: remotes.map((remote) => `refs/remotes/${remote}/main`),
+          symbolicRefs: { "@{u}": upstream },
+          revList: { "upstream/main...HEAD": "0\t1\n", "origin/main...HEAD": "0\t1\n" },
+          revParsePair: "abc\nabc\n",
+        });
+      try {
+        repo("refs/remotes/origin/feature/x");
+        const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+        await divergence.compute(true);
+
+        // An included config file repoints the upstream; nothing stamped moves.
+        repo("refs/remotes/upstream/feature/x");
+        now += RESOLUTION_MAX_AGE_MS - 1;
+        await divergence.compute(true);
+        expect(divergence.upstreamRef).toBe("refs/remotes/origin/feature/x");
+
+        now += 1;
+        await divergence.compute(true);
+        expect(divergence.upstreamRef).toBe(upstreamAfterCeiling);
+      } finally {
+        clock.mockRestore();
+      }
+    });
   });
 
   describe("remote resolution", () => {

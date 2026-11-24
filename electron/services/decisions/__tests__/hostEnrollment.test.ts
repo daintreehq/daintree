@@ -155,6 +155,34 @@ class FakePort implements DecisionsHostsPort {
 
   announceOwnerState() {}
 
+  hostQuestions() {
+    return [];
+  }
+
+  onHostQuestionsChanged() {
+    return () => {};
+  }
+
+  readHostQuestion() {
+    return null;
+  }
+
+  cancelHostQuestion() {
+    return null;
+  }
+
+  hostAttention() {
+    return null;
+  }
+
+  lastHostRead() {
+    return null;
+  }
+
+  onAgentStopChanges() {
+    return () => {};
+  }
+
   /** The host's link comes up, as the Remote Hosts client says it. */
   connect(hostId: string, link = new FakeLink()): FakeLink {
     if (!this.entries.some((entry) => entry.hostId === hostId)) {

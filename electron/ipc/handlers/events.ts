@@ -34,6 +34,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "agent:detected": "bus",
   // Pane-attributed rate-limit observation (#12797); timestamps only.
   "agent:rate-limit-observed": "bus",
+  // A Claude Code pane's update footer (#17905); the observation, never the text.
+  "agent:update-installed-changed": "bus",
   "agent:exited": "bus",
   "agent:fallback-triggered": "bus",
 
@@ -84,6 +86,10 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "terminal:decision-state": "external",
   // Sent to this machine's own windows by the Decisions service, only while it is loaded.
   "decisions:status-changed": "external",
+  // Every question this computer's Decisions holds (#17229); sent to its own windows by Decisions.
+  "decisions:questions-changed": "external",
+  // A click on a question's desktop notification (#17232); sent to one of its own windows by main.
+  "decisions:open-question": "external",
   // The same, when the relay's paired devices or its key changed (#16010).
   "decisions:devices-changed": "external",
   // The setup check's progress (#16024), to this machine's own windows.
@@ -120,6 +126,8 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:tasks-changed": "external",
   "plugin:panel-menus-changed": "external",
   "plugin:provenance-changed": "external",
+  // The catalog sources handlers broadcast it themselves (#17434).
+  "plugin:catalog-sources-changed": "external",
   // PluginService sends this itself, scoped like runtime status below.
   "plugin:settings-changed": "external",
   // PluginService sends this itself, scoped to the owning project for a

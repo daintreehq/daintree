@@ -145,6 +145,28 @@ describe("TerminalProcess.kill — agent state event", () => {
     expect(emitAgentKilledSpy).toHaveBeenCalled();
   });
 
+  it("marks the terminal killed before the kill's state edge is dispatched (#17193)", () => {
+    // The edge reads `wasKilled` to tell a gate's kill from its agent finishing;
+    // captured inside the call, since the terminal object is mutated after it.
+    const killedAtDispatch: Array<boolean | undefined> = [];
+    const terminal = createTerminal(
+      { kind: "terminal", launchAgentId: "claude" },
+      {
+        agentStateService: {
+          handleActivityState: () => {},
+          updateAgentState: (info: { wasKilled?: boolean }) => {
+            killedAtDispatch.push(info.wasKilled);
+          },
+          emitAgentKilled: () => {},
+        } as never,
+      }
+    );
+
+    terminal.kill("user requested");
+
+    expect(killedAtDispatch).toEqual([true]);
+  });
+
   // The state machine collapses kill / dispose / onExit into a single
   // idempotent teardown. Calling kill() twice must not double-fire
   // agent:killed or attempt to flush persistence twice.
@@ -578,11 +600,12 @@ describe("TerminalProcess snapshots", () => {
       terminal.flushEventDrivenSnapshot();
       await flushMicrotasks();
 
-      expect(persistAsyncMock).toHaveBeenCalledWith("t1", {
-        data: "agent-scrollback",
-        cols: 80,
-        rows: 24,
-      });
+      expect(persistAsyncMock).toHaveBeenCalledWith(
+        "t1",
+        { data: "agent-scrollback", cols: 80, rows: 24 },
+        undefined,
+        { durable: false }
+      );
     });
 
     it("suppresses an immediate repeat with unchanged content", async () => {

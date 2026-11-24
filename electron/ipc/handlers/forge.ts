@@ -8,7 +8,10 @@ import { logDebug } from "../../utils/logger.js";
 import { checkRateLimit, typedHandle, typedHandleWithContext } from "../utils.js";
 import type { IpcContext } from "../types.js";
 import { defineIpcNamespace, op } from "../define.js";
-import { getRegisteredForgeProviders } from "../../services/forgeProviderRegistry.js";
+import {
+  getForgeProviderImpl,
+  getRegisteredForgeProviders,
+} from "../../services/forgeProviderRegistry.js";
 import {
   resolveForCwd,
   resolveForgeRemoteNameForCwd,
@@ -31,6 +34,7 @@ import type {
   CreateIssueInput,
   EditIssueInput,
   ForgeLabel,
+  ForgePullRequestTerm,
   ForgeUser,
   Issue,
   IssueCloseReason,
@@ -657,12 +661,40 @@ async function handleForgeGetNewPRLink(payload: ForgeNewPRLinkRequest): Promise<
   }
 }
 
+/**
+ * What a registered forge provider calls a pull request, for the words the
+ * Review Hub shows beside one it already has. Addressed by provider id rather
+ * than cwd because the chip knows which provider its pull request came from,
+ * and the answer then needs no git and no network. `null` when that provider
+ * isn't registered or can't be activated.
+ */
+async function handleForgeGetPullRequestTerm(payload: {
+  providerId: string;
+}): Promise<ForgePullRequestTerm | null> {
+  checkRateLimit(CHANNELS.FORGE_GET_PULL_REQUEST_TERM, 20, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  const providerId = normalizeProviderId(payload.providerId);
+  if (!providerId) throw new Error("Invalid provider id");
+  const registered = getRegisteredForgeProviders().some(
+    (p) => makeForgeProviderId(p.pluginId, p.contribution.id) === providerId
+  );
+  if (!registered) return null;
+  // A lazy plugin binds its impl only once activated, and after a cold start
+  // the Review Hub can be the first thing to ask.
+  if (!(await getImplForNamespaceActivating(providerId))) return null;
+  const term: unknown = getForgeProviderImpl(providerId)?.pullRequestTerm;
+  // Nothing types a third-party plugin's field at runtime, so only the one
+  // other word the host knows replaces the default.
+  return term === "merge-request" ? "merge-request" : "pull-request";
+}
+
 export const forgeRepoLinkNamespace = defineIpcNamespace({
   name: "forgeRepoLink",
   ops: {
     openRepo: op(CHANNELS.FORGE_OPEN_REPO, handleForgeOpenRepo, { withContext: true }),
     getRepoUrl: op(CHANNELS.FORGE_GET_REPO_URL, handleForgeGetRepoUrl),
     getNewPRLink: op(CHANNELS.FORGE_GET_NEW_PR_LINK, handleForgeGetNewPRLink),
+    getPullRequestTerm: op(CHANNELS.FORGE_GET_PULL_REQUEST_TERM, handleForgeGetPullRequestTerm),
   },
 });
 

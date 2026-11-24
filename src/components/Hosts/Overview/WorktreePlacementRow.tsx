@@ -9,6 +9,7 @@ import {
   Select,
   SelectContent,
   SelectItem,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -20,6 +21,9 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useHostMetricsStore, type HostMetricsHistory } from "@/store/hostMetricsStore";
 import { cn } from "@/lib/utils";
 import { logWarn } from "@/utils/logger";
+import type { CloudHostCreateRequest } from "@shared/types/cloudHosts";
+import { useCloudHosts } from "../cloud/cloudHostsState";
+import { canOfferCloudMachine, cloudMachineAccounts } from "../cloudWorktreePlacement";
 import { hasRemoteHosts, useHostFigures, useHostList } from "../hostList";
 import {
   buildHostMenuRows,
@@ -37,6 +41,7 @@ import {
   type PlacementProjectFacts,
 } from "./placementProjectFacts";
 import { compareHostCapacity, isLive, type PlacementComparison } from "./overviewModel";
+import { NewMachineRows, useNewMachineChoice } from "./NewMachineRows";
 
 /** The new-worktree form as the dialog validated it; `path` is this host's absolute path. */
 export interface PlacementDraft extends Omit<PlacedWorktree, "relativePath"> {
@@ -71,6 +76,23 @@ export interface PlacementCommit {
   submit: (click?: Pick<MouseEvent, "metaKey" | "ctrlKey">) => void;
 }
 
+/**
+ * A new cloud machine chosen for the worktree: the worktree is created here
+ * as usual, then a machine made for it, and it opens there once the machine
+ * is set up. Null while another choice is made.
+ */
+export interface CloudMachineCommit {
+  accountId: string;
+  /** The choice as the host menu shows it: "New machine · Work". */
+  label: string;
+  /** This window's own host as the host menu names it: where the worktree is created first. */
+  homeName: string;
+  /** Why Create can't ask for the machine as the form stands; null when it can. */
+  blocked: string | null;
+  /** The machine as the form stands, without its name (that comes from the branch); null while blocked. */
+  machine: () => Omit<CloudHostCreateRequest, "name"> | null;
+}
+
 interface WorktreePlacementRowProps {
   /** This window's project, which moves to another host through git. */
   projectId: string | null;
@@ -87,7 +109,12 @@ interface WorktreePlacementRowProps {
    * dialog's primary creates it on that host. Null for the window's own host.
    */
   onCommitChange?: (commit: PlacementCommit | null) => void;
+  /** A new cloud machine chosen, while one is; null otherwise. */
+  onCloudChange?: (commit: CloudMachineCommit | null) => void;
 }
+
+/** Select values for the new-machine choices; a host id is a slug and never holds a colon. */
+const NEW_MACHINE_PREFIX = "new-machine:";
 
 export function suggestPlacement(
   rows: readonly HostMenuRow[],
@@ -175,9 +202,13 @@ export function WorktreePlacementRow({
   getDraft,
   onLeave,
   onCommitChange,
+  onCloudChange,
 }: WorktreePlacementRowProps) {
   const hostStatus = useHostList();
-  const visible = isRemoteShellSupported() && hasRemoteHosts(hostStatus);
+  const { snapshot: cloudSnapshot } = useCloudHosts();
+  const cloudAccounts = canOfferCloudMachine() ? cloudMachineAccounts(cloudSnapshot) : [];
+  const visible =
+    isRemoteShellSupported() && (hasRemoteHosts(hostStatus) || cloudAccounts.length > 0);
   // Each host's load is compared here, so its figures are followed while it shows.
   const hostList = useHostFigures(visible);
   const history = useHostMetricsStore((state) => state.history);
@@ -191,11 +222,19 @@ export function WorktreePlacementRow({
     localSummary: history.get(LOCAL_HOST_ID)?.[0] ?? hostList.localSummary,
   });
   const chosenRow = rows.find((row) => row.hostId === chosen) ?? rows[0]!;
-  const elsewhere = visible && chosen !== windowHostId;
+  // A new machine chosen: nothing goes to an existing host, and the worktree is made here first.
+  const [cloudAccountId, setCloudAccountId] = useState<string | null>(null);
+  const newMachine = visible && cloudAccountId !== null;
+  const cloudChoice = newMachine
+    ? (cloudAccounts.find((entry) => entry.account.id === cloudAccountId) ?? null)
+    : null;
+  const machineChoice = useNewMachineChoice(cloudChoice, newMachine);
+  const elsewhere = visible && !newMachine && chosen !== windowHostId;
   const relativePath = placedRelativePath(rootPath, worktreePath);
   const unavailable = elsewhere && !isLive(chosenRow) ? describeUnavailable(chosenRow) : null;
 
   const choose = (hostId: HostId) => {
+    setCloudAccountId(null);
     setChosen(hostId);
     setStatus("idle");
   };
@@ -267,6 +306,35 @@ export function WorktreePlacementRow({
   // Gone from the dialog, it chooses no other host: local Create must not stay blocked.
   useEffect(() => () => onCommitChange?.(null), [onCommitChange]);
 
+  // The dialog holds one stable reader; each call reads the latest form.
+  const machineRef = useRef(machineChoice.machine);
+  useEffect(() => {
+    machineRef.current = machineChoice.machine;
+  });
+  const [readMachine] = useState(() => () => machineRef.current());
+  const cloudLabel = newMachine
+    ? `New machine · ${cloudChoice?.account.displayName ?? "a disconnected account"}`
+    : null;
+  const cloudBlocked = newMachine
+    ? cloudChoice === null
+      ? "That account isn't connected any more. Choose another host."
+      : machineChoice.blocked
+    : null;
+  useEffect(() => {
+    onCloudChange?.(
+      cloudLabel === null || cloudAccountId === null
+        ? null
+        : {
+            accountId: cloudAccountId,
+            label: cloudLabel,
+            homeName,
+            blocked: cloudBlocked,
+            machine: readMachine,
+          }
+    );
+  }, [onCloudChange, cloudAccountId, cloudLabel, homeName, cloudBlocked, readMachine]);
+  useEffect(() => () => onCloudChange?.(null), [onCloudChange]);
+
   if (!visible) return null;
 
   const comparison = suggestPlacement(rows, history);
@@ -320,122 +388,156 @@ export function WorktreePlacementRow({
   const comparedWith =
     liveRows.length === 2 ? liveRows.find((row) => row.hostId !== best?.hostId)?.name : null;
 
+  const newMachineHint = newMachine && (
+    <p className="text-xs leading-4 text-text-secondary" data-testid="worktree-new-machine-note">
+      {cloudChoice === null
+        ? cloudBlocked
+        : `The worktree is created on ${homeName} first. ${cloudChoice.provider.name} then creates a machine for it in ${cloudChoice.account.displayName}, and once Daintree is set up there, it opens on that machine.`}
+    </p>
+  );
+
   return (
-    <FormRow
-      label="Host"
-      htmlFor="worktree-host"
-      hint={
-        <div className="flex flex-col gap-2">
-          {/* The floor keeps the value column still as rows come and go between hosts. */}
-          <dl
-            className="grid grid-cols-[minmax(4.5rem,max-content)_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs leading-4"
-            data-testid="worktree-placement-facts"
-          >
-            {facts.map((fact) => (
-              <Fragment key={fact.label}>
-                <dt className="text-text-secondary">{fact.label}</dt>
-                <dd
-                  className={cn(
-                    "min-w-0",
-                    fact.pending ? "text-text-secondary" : "text-text-primary"
-                  )}
-                >
-                  {fact.live ? <span role="status">{fact.value}</span> : fact.value}
-                </dd>
-              </Fragment>
-            ))}
-          </dl>
-          {status === "failed" && (
-            <Callout
-              severity="error"
-              size="compact"
-              role="alert"
-              data-testid="worktree-placement-error"
-              title={`Couldn't open this project on ${chosenRow.name}`}
-              action={
-                // The same window the failed attempt asked for.
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => void continueOnHost(lastNewWindow.current)}
-                >
-                  Retry
-                </Button>
-              }
-            >
-              <p>Check that it&apos;s connected.</p>
-            </Callout>
-          )}
-          {best && best.hostId !== chosenRow.hostId && (
-            <p
-              className="text-xs leading-4 text-text-secondary"
-              data-testid="worktree-placement-suggestion"
-            >
-              {`${best.name} reports more free cores and memory than ${comparedWith ?? "the others"}. `}
-              <Button
-                variant="link"
-                size="inline"
-                className="text-xs"
-                disabled={status === "pending"}
-                onClick={() => choose(best.hostId)}
+    <>
+      <FormRow
+        label="Host"
+        htmlFor="worktree-host"
+        hint={
+          newMachineHint || (
+            <div className="flex flex-col gap-2">
+              {/* The floor keeps the value column still as rows come and go between hosts. */}
+              <dl
+                className="grid grid-cols-[minmax(4.5rem,max-content)_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-xs leading-4"
+                data-testid="worktree-placement-facts"
               >
-                Use {best.name}
-              </Button>
-            </p>
-          )}
-        </div>
-      }
-    >
-      <Select
-        value={chosenRow.hostId}
-        disabled={status === "pending"}
-        onValueChange={(hostId) => {
-          const row = rows.find((entry) => entry.hostId === hostId);
-          if (row && isLive(row)) choose(hostId);
-        }}
+                {facts.map((fact) => (
+                  <Fragment key={fact.label}>
+                    <dt className="text-text-secondary">{fact.label}</dt>
+                    <dd
+                      className={cn(
+                        "min-w-0",
+                        fact.pending ? "text-text-secondary" : "text-text-primary"
+                      )}
+                    >
+                      {fact.live ? <span role="status">{fact.value}</span> : fact.value}
+                    </dd>
+                  </Fragment>
+                ))}
+              </dl>
+              {status === "failed" && (
+                <Callout
+                  severity="error"
+                  size="compact"
+                  role="alert"
+                  data-testid="worktree-placement-error"
+                  title={`Couldn't open this project on ${chosenRow.name}`}
+                  action={
+                    // The same window the failed attempt asked for.
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => void continueOnHost(lastNewWindow.current)}
+                    >
+                      Retry
+                    </Button>
+                  }
+                >
+                  <p>Check that it&apos;s connected.</p>
+                </Callout>
+              )}
+              {best && best.hostId !== chosenRow.hostId && (
+                <p
+                  className="text-xs leading-4 text-text-secondary"
+                  data-testid="worktree-placement-suggestion"
+                >
+                  {`${best.name} reports more free cores and memory than ${comparedWith ?? "the others"}. `}
+                  <Button
+                    variant="link"
+                    size="inline"
+                    className="text-xs"
+                    disabled={status === "pending"}
+                    onClick={() => choose(best.hostId)}
+                  >
+                    Use {best.name}
+                  </Button>
+                </p>
+              )}
+            </div>
+          )
+        }
       >
-        <SelectTrigger
-          id="worktree-host"
-          className="h-8 min-w-0"
-          data-testid="worktree-host-select"
-          onKeyDown={(event) => {
-            // The dialog's create shortcut, not a way to open the list: Radix
-            // opens on any Enter unless the event is already handled.
-            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) event.preventDefault();
+        <Select
+          value={newMachine ? `${NEW_MACHINE_PREFIX}${cloudAccountId}` : chosenRow.hostId}
+          disabled={status === "pending"}
+          onValueChange={(value) => {
+            if (value.startsWith(NEW_MACHINE_PREFIX)) {
+              setCloudAccountId(value.slice(NEW_MACHINE_PREFIX.length));
+              setStatus("idle");
+              return;
+            }
+            const row = rows.find((entry) => entry.hostId === value);
+            if (row && isLive(row)) choose(value);
           }}
         >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {rows.map((row) => {
-            const live = isLive(row);
-            const project = row.hostId === windowHostId ? null : projectFactsOf(row.hostId);
-            return (
+          <SelectTrigger
+            id="worktree-host"
+            className="h-8 min-w-0"
+            data-testid="worktree-host-select"
+            onKeyDown={(event) => {
+              // The dialog's create shortcut, not a way to open the list: Radix
+              // opens on any Enter unless the event is already handled.
+              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) event.preventDefault();
+            }}
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {rows.map((row) => {
+              const live = isLive(row);
+              const project = row.hostId === windowHostId ? null : projectFactsOf(row.hostId);
+              return (
+                <SelectItem
+                  key={row.hostId}
+                  value={row.hostId}
+                  unavailable={!live}
+                  description={
+                    live ? (
+                      <>
+                        {best?.hostId === row.hostId && (
+                          <span className="block">Reports more free cores and memory</span>
+                        )}
+                        <FactRun parts={usageOf(row.hostId)} />
+                        {project && <span className="block">{project.project}</span>}
+                      </>
+                    ) : (
+                      describeUnavailable(row)
+                    )
+                  }
+                >
+                  {row.name}
+                  {row.hostId === windowHostId ? " (this window)" : ""}
+                </SelectItem>
+              );
+            })}
+            {cloudAccounts.length > 0 && <SelectSeparator />}
+            {cloudAccounts.map(({ account, provider }) => (
               <SelectItem
-                key={row.hostId}
-                value={row.hostId}
-                unavailable={!live}
-                description={
-                  live ? (
-                    <>
-                      {best?.hostId === row.hostId && (
-                        <span className="block">Reports more free cores and memory</span>
-                      )}
-                      <FactRun parts={usageOf(row.hostId)} />
-                      {project && <span className="block">{project.project}</span>}
-                    </>
-                  ) : (
-                    describeUnavailable(row)
-                  )
-                }
+                key={account.id}
+                value={`${NEW_MACHINE_PREFIX}${account.id}`}
+                description={`Created for this worktree on ${provider.name}`}
               >
-                {row.name}
-                {row.hostId === windowHostId ? " (this window)" : ""}
+                New machine <FactSeparator /> {account.displayName}
               </SelectItem>
-            );
-          })}
-        </SelectContent>
-      </Select>
-    </FormRow>
+            ))}
+          </SelectContent>
+        </Select>
+      </FormRow>
+      {cloudChoice && (
+        <NewMachineRows
+          choice={cloudChoice}
+          form={machineChoice.form}
+          disabled={status === "pending"}
+        />
+      )}
+    </>
   );
 }

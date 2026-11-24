@@ -15,6 +15,7 @@ import {
   isIdleShellThresholdMinutes,
   type IdleBackgroundAutoCloseConfig,
 } from "../../../shared/types/ipc/idleBackgroundAutoClose.js";
+import { hostIdleMinutesOf } from "../../../shared/types/hostIdle.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { hostInstanceId } from "../../services/hostInstance.js";
 import type { HostSettingsLeaves } from "./HostSettingsControl.js";
@@ -48,13 +49,22 @@ const DEFAULT_LEAK_RESTART_THRESHOLD_MB = 8192;
  * pays nothing.
  */
 export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
-  const [canopy, defaults, idle, idleBackground, { store }, { getPtyClient }] = await Promise.all([
+  const [
+    canopy,
+    defaults,
+    idle,
+    idleBackground,
+    { store },
+    { getPtyClient },
+    { getActiveMemoryLeakAutoRestart },
+  ] = await Promise.all([
     import("../../ipc/handlers/canopy.js"),
     import("../../services/agentDefaults.js"),
     import("../../services/IdleTerminalNotificationService.js"),
     import("../../services/IdleBackgroundAutoCloseService.js"),
     import("../../store.js"),
     import("../../window/serviceRefs.js"),
+    import("../../services/MemoryLeakAutoRestartService.js"),
   ]);
   const idleService = idle.getIdleTerminalNotificationService();
   const idleBackgroundService = idleBackground.getIdleBackgroundAutoCloseService();
@@ -113,6 +123,8 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
         return leaf(idleBackgroundService.getConfig().includeIdleShells);
       case "idleBackgroundAutoClose.idleShellThresholdMinutes":
         return leaf(idleBackgroundService.getConfig().idleShellThresholdMinutes);
+      case "hostIdle.idleAfterMinutes":
+        return leaf(hostIdleMinutesOf(store.get("hostIdle")?.idleAfterMinutes));
     }
   };
 
@@ -179,6 +191,9 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
         store.set("terminalConfig.memoryLeakAutoRestartThresholdMb", leakThreshold);
         storeChanged = true;
       }
+      if (monitoring !== undefined || leak !== undefined || leakThreshold !== undefined) {
+        getActiveMemoryLeakAutoRestart()?.policyChanged();
+      }
       const restore = patch["sessionRestore.enabled"];
       if (restore !== undefined) {
         store.set("sessionRestore", { enabled: restore });
@@ -200,6 +215,10 @@ export async function loadHostSettingsLeaves(): Promise<HostSettingsLeaves> {
       }
       const sleepChanged = Object.keys(sleepPatch).length > 0;
       if (sleepChanged) idleBackgroundService.updateConfig(sleepPatch);
+
+      // The idle clock reads it on every check, so no view or service needs telling.
+      const idleAfter = patch["hostIdle.idleAfterMinutes"];
+      if (idleAfter !== undefined) store.set("hostIdle.idleAfterMinutes", idleAfter);
 
       // `canopyModel` names the one model there is: writing it changes nothing.
       if (mode !== undefined) {

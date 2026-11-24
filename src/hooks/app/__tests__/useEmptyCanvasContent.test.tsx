@@ -38,10 +38,10 @@ vi.mock("@/components/Plugin/ProjectSurfaceView", () => ({
     <div data-testid="project-surface" data-kind={props.config.id} />
   ),
 }));
-vi.mock("@/components/Terminal/ContentGridEmptyState", () => ({
+vi.mock("@/components/Terminal/ContentGridEmptyStateGate", () => ({
   // Reflect the props back out so the wiring itself is under test, not the
   // component's rendering (which has its own suite).
-  ContentGridEmptyState: (props: Record<string, unknown>) => (
+  ContentGridEmptyStateGate: (props: Record<string, unknown>) => (
     <div data-testid="empty-state" data-props={JSON.stringify(props)} />
   ),
 }));
@@ -51,6 +51,7 @@ import type { GettingStartedChecklistState } from "../useGettingStartedChecklist
 
 const gettingStarted: GettingStartedChecklistState = {
   visible: false,
+  forced: false,
   collapsed: false,
   checklist: null,
   dismiss: () => {},
@@ -111,7 +112,7 @@ describe("useEmptyCanvasContent", () => {
     });
 
     // undefined, not null — the grid falls back to its own context-driven empty
-    // state via `emptyContent ?? <ContentGridEmptyState/>`.
+    // state via `emptyContent ?? <ContentGridEmptyStateGate/>`.
     it("defers to the grid's own empty state", () => {
       expect(renderContent().current.emptyContent).toBeUndefined();
     });

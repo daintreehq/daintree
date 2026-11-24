@@ -11,7 +11,7 @@ import {
   type MicTestOpened,
   type MicTestSample,
 } from "@/services/voiceMicTest";
-import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { withVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import type { VoiceInputStatus, VoiceSessionElsewhere } from "@shared/types";
 
@@ -51,9 +51,10 @@ function dictationBlock(state: DictationState): DictationBlock {
 function stopDictation() {
   const state = useVoiceRecordingStore.getState();
   if (ownDictationBlock(state) === "open") {
-    void voiceRecordingService.stopActiveSession({ returnToTarget: false });
+    withVoiceRecordingService((voice) => voice.stopActiveSession({ returnToTarget: false }));
   } else if (state.sessionElsewhere) {
-    void voiceRecordingService.stopSessionElsewhereById(state.sessionElsewhere.sessionId);
+    const { sessionId } = state.sessionElsewhere;
+    withVoiceRecordingService((voice) => voice.stopSessionElsewhereById(sessionId));
   }
 }
 

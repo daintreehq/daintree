@@ -33,6 +33,7 @@ export const BUILT_IN_ACTION_IDS = [
   "panel.focusIndex",
   "panel.openPluginPanel",
   "panel.palette",
+  "panel.undoClose",
   "panel.gridLayout.setStrategy",
   "panel.gridLayout.setValue",
 
@@ -205,6 +206,8 @@ export const BUILT_IN_ACTION_IDS = [
   "git.listCommits",
   "git.stageFile",
   "git.unstageFile",
+  "git.stageHunk",
+  "git.unstageHunk",
   "git.discardFileChanges",
   "git.stageAll",
   "git.unstageAll",
@@ -289,6 +292,11 @@ export const BUILT_IN_ACTION_IDS = [
   "canopy.toggle",
   "canopy.openWindow",
   "canopy.markAllRead",
+
+  // -- decisionsActions --
+  "decisions.openInbox",
+  "decisions.openNextQuestion",
+
   "project.getAll",
   "project.getCurrent",
   "project.add",
@@ -299,6 +307,7 @@ export const BUILT_IN_ACTION_IDS = [
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "project.sleepAll",
   "project.remove",
   "project.archive",
   "project.unarchive",
@@ -315,6 +324,12 @@ export const BUILT_IN_ACTION_IDS = [
   "project.detectRunners",
   "project.runCheck",
   "project.runCommand",
+
+  // -- projectLinkActions --
+  "project.links.list",
+  "project.links.add",
+  "project.links.update",
+  "project.links.remove",
 
   // -- workspaceActions --
   "workspace.list",
@@ -380,6 +395,9 @@ export const BUILT_IN_ACTION_IDS = [
   "notifications.recent",
   "notifications.toggle",
 
+  // -- linksActions --
+  "links.open",
+
   // -- eventInspectorActions --
   "eventInspector.getEvents",
   "eventInspector.getFiltered",
@@ -419,10 +437,17 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  "agent.listAccounts",
+  "agent.addAccount",
   "agent.listModels",
   "agentSessionHistory.list",
   "agentSessionHistory.resume",
   "agent.resumeOwned",
+  // One per agent that signs in through a config folder (#17089).
+  "agent.moveTerminalsToAccount.claude",
+  "agent.moveTerminalsToAccount.codex",
+  "agent.moveTerminalsToAccount.kimi",
+  "agent.moveTerminalsToAccount.interpreter",
   // -- session bookmarks (#11288) --
   "session.bookmarkAndClose",
   "session.bookmark.promote",
@@ -448,8 +473,12 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.restartOnPreset",
   "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
+  "terminal.applyClaudeUpdateOwned",
+  "terminal.applyClaudeUpdate",
   "terminal.startHeld",
   "terminal.redraw",
+  "terminal.resetModes",
   "terminal.forceResume",
   "terminal.toggleInputLock",
   "terminal.setWhenDone",
@@ -485,6 +514,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- terminalInputActions --
   "terminal.copy",
+  "terminal.copyClean",
   "terminal.paste",
   "terminal.copyLink",
   "terminal.contextMenu",
@@ -538,45 +568,13 @@ export const BUILT_IN_ACTION_IDS = [
   // -- navActions --
   "nav.toggleFocusMode",
   "nav.quickSwitcher",
+  "nav.quickOpenFile",
   "nav.showProjectHome",
   "nav.showProjectSplit",
   "nav.showGrid",
 
   // -- findActions --
   "find.inFocusedPanel",
-
-  // -- portalActions --
-  "portal.toggle",
-  "portal.closeTab",
-  "portal.nextTab",
-  "portal.prevTab",
-  "portal.newTab",
-  "portal.closeAllTabs",
-  "portal.activateTab",
-  "portal.openLaunchpad",
-  "portal.openUrl",
-  "portal.goBack",
-  "portal.goForward",
-  "portal.reload",
-  "portal.copyUrl",
-  "portal.openExternal",
-  "portal.duplicateTab",
-  "portal.reloadTab",
-  "portal.copyTabUrl",
-  "portal.openTabExternal",
-  "portal.closeOthers",
-  "portal.closeToRight",
-  "portal.resetWidth",
-  "portal.width.set",
-  "portal.setDefaultNewTab",
-  "portal.links.add",
-  "portal.links.remove",
-  "portal.links.update",
-  "portal.links.toggle",
-  "portal.links.reorder",
-  "portal.tabs.reorder",
-  "portal.listTabs",
-  "portal.toggleDevDashboard",
 
   // -- helpActions --
   "help.gettingStarted.show",
@@ -585,6 +583,7 @@ export const BUILT_IN_ACTION_IDS = [
   "help.displayImage",
   "help.openCommandsFolder",
   "help.newSessionWithAgent",
+  "help.replaceGlobalAssistant",
   "help.resumePastSession",
 
   // -- assistantControlActions --
@@ -615,12 +614,18 @@ export const BUILT_IN_ACTION_IDS = [
   "devPreview.toggleTool",
   "devPreview.toggleElementPicker",
 
+  // -- diffActions --
+  "diff.nextChange",
+  "diff.previousChange",
+  "diff.nextFile",
+  "diff.previousFile",
+  "diff.toggleViewed",
+
   // -- devPreviewActions --
   "devPreview.reloadPreview",
   "devPreview.restart",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
-  "devPreview.promoteToPortal",
 
   // -- envActions --
   "env.global.get",
@@ -669,6 +674,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   // not by reading it out of an action or the clipboard.
   "terminal.getOutput",
   "terminal.copy",
+  "terminal.copyClean",
   "terminal.injectOwned",
   // Main checks ownership before dispatching it; nothing in its `run()` does.
   "terminal.placeOwned",
@@ -676,13 +682,26 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.paste",
   // Replays a person's own message from their pane (#16746).
   "terminal.resendLastMessage",
+  // Takes back a person's own close (#17107); a plugin closed nothing of theirs.
+  "panel.undoClose",
   "project.runCheck",
   // Runs a shell command the caller names; held to Daintree's own assistants.
   "project.runCommand",
+  // A project's own links, held to Daintree's own assistant (#17091): a plugin
+  // wrapping them could pass off its own links as the user's.
+  "project.links.list",
+  "project.links.add",
+  "project.links.update",
+  "project.links.remove",
   // Main checks the drive lease and records the pane; nothing in its `run()` does.
   "agent.resumeOwned",
   // Launches an agent with a schedule's preset, which a plugin's launch may not choose (#15978).
   "schedules.runNow",
+  // Offers every one of an agent's terminals for a restart; only a person starts that (#17089).
+  "agent.moveTerminalsToAccount.claude",
+  "agent.moveTerminalsToAccount.codex",
+  "agent.moveTerminalsToAccount.kimi",
+  "agent.moveTerminalsToAccount.interpreter",
   // Arming types the handback instruction into the agent, and close ends it (#16171).
   "terminal.setWhenDone",
   // Reloading a project's plugins unloads and re-runs every one of them,
@@ -711,6 +730,11 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.readLastMessageOwned",
   // Main checks ownership before dispatching it; nothing in its `run()` does.
   "terminal.restartOnPresetOwned",
+  "terminal.restartOnAccountOwned",
+  // Main checks the pane and types `/restart` itself; nothing in its `run()`
+  // does (#17908). Its approval is main's to ask for, never a plugin's.
+  "terminal.applyClaudeUpdateOwned",
+  "terminal.applyClaudeUpdate",
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",
@@ -746,4 +770,7 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "agent.createPreset",
   "agent.updatePreset",
   "agent.deletePreset",
+  // Makes credential folders and changes what later launches sign in as; the
+  // person ticks each one in a dialog a plugin dispatch never raises (#17079).
+  "agent.addAccount",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

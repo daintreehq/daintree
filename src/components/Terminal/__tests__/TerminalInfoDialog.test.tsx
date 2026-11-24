@@ -259,6 +259,20 @@ describe("TerminalInfoDialog", () => {
       expectPresented(screen.getByText("/repo/apps/worker"));
     });
 
+    it("renders the degradation notice as a warning Callout with a severity glyph", async () => {
+      dispatchMock.mockResolvedValue({
+        ok: false,
+        error: { message: "Failed to get terminal info: Terminal test-id not found" },
+      });
+
+      renderDialog();
+
+      const banner = await screen.findByTestId("terminal-info-error");
+      expect(banner.getAttribute("data-callout")).toBe("warning");
+      expect(banner.querySelector("[data-severity-glyph]")).not.toBeNull();
+      expect(banner.querySelector(".text-status-warning:not([data-severity-glyph])")).toBeNull();
+    });
+
     it("reports liveness from the runtime status, not the spawn status", async () => {
       // `spawnStatus` is live-only spawn-lifecycle state that stays "ready" forever
       // after a successful spawn; `runtimeStatus` is the store's authoritative

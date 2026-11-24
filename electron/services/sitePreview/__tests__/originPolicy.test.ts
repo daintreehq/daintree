@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildOriginGuardSource, isLocalPreviewUrl, originPolicyAllows } from "../originPolicy.js";
+import { isPickablePageUrl } from "../../../../shared/elementPicker/originPolicy.js";
 
 describe("isLocalPreviewUrl", () => {
   it.each([
@@ -19,6 +20,10 @@ describe("isLocalPreviewUrl", () => {
     "http://172.16.0.9:3000/",
     "http://172.31.255.254/",
     "http://192.168.1.20:5173/",
+    "http://app.test:3000/",
+    "https://APP.TEST.:3000/",
+    "http://api.internal/",
+    "http://web.dev.internal:8080/",
   ])("treats %s as a local preview", (url) => {
     expect(isLocalPreviewUrl(url)).toBe(true);
   });
@@ -31,6 +36,12 @@ describe("isLocalPreviewUrl", () => {
     "http://localhost.example.com/",
     "http://localhost@example.com/",
     "http://evil.local.example.com/",
+    "http://test/",
+    "http://internal/",
+    "http://latest.com/",
+    "http://app.test.example.com/",
+    "http://site.internal.example.com/",
+    "http://localhost@app.internal.example.com/",
     "http://256.1.1.1/",
     "file:///Users/someone/site/index.html",
     "chrome://settings",
@@ -99,6 +110,9 @@ describe("buildOriginGuardSource", () => {
       "http://10.0.0.4/",
       "http://172.16.0.1/",
       "http://172.32.0.1/",
+      "http://app.test:3000/",
+      "http://api.internal/",
+      "http://app.test.example.com/",
       "https://example.com/oauth",
       "https://accounts.google.com/",
       "about:blank",
@@ -110,6 +124,38 @@ describe("buildOriginGuardSource", () => {
       for (const policy of ["any", "local-preview"] as const) {
         expect(guardSays(policy, url), `${policy} ${url}`).toBe(originPolicyAllows(policy, url));
       }
+    }
+  });
+});
+
+describe("isPickablePageUrl", () => {
+  it("offers the picker on a page the bridge would install into", () => {
+    for (const url of [
+      "http://localhost:5173/",
+      "http://app.test:3000/",
+      "http://api.internal/",
+      "http://192.168.1.20:5173/",
+    ]) {
+      expect(isPickablePageUrl(url), url).toBe(true);
+      expect(isLocalPreviewUrl(url), url).toBe(true);
+    }
+  });
+
+  it("refuses what the guest may sit on between documents but nobody picks from", () => {
+    // The policy lets the runtime stay through Chromium's error page and the
+    // starting blank document; neither is a page with anything to select.
+    expect(isLocalPreviewUrl("chrome-error://chromewebdata/")).toBe(true);
+    expect(isPickablePageUrl("chrome-error://chromewebdata/")).toBe(false);
+    expect(isLocalPreviewUrl("about:blank", { initialDocument: true })).toBe(true);
+    expect(isPickablePageUrl("about:blank")).toBe(false);
+    expect(isPickablePageUrl("")).toBe(false);
+    expect(isPickablePageUrl(null)).toBe(false);
+    expect(isPickablePageUrl(undefined)).toBe(false);
+  });
+
+  it("refuses anything outside the policy", () => {
+    for (const url of ["https://example.com/", "file:///etc/hosts", "not a url", "http://test/"]) {
+      expect(isPickablePageUrl(url), url).toBe(false);
     }
   });
 });

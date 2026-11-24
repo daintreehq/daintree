@@ -5,7 +5,7 @@ import type {
   HeldComposerSend,
 } from "@shared/types/ipc/composerHold";
 
-/** A pane composer's sends held while its agent works (#16379), for this view's project. */
+/** A pane composer's sends held for its pane's next prompt (#16379, #16872), for this view's project. */
 export const composerHoldClient = {
   hold: (terminalId: string, text: string, imagePaths?: string[]): Promise<ComposerHoldResult> =>
     window.electron.composerHold.hold(terminalId, text, imagePaths),

@@ -1,4 +1,4 @@
-import type { PanelTitleMode, ScheduledRunRef } from "../panel.js";
+import type { ConversationStore, PanelTitleMode, ScheduledRunRef } from "../panel.js";
 
 /**
  * User-adjustable retention window for the agent resume journal, in days.
@@ -56,6 +56,12 @@ export interface AgentSessionRecord {
   savedAt: number;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  /**
+   * The preset the session launched on, where the record knows it: a scheduled
+   * run's resume does (#17435). A resume reconciles against it, so a preset's
+   * own permission mode isn't replaced by the agent's.
+   */
+  agentPresetId?: string;
   /** Working directory the terminal was running in at capture time. */
   cwd?: string;
   /** Git branch checked out in `cwd` at capture time, for resume sanity checks. */
@@ -84,6 +90,11 @@ export interface AgentSessionRecord {
    * so a resume can tell a scheduled run's conversation from any other.
    */
   scheduledRun?: ScheduledRunRef;
+  /**
+   * The config folder holding the conversation, when its pane had moved onto
+   * another account's (#17087), so a resume reopens it from there.
+   */
+  conversationStore?: ConversationStore;
 }
 
 /**

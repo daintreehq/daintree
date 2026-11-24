@@ -11,6 +11,12 @@ import type { AnalysisWorkerPool } from "./pty/analysis/AnalysisWorkerPool.js";
 import type { PanelTitleMode } from "../../shared/types/panel.js";
 import type { PtyHostDriveLease } from "../../shared/types/pty-host.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
+import type { CodexLimitAnswer, CodexLimitQuery } from "../../shared/types/codexLimitReset.js";
+import type {
+  CodexLimitContinueResult,
+  CodexLimitContinueSkipReason,
+  CodexLimitStopRef,
+} from "../../shared/types/codexLimitContinuation.js";
 import { createLogger } from "../utils/logger.js";
 
 const logger = createLogger("pty-host:PtyManager");
@@ -155,7 +161,7 @@ export class PtyManager extends EventEmitter {
   private retiredStreamHighWater = 0;
   private constructionOutput: {
     id: string;
-    chunks: Array<{ data: string; streamEnd: number }>;
+    chunks: Array<{ data: string; streamEnd: number; encoded?: Uint8Array }>;
   } | null = null;
   // Host-local lifecycle ledger. Adopts the generation Main stamped on spawn
   // options so both processes key each incarnation identically; guards the
@@ -413,9 +419,9 @@ export class PtyManager extends EventEmitter {
    * Emit terminal data with project-based filtering.
    * Accepts both string and Uint8Array data for binary optimization.
    */
-  private emitData(id: string, data: string, streamEnd: number): void {
+  private emitData(id: string, data: string, streamEnd: number, encoded?: Uint8Array): void {
     if (this.constructionOutput?.id === id) {
-      this.constructionOutput.chunks.push({ data, streamEnd });
+      this.constructionOutput.chunks.push({ data, streamEnd, encoded });
       return;
     }
 
@@ -430,13 +436,18 @@ export class PtyManager extends EventEmitter {
     if (recorded === undefined || streamEnd > recorded) this.streamOffsets.set(id, streamEnd);
 
     if (!this.activeProjectId) {
-      this.emit("data", id, data, undefined, streamEnd);
+      this.emit("data", id, data, undefined, streamEnd, encoded);
       return;
     }
 
     if (this.registry.terminalBelongsToProject(terminalProcess, this.activeProjectId)) {
-      this.emit("data", id, data, undefined, streamEnd);
+      this.emit("data", id, data, undefined, streamEnd, encoded);
     }
+  }
+
+  /** Reset the input modes a dead program left on, without touching the process. */
+  resetTerminalModes(terminalId: string): boolean {
+    return this.registry.get(terminalId)?.resetTerminalModes() ?? false;
   }
 
   /**
@@ -587,7 +598,7 @@ export class PtyManager extends EventEmitter {
     let terminalProcess: TerminalProcess;
     const constructionOutput = {
       id,
-      chunks: [] as Array<{ data: string; streamEnd: number }>,
+      chunks: [] as Array<{ data: string; streamEnd: number; encoded?: Uint8Array }>,
     };
     this.constructionOutput = constructionOutput;
     try {
@@ -595,7 +606,8 @@ export class PtyManager extends EventEmitter {
         id,
         options,
         {
-          emitData: (termId, data, streamEnd) => this.emitData(termId, data, streamEnd),
+          emitData: (termId, data, streamEnd, encoded) =>
+            this.emitData(termId, data, streamEnd, encoded),
           streamOffsetBase:
             this.streamOffsets.get(id) ??
             Math.max(this.streamOffsetOrigin, this.retiredStreamHighWater),
@@ -701,7 +713,7 @@ export class PtyManager extends EventEmitter {
     this.registry.add(id, terminalProcess);
     this.syncTreeKillHelperWarmth();
     for (const chunk of constructionOutput.chunks) {
-      this.emitData(id, chunk.data, chunk.streamEnd);
+      this.emitData(id, chunk.data, chunk.streamEnd, chunk.encoded);
     }
 
     if (consumedPendingResize) {
@@ -812,6 +824,42 @@ export class PtyManager extends EventEmitter {
 
   getSubmission(id: string, submissionToken: string): TerminalSubmissionRecord | undefined {
     return this.registry.get(id)?.getSubmission(submissionToken);
+  }
+
+  /** When the terminal's spent Codex window resets (#17906); see {@link TerminalProcess.answerCodexLimit}. */
+  answerCodexLimit(
+    id: string,
+    query: CodexLimitQuery,
+    observedSince: number | null
+  ): CodexLimitAnswer {
+    return (
+      this.registry.get(id)?.answerCodexLimit(query, observedSince) ?? {
+        reset: { status: "unknown", reason: "no-banner" },
+      }
+    );
+  }
+
+  /** Arm or disarm reporting the terminal's settled Codex stop (#17909). */
+  setCodexLimitContinueArmed(id: string, armed: boolean): void {
+    this.registry.get(id)?.setCodexLimitContinueArmed(armed);
+  }
+
+  /**
+   * Type the line that continues the terminal's Codex run at `stop` (#17909);
+   * see {@link TerminalProcess.continueAtCodexLimit}. A trashed pane is no
+   * longer where its user left it, asked again at every check up to the write,
+   * along with whatever `hostBlocker` adds.
+   */
+  async continueAtCodexLimit(
+    id: string,
+    stop: CodexLimitStopRef,
+    hostBlocker: () => CodexLimitContinueSkipReason | null = () => null
+  ): Promise<CodexLimitContinueResult> {
+    const terminal = this.registry.get(id);
+    if (!terminal) return { status: "skipped", reason: "process-changed" };
+    return terminal.continueAtCodexLimit(stop, () =>
+      this.isInTrash(id) ? "agent-gone" : hostBlocker()
+    );
   }
 
   /** Undefined when the registry holds no such terminal. */
@@ -1284,6 +1332,7 @@ export class PtyManager extends EventEmitter {
       exitCode: terminalInfo.exitCode,
       everDetectedAgent: terminalInfo.everDetectedAgent,
       usageLimitObservedAt: terminalInfo.usageLimitObservedAt,
+      updateInstalled: terminalInfo.updateInstalled,
     };
   }
 
@@ -1335,6 +1384,8 @@ export class PtyManager extends EventEmitter {
     // terminal's project would have cost an await and with it the ordering
     // that makes two rapid moves settle on the second one.
     if ((terminal.getInfo().projectId ?? null) !== expectedProjectId) return;
+    // Placed in no project, nothing can vouch for a worktree (#17926).
+    if (terminal.getInfo().unplaced === true && worktreeId !== null) return;
     terminal.setWorktreeId(worktreeId);
   }
 

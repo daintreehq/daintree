@@ -402,6 +402,50 @@ describe("page verdicts", () => {
   });
 });
 
+describe("Escape", () => {
+  const pickerOn = () =>
+    useDevPreviewToolStore.getState().activeByPanel["preview-1"] === ELEMENT_PICKER_TOOL_ID;
+
+  it("turns the picker off when the page's Escape finds nothing selected, surfaces or not", async () => {
+    await mountBound();
+    // The surfaces can be loading, failed, or hidden with the dock tab; the
+    // page's Escape still has to get out.
+    cleanup();
+    expect(pickerOn()).toBe(true);
+
+    act(() => host.pushEvent({ type: "dismissRequested" }));
+
+    expect(pickerOn()).toBe(false);
+  });
+
+  it("keeps the picker on for a request from another session, or from Browse", async () => {
+    await mountBound();
+    act(() => host.pushEvent({ type: "dismissRequested" }, undefined, "session-0"));
+    expect(pickerOn()).toBe(true);
+
+    fireEvent.click(screen.getByRole("radio", { name: "Browse" }));
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "Browse" }).getAttribute("aria-checked")).toBe(
+        "true"
+      )
+    );
+    act(() => host.pushEvent({ type: "dismissRequested" }));
+
+    expect(pickerOn()).toBe(true);
+  });
+
+  it("lets go of the selection on the chrome's Escape, and leaves the next one to the host", async () => {
+    await mountSelected();
+
+    expect(session().handleEscape()).toBe(true);
+    await waitFor(() =>
+      expect(host.preview.clearSelection).toHaveBeenCalledWith({ sessionId: "session-1" })
+    );
+    expect(session().getSnapshot().selection.status).toBe("none");
+    expect(session().handleEscape()).toBe(false);
+  });
+});
+
 describe("preview binding", () => {
   it("binds its own preview in Inspect mode, naming no runtime of its own", async () => {
     mount();
@@ -565,6 +609,192 @@ describe("preview binding", () => {
     await mountBound();
     await screen.findAllByText(/runs from another worktree/);
     expect(host.calls("openWorkspace")).toHaveLength(0);
+  });
+
+  describe("in a browser panel", () => {
+    const REFUSED = {
+      status: "unavailable",
+      reason: "other-worktree",
+      serverWorktreeId: "/repo/wt-b",
+    } as const;
+
+    function asBrowser(): void {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "preview-1": {
+            id: "preview-1",
+            location: "grid",
+            worktreeId: "wt-1",
+            ...state.panelsById["preview-1"],
+            kind: "browser",
+            browserUrl: "http://localhost:5173/",
+          },
+        } as never,
+      }));
+    }
+
+    beforeEach(asBrowser);
+
+    it("opens its source naming no port and no server directory: main reads the page itself", async () => {
+      await mountBound();
+      await waitFor(() =>
+        expect(host.calls("openWorkspace").at(-1)).toEqual({
+          panelId: "preview-1",
+          worktreeId: "wt-1",
+          previewOrigin: "http://localhost:5173",
+        })
+      );
+    });
+
+    it("keeps an opened workspace across documents, and says so once main finds the server moved", async () => {
+      await mountBound();
+      await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
+      // A reload re-proves the selection in the workspace it was proven in.
+      await act(async () => host.documentReady(1));
+      expect(host.calls("openWorkspace")).toHaveLength(1);
+
+      // Another worktree's server took the port: main closes the workspace at
+      // the next resolve, and the reopen says where the page is served from.
+      host.openWith = () => REFUSED;
+      host.picker.resolve.mockImplementationOnce(async () => {
+        throw workspaceClosedError();
+      });
+      await act(async () => host.select(1));
+      await waitFor(() => expect(host.calls("openWorkspace")).toHaveLength(2));
+      await screen.findAllByText(/served from another worktree/);
+    });
+
+    it("re-proves a selection across a reload in the workspace it was proven in", async () => {
+      await mountSelected();
+      const before = session().getSnapshot().selection;
+      if (before.status !== "ready") throw new Error("expected a selection");
+      await act(async () => host.documentReady(1));
+      await waitFor(() => expect(host.picker.reselect).toHaveBeenCalled(), { timeout: 4000 });
+      await waitFor(() => {
+        const state = session().getSnapshot().selection;
+        expect(state.status === "ready" && state.stale === null).toBe(true);
+      });
+      const after = session().getSnapshot().selection;
+      expect(after.status === "ready" && after.supersedes).toEqual([before.selection.selectionId]);
+      expect(host.calls("openWorkspace")).toHaveLength(1);
+      expect(host.calls("resolve").at(-1)).toMatchObject({ workspaceId: "ws-1", documentEpoch: 1 });
+    });
+
+    it("checks again when a document arrives while main was still looking, keeping a click held for it", async () => {
+      const answers: Array<(result: ElementPickerWorkspaceOpenResult) => void> = [];
+      host.openWith = () => new Promise((resolve) => answers.push(resolve));
+      await mountBound();
+      await waitFor(() => expect(answers).toHaveLength(1));
+      // The panel's own server took the port back, the page reloaded, and
+      // the user clicked before main answered about the old document.
+      await act(async () => host.documentReady(1));
+      await act(async () => host.select(1));
+      await act(async () => answers[0]!(REFUSED));
+      await waitFor(() => expect(answers).toHaveLength(2));
+      expect(session().getSnapshot().workspace.status).toBe("opening");
+      await act(async () =>
+        answers[1]!({
+          status: "ready",
+          workspaceId: "ws-2",
+          appPath: ".",
+          appPaths: ["."],
+          scanComplete: true,
+        })
+      );
+      await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
+      await waitFor(() =>
+        expect(host.calls("resolve").at(-1)).toMatchObject({
+          workspaceId: "ws-2",
+          documentEpoch: 1,
+        })
+      );
+    });
+
+    it("takes a refusal as the answer after a few about documents already left", async () => {
+      const answers: Array<(result: ElementPickerWorkspaceOpenResult) => void> = [];
+      host.openWith = () => new Promise((resolve) => answers.push(resolve));
+      await mountBound();
+      // A page that reloads during every check.
+      for (let epoch = 1; epoch <= 4; epoch++) {
+        await waitFor(() => expect(answers).toHaveLength(epoch));
+        await act(async () => host.documentReady(epoch));
+        await act(async () => answers[epoch - 1]!(REFUSED));
+      }
+      await waitFor(() =>
+        expect(session().getSnapshot().workspace).toMatchObject({ reason: "served-elsewhere" })
+      );
+      expect(answers).toHaveLength(4);
+    });
+
+    it("tells a pick made before main answered where its page is served from", async () => {
+      const answers: Array<(result: ElementPickerWorkspaceOpenResult) => void> = [];
+      host.openWith = () => new Promise((resolve) => answers.push(resolve));
+      await mountBound();
+      await waitFor(() => expect(answers).toHaveLength(1));
+      // Nothing to trace: published at once, before the workspace is known.
+      await act(async () => host.select(0, [PAGE_NODE]));
+      await waitFor(() => expect(session().getSnapshot().selection.status).toBe("ready"));
+      await act(async () => answers[0]!(REFUSED));
+      await waitFor(() => {
+        const state = session().getSnapshot().selection;
+        expect(state.status === "ready" && state.selection.servedFrom).toBe("/repo/wt-b");
+      });
+    });
+
+    it("won't trace a page another worktree serves: the click still selects, nothing resolves", async () => {
+      host.openWith = () => REFUSED;
+      await mountBound();
+      await screen.findAllByText(/served from another worktree/);
+      expect(screen.getByText("/repo/wt-b")).toBeTruthy();
+      expect(session().getSnapshot().workspace).toEqual({
+        status: "failed",
+        reason: "served-elsewhere",
+        message: "/repo/wt-b",
+      });
+      await act(async () => host.select(0));
+      await screen.findByRole("textbox", { name: "Request for the agent" });
+      expect(host.calls("resolve")).toEqual([]);
+    });
+
+    it("traces again once the next document is served from this worktree", async () => {
+      let elsewhere = true;
+      host.openWith = () =>
+        elsewhere
+          ? REFUSED
+          : {
+              status: "ready",
+              workspaceId: "ws-1",
+              appPath: ".",
+              appPaths: ["."],
+              scanComplete: true,
+            };
+      await mountBound();
+      await screen.findAllByText(/served from another worktree/);
+      elsewhere = false;
+      await act(async () => host.documentReady(1));
+      await waitFor(() => expect(session().getSnapshot().workspace.status).toBe("ready"));
+    });
+
+    it("tells the agent which worktree serves the page it was sent", async () => {
+      withAgent("term-browser");
+      asBrowser();
+      const sent = await recordSends();
+      host.openWith = () => REFUSED;
+      await mountBound();
+      await screen.findAllByText(/served from another worktree/);
+      await act(async () => host.select(0));
+      const prompt = await sendRequest(sent);
+      expect(prompt).toContain("- Served from: /repo/wt-b");
+    });
+  });
+
+  it("keeps a dev preview's workspace across documents: its server is its own", async () => {
+    await mountBound();
+    await waitFor(() => expect(host.calls("openWorkspace")).toHaveLength(1));
+    await act(async () => host.documentReady(1));
+    await act(async () => {});
+    expect(host.calls("openWorkspace")).toHaveLength(1);
   });
 
   it("traces and offers the agent on an app the compiler was never tested against", async () => {

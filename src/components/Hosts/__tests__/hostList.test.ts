@@ -54,6 +54,7 @@ let emit: ((event: RemoteHostsEvent) => void) | null = null;
 const list = vi.fn<() => Promise<HostListEntry[]>>();
 const isInUse = vi.fn(async () => true);
 const getSnapshots = vi.fn<() => Promise<HostMetricsSnapshot[]>>();
+const setFollowing = vi.fn<(payload: { following: boolean }) => Promise<void>>();
 // One slot per registration, so a duplicate subscription counts twice.
 const metricsListeners: Array<(event: HostMetricsEvent) => void> = [];
 
@@ -67,6 +68,7 @@ beforeEach(() => {
   list.mockReset();
   isInUse.mockReset().mockResolvedValue(true);
   getSnapshots.mockReset().mockResolvedValue([]);
+  setFollowing.mockReset().mockResolvedValue(undefined);
   metricsListeners.length = 0;
   emit = null;
   Object.defineProperty(window, "electron", {
@@ -85,6 +87,7 @@ beforeEach(() => {
       },
       hostMetrics: {
         getSnapshots,
+        setFollowing,
         onEvent: (cb: (event: HostMetricsEvent) => void) => {
           metricsListeners.push(cb);
           return () => {
@@ -168,6 +171,12 @@ function connectedHost(id: string): HostListEntry {
 
 function reporting(id: string, sampledAt: number): HostListEntry {
   return { ...connectedHost(id), summary: summary(id, sampledAt) };
+}
+
+const DOWN: HostConnectionState = { status: "disconnected" };
+
+function named(entry: HostListEntry, name: string): HostListEntry {
+  return { ...entry, descriptor: { ...entry.descriptor, name } };
 }
 
 function summary(hostId: string, sampledAt: number): HostMetricsSummary {
@@ -356,6 +365,51 @@ describe("host status and host figures", () => {
     expect(useHostMetricsStore.getState().history.size).toBe(0);
   });
 
+  it("forgets a host's figures, including what a seed already on its way carries of it", async () => {
+    list.mockResolvedValue([connectedHost("studio-01"), connectedHost("studio-02")]);
+    const seed = deferred<HostMetricsSnapshot[]>();
+    getSnapshots.mockReturnValue(seed.promise);
+    const figures = renderHook(() => useHostFigures());
+    await settle();
+    act(() => {
+      emitMetrics({ type: "summary", summary: summary("studio-01", 5) });
+      emitMetrics({ type: "summary", summary: summary("studio-02", 6) });
+    });
+
+    // Re-pointed at another machine: the id stays in the list, the figures go.
+    act(() => emit?.({ type: "host-forgotten", hostId: "studio-01" }));
+    const sampled = () => figures.result.current.hosts.map((h) => h.summary?.sampledAt ?? null);
+    const history = (hostId: string) =>
+      useHostMetricsStore
+        .getState()
+        .history.get(hostId)
+        ?.map((entry) => entry.sampledAt);
+    expect(sampled()).toEqual([null, 6]);
+    expect(history("studio-01")).toBeUndefined();
+    expect(history("studio-02")).toEqual([6]);
+
+    await act(async () => {
+      seed.resolve([
+        { hostId: "studio-01", history: [summary("studio-01", 3)] },
+        { hostId: "studio-02", history: [summary("studio-02", 4)] },
+      ]);
+      await seed.promise;
+    });
+    expect(sampled()).toEqual([null, 6]);
+    expect(history("studio-01")).toBeUndefined();
+    expect(history("studio-02")).toEqual([6, 4]);
+
+    // The new machine's own summaries land as usual, and so does a later seed.
+    act(() => emitMetrics({ type: "summary", summary: summary("studio-01", 9) }));
+    expect(history("studio-01")).toEqual([9]);
+    figures.unmount();
+    getSnapshots.mockResolvedValue([{ hostId: "studio-01", history: [summary("studio-01", 10)] }]);
+    const again = renderHook(() => useHostFigures());
+    await settle();
+    expect(again.result.current.hosts[0]?.summary?.sampledAt).toBe(10);
+    expect(history("studio-01")).toEqual([10]);
+  });
+
   it("holds no summary a list brings while nothing follows figures, and ignores an equal list", async () => {
     list.mockResolvedValue([reporting("studio-01", 3)]);
     const status = counted(() => useHostList());
@@ -398,6 +452,20 @@ describe("host status and host figures", () => {
     expect(getHostListSnapshot().hosts[0]?.summary).toBeNull();
   });
 
+  it("tells main this view follows host figures while any consumer is open, once per change", async () => {
+    list.mockResolvedValue([connectedHost("studio-01")]);
+    const following = () => setFollowing.mock.calls.map(([payload]) => payload.following);
+    const overview = renderHook(() => useHostFigures());
+    const placement = renderHook(() => useHostFigures());
+    await settle();
+    expect(following()).toEqual([true]);
+
+    overview.unmount();
+    expect(following()).toEqual([true]);
+    placement.unmount();
+    expect(following()).toEqual([true, false]);
+  });
+
   it("listens and seeds once under StrictMode's double effects", async () => {
     list.mockResolvedValue([connectedHost("studio-01")]);
     getSnapshots.mockResolvedValue([{ hostId: "studio-01", history: [summary("studio-01", 3)] }]);
@@ -424,6 +492,166 @@ describe("host status and host figures", () => {
     await settle();
     expect(getSnapshots).toHaveBeenCalledTimes(1);
     expect(figures.result.current.hosts[0]?.summary).toBeNull();
+  });
+
+  it("keeps a link lost while a remounted subscriber's read was in flight over the older answer", async () => {
+    list.mockResolvedValue([
+      connectedHost("studio-01"),
+      host("studio-02"),
+      connectedHost("studio-04"),
+    ]);
+    const first = renderHook(() => useHostFigures());
+    await settle();
+    first.unmount();
+
+    const pending = deferred<HostListEntry[]>();
+    list.mockReturnValueOnce(pending.promise);
+    const figures = renderHook(() => useHostFigures());
+    await settle();
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(ids(figures.result.current.hosts)).toEqual(["studio-01", "studio-02", "studio-04"]);
+    act(() => emitMetrics({ type: "summary", summary: summary("studio-01", 5) }));
+    expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(5);
+
+    act(() => emit?.({ type: "connection-changed", hostId: "studio-01", connection: DOWN }));
+    expect(figures.result.current.hosts[0]).toMatchObject({ connection: DOWN, summary: null });
+
+    await act(async () => {
+      pending.resolve([
+        named(reporting("studio-01", 3), "Studio one"),
+        named(connectedHost("studio-02"), "Studio two"),
+        connectedHost("studio-03"),
+      ]);
+      await pending.promise;
+    });
+    const hosts = figures.result.current.hosts;
+    expect(ids(hosts)).toEqual(["studio-01", "studio-02", "studio-03"]);
+    expect(hosts.map((h) => h.descriptor.name)).toEqual(["Studio one", "Studio two", "studio-03"]);
+    expect(hosts[0]).toMatchObject({ connection: DOWN, summary: null });
+    expect(hosts[1]?.connection.status).toBe("connected");
+  });
+
+  it("lets only the latest read answer, keeping the links heard since it was asked for", async () => {
+    list.mockResolvedValue([connectedHost("studio-01"), connectedHost("studio-02")]);
+    const first = renderHook(() => useHostList());
+    await settle();
+    first.unmount();
+    list.mockClear();
+
+    const older = deferred<HostListEntry[]>();
+    const newer = deferred<HostListEntry[]>();
+    list.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const view = renderHook(() => useHostList());
+    act(() => emit?.({ type: "connection-changed", hostId: "studio-01", connection: DOWN }));
+    // A host this list doesn't have yet means the list is behind: read again.
+    act(() => emit?.({ type: "connection-changed", hostId: "studio-03", connection: DOWN }));
+    expect(list).toHaveBeenCalledTimes(2);
+    act(() => emit?.({ type: "connection-changed", hostId: "studio-02", connection: DOWN }));
+
+    const links = () =>
+      view.result.current.hosts.map((h) => `${h.descriptor.id}:${h.connection.status}`);
+    await act(async () => {
+      newer.resolve([
+        connectedHost("studio-01"),
+        connectedHost("studio-02"),
+        connectedHost("studio-03"),
+      ]);
+      await newer.promise;
+    });
+    // studio-01 dropped before the newer read was asked for, so its answer stands.
+    expect(links()).toEqual([
+      "studio-01:connected",
+      "studio-02:disconnected",
+      "studio-03:connected",
+    ]);
+
+    await act(async () => {
+      older.resolve([connectedHost("studio-01")]);
+      await older.promise;
+    });
+    expect(links()).toEqual([
+      "studio-01:connected",
+      "studio-02:disconnected",
+      "studio-03:connected",
+    ]);
+  });
+
+  it("keeps only the summary heard for a link that dropped and came back during a read", async () => {
+    const all = ["studio-01", "studio-02", "studio-03"];
+    list.mockResolvedValue(all.map(connectedHost));
+    const first = renderHook(() => useHostFigures());
+    await settle();
+    first.unmount();
+
+    const pending = deferred<HostListEntry[]>();
+    list.mockReturnValueOnce(pending.promise);
+    const figures = renderHook(() => useHostFigures());
+    const status = counted(() => useHostList());
+    await settle();
+    expect(list).toHaveBeenCalledTimes(2);
+    act(() => {
+      for (const hostId of all) emit?.({ type: "connection-changed", hostId, connection: DOWN });
+      emit?.({ type: "connection-changed", hostId: "studio-01", connection: connected(7, 2) });
+      emit?.({ type: "connection-changed", hostId: "studio-02", connection: connected(7, 2) });
+      emitMetrics({ type: "summary", summary: summary("studio-01", 6) });
+      // Still down: a summary that lands now says nothing about the link.
+      emitMetrics({ type: "summary", summary: summary("studio-03", 6) });
+    });
+    const before = status.count.renders;
+
+    await act(async () => {
+      pending.resolve(all.map((id) => reporting(id, 3)));
+      await pending.promise;
+    });
+    const hosts = figures.result.current.hosts;
+    expect(hosts.map((h) => h.connection.status)).toEqual([
+      "connected",
+      "connected",
+      "disconnected",
+    ]);
+    expect(hosts[0]?.connection).toMatchObject({ rttMs: 7 });
+    expect(hosts.map((h) => h.summary?.sampledAt ?? null)).toEqual([6, null, null]);
+    expect(status.count.renders).toBe(before);
+  });
+
+  it("keeps the fresher summary only for a link that stayed up through the read", async () => {
+    const all = ["studio-01", "studio-02", "studio-03"];
+    list.mockResolvedValue(all.map(connectedHost));
+    const first = renderHook(() => useHostFigures());
+    await settle();
+    first.unmount();
+
+    const pending = deferred<HostListEntry[]>();
+    list.mockReturnValueOnce(pending.promise);
+    const figures = renderHook(() => useHostFigures());
+    await settle();
+    expect(list).toHaveBeenCalledTimes(2);
+    // Pings only: no link is heard going down.
+    act(() => {
+      for (const hostId of all) {
+        emit?.({ type: "connection-changed", hostId, connection: connected(9, 2) });
+      }
+      emitMetrics({ type: "summary", summary: summary("studio-01", 2) });
+      emitMetrics({ type: "summary", summary: summary("studio-02", 8) });
+    });
+
+    // studio-03 was still coming up when the answer was taken, so its sample
+    // is from before that.
+    const reconnecting: HostListEntry = {
+      ...reporting("studio-03", 4),
+      connection: { status: "connecting", attempt: 1 },
+    };
+    await act(async () => {
+      pending.resolve([reporting("studio-01", 4), reporting("studio-02", 4), reconnecting]);
+      await pending.promise;
+    });
+    const hosts = figures.result.current.hosts;
+    expect(hosts.map((h) => h.connection)).toMatchObject([
+      { rttMs: 9 },
+      { rttMs: 9 },
+      { rttMs: 9 },
+    ]);
+    expect(hosts.map((h) => h.summary?.sampledAt ?? null)).toEqual([4, 8, null]);
   });
 
   it("stops following while main has the view cached, though the page still reads visible", async () => {
@@ -453,10 +681,13 @@ describe("host status and host figures", () => {
     expect(document.hidden).toBe(false);
     expect(metricsListeners.length).toBe(0);
     expect(figures.result.current.hosts[0]?.summary).toBeNull();
+    // A cached view shows no figures, so this machine needn't sample for it.
+    expect(setFollowing).toHaveBeenLastCalledWith({ following: false });
 
     act(() => lifecycle.active?.());
     await settle();
     expect(metricsListeners.length).toBe(1);
+    expect(setFollowing).toHaveBeenLastCalledWith({ following: true });
     expect(getSnapshots).toHaveBeenCalledTimes(2);
     expect(figures.result.current.hosts[0]?.summary?.sampledAt).toBe(3);
   });

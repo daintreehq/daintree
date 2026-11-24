@@ -12,6 +12,8 @@ import { HighOutputDetector } from "./pty/HighOutputDetector.js";
 import { WorkingSignalDebouncer } from "./pty/WorkingSignalDebouncer.js";
 import { LineRewriteDetector, isStatusLineRewrite } from "./pty/LineRewriteDetector.js";
 import { stripIdleTerminalSequences } from "./pty/IdleSequenceFilter.js";
+import { stripCosmeticParticles } from "./pty/CosmeticParticleFilter.js";
+import { filteredOutputBytesUpTo } from "./pty/filteredOutputBytes.js";
 import {
   SynchronizedFrameAnalyzer,
   type FrameSnapshot,
@@ -40,9 +42,11 @@ import { BootDetector } from "./pty/BootDetector.js";
 import {
   classifyWaitingReason,
   endsOnChoiceSelector,
+  endsOnDrawnSelector,
   WAITING_REASON_CHECKLIST_ROWS,
   WAITING_REASON_SCAN_LINE_COUNT,
 } from "./pty/WaitingReasonClassifier.js";
+import { inputRowShapeFor, readInputRow } from "./pty/inputRowEvidence.js";
 import { CpuHighStateTracker } from "./pty/CpuHighStateTracker.js";
 import { WaitingWatchdog } from "./pty/WaitingWatchdog.js";
 import type { WaitingReason } from "../../shared/types/agent.js";
@@ -207,6 +211,52 @@ export interface ActivityStateMetadata {
    * it.
    */
   rereadAt?: number;
+  /**
+   * When the screen this reading was taken off was read, set only when it
+   * showed the agent's own input row (#18018): what tells a run's first sight
+   * of its prompt from a settle on a screen its CLI hasn't drawn yet.
+   */
+  promptDrawnAt?: number;
+  /**
+   * That input row held nothing typed, or only its placeholder: a reading
+   * the send gate may measure typing from, as from a settle at the prompt.
+   */
+  inputRowEmpty?: true;
+}
+
+/** More rows than any pane has: a viewport read asks for this many and gets them all. */
+const WHOLE_VIEWPORT_ROWS = 1000;
+/** The most rows an input row's block runs to: its frame and the footer rows under it. */
+const DRAWN_COMPOSER_BLOCK_ROWS = 8;
+
+/** A selector's row: a highlighted one or a numbered or lettered option, as a footer row never is. */
+const SELECTOR_ROW = /^\s*(?:[❯›▶➜→●>]\s*\S|(?:\d+|[A-Za-z])[.)]\s)/;
+/** A row's box borders, drawn on both sides of a dialog's rows. */
+const BOX_EDGES = /^\s*[│┃║]|[│┃║]\s*$/g;
+
+/**
+ * Whether the last block drawn, however many blank rows lie under it, is the
+ * agent's empty input row in its frame with its footer (#18014). Only that
+ * block counts, so a frame left higher up, above a selector or later output,
+ * never does, and nor does one with a selector drawn under it.
+ */
+function endsOnEmptyComposer(viewport: string[], patterns: readonly RegExp[]): boolean {
+  let end = viewport.length;
+  while (end > 0 && viewport[end - 1]!.trim() === "") end--;
+  let start = end;
+  while (
+    start > 0 &&
+    end - start < DRAWN_COMPOSER_BLOCK_ROWS &&
+    viewport[start - 1]!.trim() !== ""
+  ) {
+    start--;
+  }
+  const block = viewport.slice(start, end);
+  const inputRow = findEmptyComposerRow(block, patterns);
+  if (inputRow === undefined) return false;
+  return !block
+    .slice(inputRow + 2)
+    .some((row) => SELECTOR_ROW.test(stripAnsi(row).replace(BOX_EDGES, "")));
 }
 
 export class ActivityMonitor {
@@ -264,6 +314,10 @@ export class ActivityMonitor {
   // read again once it settles past that read.
   private idleWaitingReason: WaitingReason | undefined;
   private waitingReasonReadAt = 0;
+  // Whether that reading showed the agent's own input row empty (#18018). One
+  // that didn't is read again, and the row's first empty sight sent, even with
+  // the same reason: a run is never at its prompt until it is seen there.
+  private idlePromptDrawn = false;
   private readonly lineRewriteDetector: LineRewriteDetector;
   private readonly completionTimer: CompletionTimer;
   private readonly bootDetector: BootDetector;
@@ -682,9 +736,15 @@ export class ActivityMonitor {
           this.fireBootComplete(now);
         }
       }
+      const volumeDetector = this.simpleOutputVolumeDetector?.enabled
+        ? this.simpleOutputVolumeDetector
+        : undefined;
+      // The status-line check and the volume floor both measure the chunk with
+      // particles removed; one pass serves both.
+      const withoutParticles = volumeDetector ? stripCosmeticParticles(data) : undefined;
       // Semantic status-line rewrites (spinner, retry countdown, elapsed-time
       // counter) are strong liveness evidence even at 1Hz cadence (#9874).
-      const isIndicatorRewrite = isStatusLineRewrite(data);
+      const isIndicatorRewrite = isStatusLineRewrite(data, withoutParticles);
       if (isIndicatorRewrite) {
         this.lastStatusRewriteAt = now;
       }
@@ -712,16 +772,18 @@ export class ActivityMonitor {
       // the non-simple first-output-byte path uses (#6388 strip-then-count,
       // #8867 focus gate), treat that as activity: refresh the activity clock
       // so heavy streaming keeps the agent working, and recover idle→busy.
-      if (this.simpleOutputVolumeDetector) {
+      if (volumeDetector && withoutParticles !== undefined) {
         // Cursor placement and SGR resets carry bytes without new text. Grok
         // emits these after a turn, so counting them can hold busy forever.
-        const filteredLength = Buffer.byteLength(
-          stripAnsi(stripIdleTerminalSequences(data)),
-          "utf8"
+        // The bucket credits at most one frame's cap, so counting stops there.
+        const filteredLength = filteredOutputBytesUpTo(
+          data,
+          withoutParticles,
+          volumeDetector.maxContributionBytes
         );
         if (
           filteredLength > 0 &&
-          this.simpleOutputVolumeDetector.update(filteredLength, now) &&
+          volumeDetector.update(filteredLength, now) &&
           !this.isResizeSuppressed(now) &&
           !this.isFocusSuppressed(now) &&
           !this.inputTracker.isRecentUserInput(now) &&
@@ -742,7 +804,8 @@ export class ActivityMonitor {
     }
 
     const isLikelyUserEcho = data ? this.inputTracker.isLikelyUserEcho(data, now) : false;
-    const isCosmeticRedraw = data ? isStatusLineRewrite(data) : false;
+    const withoutParticles = data ? stripCosmeticParticles(data) : undefined;
+    const isCosmeticRedraw = data ? isStatusLineRewrite(data, withoutParticles) : false;
 
     this.lastDataTimestamp = now;
 
@@ -768,7 +831,10 @@ export class ActivityMonitor {
     // spuriously escalate idle→busy at low minBytes thresholds. Computed up
     // front because the debounce-reset path also gates on it: pure protocol
     // noise must not keep a busy monitor alive forever.
-    const filteredLength = Buffer.byteLength(stripIdleTerminalSequences(data), "utf8");
+    const filteredLength = Buffer.byteLength(
+      stripIdleTerminalSequences(data, withoutParticles),
+      "utf8"
+    );
     const hasOutputActivity = isCosmeticRedraw || filteredLength > 0;
 
     if (hasOutputActivity) {
@@ -883,19 +949,13 @@ export class ActivityMonitor {
   //   * cosmetic-only → low-confidence visible-output signal
   //   * spinner / time-counter → higher-confidence visible-output signal
   //
-  // Frames are dropped when resize-suppressed, before boot-complete, or when
-  // there's no visible-lines accessor (non-agent terminals).
+  // Frames are dropped when resize-suppressed or before boot-complete, and
+  // never consumed at all unless `consumesSynchronizedFrames`.
   onSynchronizedFrame(snapshot: FrameSnapshot): void {
     if (this.isDisposed) return;
-    if (!this.getVisibleLines) return;
+    if (!this.consumesSynchronizedFrames) return;
 
     const now = Date.now();
-    if (this.simpleOutputState) {
-      // Simple output mode uses the full visible-line fingerprint from the
-      // polling cycle. Mixing per-frame bottom-row hashes with full-screen
-      // hashes makes unchanged frames look like changes.
-      return;
-    }
     if (this.isResizeSuppressed(now)) return;
     if (this.isFocusSuppressed(now)) return;
     // Pre-boot frames are part of the agent's startup chrome — let the boot
@@ -904,6 +964,16 @@ export class ActivityMonitor {
 
     const result = this.synchronizedFrameAnalyzer.classify(snapshot);
     this.applyStructuralSignal(result.signal, result.confidence, now);
+  }
+
+  // Fixed for the monitor's lifetime, so the analysis backends install the
+  // per-frame detector only for monitors that will read its snapshots (#17041).
+  // Needs the visible-lines accessor (non-agent terminals lack it), and simple
+  // output mode is excluded because it fingerprints the full visible viewport
+  // in its polling cycle: mixing in per-frame bottom-row hashes would make
+  // unchanged frames look like changes.
+  get consumesSynchronizedFrames(): boolean {
+    return this.getVisibleLines !== undefined && !this.simpleOutputState;
   }
 
   private applyStructuralSignal(signal: StructuralSignal, confidence: number, now: number): void {
@@ -999,28 +1069,78 @@ export class ActivityMonitor {
    * classifier's, which is wider than the prompt scan since an approval's
    * selector sits above the input box — with room beneath for the task
    * checklist Claude Code draws under an open dialog, which is set aside
-   * rather than counted against the window.
+   * rather than counted against the window. A settle on the agent's own input
+   * row carries when it was read (#18018).
    */
-  private classifyReason(lines: string[], isPromptDetected: boolean): WaitingReason {
-    return this.readWaitingScreen(lines, isPromptDetected).reason;
+  private settleReading(
+    lines: string[],
+    isPromptDetected: boolean,
+    now: number
+  ): { waitingReason: WaitingReason; promptDrawnAt?: number; inputRowEmpty?: true } {
+    const { reason, promptDrawn } = this.readWaitingScreen(lines, isPromptDetected);
+    this.idlePromptDrawn = promptDrawn === "empty";
+    if (promptDrawn === null) return { waitingReason: reason };
+    return promptDrawn === "empty"
+      ? { waitingReason: reason, promptDrawnAt: now, inputRowEmpty: true }
+      : { waitingReason: reason, promptDrawnAt: now };
   }
 
   // The agent's empty input row bounds the error window when it is in view,
-  // so a footer drawn below it can't label the wait.
+  // so a footer drawn below it can't label the wait. A selector drawn short of
+  // the pane's bottom, as a freshly started agent's trust prompt is (#18014),
+  // leaves that window blank or holding only its key hint, so a reading that
+  // would admit a line is checked against everything drawn.
   private readWaitingScreen(
     lines: string[],
     isPromptDetected: boolean
-  ): { reason: WaitingReason; composerRow: number | undefined; read: string[]; rows: number } {
+  ): {
+    reason: WaitingReason;
+    composerRow: number | undefined;
+    read: string[];
+    rows: number;
+    /** Everything drawn ends on a selector, wherever it stops. */
+    drawnSelector: boolean;
+    /** Everything drawn ends on the agent's empty input row, wherever it stops. */
+    drawnComposer: boolean;
+    /**
+     * How plainly a prompt or question reading shows the agent's own input
+     * row (#18018); null for any other reading, or a screen without it.
+     */
+    promptDrawn: "empty" | "drawn" | null;
+  } {
     const rows = Math.max(lines.length, WAITING_REASON_SCAN_LINE_COUNT);
     const wanted = rows + WAITING_REASON_CHECKLIST_ROWS;
     const read =
       this.getVisibleLines && lines.length < wanted ? this.getVisibleLines(wanted) : lines;
-    const composerRow = findEmptyComposerRow(read, this.promptDetectorConfig.promptPatterns);
+    const patterns = this.promptDetectorConfig.promptPatterns;
+    const composerRow = findEmptyComposerRow(read, patterns);
+    const reason = classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId);
+    let drawnSelector = false;
+    let drawnComposer = false;
+    let promptDrawn: "empty" | "drawn" | null = null;
+    if ((reason === "prompt" || reason === "question") && composerRow !== undefined) {
+      // Read again by the agent's own shape: a frame with the line that
+      // started the run drawn under it is the last agent's (#18018).
+      promptDrawn = readInputRow(read, inputRowShapeFor(this.agentId));
+    } else if (
+      (reason === "prompt" || reason === "question") &&
+      this.getVisibleLines !== undefined
+    ) {
+      // Fewer rows than were asked for: that read was already the whole viewport.
+      const viewport =
+        read !== lines && read.length < wanted ? read : this.getVisibleLines(WHOLE_VIEWPORT_ROWS);
+      drawnSelector = endsOnDrawnSelector(viewport, this.agentId);
+      drawnComposer = !drawnSelector && endsOnEmptyComposer(viewport, patterns);
+      if (!drawnSelector) promptDrawn = readInputRow(viewport, inputRowShapeFor(this.agentId));
+    }
     return {
-      reason: classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId),
+      reason: drawnSelector ? "approval" : reason,
       composerRow,
       read,
       rows,
+      drawnSelector,
+      drawnComposer,
+      promptDrawn,
     };
   }
 
@@ -1063,22 +1183,31 @@ export class ActivityMonitor {
       this.getCursorLine?.() ?? null,
       { allowHistoryScan: true }
     );
-    const { reason, composerRow, read, rows } = this.readWaitingScreen(
-      lines,
-      promptResult.isPrompt
-    );
-    if (reason === this.idleWaitingReason) return;
-    if (
+    const { reason, composerRow, read, rows, drawnSelector, drawnComposer, promptDrawn } =
+      this.readWaitingScreen(lines, promptResult.isPrompt);
+    // A row with something in it again: its next empty sight is news.
+    if (promptDrawn !== "empty") this.idlePromptDrawn = false;
+    if (reason === this.idleWaitingReason) {
+      // The same reason again, sent only as the first sight of the agent's
+      // empty input row after a reading that had none (#18018), such as a CLI
+      // that drew its prompt into a pane read before it had drawn anything.
+      if (this.idlePromptDrawn || promptDrawn !== "empty") return;
+    } else if (
+      // A fresh pane draws its input row as high as a dialog it replaced, out of the bottom rows.
       composerRow === undefined &&
-      !(reason === "approval" && endsOnChoiceSelector(read, rows, this.agentId))
+      !drawnComposer &&
+      !(reason === "approval" && (drawnSelector || endsOnChoiceSelector(read, rows, this.agentId)))
     ) {
       return;
     }
     this.idleWaitingReason = reason;
+    this.idlePromptDrawn = promptDrawn === "empty";
+    // A re-read moves the gate's settle to `now`, so only an empty row is sent as one.
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "pattern",
       waitingReason: reason,
       rereadAt: now,
+      ...(promptDrawn === "empty" ? { promptDrawnAt: now, inputRowEmpty: true as const } : {}),
     });
   }
 
@@ -1286,6 +1415,8 @@ export class ActivityMonitor {
     this.synchronizedFrameAnalyzer.reset();
     this.simpleOutputTemperature.reset();
     this.invalidateSimpleSnapshotCache();
+    // Another agent's run: its input row hasn't been seen, whatever the last one showed (#18018).
+    this.idlePromptDrawn = false;
   }
 
   notifySubmission(): void {
@@ -1769,10 +1900,9 @@ export class ActivityMonitor {
       this.state = "idle";
       this.idleSince = now;
       this.patternBuf.clear();
-      const waitingReason = this.classifyReason(lines, true);
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "pattern",
-        waitingReason,
+        ...this.settleReading(lines, true, now),
       });
       return;
     }
@@ -1826,10 +1956,9 @@ export class ActivityMonitor {
       this.state = "idle";
       this.idleSince = now;
       this.patternBuf.clear();
-      const waitingReason = this.classifyReason(lines, isPrompt);
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "timeout",
-        waitingReason,
+        ...this.settleReading(lines, isPrompt, now),
       });
     }
   }
@@ -1951,6 +2080,7 @@ export class ActivityMonitor {
       this.idleSince = Date.now();
       this.patternBuf.clear();
       this.idleWaitingReason = undefined;
+      this.idlePromptDrawn = false;
       this.waitingReasonReadAt = this.idleSince;
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "pattern",
@@ -2015,7 +2145,9 @@ export class ActivityMonitor {
     this.state = "idle";
     this.idleSince = now;
     this.patternBuf.clear();
-    let waitingReason: WaitingReason | undefined;
+    let reading: { waitingReason?: WaitingReason; promptDrawnAt?: number; inputRowEmpty?: true } =
+      {};
+    this.idlePromptDrawn = false;
     if (this.getVisibleLines) {
       const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);
       const promptResult = detectPrompt(
@@ -2027,13 +2159,13 @@ export class ActivityMonitor {
       // Classification scans a wider window than prompt detection: approval
       // dialogs put the question + selector rows above the input-box chrome,
       // outside the 6-line prompt window.
-      waitingReason = this.classifyReason(lines, promptResult.isPrompt);
+      reading = this.settleReading(lines, promptResult.isPrompt, now);
     }
-    this.idleWaitingReason = waitingReason;
+    this.idleWaitingReason = reading.waitingReason;
     this.waitingReasonReadAt = now;
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "timeout",
-      waitingReason,
+      ...reading,
     });
     this.armFsmIdleBackoff();
   }

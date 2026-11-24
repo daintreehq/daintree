@@ -438,7 +438,7 @@ test("review hub states review — the states around the populated review flow",
         await featureCard.click({ button: "right" });
         await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: T_MEDIUM });
         const reviewTrigger = page.getByRole("menuitem", { name: /^Review$/ }).first();
-        const reviewItem = page.getByRole("menuitem", { name: /^Review worktree$/ }).first();
+        const reviewItem = page.getByRole("menuitem", { name: /^Open Review Hub$/ }).first();
         // Hover opens the submenu, but a dropped hover never mounts the child.
         await reviewTrigger.hover();
         if (!(await reviewItem.isVisible().catch(() => false))) {

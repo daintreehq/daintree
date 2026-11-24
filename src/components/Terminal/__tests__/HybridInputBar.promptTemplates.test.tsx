@@ -27,6 +27,7 @@ import {
 import { actionService } from "@/services/ActionService";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { toSlashAutocompleteItems } from "@/hooks/slashAutocompleteItems";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { HybridInputBar } from "../HybridInputBar";
 import { PROMPT_TEMPLATE_BAND } from "../promptTemplateCompletion";
 
@@ -767,6 +768,76 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
     );
   });
 
+  // Mod+Shift on the physical comma key, whatever character the layout puts there.
+  const NOTE_CHORD = "Cmd+Shift+,";
+  const mac = /Mac/.test(navigator.platform);
+  const pressCommaKey = async (view: EditorView, key: string, shiftKey = true, code = "Comma") => {
+    let handled = false;
+    await act(async () => {
+      handled = runScopeHandlers(
+        view,
+        new KeyboardEvent("keydown", { key, code, shiftKey, metaKey: mac, ctrlKey: !mac }),
+        "editor"
+      );
+    });
+    return handled;
+  };
+
+  it("goes to the problem from the editor by the note's shortcut, leaving the draft alone", async () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof actionService.dispatch>>);
+    withFolder(() => folder([mine()], [{ fileName: "bad.md", reason: "title is missing" }]));
+    const { type, view, container } = await renderComposer("");
+
+    // No menu, no note: the chord is nobody's.
+    expect(await pressCommaKey(view, "<")).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // A `/` matching nothing still shows the note, and the chord still reaches it.
+    await type("/zzz");
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+    const note = container.querySelector<HTMLElement>("[data-autocomplete-note]")!;
+    expect(note.getAttribute("aria-keyshortcuts")).toBe(comboToAriaKeyshortcuts(NOTE_CHORD, mac));
+
+    // Without Shift it's the Settings chord's key, not the note's; the key beside it is nobody's.
+    expect(await pressCommaKey(view, ",", false)).toBe(false);
+    expect(await pressCommaKey(view, ">", true, "Period")).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // US (`<`), then a layout that puts another character on the key (AZERTY's `.`).
+    for (const key of ["<", "."]) {
+      dispatch.mockClear();
+      expect(await pressCommaKey(view, key)).toBe(true);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith(
+        "app.settings.openTab",
+        expect.objectContaining({ tab: "agents", sectionId: "agents-prompt-templates" }),
+        { source: "user" }
+      );
+    }
+    expect(view.state.doc.toString()).toBe("/zzz");
+  });
+
+  it("leaves the shortcut alone once the folder is healthy again", async () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof actionService.dispatch>>);
+    withFolder(() => folder([mine()], [{ fileName: "bad.md", reason: "title is missing" }]));
+    const { type, view, container } = await renderComposer("");
+    await type("/boiler");
+    expect(container.querySelector("[data-autocomplete-note]")).not.toBeNull();
+
+    act(() => {
+      useUserPromptTemplateStore.setState({ problems: [] });
+    });
+    await act(async () => {});
+    expect(container.querySelector("[data-autocomplete-note]")).toBeNull();
+
+    expect(await pressCommaKey(view, "<")).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("shows no note while the folder is healthy, or in another menu", async () => {
     withFolder(() => folder([mine()]));
     const { type, container, view, rows } = await renderComposer("");
@@ -788,21 +859,20 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
 });
 
 describe("HybridInputBar prompt marker", () => {
-  it("draws the `❯` as a glyph, not a control", async () => {
+  it("draws the `❯` at the glyph's own width, with no focus look of its own", async () => {
     const { container } = await renderComposer("");
 
-    const marker = Array.from(container.querySelectorAll<HTMLElement>("*")).find(
-      (el) => el.childElementCount === 0 && el.textContent === "❯"
-    );
-    expect(marker).toBeDefined();
-    expect(marker!.closest("button, [role='button']")).toBeNull();
-    expect(marker!.hasAttribute("tabindex")).toBe(false);
-    // As drawn, whatever the class constants hold: no width of its own and no hover or focus look.
-    const drawn = marker!.className.split(/\s+/);
-    expect(drawn.filter((c) => /^(min-)?w-|^(hover|focus-visible|group-hover):/.test(c))).toEqual(
-      []
-    );
-    expect(marker!.closest("[aria-hidden='true']")).not.toBeNull();
+    const marker = container.querySelector<HTMLElement>("[data-composer-marker]")!;
+    expect(marker.textContent).toBe("❯");
+    // It opens prompt history on a click, but Mod+R is the keyboard path.
+    expect(marker.tabIndex).toBe(-1);
+    // As drawn, whatever the class constants hold: no width of its own and no focus look.
+    const drawn = marker.className.split(/\s+/);
+    expect(
+      drawn.filter((c) =>
+        /^(min-|max-)?w-|^size-|^p[xlr]?-|^(focus|focus-visible|group-hover):/.test(c)
+      )
+    ).toEqual([]);
     expect(screen.queryByRole("button", { name: /command picker/i })).toBeNull();
   });
 

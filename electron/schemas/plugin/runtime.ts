@@ -84,6 +84,7 @@ export const PluginNotifyOptionsSchema = z
       }),
     os: z.boolean().optional(),
     dedupeKey: z.string().trim().min(1).max(200).optional(),
+    audience: z.literal("assistant").optional(),
   })
   .strict()
   .superRefine((options, ctx) => {

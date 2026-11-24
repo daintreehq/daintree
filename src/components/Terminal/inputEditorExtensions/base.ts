@@ -12,6 +12,7 @@ import {
   EASE_OUT_EXPO,
 } from "@/lib/animationUtils";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
+import { isMac } from "@/lib/platform";
 import { userEdit } from "./userEdit";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
@@ -859,8 +860,9 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
         }
 
         // The draft's rows are laid out and sized as of this write, so this is
-        // the moment the composer shell can read where they end — in the same
-        // frame as the text, before it paints.
+        // the moment the composer shell can ask where they end. It asks the
+        // view, whose next read and write answer it in the same frame as the
+        // text, before it paints, rather than reading layout mid-write.
         if (draftReset) {
           draftReset = false;
           view.dom.setAttribute(COMPOSER_DRAFT_RESET_ATTR, "");
@@ -874,7 +876,8 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
 interface CustomKeymapConfig {
   onEnter: () => boolean;
   onModEnter: () => boolean;
-  onEscape: () => boolean;
+  /** Handed the keypress when it came from the DOM, which a keymap command otherwise never sees. */
+  onEscape: (event?: KeyboardEvent) => boolean;
   onArrowUp: () => boolean;
   onArrowDown: () => boolean;
   onArrowLeft: () => boolean;
@@ -885,10 +888,19 @@ interface CustomKeymapConfig {
   onPopStash: () => boolean;
   onExpand: () => boolean;
   onHistorySearch: () => boolean;
+  /** Runs the action of the note at the autocomplete menu's foot, while one shows. */
+  onAutocompleteNote: () => boolean;
 }
 
 export function createCustomKeymap(config: CustomKeymapConfig): Extension {
-  return Prec.highest(
+  // Observers run before any keydown handler, the keymap's included.
+  let escapeEvent: KeyboardEvent | null = null;
+  const trackEscape = EditorView.domEventObservers({
+    keydown(event) {
+      escapeEvent = event.key === "Escape" ? event : null;
+    },
+  });
+  const bindings = Prec.highest(
     keymap.of([
       {
         key: "Enter",
@@ -913,7 +925,9 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
       {
         key: "Escape",
         run() {
-          return config.onEscape();
+          const event = escapeEvent ?? undefined;
+          escapeEvent = null;
+          return config.onEscape(event);
         },
       },
       {
@@ -977,8 +991,19 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
           return config.onHistorySearch();
         },
       },
+      {
+        // Mod+Shift+Comma by the physical key, as app keybindings match
+        // punctuation and as the chip labels it for the user's layout: a
+        // character match misses where the layout puts the comma elsewhere.
+        any(_view, event) {
+          if (event.code !== "Comma" || !event.shiftKey || event.altKey) return false;
+          const mod = isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+          return mod && config.onAutocompleteNote();
+        },
+      },
     ])
   );
+  return [trackEscape, bindings];
 }
 
 export function createPlaceholder(text: string): Extension {

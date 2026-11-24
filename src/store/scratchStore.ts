@@ -52,6 +52,17 @@ export function scratchName(
   return scratches.find((scratch) => scratch.id === workspaceId)?.name ?? null;
 }
 
+/**
+ * Whether this view is the scratch's own: the workspace it was created for. A
+ * view with no seeded workspace (a shared legacy renderer) shows whatever it
+ * is switched to. Any other view must not take the scratch as its current one,
+ * or a project window would read as being in another window's scratch (#17186).
+ */
+function isOwnScratch(scratchId: string): boolean {
+  const own = getViewWorkspaceId();
+  return own === null || own === scratchId;
+}
+
 export const useScratchStore = create<ScratchStoreState>((set, get) => ({
   scratches: [],
   currentScratch: null,
@@ -89,8 +100,11 @@ export const useScratchStore = create<ScratchStoreState>((set, get) => ({
     // The window didn't move to it (another window had it, or a newer
     // navigation won): this view still shows what it showed.
     if (!switched) return;
+    // The answer reaches the view the window left, now cached behind the
+    // scratch's own view, which main tells it switched. That view keeps its own
+    // workspace; only the list hears the scratch's new recency.
     set((state) => ({
-      currentScratch: switched,
+      currentScratch: isOwnScratch(switched.id) ? switched : state.currentScratch,
       scratches: state.scratches.map((s) => (s.id === switched.id ? switched : s)),
     }));
   },
@@ -143,9 +157,10 @@ export const useScratchStore = create<ScratchStoreState>((set, get) => ({
  * `scratch:remove` missed.
  *
  * Keyed on the view's own workspace id, never on `currentScratch`: the removal is
- * broadcast to *every* view (cached ones included) and `currentScratch` is
- * replicated into all of them, so matching on it would wipe a sibling project
- * view's live panels.
+ * broadcast to *every* view (cached ones included), and `currentScratch` is live
+ * state that is null until a view hydrates, so it is no proof of which view is
+ * the scratch's own. Matching on it risks wiping a sibling project view's live
+ * panels.
  */
 async function closePanelsForRemovedScratch(scratchId: string): Promise<void> {
   if (!scratchId || getViewWorkspaceId() !== scratchId) return;
@@ -182,8 +197,10 @@ if (typeof window !== "undefined" && window.electron?.scratch) {
     });
     window.electron.scratch.onSwitch((payload) => {
       if (!payload) return;
-      // payload.scratch is null when a project switch deactivated the
-      // previously-active scratch. Clear local current state in that case.
+      // Sent only to the view a window switched to: the scratch's own view,
+      // or, as null, a project's view, which shows no scratch. A scratch named
+      // for any other view is ignored rather than adopted.
+      if (payload.scratch && !isOwnScratch(payload.scratch.id)) return;
       useScratchStore.getState().setCurrentScratch(payload.scratch);
     });
   }

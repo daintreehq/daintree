@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { RebaseAction, RebaseEntry, StagingStatus } from "@shared/types";
+import type {
+  ConflictSideChoice,
+  RebaseAction,
+  RebaseEntry,
+  StagingFileEntry,
+  StagingStatus,
+} from "@shared/types";
 import type { ConflictMarkerScanEntry } from "@shared/types/ipc/git";
+import type { RepoOperationPin } from "@shared/types/git";
+import { isClientGitError } from "@/utils/clientGitError";
 import { cn } from "@/lib/utils";
 import { PathTail } from "@/components/ui/PathTail";
 import { UI_EXIT_DURATION } from "@/lib/animationUtils";
@@ -20,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { useTruncationDetection } from "@/hooks/useTruncationDetection";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -40,6 +49,8 @@ import {
 } from "@/components/Git/repoOperationCopy";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
 import { pluralize } from "@/lib/pluralize";
+import { ConflictAgentHandoff } from "./ConflictAgentHandoff";
+import type { ConflictAgentFile, ConflictAgentRebase } from "./conflictAgentText";
 
 const REBASE_ACTION_LABEL: Record<RebaseAction, string> = {
   pick: "pick",
@@ -62,9 +73,13 @@ interface ConflictPanelProps {
   worktreePath: string;
   onMarkResolved: (filePath: string) => Promise<void> | void;
   onOpenInEditor: (args: { path: string; line?: number }) => Promise<void> | void;
-  onCheckoutOursTheirs: (filePath: string, side: "ours" | "theirs") => Promise<void> | void;
-  onAbort: () => Promise<void>;
-  onContinue: () => Promise<void>;
+  onCheckoutOursTheirs: (filePath: string, choice: ConflictSideChoice) => Promise<void> | void;
+  /**
+   * Both receive the operation the panel showed when the user chose, so Main
+   * can refuse one that replaced it in the meantime (#17559).
+   */
+  onAbort: (chosen: RepoOperationPin) => Promise<void>;
+  onContinue: (chosen: RepoOperationPin) => Promise<void>;
   /**
    * `operation` (default) owns the whole pane during a merge, rebase,
    * cherry-pick or revert: the operation header, the worklist, the resolved
@@ -228,7 +243,210 @@ function splitPath(filePath: string): { dir: string; base: string } {
   return { dir: normalized.slice(0, lastSlash), base: normalized.slice(lastSlash + 1) };
 }
 
+// Each row's wrapper only lays its parts out: the directory and the file name
+// clip inside their own boxes, so each is measured where it clips. Neither label
+// takes a tab stop: a conflicted row's buttons name its file in full, and a long
+// resolved list would put a stop per cut path between its disclosure and Continue.
+
+function ConflictedFileLabel({
+  path,
+  kind,
+  hunkCount,
+}: {
+  path: string;
+  kind: string;
+  hunkCount: number | null;
+}) {
+  const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
+  const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
+  const { dir, base } = splitPath(path);
+  return (
+    <TruncatedTooltip
+      content={`${path} (${kind})`}
+      isTruncated={dirTruncated || baseTruncated}
+      focusable={false}
+      contentClassName="font-mono [overflow-wrap:anywhere]"
+    >
+      <div className="flex-1 min-w-0 flex items-baseline gap-2">
+        {/* The directory gives way first; the basename is the file's identity
+            and truncates only once the directory is gone. */}
+        <span className="min-w-0 flex items-baseline font-mono text-2xs">
+          {dir && (
+            <PathTail ref={dirRef} className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
+          )}
+          <span
+            ref={baseRef}
+            className="shrink-0 max-w-full truncate text-text-primary font-medium"
+          >
+            {base}
+          </span>
+        </span>
+        <span className="shrink-0 whitespace-nowrap text-3xs uppercase tracking-wider text-text-secondary font-mono">
+          {kind}
+        </span>
+        {hunkCount != null && hunkCount > 0 && (
+          <span
+            className="shrink-0 whitespace-nowrap text-3xs tabular-nums text-text-secondary"
+            data-testid={`conflict-hunk-count-${path}`}
+          >
+            {pluralize(hunkCount, "region")}
+          </span>
+        )}
+      </div>
+    </TruncatedTooltip>
+  );
+}
+
+function StagedFileLabel({ path }: { path: string }) {
+  const { ref: dirRef, isTruncated: dirTruncated } = useTruncationDetection();
+  const { ref: baseRef, isTruncated: baseTruncated } = useTruncationDetection();
+  const { dir, base } = splitPath(path);
+  return (
+    <TruncatedTooltip
+      content={path}
+      isTruncated={dirTruncated || baseTruncated}
+      focusable={false}
+      contentClassName="font-mono [overflow-wrap:anywhere]"
+    >
+      <div className="flex-1 min-w-0 flex items-baseline font-mono text-2xs">
+        {dir && (
+          <PathTail ref={dirRef} className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
+        )}
+        <span ref={baseRef} className="shrink-0 max-w-full truncate text-text-secondary">
+          {base}
+        </span>
+      </div>
+    </TruncatedTooltip>
+  );
+}
+
+/**
+ * A collapsed-by-default list of staged paths. Git stages what it merged
+ * cleanly beside what a person resolved, so the two are told apart by their own
+ * disclosures instead of one claiming all of them as resolutions.
+ */
+function StagedDisclosure({
+  files,
+  label,
+  listLabel,
+  testIdPrefix,
+  resolved,
+}: {
+  files: StagingFileEntry[];
+  label: string;
+  listLabel: string;
+  testIdPrefix: "conflict-resolved" | "conflict-staged";
+  resolved: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const listId = useId();
+  return (
+    <div className="border-t border-divider">
+      <button
+        type="button"
+        onClick={() => setIsOpen((v) => !v)}
+        className={cn(
+          SECTION_LABEL_CLASS,
+          "w-full flex items-center gap-1.5 px-3 py-1.5 hover:text-text-primary hover:bg-overlay-subtle transition-colors"
+        )}
+        aria-expanded={isOpen}
+        aria-controls={listId}
+        data-testid={`${testIdPrefix}-toggle`}
+      >
+        <ChevronRight
+          data-animated-chevron
+          className={cn(
+            "w-3 h-3 transition-transform duration-150 ease-out",
+            isOpen && "rotate-90"
+          )}
+          aria-hidden
+        />
+        {label}
+        <span className={cn(REVIEW_HUB_COUNT_CHIP, "ml-0")}>{files.length}</span>
+      </button>
+      {/* Kept mounted while collapsed so `aria-controls` always names a real
+          element. */}
+      <ul
+        id={listId}
+        hidden={!isOpen}
+        className="px-2 pb-1 flex flex-col gap-0.5"
+        role="list"
+        aria-label={listLabel}
+        data-testid={`${testIdPrefix}-list`}
+      >
+        {files.map((file) => (
+          <li
+            key={`staged-${file.path}`}
+            className="flex items-center gap-2 pl-2 pr-1 py-1 text-xs"
+          >
+            {resolved ? (
+              <Check className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden />
+            ) : (
+              <span className="w-3 shrink-0" aria-hidden />
+            )}
+            <StagedFileLabel path={file.path} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 type Side = "ours" | "theirs";
+
+// Git's unmerged codes encode which stages hold the file (`wt-status.c`): a
+// side without one is the side that deleted it, or never added it.
+const OURS_ABSENT = new Set(["DU", "UA", "DD"]);
+const THEIRS_ABSENT = new Set(["UD", "AU", "DD"]);
+
+/**
+ * What the row offers for taking a side. A side without the file is taken by
+ * deleting it, since `checkout` has no version to write; when neither side has
+ * it there is one deletion to offer, not two.
+ */
+function sideChoices(xy: string): ConflictSideChoice[] {
+  if (OURS_ABSENT.has(xy) && THEIRS_ABSENT.has(xy)) return [{ resolution: "delete", side: "both" }];
+  return (["ours", "theirs"] as const).map((side) =>
+    (side === "ours" ? OURS_ABSENT : THEIRS_ABSENT).has(xy)
+      ? { resolution: "delete", side }
+      : { resolution: "checkout", side }
+  );
+}
+
+function CheckoutConsequence({
+  filePath,
+  choice,
+  sideSource,
+}: {
+  filePath: string;
+  choice: ConflictSideChoice;
+  sideSource: Record<Side, string>;
+}) {
+  const path = <span className="font-mono break-all">{filePath}</span>;
+  if (choice.resolution === "checkout") {
+    return (
+      <span>
+        Overwrites {path} with the {sideSource[choice.side]} version, and any manual conflict edits
+        in this file are discarded.
+      </span>
+    );
+  }
+  if (choice.side === "both") {
+    return (
+      <span>
+        Deletes {path} from the worktree, since neither side has it. Any manual edits in this file
+        are discarded.
+      </span>
+    );
+  }
+  const other: Side = choice.side === "ours" ? "theirs" : "ours";
+  return (
+    <span>
+      Deletes {path} from the worktree to match the {sideSource[choice.side]}. The{" "}
+      {sideSource[other]} version and any manual conflict edits in this file are discarded.
+    </span>
+  );
+}
 
 // A dialog's exit plus a margin for its focus restore to run first.
 const DIALOG_EXIT_SETTLE_MS = UI_EXIT_DURATION * 2 + 60;
@@ -246,20 +464,22 @@ export function ConflictPanel({
 }: ConflictPanelProps) {
   const isWorklist = variant === "worklist";
   const [isAbortOpen, setIsAbortOpen] = useState(false);
+  // The operation on screen when Abort opened its confirm, which is the one
+  // the confirm asks about and the one its approval may end.
+  const [abortChosen, setAbortChosen] = useState<RepoOperationPin | null>(null);
   const [pendingCheckout, setPendingCheckout] = useState<{
     filePath: string;
-    side: Side;
+    choice: ConflictSideChoice;
   } | null>(null);
   const [pendingMarkerConfirm, setPendingMarkerConfirm] = useState<{
     filePath: string;
-    // `null` when the re-read failed, so nothing is known either way.
-    hunkCount: number | null;
+    // `null` when the re-read couldn't say, so nothing is known either way.
+    found: { hunkCount: number; firstMarkerLine: number | null } | null;
   } | null>(null);
   const [isAborting, setIsAborting] = useState(false);
   const [isContinuing, setIsContinuing] = useState(false);
   const [busyFile, setBusyFile] = useState<string | null>(null);
   const [optimisticResolved, setOptimisticResolved] = useState<Set<string>>(() => new Set());
-  const [showResolved, setShowResolved] = useState(false);
   const [scan, setScan] = useState<ScanResults | null>(null);
   const [scanNonce, setScanNonce] = useState(0);
   const rowRefs = useRef(new Map<string, HTMLLIElement>());
@@ -268,7 +488,6 @@ export function ConflictPanel({
   // `null` means Continue; `undefined` means nothing is pending.
   const pendingFocusRef = useRef<{ path: string | null } | undefined>(undefined);
   const focusRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const resolvedListId = useId();
   const summaryId = useId();
 
   // A review pane moved between two worktrees that are both mid-operation keeps
@@ -312,6 +531,26 @@ export function ConflictPanel({
   );
   const operationLabel = operationKey ? OPERATION_LABEL[operationKey] : "Operation";
   const operationNoun = operationLabel.toLowerCase();
+  const shownOperationId = status.repoOperationId;
+  // A halted operation this read couldn't identify (an unreadable sentinel, or
+  // one that changed while the status was read): Main refuses any choice of it,
+  // so neither Abort nor Continue is offered until a read can say which it is.
+  const unidentified = operationKey !== null && shownOperationId == null;
+
+  // A status read showing a different operation than the open abort confirm
+  // asks about closes it: its question, and any approval of it, are about an
+  // operation that is gone. An unidentified read leaves it open; Main checks
+  // the approval against the worktree anyway, and refuses a mismatch. Never
+  // mid-abort, when the operation ending is the abort itself succeeding.
+  if (
+    isAbortOpen &&
+    !isAborting &&
+    abortChosen !== null &&
+    (abortChosen.operation !== operationKey ||
+      (shownOperationId != null && shownOperationId !== abortChosen.operationId))
+  ) {
+    setIsAbortOpen(false);
+  }
 
   // Filter optimistic resolves out of the live worklist so the row leaves the
   // list as soon as `onMarkResolved` is called. The parent status refresh
@@ -378,9 +617,28 @@ export function ConflictPanel({
   );
 
   const conflictCount = liveConflicts.length;
-  const canContinue = conflictCount === 0;
-  const hasStagedResolutions = status.staged.length > 0;
-  const continueBlocked = !canContinue || isAborting || isContinuing || busyFile !== null;
+  // Git stages what it merged cleanly beside what a person resolved, so only
+  // the paths its index remembers resolving are resolutions. Without that
+  // record every staged path is named for what it is, not for how it got there.
+  const { resolvedStaged, otherStaged } = useMemo(() => {
+    const resolvedPaths = new Set(status.resolveUndoPaths);
+    const resolved: StagingFileEntry[] = [];
+    const other: StagingFileEntry[] = [];
+    for (const file of status.staged) {
+      (resolvedPaths.has(file.path) ? resolved : other).push(file);
+    }
+    return { resolvedStaged: resolved, otherStaged: other };
+  }, [status.staged, status.resolveUndoPaths]);
+  const hasStagedChanges = status.staged.length > 0;
+  // `git am --continue` commits what is staged and refuses an index with no
+  // changes, which is where a patch that wouldn't apply at all leaves it. A row
+  // just marked resolved counts as staged until the status read catches up.
+  const mailboxNeedsChanges =
+    operationKey === "APPLYING_MAILBOX" && !hasStagedChanges && optimisticResolved.size === 0;
+  const canContinue = conflictCount === 0 && !mailboxNeedsChanges;
+  const needsUser = conflictCount > 0 || mailboxNeedsChanges;
+  const continueBlocked =
+    !canContinue || unidentified || isAborting || isContinuing || busyFile !== null;
 
   // Scan for hunk counts + first-marker line on every status read that lands,
   // not only when the conflicted path set moves. Fixing a region inside
@@ -430,27 +688,39 @@ export function ConflictPanel({
   }, [worktreePath, conflictedFiles, scanNonce]);
 
   const handleAbort = useCallback(async () => {
+    // A closed confirm keeps its footer through the exit animation, and a key
+    // press there must not approve what was just dismissed.
+    if (abortChosen === null || !isAbortOpen) return;
     const unmoved = startUnmoved();
     setIsAborting(true);
     try {
-      await onAbort();
+      await onAbort(abortChosen);
       if (unmoved()) setIsAbortOpen(false);
+    } catch (err) {
+      // The hub's banner reports it, and the confirm stays open over any other
+      // failure. One refused because the operation changed asks about an
+      // operation that is gone, so it closes and the banner says why. These
+      // run from click handlers, where a rethrow is only an unhandled rejection.
+      const changed = isClientGitError(err) && err.gitReason === "repo-operation-changed";
+      if (changed && unmoved()) setIsAbortOpen(false);
     } finally {
       if (unmoved()) setIsAborting(false);
     }
-  }, [onAbort]);
+  }, [abortChosen, isAbortOpen, onAbort]);
 
   const handleContinue = useCallback(async () => {
     // `aria-disabled` keeps Continue focusable, so the veto lives here.
-    if (continueBlocked) return;
+    if (continueBlocked || operationKey === null) return;
     const unmoved = startUnmoved();
     setIsContinuing(true);
     try {
-      await onContinue();
+      await onContinue({ operation: operationKey, operationId: shownOperationId });
+    } catch {
+      // Reported by the hub's banner, as for abort.
     } finally {
       if (unmoved()) setIsContinuing(false);
     }
-  }, [continueBlocked, onContinue]);
+  }, [continueBlocked, onContinue, operationKey, shownOperationId]);
 
   // Read at the moment of intent: by the time a resolve starts, the busy row
   // has disabled the control that held focus, or a dialog holds it.
@@ -521,22 +791,31 @@ export function ConflictPanel({
       const handOffFocus = rowHasFocus(filePath);
       const unmoved = startUnmoved();
       setBusyFile(filePath);
-      let hunkCount: number | null;
+      // `false` is the only answer that stages without asking.
+      let hasMarkers: boolean | null = null;
+      let found: { hunkCount: number; firstMarkerLine: number | null } | null = null;
       try {
         const [entry] = await window.electron.git.scanConflictMarkers(worktreePath, [filePath]);
+        // The region count can't stand in for the verdict: an edit that drops a
+        // region's opener leaves its closer behind with no region to count.
         // The scanner answers `null` for any file it skipped. For a deletion
         // conflict that means there is no file to hold markers; for anything
         // else (oversized, unreadable) it means nobody looked.
-        hunkCount = entry?.hunkCount ?? (isDeletionConflict(filePath) ? 0 : null);
+        if (entry?.hasMarkers != null) {
+          hasMarkers = entry.hasMarkers;
+          found = { hunkCount: entry.hunkCount ?? 0, firstMarkerLine: entry.firstMarkerLine };
+        } else if (entry?.hunkCount == null && isDeletionConflict(filePath)) {
+          hasMarkers = false;
+        }
       } catch {
-        hunkCount = null;
+        hasMarkers = null;
       }
       // The re-read answered for a worktree this panel no longer shows: its
       // file is not the row on screen, so neither ask nor resolve.
       if (!unmoved()) return;
       setBusyFile((current) => (current === filePath ? null : current));
-      if (hunkCount !== 0) {
-        setPendingMarkerConfirm({ filePath, hunkCount });
+      if (hasMarkers !== false) {
+        setPendingMarkerConfirm({ filePath, found: hasMarkers ? found : null });
         return;
       }
       await markResolved(filePath, handOffFocus);
@@ -545,8 +824,8 @@ export function ConflictPanel({
   );
 
   const handleCheckoutSide = useCallback(
-    (filePath: string, side: Side) =>
-      resolveOptimistically(filePath, true, () => onCheckoutOursTheirs(filePath, side)),
+    (filePath: string, choice: ConflictSideChoice) =>
+      resolveOptimistically(filePath, true, () => onCheckoutOursTheirs(filePath, choice)),
     [resolveOptimistically, onCheckoutOursTheirs]
   );
 
@@ -570,18 +849,61 @@ export function ConflictPanel({
   const sideSource: Record<Side, string> = isRebase
     ? { ours: "destination branch", theirs: "incoming commit" }
     : { ours: "current branch", theirs: "incoming changes" };
+  const choiceLabel = (choice: ConflictSideChoice): string =>
+    choice.resolution === "checkout"
+      ? `Use ${sideSource[choice.side]}`
+      : choice.side === "both"
+        ? "Delete file"
+        : `Delete file to match ${sideSource[choice.side]}`;
+  // Starts with the visible label, so the item answers to what it shows.
+  const choiceAriaLabel = (choice: ConflictSideChoice, filePath: string): string =>
+    choice.side === "both"
+      ? `${choiceLabel(choice)} ${filePath}`
+      : `${choiceLabel(choice)} for ${filePath} (${choice.side})`;
 
   const isRebaseMidSequence =
     isRebase &&
     status.rebaseStep != null &&
     status.rebaseTotalSteps != null &&
     status.rebaseStep < status.rebaseTotalSteps;
-  const summary =
-    conflictCount > 0
+  const summary = unidentified
+    ? "Abort and Continue wait until it can be read — Refresh, or finish it from a terminal"
+    : conflictCount > 0
       ? `${pluralize(conflictCount, "conflicted file")} — resolve each, then continue`
-      : isRebaseMidSequence
-        ? "Continue to replay the remaining commits"
-        : `Continue to finish the ${operationNoun}`;
+      : mailboxNeedsChanges
+        ? "Stage this patch's changes to continue, or run git am --skip in a terminal to drop it"
+        : isRebaseMidSequence
+          ? "Continue to replay the remaining commits"
+          : operationKey === "APPLYING_MAILBOX"
+            ? // `git am` keeps no progress Review Hub reads, and it applies the
+              // rest of the series on Continue, so "finish" could overpromise.
+              "Continue to commit this patch and apply any that remain"
+            : `Continue to finish the ${operationNoun}`;
+
+  // What the hand-off sends is what the rows show: the same live list, kind
+  // wording and scan answers.
+  const agentFiles = useMemo<ConflictAgentFile[]>(
+    () =>
+      liveConflicts.map((file) => {
+        const entry = scanResults.get(file.path);
+        return {
+          path: file.path,
+          kind: conflictKindLabel(file.label, isRebase),
+          hunkCount: entry?.hunkCount ?? null,
+          firstMarkerLine: entry?.firstMarkerLine ?? null,
+        };
+      }),
+    [liveConflicts, scanResults, isRebase]
+  );
+  const agentRebase = useMemo<ConflictAgentRebase | null>(() => {
+    if (!isRebase) return null;
+    const current = status.rebaseSequence?.entries.find((e) => e.state === "current");
+    return {
+      step: status.rebaseStep,
+      totalSteps: status.rebaseTotalSteps,
+      commit: current ? { sha: current.sha, subject: current.subject } : null,
+    };
+  }, [isRebase, status.rebaseSequence, status.rebaseStep, status.rebaseTotalSteps]);
 
   return (
     <div data-testid={isWorklist ? "conflict-worklist" : "conflict-panel"}>
@@ -591,23 +913,27 @@ export function ConflictPanel({
         <div
           className={cn(
             "px-3 py-3 border-b border-divider",
-            conflictCount > 0 ? "bg-status-warning/10" : "bg-overlay-subtle"
+            needsUser ? "bg-status-warning/10" : "bg-overlay-subtle"
           )}
         >
           <div className="flex items-start gap-2">
             <GitMerge
               className={cn(
                 "w-4 h-4 mt-0.5 shrink-0",
-                conflictCount > 0 ? "text-status-warning" : "text-text-secondary"
+                needsUser ? "text-status-warning" : "text-text-secondary"
               )}
               aria-hidden
             />
             <div className="flex-1 min-w-0">
               <div className="flex items-baseline gap-2 flex-wrap">
                 <h3 className="text-sm font-semibold text-text-primary">
-                  {conflictCount > 0
-                    ? `Resolve ${operationNoun} conflicts`
-                    : `Ready to continue ${operationNoun}`}
+                  {unidentified
+                    ? `Couldn't identify this ${operationNoun}`
+                    : conflictCount > 0
+                      ? `Resolve ${operationNoun} conflicts`
+                      : mailboxNeedsChanges
+                        ? "Nothing staged for this patch"
+                        : `Ready to continue ${operationNoun}`}
                 </h3>
                 {operationState === "REBASING" &&
                   status.rebaseStep != null &&
@@ -634,8 +960,12 @@ export function ConflictPanel({
             <Button
               variant="ghost-danger"
               size="xs"
-              onClick={() => setIsAbortOpen(true)}
-              disabled={isAborting || isContinuing}
+              onClick={() => {
+                if (operationKey === null) return;
+                setAbortChosen({ operation: operationKey, operationId: shownOperationId });
+                setIsAbortOpen(true);
+              }}
+              disabled={unidentified || isAborting || isContinuing}
               className="shrink-0"
               data-testid="conflict-abort"
             >
@@ -655,17 +985,28 @@ export function ConflictPanel({
       {/* Region 2: Conflict worklist */}
       <div className="border-b border-divider">
         <div className={REVIEW_HUB_STICKY_BAND}>
-          <div className={REVIEW_HUB_SECTION_BAND}>
-            <span className={SECTION_LABEL_CLASS}>
+          {/* Wraps so the hand-off's no-agent hint can take a line of its own
+              under the heading; `flex-1` keeps the button on the right. */}
+          <div className={cn(REVIEW_HUB_SECTION_BAND, "flex-wrap")}>
+            <span className={cn(SECTION_LABEL_CLASS, "min-w-0 flex-1 truncate")}>
               Conflicted
               <span className={REVIEW_HUB_COUNT_CHIP}>{conflictCount}</span>
             </span>
+            {conflictCount > 0 && (
+              <ConflictAgentHandoff
+                key={worktreePath}
+                worktreePath={worktreePath}
+                operation={operationKey}
+                sides={sideSource}
+                rebase={agentRebase}
+                files={agentFiles}
+              />
+            )}
           </div>
         </div>
         {conflictCount > 0 ? (
           <ul className="px-2 py-1 flex flex-col gap-0.5" role="list" aria-label="Conflicted files">
             {liveConflicts.map((file) => {
-              const { dir, base } = splitPath(file.path);
               const isBusy = busyFile === file.path;
               const scan = scanResults.get(file.path);
               const hunkCount = scan?.hunkCount ?? null;
@@ -679,34 +1020,11 @@ export function ConflictPanel({
                   className="flex items-center gap-2 pl-2 pr-1 py-1 rounded-sm text-xs hover:bg-overlay-subtle transition-colors"
                 >
                   <XCircle className="w-3 h-3 shrink-0 text-status-error" aria-hidden />
-                  <TruncatedTooltip
-                    content={`${file.path} (${conflictKindLabel(file.label, isRebase)})`}
-                  >
-                    <div className="flex-1 min-w-0 flex items-baseline gap-2">
-                      {/* The directory gives way first; the basename is the
-                          file's identity and truncates only once the
-                          directory is gone. */}
-                      <span className="min-w-0 flex items-baseline font-mono text-2xs">
-                        {dir && (
-                          <PathTail className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
-                        )}
-                        <span className="shrink-0 max-w-full truncate text-text-primary font-medium">
-                          {base}
-                        </span>
-                      </span>
-                      <span className="shrink-0 whitespace-nowrap text-3xs uppercase tracking-wider text-text-secondary font-mono">
-                        {conflictKindLabel(file.label, isRebase)}
-                      </span>
-                      {hunkCount != null && hunkCount > 0 && (
-                        <span
-                          className="shrink-0 whitespace-nowrap text-3xs tabular-nums text-text-secondary"
-                          data-testid={`conflict-hunk-count-${file.path}`}
-                        >
-                          {pluralize(hunkCount, "region")}
-                        </span>
-                      )}
-                    </div>
-                  </TruncatedTooltip>
+                  <ConflictedFileLabel
+                    path={file.path}
+                    kind={conflictKindLabel(file.label, isRebase)}
+                    hunkCount={hunkCount}
+                  />
                   <div className="flex items-center gap-1 shrink-0">
                     <Button
                       variant="outline"
@@ -742,15 +1060,17 @@ export function ConflictPanel({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="min-w-[220px]">
-                        {(["ours", "theirs"] as const).map((side) => (
+                        {sideChoices(file.xy).map((choice) => (
                           <DropdownMenuItem
-                            key={side}
+                            key={choice.side}
                             destructive
-                            onSelect={() => setPendingCheckout({ filePath: file.path, side })}
-                            aria-label={`Use ${sideSource[side]} for ${file.path} (${side})`}
+                            onSelect={() => setPendingCheckout({ filePath: file.path, choice })}
+                            aria-label={choiceAriaLabel(choice, file.path)}
                           >
-                            Use {sideSource[side]}
-                            <DropdownMenuMeta>{side}</DropdownMenuMeta>
+                            {choiceLabel(choice)}
+                            {choice.side !== "both" && (
+                              <DropdownMenuMeta>{choice.side}</DropdownMenuMeta>
+                            )}
                           </DropdownMenuItem>
                         ))}
                       </DropdownMenuContent>
@@ -764,64 +1084,26 @@ export function ConflictPanel({
           <EmptyState variant="user-cleared" scale="sidebar" title="All conflicts resolved" />
         )}
 
-        {/* Resolved disclosure — recedes when conflicts remain, collapsed by default. */}
-        {!isWorklist && hasStagedResolutions && (
-          <div className="border-t border-divider/50">
-            <button
-              type="button"
-              onClick={() => setShowResolved((v) => !v)}
-              className={cn(
-                SECTION_LABEL_CLASS,
-                "w-full flex items-center gap-1.5 px-3 py-1.5 hover:text-text-primary hover:bg-overlay-subtle transition-colors"
-              )}
-              aria-expanded={showResolved}
-              aria-controls={resolvedListId}
-              data-testid="conflict-resolved-toggle"
-            >
-              <ChevronRight
-                data-animated-chevron
-                className={cn(
-                  "w-3 h-3 transition-transform duration-150 ease-out",
-                  showResolved && "rotate-90"
-                )}
-                aria-hidden
-              />
-              Resolved
-              <span className={cn(REVIEW_HUB_COUNT_CHIP, "ml-0")}>{status.staged.length}</span>
-            </button>
-            {/* Kept mounted while collapsed so `aria-controls` always names a
-                real element. */}
-            <ul
-              id={resolvedListId}
-              hidden={!showResolved}
-              className="px-2 pb-1 flex flex-col gap-0.5"
-              role="list"
-              aria-label="Resolved files"
-              data-testid="conflict-resolved-list"
-            >
-              {status.staged.map((file) => {
-                const { dir, base } = splitPath(file.path);
-                return (
-                  <li
-                    key={`resolved-${file.path}`}
-                    className="flex items-center gap-2 pl-2 pr-1 py-1 text-xs"
-                  >
-                    <Check className="w-3 h-3 shrink-0 text-text-secondary" aria-hidden />
-                    <TruncatedTooltip content={file.path}>
-                      <div className="flex-1 min-w-0 flex items-baseline font-mono text-2xs">
-                        {dir && (
-                          <PathTail className="min-w-0 text-text-secondary">{`${dir}/`}</PathTail>
-                        )}
-                        <span className="shrink-0 max-w-full truncate text-text-secondary">
-                          {base}
-                        </span>
-                      </div>
-                    </TruncatedTooltip>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
+        {/* Staged disclosures — recede when conflicts remain, collapsed by default. */}
+        {!isWorklist && resolvedStaged.length > 0 && (
+          <StagedDisclosure
+            key="resolved"
+            files={resolvedStaged}
+            label="Resolved"
+            listLabel="Resolved files"
+            testIdPrefix="conflict-resolved"
+            resolved
+          />
+        )}
+        {!isWorklist && otherStaged.length > 0 && (
+          <StagedDisclosure
+            key="staged"
+            files={otherStaged}
+            label={resolvedStaged.length > 0 ? "Other staged changes" : "Staged changes"}
+            listLabel={resolvedStaged.length > 0 ? "Other staged files" : "Staged files"}
+            testIdPrefix="conflict-staged"
+            resolved={false}
+          />
         )}
       </div>
 
@@ -863,28 +1145,36 @@ export function ConflictPanel({
         onClose={() => setPendingCheckout(null)}
         title={
           pendingCheckout
-            ? `Use ${sideSource[pendingCheckout.side]} for '${splitPath(pendingCheckout.filePath).base}'?`
+            ? pendingCheckout.choice.resolution === "delete"
+              ? `Delete '${splitPath(pendingCheckout.filePath).base}'?`
+              : `Use ${sideSource[pendingCheckout.choice.side]} for '${splitPath(pendingCheckout.filePath).base}'?`
             : ""
         }
         description={
           pendingCheckout ? (
-            <span>
-              Overwrites <span className="font-mono break-all">{pendingCheckout.filePath}</span>{" "}
-              with the {sideSource[pendingCheckout.side]} version, and any manual conflict edits in
-              this file are discarded.
-            </span>
+            <CheckoutConsequence
+              filePath={pendingCheckout.filePath}
+              choice={pendingCheckout.choice}
+              sideSource={sideSource}
+            />
           ) : (
             ""
           )
         }
-        confirmLabel={pendingCheckout ? `Use ${sideSource[pendingCheckout.side]}` : "Use version"}
+        confirmLabel={
+          pendingCheckout
+            ? pendingCheckout.choice.resolution === "delete"
+              ? "Delete file"
+              : `Use ${sideSource[pendingCheckout.choice.side]}`
+            : "Use version"
+        }
         cancelLabel="Cancel"
         variant="destructive"
         onConfirm={() => {
           if (!pendingCheckout) return;
-          const { filePath, side } = pendingCheckout;
+          const { filePath, choice } = pendingCheckout;
           setPendingCheckout(null);
-          handleCheckoutSide(filePath, side).catch(() => {});
+          handleCheckoutSide(filePath, choice).catch(() => {});
         }}
       />
 
@@ -893,25 +1183,33 @@ export function ConflictPanel({
         onClose={() => setPendingMarkerConfirm(null)}
         title={
           pendingMarkerConfirm
-            ? pendingMarkerConfirm.hunkCount === null
+            ? pendingMarkerConfirm.found === null
               ? `Mark '${splitPath(pendingMarkerConfirm.filePath).base}' resolved without checking?`
               : `Mark '${splitPath(pendingMarkerConfirm.filePath).base}' resolved?`
             : ""
         }
         description={
           pendingMarkerConfirm ? (
-            pendingMarkerConfirm.hunkCount === null ? (
+            pendingMarkerConfirm.found === null ? (
               <span>
                 Couldn&apos;t check{" "}
                 <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> for
                 leftover conflict markers. Marking it resolved stages the file exactly as it is.
               </span>
+            ) : pendingMarkerConfirm.found.hunkCount > 0 ? (
+              <span>
+                <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> still
+                has {pluralize(pendingMarkerConfirm.found.hunkCount, "conflict region")}. Marking it
+                resolved stages the conflict markers as file content.
+              </span>
             ) : (
               <span>
                 <span className="font-mono break-all">{pendingMarkerConfirm.filePath}</span> still
-                has {pendingMarkerConfirm.hunkCount} conflict{" "}
-                {pendingMarkerConfirm.hunkCount === 1 ? "region" : "regions"}. Marking it resolved
-                stages the conflict markers as file content.
+                has leftover conflict markers
+                {pendingMarkerConfirm.found.firstMarkerLine != null
+                  ? `, starting on line ${pendingMarkerConfirm.found.firstMarkerLine.toLocaleString()}`
+                  : ""}
+                . Marking it resolved stages them as file content.
               </span>
             )
           ) : (

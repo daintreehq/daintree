@@ -7,7 +7,7 @@ import type {
   ScheduledRunWorker,
 } from "@shared/types/scheduledRuns";
 import { machineTimeZone } from "@shared/utils/cron";
-import { localDayNumber } from "./scheduleWords";
+import { localDayNumber } from "./runTime";
 
 export const TRIGGER_WORDS: Record<ScheduledRunTrigger, string> = {
   scheduled: "Scheduled",

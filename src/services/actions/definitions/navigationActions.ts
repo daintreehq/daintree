@@ -74,6 +74,22 @@ export function registerNavigationActions(
     },
   }));
 
+  actions.set("nav.quickOpenFile", () => ({
+    id: "nav.quickOpenFile",
+    title: "Open file by name",
+    description:
+      "Open the quick switcher on the active worktree's files, to find one by name and open it",
+    category: "navigation",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    keywords: ["file", "go to file", "quick open", "find file", "search files", "viewer"],
+    run: async () => {
+      callbacks.onOpenQuickSwitcher({ kind: "files" });
+    },
+  }));
+
   actions.set("nav.showProjectHome", () => ({
     id: "nav.showProjectHome",
     title: "Show project home",

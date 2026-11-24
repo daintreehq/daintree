@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod/mini";
 import type * as pty from "node-pty";
 import type {
@@ -41,10 +41,37 @@ import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackD
 import { reportRunHandback } from "./runHandback.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { resolveLaunchClaudeConfigDir } from "../claude/claudeConfigDir.js";
+import { resolveLaunchCodexHome } from "../codex/codexLaunchHome.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
 import { resolveResetsAt, scanClaudeUsageMessages } from "./ClaudeUsageWarnings.js";
+import { hasClaudeComposer, scanClaudeUpdateFooter } from "./ClaudeUpdateFooter.js";
+import {
+  clearUpdateInstalled,
+  noteUpdateFooter,
+  noteUpdateFooterProcess,
+} from "./claudeUpdateObservation.js";
+import {
+  codexBannerResetCandidates,
+  codexLaunchZone,
+  codexSystemZone,
+  locateCodexLimitBanner,
+  readCodexLimitEvidence,
+  resolveCodexLimitReset,
+  type CodexLimitObservation,
+} from "./CodexUsageLimit.js";
+import type {
+  CodexLimitAnswer,
+  CodexLimitQuery,
+  CodexLimitUnknownReason,
+} from "../../../shared/types/codexLimitReset.js";
+import type {
+  CodexLimitContinueResult,
+  CodexLimitContinueSkipReason,
+  CodexLimitStopRef,
+} from "../../../shared/types/codexLimitContinuation.js";
+import { codexStopContext, judgeCodexLimitScreen } from "./codexLimitContinueScreen.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -52,6 +79,7 @@ import { TERMINAL_SESSION_PERSISTENCE_ENABLED } from "./terminalSessionPersisten
 import { SessionSnapshotter, createTerminalSessionSnapshotter } from "./SessionSnapshotter.js";
 import { createProcessStateValidator } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
+import { encodeUtf8 } from "./encodeUtf8.js";
 import { SemanticBufferManager } from "./SemanticBufferManager.js";
 import { ProcessTreeKiller, type LineageKillSource } from "./ProcessTreeKiller.js";
 import {
@@ -86,7 +114,9 @@ import {
   type TerminalAgentDetectionHost,
 } from "./TerminalAgentDetection.js";
 import { offerAgentRunArgvSession } from "./agentRunArgv.js";
+import { TERMINAL_MODE_RESET } from "./terminalModeReset.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
+import { isTerminalAgentLive } from "./agentLiveness.js";
 import { readScheduledRunRef } from "../../../shared/utils/scheduledRunProvenance.js";
 import { stampPromptInput } from "../../../shared/utils/terminalInputProvenance.js";
 import {
@@ -94,8 +124,28 @@ import {
   type VisibleContentSnapshot,
 } from "./SustainedChangeTracker.js";
 
+/** What has happened to a pane since its Codex stop first showed (#17909). */
+interface CodexStopGuard {
+  /** The banner it was for, and the history rows just above it. */
+  key: string;
+  /** The terminal's input count when it first showed: any later write is input since the stop. */
+  inputSeq: number;
+  /** A choice dialog was observed since, whatever the screen shows now. */
+  dialogSeen: boolean;
+}
+
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
 const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
+/**
+ * How long a Codex stop banner may be off screen and still be the one first
+ * seen when it comes back: a repaint, not a new print (#17906).
+ */
+const CODEX_LIMIT_REPAINT_GRACE_MS = 5_000;
+/**
+ * How long a continuation may wait for the input lane before it counts as not
+ * delivered (#17909): a lane cancelled or disposed under it never answers.
+ */
+const CODEX_CONTINUE_LANE_TIMEOUT_MS = 30_000;
 /**
  * How long a rate-limit banner must sit unchanged, with no output at all,
  * before the pane counts as stopped at it and may fall over (#14370).
@@ -112,8 +162,11 @@ export interface TerminalProcessCallbacks {
    * `streamEnd` is the UTF-8 byte offset, in this process's renderer-bound
    * stream, just past `data`. A live snapshot is stamped with the same offset
    * (#12791) so the renderer can tell which chunks it already contains.
+   * `encoded` is `data` as UTF-8, encoded once here for the offset so the
+   * output router does not encode it again; a standalone buffer the receiver
+   * may keep.
    */
-  emitData: (id: string, data: string, streamEnd: number) => void;
+  emitData: (id: string, data: string, streamEnd: number, encoded?: Uint8Array) => void;
   /**
    * Where this process's stream offsets start. The owner carries it over from
    * the previous process at the same id, so offsets never go backwards across
@@ -258,6 +311,59 @@ export class TerminalProcess {
     ClaudeUsageWindow,
     { key: string; visible: boolean; lastSeenAt: number }
   >();
+  /**
+   * The Codex stop banner on screen (#17906), held from its first sighting,
+   * which fixes the day a bare time is read on, for as long as it stays.
+   * `seq` names this sighting for a read that resolves it against a reading;
+   * `incarnation` and `observedSince` tie it to the agent run and the unbroken
+   * read of the output it was seen in.
+   */
+  private codexLimit: {
+    key: string;
+    seq: number;
+    incarnation: number;
+    observedSince: number | null;
+    observation: CodexLimitObservation;
+    /** When a look last showed it, and when one first stopped showing it (null while shown). */
+    lastSeenAt: number;
+    hiddenSince: number | null;
+    /** What has happened to the pane since this stop first showed (#17909). */
+    guard: CodexStopGuard;
+  } | null = null;
+  /**
+   * The guard of the stop last seen, kept for a redisplay of it after it was
+   * off screen a while (a transcript or picker closed): the same banner under
+   * the same history (as text, so a rewrap after a resize is the same) is the
+   * same stop, so what happened since it first showed still counts. A stop a
+   * new turn ran into sits under other history and starts afresh.
+   */
+  private codexStopGuard: CodexStopGuard | null = null;
+  /** Bumped by every arm and disarm, so a continuation asked for under one is refused after another. */
+  private codexContinueArmGeneration = 0;
+  /** The continuation in the input lane, so a disarm or a dialog can take back its Enter. */
+  private codexContinueToken: string | null = null;
+  /** Whether the latest look showed a readable stop, a half-drawn or unreadable one, or none. */
+  private codexLimitLook: "banner" | "unreadable" | "none" = "none";
+  private codexLimitSeq = 0;
+  /** This process, as a stamp names it: a replacement pane counts its sequence from zero again. */
+  private readonly codexLimitRun = randomUUID();
+  /** The launch's `TZ`, which a Codex run here writes its local times in; see {@link codexLaunchZone}. */
+  private readonly launchTz: string | undefined;
+  /**
+   * When the pane was last looked at without a banner being drawn: a banner
+   * that shows next was printed after it. A half-drawn one doesn't count.
+   */
+  private codexSettledLookAt: number | null = null;
+  /** When the pane's screen was last read for a Codex banner at all. */
+  private codexLimitLookAt = 0;
+  /**
+   * Main armed this pane to continue at its limit's reset (#17909): its Codex
+   * stop is reported once it settles, one report per sighting. Off, nothing
+   * here runs.
+   */
+  private codexContinueArmed = false;
+  private codexStopReportedSeq: number | null = null;
+  private codexStopSettleTimer: NodeJS.Timeout | null = null;
   /** True only while the exit path settles the mirror's last frame. */
   private samplingFinalFrame = false;
 
@@ -272,10 +378,7 @@ export class TerminalProcess {
    * cold-launched/restored agents wired until an explicit exit signal arrives.
    */
   private get isAgentLive(): boolean {
-    const t = this.terminalInfo;
-    if (t.detectedAgentId !== undefined) return true;
-    if (t.agentState === "exited" || t.isExited) return false;
-    return t.launchAgentId !== undefined;
+    return isTerminalAgentLive(this.terminalInfo);
   }
 
   // Live identity check for OSC 10/11 color-query responder ownership. Matches
@@ -288,6 +391,11 @@ export class TerminalProcess {
   private _activityTier: "active" | "background" = "active";
   private readonly textDecoder = new TextDecoder();
   private emittedBytes = 0;
+  /**
+   * Chunks read off the pty, counted before anything filters them: a chunk
+   * answered and stripped on its way to the views still reached the mirror.
+   */
+  private receivedChunks = 0;
 
   flushEventDrivenSnapshot(): void {
     this.sessionSnapshotter.flushEventDriven();
@@ -367,6 +475,7 @@ export class TerminalProcess {
     this.emittedBytes = callbacks.streamOffsetBase ?? 0;
     const { shell, args: spawnArgs } = spawnContext;
     const spawnedAt = Date.now();
+    this.launchTz = spawnContext.env.TZ;
 
     // Launch hint: the agent this terminal was asked to run, if any. Not an
     // identity — never drives chrome or capability — see
@@ -381,6 +490,7 @@ export class TerminalProcess {
     this.terminalInfo = {
       id,
       projectId: options.projectId,
+      unplaced: options.unplaced,
       ptyProcess,
       cwd: options.cwd,
       shell,
@@ -396,6 +506,8 @@ export class TerminalProcess {
       // terminals have no agent state.
       agentState: hasLaunchHint ? "idle" : undefined,
       lastStateChange: hasLaunchHint ? spawnedAt : undefined,
+      // A resumed conversation opens on whatever its CLI shows first (#18014).
+      ...(hasLaunchHint ? { promptUnseen: true as const, promptUnseenAt: spawnedAt } : {}),
       lastInputTime: spawnedAt,
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
@@ -418,10 +530,13 @@ export class TerminalProcess {
       // shell inherits the same env. Read off the env the PTY really got, so an
       // account's folder and Daintree's own override both land here (#16269).
       claudeConfigDir: resolveLaunchClaudeConfigDir(spawnContext.env),
+      // Likewise for Codex: which account's home an agent here reads quota from (#17318).
+      codexHome: resolveLaunchCodexHome(spawnContext.env),
       worktreeId: options.worktreeId,
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
       originalAgentPresetId: options.originalAgentPresetId ?? options.agentPresetId,
+      fallbackChainIndex: options.fallbackChainIndex,
       launchGeneration: options.launchGeneration,
       spawnArgs,
     };
@@ -529,6 +644,8 @@ export class TerminalProcess {
         return self.writeQueue;
       },
       logWriteError: (error, context) => self.logWriteError(error, context),
+      serializeScreen: () => self.analysis.serializeScreen(),
+      outputMark: () => self.emittedBytes + self.receivedChunks,
     });
     this.ptyDataPipeline = new PtyDataPipeline({
       get terminalInfo() {
@@ -739,6 +856,20 @@ export class TerminalProcess {
     }
     this.flushAgentOutput();
     this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
+    this.noteCodexStopState();
+  }
+
+  /**
+   * Every state the pane is observed in, whenever it arrives (#17909): a
+   * choice dialog marks the stop on screen, and takes back a continuation
+   * whose Enter hasn't been written yet.
+   */
+  private noteCodexStopState(): void {
+    const t = this.terminalInfo;
+    if (t.agentState !== "waiting" || t.waitingReason !== "approval") return;
+    if (this.codexLimit) this.codexLimit.guard.dialogSeen = true;
+    if (this.codexStopGuard) this.codexStopGuard.dialogSeen = true;
+    this.withdrawCodexContinue();
   }
 
   private handleAnalysisWaitingTimeout(spawnedAt: number): void {
@@ -786,6 +917,8 @@ export class TerminalProcess {
           cpuUsage: validator.getDescendantsCpuUsage?.() ?? 0,
         };
       },
+      onProcessTreeRefresh: (listener) =>
+        this.deps.processTreeCache?.onRefresh(listener) ?? (() => {}),
       getAgentContext: () => ({
         agentLive: this.isAgentLive,
         agentState: this.terminalInfo.agentState,
@@ -906,6 +1039,12 @@ export class TerminalProcess {
     this.flushAgentOutput();
     this.inThreadAnalysis?.cancelAgentOutputNote();
     this.cancelRateLimitSettle();
+    this.cancelCodexStopSettle();
+    // The run is over however it ended, an idle kill the state machine
+    // ignores included (#17905).
+    clearUpdateInstalled(this.terminalInfo, Date.now());
+    this.codexLimit = null;
+    this.codexLimitLook = "none";
 
     if (this.ptyDataDisposable) {
       try {
@@ -1011,6 +1150,7 @@ export class TerminalProcess {
       agentState: t.agentState,
       waitingReason: t.waitingReason,
       lastStateChange: t.lastStateChange,
+      promptUnseen: t.promptUnseen,
       lastOutputChangeAt: t.lastOutputChangeAt,
       traceId: t.traceId,
       analysisEnabled: t.analysisEnabled,
@@ -1026,11 +1166,13 @@ export class TerminalProcess {
       detectedProcessIconId: t.detectedProcessIconId,
       everDetectedAgent: t.everDetectedAgent,
       agentIncarnation: t.agentIncarnation,
+      updateInstalled: t.updateInstalled,
       restartCount: t.restartCount,
       activityTier: this._activityTier,
       hasPty,
       agentSessionId: t.agentSessionId,
       claudeConfigDir: t.claudeConfigDir,
+      codexHome: t.codexHome,
       agentLaunchFlags: t.agentLaunchFlags,
       agentModelId: t.agentModelId,
       scheduledRun: t.scheduledRun,
@@ -1429,6 +1571,9 @@ export class TerminalProcess {
     }
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
+    // Every transition the quit provokes (the agent dropping back to its prompt,
+    // exiting to the shell) is the terminal closing, not its agent finishing.
+    this.terminalInfo.gracefullyClosing = true;
     const inFlight = runGracefulShutdown({
       terminalInfo: this.terminalInfo,
       get isAgentLive() {
@@ -1450,6 +1595,7 @@ export class TerminalProcess {
     const clear = () => {
       if (self.gracefulShutdownInFlight === inFlight) {
         self.gracefulShutdownInFlight = null;
+        self.terminalInfo.gracefullyClosing = false;
       }
     };
     void inFlight.then(clear, clear);
@@ -1617,6 +1763,8 @@ export class TerminalProcess {
       getLastCommand: () => tp.semanticBufferManager.getLastCommand(),
       getPtyDescendantCount: () => tp.getPtyDescendantCount(),
       hasAgentProcess: (agentId) => tp.hasAgentProcess(agentId),
+      onProcessTreeRefresh: (listener) =>
+        tp.deps.processTreeCache?.onRefresh(listener) ?? (() => {}),
       readForegroundProcessGroupSnapshot: () => tp.readForegroundProcessGroupSnapshot(),
       handleAgentDetection: (result, cbSpawnedAt) => tp.handleAgentDetection(result, cbSpawnedAt),
     };
@@ -1697,6 +1845,23 @@ export class TerminalProcess {
     this.emitDataDirect(historyChunk);
 
     return linesToReplay;
+  }
+
+  /**
+   * Put back the input modes a program left on when it died (#17328), as
+   * output Daintree makes itself: the mirror and the pane get the same bytes in
+   * stream order, and the process gets none. False when there is no live
+   * screen to reset: an exited or killed pane, or one showing the snapshot it
+   * kept at exit, which must stay as captured.
+   */
+  resetTerminalModes(): boolean {
+    const terminal = this.terminalInfo;
+    if (terminal.wasKilled || terminal.isExited || !this.lifecycle.isAlive) return false;
+    if (terminal.preservedSnapshot !== undefined) return false;
+    if (!this.analysis.feedModeReset(TERMINAL_MODE_RESET)) return false;
+    this.sessionSnapshotter.schedule();
+    this.emitDataDirect(TERMINAL_MODE_RESET);
+    return true;
   }
 
   shouldPreserveOnExit(exitCode: number): boolean {
@@ -1936,12 +2101,15 @@ export class TerminalProcess {
   }
 
   private noteOutputProgress(lines: readonly string[]): void {
+    this.identityWatcher.noteScreenChange();
     const now = Date.now();
     if (this.outputProgress.observe(lines, now)) {
       this.terminalInfo.lastOutputChangeAt = now;
     }
     this.observeRateLimitBanner(lines, now);
     this.observeClaudeUsage(lines, now);
+    this.observeUpdateFooter(lines, now);
+    this.observeCodexUsageLimit(lines, now);
     this.observeHandback(now);
   }
 
@@ -2088,6 +2256,372 @@ export class TerminalProcess {
   }
 
   /**
+   * Note Claude Code's "Update installed" footer (#17905). Only a detected,
+   * live Claude Code run is read: the launch hint alone doesn't make a pane
+   * Claude's, and the exit path's last frame belongs to a run that is over.
+   * Anything else ends the observation, so a shell or another CLI taking the
+   * pane clears it on its first frame.
+   */
+  private observeUpdateFooter(lines: readonly string[], now: number): void {
+    const t = this.terminalInfo;
+    const cols = readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined;
+    if (t.detectedAgentId !== "claude" || !this.isAgentLive || this.samplingFinalFrame) {
+      clearUpdateInstalled(t, now);
+      // A fenced footer the shell scrolled away no longer belongs to anyone.
+      if (t.updateFooterSighting?.fenced && scanClaudeUpdateFooter(lines, cols) === null) {
+        t.updateFooterSighting.fenced = false;
+      }
+      return;
+    }
+    noteUpdateFooter(t, scanClaudeUpdateFooter(lines, cols), now);
+  }
+
+  /**
+   * Hold the Codex stop banner this pane shows (#17906): what it says, when it
+   * first showed, and the instants its printed time can mean in the zone the
+   * Codex process runs in. Nothing leaves here but the answer
+   * {@link answerCodexLimit} gives.
+   */
+  private observeCodexUsageLimit(lines: readonly string[], now: number): void {
+    const t = this.terminalInfo;
+    const printedAfter = this.codexSettledLookAt ?? t.spawnedAt;
+    const live = getLiveAgentId(t) === "codex" && this.isAgentLive && this.lifecycle.isAlive;
+    const cols = live ? (readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined) : undefined;
+    const located = live ? locateCodexLimitBanner(lines, cols) : null;
+    const banner = located?.banner ?? null;
+    this.codexLimitLookAt = now;
+    if (banner?.kind !== "unreadable") this.codexSettledLookAt = now;
+    if (!live) {
+      this.codexLimit = null;
+      this.codexStopGuard = null;
+      this.codexLimitLook = "none";
+      this.trackCodexStop();
+      return;
+    }
+    const held = this.codexLimit;
+    // A dialog that came and went leaves the same screen behind, so the
+    // sighting remembers it.
+    this.noteCodexStopState();
+    // A half-drawn or unreadable stop answers for itself, but doesn't replace
+    // the one held: a repaint that passes through it may bring that one back.
+    if (banner === null || banner.kind === "unreadable") {
+      this.codexLimitLook = banner === null ? "none" : "unreadable";
+      if (held) held.hiddenSince ??= now;
+      this.trackCodexStop();
+      return;
+    }
+    this.codexLimitLook = "banner";
+    const incarnation = t.agentIncarnation ?? 0;
+    const observedSince = this.analysis.observedSince();
+    const key = JSON.stringify(banner);
+    // Back after a moment off screen with no prompt typed or sent in between,
+    // the same banner is a repaint; after one, it may be the same stop again.
+    const promptedAt = Math.max(
+      t.lastTypedInputAt ?? 0,
+      t.lastOwnedPromptInput?.at ?? 0,
+      t.lastForeignPromptInputAt ?? 0
+    );
+    const repaint =
+      held !== null &&
+      (held.hiddenSince === null ||
+        (now - held.hiddenSince < CODEX_LIMIT_REPAINT_GRACE_MS && promptedAt <= held.lastSeenAt));
+    if (
+      repaint &&
+      held.key === key &&
+      held.incarnation === incarnation &&
+      held.observedSince === observedSince
+    ) {
+      held.hiddenSince = null;
+      held.lastSeenAt = now;
+      this.trackCodexStop();
+      return;
+    }
+    const launchZone = codexLaunchZone({ TZ: this.launchTz });
+    const zone = launchZone === undefined ? codexSystemZone() : launchZone;
+    this.codexLimit = {
+      key,
+      seq: ++this.codexLimitSeq,
+      incarnation,
+      observedSince,
+      lastSeenAt: now,
+      hiddenSince: null,
+      guard: this.codexStopGuardFor(
+        // Narrowed by the readable-banner branch above.
+        `${key}\u0000${codexStopContext(lines, located!.start)}`
+      ),
+      observation: {
+        banner,
+        observedAt: now,
+        candidates:
+          banner.kind !== "at" || zone === null
+            ? null
+            : codexBannerResetCandidates(banner.time, now, printedAfter, zone),
+        // Only the Codex Daintree launched runs on the launch's home and zone.
+        attributed: t.launchAgentId === "codex" && incarnation === 0,
+      },
+    };
+    this.trackCodexStop();
+  }
+
+  /**
+   * When this pane's spent Codex window resets (#17906). A first read answers
+   * outright when no quota reading could change the answer, and otherwise
+   * names the banner for a second read that brings a reading of the pane's
+   * Codex home. `observedSince` is since when the pane's output has been read
+   * without a gap (null while it isn't): a banner seen before a gap may have
+   * been replaced unseen.
+   */
+  answerCodexLimit(query: CodexLimitQuery, observedSince: number | null): CodexLimitAnswer {
+    const held = this.codexLimit;
+    const t = this.terminalInfo;
+    const unknown = (reason: CodexLimitUnknownReason): CodexLimitAnswer => ({
+      reset: { status: "unknown", reason },
+    });
+    const live = getLiveAgentId(t) === "codex" && this.isAgentLive && this.lifecycle.isAlive;
+    if (live && this.codexLimitLook === "unreadable") return unknown("unreadable-banner");
+    if (
+      !live ||
+      this.codexLimitLook !== "banner" ||
+      held === null ||
+      held.hiddenSince !== null ||
+      held.incarnation !== (t.agentIncarnation ?? 0)
+    ) {
+      return unknown("no-banner");
+    }
+    if (observedSince === null || observedSince !== held.observedSince) {
+      return unknown("not-observed");
+    }
+    const { observation } = held;
+    const stamp = { seq: held.seq, run: this.codexLimitRun, observedAt: observation.observedAt };
+    if (query.seq === undefined) {
+      const { banner, candidates } = observation;
+      // A printed minute already begun is answered as it stands: no reading
+      // taken now can tell what was spent at the stop.
+      const now = Date.now();
+      const wantsReading =
+        observation.attributed &&
+        (banner.kind === "later" ||
+          (banner.kind === "at" &&
+            (candidates?.length ?? 0) > 0 &&
+            candidates!.every((candidate) => candidate > now)));
+      return wantsReading
+        ? { stamp }
+        : { reset: resolveCodexLimitReset(observation, null, now), stamp };
+    }
+    if (query.seq !== held.seq || query.run !== this.codexLimitRun) {
+      return unknown("banner-changed");
+    }
+    const evidence = readCodexLimitEvidence(query.evidence);
+    return { reset: resolveCodexLimitReset(observation, evidence, Date.now()), stamp };
+  }
+
+  /** The guard for a new sighting of `key`: the last stop's when it is the same banner again. */
+  private codexStopGuardFor(key: string): CodexStopGuard {
+    const kept = this.codexStopGuard;
+    if (kept && kept.key === key) return kept;
+    const guard = { key, inputSeq: this.inputController.inputSequence, dialogSeen: false };
+    this.codexStopGuard = guard;
+    return guard;
+  }
+
+  /**
+   * Arm or disarm this pane's continuation at its limit's reset (#17909). Armed
+   * after the stop, the stop already on screen is reported as first seen once
+   * it has settled; disarmed, nothing more is reported.
+   */
+  setCodexLimitContinueArmed(armed: boolean): void {
+    if (armed === this.codexContinueArmed) return;
+    this.codexContinueArmed = armed;
+    this.codexContinueArmGeneration++;
+    if (!armed) this.withdrawCodexContinue();
+    this.codexStopReportedSeq = null;
+    this.trackCodexStop();
+  }
+
+  /**
+   * Report an armed pane's Codex stop once it has settled: on screen, the
+   * output quiet and read, and the agent not working. One report per sighting,
+   * so a banner that stays is reported once and one that comes back after a
+   * prompt is a new stop.
+   */
+  private trackCodexStop(): void {
+    const held = this.codexLimit;
+    if (
+      !this.codexContinueArmed ||
+      this.samplingFinalFrame ||
+      held === null ||
+      this.codexLimitLook !== "banner" ||
+      held.hiddenSince !== null ||
+      held.seq === this.codexStopReportedSeq
+    ) {
+      this.cancelCodexStopSettle();
+      return;
+    }
+    if (this.codexStopSettleTimer === null) this.armCodexStopSettle(RATE_LIMIT_SETTLE_MS);
+  }
+
+  private armCodexStopSettle(delayMs: number): void {
+    if (this.codexStopSettleTimer) clearTimeout(this.codexStopSettleTimer);
+    this.codexStopSettleTimer = setTimeout(() => {
+      this.codexStopSettleTimer = null;
+      this.settleCodexStop();
+    }, delayMs);
+    this.codexStopSettleTimer.unref?.();
+  }
+
+  private cancelCodexStopSettle(): void {
+    if (this.codexStopSettleTimer) {
+      clearTimeout(this.codexStopSettleTimer);
+      this.codexStopSettleTimer = null;
+    }
+  }
+
+  private settleCodexStop(): void {
+    const held = this.codexLimit;
+    const t = this.terminalInfo;
+    if (
+      !this.codexContinueArmed ||
+      held === null ||
+      this.codexLimitLook !== "banner" ||
+      held.hiddenSince !== null ||
+      held.seq === this.codexStopReportedSeq ||
+      !this.isAgentLive ||
+      t.isExited ||
+      getLiveAgentId(t) !== "codex"
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const quietFor = now - t.lastOutputTime;
+    if (quietFor < RATE_LIMIT_SETTLE_MS) {
+      this.armCodexStopSettle(RATE_LIMIT_SETTLE_MS - quietFor);
+      return;
+    }
+    // A byte the last look hasn't caught up with, or a turn still running.
+    if (t.lastOutputTime > this.codexLimitLookAt || t.agentState === "working") {
+      this.armCodexStopSettle(RATE_LIMIT_SETTLE_MS);
+      return;
+    }
+    this.codexStopReportedSeq = held.seq;
+    events.emit("agent:codex-limit-stopped", {
+      terminalId: this.id,
+      run: this.codexLimitRun,
+      seq: held.seq,
+      timestamp: now,
+    });
+  }
+
+  /** Take back a continuation in the lane before its Enter: its text stays as a draft, unsent. */
+  private withdrawCodexContinue(): void {
+    if (this.codexContinueToken !== null) {
+      this.writeQueue.withdrawGuardedSubmission(this.codexContinueToken);
+    }
+  }
+
+  /**
+   * What stops a continuation for `stop` right now, or null (#17909). `inLane`
+   * is the lane's own admission, where the continuation itself is the
+   * submission in flight.
+   */
+  private codexContinueBlocker(
+    stop: CodexLimitStopRef,
+    inLane: boolean,
+    hostBlocker: () => CodexLimitContinueSkipReason | null
+  ): CodexLimitContinueSkipReason | null {
+    const t = this.terminalInfo;
+    const held = this.codexLimit;
+    if (stop.run !== this.codexLimitRun) return "process-changed";
+    // Disarmed since main asked: the disarm reaches the host ahead of the write.
+    if (!this.codexContinueArmed) return "disarmed";
+    if (!this.lifecycle.isAlive || t.isExited || !this.isAgentLive) return "agent-gone";
+    if (getLiveAgentId(t) !== "codex") return "agent-gone";
+    if (held === null || held.seq !== stop.seq || held.incarnation !== (t.agentIncarnation ?? 0)) {
+      return "banner-changed";
+    }
+    if (this.codexLimitLook !== "banner" || held.hiddenSince !== null) return "banner-gone";
+    // A banner seen before a gap in the read may have been replaced unseen.
+    if (this.analysis.observedSince() !== held.observedSince) return "not-observed";
+    if (this.inputController.inputSequence !== held.guard.inputSeq) return "input-since";
+    if (held.guard.dialogSeen || (t.agentState === "waiting" && t.waitingReason === "approval")) {
+      return "dialog-since";
+    }
+    if (this.inputController.isInputLocked) return "input-locked";
+    if (!inLane && this.writeQueue.hasPendingSubmission()) return "input-pending";
+    if (t.agentState === "working") return "agent-working";
+    return hostBlocker();
+  }
+
+  /**
+   * Type the line that continues this pane's Codex run after its usage limit
+   * reset (#17909), only if the pane is still where the limit left it: the
+   * same process and sighting, no input written and no choice dialog seen
+   * since, the banner the last thing above an empty composer, and no byte
+   * printed between that look and the write. The line goes through the input lane as a guarded
+   * submission, so the checks run again the moment it takes the lane and input
+   * arriving between its text and its Enter abandons the Enter.
+   */
+  async continueAtCodexLimit(
+    stop: CodexLimitStopRef,
+    outerBlocker: () => CodexLimitContinueSkipReason | null = () => null
+  ): Promise<CodexLimitContinueResult> {
+    const skipped = (reason: CodexLimitContinueSkipReason): CodexLimitContinueResult => ({
+      status: "skipped",
+      reason,
+    });
+    // Disarmed and armed again meanwhile is another arming, not this one.
+    const generation = this.codexContinueArmGeneration;
+    const hostBlocker = () =>
+      this.codexContinueArmGeneration === generation ? outerBlocker() : "disarmed";
+    const before = this.codexContinueBlocker(stop, false, hostBlocker);
+    if (before !== null) return skipped(before);
+    const streamOffset = this.emittedBytes;
+    // The whole buffer, so the read carries its continuation: proof the
+    // mirror parsed every byte emitted before it, which a capped read lacks.
+    const snapshot = await this.getSerializedStateAsync().catch(() => null);
+    const after = this.codexContinueBlocker(stop, false, hostBlocker);
+    if (after !== null) return skipped(after);
+    if (this.emittedBytes !== streamOffset) return skipped("output-since");
+    if (snapshot?.continuation?.streamOffset !== streamOffset) return skipped("unreadable-screen");
+    const cols = readPtyDimension(() => this.terminalInfo.ptyProcess.cols, null) ?? undefined;
+    const held = this.codexLimit;
+    if (held === null) return skipped("banner-changed");
+    const verdict = judgeCodexLimitScreen(snapshot.data, cols, held.key);
+    if ("skip" in verdict) return skipped(verdict.skip);
+    const { line } = verdict;
+    return new Promise<CodexLimitContinueResult>((resolve) => {
+      let settled = false;
+      const token = randomUUID();
+      const settle = (result: CodexLimitContinueResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (this.codexContinueToken === token) this.codexContinueToken = null;
+        resolve(result);
+      };
+      const timer = setTimeout(
+        () => settle(skipped("not-delivered")),
+        CODEX_CONTINUE_LANE_TIMEOUT_MS
+      );
+      timer.unref?.();
+      const admit = () => {
+        // Already answered (the lane took too long): it must not type after all.
+        if (settled) return false;
+        const blocker =
+          this.codexContinueBlocker(stop, true, hostBlocker) ??
+          (this.emittedBytes !== streamOffset ? "output-since" : null);
+        if (blocker === null) return true;
+        settle(skipped(blocker));
+        return false;
+      };
+      this.codexContinueToken = token;
+      this.writeQueue.submit(line, token, () => settle({ status: "continued", line }), admit);
+      // Runs once the lane is past the line, however it ended: refused,
+      // abandoned before its Enter, or written (already settled).
+      this.writeQueue.stage(() => settle(skipped("not-delivered")));
+    });
+  }
+
+  /**
    * Offer the pane's fallback chain once its rate-limit banner has sat still
    * (#14370). Kept apart from the chip's cooldown: a banner blanked by one
    * repaint restarts the settle without waiting a minute for a new observation.
@@ -2170,6 +2704,7 @@ export class TerminalProcess {
   }
 
   private handlePtyData(ptyProcess: pty.IPty, data: string): void {
+    if (data.length > 0) this.receivedChunks++;
     this.ptyDataPipeline.handlePtyData(ptyProcess, data);
   }
 
@@ -2200,8 +2735,9 @@ export class TerminalProcess {
   }
 
   private emitDataDirect(data: string): void {
-    this.emittedBytes += Buffer.byteLength(data, "utf8");
-    this.callbacks.emitData(this.id, data, this.emittedBytes);
+    const encoded = encodeUtf8(data);
+    this.emittedBytes += encoded.byteLength;
+    this.callbacks.emitData(this.id, data, this.emittedBytes, encoded);
   }
 
   /**
@@ -2222,6 +2758,9 @@ export class TerminalProcess {
       const seen = this.agentProcessSeen;
       if (seen?.pid === observation.pid && seen.run !== run) return;
       this.agentProcessSeen = { pid: observation.pid, run };
+      if (observation.agentType === "claude") {
+        noteUpdateFooterProcess(info, observation.pid, Date.now());
+      }
     }
     if (this.argvReadRun === run) return;
     this.argvReadRun = run;
@@ -2230,7 +2769,18 @@ export class TerminalProcess {
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {
     this.flushAgentOutput();
+    const before = this.terminalInfo.detectedAgentId;
     runHandleAgentDetection(this.agentDetectionHost(), result, spawnedAt);
+    // A quiet pane may already show the footer from before detection caught
+    // up (#17905); read the screen now rather than wait for output. Only a
+    // screen showing Claude's composer counts, and any other says nothing,
+    // not even that the footer is gone: it may still be what the shell left
+    // before Claude's first frame reached the mirror.
+    if (before !== "claude" && this.terminalInfo.detectedAgentId === "claude") {
+      const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
+      const lines = this.analysis.getViewportLines(rows);
+      if (hasClaudeComposer(lines)) this.observeUpdateFooter(lines, Date.now());
+    }
   }
 
   /**

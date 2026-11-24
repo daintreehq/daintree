@@ -13,6 +13,7 @@ export const ONBOARDING_METHOD_CHANNELS = {
   dismissSetupBanner: "onboarding:dismiss-setup-banner",
   getChecklist: "onboarding:checklist-get",
   dismissChecklist: "onboarding:checklist-dismiss",
+  reopenChecklist: "onboarding:checklist-reopen",
   markChecklistItem: "onboarding:checklist-mark-item",
   dismissTourInvite: "onboarding:tour-dismiss-invite",
   setTourProgress: "onboarding:tour-set-progress",

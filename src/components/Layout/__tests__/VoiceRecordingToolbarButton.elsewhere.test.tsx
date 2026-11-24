@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { setInitializedVoiceRecordingService } from "@/services/voiceRecordingRuntime";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -34,7 +36,10 @@ vi.mock("@/components/Hosts/hostList", () => ({
     localSummary: null,
   }),
 }));
-vi.mock("@/lib/appThemeViewTransition", () => ({ prefersReducedMotion: () => true }));
+vi.mock("@/lib/appThemeViewTransition", () => ({
+  prefersReducedMotion: () => true,
+  subscribeReducedMotion: () => () => {},
+}));
 vi.mock("../ToolbarContextMenuItems", () => ({ ToolbarContextMenuItems: () => null }));
 vi.mock("../RecentDictationMenuItems", () => ({ RecentDictationMenuItems: () => null }));
 
@@ -169,6 +174,12 @@ afterEach(() => {
   Reflect.deleteProperty(window, "__DAINTREE_HOST_ID__");
   Object.defineProperty(navigator, "platform", { configurable: true, value: originalPlatform });
   useVoiceRecordingStore.setState({ sessionElsewhere: null });
+});
+
+// Consumers reach the service through the runtime, which knows it once it
+// has initialized.
+beforeEach(() => {
+  setInitializedVoiceRecordingService(voiceRecordingService);
 });
 
 describe("VoiceRecordingToolbarButton — the session panel in a view that doesn't own it (#14921)", () => {

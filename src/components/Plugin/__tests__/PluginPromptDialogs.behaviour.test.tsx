@@ -41,8 +41,6 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
 vi.mock("@/store", () => ({
   usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
-vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
-
 vi.mock("@/store/paletteStore", () => {
   const usePaletteStore = (selector?: (s: { activePaletteId: null }) => unknown) =>
     selector ? selector({ activePaletteId: null }) : { activePaletteId: null };
@@ -53,7 +51,7 @@ vi.mock("@/store/paletteStore", () => {
 import { PluginInputBoxDialog } from "../PluginInputBoxDialog";
 import { PluginQuickPickDialog } from "../PluginQuickPickDialog";
 import { PluginConfirmPromptDialog } from "../PluginConfirmPromptDialog";
-import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { enqueueUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import {
   _resetPluginRuntimeStoreForTest,
@@ -280,6 +278,22 @@ describe("PluginQuickPickDialog — multi-select", () => {
 
     expect(resolve).toHaveBeenCalledWith([CHECKS[2]]);
   });
+
+  it.each([{ metaKey: true }, { ctrlKey: true }])(
+    "submits on the chord from the results region too, rather than toggling a row (%o)",
+    (modifier) => {
+      const resolve = renderMulti();
+      fireEvent.keyDown(combobox(), { key: "Enter" });
+      const region = combobox()
+        .closest('[role="dialog"]')!
+        .querySelector<HTMLElement>('[role="group"][tabindex="0"]')!;
+
+      fireEvent.keyDown(region, { key: "Enter", ...modifier });
+
+      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(resolve).toHaveBeenCalledWith([CHECKS[0]]);
+    }
+  );
 
   it("accepts an empty selection as an answer, distinct from dismissing", () => {
     const resolve = renderMulti();
@@ -509,4 +523,94 @@ describe("PluginQuickPickDialog — plugin attribution", () => {
     );
     expect(document.body.textContent).not.toContain("project__b6700c7a__");
   });
+});
+
+describe("PluginConfirmPromptDialog — advancing the queue (#16943)", () => {
+  function ask(promptId: string, destructive: boolean) {
+    return enqueueUiPrompt({
+      promptId,
+      pluginId: PLUGIN_ID,
+      params: {
+        kind: "confirm",
+        options: { title: `Question ${promptId}?`, message: "Body", destructive },
+      },
+    });
+  }
+
+  function scroller(): HTMLElement {
+    const el = document.querySelector<HTMLElement>(
+      '[role="dialog"] .dialog-body-inset, [role="alertdialog"] .dialog-body-inset'
+    );
+    if (!el) throw new Error("no dialog body rendered");
+    return el;
+  }
+
+  function primary(): HTMLElement {
+    const el = document.querySelector<HTMLElement>('[data-confirm-role="confirm"]');
+    if (!el) throw new Error("no primary rendered");
+    return el;
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  afterEach(() => {
+    cleanup();
+    usePluginPromptStore.getState().reset();
+    vi.useRealTimers();
+  });
+
+  it.each([false, true])(
+    "starts the next question at the top with focus on Cancel (destructive: %s)",
+    async (destructive) => {
+      vi.useFakeTimers();
+      const first = ask("q1", destructive);
+      const second = ask("q2", destructive);
+      render(<PluginConfirmPromptDialog />);
+      // A destructive question holds its answer for a read; a plain one doesn't.
+      expect(primary().getAttribute("aria-disabled") === "true").toBe(destructive);
+      await advance(5_000);
+
+      const body = scroller();
+      Object.defineProperty(body, "scrollTop", {
+        value: 40,
+        writable: true,
+        configurable: true,
+      });
+      const confirm = primary();
+      act(() => {
+        confirm.focus();
+      });
+      expect(document.activeElement).toBe(confirm);
+      act(() => {
+        fireEvent.click(confirm);
+      });
+      await expect(first).resolves.toBe(true);
+      expect(document.body.textContent).toContain("Question q2?");
+      // The same scroller, put back at the top: a remounted one would read 0 anyway.
+      expect(scroller()).toBe(body);
+      expect(body.scrollTop).toBe(0);
+
+      await advance(16);
+      expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+
+      if (destructive) {
+        expect(primary().getAttribute("aria-disabled")).toBe("true");
+        act(() => {
+          fireEvent.click(primary());
+        });
+        expect(usePluginPromptStore.getState().current?.promptId).toBe("q2");
+        await advance(1_200);
+        expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+      }
+      expect(primary().hasAttribute("aria-disabled")).toBe(false);
+      act(() => {
+        fireEvent.click(primary());
+      });
+      await expect(second).resolves.toBe(true);
+    }
+  );
 });

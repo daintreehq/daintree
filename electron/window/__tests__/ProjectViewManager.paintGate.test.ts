@@ -1570,7 +1570,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
 
     // After rollback, the registry must point back at the original (initialWc)
     // view — otherwise getAppWebContents() would fall through to the bare
-    // BrowserWindow and IPC consumers (portal, voiceInput, accessibility)
+    // BrowserWindow and IPC consumers (voiceInput, accessibility)
     // would silently target the wrong webContents.
     const registerCalls = vi.mocked(registerAppView).mock.calls;
     const lastCall = registerCalls[registerCalls.length - 1];

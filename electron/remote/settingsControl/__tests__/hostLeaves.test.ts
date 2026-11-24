@@ -60,6 +60,10 @@ vi.mock("../../../services/IdleBackgroundAutoCloseService.js", () => ({
 }));
 
 import { loadHostSettingsLeaves } from "../hostLeaves.js";
+import {
+  MemoryLeakAutoRestartService,
+  setActiveMemoryLeakAutoRestart,
+} from "../../../services/MemoryLeakAutoRestartService.js";
 
 beforeEach(() => {
   canopy.state.mode = "unset";
@@ -181,5 +185,59 @@ describe("the host's own setters for named settings (#14167)", () => {
     expect(sleep.updateConfig).toHaveBeenCalledWith({ idleShellThresholdMinutes: 240 });
     expect(stored.set).not.toHaveBeenCalledWith("agentSettings", expect.anything());
     expect(written.reconcile).toBe(true);
+  });
+
+  it("tells the memory-leak auto-restart once its policy is written, after the write (#17598)", async () => {
+    const leaves = await loadHostSettingsLeaves();
+    const seen: unknown[] = [];
+    const policyChanged = vi.fn(() => seen.push(stored.set.mock.calls.length));
+    setActiveMemoryLeakAutoRestart({ policyChanged } as unknown as MemoryLeakAutoRestartService);
+    try {
+      leaves.write({ "sessionRestore.enabled": false });
+      expect(policyChanged).not.toHaveBeenCalled();
+
+      for (const leaf of [
+        { "terminalConfig.resourceMonitoringEnabled": false },
+        { "terminalConfig.memoryLeakDetectionEnabled": false },
+        { "terminalConfig.memoryLeakAutoRestartThresholdMb": 4096 },
+      ]) {
+        stored.set.mockClear();
+        policyChanged.mockClear();
+        seen.length = 0;
+        leaves.write(leaf);
+        expect(stored.set).toHaveBeenCalledWith(...Object.entries(leaf)[0]!);
+        expect(policyChanged).toHaveBeenCalledTimes(1);
+        expect(seen).toEqual([1]);
+      }
+
+      stored.set.mockClear();
+      policyChanged.mockClear();
+      seen.length = 0;
+      leaves.write({
+        "terminalConfig.memoryLeakDetectionEnabled": false,
+        "terminalConfig.memoryLeakAutoRestartThresholdMb": 4096,
+      });
+      expect(policyChanged).toHaveBeenCalledTimes(1);
+      expect(seen).toEqual([2]);
+    } finally {
+      setActiveMemoryLeakAutoRestart(null);
+    }
+  });
+
+  it("reads the idle time with its default, folds a hand-edited one back, and writes it alone (#17357)", async () => {
+    const leaves = await loadHostSettingsLeaves();
+    expect(leaves.read("hostIdle.idleAfterMinutes").value).toBe(30);
+    stored.values.hostIdle = { idleAfterMinutes: 2 };
+    expect(leaves.read("hostIdle.idleAfterMinutes").value).toBe(30);
+    stored.values.hostIdle = { idleAfterMinutes: 120 };
+    const read = leaves.read("hostIdle.idleAfterMinutes");
+    expect(read.value).toBe(120);
+    stored.values.hostIdle = { idleAfterMinutes: 60 };
+    expect(leaves.read("hostIdle.idleAfterMinutes").revision).not.toBe(read.revision);
+    delete stored.values.hostIdle;
+
+    // The idle clock reads the store on every check: no view or service needs a refresh.
+    expect(leaves.write({ "hostIdle.idleAfterMinutes": 240 }).reconcile).toBe(false);
+    expect(stored.set).toHaveBeenCalledWith("hostIdle.idleAfterMinutes", 240);
   });
 });

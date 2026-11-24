@@ -64,10 +64,14 @@ const BASE_PANEL_FIELD_SET: ReadonlySet<string> = new Set(BASE_PANEL_FIELDS);
 // no longer owns (which must not resurrect a session another window consumed).
 // `holdOnRestart` (#14017) is set in one window, and a sibling's agent-state save
 // carries the copy from before, which must not erase the plugin's hold.
+// `stopObservation` (#17886) is Main's like `agentSessionId`: the kill's own
+// state reports save after Main writes it, and must not erase it; the restore
+// that read it from disk drops it on its first save.
 // Mirrors Main's `TERMINAL_FIELD_LEVEL_MERGE`.
 const TERMINAL_TRACKED_FIELDS = [
   "agentSessionId",
   "holdOnRestart",
+  "stopObservation",
 ] as const satisfies readonly (keyof PanelSnapshot)[];
 
 export function panelToSnapshot(

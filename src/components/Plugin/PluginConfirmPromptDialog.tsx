@@ -1,9 +1,11 @@
 import { useCallback, useRef } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { usePluginPromptStore } from "@/store/pluginPromptStore";
+import { afterCatch, ErrorBoundary } from "@/components/ErrorBoundary";
+import { dismissFailedUiPrompt, usePluginPromptStore } from "@/store/pluginPromptStore";
 import { PluginProvenance } from "./PluginProvenance";
 import { usePluginAttribution } from "@/hooks/usePluginAttribution";
+
+const CONFIRM_COOLDOWN_MS = 1_200;
 
 /**
  * Singleton dialog for `host.showConfirm` (#10522). Mounted once near the top of
@@ -55,6 +57,7 @@ export function PluginConfirmPromptDialog() {
         variant="component"
         componentName="PluginConfirmPromptDialog"
         resetKeys={[resetKey]}
+        onError={afterCatch(() => dismissFailedUiPrompt(resetKey))}
       >
         <ConfirmDialog
           isOpen={false}
@@ -75,6 +78,7 @@ export function PluginConfirmPromptDialog() {
       variant="component"
       componentName="PluginConfirmPromptDialog"
       resetKeys={[resetKey]}
+      onError={afterCatch(() => dismissFailedUiPrompt(resetKey))}
     >
       <ConfirmDialog
         isOpen={true}
@@ -93,6 +97,13 @@ export function PluginConfirmPromptDialog() {
         cancelLabel={options.cancelLabel || "Cancel"}
         onConfirm={() => resolveOnce(confirm.promptId, true)}
         variant={variant}
+        // The queue advances by swapping the prompt on the mounted dialog, so each
+        // question starts at the top, with focus back on the safe answer rather
+        // than the button that answered the last one.
+        focusResetKey={confirm.promptId}
+        bodyResetKey={confirm.promptId}
+        confirmCooldownMs={options.destructive ? CONFIRM_COOLDOWN_MS : undefined}
+        cooldownKey={confirm.promptId}
         hint={<PluginProvenance attribution={attribution} waited={confirm.waited} />}
       />
     </ErrorBoundary>

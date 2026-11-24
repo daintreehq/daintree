@@ -3,7 +3,9 @@ import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { z } from "zod";
 import { PanelCloseResultSchema } from "@shared/types/panelClose";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
+import { ApplyClaudeUpdateResultSchema } from "@shared/types/claudeUpdateApply";
 import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { userCloseCommit } from "@/services/terminal/panelCloseHistory";
 import { usePanelStore } from "@/store/panelStore";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
@@ -19,6 +21,7 @@ import {
 } from "@shared/types/agentSessionFile";
 import {
   KeepConversationArgSchema,
+  ResetModesArgsSchema,
   RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
@@ -26,6 +29,17 @@ import {
   TerminalKillBatchArgsSchema,
 } from "./terminalLifecycleActionArgs";
 import type { TerminalLifecycleActionRunId } from "./terminalLifecycleActions.impl";
+
+const RestartOnAccountResultSchema = z.object({
+  terminalId: z.string().describe("The panel, respawned in place."),
+  agentAccountId: z
+    .string()
+    .nullable()
+    .describe("Account it now runs on; null is no saved account."),
+  agentSessionIdCleared: z
+    .boolean()
+    .describe("false: asked to reopen it; true: re-send the brief."),
+});
 
 const RestartOnPresetResultSchema = z.object({
   terminalId: z.string().describe("The panel, respawned in place."),
@@ -133,6 +147,7 @@ export function registerTerminalLifecycleActions(
     title: "Close panel",
     description:
       "Close a terminal or any other panel, usually to the trash, where it stays briefly recoverable; remove-on-exit and dialog panels are discarded outright. Name the panel: the wrong one discards someone's work. An untracked panel is rejected; the result names what closed.",
+    paletteDescription: "Close the focused panel, or another open one, usually to the trash",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -191,7 +206,9 @@ export function registerTerminalLifecycleActions(
       // stream keeps closing fresh panels instead of re-targeting this one.
       requestPanelClose({
         hideIds: [targetId],
-        commit: () => usePanelStore.getState().trashPanel(targetId),
+        commit: userCloseCommit(ctx?.dispatchSource, [targetId], () =>
+          usePanelStore.getState().trashPanel(targetId)
+        ),
       });
       return settleCloseForDispatch([targetId], ctx);
     },
@@ -301,6 +318,8 @@ export function registerTerminalLifecycleActions(
     title: "Send to background",
     description:
       "Hide a panel from view while keeping its process alive; a grouped panel takes its group along. A panel not in this view, or one in the trash, an overlay or a dialog, is refused. The result names where the panel is now.",
+    paletteDescription:
+      "Hide the focused panel and its tab group while their processes keep running",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -318,6 +337,7 @@ export function registerTerminalLifecycleActions(
     title: "Remove panel",
     description:
       "Permanently destroy a panel of any kind and its process: no trash, no recovery. A panel running an agent session is left alone unless confirmed, and the call then fails. Name the panel explicitly; close it instead when recovery matters.",
+    paletteDescription: "Remove the focused panel and stop its process, with no trash or undo",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -366,6 +386,7 @@ export function registerTerminalLifecycleActions(
     title: "Restart terminal",
     description:
       "Restart a terminal's process in place, keeping the panel. Returns before the restart finishes; watch its status before sending. A running agent session is left alone unless confirmed; otherwise whatever ran is killed and unsaved state lost. Fails on a held panel.",
+    paletteDescription: "Restart the focused terminal's process in the same panel",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -452,16 +473,7 @@ export function registerTerminalLifecycleActions(
     // the rate-limit chip carry their own picker and confirm.
     palette: { mode: "hidden" },
     argsSchema: RestartOnAccountArgsSchema,
-    resultSchema: z.object({
-      terminalId: z.string().describe("The panel, respawned in place."),
-      agentAccountId: z
-        .string()
-        .nullable()
-        .describe("Account it now runs on; null is the CLI's default login."),
-      agentSessionIdCleared: z
-        .boolean()
-        .describe("false: asked to reopen it; true: re-send the brief."),
-    }),
+    resultSchema: RestartOnAccountResultSchema,
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.restartOnAccount", args, ctx),
   }));
@@ -504,6 +516,112 @@ export function registerTerminalLifecycleActions(
     },
   }));
 
+  // The account twin (#17079), executed in main the same way: main checks the
+  // session launched the pane, then dispatches `terminal.restartOnAccount`
+  // with the account alone, never `confirmed`.
+  actions.set("terminal.restartOnAccountOwned", () => ({
+    id: "terminal.restartOnAccountOwned",
+    title: "Move owned agent to another account",
+    description:
+      "Move a panel this session launched (not a handed one) to another account of its agent once the user confirms. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    dangerRationale:
+      "Interrupts the agent and respawns it on another account, in a new conversation unless asked to keep it. Scrollback is lost.",
+    keywords: ["account", "login", "rate limit", "owned"],
+    // Hidden for the same reason as `terminal.closeOwned`: only the MCP
+    // main-process path can reach it.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe("Panel `id` this session got when launching it. Required."),
+      accountId: z
+        .string()
+        .min(1)
+        .nullable()
+        .describe("An account of the panel's agent; null is no saved account."),
+      keepConversation: KeepConversationArgSchema,
+    }),
+    resultSchema: RestartOnAccountResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.restartOnAccountOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  // Applying a Claude Code update an assistant asked for (#17908), executed in
+  // main like the preset move: main checks the session launched the pane (or,
+  // for the global Assistant, the steer's reach), reads that the pane offers
+  // /restart, then asks the person through `terminal.applyClaudeUpdate` and
+  // types `/restart` itself once they approve. Takes no command text.
+  actions.set("terminal.applyClaudeUpdateOwned", () => ({
+    id: "terminal.applyClaudeUpdateOwned",
+    title: "Apply Claude Code update",
+    description:
+      "After the user approves, types /restart once into a Claude Code panel whose updateInstalled names it, when it waits at its empty prompt (up to 30s). Quotes any refusal Claude prints; never says the conversation came back.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    dangerRationale:
+      "Restarts Claude Code in place to run its installed update; it reopens the conversation if it can.",
+    keywords: ["update", "restart", "claude", "owned"],
+    // Hidden for the same reason as `terminal.closeOwned`: only the MCP
+    // main-process path can reach it.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe("Panel `id` this session launched, or a worker the global Assistant steers."),
+      generation: RunGenerationArgSchema,
+    }),
+    resultSchema: ApplyClaudeUpdateResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.applyClaudeUpdateOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  // The person's approval for `terminal.applyClaudeUpdateOwned` (#17908), asked
+  // the way the preset move asks through `terminal.restartOnPreset`: main
+  // dispatches it with the panel's id alone, never `confirmed`, so the dialog,
+  // a grant or the skip preference is the approval. It writes nothing; main
+  // types `/restart` once it answers. Off MCP and the palette, so nothing else
+  // asks for an approval that does nothing.
+  actions.set("terminal.applyClaudeUpdate", () => ({
+    id: "terminal.applyClaudeUpdate",
+    title: "Apply Claude Code update",
+    description:
+      "Approve typing /restart into a Claude Code panel once it waits at its empty prompt, to run the update it installed.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    dangerRationale:
+      "Restarts Claude Code in place to run its installed update; it reopens the conversation if it can.",
+    keywords: ["update", "restart", "claude"],
+    mcpVisibility: "hidden",
+    palette: { mode: "hidden" },
+    argsSchema: z.object({ terminalId: z.string().min(1) }),
+    resultSchema: z.object({ terminalId: z.string() }),
+    run: async (args: unknown) => {
+      const { terminalId } = z.object({ terminalId: z.string().min(1) }).parse(args);
+      return { terminalId };
+    },
+  }));
+
   actions.set("terminal.redraw", () => ({
     id: "terminal.redraw",
     title: "Redraw terminal",
@@ -518,11 +636,38 @@ export function registerTerminalLifecycleActions(
       runTerminalLifecycleAction("terminal.redraw", args, ctx),
   }));
 
+  // The gentler step before Restart (#17328): the process, its scrollback and
+  // an agent's session all stay. Off MCP: an agent has no stuck pane to see.
+  actions.set("terminal.resetModes", () => ({
+    id: "terminal.resetModes",
+    title: "Reset terminal modes",
+    description:
+      "Turn off the mouse, paste and keyboard modes a crashed program left on. The process keeps running and scrollback stays.",
+    paletteDescription: "Turn off stuck mouse and keyboard modes without restarting the process",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "A program still running in the terminal loses bracketed paste and the other input modes it set until it turns them on again.",
+    keywords: ["mouse", "stuck", "escape", "bracketed paste", "keyboard", "fix"],
+    mcpVisibility: "hidden",
+    palette: {
+      mode: "requireContext",
+      isReady: (ctx) => !!ctx.focusedTerminalId,
+      reason: "Focus a terminal to reset its modes",
+    },
+    argsSchema: ResetModesArgsSchema,
+    run: (args: unknown, ctx: ActionContext) =>
+      runTerminalLifecycleAction("terminal.resetModes", args, ctx),
+  }));
+
   actions.set("terminal.rename", () => ({
     id: "terminal.rename",
     title: "Rename panel",
     description:
       "Set a panel's title, or clear it to the default. Pass the panel and the title: an omitted title opens a dialog an automated caller cannot answer. Returns the title now shown; `applied` is false when a title the user set by hand kept its place.",
+    paletteDescription: "Set or clear the focused panel's title",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -545,6 +690,13 @@ export function registerTerminalLifecycleActions(
     danger: "safe",
     scope: "renderer",
     keywords: ["details", "metadata", "inspect", "status"],
+    // Palette-only: the context menu and MCP name their terminal explicitly,
+    // and `run()` silently does nothing without one.
+    palette: {
+      mode: "requireContext",
+      isReady: (ctx) => !!ctx.focusedTerminalId,
+      reason: "Focus a terminal to view its info",
+    },
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.viewInfo", args, ctx),
@@ -558,6 +710,8 @@ export function registerTerminalLifecycleActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    // The same dialog as `terminal.viewInfo`, which is the palette's row for it.
+    palette: { mode: "hidden" },
     keywords: ["details", "metadata", "inspect", "status"],
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
@@ -649,7 +803,9 @@ export function registerTerminalLifecycleActions(
         .trim()
         .min(1)
         .max(128)
-        .describe("Terminal panel id in this project. Required; no focus fallback."),
+        .describe(
+          "Terminal panel id in this workspace, an Assistant session's included, or the global Assistant's. Required; no focus fallback."
+        ),
     }),
     resultSchema: z.object({
       status: z.enum(["observed", "unknown"]),
@@ -745,6 +901,7 @@ export function registerTerminalLifecycleActions(
     title: "Close all panels",
     description:
       "Close every panel in the active worktree, not just terminals, including the user's shells and other agents' terminals; prefer closing individually. Most go to the trash; remove-on-exit panels are discarded. Internal and dialog panels are spared.",
+    paletteDescription: "Close every panel in the active worktree, most of them to the trash",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -772,10 +929,10 @@ export function registerTerminalLifecycleActions(
       if (idsToClose.length === 0) return { closedIds: [] };
       requestPanelClose({
         hideIds: idsToClose,
-        commit: () => {
+        commit: userCloseCommit(ctx?.dispatchSource, idsToClose, () => {
           const latest = usePanelStore.getState();
           idsToClose.forEach((id) => latest.trashPanel(id));
-        },
+        }),
       });
       return settleCloseForDispatch(idsToClose, ctx);
     },
@@ -786,6 +943,8 @@ export function registerTerminalLifecycleActions(
     title: "Remove all panels in project",
     description:
       "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is confirmed. Automated callers should never need this.",
+    paletteDescription:
+      "Remove every panel in this project, across all worktrees, with no trash or undo",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -827,6 +986,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restartService",
     title: "Restart terminal service",
     description: "Restart the PTY host. Available only when the terminal backend is disconnected.",
+    paletteDescription: "Restart the terminal backend after it disconnects",
     category: "terminal",
     kind: "command",
     danger: "safe",

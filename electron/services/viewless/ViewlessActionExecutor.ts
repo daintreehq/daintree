@@ -59,6 +59,7 @@ import {
 } from "./viewlessTerminals.js";
 import {
   runAgentLaunch,
+  runAgentListAccounts,
   runAgentListAvailable,
   runAgentListModels,
   runAgentListPresets,
@@ -880,6 +881,8 @@ async function runAction(
       return runActionsGetContext(request, project, deps);
     case "agent.listPresets":
       return runAgentListPresets(request, project, deps);
+    case "agent.listAccounts":
+      return runAgentListAccounts(request, project, deps);
     case "agent.listModels":
       return runAgentListModels(request, project, deps);
     case "recipe.list":

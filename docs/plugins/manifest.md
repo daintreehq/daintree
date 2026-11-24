@@ -109,7 +109,7 @@ Daintree reads the manifest eagerly at startup. Contribution points declared her
     "databases": [/* SQLite files opened with host.db */],
     "toolbarButtons": [/* ... */],
     "keybindings": [/* ... */],
-    "contextMenus": [/* worktree, terminal, file, browser and project menu entries */],
+    "contextMenus": [/* worktree, terminal, file, browser, project and assistant menu entries */],
     "menuItems": [/* application menu entries; not under scope: "project" */],
     "agentMcp": [/* tools Daintree serves to terminal agents; requires mcp:expose */],
     "mcpServers": [/* stdio servers Daintree connects to as a client */],
@@ -380,7 +380,7 @@ Array of capability tokens the plugin wants. The model is **disclosure-first wit
 | `shell:exec` | Spawn subprocesses (managed via `host.process`) |
 | `socket:connect` | Connect to local Unix-domain sockets or Windows named pipes (e.g. the Docker socket). Disclosure only — no host API is gated on it, and it takes no part in the danger derivation |
 | `mcp:expose` | Serve `contributes.agentMcp` tools to agents in Daintree's terminals (`host.mcp.registerTools`). Required by `agentMcp`; exposes nothing until the plugin's agent access is turned on for a project |
-| `panel:focus-read` | Observe which kind of panel has focus (`host.onDidChangeFocusedPanel`): a built-in kind (`terminal`, `browser`, `diff`, …), `plugin` for any plugin panel, `portal`, or `null` when Daintree isn't the foreground window or no panel has focus, plus an agent flag and the worktree id. Never a panel's id, title, URL or content. A project plugin sees focus only inside its own project |
+| `panel:focus-read` | Observe which kind of panel has focus (`host.onDidChangeFocusedPanel`): a built-in kind (`terminal`, `browser`, `diff`, …), `plugin` for any plugin panel, or `null` when Daintree isn't the foreground window or no panel has focus, plus an agent flag and the worktree id. Never a panel's id, title, URL or content. A project plugin sees focus only inside its own project |
 | `project:dispatch` | Run actions in a named project with `host.dispatch(actionId, args, { projectId })`; an installed plugin needs it for any explicit `projectId`, even the focused project's. Enables nothing until the user turns on **Allow project targeting** for the plugin, and there is no first-use prompt: the switch is the whole grant. A project plugin can never target another project, whatever it declares; naming its own project needs no capability ([host API → Targeting a project](./host-api.md#targeting-a-project)) |
 | `host:dispatch` | List the Remote Hosts this machine drives and their projects (`host.remoteHosts.list()`), run built-in actions in one with `host.dispatch(actionId, args, { hostId, projectId })`, and reach the agents it launched there with `host.agents.*(..., { hostId })`. Installed plugins only. Enables nothing until the user turns on **Allow host targeting** for the plugin; there is no first-use prompt, and one switch covers every host. Each host still applies its own rules ([host API → Targeting a Remote Host](./host-api.md#targeting-a-remote-host)) |
 
@@ -470,7 +470,7 @@ Wakes are best effort, not a log:
 
 ### `contributes`
 
-Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `worktreeDeleteNotes`, `agents`, `processTools`, `settings`, `recipes`, `promptTemplates`, `worktreeSetupSteps`, `setup`, `terminalLinks`, `contextProviders`, and `fileEditors`, whose slot-backed entries are built-in only) — plus the non-array `surfaces`, `services`, `account` and `assistantKnowledge` objects and the optional `connections` array. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
+Object containing an array per contribution type (`panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `databases`, `tours`, `skills`, `forgeProviders`, `fileDecorationProviders`, `worktreeDeleteNotes`, `cloudProviders`, `agents`, `processTools`, `settings`, `recipes`, `promptTemplates`, `worktreeSetupSteps`, `setup`, `terminalLinks`, `contextProviders`, and `fileEditors`, whose slot-backed entries are built-in only) — plus the non-array `surfaces`, `services`, `account` and `assistantKnowledge` objects and the optional `connections` array. All are optional; unlisted types default to empty. Each array has an upper bound (`MANIFEST_CONTRIBUTION_CAPS` in `electron/schemas/plugin.ts`) generous for any real plugin and there to reject pathological manifests:
 
 | Contribution              | Max entries                               |
 | ------------------------- | ----------------------------------------- |
@@ -495,6 +495,7 @@ Object containing an array per contribution type (`panels`, `toolbarButtons`, `m
 | `forgeProviders`          | 20                                        |
 | `fileDecorationProviders` | 50                                        |
 | `worktreeDeleteNotes`     | 1                                         |
+| `cloudProviders`          | 8                                         |
 | `agents`                  | 50                                        |
 | `processTools`            | 100                                       |
 | `settings`                | 200                                       |
@@ -523,6 +524,7 @@ A few notes on individual points; the [Contribution points reference](./contribu
 - `assistantKnowledge` — Markdown for the Daintree Assistant about the plugin's agent tools: `instructions`, `skills` and `references`, delivered only while the user has given the Assistant those tools. No capability, but the plugin must declare `agentMcp` or `databases`. See [Agent extensions → Knowledge for the Assistant](./agent-extensions.md#knowledge-for-the-assistant).
 - `agents` — registers a launchable agent CLI as a selectable agent. Requires the `agent:register` capability; the schema rejects the contribution without it. An optional `detection` block wires it into the same agent-state UI built-in agents use.
 - `worktreeDeleteNotes` — one check that adds the plugin's notes to a worktree's delete confirmation, bound in `activate()` through [`host.registerWorktreeDeleteNotesProvider`](./host-api.md#registerworktreedeletenotesprovider). Declaring it is what lets a confirmation find, and activate, the plugin. Notes only annotate; they never change the delete. Requires no capability; allowed under `scope: "project"`. See [Worktree delete notes](./contribution-points.md#worktree-delete-notes--shipped).
+- `cloudProviders` — cloud providers the plugin runs in its worker, each registered as `{pluginId}.{id}` and bound in `activate()` through [`host.registerCloudProvider`](./host-api.md#registercloudprovider). Everything Daintree shows about one comes from the entry; every call goes to the plugin. Requires no capability; rejected under `scope: "project"`. See [Implementing a cloud provider](./cloud-provider.md).
 - `forgeProviders` and `fileDecorationProviders` — the manifest entry is read eagerly so the host's routing tables are populated before any plugin code runs; the implementation binds lazily in `activate()`. Forge providers are **built-in plugins only** — their host methods are synchronous and cannot cross the plugin worker's message port.
 - `surfaces` — **project-scope only.** An object, not an array: fixed slots a project-local plugin claims to replace one of the host's own surfaces for its own project. `emptyCanvas`, `projectHome` and `worktreeCreate` (each `{ "viewId": "..." }`) are the slots accepted today; `viewId` must name a declared `contributes.views` entry, and at most one plugin holds a slot per project: project plugins first, then the lower manifest id, whatever order they load in. A manifest without `"scope": "project"` that declares any surface is rejected. See [Project-local plugins → Surfaces](./project-local.md#surfaces).
 

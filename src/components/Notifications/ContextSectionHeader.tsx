@@ -3,6 +3,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { Button } from "@/components/ui/button";
 import { CountBadge } from "@/components/ui/badge";
 import { FactSeparator } from "@/components/ui/FactSeparator";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import {
   APP_SOURCE_LABEL,
   UNKNOWN_PROJECT_LABEL,
@@ -57,10 +58,6 @@ export function ContextSectionHeader({
   // A main worktree is named after its folder, usually the project's own name.
   const worktree = resolvedWorktree && resolvedWorktree !== project ? resolvedWorktree : undefined;
   const host = hostName?.trim() || undefined;
-  const label =
-    [host, project, worktree, worktreeUnavailable ? "unavailable" : undefined]
-      .filter(Boolean)
-      .join(" · ") || APP_SOURCE_LABEL;
   const hasUnread = unreadIds.length > 0;
   return (
     // Sticky, so the place a row belongs to stays on screen while you read
@@ -87,12 +84,12 @@ export function ContextSectionHeader({
           {/* Two spans so the worktree survives a long project name. As one
             string it truncated from the right, and the worktree — the part
             that tells two sections of one project apart — went first. */}
-          <span
-            id={labelId}
-            className="flex min-w-0 items-baseline text-text-primary"
-            title={label}
-          >
-            {host ? <span className="min-w-[5ch] truncate">{host}</span> : null}
+          <span id={labelId} className="flex min-w-0 items-baseline text-text-primary">
+            {host ? (
+              <TruncatedTooltip content={host}>
+                <span className="min-w-[5ch] truncate">{host}</span>
+              </TruncatedTooltip>
+            ) : null}
             {host && (project || worktree) ? (
               <span aria-hidden="true" className="shrink-0 px-1">
                 <FactSeparator />
@@ -102,13 +99,21 @@ export function ContextSectionHeader({
                 a readable stub. With the worktree held whole, a long project
                 name went to "daintree-n…" — and a grouped row names neither, so
                 the header is the only place the project is said at all. */}
-            {project ? <span className="min-w-[5ch] truncate">{project}</span> : null}
+            {project ? (
+              <TruncatedTooltip content={project}>
+                <span className="min-w-[5ch] truncate">{project}</span>
+              </TruncatedTooltip>
+            ) : null}
             {project && worktree ? (
               <span aria-hidden="true" className="shrink-0 px-1">
                 <FactSeparator />
               </span>
             ) : null}
-            {worktree ? <span className="min-w-[5ch] truncate">{worktree}</span> : null}
+            {worktree ? (
+              <TruncatedTooltip content={worktree}>
+                <span className="min-w-[5ch] truncate">{worktree}</span>
+              </TruncatedTooltip>
+            ) : null}
             {worktreeUnavailable ? (
               <span
                 data-testid="context-section-unavailable"
@@ -118,7 +123,9 @@ export function ContextSectionHeader({
               </span>
             ) : null}
             {!host && !project && !worktree ? (
-              <span className="truncate">{APP_SOURCE_LABEL}</span>
+              <TruncatedTooltip content={APP_SOURCE_LABEL}>
+                <span className="truncate">{APP_SOURCE_LABEL}</span>
+              </TruncatedTooltip>
             ) : null}
           </span>
           {/* Beside the name it counts, not beside the button — at the far end

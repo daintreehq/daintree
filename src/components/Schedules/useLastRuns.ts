@@ -12,6 +12,8 @@ export interface LastRunsState {
   byScheduleId: ReadonlyMap<string, ScheduledRun>;
   /** Rises with every read that lands, so the clock can be re-read beside fresh history. */
   version: number;
+  /** A retry is reading again after a failed read; its Retry holds off a second one. */
+  retrying?: boolean;
 }
 
 const EMPTY: ReadonlyMap<string, ScheduledRun> = new Map();
@@ -39,10 +41,11 @@ export function useLastRuns(projectId: string | null) {
     const read = () => {
       const ticket = ++reads;
       schedulesClient
-        .listRuns(projectId)
+        .listLatestRuns(projectId)
         .then((runs) => {
           if (cancelled || ticket !== reads) return;
-          // Newest first, so the first run seen for a schedule is its last.
+          // Newest first, so the first run seen for a schedule is its last. A
+          // remote host on an older build still sends the whole history.
           const byScheduleId = new Map<string, ScheduledRun>();
           for (const run of runs) {
             if (!byScheduleId.has(run.scheduleId)) byScheduleId.set(run.scheduleId, run);
@@ -52,7 +55,7 @@ export function useLastRuns(projectId: string | null) {
         .catch((error: unknown) => {
           if (cancelled || ticket !== reads) return;
           logError("Failed to read scheduled run history", error);
-          setState((prev) => ({ ...prev, status: "error" }));
+          setState((prev) => ({ ...prev, status: "error", retrying: false }));
         });
     };
     const unsubscribe = schedulesClient.onRunsChanged((payload) => {
@@ -65,7 +68,10 @@ export function useLastRuns(projectId: string | null) {
     };
   }, [projectId, attempt]);
 
-  const retry = useCallback(() => setAttempt((value) => value + 1), []);
+  const retry = useCallback(() => {
+    setState((prev) => (prev.status === "error" ? { ...prev, retrying: true } : prev));
+    setAttempt((value) => value + 1);
+  }, []);
 
   return { lastRuns: state, retryLastRuns: retry };
 }

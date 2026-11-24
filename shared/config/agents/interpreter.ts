@@ -91,8 +91,10 @@ export const config: AgentConfig = {
     // "Welcome to Open Interpreter" is onboarding-only, so it isn't used.
     bootCompletePatterns: ["Open Interpreter \\(v\\d+\\.\\d+\\.\\d+"],
     // The composer row, `› Ask Codex to do anything` when empty (the placeholder
-    // is inherited unchanged from Codex).
+    // is inherited unchanged from Codex). The placeholder is what tells its
+    // empty input row from a draft (#18018).
     promptPatterns: ["^\\s*›(?:\\s|$)"],
+    promptHintPatterns: ["Ask Codex to do anything"],
     scanLineCount: 10,
     primaryConfidence: 0.95,
     promptConfidence: 0.85,

@@ -197,6 +197,9 @@ export function ImportEnvDialog({
   const [step, setStep] = useState<Step>("paste");
   const [conflictResolution, setConflictResolution] = useState<ConflictResolution>("keep");
   const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set());
+  // A paste of nothing but whitespace leaves the field looking untouched, so the
+  // dead Import button would say nothing about the paste that just happened.
+  const [blankPaste, setBlankPaste] = useState(false);
 
   const headingId = useId();
   const helpId = useId();
@@ -212,6 +215,7 @@ export function ImportEnvDialog({
       setStep("paste");
       setConflictResolution("keep");
       setRevealed(new Set());
+      setBlankPaste(false);
       prevStepRef.current = "paste";
     }
   }, [isOpen]);
@@ -326,7 +330,7 @@ export function ImportEnvDialog({
         ? `Fix ${pluralize(parsed.errors.length, "parse error")} to continue`
         : incomingCount > 0
           ? "Every variable in that paste is already set"
-          : pastedText.trim() !== ""
+          : pastedText.trim() !== "" || blankPaste
             ? "No variables found in that paste"
             : null;
 
@@ -395,7 +399,13 @@ export function ImportEnvDialog({
                 // the footer. It resizes when a paste is longer than that.
                 className="h-40 leading-[inherit]"
                 value={pastedText}
-                onChange={(e) => setPastedText(e.target.value)}
+                onChange={(e) => {
+                  setPastedText(e.target.value);
+                  // Once the field holds text the check above takes over, and clearing
+                  // it afterwards is an empty field again, not a blank paste.
+                  if (e.target.value.trim() !== "") setBlankPaste(false);
+                }}
+                onPaste={(e) => setBlankPaste(e.clipboardData.getData("text").trim() === "")}
                 placeholder={'FOO=bar\nexport BAZ="hello world"\n# comments supported'}
                 spellCheck={false}
                 autoCapitalize="off"

@@ -6,7 +6,7 @@
  * no-drag rectangle is there from the first paint.
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import type { ForgeProviderEntry } from "@shared/types/forge";
 import type { Project } from "@shared/types";
@@ -54,8 +54,15 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => ({
   }),
 }));
 
+const warm = vi.hoisted(() => ({ local: vi.fn(), view: vi.fn() }));
 vi.mock("@/registry/builtinRendererRegistry", () => ({
   useBuiltinView: () => null,
+  preloadBuiltinView: warm.view,
+}));
+
+vi.mock("../LazyLocalCommitsDropdown", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../LazyLocalCommitsDropdown")>()),
+  preloadLocalCommitsDropdown: warm.local,
 }));
 
 vi.mock("@/hooks/useGlobalMinuteTicker", () => ({
@@ -178,5 +185,16 @@ describe("ForgeStatsToolbarButton while the forge provider resolves (#15931)", (
 
     expect(container.querySelectorAll("button").length).toBeGreaterThan(0);
     expect(controlWidthRem(container)).toBeLessThan(heldWidth);
+  });
+
+  it("warms the local commit list, not a provider view, from a commits-only pill", () => {
+    providerState.loading = false;
+    const { container } = renderButton();
+    const commits = container.querySelector<HTMLElement>('[data-testid="forge-stat-pill-commits"]');
+    if (!commits) throw new Error("commits pill not found");
+    fireEvent.pointerEnter(commits, { pointerType: "touch" });
+    fireEvent.focus(commits);
+    expect(warm.local).toHaveBeenCalledTimes(2);
+    expect(warm.view).not.toHaveBeenCalled();
   });
 });

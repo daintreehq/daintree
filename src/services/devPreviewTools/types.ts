@@ -28,6 +28,12 @@ export interface DevPreviewToolSessionContext extends DevPreviewToolContext {
   visible: boolean;
   /** Aborted when the session is disposed. */
   signal: AbortSignal;
+  /**
+   * Turn the tool off for this preview, as its toggle would — for a session
+   * that hears the user leave from somewhere no surface can, such as the
+   * page's own keys. Does nothing once the session is over.
+   */
+  close: () => void;
 }
 
 /**
@@ -38,6 +44,12 @@ export interface DevPreviewToolSessionContext extends DevPreviewToolContext {
 export interface DevPreviewToolSession {
   /** The context changed — a new page, a moved worktree, a surface mounting. */
   update?: (context: DevPreviewToolSessionContext) => void;
+  /**
+   * Escape reached the preview's chrome and nothing else took it. True when
+   * the session used it (let go of a selection, say) and the tool stays on;
+   * otherwise the host turns the tool off.
+   */
+  handleEscape?: () => boolean;
   dispose: () => void;
 }
 

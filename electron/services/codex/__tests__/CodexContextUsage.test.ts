@@ -2,10 +2,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   __codexContextUsageWaiters,
+  CODEX_PROBE_MISS_REUSE_MS,
+  createCodexProbeMemo,
   readCodexPaneContextUsage,
   readCodexPaneContextUsageWithin,
+  type CodexProbeMemo,
 } from "../CodexContextUsage.js";
-import type { CodexRolloutObservation } from "../CodexSessionFileProbe.js";
+import {
+  observeCodexRollout,
+  type CodexRolloutObservation,
+  type ListingRunner,
+} from "../CodexSessionFileProbe.js";
 import type { AgentContextUsageResult } from "../../../../shared/types/ipc/agentContextUsage.js";
 import type { AgentSessionFileUnknownReason } from "../../../../shared/types/agentSessionFile.js";
 
@@ -58,12 +65,16 @@ const read =
     ) => Promise<AgentContextUsageResult>
   >();
 
+let clock = 0;
+let probes: CodexProbeMemo;
+
 function deps() {
   return {
     ptyClient: { getTerminalAsync, getTerminalInfo } as never,
     platform: "darwin" as NodeJS.Platform,
     observe: observe as never,
     read: read as never,
+    probes,
   };
 }
 
@@ -72,6 +83,8 @@ function signal(): AbortSignal {
 }
 
 beforeEach(() => {
+  clock = 0;
+  probes = createCodexProbeMemo(() => clock);
   getTerminalAsync.mockReset();
   getTerminalAsync.mockResolvedValue(LIVE);
   getTerminalInfo.mockReset();
@@ -191,6 +204,182 @@ describe("readCodexPaneContextUsage (#16408)", () => {
 
     await expect(readCodexPaneContextUsage("t-1", controller.signal, deps())).rejects.toThrow();
     expect(observe).not.toHaveBeenCalled();
+  });
+});
+
+const REUSABLE_MISSES = ["not-observed", "unverified", "ambiguous", "probe-failed"] as const;
+
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((settle) => (resolve = settle));
+  return { promise, resolve };
+}
+
+describe("probing a pane across a turn's reads (#17044)", () => {
+  it("lists a pane with no rollout to find once for both of a turn's reads", async () => {
+    const shell = "4242     1 Mon Nov  2 04:36:27 2026     -zsh";
+    const codex = "4243  4242 Mon Nov  2 04:36:27 2026     codex";
+    const run = vi.fn<ListingRunner>(async (file, args) => {
+      if (file === "lsof") return { stdout: "p4243\n", exitCode: 0 };
+      return { stdout: args.includes("-A") ? `${shell}\n${codex}` : codex, exitCode: 0 };
+    });
+    const listing = {
+      ...deps(),
+      observe: ((pid: number) => observeCodexRollout(pid, { platform: "darwin", run })) as never,
+    };
+    const miss = { status: "unavailable", reason: "rollout-unknown" };
+
+    expect(await readCodexPaneContextUsage("t-1", signal(), listing)).toEqual(miss);
+    clock += 1_500;
+    expect(await readCodexPaneContextUsage("t-1", signal(), listing)).toEqual(miss);
+    expect(
+      run.mock.calls.map(([file, args]) => `${file} ${args.includes("-A") ? "-A" : ""}`)
+    ).toEqual(["ps -A", "lsof ", "ps "]);
+
+    clock += CODEX_PROBE_MISS_REUSE_MS;
+    await readCodexPaneContextUsage("t-1", signal(), listing);
+    expect(run).toHaveBeenCalledTimes(6);
+  });
+
+  it.each(REUSABLE_MISSES)(
+    "answers a %s miss again for the same run until it expires",
+    async (reason) => {
+      observe.mockResolvedValue({ status: "unknown", reason });
+
+      const first = await readCodexPaneContextUsage("t-1", signal(), deps());
+      clock += CODEX_PROBE_MISS_REUSE_MS - 1;
+      expect(await readCodexPaneContextUsage("t-1", signal(), deps())).toEqual(first);
+      expect(observe).toHaveBeenCalledTimes(1);
+
+      clock += 1;
+      await readCodexPaneContextUsage("t-1", signal(), deps());
+      expect(observe).toHaveBeenCalledTimes(2);
+      expect(read).not.toHaveBeenCalled();
+    }
+  );
+
+  it("counts a miss's reuse from when the probe answered, not when it started", async () => {
+    observe.mockImplementation(async () => {
+      clock += CODEX_PROBE_MISS_REUSE_MS - 500;
+      return { status: "unknown", reason: "not-observed" };
+    });
+
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+    clock += 1_000;
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+
+    expect(observe).toHaveBeenCalledTimes(1);
+  });
+
+  it.each<AgentSessionFileUnknownReason>(["pane-changed", "no-live-agent", "unsupported-platform"])(
+    "looks again right away after a %s answer, which a second listing may not repeat",
+    async (reason) => {
+      observe.mockResolvedValueOnce({ status: "unknown", reason });
+
+      await readCodexPaneContextUsage("t-1", signal(), deps());
+      expect(await readCodexPaneContextUsage("t-1", signal(), deps())).toEqual(OK);
+      expect(observe).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  it("reuses a miss through the memo every caller shares by default", async () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000_000);
+    observe.mockResolvedValue({ status: "unknown", reason: "not-observed" });
+    const shared = { ...deps(), probes: undefined };
+
+    try {
+      await readCodexPaneContextUsage("t-default-memo", signal(), shared);
+      await readCodexPaneContextUsage("t-default-memo", signal(), shared);
+      expect(observe).toHaveBeenCalledTimes(1);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("finds the rollout afresh for every reading, so a new conversation's replaces the old", async () => {
+    const next: CodexRolloutObservation = {
+      ...OBSERVED,
+      path: OBSERVED.status === "observed" ? OBSERVED.path.replace("06-41-26", "07-02-11") : "",
+      inode: "654321",
+    };
+    observe.mockResolvedValueOnce(OBSERVED).mockResolvedValueOnce(next);
+
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+
+    expect(read.mock.calls.map(([rollout]) => rollout)).toEqual([OBSERVED, next]);
+  });
+
+  it.each<[string, Partial<PaneRecord> & { ptyPid?: number }]>([
+    ["started Codex again", { agentIncarnation: 1 }],
+    ["relaunched", { launchGeneration: 2 }],
+    ["restarted", { spawnedAt: 2_000 }],
+    ["recorded a session", { agentSessionId: THREAD }],
+    ["runs another process", { ptyPid: 5151 }],
+  ])("looks again within the window once the pane %s", async (_label, change) => {
+    observe.mockResolvedValue({ status: "unknown", reason: "not-observed" });
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+
+    const { ptyPid = 4242, ...pane } = change;
+    getTerminalAsync.mockResolvedValue({ ...LIVE, ...pane });
+    getTerminalInfo.mockResolvedValue({ ...LIVE, ...pane, ptyPid });
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(observe).toHaveBeenLastCalledWith(ptyPid);
+  });
+
+  it("keeps each pane's misses to itself", async () => {
+    observe.mockResolvedValue({ status: "unknown", reason: "not-observed" });
+
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+    await readCodexPaneContextUsage("t-2", signal(), deps());
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares a probe still running between callers, who each read for themselves", async () => {
+    const probe = deferred<CodexRolloutObservation>();
+    observe.mockReturnValue(probe.promise);
+
+    const first = readCodexPaneContextUsage("t-1", signal(), deps());
+    await vi.waitFor(() => expect(observe).toHaveBeenCalled());
+    // A probe still running has no miss to age out, however long it takes.
+    clock += CODEX_PROBE_MISS_REUSE_MS * 2;
+    const second = readCodexPaneContextUsage("t-1", signal(), deps());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    probe.resolve(OBSERVED);
+
+    expect(await Promise.all([first, second])).toEqual([OK, OK]);
+    expect(observe).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("forgets a probe that failed outright", async () => {
+    observe.mockRejectedValueOnce(new Error("spawn EAGAIN"));
+
+    await expect(readCodexPaneContextUsage("t-1", signal(), deps())).rejects.toThrow();
+    expect(await readCodexPaneContextUsage("t-1", signal(), deps())).toEqual(OK);
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a replaced run's late answer out of its successor's miss", async () => {
+    const stale = deferred<CodexRolloutObservation>();
+    observe.mockReturnValueOnce(stale.promise);
+    const before = readCodexPaneContextUsage("t-1", signal(), deps());
+    await vi.waitFor(() => expect(observe).toHaveBeenCalledTimes(1));
+
+    const successor = { ...LIVE, agentIncarnation: 1 };
+    getTerminalAsync.mockResolvedValue(successor);
+    getTerminalInfo.mockResolvedValue({ ...successor, ptyPid: 4242 });
+    observe.mockResolvedValue({ status: "unknown", reason: "not-observed" });
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+    stale.resolve(OBSERVED);
+    await before;
+    await readCodexPaneContextUsage("t-1", signal(), deps());
+
+    expect(observe).toHaveBeenCalledTimes(2);
   });
 });
 

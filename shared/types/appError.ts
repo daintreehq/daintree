@@ -7,7 +7,26 @@ import type { RequiredPluginToolsError } from "./ipc/pluginAgentMcp.js";
  * every member small and free of paths, secrets and user content.
  */
 export type AppErrorDetails =
-  PluginHostError | RequiredPluginToolsError | HostSwitchOnScreenError | ProjectHeldElsewhereError;
+  | PluginHostError
+  | RequiredPluginToolsError
+  | HostSwitchOnScreenError
+  | ProjectHeldElsewhereError
+  | FileTooLargeError;
+
+/**
+ * A file read refused for its size, with the size it was refused at, so the
+ * renderer can tell a file another viewer still opens from one nothing will.
+ */
+export interface FileTooLargeError {
+  code: "FILE_TOO_LARGE";
+  sizeBytes: number;
+  /**
+   * The path asked for is the file's own canonical path, as a successful
+   * read's `pathIsCanonical` says, so a watcher's directories can still scope
+   * re-reads of a file only a viewer can show.
+   */
+  pathIsCanonical?: boolean;
+}
 
 /**
  * A host switch that failed and is showing why on the window's own switch
@@ -26,7 +45,13 @@ export interface HostSwitchOnScreenError {
  * settled in the background, so it names no hold at all.
  */
 export type CachedViewReleaseBlock =
-  "assistant" | "unsaved-work" | "mcp" | "flush" | "dictation" | "unavailable";
+  | "assistant"
+  | "unsaved-work"
+  | "mcp"
+  | "flush"
+  | "dictation"
+  | "worktree-creation"
+  | "unavailable";
 
 /**
  * A project another window keeps in its cache and can't release. `showable`
@@ -133,6 +158,9 @@ export type AppErrorCode =
   // ssh reached the host and couldn't log in: authentication or the host key
   // failed. Trying again finds the same until it is fixed outside Daintree.
   | "HOST_SSH_ACCESS_DENIED"
+  // The link stopped retrying for something other than ssh or Host mode: a WSL
+  // distribution that isn't there, a connection this machine can't use as set up.
+  | "HOST_CONNECTION_UNUSABLE"
   // An action that is inherently UI (focus a panel, open a dialog) was
   // dispatched with no frontend attached to the host.
   | "NO_FRONTEND_ATTACHED"

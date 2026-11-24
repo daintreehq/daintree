@@ -17,6 +17,8 @@ npm run rebuild            # native-module errors after an install
 
 Typecheck runs on the TypeScript 7 native compiler. Use `npm run typecheck` or `typecheck:changed`, never a bare `tsc -b` (it emits build artifacts and phantom TS6305s). `npm install` for dev, `npm ci` only in CI.
 
+**Remote checks with spotexec.** When `spotexec supported` prints `true`, heavy checks run on remote VMs through `sx` (tasks in `.spotexec.toml`) and leave this machine free: `sx test <paths>` in place of `npm test -- <paths>`, `sx typecheck` in place of `typecheck:changed` (all twelve projects, one after another in a shared slot), `sx check` in place of `npm run check`, and `sx test-all` for the whole unit suite (one Vitest run on a VM of its own) before pushing anything that touches shared code or more than one area, so CI rarely finds a failure first. Lint and format on your own files stay local. Exit `125` is spotexec failing, not the code: never change code for it; rerun it, then fall back to the local command for targeted tests and checks, and for `sx test-all` leave the full suite to CI.
+
 ## Architecture
 
 - **Main (`electron/`)** — node-pty, git, OS access. Services in `services/`, IPC handlers by domain in `ipc/handlers/`, windowing in `window/`. Utility subprocesses with crash recovery: `pty-host/`, `workspace-host/`, `watchdog-host*`, `plugin-dev-worker*`.
@@ -29,9 +31,9 @@ Path-scoped rules in `.claude/rules/` load the detail for stores and persistence
 
 ## Definition of done
 
-1. **Never run the full unit suite locally** (bare `npm test` / `npx vitest run`: 15-20 minutes of a locked-up machine) — not mid-work, not before a commit or PR, not because a skill says to. CI runs it in 6 shards and `ci-ok` is the gate. Locally, run only the tests covering your change, plus typecheck and lint; fix anything else from the CI log.
+1. **Never run the full unit suite locally** (bare `npm test` / `npx vitest run`: 15-20 minutes of a locked-up machine) — not mid-work, not before a commit or PR, not because a skill says to. `sx test-all` runs it remotely and is allowed, and the `stabilize` skill runs it on the stabilization machine, whose job that is. PR CI runs only the tests the diff reaches (Vitest `--changed`) behind `ci-ok`, and the daily stabilization run covers the whole suite. Locally, run only the tests covering your change, plus typecheck and lint; fix anything else from the CI log.
 2. **Never decide to run E2E yourself.** Run only the spec or bucket the user names, when they ask.
-3. Run `npm run check` for anything touching types, IPC, keybindings, plugin manifests, or lint-visible code. Otherwise scale verification to the change.
+3. Run `npm run check` (or `sx check`) for anything touching types, IPC, keybindings, plugin manifests, or lint-visible code. Otherwise scale verification to the change.
 4. Report the commands actually run and their real results, trusting exit codes over summaries: `prettier` prints "All files formatted correctly" while exiting 1, and `rtk` reports "No errors found" while `tsc` fails (use `rtk proxy` for anything you'll make a claim about).
 5. Never weaken a test, suppress a warning, hand-edit generated output or a ratchet baseline, or widen a baseline to make a change pass. Regenerate from the source.
 

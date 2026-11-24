@@ -22,6 +22,7 @@ import { logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { freezeWebContents, unfreezeWebContents } from "../utils/webContentsLifecycle.js";
+import { sendLatestWins } from "./frozenViewDelivery.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { AgentState } from "../../shared/types/agent.js";
 import type { CachedViewReleaseBlock } from "../../shared/types/appError.js";
@@ -67,6 +68,10 @@ import {
   isDictationViewHeld,
   onDictationViewReleased,
 } from "../services/voice/dictationViewHold.js";
+import {
+  isBulkWorktreeRunViewHeld,
+  onBulkWorktreeRunViewReleased,
+} from "../services/BulkWorktreeRunRegistry.js";
 import { isCachedViewFlushPending, onCachedViewFlushSettled } from "../services/cachedViewFlush.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
@@ -570,6 +575,14 @@ export class ProjectViewManager {
     };
     const offRecovery = onPanelRecoveryHoldReleased(reclaimReleased);
     const offDictation = onDictationViewReleased(reclaimReleased);
+    // A bulk worktree creation held back the freeze as well as eviction (#17085).
+    const offBulkRun = onBulkWorktreeRunViewReleased((webContentsId) => {
+      reclaimReleased(webContentsId);
+      if (this.disposed || !isOurs(webContentsId)) return;
+      setImmediate(() => {
+        if (!this.disposed) this.freezeSettledFlushView(webContentsId);
+      });
+    });
     // The flush also held back the efficiency freeze `deactivateEntry` would
     // have applied, and nothing else would apply it before the next sampler tick.
     const offCachedFlush = onCachedViewFlushSettled((webContentsId) => {
@@ -582,6 +595,7 @@ export class ProjectViewManager {
     this.holdReleaseCleanup = () => {
       offRecovery();
       offDictation();
+      offBulkRun();
       offCachedFlush();
     };
     if (opts.cachedProjectViews != null) {
@@ -633,10 +647,10 @@ export class ProjectViewManager {
         if (child === view || child === outgoing) continue;
         const childWc = child.webContents;
         if (!childWc || childWc.isDestroyed()) continue;
-        // Only sync project views. Non-project children (PortalManager parks
-        // hidden portal tabs at OFFSCREEN_BOUNDS while still attached, the
-        // unbound welcome view, devtools) own their own bounds — forcing them
-        // to full-window here would yank a hidden portal onscreen on resize.
+        // Only sync project views. Non-project children (paint-surface views
+        // SurfaceViewManager places, the unbound welcome view, devtools) own
+        // their own bounds — forcing them to full-window here would stretch a
+        // surface over the active project view on resize.
         if (!this.webContentsToProject.has(childWc.id)) continue;
         child.setBounds({ x: 0, y: 0, width, height });
       }
@@ -1652,6 +1666,8 @@ export class ProjectViewManager {
     if (this.remoteAssistantLive?.(wc.id) === true) return;
     // A dictation started here captures its audio in this renderer (#14773).
     if (isDictationViewHeld(wc)) return;
+    // A bulk worktree creation runs in this renderer (#17085).
+    if (isBulkWorktreeRunViewHeld(wc)) return;
     // Its cached-edge flush is still reaching main (#15633).
     if (isCachedViewFlushPending(wc)) return;
     void freezeWebContents(wc);
@@ -1750,9 +1766,13 @@ export class ProjectViewManager {
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;
       if (entry.state !== "cached") continue;
-      const wc = entry.view.webContents;
-      if (wc.isDestroyed()) continue;
-      wc.send(CHANNELS.PROJECT_BACKGROUND_RESIZE, { width, height });
+      // Only the settled size matters to a frozen view, not every one it missed.
+      sendLatestWins(
+        entry.view.webContents,
+        CHANNELS.PROJECT_BACKGROUND_RESIZE,
+        CHANNELS.PROJECT_BACKGROUND_RESIZE,
+        { width, height }
+      );
     }
   }
 
@@ -1805,6 +1825,8 @@ export class ProjectViewManager {
     // A dictation running there, or its cleanup, would end with the view
     // (#14773). Another window asking for the project brings this one forward.
     if (isDictationViewHeld(wc)) return "dictation";
+    // Worktrees it is creating would stop half made (#17085).
+    if (isBulkWorktreeRunViewHeld(wc)) return "worktree-creation";
     return null;
   }
 
@@ -1843,6 +1865,12 @@ export class ProjectViewManager {
   isDictationHeld(projectId: string): boolean {
     const wc = this.views.get(projectId)?.view.webContents;
     return wc ? isDictationViewHeld(wc) : false;
+  }
+
+  /** Whether a bulk worktree creation still runs in this project's view here (#17085). */
+  isBulkWorktreeRunHeld(projectId: string): boolean {
+    const wc = this.views.get(projectId)?.view.webContents;
+    return wc ? isBulkWorktreeRunViewHeld(wc) : false;
   }
 
   /**

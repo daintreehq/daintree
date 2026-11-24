@@ -6,7 +6,21 @@
  * nothing.
  */
 
+import type {
+  DecisionsHostAttentionAnswer,
+  DecisionsHostAttentionRequest,
+} from "../../shared/types/decisionsAttention.js";
 import type { DecisionsHostRuntimeObservation } from "../../shared/types/decisionsHosts.js";
+import type {
+  DecisionQuestionCancelResult,
+  DecisionQuestionContentResult,
+  DecisionQuestionImagePartResult,
+  DecisionQuestionLastRead,
+  DecisionQuestionListItem,
+  DecisionQuestionPaneResult,
+  DecisionQuestionReference,
+  DecisionQuestionSummariesResult,
+} from "../../shared/types/decisionsQuestion.js";
 
 /** The most a Host's or the library's own words may run to, wherever they are shown. */
 export const MAX_HOST_DETAIL_LENGTH = 300;
@@ -150,4 +164,94 @@ export interface DecisionsHostsPort {
   runtimeOf(hostId: string): DecisionsHostRuntimeObservation | null;
   /** Tells every connected Host now whether Decisions is on here, as the setting says. */
   announceOwnerState(): void;
+  /**
+   * Every Host's questions as it last reported them to this computer's owner
+   * (#17230), connected or not. A Host whose questions name an id another
+   * Host's also name is left out, so neither can stand in for the other.
+   */
+  hostQuestions(): DecisionsHostQuestions[];
+  /** A Host's questions, its connection or its name changed. */
+  onHostQuestionsChanged(listener: () => void): () => void;
+  /**
+   * Reads one of a Host's questions on the Host whose questions name
+   * `questionHostId`; null when no Host's do.
+   */
+  readHostQuestion<R extends DecisionsHostQuestionRead>(
+    questionHostId: string,
+    read: R
+  ): Promise<HostCallOutcome<DecisionsHostQuestionAnswer<R>>> | null;
+  /** Withdraws one of a Host's questions on that Host; null when no Host's questions name it. */
+  cancelHostQuestion(
+    reference: DecisionQuestionReference
+  ): Promise<HostCallOutcome<DecisionQuestionCancelResult>> | null;
+  /**
+   * Reads or acts on one of a Host's stopped deliveries on that Host
+   * (#18031); null when no Host's questions list the reference. A Host from
+   * before it answers `needs-update`, and isn't asked again on that link.
+   */
+  hostAttention(
+    request: DecisionsHostAttentionRequest
+  ): Promise<HostCallOutcome<DecisionsHostAttentionAnswer>> | null;
+  /**
+   * What this computer last read of one of a Host's questions over its link
+   * (#17946), for the owner to dismiss it by while the Host is away: only
+   * while the Host whose questions name `reference.hostId` is still reported
+   * to the owner this computer speaks as now, from the same Host device, and
+   * its last report lists the question as waiting for the person. Null otherwise.
+   */
+  lastHostRead(reference: DecisionQuestionReference): DecisionQuestionLastRead | null;
+  /**
+   * Each connected Host's agents seen reaching `completed` or `exited`, and
+   * each of those stops taken back: the agent took up work again, its run was
+   * put aside, or the link it came on ended (#17933). Only links already up
+   * report, and a stop is passed on only as it happens, never late.
+   */
+  onAgentStopChanges(listener: (hostId: string, change: HostAgentStopChange) => void): () => void;
 }
+
+/** One of a Host's agents' stops: `stopped` false takes back the one before it. */
+export interface HostAgentStopChange {
+  terminalId: string;
+  stopped: boolean;
+}
+
+/** One Host's questions, as this computer last heard them (#17230). */
+export interface DecisionsHostQuestions {
+  /** The Host by the id and name this computer's host list gives it. */
+  hostId: string;
+  name: string;
+  /** This computer has a link to the Host now, the one it last heard the list over. */
+  connected: boolean;
+  /** The id the Host's questions name it by: each one's `reference.hostId`. */
+  questionHostId: string;
+  questions: Omit<DecisionQuestionListItem, "remoteHost" | "inbox">[];
+  /**
+   * What each of its questions in Needs you asks now (#17895), by question
+   * id; absent from a Host from before it, whose list says only which wait
+   * for a reply.
+   */
+  asks?: ReadonlyMap<string, string | null>;
+}
+
+/** One of a Host's questions read on the Host by its reference (#17230). */
+export type DecisionsHostQuestionRead =
+  | { read: "content"; reference: DecisionQuestionReference }
+  | {
+      read: "image";
+      reference: DecisionQuestionReference;
+      attachmentId: string;
+      offset: number;
+    }
+  | { read: "summaries"; references: DecisionQuestionReference[] }
+  /** The pane that asked it, as it shows now (#18037). */
+  | { read: "pane"; reference: DecisionQuestionReference };
+
+export type DecisionsHostQuestionAnswer<R extends DecisionsHostQuestionRead> = R extends {
+  read: "content";
+}
+  ? DecisionQuestionContentResult
+  : R extends { read: "image" }
+    ? DecisionQuestionImagePartResult
+    : R extends { read: "pane" }
+      ? DecisionQuestionPaneResult
+      : DecisionQuestionSummariesResult;

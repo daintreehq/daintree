@@ -832,10 +832,14 @@ function HostEnvironmentSection({
     }
   }
 
+  // Opened on the machine the host was before a removal or re-point: what it
+  // holds is that machine's, and must not be handed to the page that replaces it.
+  const [identity] = useState(() => hostEnvDrafts.identity(hostId));
   useEffect(() => {
+    if (hostEnvDrafts.identity(hostId) !== identity) return;
     if (dirty) hostEnvDrafts.set(hostId, { rows, base, movedUnder });
     else hostEnvDrafts.delete(hostId);
-  }, [dirty, rows, base, movedUnder, hostId]);
+  }, [dirty, rows, base, movedUnder, hostId, identity]);
 
   // A held close lands here: the reason and both ways out, in view.
   useEffect(() => {

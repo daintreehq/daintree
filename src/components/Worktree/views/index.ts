@@ -7,7 +7,11 @@ export { ExistingBranchPicker } from "./ExistingBranchPicker";
 export { BranchPickerPanel } from "./BranchPickerPanel";
 export { NewBranchInput, BranchResolvedHint } from "./NewBranchInput";
 export { WorktreePathPicker, PathResolvedHint } from "./WorktreePathPicker";
-export { EnvironmentRadioGroup, EnvironmentHint } from "./EnvironmentRadioGroup";
+export {
+  EnvironmentRadioGroup,
+  EnvironmentHint,
+  OpenOnMachineToggle,
+} from "./EnvironmentRadioGroup";
 export { RecipePickerPopover, type RecipeOption } from "./RecipePickerPopover";
 export { AgentPickerPopover } from "./AgentPickerPopover";
 export { IssuePromptToggle } from "./IssuePromptToggle";

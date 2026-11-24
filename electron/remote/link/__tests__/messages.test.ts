@@ -44,6 +44,23 @@ const hostSummary = (extra: object) =>
   ).body as HostMetricsSummary;
 
 describe("link messages", () => {
+  it("frames a structured message's encoded body without copying it", () => {
+    const frame = messageToFrame({
+      lane: Lane.CONTROL,
+      kind: ControlKind.PING,
+      body: { sentAt: 12, nonce: 3 },
+    });
+    const wire = encodeFrame(frame);
+
+    expect(wire.buffer).toBe(frame.payload.buffer);
+    const [decoded] = new FrameDecoder().push(wire);
+    expect(frameToMessage(decoded!)).toEqual({
+      lane: Lane.CONTROL,
+      kind: ControlKind.PING,
+      body: { sentAt: 12, nonce: 3 },
+    });
+  });
+
   it("carries a summary's CPU scale and clusters, and one from a host that sends none", () => {
     const cpu = {
       cpuLogicalCoreCount: 14,
@@ -145,6 +162,120 @@ describe("link messages", () => {
     expect(() =>
       summary({ drivers: Array.from({ length: MAX_HOST_SUMMARY_DRIVERS + 1 }, () => driver) })
     ).toThrow();
+  });
+
+  it("carries a host's idle clock, one that sends none, and a later build's wider idle time (#17357)", () => {
+    const idle = { idleAfterMinutes: 30, lastWorkAt: 10, busy: false, idleEndsAt: 1_800_010 };
+    expect(hostSummary({ idle }).idle).toEqual(idle);
+    expect(hostSummary({})).not.toHaveProperty("idle");
+    const busy = { ...idle, busy: true, idleEndsAt: null };
+    expect(hostSummary({ idle: busy }).idle).toEqual(busy);
+    // Bounds on what a host stores never reach the wire: a later one widening them still reads.
+    expect(hostSummary({ idle: { ...idle, idleAfterMinutes: 10_080 } }).idle).toMatchObject({
+      idleAfterMinutes: 10_080,
+    });
+    // A newer host's extra fields are dropped, not refused.
+    expect(hostSummary({ idle: { ...idle, heldBy: ["agents"] } }).idle).toEqual(idle);
+    // Whether it stops its own machine once idle (#17361).
+    expect(hostSummary({ idle: { ...idle, stopsWhenIdle: true } }).idle).toEqual({
+      ...idle,
+      stopsWhenIdle: true,
+    });
+    expect(hostSummary({ idle: { ...idle, stopsWhenIdle: false } }).idle).toEqual({
+      ...idle,
+      stopsWhenIdle: false,
+    });
+    expect(() => hostSummary({ idle: { ...idle, stopsWhenIdle: "yes" } })).toThrow();
+    for (const bad of [
+      { ...idle, idleAfterMinutes: 0 },
+      { ...idle, busy: "no" },
+      { busy: false },
+    ]) {
+      expect(() => hostSummary({ idle: bad })).toThrow();
+    }
+  });
+
+  it("carries a host's usage readings, one that sends none, and drops a reading a later build adds (#17318)", () => {
+    const codex = {
+      agentId: "codex",
+      accountNames: ["Work"],
+      isDefault: false,
+      windowDurationMins: 300,
+      usedPercent: 82.5,
+      resetsAt: 1_800_000,
+      observedAt: 10,
+    };
+    const claude = {
+      agentId: "claude",
+      accountNames: [],
+      isDefault: true,
+      window: "weekly limit",
+      statement: "approaching",
+      usedPercent: null,
+      resetsAt: null,
+      observedAt: 20,
+    };
+    expect(hostSummary({ agentUsage: [codex, claude] }).agentUsage).toEqual([codex, claude]);
+    expect(hostSummary({ agentUsage: [] }).agentUsage).toEqual([]);
+    expect(hostSummary({})).not.toHaveProperty("agentUsage");
+    // One bad or unknown reading is left out; the summary and the other reading stand.
+    for (const bad of [
+      { ...codex, agentId: "gemini" },
+      { ...claude, window: "hourly limit" },
+      { ...codex, usedPercent: 140 },
+      { ...codex, usedPercent: null },
+      { ...codex, windowDurationMins: 0 },
+      { ...codex, accountNames: [42] },
+      // A figure without a statement that names one, or the other way round, never ranks.
+      { ...claude, statement: "used", usedPercent: null },
+      { ...claude, statement: "approaching", usedPercent: 90 },
+    ]) {
+      expect(hostSummary({ agentUsage: [bad, claude] }).agentUsage).toEqual([claude]);
+    }
+    expect(() => hostSummary({ agentUsage: "none" })).toThrow();
+    expect(() => hostSummary({ agentUsage: Array.from({ length: 17 }, () => codex) })).toThrow();
+  });
+
+  it("carries a host's name for its default login, and a reading from a host that sends none (#17080)", () => {
+    const named = {
+      agentId: "claude",
+      accountNames: [],
+      isDefault: true,
+      defaultLoginName: "Work",
+      window: "weekly limit",
+      statement: "approaching",
+      usedPercent: null,
+      resetsAt: null,
+      observedAt: 20,
+    };
+    const { defaultLoginName: _name, ...unnamed } = named;
+    const codexNamed = {
+      agentId: "codex",
+      accountNames: [],
+      isDefault: true,
+      defaultLoginName: "Lab",
+      windowDurationMins: 300,
+      usedPercent: 40,
+      resetsAt: null,
+      observedAt: 10,
+    };
+    const { defaultLoginName: _lab, ...codexUnnamed } = codexNamed;
+    expect(hostSummary({ agentUsage: [named, unnamed, codexNamed] }).agentUsage).toEqual([
+      named,
+      unnamed,
+      codexNamed,
+    ]);
+    // A name this can't take is dropped, and the reading it labelled stands.
+    for (const name of [7, "x".repeat(257)]) {
+      const parsed = hostSummary({
+        agentUsage: [
+          { ...named, defaultLoginName: name },
+          { ...codexNamed, defaultLoginName: name },
+        ],
+      }).agentUsage;
+      expect(parsed).toEqual([unnamed, codexUnnamed]);
+      expect(parsed?.every((reading) => reading.defaultLoginName === undefined)).toBe(true);
+    }
   });
 
   it("carries a summary's timing, and one from a host that sends none (#14462)", () => {

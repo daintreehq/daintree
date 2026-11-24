@@ -1,29 +1,30 @@
-export type ItemStage =
-  | "pending"
-  | "worktree-creating"
-  | "worktree-created"
-  | "terminals-spawning"
-  | "terminals-error"
-  | "worktree-error"
-  | "assigning"
-  | "verifying"
-  | "succeeded"
-  | "failed";
+import type {
+  BulkWorktreeRunFailedStep,
+  BulkWorktreeRunItemStage,
+} from "@shared/types/ipc/bulkWorktreeRuns";
+
+export type ItemStage = BulkWorktreeRunItemStage;
 
 export interface ItemStatus {
   stage: ItemStage;
   attempt: number;
+  /** Times Retry failed has run this item again. */
+  retried?: number;
   error?: string;
   worktreeId?: string;
   worktreePath?: string;
   resolvedBranch?: string;
   failedTerminalIndices?: number[];
   spawnedTerminalIds?: string[];
-  failedStep?: "worktree" | "terminals" | "verification" | "assignment";
+  failedStep?: BulkWorktreeRunFailedStep;
 }
 
 export interface ProgressState {
-  phase: "idle" | "executing" | "done";
+  /**
+   * `cancelling` waits for work already underway (a worktree create can't be
+   * called back) before the run settles as `cancelled`.
+   */
+  phase: "idle" | "executing" | "cancelling" | "cancelled" | "done";
   total: number;
   items: Map<number, ItemStatus>;
 }
@@ -53,9 +54,11 @@ export type ProgressAction =
       issueNumber: number;
       error: string;
       attempts: number;
-      failedStep?: "worktree" | "terminals" | "verification" | "assignment";
+      failedStep?: BulkWorktreeRunFailedStep;
     }
   | { type: "DONE" }
+  | { type: "CANCEL_REQUESTED" }
+  | { type: "CANCELLED" }
   | { type: "RETRY_FAILED" }
   | { type: "RESET" };
 
@@ -157,6 +160,19 @@ export function progressReducer(state: ProgressState, action: ProgressAction): P
     }
     case "DONE":
       return { ...state, phase: "done" };
+    case "CANCEL_REQUESTED":
+      return state.phase === "executing" ? { ...state, phase: "cancelling" } : state;
+    case "CANCELLED": {
+      // Whatever didn't finish is cancelled, keeping the worktree it may
+      // already have: a created worktree is reported as created.
+      const items = new Map(state.items);
+      for (const [key, val] of items) {
+        if (val.stage !== "succeeded" && val.stage !== "failed") {
+          items.set(key, { ...val, stage: "cancelled", error: undefined });
+        }
+      }
+      return { ...state, phase: "cancelled", items };
+    }
     case "RETRY_FAILED": {
       const items = new Map(state.items);
       let retryCount = 0;
@@ -166,7 +182,12 @@ export function progressReducer(state: ProgressState, action: ProgressAction): P
           val.stage === "terminals-error" ||
           val.stage === "worktree-error"
         ) {
-          items.set(key, { ...val, stage: "pending", error: undefined });
+          items.set(key, {
+            ...val,
+            stage: "pending",
+            error: undefined,
+            retried: (val.retried ?? 0) + 1,
+          });
           retryCount++;
         }
       }
@@ -174,26 +195,5 @@ export function progressReducer(state: ProgressState, action: ProgressAction): P
     }
     case "RESET":
       return { phase: "idle", total: 0, items: new Map() };
-  }
-}
-
-export function getStageLabel(status: ItemStatus | undefined): string | null {
-  if (!status) return null;
-  switch (status.stage) {
-    case "worktree-creating":
-      return "Creating worktree…";
-    case "terminals-spawning":
-      return "Spawning terminals…";
-    case "assigning":
-      return "Assigning issue…";
-    case "verifying":
-      return "Verifying…";
-    case "failed":
-      if (status.failedStep === "terminals") return "Terminal spawn failed";
-      if (status.failedStep === "verification") return "Missing terminals";
-      if (status.failedStep === "assignment") return "Assignment failed";
-      return null;
-    default:
-      return null;
   }
 }

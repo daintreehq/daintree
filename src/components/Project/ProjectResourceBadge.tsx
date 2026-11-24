@@ -97,11 +97,27 @@ interface AggregateStats {
   projects: Array<{ id: string; name: string }>;
 }
 
-/** Each read settles on its own; a null is that read failing, not the popover. */
+/**
+ * Each read settles on its own: a field is absent until its collector's first
+ * read settles, and null when the latest read failed — never the popover.
+ */
 interface PopoverData {
-  processMetrics: ProcessMetricEntry[] | null;
-  heapStats: HeapStats | null;
-  diagnosticsInfo: DiagnosticsInfo | null;
+  processMetrics?: ProcessMetricEntry[] | null;
+  heapStats?: HeapStats | null;
+  diagnosticsInfo?: DiagnosticsInfo | null;
+  /** When the `diagnosticsInfo` on show was asked for. */
+  diagnosticsInfoAt?: number;
+}
+
+type PopoverCollector = "processMetrics" | "heapStats" | "diagnosticsInfo" | "memorySnapshot";
+
+/** The earliest of the given times, or null when none is known. */
+function earliest(...times: Array<number | null>): number | null {
+  let result: number | null = null;
+  for (const time of times) {
+    if (time !== null && (result === null || time < result)) result = time;
+  }
+  return result;
 }
 
 function settled<T>(result: PromiseSettledResult<T>, what: string): T | null {
@@ -442,9 +458,9 @@ function DiagnosticsSection({
   bufferSlice,
   projectNames,
 }: {
-  diagnosticsInfo: DiagnosticsInfo | null;
-  processMetrics: ProcessMetricEntry[] | null;
-  heapStats: HeapStats | null;
+  diagnosticsInfo: DiagnosticsInfo | null | undefined;
+  processMetrics: ProcessMetricEntry[] | null | undefined;
+  heapStats: HeapStats | null | undefined;
   trend: TrendDirection;
   trendSamples: number[];
   bufferSlice: RendererTerminalBufferSlice | null;
@@ -488,24 +504,31 @@ function DiagnosticsSection({
       </Button>
       {expanded && (
         <div id="resource-diagnostics" className="space-y-3">
+          {/* A row whose first read is still out is left off rather than
+              called Unavailable: the reads land one by one now, and waiting
+              is not failing. */}
           <div className="space-y-1">
             <MemoryRow label="App memory trend" value={trendText} />
-            <MemoryRow
-              label="Main process JS heap"
-              value={
-                heapStats
-                  ? `${formatMemory(heapStats.usedMB)} of ${formatMemory(heapStats.limitMB)}`
-                  : "Unavailable"
-              }
-            />
-            <MemoryRow
-              label="Uptime"
-              value={
-                diagnosticsInfo
-                  ? formatElapsedDuration(diagnosticsInfo.uptimeSeconds * 1000)
-                  : "Unavailable"
-              }
-            />
+            {heapStats !== undefined && (
+              <MemoryRow
+                label="Main process JS heap"
+                value={
+                  heapStats
+                    ? `${formatMemory(heapStats.usedMB)} of ${formatMemory(heapStats.limitMB)}`
+                    : "Unavailable"
+                }
+              />
+            )}
+            {diagnosticsInfo !== undefined && (
+              <MemoryRow
+                label="Uptime"
+                value={
+                  diagnosticsInfo
+                    ? formatElapsedDuration(diagnosticsInfo.uptimeSeconds * 1000)
+                    : "Unavailable"
+                }
+              />
+            )}
             {diagnosticsInfo && diagnosticsInfo.eventLoopP99Ms > 50 && (
               <MemoryRow
                 label="Event loop delay (p99)"
@@ -518,9 +541,9 @@ function DiagnosticsSection({
           )}
           {processMetrics ? (
             <ProcessTable metrics={processMetrics} />
-          ) : (
+          ) : processMetrics === null ? (
             <div className="text-2xs text-text-secondary">Process list unavailable</div>
-          )}
+          ) : null}
         </div>
       )}
     </div>
@@ -559,16 +582,24 @@ export function ProjectResourceBadge({
   });
   const [isLoading, setIsLoading] = useState(true);
   const [open, setOpen] = useState(false);
-  const [popoverData, setPopoverData] = useState<PopoverData | null>(null);
-  const [memorySnapshot, setMemorySnapshot] = useState<CompositeMemorySnapshot | null>(null);
+  const [popoverData, setPopoverData] = useState<PopoverData>({});
+  // Undefined until the first snapshot read settles, null when the latest failed.
+  const [memorySnapshot, setMemorySnapshot] = useState<CompositeMemorySnapshot | null>();
   // Last workload slice that was actually measured — survives unavailable
   // reads so the popover degrades to "showing last reading" instead of
   // dropping to a fake 0 or hiding a previously-shown row.
   const [lastGoodWorkloads, setLastGoodWorkloads] = useState<TerminalWorkloadSlice | null>(null);
+  // When the popover asked for the readings above: the snapshot on show (set
+  // only by a read that succeeded) and the last good workload slice.
   const [popoverSampledAt, setPopoverSampledAt] = useState<number | null>(null);
+  const [lastGoodWorkloadsAt, setLastGoodWorkloadsAt] = useState<number | null>(null);
   const [nowTs, setNowTs] = useState(() => Date.now());
   const [thresholds, setThresholds] = useState<MemoryThresholds>(FALLBACK_THRESHOLDS);
   const samplesRef = useRef<number[]>([]);
+  // The popover's reads still out, one slot per collector. Held for the
+  // badge's lifetime rather than one opening, so closing and reopening around
+  // a stalled read can't stack a second call on the same collector.
+  const popoverReadsInFlightRef = useRef<Set<PopoverCollector> | null>(null);
   const popoverContentRef = useRef<HTMLDivElement>(null);
   const [processesOpen, setProcessesOpen] = useState(false);
   const processesDialogMounted = useKeepMounted(processesOpen);
@@ -631,12 +662,7 @@ export function ProjectResourceBadge({
     [stats.projects]
   );
 
-  const systemAvailableMB = popoverData?.diagnosticsInfo?.systemAvailableMB ?? null;
-  const ageSec =
-    popoverSampledAt !== null ? Math.max(0, Math.round((nowTs - popoverSampledAt) / 1000)) : null;
-  // Silent while fresh. The popover polls every 4s, so "Updated just now" on
-  // every open said nothing; an age only earns its line once the reads stall.
-  const ageLabel = ageSec !== null && ageSec >= STALE_AFTER_SEC ? `Updated ${ageSec}s ago` : null;
+  const systemAvailableMB = popoverData.diagnosticsInfo?.systemAvailableMB ?? null;
 
   const fetchStats = useCallback(async () => {
     try {
@@ -828,56 +854,91 @@ export function ProjectResourceBadge({
 
   // Stale-while-revalidate: keep the last snapshot across closes so reopening
   // shows data instantly; the poll below refreshes it silently.
+  //
+  // Each collector reads and lands on its own. A tick starts only the
+  // collectors with no read still out, so however long one stalls the poll
+  // holds at most one call per collector, the stalled one holds up nothing
+  // else, and no read can land after a newer one of its kind. Batched, a late
+  // tick overwrote the newer one and took a fresh timestamp with it.
   useEffect(() => {
     if (!open) return;
 
-    let cancelled = false;
+    if (popoverReadsInFlightRef.current === null) popoverReadsInFlightRef.current = new Set();
+    const inFlight = popoverReadsInFlightRef.current;
 
-    const fetchPopoverData = async () => {
+    // A read still out when the popover closes lands anyway: it is still the
+    // newest of its kind, and its slot is what kept a reopen from asking again.
+    const read = async <T,>(
+      collector: PopoverCollector,
+      request: () => Promise<T>,
+      land: (value: T | null, requestedAt: number) => void,
+      what?: string
+    ) => {
+      if (inFlight.has(collector)) return;
+      inFlight.add(collector);
+      const requestedAt = Date.now();
+      let value: T | null = null;
+      let failed = false;
+      let failure: unknown;
+      try {
+        value = await request();
+      } catch (error) {
+        failed = true;
+        failure = error;
+      }
+      // Released and landed before anything else can throw.
+      inFlight.delete(collector);
+      land(value, requestedAt);
+      if (failed && what) logError(`[ProjectResourceBadge] Failed to fetch ${what}`, failure);
+    };
+
+    const fetchPopoverData = () => {
       // Guarded in the body, not only by the `open` teardown: closing on the
       // cached phase costs a render pass, so a tick already queued when the
       // view cached would still fire, and a hidden window suppresses nothing
       // here at all — Radix keeps the popover open across both.
       if (document.hidden || isProjectViewCached()) return;
-      try {
-        // Settled one by one. The memory summary and the diagnostics come from
-        // unrelated reads, and a single rejection in a `Promise.all` used to
-        // hold back a perfectly good snapshot along with everything else.
-        const [metricsResult, heapResult, infoResult, snapshotResult] = await Promise.allSettled([
-          systemClient.getProcessMetrics(),
-          systemClient.getHeapStats(),
-          systemClient.getDiagnosticsInfo(),
-          systemClient.getMemorySnapshot(),
-        ]);
-        const snapshot = snapshotResult.status === "fulfilled" ? snapshotResult.value : null;
-
-        if (!cancelled) {
-          setPopoverData({
-            processMetrics: settled(metricsResult, "process metrics"),
-            heapStats: settled(heapResult, "heap stats"),
-            diagnosticsInfo: settled(infoResult, "diagnostics info"),
-          });
-          // A failed snapshot poll clears the live slice so old readings can't
+      void read(
+        "processMetrics",
+        () => systemClient.getProcessMetrics(),
+        (processMetrics) => setPopoverData((prev) => ({ ...prev, processMetrics })),
+        "process metrics"
+      );
+      void read(
+        "heapStats",
+        () => systemClient.getHeapStats(),
+        (heapStats) => setPopoverData((prev) => ({ ...prev, heapStats })),
+        "heap stats"
+      );
+      void read(
+        "diagnosticsInfo",
+        () => systemClient.getDiagnosticsInfo(),
+        (diagnosticsInfo, requestedAt) =>
+          setPopoverData((prev) => ({ ...prev, diagnosticsInfo, diagnosticsInfoAt: requestedAt })),
+        "diagnostics info"
+      );
+      void read(
+        "memorySnapshot",
+        () => systemClient.getMemorySnapshot(),
+        (snapshot, requestedAt) => {
+          // A failed snapshot read clears the live slice so old readings can't
           // masquerade as current; last-good values still render via
           // lastGoodWorkloads with their "showing last reading" note.
           setMemorySnapshot(snapshot);
-          if (snapshot?.terminalWorkloads.available) {
+          if (snapshot === null) return;
+          if (snapshot.terminalWorkloads.available) {
             setLastGoodWorkloads(snapshot.terminalWorkloads);
+            setLastGoodWorkloadsAt(requestedAt);
           }
-          setPopoverSampledAt(Date.now());
+          setPopoverSampledAt(requestedAt);
         }
-      } catch (error) {
-        logError("[ProjectResourceBadge] Failed to fetch popover data", error);
-      }
+      );
     };
 
-    void fetchPopoverData();
-    const interval = setInterval(() => void fetchPopoverData(), POPOVER_POLL_MS);
+    fetchPopoverData();
+    const interval = setInterval(fetchPopoverData, POPOVER_POLL_MS);
 
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, [open]);
 
   // Tick a 1s clock while the popover is open so the "updated Ns ago" label
@@ -980,6 +1041,30 @@ export function ProjectResourceBadge({
     memorySnapshot?.terminalWorkloads ?? null,
     lastGoodWorkloads
   );
+
+  // The Memory heading dates the oldest figure shown under it, each by when the
+  // popover asked for it: a read that stalls ages instead of arriving looking
+  // fresh, a failed read freshens nothing, and a retained figure keeps its own
+  // date. The workload sweep's age stays with its note, since the pty-host
+  // backs off when idle and dating the heading by it would call a healthy
+  // reading old; the badge's fallback app figure has its own freshness gate.
+  const memoryReadAt =
+    memorySnapshot === undefined
+      ? null
+      : earliest(
+          memorySnapshot?.electron.available ? popoverSampledAt : null,
+          shownWorkloads === null
+            ? null
+            : shownWorkloads === memorySnapshot?.terminalWorkloads
+              ? popoverSampledAt
+              : lastGoodWorkloadsAt,
+          systemAvailableMB !== null ? (popoverData.diagnosticsInfoAt ?? null) : null
+        );
+  const ageSec =
+    memoryReadAt !== null ? Math.max(0, Math.round((nowTs - memoryReadAt) / 1000)) : null;
+  // Silent while fresh. The popover polls every 4s, so "Updated just now" on
+  // every open said nothing; an age only earns its line once the reads stall.
+  const ageLabel = ageSec !== null && ageSec >= STALE_AFTER_SEC ? `Updated ${ageSec}s ago` : null;
 
   return (
     <>
@@ -1112,7 +1197,9 @@ export function ProjectResourceBadge({
                 <SectionLabel id="resource-usage-title">Memory</SectionLabel>
                 {ageLabel && <span className="text-2xs text-text-secondary">{ageLabel}</span>}
               </div>
-              {popoverData ? (
+              {/* Waits on the snapshot alone: the figures here are its, and the
+                  machine-available row joins them whenever its own read lands. */}
+              {memorySnapshot !== undefined ? (
                 <MemorySummary
                   appMemoryMB={appMemoryMB}
                   workloads={shownWorkloads}
@@ -1127,7 +1214,7 @@ export function ProjectResourceBadge({
                 </Skeleton>
               )}
             </div>
-            {popoverData && (
+            {memorySnapshot !== undefined && (
               <>
                 {shownWorkloads !== null && (
                   <ProjectBreakdown workloads={shownWorkloads} projectNames={projectNames} />
@@ -1186,19 +1273,19 @@ export function ProjectResourceBadge({
                 <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
               </button>
             </div>
-            {popoverData && (
-              <div className="border-t border-divider pt-2">
-                <DiagnosticsSection
-                  diagnosticsInfo={popoverData.diagnosticsInfo}
-                  processMetrics={popoverData.processMetrics}
-                  heapStats={popoverData.heapStats}
-                  trend={trend}
-                  trendSamples={samples}
-                  bufferSlice={memorySnapshot?.rendererTerminalBuffers ?? null}
-                  projectNames={projectNames}
-                />
-              </div>
-            )}
+            {/* Mounted from the start: each row inside waits on its own read,
+                so a stalled collector can't hold back the ones that answered. */}
+            <div className="border-t border-divider pt-2">
+              <DiagnosticsSection
+                diagnosticsInfo={popoverData.diagnosticsInfo}
+                processMetrics={popoverData.processMetrics}
+                heapStats={popoverData.heapStats}
+                trend={trend}
+                trendSamples={samples}
+                bufferSlice={memorySnapshot?.rendererTerminalBuffers ?? null}
+                projectNames={projectNames}
+              />
+            </div>
           </div>
         </PopoverContent>
       </Popover>

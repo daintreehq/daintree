@@ -12,6 +12,7 @@ import {
   filterOutDockDroppables,
   shouldCancelDrop,
   isPanelDragMovableToWorktree,
+  isPanelDragOverWorktreeCard,
   dockCheckedGroupPanelIds,
   type ClientRectLike,
   type OverDropData,
@@ -950,6 +951,59 @@ describe("isPanelDragMovableToWorktree", () => {
     expect(isPanelDragMovableToWorktree(undefined, "wt-b")).toBe(false);
     const sortDrag = { type: "worktree-sort", worktreeId: "wt-a", dragStartOrder: ["wt-a"] };
     expect(isPanelDragMovableToWorktree(sortDrag, "wt-b")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isPanelDragOverWorktreeCard (#16920)
+// ---------------------------------------------------------------------------
+describe("isPanelDragOverWorktreeCard", () => {
+  const panel = { terminal: makeTerminal("panel-1", "grid", "wt-a") };
+  const cardDrop = {
+    id: "worktree-drop-wt-b",
+    data: { current: { type: "worktree", worktreeId: "wt-b" } },
+  };
+  const cardSort = {
+    id: "worktree-sort-wt-b",
+    data: { current: { sortable: { containerId: "worktree-list", index: 1 } } },
+  };
+  const sessionRow = (worktreeId: string) => ({
+    id: "accordion-t-9",
+    data: {
+      current: {
+        origin: "accordion",
+        worktreeId,
+        sortable: { containerId: `worktree-${worktreeId}-accordion`, index: 3 },
+      },
+    },
+  });
+
+  it("holds the highlight over the card's expanded session rows, as over the card itself", () => {
+    for (const over of [cardDrop, cardSort, sessionRow("wt-b")]) {
+      expect(isPanelDragOverWorktreeCard(panel, over, "wt-b")).toBe(true);
+    }
+  });
+
+  it("lights only the card a hovered row belongs to", () => {
+    expect(isPanelDragOverWorktreeCard(panel, sessionRow("wt-c"), "wt-b")).toBe(false);
+    expect(isPanelDragOverWorktreeCard(panel, sessionRow("wt-c"), "wt-c")).toBe(true);
+  });
+
+  it("lights a card for a sidebar row from another worktree, never for a reorder in its own", () => {
+    const rowDrag = { ...panel, origin: "accordion", worktreeId: "wt-a" };
+    expect(isPanelDragOverWorktreeCard(rowDrag, sessionRow("wt-b"), "wt-b")).toBe(true);
+    expect(isPanelDragOverWorktreeCard(rowDrag, sessionRow("wt-a"), "wt-a")).toBe(false);
+  });
+
+  it("stays dark with nothing under the pointer, over a panel, or for a worktree-sort drag", () => {
+    expect(isPanelDragOverWorktreeCard(panel, null, "wt-b")).toBe(false);
+    const gridPanel = {
+      id: "panel-2",
+      data: { current: { sortable: { containerId: "grid-container", index: 0 } } },
+    };
+    expect(isPanelDragOverWorktreeCard(panel, gridPanel, "wt-a")).toBe(false);
+    const sortDrag = { type: "worktree-sort", worktreeId: "wt-a" };
+    expect(isPanelDragOverWorktreeCard(sortDrag, cardDrop, "wt-b")).toBe(false);
   });
 });
 

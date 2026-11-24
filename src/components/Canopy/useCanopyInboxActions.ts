@@ -7,8 +7,14 @@ import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
-import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
-import { itemAnswerAttention, itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
+import { openStoppedAnswers } from "@/components/Decisions/openStoppedAnswers";
+import {
+  decisionsAttentionHolds,
+  itemAnswerAttention,
+  itemArchived,
+  itemSubject,
+  type CanopyItem,
+} from "./canopyModel";
 import {
   canopyCardDomId,
   type CanopyCardHandle,
@@ -25,6 +31,16 @@ import {
 import { bulkTrashTarget } from "./canopyBulkTrash";
 import { useCanopyFrame } from "./canopyFrame";
 import { placeOf } from "./canopyInboxPlace";
+import { parseAllHostsKey, type AllHostsRoute } from "./canopyAllHosts";
+
+/** The hosts a bulk call left alone, by the names their agents carry in the list. */
+function hostNamesOf(items: readonly CanopyItem[], refused: readonly string[]): string {
+  const names = refused.map((hostId) => {
+    const on = items.find((item) => parseAllHostsKey(item.runId)?.hostId === hostId);
+    return on?.workspace.host || hostId;
+  });
+  return [...new Set(names)].join(", ");
+}
 
 /** An error toast whose one recovery is the place the action can be done by hand. */
 function failToast(
@@ -45,7 +61,7 @@ function failToast(
 interface UndoReservation {
   land: (
     restoreOnce: () => void,
-    shown?: { title: string; message: string } | { line: string }
+    shown?: { title: string; message: string; partial?: boolean } | { line: string }
   ) => void;
   forget: () => void;
 }
@@ -59,6 +75,7 @@ export function useCanopyInboxActions({
   hostId,
   ownHostId,
   api,
+  markAllReadReport,
   terminalApi,
   listed,
   focusedItem,
@@ -73,6 +90,7 @@ export function useCanopyInboxActions({
   showsHost,
   isSelected,
   reserveUndo,
+  clearUndo,
   undoReads,
   menuOpenChanged,
   requestRank,
@@ -81,6 +99,8 @@ export function useCanopyInboxActions({
   hostId: HostId | null;
   ownHostId: HostId;
   api: CanopyApi;
+  /** All hosts only: the bulk mark that also says which hosts didn't answer. */
+  markAllReadReport: AllHostsRoute["markAllReadReport"] | null;
   terminalApi: CanopyTerminalApi;
   /** The inbox as listed, filters included. */
   listed: CanopyItem[];
@@ -97,6 +117,8 @@ export function useCanopyInboxActions({
   showsHost: (hostId: HostId | null) => boolean;
   isSelected: (runId: string) => boolean;
   reserveUndo: () => UndoReservation;
+  /** An action Z can't take back was done: Z takes nothing back past it. */
+  clearUndo: () => void;
   undoReads: (before: CanopyReadMark[], after: CanopyReadMark[]) => void;
   menuOpenChanged: (open: boolean) => void;
   requestRank: () => void;
@@ -184,8 +206,9 @@ export function useCanopyInboxActions({
         }
         // The cursor moves on before the run leaves, as archiving does in mail —
         // only off the run it is on: a row archived from its hover button
-        // leaves the user where they were.
-        if (isSelected(item.runId)) {
+        // leaves the user where they were. A run Decisions holds something for
+        // stays listed, so the cursor stays with it.
+        if (isSelected(item.runId) && !decisionsAttentionHolds(item)) {
           const next = nextAfter(item.runId);
           if (next) focusCardNow(next.runId);
         }
@@ -357,26 +380,50 @@ export function useCanopyInboxActions({
     if (unread.length === 0) return;
     const before = unread.flatMap((item) => (item.readMark ? [item.readMark] : []));
     const undo = reserveUndo();
+    const targets = unread.map((item) => ({
+      runId: item.runId,
+      spawnedAt: item.row.run.spawnedAt,
+      turn: item.readMark?.turn ?? 0,
+    }));
     safeFireAndForget(
-      api
-        .markAllRead(
-          unread.map((item) => ({
-            runId: item.runId,
-            spawnedAt: item.row.run.spawnedAt,
-            turn: item.readMark?.turn ?? 0,
-          }))
-        )
-        .then(
-          (after) =>
+      (markAllReadReport
+        ? markAllReadReport(targets)
+        : api.markAllRead(targets).then((marks) => ({ marks, refused: [] as string[] }))
+      ).then(
+        ({ marks: after, refused }) => {
+          // Only the runs a host marked count and can be undone.
+          const left = refused.length > 0 ? hostNamesOf(unread, refused) : null;
+          if (left === null) {
             undo.land(() => undoReads(before, after), {
               title: "Marked as read",
-              message: pluralize(unread.length, "agent"),
-            }),
-          (error: unknown) => {
-            undo.forget();
-            failToast("Couldn't mark as read", error, { label: "Retry", onClick: markAllRead });
+              message: pluralize(after.length, "agent"),
+            });
+            return;
           }
-        )
+          const notDone = `Couldn't confirm it on ${left}. Its agents may still be unread.`;
+          if (after.length === 0) {
+            undo.forget();
+            notify({
+              type: "error",
+              title: "Couldn't mark as read",
+              message: notDone,
+              context: { eventKind: "agent" },
+              duration: 6000,
+              actions: [{ label: "Retry", onClick: markAllRead }],
+            });
+            return;
+          }
+          undo.land(() => undoReads(before, after), {
+            title: "Marked as read",
+            message: `${pluralize(after.length, "agent")} of ${unread.length}. ${notDone}`,
+            partial: true,
+          });
+        },
+        (error: unknown) => {
+          undo.forget();
+          failToast("Couldn't mark as read", error, { label: "Retry", onClick: markAllRead });
+        }
+      )
     );
   };
 
@@ -469,41 +516,52 @@ export function useCanopyInboxActions({
   const closePark = useCallback(() => setParkRunId(null), []);
   const asideFailed = (title: string, error: unknown, retry: () => void) =>
     failToast(title, error, { label: "Retry", onClick: retry });
+  // Each gives Z up on the host it was done on: a toast's Retry once another
+  // host is shown leaves that host's Z alone. Arrow constants rather than named
+  // function expressions: React Compiler can't hoist a function expression that
+  // names itself, and gives up on the whole hook.
+  const unpark = (item: CanopyItem) => {
+    const { runId } = placeOf(item, hostId, ownHostId);
+    if (showsHost(hostId)) clearUndo();
+    safeFireAndForget(
+      window.electron.fleet
+        .unparkRun(runId)
+        .catch((error: unknown) =>
+          asideFailed("Couldn't unpark the agent", error, () => unpark(item))
+        )
+    );
+  };
+  const snooze = (item: CanopyItem, option: AgentSnoozeDurationOption) => {
+    const { runId } = placeOf(item, hostId, ownHostId);
+    if (showsHost(hostId)) clearUndo();
+    safeFireAndForget(
+      window.electron.fleet
+        .snoozeRun(runId, option)
+        .catch((error: unknown) =>
+          asideFailed("Couldn't snooze the agent", error, () => snooze(item, option))
+        )
+    );
+  };
+  const wake = (item: CanopyItem) => {
+    const { runId } = placeOf(item, hostId, ownHostId);
+    if (showsHost(hostId)) clearUndo();
+    safeFireAndForget(
+      window.electron.fleet
+        .unsnoozeRun(runId)
+        .catch((error: unknown) => asideFailed("Couldn't wake the agent", error, () => wake(item)))
+    );
+  };
   const setAside = {
     canSetAside,
+    // Opened once the menu has closed: by then the panel may show another host.
     onPark: (item: CanopyItem) => {
-      if (canSetAside(item)) setParkRunId(placeOf(item, hostId, ownHostId).runId);
+      if (canSetAside(item) && showsHost(hostId)) {
+        setParkRunId(placeOf(item, hostId, ownHostId).runId);
+      }
     },
-    onUnpark: function unpark(item: CanopyItem) {
-      const { runId } = placeOf(item, hostId, ownHostId);
-      safeFireAndForget(
-        window.electron.fleet
-          .unparkRun(runId)
-          .catch((error: unknown) =>
-            asideFailed("Couldn't unpark the agent", error, () => unpark(item))
-          )
-      );
-    },
-    onSnooze: function snooze(item: CanopyItem, option: AgentSnoozeDurationOption) {
-      const { runId } = placeOf(item, hostId, ownHostId);
-      safeFireAndForget(
-        window.electron.fleet
-          .snoozeRun(runId, option)
-          .catch((error: unknown) =>
-            asideFailed("Couldn't snooze the agent", error, () => snooze(item, option))
-          )
-      );
-    },
-    onWake: function wake(item: CanopyItem) {
-      const { runId } = placeOf(item, hostId, ownHostId);
-      safeFireAndForget(
-        window.electron.fleet
-          .unsnoozeRun(runId)
-          .catch((error: unknown) =>
-            asideFailed("Couldn't wake the agent", error, () => wake(item))
-          )
-      );
-    },
+    onUnpark: unpark,
+    onSnooze: snooze,
+    onWake: wake,
   };
 
   // Decisions' list holds this computer's answers: a run on another host
@@ -512,14 +570,20 @@ export function useCanopyInboxActions({
     itemAnswerAttention(item) > 0 && placeOf(item, hostId, ownHostId).hostId === null;
   const answers: CanopyAnswerActions = {
     canReviewAnswers,
-    // Its first answer for the run takes the focus; once the run's last
-    // answer has gone, and the control that opened the list with it, the
-    // close returns to the run's row.
+    // In the inbox at the run's first stopped delivery (#18048), or the attention
+    // list for one the inbox can't list; once the run's last answer has gone, and
+    // the control that opened it with it, the close returns to the run's row.
     onReviewAnswers: (item) => {
       if (!canReviewAnswers(item)) return;
-      useDecisionsAttentionStore.getState().open(placeOf(item, hostId, ownHostId).runId, {
-        returnFocusTo: canopyCardDomId(item.runId),
-      });
+      const { runId, workspaceId } = placeOf(item, hostId, ownHostId);
+      void openStoppedAnswers(
+        { terminalId: runId, projectId: workspaceId },
+        {
+          returnFocusTo: canopyCardDomId(item.runId),
+          // Shown another host by the time the reads land, the list behind it isn't this one.
+          stillWanted: () => showsHost(hostId),
+        }
+      );
     },
   };
 
@@ -551,7 +615,9 @@ export function useCanopyInboxActions({
     },
     onArchive: handlers.onArchive,
     onRename: askRename,
+    // Armed once the menu has closed, so only on the host it was asked of.
     onTrash: (item) => {
+      if (!showsHost(hostId)) return;
       focusCardNow(item.runId);
       setTrashArm((arm) => ({ runId: item.runId, request: (arm?.request ?? 0) + 1 }));
     },

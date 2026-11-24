@@ -16,7 +16,11 @@ import {
   GIT_PAGE_LIMIT_MAX,
 } from "@shared/config/gitReadLimits";
 import { z } from "zod";
-import { fileMutationArgsSchema } from "./gitActionArgs";
+import {
+  fileMutationArgsSchema,
+  hunkStagingArgsSchema,
+  hunkStagingResultSchema,
+} from "./gitActionArgs";
 import type { GitActionRunId } from "./gitActions.impl";
 import { notify } from "@/lib/notify";
 
@@ -35,7 +39,7 @@ const BaseBranchSchema = z
   .describe("The base branch to integrate, as named on the worktree's snapshot.");
 
 const RepoOperationStateSchema = z
-  .enum(["MERGING", "REBASING", "CHERRY_PICKING", "REVERTING"])
+  .enum(["MERGING", "REBASING", "CHERRY_PICKING", "REVERTING", "APPLYING_MAILBOX"])
   .optional()
   .describe("Which operation is in progress, used only to label the confirm while it loads.");
 
@@ -291,6 +295,44 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     run: (args: unknown, ctx: ActionContext) => runGitAction("git.unstageFile", args, ctx),
   }));
 
+  // The hunk pair (#17331) writes only the index, like the file pair, and each
+  // is the other's inverse from the opposite side of the diff. Off the palette
+  // and the MCP surface: the hunks are lines a person read in the diff pane,
+  // which is the only place that has them, and agents stage with their own git.
+  actions.set("git.stageHunk", () => ({
+    id: "git.stageHunk",
+    title: "Stage hunk",
+    description:
+      "Stage hunks of one file's unstaged diff, as read. Refused as stale when those lines changed since, so nothing unseen is staged.",
+    category: "git",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    palette: { mode: "hidden" },
+    mcpVisibility: "hidden",
+    nonRepeatable: true,
+    argsSchema: hunkStagingArgsSchema,
+    resultSchema: hunkStagingResultSchema,
+    run: (args: unknown, ctx: ActionContext) => runGitAction("git.stageHunk", args, ctx),
+  }));
+
+  actions.set("git.unstageHunk", () => ({
+    id: "git.unstageHunk",
+    title: "Unstage hunk",
+    description:
+      "Unstage hunks of one file's staged diff, as read, leaving the working tree untouched. Refused as stale when those lines changed since.",
+    category: "git",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    palette: { mode: "hidden" },
+    mcpVisibility: "hidden",
+    nonRepeatable: true,
+    argsSchema: hunkStagingArgsSchema,
+    resultSchema: hunkStagingResultSchema,
+    run: (args: unknown, ctx: ActionContext) => runGitAction("git.unstageHunk", args, ctx),
+  }));
+
   actions.set("git.discardFileChanges", () => ({
     id: "git.discardFileChanges",
     title: "Discard file changes",
@@ -313,6 +355,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Stage all files",
     description:
       "Stage every change in the worktree for the next commit — modifications, new files, deletions and renames alike. This is broader than it looks — it sweeps in unrelated edits — so read the staging status first when the commit is meant to be scoped. Reversible by unstaging everything.",
+    paletteDescription:
+      "Stage every change in the worktree, including new, deleted and renamed files",
     category: "git",
     kind: "command",
     // Deliberately unattended at system tier (#12118) despite the wider reach:
@@ -331,6 +375,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Unstage all files",
     description:
       "Clear the staging area entirely, leaving all working-tree changes untouched. This is the inverse of staging everything and discards no edits.",
+    paletteDescription: "Clear the staging area and keep every working-tree change",
     category: "git",
     kind: "command",
     // Deliberately unattended at system tier (#12118): clears the index only.
@@ -346,6 +391,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Commit",
     description:
       "Commit whatever is currently staged, with a message. Read the staging status first — this commits the index as it stands, including anything staged earlier that you did not intend. The commit stays local until it is pushed, so it is recoverable, but rewriting it afterwards is not something this surface offers.",
+    paletteDescription:
+      "Open the Review Hub to write a commit message, staging everything if nothing is staged",
     category: "git",
     kind: "command",
     // Deliberately unattended at system tier (#12118): the commit stays local
@@ -383,6 +430,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Push",
     description:
       "Publish local commits to the remote branch, making them visible to everyone working from it. This leaves the local repository and cannot be undone from here — confirm the commits are the intended ones first. It fails rather than overwriting when the remote has diverged.",
+    paletteDescription:
+      "Preview the active worktree's local commits, then push them to the remote branch",
     category: "git",
     kind: "command",
     danger: "confirm",
@@ -420,6 +469,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Fetch",
     description:
       "Update this worktree's remote-tracking refs so its ahead/behind counts match the remote. HEAD, the working tree, and local branches are left untouched.",
+    paletteDescription: "Update remote-tracking refs so ahead and behind counts match the remote",
     category: "git",
     kind: "command",
     danger: "safe",
@@ -501,13 +551,14 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.abortRepositoryOperation", () => ({
     id: "git.abortRepositoryOperation",
     title: "Abort Git operation",
-    description: "Abort the merge, rebase, cherry-pick, or revert this worktree is halted on",
+    description:
+      "Abort the merge, rebase, cherry-pick, revert, or git am this worktree is halted on",
     category: "git",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Discards staged conflict resolutions and any commits already replayed, returning the worktree to its pre-operation state.",
+      "Discards staged conflict resolutions and any commits already replayed or patches applied, returning the worktree to its pre-operation state.",
     argsSchema: withWorktreeLocation({ operation: RepoOperationStateSchema }, { legacy: ["cwd"] }),
     run: (args: unknown, ctx: ActionContext) =>
       runGitAction("git.abortRepositoryOperation", args, ctx),
@@ -516,7 +567,8 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("git.continueRepositoryOperation", () => ({
     id: "git.continueRepositoryOperation",
     title: "Continue Git operation",
-    description: "Continue the merge, rebase, cherry-pick, or revert this worktree is halted on",
+    description:
+      "Continue the merge, rebase, cherry-pick, revert, or git am this worktree is halted on",
     category: "git",
     kind: "command",
     danger: "safe",
@@ -566,10 +618,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     title: "Retry suspended fetches",
     description:
       "Lift the pause on background fetches that Git rejected for authentication and fetch every worktree again. Use after fixing the SSH key or Git credential helper.",
+    paletteDescription: "Resume background fetches after fixing your Git credentials",
     category: "git",
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["ssh", "credentials", "authentication"],
     run: (args: unknown, ctx: ActionContext) => runGitAction("git.retryAuthFetch", args, ctx),
   }));
 

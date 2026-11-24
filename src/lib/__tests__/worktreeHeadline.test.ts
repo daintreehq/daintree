@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   getWorktreeHeadline,
   getWorktreeBranchLabel,
+  getWorktreeQualifier,
   isMainWorktreeOnStandardBranch,
 } from "../worktreeHeadline";
 import type { Worktree } from "@shared/types/worktree";
@@ -357,5 +358,54 @@ describe("getWorktreeHeadline — custom title", () => {
     const worktree = createWorktree({ branch: "chore/x" });
     expect(getWorktreeHeadline(worktree, undefined)).toEqual(getWorktreeHeadline(worktree));
     expect(getWorktreeHeadline(worktree, "")).toEqual({ kind: "branch", label: "chore/x" });
+  });
+});
+
+describe("getWorktreeQualifier", () => {
+  it("names the branch a custom title displaced", () => {
+    const worktree = createWorktree({ name: "feature/auth", branch: "feature/auth" });
+    expect(getWorktreeQualifier(worktree, "Release planning")).toBe("feature/auth");
+  });
+
+  it("is empty when the title is the branch itself", () => {
+    const worktree = createWorktree({ name: "feature/auth", branch: "feature/auth" });
+    expect(getWorktreeQualifier(worktree, "feature/auth")).toBeNull();
+  });
+
+  it("gives main its branch beside its folder name, and nothing once the name is the branch", () => {
+    const main = createWorktree({ isMainWorktree: true, name: "daintree", branch: "develop" });
+    expect(getWorktreeQualifier(main, "daintree")).toBe("develop");
+    expect(getWorktreeQualifier(main, "Integration")).toBe("develop");
+    expect(getWorktreeQualifier(createWorktree({ name: "x", branch: "x" }), "x")).toBeNull();
+  });
+
+  it("keeps main's folder name as the qualifier when the custom title is its branch", () => {
+    const main = createWorktree({ isMainWorktree: true, name: "daintree", branch: "develop" });
+    expect(getWorktreeQualifier(main, "develop")).toBe("daintree");
+  });
+
+  it("falls back to the worktree's own name when there is no branch to show", () => {
+    const worktree = createWorktree({ name: "scratch", branch: undefined });
+    expect(getWorktreeQualifier(worktree, "Scratch pad")).toBe("scratch");
+    expect(getWorktreeQualifier(worktree, "scratch")).toBeNull();
+  });
+
+  it("says detached with its commit rather than the branch the snapshot still carries", () => {
+    const detached = createWorktree({
+      name: "feature/auth",
+      branch: "feature/auth",
+      isDetached: true,
+      head: "0123456789abcdef",
+    });
+    expect(getWorktreeQualifier(detached, "Release planning")).toBe("detached at 0123456");
+    expect(getWorktreeQualifier({ ...detached, head: undefined }, "Release planning")).toBe(
+      "detached"
+    );
+  });
+
+  it("does not repeat a detached label the custom title already is", () => {
+    const detached = createWorktree({ isDetached: true, head: "0123456789abcdef" });
+    expect(getWorktreeQualifier(detached, "detached at 0123456")).toBeNull();
+    expect(getWorktreeQualifier({ ...detached, head: undefined }, "detached")).toBeNull();
   });
 });

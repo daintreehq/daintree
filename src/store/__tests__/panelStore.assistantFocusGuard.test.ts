@@ -386,6 +386,29 @@ describe("panelStore.addPanel focus guard (#6959)", () => {
       expect(state.focusedId).toBe("incumbent-1");
     });
 
+    it.each([
+      { kind: "terminal" as const, cwd: "/test" },
+      { kind: "browser" as const, cwd: "/test" },
+    ])(
+      "a $kind dock activation that takes focus keeps it while the assistant is focused (#17221)",
+      async (panel) => {
+        useMacroFocusStore.setState({ focusedRegion: "assistant" });
+
+        const newId = await usePanelStore.getState().addPanel({
+          ...panel,
+          location: "dock",
+          activateDockOnCreate: true,
+          focusPolicy: "take",
+        });
+
+        expect(newId).toBeTruthy();
+        const state = usePanelStore.getState();
+        expect(state.activeDockTerminalId).toBe(newId);
+        expect(state.focusedId).toBe(newId);
+        expect(state.previousFocusedId).toBe("incumbent-1");
+      }
+    );
+
     it("user-initiated dock activation still advances focus normally when assistant is not focused", async () => {
       // Positive control for the dock path — make sure we didn't break the
       // happy path while patching the guard.

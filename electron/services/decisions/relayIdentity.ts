@@ -15,7 +15,7 @@ import {
   verifyString,
   type RecoveryBundleFile,
 } from "@daintreehq/decisions-crypto";
-import { DevicesResponse, base64UrlToBytes } from "@daintreehq/decisions-protocol";
+import { DevicesResponse, LIMITS, base64UrlToBytes } from "@daintreehq/decisions-protocol";
 import type {
   ClaimDecisionsRelayPayload,
   DecisionsClaimRefusal,
@@ -66,6 +66,11 @@ const DEVICE_LABEL = "Daintree";
 const REQUEST_TIMEOUT_MS = 10_000;
 /** A claim, a device list or a push config is a few KiB; anything far bigger isn't a relay. */
 const MAX_ANSWER_BYTES = 1024 * 1024;
+/** An image's ciphertext: the protocol's largest image and its 16-byte AES-GCM tag. */
+const MAX_ATTACHMENT_BYTES = LIMITS.attachmentBytes + 16;
+/** The largest image over a slow link; the library gives an answer's phone images as long. */
+const ATTACHMENT_TIMEOUT_MS = 30_000;
+const ATTACHMENT_CONTENT_PATH = /\/attachments\/[^/]+\/content$/;
 /** A kit is one identity, a few KiB. */
 export const MAX_RECOVERY_KIT_BYTES = 256 * 1024;
 /** The library refuses fewer; more than this would hold the setup for minutes. */
@@ -127,9 +132,20 @@ export async function relayRequests(
   const call = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     failure = null;
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (URL.parse(url)?.origin !== origin) fail("network", false);
-    const deadline = AbortSignal.timeout(timeoutMs);
-    const signal = options.signal ? AbortSignal.any([options.signal, deadline]) : deadline;
+    const parsed = URL.parse(url);
+    if (parsed?.origin !== origin) fail("network", false);
+    // An image's ciphertext is far bigger than any other answer, and takes longer to arrive.
+    const download =
+      (init.method ?? "GET").toUpperCase() === "GET" &&
+      ATTACHMENT_CONTENT_PATH.test(parsed?.pathname ?? "");
+    const deadline = AbortSignal.timeout(
+      download ? Math.max(timeoutMs, ATTACHMENT_TIMEOUT_MS) : timeoutMs
+    );
+    // The library's own deadline or abort for this call (0.9.0 passes one per call) holds as well.
+    const sources = [deadline, options.signal, init.signal].filter(
+      (source): source is AbortSignal => source != null
+    );
+    const signal = sources.length === 1 ? deadline : AbortSignal.any(sources);
     let response: Response;
     try {
       response = await fetchImpl(url, {
@@ -148,7 +164,7 @@ export async function relayRequests(
     let body: Uint8Array<ArrayBuffer> | null = null;
     let bodyError: unknown = null;
     try {
-      body = await readCappedBytes(response, MAX_ANSWER_BYTES);
+      body = await readCappedBytes(response, download ? MAX_ATTACHMENT_BYTES : MAX_ANSWER_BYTES);
     } catch (error) {
       bodyError = error;
     }

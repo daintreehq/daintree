@@ -16,6 +16,8 @@ interface LogFiltersProps {
   sourceCounts?: Partial<Record<string, number>>;
   /** Changes whenever filters are cleared from anywhere, so a pending search draft is dropped too. */
   resetSignal?: number;
+  /** Lets the surface around the bar hand the keyboard to the search box. */
+  searchInputRef?: React.Ref<HTMLInputElement>;
 }
 
 // The dot is a recognition aid beside the word, never the only signal.
@@ -26,6 +28,11 @@ const LOG_LEVELS: { level: LogLevel; label: string; dot: string }[] = [
   { level: "error", label: "Error", dot: "bg-status-error" },
 ];
 
+function assignRef<T>(ref: React.Ref<T> | undefined, value: T | null): void {
+  if (typeof ref === "function") ref(value);
+  else if (ref) (ref as React.RefObject<T | null>).current = value;
+}
+
 export function LogFilters({
   filters,
   onFiltersChange,
@@ -34,7 +41,16 @@ export function LogFilters({
   levelCounts,
   sourceCounts,
   resetSignal,
+  searchInputRef,
 }: LogFiltersProps) {
+  const localSearchRef = useRef<HTMLInputElement | null>(null);
+  const setSearchRefs = useCallback(
+    (el: HTMLInputElement | null) => {
+      localSearchRef.current = el;
+      assignRef(searchInputRef, el);
+    },
+    [searchInputRef]
+  );
   const [searchValue, setSearchValue] = useState(filters.search || "");
   const [isSourcesOpen, setIsSourcesOpen] = useState(false);
 
@@ -92,11 +108,12 @@ export function LogFilters({
     [filters.sources, onFiltersChange]
   );
 
+  // The button unmounts once no filter is left, so the search box takes the keyboard.
   const handleClearAll = useCallback(() => {
     setSearchValue("");
     onClear();
+    localSearchRef.current?.focus({ preventScroll: true });
   }, [onClear]);
-
 
   const hasActiveFilters =
     (filters.levels && filters.levels.length > 0) ||
@@ -109,6 +126,7 @@ export function LogFilters({
     <div className="flex flex-wrap items-center gap-2 border-b border-divider px-3 py-1.5">
       <SearchField
         size="dense"
+        inputRef={setSearchRefs}
         fieldClassName="min-w-[150px] max-w-[260px] flex-1"
         type="search"
         value={searchValue}

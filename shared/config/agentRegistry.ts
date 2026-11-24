@@ -1,6 +1,7 @@
 import type { PrerequisiteSpec } from "../types/ipc/system.js";
 import type { CompletionSourceConfig } from "../types/completionSources.js";
 import type { LaunchMcpInjection } from "./launchMcp.js";
+import type { DangerousMode } from "../types/dangerousMode.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -62,6 +63,20 @@ export interface AgentInputSuggestionConfig {
   borderPattern: string;
   /** Fixed placeholders an empty box shows, matched against its styled text: they read as `empty`. */
   placeholderPatterns?: string[];
+  /**
+   * How the box's edges are drawn. `rules` (the default): rows matching
+   * `borderPattern` above and below it. `band`: a background of its own, not
+   * the terminal's default, opening and closing on rows matching
+   * `borderPattern`; every row inside it, blank ones included, is the box.
+   */
+  frame?: "rules" | "band";
+  /** The style echoes of sent messages draw the prompt glyph in: a row whose glyph is drawn so is never the box. */
+  echoGlyphStyle?: "dim";
+  /**
+   * The box always shows one of `placeholderPatterns` when empty, so a box
+   * with nothing visible in it holds something not drawn and reads `unknown`.
+   */
+  emptyShowsPlaceholder?: boolean;
 }
 
 /**
@@ -234,12 +249,11 @@ export interface AgentPreset {
   /** Legacy per-preset bypass override; superseded by `dangerousMode`. */
   dangerousEnabled?: boolean;
   /**
-   * Per-preset tri-state bypass override (`DangerousMode`), layered on top of
-   * the agent's resolved mode: `"off"` vetoes the agent/global value,
-   * `"inherit"`/absent defers to the agent's Default scope. Inlined union to
-   * avoid a config→types import cycle.
+   * Per-preset permission override (`DangerousMode`), layered on top of the
+   * agent's resolved mode: `"off"` and `"auto"` veto the agent/global value,
+   * `"inherit"`/absent defers to the agent's Default scope.
    */
-  dangerousMode?: "inherit" | "on" | "off";
+  dangerousMode?: DangerousMode;
   /** Per-preset override: extra CLI flags merged on top of agent-level customFlags */
   customFlags?: string;
   /** Optional brand color (CSS hex) this preset's mark inks are derived from */
@@ -268,6 +282,13 @@ export interface AgentPreset {
    */
   keepConversationOnRateLimit?: boolean;
   /**
+   * Launch every pane on this preset armed to continue once its usage limit
+   * resets (#17912), for agents Daintree can wait out (#17909). Read from the
+   * user's own presets alone, like `fallbackOnRateLimit`: arming lets Daintree
+   * type into the agent later, which a shared preset can't agree to for them.
+   */
+  continueAtLimitReset?: boolean;
+  /**
    * One of the agent's accounts (#16133) a launch of this preset signs in as,
    * unless the launch or its worktree chooses another. Kept on the user's own
    * presets alone: accounts are this machine's folders, which a shared preset
@@ -289,7 +310,7 @@ export interface AgentProviderTemplate {
   env?: Record<string, string>;
   args?: string[];
   dangerousEnabled?: boolean;
-  dangerousMode?: "inherit" | "on" | "off";
+  dangerousMode?: DangerousMode;
   customFlags?: string;
 }
 
@@ -1031,6 +1052,13 @@ export interface AgentConfig {
      * the pane's next settle. Omitted means unverified: the notice waits.
      */
     queuesInputWhileWorking?: boolean;
+    /**
+     * The CLI takes down its input line while it works, so a message typed
+     * mid-turn is lost or misread. The pane composer then holds a mid-turn
+     * send for the agent's next prompt (#16872). Omitted means the line stays
+     * up and a mid-turn send is typed at once.
+     */
+    noInputLineWhileWorking?: boolean;
     /** Delay in ms before sending Enter key after body write (default: 200) */
     submitEnterDelayMs?: number;
     /**

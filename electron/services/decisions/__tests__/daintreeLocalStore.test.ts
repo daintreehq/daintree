@@ -42,7 +42,7 @@ import {
   eraseDecisionsData,
   hasDecisionsData,
 } from "../daintreeLocalStore.js";
-import { messages } from "./questionRows.js";
+import { DECLINE, answers, messages } from "./questionRows.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../../persistence/migrations");
@@ -258,6 +258,139 @@ describe("DaintreeLocalStore", () => {
     expect(await second.nextAlias()).toBe(2);
   });
 
+  it("lists questions by status and pane in alias order, decoding only the rows it returns", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1, { local_status: "queued" }), item("o1", "q1"));
+    await store.commitNewQuestion(row("q2", 2, { local_status: "cancelled" }), item("o2", "q2"));
+    await store.commitNewQuestion(
+      row("q3", 3, { local_status: "queued", origin: origin({ pane_id: "pane-2" }) }),
+      item("o3", "q3")
+    );
+    await store.commitNewQuestion(row("q4", 4, { local_status: "open" }), item("o4", "q4"));
+    // A settled row the filter leaves out is never parsed, so one that wouldn't
+    // parse can't fail a read of the open questions.
+    sqlite
+      .prepare(
+        "UPDATE decisions_questions SET attachment_digests = 'not json' WHERE question_id = ?"
+      )
+      .run("q2");
+
+    const ids = async (filter?: Parameters<DaintreeLocalStore["listQuestions"]>[0]) =>
+      (await store.listQuestions(filter)).map((q) => q.question_id);
+    expect(await ids({ status: ["queued", "open"] })).toEqual(["q1", "q3", "q4"]);
+    expect(await ids({ status: ["queued"], paneId: "pane-1" })).toEqual(["q1"]);
+    expect(await ids({ paneId: "pane-2" })).toEqual(["q3"]);
+    expect(await ids({ status: [] })).toEqual([]);
+    await expect(store.listQuestions()).rejects.toThrow();
+
+    const plan = sqlite
+      .prepare(
+        "EXPLAIN QUERY PLAN SELECT * FROM decisions_questions WHERE local_status IN (?, ?) ORDER BY alias ASC"
+      )
+      .all("queued", "open") as { detail: string }[];
+    expect(plan.map((step) => step.detail).join("\n")).toContain("decisions_questions_status_idx");
+  });
+
+  it("reads only the questions still missing a session on this host, never the linked history (#17783)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const unlinked = (over: Partial<QuestionOrigin>) =>
+      origin({ agent_kind: "codex", agent_session_id: null, ...over });
+    await store.commitNewQuestion(
+      row("open", 1, { origin: unlinked({}), local_status: "open" }),
+      item("o1", "open")
+    );
+    // A delivered question still counts: a correction can reopen it after its pane is gone.
+    await store.commitNewQuestion(
+      row("delivered", 2, {
+        origin: unlinked({ agent_kind: "claude" }),
+        local_status: "human-answered",
+        delivery_status: "terminal-delivered",
+      }),
+      item("o2", "delivered")
+    );
+    await store.commitNewQuestion(
+      row("empty", 3, { origin: unlinked({ agent_session_id: "" }) }),
+      item("o3", "empty")
+    );
+    await store.commitNewQuestion(
+      row("remote", 4, { origin: unlinked({ host_id: "host-remote" }) }),
+      item("o4", "remote")
+    );
+    await store.commitNewQuestion(
+      row("gemini", 5, { origin: unlinked({ agent_kind: "gemini" }) }),
+      item("o5", "gemini")
+    );
+    const columns = (
+      sqlite.prepare("SELECT name FROM pragma_table_info('decisions_questions')").all() as {
+        name: string;
+      }[]
+    )
+      .map((c) => c.name)
+      .filter((name) => name !== "question_id" && name !== "alias");
+    sqlite
+      .prepare(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+         INSERT INTO decisions_questions (question_id, alias, ${columns.join(", ")})
+         SELECT 'history-' || i, 100 + i, ${columns.join(", ")} FROM n, decisions_questions
+         WHERE question_id = 'open'`
+      )
+      .run();
+    // Statistics taken while all of them still waited for a session, so they
+    // overstate the index by ten thousand rows once those are linked.
+    sqlite.exec("ANALYZE");
+    // Linked, and unable even to decode: reading one would throw.
+    sqlite
+      .prepare(
+        `UPDATE decisions_questions SET agent_session_id = 'session-' || alias,
+           attachment_digests = 'not json' WHERE question_id LIKE 'history-%'`
+      )
+      .run();
+
+    let materialized = 0;
+    const prepare = sqlite.prepare.bind(sqlite);
+    const prepared: string[] = [];
+    vi.spyOn(sqlite, "prepare").mockImplementation(((source: string) => {
+      const statement = prepare(source);
+      if (!/FROM decisions_questions/.test(source)) return statement;
+      prepared.push(source);
+      const all = statement.all.bind(statement);
+      statement.all = ((...args: unknown[]) => {
+        const rows = all(...args) as unknown[];
+        materialized += rows.length;
+        return rows;
+      }) as typeof statement.all;
+      return statement;
+    }) as typeof sqlite.prepare);
+
+    const ids = async (hostId: string, kinds: string[]) =>
+      (await store.listSessionlessQuestions(hostId, kinds)).map((q) => q.question_id);
+    expect(await ids("host-local", ["claude", "codex"])).toEqual(["open", "delivered", "empty"]);
+    expect(materialized).toBe(3);
+    expect(await ids("host-local", [])).toEqual([]);
+    expect(prepared).toHaveLength(1);
+    const plan = (
+      prepare(`EXPLAIN QUERY PLAN ${prepared[0]}`).all("host-local") as {
+        detail: string;
+      }[]
+    )
+      .map((step) => step.detail)
+      .join("\n");
+    expect(plan).toContain(
+      "USING INDEX decisions_questions_missing_session_idx (origin_host_id=?)"
+    );
+    expect(plan).not.toContain("TEMP B-TREE");
+
+    expect(await ids("host-local", ["codex", "claude", "codex"])).toEqual([
+      "open",
+      "delivered",
+      "empty",
+    ]);
+    expect(prepared).toHaveLength(1);
+    expect(await ids("host-remote", ["codex"])).toEqual(["remote"]);
+    expect(await ids("host-local", ["gemini"])).toEqual(["gemini"]);
+    expect(await ids("host-local", ["it's"])).toEqual([]);
+  });
+
   it("has a question on disk, visible to another connection, by the time its commit resolves", async () => {
     const store = new DaintreeLocalStore(sqlite);
     const other = reader();
@@ -355,6 +488,55 @@ describe("DaintreeLocalStore", () => {
 
     expect((await store.getIntent("i1"))!.state).toBe("intent");
     expect(await store.hasUncertainIntent("q1")).toBe(false);
+  });
+
+  it("names each withdrawal and decline queued, retrying or not, with a decline's round (#18052)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const queued = (
+      id: string,
+      kind: OutboxItem["kind"],
+      qid: string,
+      payload: unknown = {},
+      at = 1
+    ): OutboxItem => ({ ...item(id, qid, at), kind, payload });
+    const decline = (revision: unknown) => ({
+      signed: { record: { expected_revision: revision, decline_id: "d1" } },
+      seq: 3,
+    });
+    const read = async () =>
+      (await store.pendingClosings()).sort((a, b) =>
+        a.questionId === b.questionId
+          ? a.closing.localeCompare(b.closing)
+          : a.questionId.localeCompare(b.questionId)
+      );
+    expect(await store.pendingClosings()).toEqual([]);
+
+    await store.putOutbox(queued("o1", "cancel", "q1"));
+    // Backed off well past now: still queued.
+    await store.putOutbox(queued("o2", "owner-decline", "q2", decline(2), Date.now() + 600_000));
+    await store.recordOutboxFailure("o2", "relay unreachable", Date.now() + 900_000);
+    await store.putOutbox(queued("o3", "owner-decline", "q3", decline(1)));
+    await store.putOutbox(queued("o4", "cancel", "q3"));
+    // A decline whose round can't be read is named without one.
+    await store.putOutbox(queued("o5", "owner-decline", "q4", decline("2")));
+    // Nothing else closes a question.
+    await store.putOutbox(queued("o6", "create", "q5"));
+    await store.putOutbox(queued("o7", "owner-answer", "q6", decline(1)));
+
+    expect(await read()).toEqual([
+      { questionId: "q1", closing: "withdrawing", revision: null },
+      { questionId: "q2", closing: "declining", revision: 2 },
+      { questionId: "q3", closing: "declining", revision: 1 },
+      { questionId: "q3", closing: "withdrawing", revision: null },
+      { questionId: "q4", closing: "declining", revision: null },
+    ]);
+    await store.deleteOutbox("o1");
+    await store.deleteOutbox("o4");
+    expect((await read()).map(({ questionId, closing }) => [questionId, closing])).toEqual([
+      ["q2", "declining"],
+      ["q3", "declining"],
+      ["q4", "declining"],
+    ]);
   });
 
   it("stores what a call was given, not what its caller changed afterwards", async () => {
@@ -863,6 +1045,31 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.hasPendingDelivery()).toBe(false);
   });
 
+  it("says a person's decline waits only while its notice is still to be typed (#17234)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const declined = {
+      local_status: "cancelled" as const,
+      delivery_status: "desktop-received" as const,
+      answers_json: answers(DECLINE),
+    };
+    await store.commitNewQuestion(row("q1", 1, declined), item("o1", "q1"));
+    expect(await store.hasPendingDelivery()).toBe(true);
+
+    // Dropped for a run that has gone: the row keeps its status, and nothing waits.
+    await store.updateQuestion("q1", { answers_json: answers({ ...DECLINE, deliver: false }) });
+    expect(await store.hasPendingDelivery()).toBe(false);
+    await store.updateQuestion("q1", { delivery_status: "pending-host" });
+    expect(await store.hasPendingDelivery()).toBe(false);
+
+    // Entries that can't be read are taken as waiting, and never fail the read.
+    for (const unreadable of ["not json", '["damaged"]', "[5]", '{"deliver":true}', "{}", '"x"']) {
+      await store.updateQuestion("q1", { answers_json: unreadable });
+      expect(await store.hasPendingDelivery()).toBe(true);
+    }
+    await store.updateQuestion("q1", { answers_json: answers({ ...DECLINE, deliver: false }) });
+    expect(await store.hasPendingDelivery()).toBe(false);
+  });
+
   it("says a follow-up waits while one waits to be typed or its receipt to be sent (#16231)", async () => {
     const store = new DaintreeLocalStore(sqlite);
     const settled = { status: "terminal-delivered" as const, injection_id: "i1" };
@@ -971,48 +1178,21 @@ describe("DaintreeLocalStore ordering and failures", () => {
     expect(await store.hasPendingDelivery()).toBe(waiting);
   });
 
-  it("keeps a create's possibly-published mark across a rewrite from a copy read before it", async () => {
+  it("writes a create back as the publisher gives it, so a claim it withdraws stays withdrawn", async () => {
     const store = new DaintreeLocalStore(sqlite);
-    const create = { ...item("o1", "q1"), payload: { signed: 1, attachments: [], uploaded: [] } };
-    await store.commitNewQuestion(row("q1", 1), create);
-    await store.putOutbox({ ...item("o2", "q1"), kind: "cancel", payload: {} });
+    const claimed = { signed: 1, attachments: [], uploaded: ["a1"], maybePublished: true };
+    await store.commitNewQuestion(row("q1", 1), { ...item("o1", "q1"), payload: claimed });
 
-    // Submitted together, as a cancel and an upload's progress write can be: the
-    // rewrite must read the mark when it commits, not when it was asked for.
-    const [marked] = await Promise.all([
-      store.markCreateMaybePublished("q1"),
-      store.putOutbox({ ...create, payload: { signed: 1, attachments: [], uploaded: ["a1"] } }),
-    ]);
-    expect(marked).toBe(true);
-    await store.putOutbox({ ...item("o2", "q1"), kind: "cancel", payload: { n: 2 } });
+    // 0.9.0's publisher unclaims a create the relay showed it never took, before it closes the question.
+    const { maybePublished: _claim, ...unsent } = claimed;
+    await store.putOutbox({ ...item("o1", "q1"), payload: unsent });
 
-    const [kept, cancel] = await store.outboxFor("q1");
-    expect(kept.payload).toEqual({
-      signed: 1,
-      attachments: [],
-      uploaded: ["a1"],
-      maybePublished: true,
-    });
-    expect(cancel.payload).toEqual({ n: 2 });
-  });
+    const [create] = await store.outboxFor("q1");
+    expect(create.payload).toEqual({ signed: 1, attachments: [], uploaded: ["a1"] });
 
-  it("marks a create in place, keeping its upload progress and retry time, and never puts one back", async () => {
-    const store = new DaintreeLocalStore(sqlite);
-    const payload = { signed: 1, attachments: [{ attachment_id: "a1" }], uploaded: ["a1"] };
-    await store.commitNewQuestion(row("q1", 1), { ...item("o1", "q1"), payload });
-    await store.recordOutboxFailure("o1", "network_error", 40);
-
-    expect(await store.markCreateMaybePublished("q1")).toBe(true);
-    const [marked] = await store.outboxFor("q1");
-    expect(marked).toMatchObject({
-      payload: { ...payload, maybePublished: true },
-      attempts: 1,
-      next_attempt_at: 40,
-    });
-
-    await store.deleteOutbox("o1");
-    expect(await store.markCreateMaybePublished("q1")).toBe(false);
-    expect(await store.outboxFor("q1")).toEqual([]);
+    // And a claim it makes stays, so a cancel from another bridge sends a real cancel after it.
+    await store.putOutbox({ ...item("o1", "q1"), payload: claimed });
+    expect((await store.outboxFor("q1"))[0].payload).toEqual(claimed);
   });
 
   it("keeps a cancelled question cancelled when a stale flush reports its create refused", async () => {
@@ -1030,6 +1210,39 @@ describe("DaintreeLocalStore ordering and failures", () => {
       last_attempt_at: "2026-11-02T00:00:00.000Z",
     });
     expect(await store.getQuestion("q2")).toMatchObject(failed);
+  });
+
+  it("keeps a question past a later event when its create's receipt is read after it (#17234)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    // Declined on the phone at seq 9, before the create's response (seq 4) was read.
+    await store.commitNewQuestion(
+      row("q1", 1, { local_status: "cancelled", remote_event_seq: 9, error_code: "pane_gone" }),
+      item("o1", "q1")
+    );
+    await store.commitNewQuestion(row("q2", 2), item("o2", "q2"));
+    const receipt = (seq: number) =>
+      ({ local_status: "open", remote_event_seq: seq, error_code: null }) as const;
+
+    await store.updateQuestion("q1", receipt(4));
+    await store.updateQuestion("q2", receipt(5));
+
+    expect(await store.getQuestion("q1")).toMatchObject({
+      local_status: "cancelled",
+      remote_event_seq: 9,
+      error_code: "pane_gone",
+    });
+    expect(await store.getQuestion("q2")).toMatchObject({
+      local_status: "open",
+      remote_event_seq: 5,
+    });
+
+    // A reopen is a later event, and applies.
+    await store.updateQuestion("q1", { ...receipt(12), question_revision: 1 });
+    expect(await store.getQuestion("q1")).toMatchObject({
+      local_status: "open",
+      remote_event_seq: 12,
+      question_revision: 1,
+    });
   });
 
   it("never writes back a create it has deleted, from a copy a flush still holds", async () => {
@@ -1267,6 +1480,64 @@ describe("DaintreeLocalStore relay deletions (#16233)", () => {
     expect(heard).toEqual([]);
     expect(await store.deletedQuestionIds()).toEqual(new Set());
   });
+
+  it("reads applied deletions through an index of them alone, however long the event history (#17791)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const created = sqlite.prepare(
+      `INSERT INTO decisions_inbound_events
+         (seq, event_id, event_type, json, received_at, processed_at)
+       VALUES (?, ?, 'decision.created', '{}', 1, 2)`
+    );
+    sqlite.transaction(() => {
+      for (let seq = 1; seq <= 500; seq++) created.run(seq, `c${seq}`);
+    })();
+    const prepare = vi.spyOn(sqlite, "prepare");
+
+    const empty = await store.deletedQuestionIds();
+    const read = prepare.mock.calls
+      .map(([sql]) => sql)
+      .find((sql) => sql.includes("'decision.deleted'"));
+    prepare.mockRestore();
+    expect(empty).toEqual(new Set());
+    expect(read).toBeDefined();
+    const usesIndex = /USING (COVERING )?INDEX decisions_inbound_events_deleted_idx\b/;
+    const plan = () =>
+      (sqlite.prepare(`EXPLAIN QUERY PLAN ${read}`).all() as { detail: string }[])
+        .map((step) => step.detail)
+        .join("\n");
+    expect(plan()).toMatch(usesIndex);
+
+    // A few deletions, one applied, one refused and one unreadable, still read
+    // through it and still name only the question actually withdrawn.
+    await store.commitNewQuestion(row("q1", 1, { local_status: "open" }), item("o1", "q1"));
+    await store.commitNewQuestion(
+      row("q2", 2, { local_status: "cancelled", history_only: true }),
+      item("o2", "q2")
+    );
+    await store.insertEvent(deletion(501, "q1"));
+    await store.insertEvent(deletion(502, "q2"));
+    await store.insertEvent({ ...deletion(503, null), json: "not json" });
+    await store.updateQuestion("q1", { local_status: "cancelled", remote_event_seq: 501 });
+    for (const seq of [501, 502, 503]) await store.markEventProcessed(seq, 5);
+    // Neither an unprocessed deletion nor another processed kind of event belongs in it.
+    await store.insertEvent(deletion(504, "q-pending"));
+    await store.insertEvent({
+      ...deletion(505, "q1"),
+      event_type: "decision.answered",
+      json: JSON.stringify({ seq: 505, event_type: "decision.answered", question_id: "q1" }),
+    });
+    await store.markEventProcessed(505, 5);
+    expect(await store.deletedQuestionIds()).toEqual(new Set(["q1"]));
+    expect(plan()).toMatch(usesIndex);
+    // The same once `PRAGMA optimize` has gathered statistics, which also
+    // count the index's rows: the three processed deletions alone.
+    sqlite.exec("ANALYZE");
+    expect(plan()).toMatch(usesIndex);
+    const stat = sqlite
+      .prepare("SELECT stat FROM sqlite_stat1 WHERE idx = 'decisions_inbound_events_deleted_idx'")
+      .get() as { stat: string } | undefined;
+    expect(stat?.stat.split(" ")[0]).toBe("3");
+  });
 });
 
 /**
@@ -1443,3 +1714,474 @@ function releaseAsImmediateBegins(db: Database.Database, release: () => void): v
     });
   }) as typeof db.transaction);
 }
+
+describe("DaintreeLocalStore commit changes and settled history (#18033)", () => {
+  const HOST = "host-local";
+
+  async function stored(store: DaintreeLocalStore, q: QuestionRow): Promise<void> {
+    await store.commitNewQuestion(q, item(`o-${q.question_id}`, q.question_id));
+    await store.deleteOutbox(`o-${q.question_id}`);
+  }
+
+  const delivered = (revision = 1) => JSON.stringify([answer(revision, { delivered: true })]);
+
+  const ids = async (store: DaintreeLocalStore) =>
+    (await store.listQuestions()).map((q) => q.question_id);
+
+  it("names the questions and meta keys each committed transaction wrote", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const commits: Array<{ questions: string[]; meta: string[] }> = [];
+    store.onCommit((commit) =>
+      commits.push({ questions: [...commit.questions].sort(), meta: [...commit.meta].sort() })
+    );
+
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+    await store.updateQuestion("q1", { local_status: "open" });
+    await store.setMeta("k", "v");
+    await store.appendAudit({ at: 1, event: "x" } as never);
+    await store.recordOutboxFailure("o1", "offline", 5);
+    // A missing row is no change.
+    await store.updateQuestion("q-missing", { local_status: "open" });
+
+    expect(commits).toEqual([
+      { questions: ["q1"], meta: [] },
+      { questions: ["q1"], meta: [] },
+      { questions: [], meta: ["k"] },
+      { questions: [], meta: [] },
+      { questions: [], meta: [] },
+      { questions: [], meta: [] },
+    ]);
+  });
+
+  it("names the question a withdrawal or decline was queued or sent for, and no other send's (#18052)", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const commits: string[][] = [];
+    store.onCommit((commit) => commits.push([...commit.questions].sort()));
+
+    await store.putOutbox({ ...item("c1", "q1"), kind: "cancel" });
+    await store.putOutbox({ ...item("d1", "q2"), kind: "owner-decline" });
+    await store.putOutbox({ ...item("a1", "q3"), kind: "owner-answer" });
+    await store.recordOutboxFailure("c1", "offline", 5);
+    await store.deleteOutbox("c1");
+    await store.deleteOutbox("a1");
+    await store.deleteOutbox("missing");
+
+    expect(commits).toEqual([["q1"], ["q2"], [], [], ["q1"], [], []]);
+  });
+
+  it("leaves out a call that failed in a batch whose other calls committed", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+    const commits: string[][] = [];
+    store.onCommit((commit) => commits.push([...commit.questions].sort()));
+
+    const duplicate = store.commitNewQuestion(row("q1", 1), item("o1b", "q1"));
+    const fresh = store.commitNewQuestion(row("q2", 2), item("o2", "q2"));
+    await expect(duplicate).rejects.toThrow();
+    await fresh;
+
+    expect(commits).toEqual([["q2"]]);
+  });
+
+  it("leaves out a question a failed call had already written before it rolled back", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const commits: string[][] = [];
+    store.onCommit((commit) => commits.push([...commit.questions].sort()));
+    // The question row goes in, then its outbox write fails: the call's savepoint rolls both back.
+    sqlite.exec(`CREATE TEMP TRIGGER refuse_outbox BEFORE INSERT ON decisions_outbox
+      WHEN NEW.id = 'o-bad' BEGIN SELECT RAISE(ABORT, 'outbox refused'); END`);
+
+    const failed = store.commitNewQuestion(row("q-bad", 1), item("o-bad", "q-bad"));
+    const fresh = store.commitNewQuestion(row("q-ok", 2), item("o-ok", "q-ok"));
+    await expect(failed).rejects.toThrow("outbox refused");
+    await fresh;
+
+    expect(commits).toEqual([["q-ok"]]);
+    expect(await store.getQuestion("q-bad")).toBeNull();
+  });
+
+  it("names the question an intent's settlement wrote", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q1", 1), item("o1", "q1"));
+    await store.putIntent(intent("i1", "q1"));
+    const commits: string[][] = [];
+    store.onCommit((commit) => commits.push([...commit.questions]));
+
+    await store.settleIntent("i1", { state: "acked" }, "q1", {
+      delivery_status: "terminal-delivered",
+    });
+
+    expect(commits).toEqual([["q1"]]);
+  });
+
+  it("reads rows by id in alias order, skipping ids it doesn't hold", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await store.commitNewQuestion(row("q-b", 2), item("o2", "q-b"));
+    await store.commitNewQuestion(row("q-a", 1), item("o1", "q-a"));
+    await store.commitNewQuestion(row("q-unasked", 3), item("o3", "q-unasked"));
+
+    expect(
+      (await store.getQuestions(["q-b", "q-none", "q-a", "q-b"])).map((q) => q.question_id)
+    ).toEqual(["q-a", "q-b"]);
+    expect(await store.getQuestions([])).toEqual([]);
+  });
+
+  it("removes what History shows as settled and finished, and nothing else", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const removable = [
+      row("answered", 1, { local_status: "human-answered", answers_json: delivered() }),
+      row("expired", 2, { local_status: "expired" }),
+      row("withdrawn", 3, { local_status: "cancelled" }),
+      row("declined", 4, {
+        local_status: "cancelled",
+        answers_json: answers({ ...DECLINE, deliver: true, delivered: true }),
+      }),
+      row("never-sent", 5, { local_status: "publish-failed" }),
+    ];
+    const kept = [
+      row("open", 10, { local_status: "open" }),
+      row("queued", 11, { local_status: "queued" }),
+      // An answer still to be typed, and one whose delivery stopped.
+      row("to-type", 12, {
+        local_status: "human-answered",
+        delivery_status: "desktop-received",
+        answers_json: JSON.stringify([answer(1)]),
+      }),
+      row("stopped", 13, {
+        local_status: "human-answered",
+        delivery_status: "needs-attention",
+        answers_json: JSON.stringify([answer(1)]),
+      }),
+      // A decline whose notice is still to be typed.
+      row("decline-owed", 14, {
+        local_status: "cancelled",
+        answers_json: answers({ ...DECLINE, deliver: true, delivered: false }),
+      }),
+      // A follow-up from the person still to be typed.
+      row("follow-up", 15, {
+        local_status: "human-answered",
+        answers_json: delivered(),
+        messages_json: messages({}),
+      }),
+      // Another machine's, imported history, and one asked outside a project's terminal.
+      row("other-host", 16, { local_status: "expired", origin: origin({ host_id: "host-other" }) }),
+      row("imported", 17, { local_status: "expired", history_only: true }),
+      row("no-pane", 18, { local_status: "expired", origin: origin({ pane_id: "" }) }),
+    ];
+    for (const q of [...removable, ...kept]) await stored(store, q);
+    const commits: string[][] = [];
+    store.onCommit((commit) => commits.push([...commit.questions].sort()));
+
+    const removed = await store.removeSettledQuestions(HOST, () => new Set());
+
+    expect(removed.sort()).toEqual(removable.map((q) => q.question_id).sort());
+    expect((await ids(store)).sort()).toEqual(kept.map((q) => q.question_id).sort());
+    expect(commits).toEqual([removed.sort()]);
+    // Nothing is left to remove; a second removal changes no question.
+    expect(await store.removeSettledQuestions(HOST, () => new Set())).toEqual([]);
+    expect(commits).toEqual([removed.sort(), []]);
+    // The rows are gone from disk, not only from this connection.
+    expect(
+      (reader().prepare("SELECT COUNT(*) AS n FROM decisions_questions").get() as { n: number }).n
+    ).toBe(kept.length);
+  });
+
+  it("keeps a settled question anything is still owed for", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const settled = (id: string, alias: number) =>
+      row(id, alias, { local_status: "human-answered", answers_json: delivered() });
+    for (const [i, id] of [
+      "outbox",
+      "intent",
+      "event",
+      "snapshot",
+      "busy",
+      "answer-sent",
+      "message-sent",
+      "free",
+    ].entries()) {
+      await stored(store, settled(id, i + 1));
+    }
+    await store.putOutbox({ ...item("retry", "outbox", 9_999_999_999), kind: "owner-answer" });
+    await store.putIntent(intent("i1", "intent", { state: "typed" }));
+    await store.insertEvent({
+      seq: 1,
+      event_id: "e1",
+      event_type: "decision.answered",
+      json: JSON.stringify({ question_id: "event" }),
+      received_at: 1,
+      processed_at: null,
+    });
+    await store.setMeta("daintree:snapshots-shared", JSON.stringify({ snapshot: Date.now() }));
+    // The relay took them; their events haven't come back to the row yet.
+    await store.setMeta(
+      "owner-answer:a2",
+      JSON.stringify({
+        question_id: "answer-sent",
+        expected_revision: 1,
+        envelope: {},
+        result: { status: "sent" },
+      })
+    );
+    await store.setMeta(
+      "owner-message:m1",
+      JSON.stringify({
+        question_id: "message-sent",
+        seq: 1,
+        signed: { record: {}, envelope: {} },
+        result: { status: "sent" },
+      })
+    );
+
+    expect(await store.removeSettledQuestions(HOST, () => new Set(["busy"]))).toEqual(["free"]);
+  });
+
+  it("removes a question's settled intents and the person's records, and keeps the rest", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await stored(
+      store,
+      row("gone", 1, { local_status: "human-answered", answers_json: delivered() })
+    );
+    await stored(store, row("open", 2, { local_status: "open" }));
+    await store.putIntent(intent("i-acked", "gone", { state: "acked" }));
+    await store.putIntent(intent("i-open", "open", { state: "intent" }));
+    const echoed = {
+      question_id: "gone",
+      expected_revision: 1,
+      envelope: { sealed: 1 },
+      result: { status: "sent" },
+    };
+    // The answer the person sent, now in the row as entry `a1`.
+    await store.setMeta("owner-answer:a1", JSON.stringify(echoed));
+    await store.setMeta(
+      "owner-answer:remote",
+      JSON.stringify({ ...echoed, question_id: "a-remote-hosts-question" })
+    );
+    await store.setMeta("thread-messages:gone", "2");
+    await store.setMeta(
+      "daintree:question-marks",
+      JSON.stringify({
+        marks: [
+          { hostId: HOST, questionId: "gone", ask: null, seen: true, cleared: false },
+          { hostId: "host-remote", questionId: "gone", ask: null, seen: true, cleared: true },
+        ],
+      })
+    );
+
+    expect(await store.removeSettledQuestions(HOST, () => new Set())).toEqual(["gone"]);
+
+    const intents = reader()
+      .prepare("SELECT injection_id FROM decisions_injection_intents ORDER BY injection_id")
+      .all() as Array<{ injection_id: string }>;
+    expect(intents.map((i) => i.injection_id)).toEqual(["i-open"]);
+    expect(await store.getMeta("owner-answer:a1")).toBeNull();
+    expect(await store.getMeta("owner-answer:remote")).not.toBeNull();
+    // The library's own bookkeeping stays.
+    expect(await store.getMeta("thread-messages:gone")).toBe("2");
+    expect(
+      (JSON.parse((await store.getMeta("daintree:question-marks"))!) as { marks: unknown[] }).marks
+    ).toEqual([
+      { hostId: "host-remote", questionId: "gone", ask: null, seen: true, cleared: true },
+    ]);
+  });
+
+  it("removes a question once its answer handled, and lets go of the handled record", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const handledId = "handled_question_1";
+    await stored(
+      store,
+      row(handledId, 1, {
+        local_status: "human-answered",
+        delivery_status: "needs-attention",
+        answers_json: JSON.stringify([answer(1, { deliver: false })]),
+      })
+    );
+    await store.setMeta("daintree:handled-answers", JSON.stringify({ [handledId]: 1 }));
+
+    expect(await store.removeSettledQuestions(HOST, () => new Set())).toEqual([handledId]);
+    expect(JSON.parse((await store.getMeta("daintree:handled-answers"))!)).toEqual({});
+  });
+
+  it("keeps an answered question whose agent's published follow-up hasn't come back yet", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    const answered = (id: string, alias: number, over: Partial<QuestionRow> = {}) =>
+      row(id, alias, { local_status: "human-answered", answers_json: delivered(), ...over });
+    // An unrelated event about it that only mentions the id in passing isn't its echo.
+    await store.insertEvent({
+      seq: 3,
+      event_id: "e3",
+      event_type: "decision.answered",
+      json: JSON.stringify({
+        seq: 3,
+        event_type: "decision.answered",
+        question_id: "waiting-echo",
+        data: { record: { action_id: "a-other" }, note: "m-waiting" },
+      }),
+      received_at: 1,
+      processed_at: 4,
+    });
+    // Another follow-up of the agent's is back; the one published last isn't.
+    await stored(
+      store,
+      answered("waiting-echo", 1, {
+        messages_json: messages({ message_id: "m-earlier", side: "agent", delivery: null }),
+      })
+    );
+    // Back, but the inbox couldn't apply it (a key it lacked): nothing more will follow.
+    await stored(store, answered("rejected-echo", 4));
+    await stored(
+      store,
+      answered("echoed", 2, {
+        messages_json: messages({ message_id: "m-echoed", side: "agent", delivery: null }),
+      })
+    );
+    // Deleted by the relay before the echo came: no event follows a deletion.
+    await stored(store, answered("relay-deleted", 3, { local_status: "cancelled" }));
+    const published = (questionId: string, messageId: string) =>
+      store.appendAudit({
+        at: "2026-11-01T00:00:00.000Z",
+        event: "message.published",
+        question_id: questionId,
+        result: "ok",
+        detail: { message_id: messageId },
+      });
+    await published("waiting-echo", "m-waiting");
+    await published("echoed", "m-echoed");
+    await published("relay-deleted", "m-gone");
+    await published("rejected-echo", "m-rejected");
+    await store.insertEvent({
+      seq: 2,
+      event_id: "e2",
+      event_type: "decision.message.posted",
+      json: JSON.stringify({
+        seq: 2,
+        event_type: "decision.message.posted",
+        question_id: "rejected-echo",
+        data: { record: { message_id: "m-rejected" } },
+      }),
+      received_at: 1,
+      processed_at: 3,
+    });
+    await store.insertEvent({
+      seq: 1,
+      event_id: "e1",
+      event_type: "decision.deleted",
+      json: JSON.stringify({
+        seq: 1,
+        event_type: "decision.deleted",
+        question_id: "relay-deleted",
+      }),
+      received_at: 1,
+      processed_at: 2,
+    });
+
+    expect((await store.removeSettledQuestions(HOST, () => new Set())).sort()).toEqual([
+      "echoed",
+      "rejected-echo",
+      "relay-deleted",
+    ]);
+  });
+
+  it("strips the content of the events it applied about a removed question, keeping the ledger", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await stored(store, row("gone", 1, { local_status: "expired" }));
+    await stored(store, row("open", 2, { local_status: "open" }));
+    const created = (seq: number, questionId: string) => ({
+      seq,
+      event_id: `e${seq}`,
+      event_type: "decision.created",
+      json: JSON.stringify({
+        seq,
+        event_id: `e${seq}`,
+        event_type: "decision.created",
+        question_id: questionId,
+        question_revision: 1,
+        data: { record: { question_id: questionId }, envelope: { ciphertext: "SEALED" } },
+      }),
+      received_at: 1,
+      processed_at: 2,
+    });
+    await store.insertEvent(created(1, "gone"));
+    await store.insertEvent(created(2, "open"));
+    await store.insertEvent({
+      seq: 3,
+      event_id: "e3",
+      event_type: "unreadable",
+      json: "not json",
+      received_at: 1,
+      processed_at: 2,
+    });
+
+    expect(await store.removeSettledQuestions(HOST, () => new Set())).toEqual(["gone"]);
+
+    const events = reader()
+      .prepare("SELECT seq, event_id, json FROM decisions_inbound_events ORDER BY seq")
+      .all() as Array<{ seq: number; event_id: string; json: string }>;
+    expect(events.map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(JSON.parse(events[0]!.json)).toEqual({
+      seq: 1,
+      event_id: "e1",
+      event_type: "decision.created",
+      question_id: "gone",
+      question_revision: 1,
+    });
+    expect(events[1]!.json).toContain("SEALED");
+    expect(events[2]!.json).toBe("not json");
+  });
+
+  it("lets go of a correlation pointer whose question in force was removed", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await stored(store, row("old", 1, { local_status: "open" }));
+    await stored(store, row("new", 2, { local_status: "expired" }));
+    await stored(store, row("plain", 3, { local_status: "expired" }));
+    // A staged pointer whose newer question was committed and then settled.
+    await store.setMeta("corr:scope:staged", JSON.stringify({ q: "old", p: "new" }));
+    await store.setMeta("corr:scope:committed", JSON.stringify({ q: "new" }));
+    await store.setMeta("corr:scope:legacy", "plain");
+    await store.setMeta("corr:scope:open", JSON.stringify({ q: "old" }));
+
+    expect((await store.removeSettledQuestions(HOST, () => new Set())).sort()).toEqual([
+      "new",
+      "plain",
+    ]);
+
+    expect(await store.getMeta("corr:scope:staged")).toBeNull();
+    expect(await store.getMeta("corr:scope:committed")).toBeNull();
+    expect(await store.getMeta("corr:scope:legacy")).toBeNull();
+    expect(await store.getMeta("corr:scope:open")).toBe(JSON.stringify({ q: "old" }));
+  });
+
+  it("refuses alone when disk space turns critical after it queued, leaving the store writing", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await stored(store, row("expired", 1, { local_status: "expired" }));
+
+    const removing = store.removeSettledQuestions(HOST, () => new Set());
+    setWritesSuppressed(true);
+    await expect(removing).rejects.toMatchObject({ reason: "disk-pressure" });
+    expect(store.isFaulted()).toBe(false);
+    expect(await store.getQuestion("expired")).not.toBeNull();
+
+    // Any other write in the same batch still stops the store, as before.
+    setWritesSuppressed(false);
+    const removingAgain = store.removeSettledQuestions(HOST, () => new Set()).catch((e) => e);
+    const write = store.setMeta("k", "v");
+    setWritesSuppressed(true);
+    await expect(write).rejects.toMatchObject({ reason: "disk-pressure" });
+    expect(await removingAgain).toMatchObject({ reason: "disk-pressure" });
+    expect(store.isFaulted()).toBe(true);
+  });
+
+  it("refuses while disk space is critical without stopping the store", async () => {
+    const store = new DaintreeLocalStore(sqlite);
+    await stored(store, row("expired", 1, { local_status: "expired" }));
+    setWritesSuppressed(true);
+
+    await expect(store.removeSettledQuestions(HOST, () => new Set())).rejects.toMatchObject({
+      name: "DecisionsStoreUnavailableError",
+      reason: "disk-pressure",
+    });
+    expect(store.isFaulted()).toBe(false);
+    setWritesSuppressed(false);
+    expect(await store.removeSettledQuestions(HOST, () => new Set())).toEqual(["expired"]);
+  });
+});

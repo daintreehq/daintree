@@ -3,6 +3,7 @@ import { filesClient } from "@/clients/filesClient";
 import { isClientAppError } from "@/utils/clientAppError";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 
 export type PerfMode = "smoke" | "ci" | "nightly" | "soak";
 
@@ -57,7 +58,7 @@ let clsObserver: PerformanceObserver | null = null;
 const lafTimestamps: number[] = [];
 const clsEntries: Array<{ startTime: number; value: number }> = [];
 let captureRefCount = 0;
-let visibilityHandler: (() => void) | null = null;
+let offObservability: (() => void) | null = null;
 let refreshRequestId = 0;
 
 const WINDOW_MS = 30_000;
@@ -90,17 +91,17 @@ function publishMetrics(fps: number | null): void {
 }
 
 function tick(): void {
+  rafHandle = null;
   frameCount += 1;
   const now = performance.now();
   const elapsed = now - lastBucketTime;
   if (elapsed >= FPS_BUCKET_MS) {
-    const fps =
-      document.visibilityState === "hidden" ? null : Math.round((frameCount * 1000) / elapsed);
+    const fps = Math.round((frameCount * 1000) / elapsed);
     frameCount = 0;
     lastBucketTime = now;
     publishMetrics(fps);
   }
-  rafHandle = requestAnimationFrame(tick);
+  scheduleFrame();
 }
 
 interface LayoutShiftEntry extends PerformanceEntry {
@@ -158,12 +159,35 @@ function stopObservers(): void {
   clsEntries.length = 0;
 }
 
-function handleVisibilityChange(): void {
-  const hidden = document.visibilityState === "hidden";
-  usePerfMetricsStore.getState().setBackgrounded(hidden);
-  if (hidden) {
-    publishMetrics(null);
+// Re-checked at every scheduling point: a store subscriber notified mid-frame
+// can release the capture, restart it, or hide the view before this returns.
+function scheduleFrame(): void {
+  if (rafHandle !== null || captureRefCount === 0 || !isProjectViewObservable()) return;
+  rafHandle = requestAnimationFrame(tick);
+}
+
+function stopFrameLoop(): void {
+  if (rafHandle !== null) {
+    cancelAnimationFrame(rafHandle);
+    rafHandle = null;
   }
+}
+
+// Frames only while someone can see this view. A hidden window gets none
+// anyway, but a cached project view still reports itself visible and gets them
+// at display rate (see viewCacheState), so the loop has to stop itself. Each
+// resume opens a fresh bucket, so a reading never spans the pause.
+function applyObservability(observable: boolean): void {
+  usePerfMetricsStore.getState().setBackgrounded(!observable);
+  if (!observable) {
+    stopFrameLoop();
+    publishMetrics(null);
+    return;
+  }
+  if (rafHandle !== null) return;
+  frameCount = 0;
+  lastBucketTime = performance.now();
+  scheduleFrame();
 }
 
 // Lazy ref-counted lifecycle so the rAF loop only runs while the Perf tab is
@@ -173,15 +197,9 @@ export function startLivePerfCapture(): void {
   captureRefCount += 1;
   if (captureRefCount > 1) return;
 
-  frameCount = 0;
-  lastBucketTime = performance.now();
   startObservers();
-
-  visibilityHandler = handleVisibilityChange;
-  document.addEventListener("visibilitychange", visibilityHandler);
-  usePerfMetricsStore.getState().setBackgrounded(document.visibilityState === "hidden");
-
-  rafHandle = requestAnimationFrame(tick);
+  offObservability = subscribeProjectViewObservability(applyObservability);
+  applyObservability(isProjectViewObservable());
 }
 
 export function stopLivePerfCapture(): void {
@@ -189,14 +207,9 @@ export function stopLivePerfCapture(): void {
   captureRefCount -= 1;
   if (captureRefCount > 0) return;
 
-  if (rafHandle !== null) {
-    cancelAnimationFrame(rafHandle);
-    rafHandle = null;
-  }
-  if (visibilityHandler) {
-    document.removeEventListener("visibilitychange", visibilityHandler);
-    visibilityHandler = null;
-  }
+  stopFrameLoop();
+  offObservability?.();
+  offObservability = null;
   stopObservers();
   usePerfMetricsStore.getState().setLiveMetrics({
     fps: null,
@@ -370,14 +383,9 @@ export const usePerfMetricsStore = create<PerfMetricsState>((set) => ({
 
 // Test-only reset that drains module-scope state and the rAF loop.
 export function resetPerfMetricsForTests(): void {
-  if (rafHandle !== null) {
-    cancelAnimationFrame(rafHandle);
-    rafHandle = null;
-  }
-  if (visibilityHandler) {
-    document.removeEventListener("visibilitychange", visibilityHandler);
-    visibilityHandler = null;
-  }
+  stopFrameLoop();
+  offObservability?.();
+  offObservability = null;
   stopObservers();
   frameCount = 0;
   lastBucketTime = 0;

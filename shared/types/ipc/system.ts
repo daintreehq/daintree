@@ -19,16 +19,33 @@ export interface SystemOpenInEditorPayload {
 }
 
 /**
- * What an open-in-editor did instead of opening, when it couldn't. Only a
- * window attached to a remote host answers this: no editor here could open
- * the host's file, so its path went to this machine's clipboard. Undefined
+ * What an open-in-editor did instead of opening, when it couldn't. Undefined
  * means the editor was asked to open it.
  */
-export interface SystemOpenInEditorFallback {
+export type SystemOpenInEditorFallback =
+  SystemOpenInEditorCopiedHostPath | SystemOpenInEditorNeedsTerminal;
+
+/**
+ * A window attached to a remote host: no editor here could open the host's
+ * file, so its path went to this machine's clipboard.
+ */
+export interface SystemOpenInEditorCopiedHostPath {
   outcome: "copied-host-path";
   path: string;
   /** The host's display name, for the notice that says where the path is. */
   hostName: string;
+}
+
+/**
+ * The chosen editor only runs in a terminal, so nothing was launched: started
+ * detached it would be a process nobody can see.
+ */
+export interface SystemOpenInEditorNeedsTerminal {
+  outcome: "needs-terminal";
+  /** The chosen editor's display name, for the notice that explains the setup. */
+  editorName: string;
+  /** The program a terminal app would run for it, for the notice's example. */
+  command: string;
 }
 
 /** System wake event payload */
@@ -336,8 +353,8 @@ export interface ProcessMetricEntry {
   cpuPercent: number;
   /**
    * Names of the projects whose views run in this renderer, for "Tab" processes
-   * only. Absent when no project owns the process (GPU/utility/browser, portal
-   * views, an unbound welcome view) — an array because project views share one
+   * only. Absent when no project owns the process (GPU/utility/browser, an
+   * unbound welcome view) — an array because project views share one
    * session partition and URL, so Chromium can collapse several into a single
    * renderer process. Sorted, deduped, and never empty when present.
    */

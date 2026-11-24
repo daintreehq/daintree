@@ -1,5 +1,9 @@
 import { SquareDashedMousePointer } from "lucide-react";
 import type { DevPreviewToolButtonProps } from "@/services/devPreviewTools/types";
+import {
+  PANE_TOOLBAR_ICON_BUTTON_CLASS,
+  PANE_TOOLBAR_ICON_CLASS,
+} from "@/components/ui/paneToolbarStyles";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TOOL_NAME } from "./toolId.js";
 
@@ -17,9 +21,9 @@ export function ElementPickerButton({ active, onToggle }: DevPreviewToolButtonPr
           onClick={onToggle}
           aria-label={TOOL_NAME}
           aria-pressed={active}
-          className="toolbar-icon-button rounded-[var(--radius-md)] p-1.5"
+          className={PANE_TOOLBAR_ICON_BUTTON_CLASS}
         >
-          <SquareDashedMousePointer className="h-4 w-4" aria-hidden="true" />
+          <SquareDashedMousePointer className={PANE_TOOLBAR_ICON_CLASS} aria-hidden="true" />
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom">{TOOL_NAME}</TooltipContent>

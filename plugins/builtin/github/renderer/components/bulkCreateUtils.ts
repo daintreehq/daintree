@@ -1,8 +1,10 @@
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import type { Issue, PR } from "@shared/types/forge";
+import type { Worktree } from "@shared/types/worktree";
 import { issueBranchName } from "@shared/utils/issueBranchName";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "@shared/utils/recipeSanitizer";
+import { worktreeIssueIsGitHub } from "@shared/utils/worktreeIssueProjection";
 import type { PlannedWorktree } from "./bulkCreatePrequery";
 
 export type { PlannedWorktree };
@@ -102,6 +104,15 @@ export function nextBackoffDelay(prevDelay: number, cap: number = BACKOFF_CAP_MS
   const min = BACKOFF_BASE_MS;
   const max = prevDelay * 3;
   return Math.min(cap, min + Math.random() * (max - min));
+}
+
+/** GitHub issue numbers that already have a worktree, ignoring other trackers' issues of the same number. */
+export function collectGitHubIssueNumbers(worktrees: Iterable<Worktree>): Set<number> {
+  const numbers = new Set<number>();
+  for (const wt of worktrees) {
+    if (wt.issueNumber && worktreeIssueIsGitHub(wt)) numbers.add(wt.issueNumber);
+  }
+  return numbers;
 }
 
 export function planIssueWorktrees(

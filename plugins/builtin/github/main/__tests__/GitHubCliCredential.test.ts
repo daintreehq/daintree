@@ -176,6 +176,19 @@ describe("readGhToken", () => {
     expect(opts.env.GH_PROMPT_DISABLED).toBe("1");
   });
 
+  it("asks gh for the named host's token", async () => {
+    childProcessMock.execFile.mockImplementation(
+      (_cmd: string, _args: string[], _opts: ExecOptions, cb: ExecCallback) => {
+        queueMicrotask(() => cb(null, `${TOKEN}\n`, ""));
+        return {};
+      }
+    );
+
+    await expect(readGhToken(undefined, "github.example.com")).resolves.toEqual({ token: TOKEN });
+
+    expect(lastExec().args).toEqual(["auth", "token", "--hostname", "github.example.com"]);
+  });
+
   it("strips the app's own inherited tokens from the child env", async () => {
     vi.stubEnv("GH_TOKEN", "inherited-token");
     vi.stubEnv("GITHUB_TOKEN", "inherited-token");
@@ -327,6 +340,7 @@ describe("credentialImportCapability.preview", () => {
     expect(tokenMock.validateGitHubToken).toHaveBeenCalledWith(TOKEN, {
       signal: undefined,
       detached: true,
+      host: "github.com",
     });
   });
 
@@ -352,6 +366,7 @@ describe("credentialImportCapability.preview", () => {
     expect(tokenMock.validateGitHubToken).toHaveBeenCalledWith(TOKEN, {
       signal: controller.signal,
       detached: true,
+      host: "github.com",
     });
   });
 

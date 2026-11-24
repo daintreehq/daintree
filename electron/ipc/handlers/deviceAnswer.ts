@@ -4,7 +4,11 @@ import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { store } from "../../store.js";
-import { decisionsServesPanes, loadDecisionsModule } from "../../window/serviceRefs.js";
+import {
+  decisionsHostServes,
+  decisionsServesPanes,
+  loadDecisionsModule,
+} from "../../window/serviceRefs.js";
 import {
   getDeviceAnswerService,
   peekDeviceAnswerService,
@@ -29,6 +33,7 @@ import type {
   DecisionsExportResult,
   DecisionsKitExportResult,
   DecisionsKitVerifyResult,
+  DecisionsHistoryRemoveResult,
   DecisionsLocalDeleteResult,
   DecisionsPairingApproveResult,
   DecisionsPairingDeclineResult,
@@ -43,6 +48,7 @@ import type {
   DecisionsSetupCheckRun,
   DecisionsSetupCheckStartResult,
   DecisionsStatus,
+  DecisionsKeyErasurePayload,
   DeleteDecisionsRelayDataPayload,
   ExportDecisionsDataPayload,
   ExportDecisionsRecoveryKitPayload,
@@ -68,6 +74,8 @@ import type {
   DecisionsAnswerDestinations,
   DecisionsAnswerOutcome,
   DecisionsAttentionList,
+  DecisionsHostAttentionRequest,
+  DecisionsHostAttentionResult,
   MarkDecisionsAnswerHandledPayload,
   ReassignDecisionsAnswerPayload,
 } from "../../../shared/types/decisionsAttention.js";
@@ -77,6 +85,41 @@ import type {
   SetDecisionsModelPayload,
   SetDecisionsModelThresholdPayload,
 } from "../../../shared/types/decisionsModel.js";
+import type {
+  AnswerDecisionQuestionPayload,
+  CancelDecisionQuestionByReferencePayload,
+  CancelDecisionQuestionPayload,
+  DeclineDecisionQuestionPayload,
+  DecisionAnswerResultRead,
+  DecisionDeclineResultRead,
+  DecisionFollowUpResultRead,
+  DecisionQuestionAnswerResult,
+  DecisionQuestionCancelResult,
+  DecisionQuestionContentResult,
+  DecisionQuestionDeclineResult,
+  DecisionQuestionFollowUpResult,
+  DecisionQuestionImagePartResult,
+  DecisionQuestionList,
+  DecisionQuestionMarkResult,
+  DecisionQuestionPaneResult,
+  DecisionQuestionSummariesResult,
+  GetDecisionQuestionByReferencePayload,
+  GetDecisionQuestionImageByReferencePayload,
+  GetDecisionQuestionImagePayload,
+  GetDecisionQuestionPayload,
+  GetDecisionQuestionSummariesByReferencePayload,
+  GetDecisionQuestionSummariesPayload,
+  GetDecisionAnswerResultPayload,
+  GetDecisionDeclineResultPayload,
+  GetDecisionFollowUpResultPayload,
+  SendDecisionFollowUpPayload,
+  MarkDecisionQuestionsPayload,
+} from "../../../shared/types/decisionsQuestion.js";
+import type {
+  DecisionsInvolvementRead,
+  DecisionsInvolvementSaveResult,
+  SetDecisionsInvolvementPayload,
+} from "../../../shared/types/decisionsInvolvement.js";
 import { AppError } from "../../utils/errorTypes.js";
 
 /**
@@ -215,6 +258,15 @@ const exportDataSchema = z.object({ passphrase: z.string().min(1).max(1024) }).s
 
 const deleteRelayDataSchema = z.object({ origin: z.string().max(2048) }).strict();
 
+// How the person confirmed erasing the keys (#18064); main rechecks a one-click confirm.
+const keyErasureSchema = z
+  .object({
+    oneClick: z.boolean(),
+    relayOrigin: z.string().max(2048).nullable(),
+    keys: z.string().max(256).nullable(),
+  })
+  .strict();
+
 const startRelayRemovalSchema = z
   .object({
     terminalId: z.string().refine(isRelayRemovalTerminalId, "Not a relay removal terminal id"),
@@ -263,11 +315,195 @@ const cancelSetupCheckSchema = z.object({ runId: z.string().min(1).max(64) }).st
 // A question id as the library mints it.
 const questionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,80}$/);
 
+/** An attention item's token, as main minted it: a SHA-256 digest of ids and states. */
+const attentionTokenSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
+/** A destination's run as main listed it: a SHA-256 digest of the pane's run identity. */
+const destinationRunSchema = z.string().regex(/^[0-9a-f]{64}$/);
+
 const reassignAnswerSchema = z
-  .object({ questionId: questionIdSchema, terminalId: z.string().min(1).max(256) })
+  .object({
+    questionId: questionIdSchema,
+    terminalId: z.string().min(1).max(256),
+    run: destinationRunSchema,
+    expected: attentionTokenSchema.optional(),
+  })
   .strict();
 
-const markAnswerHandledSchema = z.object({ questionId: questionIdSchema }).strict();
+const markAnswerHandledSchema = z
+  .object({ questionId: questionIdSchema, expected: attentionTokenSchema.optional() })
+  .strict();
+
+const questionTerminalIdSchema = z.string().min(1).max(256);
+
+const getQuestionContentSchema = z
+  .object({ terminalId: questionTerminalIdSchema, questionId: questionIdSchema })
+  .strict();
+
+const cancelQuestionSchema = z
+  .object({ terminalId: questionTerminalIdSchema, questionId: questionIdSchema })
+  .strict();
+
+const attachmentIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
+
+// Where in an image (at most 20 MiB) a part starts.
+const imageOffsetSchema = z
+  .number()
+  .int()
+  .min(0)
+  .max(20 * 1024 * 1024);
+
+const getQuestionImageSchema = z
+  .object({
+    terminalId: questionTerminalIdSchema,
+    questionId: questionIdSchema,
+    attachmentId: attachmentIdSchema,
+    offset: imageOffsetSchema,
+  })
+  .strict();
+
+// A question by the machine, project, terminal and id it names (#17229); main checks the machine is this one.
+const questionReferenceSchema = z
+  .object({
+    hostId: z.string().min(1).max(256),
+    projectId: z.string().min(1).max(256),
+    terminalId: questionTerminalIdSchema,
+    questionId: questionIdSchema,
+  })
+  .strict();
+
+const questionByReferenceSchema = z.object({ reference: questionReferenceSchema }).strict();
+
+// One of a Remote Host's stopped deliveries (#18031): a resume or Mark handled names the item it confirmed.
+const hostAttentionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("read"), reference: questionReferenceSchema }).strict(),
+  z.object({ action: z.literal("copy"), reference: questionReferenceSchema }).strict(),
+  z
+    .object({
+      action: z.literal("resume"),
+      reference: questionReferenceSchema,
+      expected: attentionTokenSchema,
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("handled"),
+      reference: questionReferenceSchema,
+      expected: attentionTokenSchema,
+    })
+    .strict(),
+]);
+
+const getQuestionImageByReferenceSchema = z
+  .object({
+    reference: questionReferenceSchema,
+    attachmentId: attachmentIdSchema,
+    offset: imageOffsetSchema,
+  })
+  .strict();
+
+// The client's page, `DECISION_QUESTION_MARKS_PER_CALL`, as a literal: this module loads at
+// startup, and importing a value from the Decisions types would add that module to it.
+const MARKS_PER_CALL = 500;
+
+// What the person did with questions' current asks on this computer (#17895), a page at a time.
+const markQuestionsSchema = z
+  .object({
+    action: z.enum(["seen", "clear", "restore"]),
+    questions: z
+      .array(
+        z
+          .object({
+            reference: questionReferenceSchema,
+            ask: z.string().min(1).max(256).nullable(),
+          })
+          .strict()
+      )
+      .min(1)
+      .max(MARKS_PER_CALL),
+  })
+  .strict();
+
+const getQuestionSummariesByReferenceSchema = z
+  .object({ references: z.array(questionReferenceSchema).max(64) })
+  .strict();
+
+// An answer id the view mints (a UUID fits), in the protocol's id shape.
+const answerIdSchema = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
+
+// The person's answer (#17101), within the protocol's own bounds, which the
+// library checks again, with the question's rules, before anything is signed.
+const answerQuestionSchema = z
+  .object({
+    reference: questionReferenceSchema,
+    answerId: answerIdSchema,
+    expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+    selectedOptionIds: z.array(z.string().min(1).max(64)).max(12),
+    text: z
+      .string()
+      .max(16 * 1024)
+      .optional(),
+    explicitApproval: z.boolean().optional(),
+    reason: z.string().max(2_000).optional(),
+    reviewedAttachmentDigests: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(8),
+  })
+  .strict();
+
+const getAnswerResultSchema = z.object({ answerId: answerIdSchema }).strict();
+
+// The person's decline (#17239): the question as an answer names it, the
+// revision the person read, and an id the view mints, in the same shape.
+const declineQuestionSchema = z
+  .object({
+    reference: questionReferenceSchema,
+    declineId: answerIdSchema,
+    expectedRevision: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
+  })
+  .strict();
+
+const getDeclineResultSchema = z.object({ declineId: answerIdSchema }).strict();
+
+// The person's follow-up (#17238): words only, as from a phone, within the
+// protocol's message bound, which the library checks again in UTF-8 bytes.
+const sendFollowUpSchema = z
+  .object({
+    reference: questionReferenceSchema,
+    messageId: answerIdSchema,
+    text: z
+      .string()
+      .max(16 * 1024)
+      .refine((text) => text.trim() !== ""),
+  })
+  .strict();
+
+const getFollowUpResultSchema = z.object({ messageId: answerIdSchema }).strict();
+
+const involvementModeSchema = z.enum(["involve-early", "recommend"]);
+
+// The library's own input bounds (`SetInvolvementInput`), which it checks again before signing.
+const setInvolvementSchema = z
+  .object({
+    expectedRevision: z
+      .number()
+      .int()
+      .min(0)
+      .max(Number.MAX_SAFE_INTEGER - 1),
+    normalMode: involvementModeSchema,
+    consultCount: z.number().int().min(1).max(8),
+    override: z
+      .object({ mode: involvementModeSchema, until: z.iso.datetime({ precision: 3 }) })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+
+// A pane holds at most ten open questions; the cap leaves room for the settled ones a list names.
+const getQuestionSummariesSchema = z
+  .object({
+    terminalId: questionTerminalIdSchema,
+    questionIds: z.array(questionIdSchema).max(64),
+  })
+  .strict();
 
 // The decision model's CLIs, named here rather than imported from the
 // setting's module, which would make it eager; the sanitiser drops any other.
@@ -332,6 +568,278 @@ export const decisionsNamespace = defineIpcNamespace({
         if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) return null;
         const decisions = await loadDecisions();
         return decisions ? decisions.getDecisionsPaneState(terminalId) : null;
+      }
+    ),
+    // A pane's question with its content opened (#17097), and the opening
+    // lines its list names. `host`, like the pane state, so a view on a Remote
+    // Host reads the Host's store; scoped to the asking view's project, which
+    // comes from the request's context, never from the renderer.
+    getQuestionContent: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_CONTENT,
+      getQuestionContentSchema,
+      async (ctx, payload: GetDecisionQuestionPayload): Promise<DecisionQuestionContentResult> => {
+        if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
+          return { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionContent(ctx.projectId, payload);
+      },
+      { withContext: true }
+    ),
+    // One of a question's images, fetched and checked on the machine that
+    // owns the pane (#17100); scoped like the content, and only ever returned
+    // to the view that asked.
+    getQuestionImage: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_IMAGE,
+      getQuestionImageSchema,
+      async (
+        ctx,
+        payload: GetDecisionQuestionImagePayload
+      ): Promise<DecisionQuestionImagePartResult> => {
+        if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
+          return { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionImage(ctx.projectId, payload);
+      },
+      { withContext: true }
+    ),
+    getQuestionSummaries: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES,
+      getQuestionSummariesSchema,
+      async (
+        ctx,
+        payload: GetDecisionQuestionSummariesPayload
+      ): Promise<DecisionQuestionSummariesResult> => {
+        if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
+          return { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionSummaries(ctx.projectId, payload);
+      },
+      { withContext: true }
+    ),
+    // A person withdrawing a pane's question from its view (#17099). `host`,
+    // so a Remote Host's pane has its question withdrawn by the Host that
+    // asked it; scoped like the reads, to the asking view's project from the
+    // request's context. Never starts Decisions.
+    cancelQuestion: opValidated(
+      CHANNELS.DECISIONS_CANCEL_QUESTION,
+      cancelQuestionSchema,
+      async (
+        ctx,
+        payload: CancelDecisionQuestionPayload
+      ): Promise<DecisionQuestionCancelResult> => {
+        if (!decisionsServesPanes(store.get("decisions"), store.get("decisionsHost"))) {
+          return { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.cancelDecisionQuestion(ctx.projectId, payload);
+      },
+      { withContext: true }
+    ),
+    // Every question this computer's Decisions holds (#17229), ids, labels,
+    // times and statuses only, and each read or withdrawn by its reference.
+    // `shell`: this computer's own, for any of its windows whatever project it
+    // shows. The list is the leaf Decisions installs into while it runs, so
+    // reading it never loads Decisions; it is empty while Decisions is off.
+    // Imported on demand, so Decisions adds no module to startup.
+    listQuestions: op(CHANNELS.DECISIONS_LIST_QUESTIONS, async (): Promise<DecisionQuestionList> =>
+      (await import("../../services/decisionsQuestionList.js")).getDecisionQuestionList()
+    ),
+    getQuestionContentByReference: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE,
+      questionByReferenceSchema,
+      async (
+        payload: GetDecisionQuestionByReferencePayload
+      ): Promise<DecisionQuestionContentResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionContentByReference(payload);
+      }
+    ),
+    // The pane that asked a question, as it shows now (#18037): `shell`, read on the machine that
+    // owns it, this computer or the Remote Host that asked, for this computer's person only. Never
+    // the relay: it doesn't wait on terminal snapshots being on. Never starts Decisions.
+    getQuestionPaneByReference: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_PANE_BY_REFERENCE,
+      questionByReferenceSchema,
+      async (
+        payload: GetDecisionQuestionByReferencePayload
+      ): Promise<DecisionQuestionPaneResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        const read = await decisions.getDecisionQuestionPaneByReference(payload);
+        // Turned off while it was out, here or on a Host: none of the terminal reaches the window.
+        return decisionsOn() ? read : { result: "off" };
+      }
+    ),
+    getQuestionImageByReference: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE,
+      getQuestionImageByReferenceSchema,
+      async (
+        payload: GetDecisionQuestionImageByReferencePayload
+      ): Promise<DecisionQuestionImagePartResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionImageByReference(payload);
+      }
+    ),
+    getQuestionSummariesByReference: opValidated(
+      CHANNELS.DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE,
+      getQuestionSummariesByReferenceSchema,
+      async (
+        payload: GetDecisionQuestionSummariesByReferencePayload
+      ): Promise<DecisionQuestionSummariesResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionQuestionSummariesByReference(payload);
+      }
+    ),
+    cancelQuestionByReference: opValidated(
+      CHANNELS.DECISIONS_CANCEL_QUESTION_BY_REFERENCE,
+      questionByReferenceSchema,
+      async (
+        payload: CancelDecisionQuestionByReferencePayload
+      ): Promise<DecisionQuestionCancelResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.cancelDecisionQuestionByReference(payload);
+      }
+    ),
+    // The person seeing, clearing or restoring questions (#17895): `shell`,
+    // kept on this computer whichever machine asked, and never sent to the
+    // relay, a Host or a terminal. No action, MCP tool or plugin surface
+    // reaches it. Never starts Decisions.
+    markQuestions: opValidated(
+      CHANNELS.DECISIONS_MARK_QUESTIONS,
+      markQuestionsSchema,
+      async (payload: MarkDecisionQuestionsPayload): Promise<DecisionQuestionMarkResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.markDecisionQuestions(payload);
+      }
+    ),
+    // The person's answer to a question (#17101), from Daintree's own view:
+    // `shell`, so this computer signs it with its owner key whichever machine
+    // asked, and a Remote Host window's answer never reaches the Host, whose
+    // key never signs one. The question is named by the reference its content
+    // was read with. There is no action, MCP tool or plugin surface for it.
+    // Never starts Decisions.
+    answerQuestion: opValidated(
+      CHANNELS.DECISIONS_ANSWER_QUESTION,
+      answerQuestionSchema,
+      async (payload: AnswerDecisionQuestionPayload): Promise<DecisionQuestionAnswerResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.answerDecisionQuestion(payload);
+      }
+    ),
+    getAnswerResult: opValidated(
+      CHANNELS.DECISIONS_GET_ANSWER_RESULT,
+      getAnswerResultSchema,
+      async (payload: GetDecisionAnswerResultPayload): Promise<DecisionAnswerResultRead> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionAnswerResult(payload);
+      }
+    ),
+    // The person's decline (#17239), from Daintree's own view: `shell` like
+    // their answer, so this computer signs it with its owner key whichever
+    // machine asked. No action, MCP tool or plugin surface reaches it. An
+    // enrolled Remote Host serves its panes with the owner's switch off here,
+    // and its key never signs for the person: it says so, without loading
+    // anything, so its view offers withdrawing instead. Never starts Decisions.
+    declineQuestion: opValidated(
+      CHANNELS.DECISIONS_DECLINE_QUESTION,
+      declineQuestionSchema,
+      async (payload: DeclineDecisionQuestionPayload): Promise<DecisionQuestionDeclineResult> => {
+        if (!decisionsOn()) {
+          return decisionsHostServes(store.get("decisionsHost"))
+            ? { result: "refused", reason: "not-owner" }
+            : { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.declineDecisionQuestion(payload);
+      }
+    ),
+    getDeclineResult: opValidated(
+      CHANNELS.DECISIONS_GET_DECLINE_RESULT,
+      getDeclineResultSchema,
+      async (payload: GetDecisionDeclineResultPayload): Promise<DecisionDeclineResultRead> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionDeclineResult(payload);
+      }
+    ),
+    // The person's follow-up on a question's thread (#17238), from Daintree's
+    // own view: `shell`, signed by this computer's owner key as their answer
+    // is, whichever machine asked. No action, MCP tool or plugin surface.
+    // Never starts Decisions.
+    sendFollowUp: opValidated(
+      CHANNELS.DECISIONS_SEND_FOLLOW_UP,
+      sendFollowUpSchema,
+      async (payload: SendDecisionFollowUpPayload): Promise<DecisionQuestionFollowUpResult> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.sendDecisionFollowUp(payload);
+      }
+    ),
+    getFollowUpResult: opValidated(
+      CHANNELS.DECISIONS_GET_FOLLOW_UP_RESULT,
+      getFollowUpResultSchema,
+      async (payload: GetDecisionFollowUpResultPayload): Promise<DecisionFollowUpResultRead> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionFollowUpResult(payload);
+      }
+    ),
+
+    // The person's involvement preference (#17237), from Daintree's own view:
+    // `shell`, so this computer reads its own copy and signs a change with its
+    // owner key whichever machine a window is attached to. There is no
+    // action, MCP tool or plugin surface for it: agents read the preference
+    // in force through `get_involvement` and never change it. Never starts
+    // Decisions.
+    getInvolvement: op(
+      CHANNELS.DECISIONS_GET_INVOLVEMENT,
+      async (): Promise<DecisionsInvolvementRead> => {
+        if (!decisionsOn()) return { result: "off" };
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.getDecisionsInvolvement();
+      }
+    ),
+    setInvolvement: opValidated(
+      CHANNELS.DECISIONS_SET_INVOLVEMENT,
+      setInvolvementSchema,
+      async (payload: SetDecisionsInvolvementPayload): Promise<DecisionsInvolvementSaveResult> => {
+        // An enrolled Remote Host serves its panes with the owner's switch off
+        // here, and its key never signs the person's preference.
+        if (!decisionsOn()) {
+          return decisionsHostServes(store.get("decisionsHost"))
+            ? { result: "refused", reason: "not-owner" }
+            : { result: "off" };
+        }
+        const decisions = await loadDecisions();
+        if (!decisions) return { result: "not-running" };
+        return decisions.setDecisionsInvolvement(payload);
       }
     ),
     // Which terminals this view's hybrid input holds a draft for (#16282): an
@@ -454,12 +962,16 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.restoreIdentity(payload);
       }
     ),
-    disconnectRelay: op(CHANNELS.DECISIONS_DISCONNECT_RELAY, async (): Promise<DecisionsStatus> => {
-      refuseWhileOff("disconnect a relay");
-      const decisions = await loadDecisions();
-      if (!decisions) throw setupCancelled();
-      return decisions.disconnectRelay();
-    }),
+    disconnectRelay: opValidated(
+      CHANNELS.DECISIONS_DISCONNECT_RELAY,
+      keyErasureSchema,
+      async (payload: DecisionsKeyErasurePayload): Promise<DecisionsStatus> => {
+        refuseWhileOff("disconnect a relay");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.disconnectRelay(payload);
+      }
+    ),
     // A guided removal from Cloudflare (#16202), watched from before its pane
     // opens. Only while on: what it forgets is the running lifetime's identity.
     startRelayRemoval: opValidated(
@@ -556,35 +1068,36 @@ export const decisionsNamespace = defineIpcNamespace({
         return decisions.deleteRelayData(payload);
       }
     ),
-    deleteLocalData: op(
+    deleteLocalData: opValidated(
       CHANNELS.DECISIONS_DELETE_LOCAL_DATA,
-      async (): Promise<DecisionsLocalDeleteResult> => {
+      keyErasureSchema,
+      async (payload: DecisionsKeyErasurePayload): Promise<DecisionsLocalDeleteResult> => {
         refuseWhileOff("delete its data");
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
-        return decisions.deleteLocalData();
+        return decisions.deleteLocalData(payload);
       }
     ),
-    // The trusted gates, the proxy allowlist (#16013) and the default question
-    // expiry (#16122). Read and changed only while on: Settings shows them
-    // behind the switch, and reading them loads Decisions. No op registers or
-    // edits a gate.
+    removeSettledQuestions: op(
+      CHANNELS.DECISIONS_REMOVE_SETTLED_QUESTIONS,
+      async (): Promise<DecisionsHistoryRemoveResult> => {
+        refuseWhileOff("remove its settled questions");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.removeSettledQuestions();
+      }
+    ),
+    // The trusted gates (#16013) and the default question expiry (#16122).
+    // Read and changed only while on: Settings shows them behind the switch,
+    // and reading them loads Decisions. No op registers or edits a gate, and
+    // whether a question without one may take a proxy answer follows the
+    // decision model's own choice (#18062).
     getPolicy: op(CHANNELS.DECISIONS_GET_POLICY, async (): Promise<DecisionsPolicy> => {
       refuseWhileOff("read its policy");
       const decisions = await loadDecisions();
       if (!decisions) throw setupCancelled();
       return decisions.getDecisionsPolicy();
     }),
-    setProxyAllowlisted: opValidated(
-      CHANNELS.DECISIONS_SET_PROXY_ALLOWLISTED,
-      z.boolean(),
-      async (allowed: boolean): Promise<DecisionsPolicy> => {
-        refuseWhileOff("change who may answer");
-        const decisions = await loadDecisions();
-        if (!decisions) throw setupCancelled();
-        return decisions.setDecisionsProxyAllowlisted(allowed);
-      }
-    ),
     // Only the shape here; main refuses any value Settings doesn't offer.
     setDefaultQuestionExpiry: opValidated(
       CHANNELS.DECISIONS_SET_DEFAULT_QUESTION_EXPIRY,
@@ -618,6 +1131,28 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.setDecisionsTerminalSnapshots(payload);
+      }
+    ),
+    // Holding a new question's phone push while the person is here (#17240).
+    setHoldPhonePushes: opValidated(
+      CHANNELS.DECISIONS_SET_HOLD_PHONE_PUSHES,
+      z.boolean(),
+      async (enabled: boolean): Promise<DecisionsStatus> => {
+        refuseWhileOff("change when your phone is notified");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsHoldPhonePushes(enabled);
+      }
+    ),
+    // Telling the phone when one of this computer's agents stops while the person is away (#17319).
+    setAgentStoppedPushes: opValidated(
+      CHANNELS.DECISIONS_SET_AGENT_STOPPED_PUSHES,
+      z.boolean(),
+      async (enabled: boolean): Promise<DecisionsStatus> => {
+        refuseWhileOff("change when your phone is notified");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.setDecisionsAgentStoppedPushes(enabled);
       }
     ),
     // Saving and verifying a recovery kit (#16007). The save dialog belongs to
@@ -796,6 +1331,18 @@ export const decisionsNamespace = defineIpcNamespace({
         const decisions = await loadDecisions();
         if (!decisions) throw setupCancelled();
         return decisions.markDecisionsAnswerHandled(payload);
+      }
+    ),
+    // A Remote Host's stopped delivery (#18031), read and acted on on that
+    // Host alone; one no Host lists never reaches this computer's delivery.
+    hostAttention: opValidated(
+      CHANNELS.DECISIONS_HOST_ATTENTION,
+      hostAttentionSchema,
+      async (request: DecisionsHostAttentionRequest): Promise<DecisionsHostAttentionResult> => {
+        refuseWhileOff("resolve a Remote Host's delivery");
+        const decisions = await loadDecisions();
+        if (!decisions) throw setupCancelled();
+        return decisions.actOnHostAttention(request);
       }
     ),
     // The decision model (#16027): its preferences, evaluation and history.

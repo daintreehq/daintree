@@ -1,5 +1,5 @@
-import { usePanelStore } from "@/store/panelStore";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { usePanelStore, type PanelGridState } from "@/store/panelStore";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { buildResumeCommand, stripAssignedSessionIdArgs } from "@shared/types";
 import { reconcileResumeLaunchFlags } from "@/services/agentResume";
 import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
@@ -49,6 +49,7 @@ export interface WorktreeTerminalRestoreSnapshot {
   originalPresetId?: string;
   agentSessionId?: string;
   conversationCwd?: string;
+  conversationStore?: PtyPanelData["conversationStore"];
   /** Held for recovery (#12434): comes back held, never launched by a rollback. */
   restoreRecovery?: PtyPanelData["restoreRecovery"];
   /** The pane's own notes (#12835): a rollback brings the terminal back whole. */
@@ -64,16 +65,39 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+type PanelStoreSnapshot = Pick<PanelGridState, "panelIds" | "panelsById">;
+
+function isLiveWorktreePanel(
+  panel: PanelInstance | undefined,
+  worktreeId: string
+): panel is PanelInstance {
+  return (
+    panel?.worktreeId === worktreeId &&
+    panel.location !== "trash" &&
+    (!isPtyPanel(panel) || panel.excludeFromPersistence !== true)
+  );
+}
+
+/**
+ * Every panel a worktree delete closes: all of the worktree's live panels, not
+ * only its terminals, less trash and ephemeral PTYs. Shared with the bulk
+ * confirm so the count it states is the population the run closes.
+ */
+export function selectLivePanelsForWorktree(
+  state: PanelStoreSnapshot,
+  worktreeId: string
+): PanelInstance[] {
+  const panels: PanelInstance[] = [];
+  for (const id of state.panelIds) {
+    const panel = state.panelsById[id];
+    if (isLiveWorktreePanel(panel, worktreeId)) panels.push(panel);
+  }
+  return panels;
+}
+
 export function getLiveTerminalIdsForWorktree(worktreeId: string): string[] {
   const state = usePanelStore.getState();
-  return state.panelIds.filter((id) => {
-    const panel = state.panelsById[id];
-    return (
-      panel?.worktreeId === worktreeId &&
-      panel.location !== "trash" &&
-      (!isPtyPanel(panel) || panel.excludeFromPersistence !== true)
-    );
-  });
+  return state.panelIds.filter((id) => isLiveWorktreePanel(state.panelsById[id], worktreeId));
 }
 
 /**
@@ -118,6 +142,7 @@ function snapshotTerminal(panel: PtyPanelData): WorktreeTerminalRestoreSnapshot 
     originalPresetId: panel.originalPresetId,
     agentSessionId: panel.agentSessionId,
     conversationCwd: panel.conversationCwd,
+    conversationStore: panel.conversationStore,
     restoreRecovery: panel.restoreRecovery,
     ...(panel.scratchpad && { scratchpad: panel.scratchpad }),
     ...(panel.firstPrompt && { firstPrompt: panel.firstPrompt }),
@@ -254,6 +279,7 @@ export async function restoreClosedTerminals(
         originalPresetId: snap.originalPresetId,
         agentSessionId: snap.agentSessionId,
         conversationCwd: snap.conversationCwd,
+        conversationStore: snap.conversationStore,
         restoreRecovery: snap.restoreRecovery,
         ...(snap.scratchpad && { scratchpad: snap.scratchpad }),
         ...(snap.firstPrompt && { firstPrompt: snap.firstPrompt }),

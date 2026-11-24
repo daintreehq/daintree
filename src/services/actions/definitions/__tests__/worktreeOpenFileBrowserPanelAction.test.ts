@@ -78,6 +78,13 @@ import type { ActionContext } from "@shared/types/actions";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { ActionRegistry, ActionCallbacks } from "../../actionTypes";
 import { registerWorktreeContextActions } from "../worktreeContextActions";
+import { useFileDocumentStore } from "@/store/fileDocumentStore";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { __resetFileBrowserNavigationForTests } from "@/panels/file-browser/guardedFileBrowserView";
+import {
+  __resetPanelCloseGuardsForTests,
+  registerPanelCloseGuard,
+} from "@/services/panelCloseGuard";
 
 function getAction() {
   const actions: ActionRegistry = new Map();
@@ -558,6 +565,8 @@ describe("worktree.openFileBrowserPanel", () => {
         // The target is outside the scoped root, so the scope has to go or the
         // selection would name a row the tree does not contain.
         browserRootPath: "",
+        // A reveal is something to look at, so it opens a collapsed viewer (#17197).
+        browserViewerCollapsed: false,
       });
       expect(activateTerminalMock).toHaveBeenCalledWith("fb-existing");
     });
@@ -626,6 +635,328 @@ describe("worktree.openFileBrowserPanel", () => {
       );
 
       expect(addPanelOptions()).toMatchObject({ browserExpandedPaths: ["src", "src/lib"] });
+    });
+  });
+
+  describe("unsaved drafts in a reused browser (#17197)", () => {
+    function seedDirtyDraft(panelId: string, dirty = true) {
+      useFileDocumentStore.getState().setFileDocument(panelId, {
+        identityKey: `doc:${panelId}`,
+        fileName: "notes.md",
+        draftText: dirty ? "edited" : null,
+        dirty,
+        conflict: false,
+        save: vi.fn(async () => ({ status: "saved" as const })),
+        discard: vi.fn(async () => {}),
+      });
+    }
+
+    beforeEach(() => {
+      __resetPanelCloseGuardsForTests();
+      __resetFileBrowserNavigationForTests();
+      useFileDocumentStore.setState({ byPanelId: {} });
+    });
+
+    it("asks before a reveal moves a dirty draft's browser off its file, and keeps it on cancel", async () => {
+      seedWorktree("wt-1");
+      activeWorktreeIdMock.current = "wt-other";
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+      ];
+      seedDirtyDraft("fb-existing");
+      const guard = vi.fn(async () => "cancel" as const);
+      registerPanelCloseGuard("fb-existing", guard);
+
+      const result = await getAction().run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+        dispatchSource: "user",
+      } as ActionContext);
+
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      // Cancel leaves the person where they were: no worktree switch, no focus.
+      expect(selectWorktreeMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+      // They answered the prompt themselves, so there is no failure to report.
+      expect(result).toEqual({ panelId: "fb-existing" });
+    });
+
+    it("reports a cancelled prompt to an agent as a refusal rather than a reveal", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+      ];
+      seedDirtyDraft("fb-existing");
+      const guard = vi.fn(async () => "cancel" as const);
+      registerPanelCloseGuard("fb-existing", guard);
+
+      const error = await getAction()
+        .run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+          dispatchSource: "agent",
+        } as ActionContext)
+        .catch((e: unknown) => e);
+
+      // Asked first — an unsuppressed agent dispatch may prompt — and the
+      // refusal says the prompt was cancelled, not that it was never shown.
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(error).toBeInstanceOf(UnactionableTargetError);
+      expect(formatErrorMessage(error, "")).toMatch(/prompt for 'notes\.md'.*was cancelled/);
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses without prompting when the dispatch may not take focus", async () => {
+      // A modal over a typing user is a bigger interruption than the focus
+      // change the suppression lease holds back.
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+      ];
+      seedDirtyDraft("fb-existing");
+      const guard = vi.fn(async () => "proceed" as const);
+      registerPanelCloseGuard("fb-existing", guard);
+      const { runWithMcpSpawnFocusSuppressed } = await import("@/store/mcpSpawnFocusGuard");
+
+      const error = await runWithMcpSpawnFocusSuppressed(async () =>
+        getAction().run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+          dispatchSource: "agent",
+        } as ActionContext)
+      ).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(UnactionableTargetError);
+      expect(formatErrorMessage(error, "")).toMatch(/unsaved changes to 'notes\.md'/);
+      expect(guard).not.toHaveBeenCalled();
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a clean document", false, "src/app.ts"],
+      ["the draft's own file", true, "docs/notes.md"],
+    ] as const)(
+      "still reveals under suppression when the move leaves no draft behind: %s",
+      async (_label, dirty, revealPath) => {
+        seedWorktree("wt-1");
+        panelsMock.byId = [
+          browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+        ];
+        seedDirtyDraft("fb-existing", dirty);
+        const guard = vi.fn(async () => "cancel" as const);
+        registerPanelCloseGuard("fb-existing", guard);
+        const { runWithMcpSpawnFocusSuppressed } = await import("@/store/mcpSpawnFocusGuard");
+
+        const result = await runWithMcpSpawnFocusSuppressed(async () =>
+          getAction().run({ worktreeId: "wt-1", revealPath }, {
+            dispatchSource: "agent",
+          } as ActionContext)
+        );
+
+        expect(guard).not.toHaveBeenCalled();
+        expect(setFileBrowserViewMock).toHaveBeenCalledWith(
+          "fb-existing",
+          expect.objectContaining({ browserSelectedPath: revealPath })
+        );
+        // Suppressed as before: the browser is updated, not pulled in front.
+        expect(activateTerminalMock).not.toHaveBeenCalled();
+        expect(result).toEqual({ panelId: "fb-existing" });
+      }
+    );
+
+    it("lets only the latest of two reveals land on one answered prompt", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+      ];
+      seedDirtyDraft("fb-existing");
+      let answer: (verdict: "proceed" | "cancel") => void = () => {};
+      const guard = vi.fn(
+        () =>
+          new Promise<"proceed" | "cancel">((resolve) => {
+            answer = resolve;
+          })
+      );
+      registerPanelCloseGuard("fb-existing", guard);
+      const ctx = { dispatchSource: "user" } as ActionContext;
+
+      const first = getAction().run({ worktreeId: "wt-1", revealPath: "src/a.ts" }, ctx);
+      const second = getAction().run({ worktreeId: "wt-1", revealPath: "src/b.ts" }, ctx);
+      await vi.waitFor(() => expect(guard).toHaveBeenCalled());
+      answer("proceed");
+      await Promise.all([first, second]);
+
+      // One prompt for both, and the earlier target never writes over the later.
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(setFileBrowserViewMock).toHaveBeenCalledTimes(1);
+      expect(setFileBrowserViewMock.mock.calls[0]![1]).toMatchObject({
+        browserSelectedPath: "src/b.ts",
+      });
+      expect(activateTerminalMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("builds the reveal from the browser as it stands once the prompt is answered", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", {
+          worktreeId: "wt-1",
+          browserSelectedPath: "docs/notes.md",
+          browserExpandedPaths: ["docs"],
+        }),
+      ];
+      seedDirtyDraft("fb-existing");
+      registerPanelCloseGuard("fb-existing", async () => {
+        // The user expanded another folder while the prompt was up.
+        panelsMock.byId = [
+          browserPanel("fb-existing", {
+            worktreeId: "wt-1",
+            browserSelectedPath: "docs/notes.md",
+            browserExpandedPaths: ["docs", "lib"],
+          }),
+        ];
+        return "proceed";
+      });
+
+      await getAction().run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+        dispatchSource: "user",
+      } as ActionContext);
+
+      expect(setFileBrowserViewMock.mock.calls[0]![1]).toMatchObject({
+        browserExpandedPaths: ["docs", "lib", "src"],
+      });
+    });
+
+    it("does not navigate or focus a browser trashed while the prompt was up", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+      ];
+      seedDirtyDraft("fb-existing");
+      const guard = vi.fn(async () => {
+        // Still a file-browser record, still listed — only the reuse rules
+        // the action re-checks after the wait can tell it is gone.
+        panelsMock.byId = [
+          browserPanel("fb-existing", {
+            worktreeId: "wt-1",
+            browserSelectedPath: "docs/notes.md",
+            location: "trash",
+          }),
+        ];
+        return "proceed" as const;
+      });
+      registerPanelCloseGuard("fb-existing", guard);
+
+      const error = await getAction()
+        .run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+          dispatchSource: "user",
+        } as ActionContext)
+        .catch((e: unknown) => e);
+
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(error).toBeInstanceOf(UnactionableTargetError);
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+      expect(addPanelMock).not.toHaveBeenCalled();
+    });
+
+    it("refuses a browser whose close was approved while the reveal's prompt was up", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+      ];
+      seedDirtyDraft("fb-existing");
+      const { replaceClosingIds } = await import("@/services/terminal/optimisticPanelCloseIds");
+      registerPanelCloseGuard("fb-existing", async () => {
+        replaceClosingIds(new Set(["fb-existing"]));
+        return "proceed";
+      });
+      const error = await getAction()
+        .run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+          dispatchSource: "user",
+        } as ActionContext)
+        .catch((e: unknown) => e)
+        .finally(() => replaceClosingIds(new Set()));
+
+      expect(error).toBeInstanceOf(UnactionableTargetError);
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+      expect(addPanelMock).not.toHaveBeenCalled();
+    });
+
+    it("opens a fresh browser rather than revealing into one whose close is under way", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-closing", { worktreeId: "wt-1" })];
+      const { replaceClosingIds } = await import("@/services/terminal/optimisticPanelCloseIds");
+      replaceClosingIds(new Set(["fb-closing"]));
+      try {
+        await getAction().run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+          dispatchSource: "user",
+        } as ActionContext);
+      } finally {
+        replaceClosingIds(new Set());
+      }
+
+      expect(setFileBrowserViewMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+      expect(addPanelOptions()).toMatchObject({ browserSelectedPath: "src/app.ts" });
+    });
+
+    it("applies the reveal once the prompt lets it through", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+      ];
+      seedDirtyDraft("fb-existing");
+      const guard = vi.fn(async () => "proceed" as const);
+      registerPanelCloseGuard("fb-existing", guard);
+
+      const result = await getAction().run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+        dispatchSource: "user",
+      } as ActionContext);
+
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(setFileBrowserViewMock).toHaveBeenCalledWith(
+        "fb-existing",
+        expect.objectContaining({ browserSelectedPath: "src/app.ts" })
+      );
+      expect(activateTerminalMock).toHaveBeenCalledWith("fb-existing");
+      expect(result).toEqual({ panelId: "fb-existing" });
+    });
+
+    it("does not ask when the reveal names the file the draft is already on", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserSelectedPath: "docs/notes.md" }),
+      ];
+      seedDirtyDraft("fb-existing");
+      const guard = vi.fn(async () => "cancel" as const);
+      registerPanelCloseGuard("fb-existing", guard);
+
+      await getAction().run({ worktreeId: "wt-1", revealPath: "docs/notes.md" }, {
+        dispatchSource: "user",
+      } as ActionContext);
+
+      expect(guard).not.toHaveBeenCalled();
+      expect(setFileBrowserViewMock).toHaveBeenCalledWith(
+        "fb-existing",
+        expect.objectContaining({ browserSelectedPath: "docs/notes.md" })
+      );
+    });
+
+    it("opens a collapsed viewer so the revealed file is on screen", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [
+        browserPanel("fb-existing", { worktreeId: "wt-1", browserViewerCollapsed: true }),
+      ];
+
+      await getAction().run({ worktreeId: "wt-1", revealPath: "src/app.ts" }, {
+        dispatchSource: "user",
+      } as ActionContext);
+
+      expect(setFileBrowserViewMock).toHaveBeenCalledWith(
+        "fb-existing",
+        expect.objectContaining({
+          browserSelectedPath: "src/app.ts",
+          browserViewerCollapsed: false,
+        })
+      );
     });
   });
 
@@ -842,6 +1173,8 @@ describe("worktree.openFileBrowserPanel", () => {
         browserRootPath: "content",
         browserSelectedPath: "content/posts/a.md",
         browserExpandedPaths: ["content", "content/posts", "docs"],
+        // A reveal is something to look at, so it opens a collapsed viewer (#17197).
+        browserViewerCollapsed: false,
       });
     });
 

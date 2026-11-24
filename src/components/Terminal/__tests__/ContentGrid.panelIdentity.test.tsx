@@ -116,7 +116,7 @@ vi.mock("../GridScrollbar", () => ({
 vi.mock("../GridNotificationBar", () => ({ GridNotificationBar: () => null }));
 vi.mock("../TerminalCountWarning", () => ({ TerminalCountWarning: () => null }));
 vi.mock("../BatchScrollbackRestoreBar", () => ({ BatchScrollbackRestoreBar: () => null }));
-vi.mock("../ContentGridEmptyState", () => ({ ContentGridEmptyState: () => null }));
+vi.mock("../ContentGridEmptyStateGate", () => ({ ContentGridEmptyStateGate: () => null }));
 vi.mock("../ContentGridFleetScope", () => ({ ContentGridFleetScope: () => null }));
 vi.mock("../ContentGridMaximizedGroup", () => ({ ContentGridMaximizedGroup: () => null }));
 vi.mock("../ContentGridMaximizedSingle", () => ({ ContentGridMaximizedSingle: () => null }));

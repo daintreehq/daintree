@@ -230,6 +230,72 @@ interface ChecksCapability {
         checks: CheckRun[];
     } | null>;
 }
+/**
+ * Normalized state of one deployment. `pending` has not started (queued, or
+ * waiting on an approval), `success` is deployed, and `inactive` no longer
+ * serves: superseded, torn down, or abandoned before it finished. `unknown` is
+ * a state this vocabulary doesn't model; the provider's own value stays in
+ * `rawData`.
+ */
+type DeploymentState = "pending" | "in_progress" | "success" | "failure" | "inactive" | "unknown";
+/**
+ * What {@link DeploymentsCapability.getDeployments} reports on: a branch by its
+ * short name (`feature/login`, not `refs/heads/feature/login`), or a pull
+ * request by number. Ask by pull request when there is one: a forge can tie
+ * deployments to a pull request, such as one made from its merge ref, that its
+ * branch alone doesn't reach.
+ */
+type DeploymentTarget = {
+    kind: "branch";
+    branch: string;
+} | {
+    kind: "pullRequest";
+    prNumber: number;
+};
+/**
+ * One deployment the forge recorded, as returned by
+ * {@link DeploymentsCapability.getDeployments}. Every field is the forge's own
+ * record: `url` is the address the deployment reported, never one built from a
+ * host's naming pattern, and it is absent when none was reported.
+ */
+interface Deployment {
+    /** Provider's id for the deployment, stable within the repository. */
+    id: string;
+    /** Environment name exactly as the forge records it (`Preview – web`, `production`). */
+    environment: string;
+    state: DeploymentState;
+    /** Address the deployment's latest status reported, when it reported one. */
+    url?: string;
+    /** When the deployment was created, epoch milliseconds. */
+    createdAt: number;
+    /** When the deployment or its latest status last changed, epoch milliseconds. */
+    updatedAt: number;
+    /** Commit that was deployed, when the forge reports it. */
+    commitSha?: string;
+    /** Qualified ref the deployment was made from (`refs/heads/main`), when the forge recorded one rather than a commit. */
+    ref?: string;
+    rawData: unknown;
+}
+/**
+ * Optional read of where a branch or pull request is deployed, from the
+ * deployments the forge itself recorded for it (#17248). Nothing is read until
+ * a caller asks, so a project that never looks pays nothing.
+ *
+ * Returns the deployments the forge associates with the target, newest first
+ * by creation time, failed and inactive ones included. A provider may read only
+ * part of a target's history, so the list can be incomplete. One environment
+ * can appear more than once, such as a rollout still in progress beside the
+ * deployment it is replacing, so pick per environment rather than per row.
+ *
+ * `null` means the branch or pull request doesn't exist on the forge; one with
+ * nothing deployed returns `{ deployments: [] }`. A provider that can't read
+ * deployments at all leaves this field absent, and the host reports nothing.
+ */
+interface DeploymentsCapability {
+    getDeployments(repo: RepoRef, target: DeploymentTarget): Promise<{
+        deployments: Deployment[];
+    } | null>;
+}
 /** Result of validating stored credentials against the provider. */
 interface AuthValidation {
     valid: boolean;
@@ -930,7 +996,11 @@ interface BatchLookupCapability {
  * self-assignment" rather than an error.
  */
 interface IdentityCapability {
-    getCurrentUser(): Promise<ForgeUser | null>;
+    /**
+     * `repo` is the repository the viewer is wanted for, for a provider whose
+     * account differs per host (a self-hosted instance beside the public one).
+     */
+    getCurrentUser(repo?: RepoRef): Promise<ForgeUser | null>;
 }
 /**
  * Hover-tooltip projection of an issue — the subset a hover card renders
@@ -1099,7 +1169,12 @@ interface ProjectHealthCapability {
  * Providers cache internally; the lookup must be cheap to call repeatedly.
  */
 interface AvatarCapability {
-    resolveAuthorAvatar(email: string): Promise<string | null>;
+    /**
+     * `repo` is the repository the author committed to. A provider that serves
+     * more than one host answers only from that repository's own host, so an
+     * author's address never goes to a server the repository isn't on.
+     */
+    resolveAuthorAvatar(email: string, repo?: RepoRef): Promise<string | null>;
     /**
      * Synchronous counter that changes whenever a credential or instance change
      * invalidates earlier lookups. When present, the host shares one in-flight
@@ -1207,9 +1282,11 @@ interface CloneCapability {
      * (tooling installed and signed in, or a valid stored credential). Drives
      * the host's path selection; an unauthenticated probe also means the clone
      * dialog shows no provider sign-in recovery affordance beyond the standard
-     * auth-failure banner.
+     * auth-failure banner. `url` is the repository about to be cloned, for a
+     * provider whose sign-in is per host (a self-hosted instance beside the
+     * public one).
      */
-    probeAuth(signal?: AbortSignal): Promise<CloneAuthProbe>;
+    probeAuth(signal?: AbortSignal, url?: string): Promise<CloneAuthProbe>;
     /**
      * Rewrite a clone URL to carry the provider's credentials (e.g. an
      * embedded token). Return `null` when no authenticated URL is available;
@@ -1596,6 +1673,7 @@ interface ForgeCodeProviderImpl extends ForgeProviderBaseImpl {
     classifyPushError?(stderr: string): PushErrorClassification | null;
     reviews?: ReviewCapability;
     checks?: ChecksCapability;
+    deployments?: DeploymentsCapability;
     approvals?: ApprovalCapability;
     autoMerge?: AutoMergeCapability;
     releases?: ReleaseCapability;
@@ -1707,6 +1785,16 @@ interface ForgeProviderContribution {
      * must list at least one hostname.
      */
     matches: string[];
+    /**
+     * Exact `contributes.settings[].id` of a user-scoped `string` setting whose
+     * value is one more hostname this provider matches — a self-hosted instance
+     * the user names (GitHub Enterprise Server). The host reads it when the
+     * plugin loads and re-reads it whenever the setting changes, so routing
+     * follows the setting before the plugin activates. An empty value adds
+     * nothing; a value that isn't a bare hostname or an `https://` origin is
+     * ignored.
+     */
+    matchesSettingRef?: string;
     /**
      * Which roles the provider serves (#13700). Omitted means both, which is
      * every provider written before roles existed. An issues-only provider
@@ -1855,6 +1943,13 @@ interface FileDecorationContribution {
     id: string;
     /** Exact scope strings or `prefix:*` wildcards this provider handles. */
     scopes: string[];
+    /**
+     * The `id` of one of this plugin's own `forgeProviders`. When set, the
+     * provider is started and asked for decorations only in a project whose
+     * code forge resolves to that provider, so a forge-specific decorator
+     * stays asleep in repositories hosted somewhere else.
+     */
+    forgeProvider?: string;
 }
 /**
  * Passed to `host.registerFileDecorationProvider` alongside the impl. Mirrors
@@ -1864,6 +1959,162 @@ interface FileDecorationContribution {
 interface FileDecorationProviderDescriptor {
     id: string;
     scopes?: string[];
+}
+
+/**
+ * The key scopes a plugin manifest may name for a keybinding. This is the
+ * plugin contract, owned here rather than borrowed from the app's own
+ * `KeyScope`, so a scope the app retires stays loadable in manifests that still
+ * declare it (#17245). Order matches the published JSON schemas.
+ */
+declare const PLUGIN_KEYBINDING_SCOPES: readonly ["global", "portal", "worktreeGrid", "dev-preview"];
+type PluginKeybindingScope = (typeof PLUGIN_KEYBINDING_SCOPES)[number];
+
+/**
+ * A file the host holds for a plugin (#14100): a copy of a file the person
+ * chose or a scoped path, or a provider file downloaded into the cache. The
+ * handle is metadata only. It never carries a path, a provider URL or bytes,
+ * and the id alone authorizes nothing outside the plugin that owns it.
+ *
+ * Artifacts live for the session: an index in main, the bytes under the
+ * app's data directory. They go when they expire, when the plugin releases
+ * them, when their project closes, when the plugin unloads, or when the cache
+ * needs the room, oldest use first. A restart starts with an empty cache.
+ */
+interface PluginArtifact {
+    readonly id: string;
+    /** The project the artifact belongs to; null for an app-wide artifact of an app-global plugin. */
+    readonly projectId: string | null;
+    /** Display name: the source file's base name, or the one the plugin gave. */
+    readonly name: string;
+    readonly mimeType: string;
+    /** Exact byte length of the stored file. */
+    readonly size: number;
+    readonly createdAt: number;
+    /** When the host drops it unless released earlier. */
+    readonly expiresAt: number;
+    readonly origin: "import" | "download";
+}
+/** Byte progress of one artifact transfer. */
+interface PluginArtifactProgress {
+    readonly transferredBytes: number;
+    /** Null when the provider did not say how long the body is. */
+    readonly totalBytes: number | null;
+    /** 1-based; a retried download reports its second attempt as 2. */
+    readonly attempt: number;
+}
+/** Options every call that creates an artifact accepts. */
+interface PluginArtifactCreateOptions {
+    signal?: AbortSignal;
+    /**
+     * The project the artifact belongs to. A project plugin's artifacts always
+     * belong to its own project, and naming another rejects. An app-global
+     * plugin may name a project so the artifact goes when that project closes;
+     * without one it is app-wide.
+     */
+    projectId?: string;
+    /** Display name; defaults to the source's base name. */
+    name?: string;
+    /** Overrides the type the host infers from the name or the response. */
+    mimeType?: string;
+    /** Lifetime from creation, clamped to 1 minute through 24 hours. */
+    ttlMs?: number;
+    /** Called at most every ~150 ms while bytes move, and once at the end. */
+    onProgress?: (progress: PluginArtifactProgress) => void;
+}
+/** What {@link PluginArtifactApi.import} copies from. */
+interface PluginArtifactImportSource {
+    /** An absolute path inside the plugin's declared `scopes.fs.allowedPaths` or its data dir. */
+    path: string;
+}
+/** A provider file {@link PluginArtifactApi.download} fetches. */
+interface PluginArtifactDownloadRequest {
+    /** HTTPS URL under one of the manifest's `scopes.network.allowedUrls`. */
+    url: string;
+    /**
+     * Request headers, for a provider token for instance. Dropped from any
+     * redirect hop that leaves the original origin, and never stored or logged.
+     */
+    headers?: Record<string, string>;
+}
+/** Options for {@link PluginArtifactApi.download}. */
+interface PluginArtifactDownloadOptions extends PluginArtifactCreateOptions {
+    /**
+     * Attempts in all, 1 to 3; default 3. A
+     * retry resumes from the bytes already received when the provider supports
+     * ranges and the file has not changed, and starts over otherwise.
+     */
+    attempts?: number;
+}
+/** Where {@link PluginArtifactApi.upload} sends an artifact. */
+interface PluginArtifactUploadRequest {
+    /** HTTPS URL under one of the manifest's `scopes.network.allowedUrls`. Redirects are refused. */
+    url: string;
+    /** Default `PUT`. The artifact is the whole request body. */
+    method?: "PUT" | "POST";
+    headers?: Record<string, string>;
+}
+/** Options for {@link PluginArtifactApi.upload}. */
+interface PluginArtifactUploadOptions {
+    signal?: AbortSignal;
+    onProgress?: (progress: PluginArtifactProgress) => void;
+}
+/** The provider's answer to an upload. Any status counts as an answer; the plugin judges it. */
+interface PluginArtifactUploadResult {
+    status: number;
+    /** Response headers, lower-cased. */
+    headers: Record<string, string>;
+    /** The response body as text, cut at 64 KiB. */
+    body: string;
+    bodyTruncated: boolean;
+}
+/** Options for {@link PluginArtifactApi.list}. */
+interface PluginArtifactListOptions {
+    /** Only this project's artifacts; an app-global plugin's app-wide ones when null. */
+    projectId?: string | null;
+}
+/**
+ * Host-managed large files (#14100), gated on the `artifact:store`
+ * capability. Bytes never cross the plugin's channel: the host reads, writes
+ * and streams them, and the plugin holds {@link PluginArtifact} handles. A
+ * view plays and previews one with the kit's `MediaPlayer` and
+ * `MediaThumbnail`, and takes the person's files in with `FileDropzone`'s
+ * `onArtifacts`.
+ *
+ * Every rejection carries a `code`: `ARTIFACT_NOT_FOUND` (missing, expired or
+ * released), `ARTIFACT_TOO_LARGE`, `ARTIFACT_QUOTA_EXCEEDED`, `ARTIFACT_BUSY`
+ * (too many transfers at once), `ARTIFACT_URL_NOT_ALLOWED`,
+ * `ARTIFACT_TRANSFER_FAILED`, `ABORT_ERR`, `PERMISSION_REQUIRED`,
+ * `INVALID_PATH` or `VALIDATION`.
+ */
+interface PluginArtifactApi {
+    /**
+     * Copy a scoped file into the cache. Needs the `fs:*-read` capability for the
+     * path's root, as `host.fs.readFileBytes` does. Directories, FIFOs and
+     * symlinks are refused.
+     */
+    import(source: PluginArtifactImportSource, options?: PluginArtifactCreateOptions): Promise<PluginArtifact>;
+    /**
+     * Stream a provider file into the cache. Needs `network:fetch`, and the URL
+     * and every redirect hop must fall under `scopes.network.allowedUrls`. The
+     * artifact exists only once every byte has arrived; a cancelled or failed
+     * download leaves nothing behind.
+     */
+    download(request: PluginArtifactDownloadRequest, options?: PluginArtifactDownloadOptions): Promise<PluginArtifact>;
+    /** Stream an artifact to a provider as one request body. Needs `network:fetch`. */
+    upload(artifactId: string, request: PluginArtifactUploadRequest, options?: PluginArtifactUploadOptions): Promise<PluginArtifactUploadResult>;
+    /** The artifact's current handle, or null once it is gone. */
+    stat(artifactId: string): Promise<PluginArtifact | null>;
+    /** This plugin's live artifacts, oldest first. */
+    list(options?: PluginArtifactListOptions): Promise<PluginArtifact[]>;
+    /** Drop the artifact now; false when it was already gone. Playback of it stops. */
+    release(artifactId: string): Promise<boolean>;
+}
+/** A playable source for an artifact, minted for one view. */
+interface PluginArtifactSource {
+    url: string;
+    mimeType: string;
+    size: number;
 }
 
 declare const BUILT_IN_AGENT_IDS: readonly ["claude", "opencode", "aider", "gemini", "antigravity", "codex", "grok", "cursor", "copilot", "goose", "amp", "crush", "qwen", "kimi", "interpreter", "mistral", "kiro"];
@@ -1882,9 +2133,9 @@ type AgentKeyAction = `agent.${BuiltInAgentId}`;
  */
 type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
-type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.markReviewed" | "worktree.clearReviewMark" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openFileBrowserPanel" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.toggleInputSurface" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "pilot.openProject" | "canopy.toggle" | "canopy.openWindow" | "project.switcherPalette" | "project.mruCycleOlder" | "project.openInNewWindow" | "project.sleep" | "project.restart" | "project.sleepIdle" | "host.switch" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.rewriteSelection" | "voiceInput.togglePause" | "voiceInput.stopAndSend" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "voiceInput.openRecentDictations" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
+type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.quickOpenFile" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.markReviewed" | "worktree.clearReviewMark" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openFileBrowserPanel" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "panel.undoClose" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.toggleInputSurface" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.copyClean" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "devPreview.reloadPreview" | "diff.nextChange" | "diff.previousChange" | "diff.nextFile" | "diff.previousFile" | "diff.toggleViewed" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "pilot.openProject" | "canopy.toggle" | "canopy.openWindow" | "decisions.openInbox" | "decisions.openNextQuestion" | "project.switcherPalette" | "project.mruCycleOlder" | "project.openInNewWindow" | "project.sleep" | "project.restart" | "project.sleepIdle" | "project.sleepAll" | "host.switch" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.rewriteSelection" | "voiceInput.togglePause" | "voiceInput.stopAndSend" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "voiceInput.openRecentDictations" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
 
-declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.sendCommandMany", "terminal.closeMany", "terminal.waitForExit", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.notifyWhenIdle", "terminal.cancelQueuedSend", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.retireOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.waitForPullRequest", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.markReviewed", "worktree.clearReviewMark", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.setLabelColor", "worktree.setCustomTitle", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.openOnHost", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "windowOpening.getConfig", "windowOpening.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.trash", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.discardFileChanges", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.retryAuthFetch", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.enableAutoMerge", "forge.disableAutoMerge", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "canopy.toggle", "canopy.openWindow", "canopy.markAllRead", "project.getAll", "project.getCurrent", "project.add", "project.openInNewWindow", "project.switch", "project.update", "project.toggleNeverAutoSleep", "project.sleep", "project.restart", "project.sleepIdle", "project.remove", "project.archive", "project.unarchive", "project.setGroup", "project.listGroups", "project.createGroup", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "project.runCommand", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadPanel", "plugin.capturePanel", "plugin.reloadWindow", "plugin.openSettings", "plugin.backupDatabases", "plugin.setNotificationsSilenced", "project.getStats", "project.settings.open", "project.cloneRepo", "schedules.open", "schedules.runNow", "host.switch", "host.add", "host.overview.open", "project.openOnHost", "host.forwardPort", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "layout.apply", "agent.launch", "agent.launchMany", "agent.launchInNewWorktree", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agent.createPreset", "agent.updatePreset", "agent.deletePreset", "agent.listModels", "agentSessionHistory.list", "agentSessionHistory.resume", "agent.resumeOwned", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.restartOnPreset", "terminal.restartOnAccount", "terminal.restartOnPresetOwned", "terminal.startHeld", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.setWhenDone", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.placeOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.sendKeys", "terminal.sendKeysOwned", "terminal.stashInput", "terminal.popStash", "terminal.resendLastMessage", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "terminal.sessionFile.get", "terminal.setHoldOnRestart", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "nav.showProjectHome", "nav.showProjectSplit", "nav.showGrid", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.tour.show", "help.tour.status", "help.displayImage", "help.openCommandsFolder", "help.newSessionWithAgent", "help.resumePastSession", "assistant.list", "assistant.resume", "assistant.start", "agent.readQuota", "host.list", "host.call", "host.ensureProject", "host.settings", "host.watch", "host.bringBack", "host.status", "ui.sidebar.resetWidth", "ui.sidebar.switchView", "ui.sidebar.showWorktrees", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.toggleElementPicker", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
+declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.sendCommandMany", "terminal.closeMany", "terminal.waitForExit", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.notifyWhenIdle", "terminal.cancelQueuedSend", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.undoClose", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.retireOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.waitForPullRequest", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.markReviewed", "worktree.clearReviewMark", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.setLabelColor", "worktree.setCustomTitle", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.openOnHost", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "windowOpening.getConfig", "windowOpening.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.trash", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageHunk", "git.unstageHunk", "git.discardFileChanges", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.retryAuthFetch", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.enableAutoMerge", "forge.disableAutoMerge", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "canopy.toggle", "canopy.openWindow", "canopy.markAllRead", "decisions.openInbox", "decisions.openNextQuestion", "project.getAll", "project.getCurrent", "project.add", "project.openInNewWindow", "project.switch", "project.update", "project.toggleNeverAutoSleep", "project.sleep", "project.restart", "project.sleepIdle", "project.sleepAll", "project.remove", "project.archive", "project.unarchive", "project.setGroup", "project.listGroups", "project.createGroup", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "project.runCommand", "project.links.list", "project.links.add", "project.links.update", "project.links.remove", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadPanel", "plugin.capturePanel", "plugin.reloadWindow", "plugin.openSettings", "plugin.backupDatabases", "plugin.setNotificationsSilenced", "project.getStats", "project.settings.open", "project.cloneRepo", "schedules.open", "schedules.runNow", "host.switch", "host.add", "host.overview.open", "project.openOnHost", "host.forwardPort", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "links.open", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "layout.apply", "agent.launch", "agent.launchMany", "agent.launchInNewWorktree", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agent.createPreset", "agent.updatePreset", "agent.deletePreset", "agent.listAccounts", "agent.addAccount", "agent.listModels", "agentSessionHistory.list", "agentSessionHistory.resume", "agent.resumeOwned", "agent.moveTerminalsToAccount.claude", "agent.moveTerminalsToAccount.codex", "agent.moveTerminalsToAccount.kimi", "agent.moveTerminalsToAccount.interpreter", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.restartOnPreset", "terminal.restartOnAccount", "terminal.restartOnPresetOwned", "terminal.restartOnAccountOwned", "terminal.applyClaudeUpdateOwned", "terminal.applyClaudeUpdate", "terminal.startHeld", "terminal.redraw", "terminal.resetModes", "terminal.forceResume", "terminal.toggleInputLock", "terminal.setWhenDone", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.placeOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.copyClean", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.sendKeys", "terminal.sendKeysOwned", "terminal.stashInput", "terminal.popStash", "terminal.resendLastMessage", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "terminal.sessionFile.get", "terminal.setHoldOnRestart", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "nav.quickOpenFile", "nav.showProjectHome", "nav.showProjectSplit", "nav.showGrid", "find.inFocusedPanel", "help.gettingStarted.show", "help.tour.show", "help.tour.status", "help.displayImage", "help.openCommandsFolder", "help.newSessionWithAgent", "help.replaceGlobalAssistant", "help.resumePastSession", "assistant.list", "assistant.resume", "assistant.start", "agent.readQuota", "host.list", "host.call", "host.ensureProject", "host.settings", "host.watch", "host.bringBack", "host.status", "ui.sidebar.resetWidth", "ui.sidebar.switchView", "ui.sidebar.showWorktrees", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.toggleElementPicker", "diff.nextChange", "diff.previousChange", "diff.nextFile", "diff.previousFile", "diff.toggleViewed", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
 type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
 
 /** Agent lifecycle state: idle | working | waiting | directing | completed | exited */
@@ -2248,157 +2499,421 @@ interface PluginActionManifestEntry {
  */
 type PluginCanDispatchResult = "ok" | "confirm" | "restricted";
 
-type KeyScope = "global" | "portal" | "worktreeGrid" | "dev-preview";
+/**
+ * What a stop keeps and loses, in the provider's own terms. The UI words every
+ * promise about a stopped machine from this, never from what one provider does.
+ */
+interface CloudProviderPersistence {
+    /** What a stop keeps, as a plural noun phrase: "Files in its home folder". */
+    kept: string;
+    /** What a stop loses, as a plural noun phrase: "/tmp, caches and memory". */
+    lost: string;
+    /** The least number of days a stopped machine's disk is kept; null when kept until deleted. */
+    retentionDays: number | null;
+    /** Whether the time a failed save is retried, with the machine still up, is billed. */
+    saveRetryBilled: boolean;
+    /** Whether a stopped machine still bills for compute, not only for its disk. */
+    stoppedComputeBilled: boolean;
+    /**
+     * Whether a stopped machine's disk keeps billing on its own, so stopping
+     * cuts the bill to storage rather than ending it.
+     */
+    stoppedStorageBilled: boolean;
+    /**
+     * For one that bills a stopped machine for compute, what a stopped machine
+     * bills, as one sentence in the provider's own terms; the general wording
+     * when absent.
+     */
+    stoppedBilling?: string;
+}
+/**
+ * Whether and how a machine stops by itself, without Daintree asking.
+ * - `none`: it runs until someone stops it.
+ * - `fixed-at-create`: a runtime limit chosen at create, which can't be moved while it runs;
+ *   some providers let it change while the machine is stopped.
+ * - `renewable`: a deadline that can be moved forward while the machine is in use.
+ * - `idle-sleep`: the provider sleeps it once it has been idle for a while.
+ */
+type CloudLifetimeModel = {
+    kind: "none";
+} | {
+    kind: "fixed-at-create";
+    canChangeWhileStopped: boolean;
+} | {
+    kind: "renewable";
+} | {
+    kind: "idle-sleep";
+    /** How long the machine is idle before the provider sleeps it; null when the provider doesn't say. */
+    idleSeconds: number | null;
+};
+/**
+ * Where the trust in a machine's SSH server key comes from.
+ * - `pinned-from-api`: the provider's authenticated API returns it, so it is pinned before any dial.
+ * - `confirm-on-first-connect`: nothing vouches for it; the person confirms its fingerprint once.
+ * - `api-or-confirm`: the provider's authenticated API reports the key when it can (EC2's console
+ *   output, which can lag boot); that report is trusted for a first connect when the machine
+ *   presents exactly it, and otherwise the person confirms the fingerprint once. Direct only.
+ * - `provider-tunnel`: the provider's own tunnel authenticates the machine, whose key may change
+ *   when it is rebuilt or moved.
+ */
+type CloudSshTrust = "pinned-from-api" | "confirm-on-first-connect" | "api-or-confirm" | "provider-tunnel";
+/**
+ * How the desktop reaches the machine's sshd: straight to an address, or
+ * through a command the provider supplies (an ssh `ProxyCommand`).
+ */
+type CloudSshTransport = "direct" | "provider-command";
+/**
+ * The command a `provider-command` transport runs as ssh's `ProxyCommand`:
+ * the provider's own CLI, which the person installs and signs in to.
+ */
+interface CloudSshTunnelCommand {
+    /** The executable's bare name, looked up on this device's PATH: "agent37". */
+    command: string;
+    /** Its arguments: plain words, or exactly one of ssh's tokens %h, %p, %r or %n. */
+    args: string[];
+    /** Where the person gets the command; https only. */
+    installUrl: string;
+}
+/** Whether a create takes a value: never, when the person chooses to, or always. */
+type CloudProvisioningInput = "none" | "optional" | "required";
+/** What a create names beyond the machine's name and type. */
+interface CloudProvisioning {
+    /** The region or zone it runs in. */
+    location: CloudProvisioningInput;
+    /** The disk image it boots. */
+    image: CloudProvisioningInput;
+    /** The network, subnet or firewall it joins. */
+    network: CloudProvisioningInput;
+    /**
+     * When Daintree's SSH public key reaches the machine: with the create
+     * itself, or through the provider's API once the machine exists.
+     */
+    sshKey: "at-create" | "after-create";
+}
+/** What a provider can do, as semantics rather than a bare "supports start". */
+interface CloudProviderCapabilities {
+    persistence: CloudProviderPersistence;
+    /** About how long a start or create takes to running, for progress copy; null when unknown. */
+    typicalStartSeconds: number | null;
+    lifetime: CloudLifetimeModel;
+    sshTrust: CloudSshTrust;
+    transport: CloudSshTransport;
+    /** The tunnel a `provider-command` transport runs; null for a direct one. */
+    tunnel: CloudSshTunnelCommand | null;
+    provisioning: CloudProvisioning;
+    /** Machines can be deleted from Daintree. */
+    deletion: boolean;
+}
+/**
+ * One value an account's credentials are made of, as the provider declares
+ * it: an API key, an access key id and its secret, a service-account key file.
+ */
+interface CloudCredentialField {
+    /** The key the value is kept and handed to the provider under: "apiKey", "secretAccessKey". */
+    id: string;
+    label: string;
+    /** Masked as it's typed, kept only in the OS keychain, and never shown again. */
+    secret: boolean;
+    /** One line of text, text over several lines, or the contents of a file chosen from disk. */
+    input: "single-line" | "multi-line" | "key-file";
+    required: boolean;
+    /** A short hint shown with the field; null for none. */
+    help: string | null;
+}
+/**
+ * What a person entered for an account's credentials, keyed by the provider's
+ * declared field ids. It travels to main once, when credentials are checked,
+ * connected or replaced, and never comes back.
+ */
+type CloudCredentialValues = Record<string, string>;
+/**
+ * What an account bills: the person's own wallet, an organization they belong
+ * to, the one workspace a provider binds each key to, a cloud project (Google
+ * Cloud's unit of billing and access), or the provider's account itself (an
+ * AWS account), with no wallet to choose.
+ */
+interface CloudBillingScope {
+    kind: "personal" | "organization" | "workspace" | "project" | "account";
+    /** The provider's id for it: what every request names. */
+    id: string;
+    name: string;
+}
+/** The scopes a key can bill, offered when an account is connected. */
+interface CloudAccountScopeChoice {
+    scope: CloudBillingScope;
+    /** The provider marks this the account's active wallet. */
+    active: boolean;
+}
+interface CloudAccountCheckResult {
+    identity: string | null;
+    scopes: CloudAccountScopeChoice[];
+}
+/**
+ * The machine as the provider reports it, normalised. Separate from the
+ * link's state: a machine can run with nobody connected, and a link can be
+ * down while the machine runs.
+ */
+type CloudMachineState = "not-created" | "starting" | "running" | "stopping" | "stopped" | "error" | "deleted" | "unknown";
+interface CloudMachineType {
+    id: string;
+    label: string;
+    vcpu: number | null;
+    memoryGB: number | null;
+    /** Price per running hour at list price; null when the provider didn't say. */
+    hourlyDollars: number | null;
+    available: boolean;
+    /** Why it isn't available, in the provider's words. */
+    reason: string | null;
+}
+/** The three things a create may name beyond its size, in the order a person picks them. */
+type CloudProvisioningDimension = "location" | "image" | "network";
+/** One region, image or network an account may create a machine with. */
+interface CloudProvisioningChoice {
+    /** The provider's own id for it, opaque to Daintree. */
+    id: string;
+    label: string;
+    /** A short line about it ("Ubuntu 24.04 LTS, x86-64"); null for none. */
+    description: string | null;
+    available: boolean;
+    /** Why it isn't available, in the provider's words. */
+    reason: string | null;
+    /**
+     * The location ids an image or network is offered in: null for every
+     * location, [] for none. Always null on a location.
+     */
+    locations: string[] | null;
+}
+/** What a provider offers for one dimension of a create. */
+interface CloudProvisioningOptions {
+    /** What the provider calls it: "Region", "Zone", "AMI", "Subnet". */
+    label: string;
+    choices: CloudProvisioningChoice[];
+    /**
+     * The provider's suggestion. For an optional dimension null means the
+     * provider decides; for a required one, that it suggests nothing.
+     */
+    defaultId: string | null;
+}
+/**
+ * The ids a create names. Null is "not named": the provider decides, which
+ * only an optional dimension (or one the provider doesn't take) allows.
+ */
+interface CloudProvisioningSelection {
+    location: string | null;
+    image: string | null;
+    network: string | null;
+}
+type CloudHostErrorCode = "credential-invalid" | "permission" | "billing" | "rate-limited" | "capacity" | "not-found" | "data-expired" | "stop-failing" | "ssh-authorization" | "ssh-tunnel-command-missing" | "provider-unreachable" | "outcome-unknown" | "unsupported" | "lifetime-renewal"
+/** The provider turned the request down as it was made (a size its region lacks, a limit reached); nothing changed. */
+ | "refused" | "failed";
 
 /**
- * A file the host holds for a plugin (#14100): a copy of a file the person
- * chose or a scoped path, or a provider file downloaded into the cache. The
- * handle is metadata only. It never carries a path, a provider URL or bytes,
- * and the id alone authorizes nothing outside the plugin that owns it.
- *
- * Artifacts live for the session: an index in main, the bytes under the
- * app's data directory. They go when they expire, when the plugin releases
- * them, when their project closes, when the plugin unloads, or when the cache
- * needs the room, oldest use first. A restart starts with an empty cache.
+ * The cloud provider contract as a plugin implements it (#17351): the same
+ * calls Daintree makes of a built-in provider, minus the two it answers
+ * itself (what the provider is, from the manifest, and how its failures read).
  */
-interface PluginArtifact {
-    readonly id: string;
-    /** The project the artifact belongs to; null for an app-wide artifact of an app-global plugin. */
-    readonly projectId: string | null;
-    /** Display name: the source file's base name, or the one the plugin gave. */
-    readonly name: string;
-    readonly mimeType: string;
-    /** Exact byte length of the stored file. */
-    readonly size: number;
-    readonly createdAt: number;
-    /** When the host drops it unless released earlier. */
-    readonly expiresAt: number;
-    readonly origin: "import" | "download";
-}
-/** Byte progress of one artifact transfer. */
-interface PluginArtifactProgress {
-    readonly transferredBytes: number;
-    /** Null when the provider did not say how long the body is. */
-    readonly totalBytes: number | null;
-    /** 1-based; a retried download reports its second attempt as 2. */
-    readonly attempt: number;
-}
-/** Options every call that creates an artifact accepts. */
-interface PluginArtifactCreateOptions {
-    signal?: AbortSignal;
+/** A machine as a provider reports it, normalised. */
+interface CloudProviderResource {
+    resourceId: string;
+    name: string;
+    machine: CloudMachineState;
+    rawState: string;
+    machineType: string | null;
+    vcpu: number | null;
+    memoryGB: number | null;
+    autoStopAt: string | null;
+    lifetimeSeconds: number | null;
+    stoppedAt: string | null;
+    createdAt: string | null;
+    stop: {
+        id: string;
+        status: "pending" | "failing" | "completed" | "superseded" | "unknown";
+        error: string | null;
+    } | null;
+    lastSnapshotAt: string | null;
+    dataExpired: boolean;
+    /** Snapshots were turned off at create: a stop erases the disk. */
+    snapshotsDisabled: boolean;
+    labels: Record<string, string>;
+    /** This account may see the machine but not start or reach it. */
+    restricted: boolean;
+    /** The provider's word on why it is stopped or failed. */
+    error: string | null;
+    /** Stopped because the provider slept it on idle; a request to it would wake it. Absent: not asleep. */
+    asleep?: boolean;
     /**
-     * The project the artifact belongs to. A project plugin's artifacts always
-     * belong to its own project, and naming another rejects. An app-global
-     * plugin may name a project so the artifact goes when that project closes;
-     * without one it is app-wide.
+     * Whether this machine sleeps by itself when idle, and after how long, as
+     * the provider reports it for this machine; absent when it doesn't say per
+     * machine, and the provider's declared lifetime holds.
      */
-    projectId?: string;
-    /** Display name; defaults to the source's base name. */
-    name?: string;
-    /** Overrides the type the host infers from the name or the response. */
-    mimeType?: string;
-    /** Lifetime from creation, clamped to 1 minute through 24 hours. */
-    ttlMs?: number;
-    /** Called at most every ~150 ms while bytes move, and once at the end. */
-    onProgress?: (progress: PluginArtifactProgress) => void;
+    idleSleep?: {
+        enabled: boolean;
+        idleSeconds: number | null;
+    };
 }
-/** What {@link PluginArtifactApi.import} copies from. */
-interface PluginArtifactImportSource {
-    /** An absolute path inside the plugin's declared `scopes.fs.allowedPaths` or its data dir. */
-    path: string;
-}
-/** A provider file {@link PluginArtifactApi.download} fetches. */
-interface PluginArtifactDownloadRequest {
-    /** HTTPS URL under one of the manifest's `scopes.network.allowedUrls`. */
-    url: string;
+/** How to reach the machine's sshd right now, as the provider's authenticated API said. */
+interface CloudProviderSshAccess {
+    user: string;
+    /** A DNS name, an IPv4 address, or an IPv6 address without brackets, and its port. */
+    endpoint: {
+        host: string;
+        port: number;
+    };
     /**
-     * Request headers, for a provider token for instance. Dropped from any
-     * redirect hop that leaves the original origin, and never stored or logged.
+     * The server's public key, `type base64`. Null when the provider doesn't
+     * vouch for one: its tunnel does (`sshTrust: "provider-tunnel"`), or the
+     * person confirms the key the machine presents (`"confirm-on-first-connect"`).
+     * Under `"api-or-confirm"` it is the key the API reports when it has one yet,
+     * and null when it doesn't, leaving the first key to the person.
      */
-    headers?: Record<string, string>;
+    hostKey: string | null;
 }
-/** Options for {@link PluginArtifactApi.download}. */
-interface PluginArtifactDownloadOptions extends PluginArtifactCreateOptions {
+interface CloudProviderCatalog {
+    machineTypes: CloudMachineType[];
+    canStart: boolean;
+    includedHoursRemaining: number | null;
+    startsRemaining: number | null;
+    savedSnapshotDayDollars: number | null;
     /**
-     * Attempts in all, 1 to 3; default 3. A
-     * retry resumes from the bytes already received when the provider supports
-     * ranges and the file has not changed, and starts over otherwise.
+     * The regions, images and networks this account may create with, for each
+     * dimension the provider's capabilities say a create takes. One left out
+     * reads as offering nothing; one the provider doesn't take is ignored.
      */
-    attempts?: number;
+    provisioning?: Partial<Record<CloudProvisioningDimension, CloudProvisioningOptions>>;
 }
-/** Where {@link PluginArtifactApi.upload} sends an artifact. */
-interface PluginArtifactUploadRequest {
-    /** HTTPS URL under one of the manifest's `scopes.network.allowedUrls`. Redirects are refused. */
-    url: string;
-    /** Default `PUT`. The artifact is the whole request body. */
-    method?: "PUT" | "POST";
-    headers?: Record<string, string>;
+interface CloudProviderCreateRequest {
+    name: string;
+    machineType: string;
+    /** The runtime limit, for a provider whose create takes one; always null for the rest. */
+    lifetimeSeconds: number | null;
+    /** What the person chose, checked against the catalog; the same on every retry of this create. */
+    provisioning: CloudProvisioningSelection;
+    /** Non-secret identifiers that let a lost create be found again. */
+    labels: Record<string, string>;
+    idempotencyKey: string;
+    /**
+     * The account's SSH public key, `type base64 comment`, for a provider whose
+     * `provisioning.sshKey` is "at-create"; null for one that authorizes it after.
+     * A retried create carries the same key.
+     */
+    publicKey: string | null;
 }
-/** Options for {@link PluginArtifactApi.upload}. */
-interface PluginArtifactUploadOptions {
-    signal?: AbortSignal;
-    onProgress?: (progress: PluginArtifactProgress) => void;
+/** What one call needs to act for one account. Never kept past the call. */
+interface CloudProviderCallCredentials {
+    /** The account's whole credential set, keyed by the declared field ids. */
+    values: Readonly<CloudCredentialValues>;
+    /** The billing scope every request names. */
+    scopeId: string;
+    /** The API origin the account was connected against: the manifest's `apiUrl`. */
+    apiUrl: string;
+    /** Aborted when Daintree stops waiting: its deadline passed, or the person cancelled. */
+    signal: AbortSignal;
 }
-/** The provider's answer to an upload. Any status counts as an answer; the plugin judges it. */
-interface PluginArtifactUploadResult {
-    status: number;
-    /** Response headers, lower-cased. */
-    headers: Record<string, string>;
-    /** The response body as text, cut at 64 KiB. */
-    body: string;
-    bodyTruncated: boolean;
-}
-/** Options for {@link PluginArtifactApi.list}. */
-interface PluginArtifactListOptions {
-    /** Only this project's artifacts; an app-global plugin's app-wide ones when null. */
-    projectId?: string | null;
-}
+type Answer<T> = Promise<T> | T;
 /**
- * Host-managed large files (#14100), gated on the `artifact:store`
- * capability. Bytes never cross the plugin's channel: the host reads, writes
- * and streams them, and the plugin holds {@link PluginArtifact} handles. A
- * view plays and previews one with the kit's `MediaPlayer` and
- * `MediaThumbnail`, and takes the person's files in with `FileDropzone`'s
- * `onArtifacts`.
+ * A cloud provider bound with `host.registerCloudProvider` (#17351). Every
+ * method may be asked at any time, with no state kept between calls, and each
+ * has 30 seconds, the plugin's activation included.
  *
- * Every rejection carries a `code`: `ARTIFACT_NOT_FOUND` (missing, expired or
- * released), `ARTIFACT_TOO_LARGE`, `ARTIFACT_QUOTA_EXCEEDED`, `ARTIFACT_BUSY`
- * (too many transfers at once), `ARTIFACT_URL_NOT_ALLOWED`,
- * `ARTIFACT_TRANSFER_FAILED`, `ABORT_ERR`, `PERMISSION_REQUIRED`,
- * `INVALID_PATH` or `VALIDATION`.
+ * A failure the provider can name throws an `Error` whose `code` is a
+ * `CloudHostErrorCode`: `credential-invalid`, `permission`, `billing`,
+ * `rate-limited`, `capacity`, `ssh-authorization`, `unsupported` and
+ * `refused` tell Daintree that nothing was done, so a refused create is
+ * retried with a fresh key. Any other throw reads as `failed`.
  */
-interface PluginArtifactApi {
+interface CloudProviderImpl {
     /**
-     * Copy a scoped file into the cache. Needs the `fs:*-read` capability for the
-     * path's root, as `host.fs.readFileBytes` does. Directories, FIFOs and
-     * symlinks are refused.
+     * Checks credentials the person entered, already normalised against the
+     * declared fields, and lists the scopes they may bill.
      */
-    import(source: PluginArtifactImportSource, options?: PluginArtifactCreateOptions): Promise<PluginArtifact>;
+    checkCredentials(values: Readonly<CloudCredentialValues>, apiUrl: string, signal: AbortSignal): Answer<CloudAccountCheckResult>;
+    validate(credentials: CloudProviderCallCredentials): Answer<{
+        identity: string | null;
+    }>;
+    catalog(credentials: CloudProviderCallCredentials): Answer<CloudProviderCatalog>;
     /**
-     * Stream a provider file into the cache. Needs `network:fetch`, and the URL
-     * and every redirect hop must fall under `scopes.network.allowedUrls`. The
-     * artifact exists only once every byte has arrived; a cancelled or failed
-     * download leaves nothing behind.
+     * Every machine in the scope; with `label`, only those carrying that
+     * `key=value`; with `location`, only those in that location, for a provider
+     * whose create takes one (where a create was sent, when one is looked for).
      */
-    download(request: PluginArtifactDownloadRequest, options?: PluginArtifactDownloadOptions): Promise<PluginArtifact>;
-    /** Stream an artifact to a provider as one request body. Needs `network:fetch`. */
-    upload(artifactId: string, request: PluginArtifactUploadRequest, options?: PluginArtifactUploadOptions): Promise<PluginArtifactUploadResult>;
-    /** The artifact's current handle, or null once it is gone. */
-    stat(artifactId: string): Promise<PluginArtifact | null>;
-    /** This plugin's live artifacts, oldest first. */
-    list(options?: PluginArtifactListOptions): Promise<PluginArtifact[]>;
-    /** Drop the artifact now; false when it was already gone. Playback of it stops. */
-    release(artifactId: string): Promise<boolean>;
+    list(credentials: CloudProviderCallCredentials, options: {
+        label?: string;
+        location?: string;
+    }): Answer<CloudProviderResource[]>;
+    inspect(credentials: CloudProviderCallCredentials, resourceId: string): Answer<CloudProviderResource>;
+    /**
+     * Must be idempotent on `request.idempotencyKey`: a lost answer is retried
+     * with the same key, unless the manifest declares `createReplay:
+     * "lookup-only"`, when it is only ever looked for again.
+     */
+    create(credentials: CloudProviderCallCredentials, request: CloudProviderCreateRequest): Answer<CloudProviderResource>;
+    /** Starts a stopped machine; `lifetimeSeconds` is absent when it keeps the limit it has. */
+    start(credentials: CloudProviderCallCredentials, resourceId: string, options: {
+        lifetimeSeconds?: number | null;
+    }): Answer<CloudProviderResource | null>;
+    /** A normal, saving stop. Never forced. */
+    stop(credentials: CloudProviderCallCredentials, resourceId: string): Answer<CloudProviderResource | null>;
+    /** Required, and only called, when `capabilities.lifetime.kind` is "renewable". */
+    renewLifetime?(credentials: CloudProviderCallCredentials, resourceId: string, lifetimeSeconds: number | null): Answer<CloudProviderResource>;
+    rename(credentials: CloudProviderCallCredentials, resourceId: string, name: string): Answer<void>;
+    /** Called only while `capabilities.deletion` is true. */
+    delete(credentials: CloudProviderCallCredentials, resourceId: string): Answer<void>;
+    /** Required, and only called, when `capabilities.provisioning.sshKey` is "after-create". */
+    authorizeSsh?(credentials: CloudProviderCallCredentials, resourceId: string, publicKey: string): Answer<CloudProviderSshAccess>;
+    /** Required, and only called, when `capabilities.provisioning.sshKey` is "at-create". */
+    sshAccess?(credentials: CloudProviderCallCredentials, resourceId: string): Answer<CloudProviderSshAccess>;
 }
-/** A playable source for an artifact, minted for one view. */
-interface PluginArtifactSource {
-    url: string;
-    mimeType: string;
-    size: number;
+/** Passed to `host.registerCloudProvider` alongside the impl; `id` names the manifest entry. */
+interface CloudProviderDescriptor {
+    id: string;
+}
+type CloudProviderMethod = keyof CloudProviderImpl;
+/**
+ * `contributes.cloudProviders` entry (#17351). Everything Daintree shows about
+ * the provider comes from here, so it is listed, and its accounts and machines
+ * are named, before any of the plugin's code runs.
+ */
+interface CloudProviderContribution {
+    /** The provider's name inside the plugin: registered as `{pluginId}.{id}`. */
+    id: string;
+    name: string;
+    description: string;
+    /** The https origin the plugin's API calls go to; an account is tied to the one it connected with. */
+    apiUrl: string;
+    /** Where to create an account or an API key; opened in the system browser. */
+    apiKeyUrl: string;
+    dashboardUrl: string;
+    docsUrl: string;
+    /** What connecting an account asks for, in order. */
+    credentialFields: CloudCredentialField[];
+    capabilities: CloudProviderCapabilities;
+    /**
+     * What a create whose answer was lost may do once a lookup by its labels
+     * finds nothing: send it again with the same idempotency key (`same-key`,
+     * the default when left out), or, for a provider with no such key, where a
+     * second send could make a second machine, only look again (`lookup-only`).
+     */
+    createReplay?: "same-key" | "lookup-only";
 }
 
 /** Notification type */
 type NotificationType = "info" | "success" | "error" | "warning";
+
+/**
+ * What a terminal's input box held when its screen was read (#16189): nothing,
+ * text drawn as typed, or the CLI's own suggested next prompt, which it styles
+ * apart. Read off the screen's styling, so an observation and never a verdict
+ * on who wrote it; `unknown` for an agent with no declared rule, a screen whose
+ * box wasn't found, or a terminal running no agent.
+ */
+type TerminalInputLineState = "empty" | "typed" | "suggestion" | "unknown";
+interface TerminalInputLine {
+    state: TerminalInputLineState;
+    /** The box's text after the prompt glyph; the suggested text for `suggestion`, `""` for `empty` and `unknown`. */
+    text: string;
+    /** `text` was cut to its first 200 characters (`INPUT_LINE_TEXT_MAX_CHARS`); never sent as `false`. */
+    truncated?: true;
+}
 
 /**
  * `contributes.contextProviders` (#13795): a plugin claims a short `@` prefix
@@ -2712,8 +3227,10 @@ type PluginFileDocumentSaveResult = {
 interface PluginFileDocumentChange {
     /**
      * `"disk"`: the file changed on disk — re-read it, or keep your draft and
-     * let the conflict stand. `"saved"`: the host saved the draft (the close
-     * prompt's Save). `"discarded"`: the host dropped the draft — re-read.
+     * let the conflict stand. `"saved"`: the host saved the whole draft (the
+     * close prompt's Save); edits that landed during that save stay the draft,
+     * now based on `revision`, and arrive as `"disk"` instead. `"discarded"`:
+     * the host dropped the draft — re-read.
      */
     readonly reason: "disk" | "saved" | "discarded";
     /**
@@ -2753,8 +3270,26 @@ interface PluginFileDocument {
      * it on mount to restore a draft from before the user switched modes.
      */
     getDraft(): string | null;
-    /** Report the unsaved text (null when clean). The host derives "dirty" from it. */
-    setDraft(text: string | null): void;
+    /**
+     * The revision the host's draft is based on, or null when clean or when the
+     * draft started without one. A restored draft is saved against this, not
+     * against a fresh read.
+     */
+    getDraftBaseRevision(): string | null;
+    /**
+     * Report the unsaved text (null when clean). The host derives "dirty" from
+     * it. When a draft starts (the first text after clean), pass `baseRevision`:
+     * the `revision` of the read or save your text came from. The close prompt's
+     * Save writes the draft only if the file is still at that revision, and a
+     * draft started without one stays dirty but can't be saved from the prompt.
+     * Later calls keep the base the draft started with, and a save of the draft
+     * moves it to the revision that save wrote. To rebase a draft onto a newer
+     * revision, clear it and start it again: `setDraft(null)`, then
+     * `setDraft(text, { baseRevision })`.
+     */
+    setDraft(text: string | null, options?: {
+        baseRevision?: string;
+    }): void;
     /**
      * Report a conflict your editor detected itself. It can raise the host's
      * conflict flag but never clear one the host observed on disk.
@@ -3373,7 +3908,7 @@ interface PluginPanelActivity {
 /** Value a plugin publishes to `when` clauses via {@link PluginHostApi.setContext}. */
 type PluginContextValue = boolean | string;
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
-type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project";
+type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project" | "assistant";
 declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "agent:launch-preset", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "host:dispatch", "panel:focus-read", "notification:os", "artifact:store", "preview:inspect"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 type PluginCapability = BuiltInPluginCapability;
@@ -3441,7 +3976,7 @@ interface MenuItemContribution {
 interface KeybindingContribution {
     actionId: ActionId;
     combo: string;
-    scope?: KeyScope;
+    scope?: PluginKeybindingScope;
     description?: string;
     when?: string;
 }
@@ -3456,6 +3991,70 @@ interface ContextMenuContribution {
     extensions?: string[];
     /** `location: "file"` only: worktree-relative globs, any of which must match. */
     paths?: string[];
+    /**
+     * Opts the item into an availability check (#18141). Each time a menu shows
+     * the item, the host asks the plugin's {@link CONTEXT_MENU_AVAILABILITY_CHANNEL}
+     * handler with this id and the clicked subject, and keeps the item visible but
+     * disabled, with the answer beside it, when the plugin names a reason. Letters,
+     * digits, `_` and `-`, at most 64 characters. Omitted, the item is offered as
+     * soon as its `when` holds, without asking.
+     */
+    availability?: string;
+}
+/**
+ * The handler channel a plugin registers with {@link PluginHostApi.registerHandler}
+ * to answer for its `contributes.contextMenus` items that set `availability`
+ * (#18141). The handler receives one {@link ContextMenuAvailabilityRequest} and
+ * returns `null` when the item can run on that subject, or a short reason when
+ * it can't. A reason is one line of at most
+ * {@link CONTEXT_MENU_AVAILABILITY_REASON_MAX} characters.
+ *
+ * The answer is advisory: the item is disabled while the menu waits (up to
+ * {@link CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS} from opening, starting the
+ * plugin included), and when the handler is missing, throws, answers late or
+ * answers anything else, the item is offered as it would be without the check.
+ * The host separately stops waiting for the handler that long after it
+ * starts, whatever longer `timeoutMs` it was registered with.
+ */
+declare const CONTEXT_MENU_AVAILABILITY_CHANNEL = "@daintree/context-menu-availability";
+/** Max length of a reason a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler returns. */
+declare const CONTEXT_MENU_AVAILABILITY_REASON_MAX = 120;
+/**
+ * How long a menu waits for a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} answer
+ * before offering the item anyway, and the longest the host waits for the handler.
+ */
+declare const CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS = 3000;
+/**
+ * What a {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler is asked: the
+ * item's `availability` id, its `location`, and the subject the menu was
+ * opened on. Only the subject fields that location carries are present.
+ */
+interface ContextMenuAvailabilityRequest {
+    /** The item's manifest `availability` id. */
+    availability: string;
+    location: ContextMenuLocation;
+    /** `terminal` and `browser`: the panel the menu was opened on. */
+    panelId?: string;
+    /** `terminal` and `browser`: that panel's kind. */
+    panelKind?: string;
+    /** `terminal` (when the panel has one) and `worktree`: the worktree. */
+    worktreeId?: string;
+    /** `project`, and `assistant` on a project session: the project. */
+    projectId?: string;
+    /** `file`: the row's path relative to its worktree root, when it is inside one. */
+    relativePath?: string;
+    /** `file`: whether the row is a folder. */
+    isDirectory?: boolean;
+    /** `assistant`: a project assistant session or the global assistant. */
+    assistantScope?: "project" | "global";
+    /** `assistant`: the session's terminal, when it is up. */
+    terminalId?: string;
+    /** `assistant`: the agent the session runs, when known. */
+    agentId?: string;
+    /** `assistant`, project sessions: the lane's zero-based slot. */
+    slot?: number;
+    /** `assistant`, global: which launch of that terminal. */
+    incarnation?: number;
 }
 /**
  * View contribution location.
@@ -3970,11 +4569,13 @@ interface PanelViewProps {
     /**
      * Present only for a `location: "fileEditor"` view (#13809): the file it was
      * opened for, owned by the host. Read it with a revision, save against the
-     * revision you read, and report your unsaved text with `setDraft` so the
-     * host's dirty indicator, Rendered preview and Save / Discard / Cancel prompt
-     * on close all apply. The draft is the host's, not the view's: it survives
-     * the user switching to Source and back, and the close prompt can save it
-     * after your view has unmounted.
+     * revision you read, and report your unsaved text with `setDraft`, naming the
+     * revision it started from, so the host's dirty indicator, Rendered preview
+     * and Save / Discard / Cancel prompt on close all apply. The draft is the
+     * host's, not the view's: it survives the user switching to Source and back,
+     * and the close prompt can save it after your view has unmounted. Calls made
+     * after your view unmounts change nothing, so flush a pending (debounced)
+     * draft in your unmount cleanup.
      */
     readonly fileDocument?: PluginFileDocument;
     /**
@@ -5082,6 +5683,14 @@ interface PluginManifest {
          */
         worktreeDeleteNotes?: WorktreeDeleteNotesContribution[];
         /**
+         * Cloud providers an installed plugin runs in its worker (#17351), each
+         * registered as `{pluginId}.{id}`. Optional in the type but always
+         * materialized by the manifest schema's `.default([])`. Refused for a
+         * project plugin: a repository must never add a provider that creates
+         * machines.
+         */
+        cloudProviders?: CloudProviderContribution[];
+        /**
          * Plugin-contributed file editors (#12323): an extra, writable mode on the
          * host's file panel for the declared extensions. Built-in plugins only in
          * v1 — the slot resolves through the host-bundled builtin view registry,
@@ -5873,7 +6482,9 @@ interface PluginHandlerOptions {
      * Deadline, in milliseconds, for one invoke of this channel. When it passes,
      * the renderer's `invoke` rejects with a `PLUGIN_INVOKE_TIMEOUT:` error and a
      * worker-hosted handler's invoke is cancelled. Defaults to five minutes;
-     * `0` disables the deadline for handlers that legitimately run longer.
+     * `0` disables the deadline for handlers that legitimately run longer. A
+     * {@link CONTEXT_MENU_AVAILABILITY_CHANNEL} handler is always held to
+     * {@link CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS} or less.
      */
     timeoutMs?: number;
 }
@@ -5943,9 +6554,11 @@ interface PluginWorktreeStatus {
 /**
  * A git operation the host saw in progress in a worktree, read from the
  * operation's marker files under the git directory. Only operations that block
- * normal work appear here; a worktree with none reads as `null`.
+ * normal work appear here; a worktree with none reads as `null`. `am` is a
+ * halted `git am`, kept apart from `rebase` because the two finish with
+ * different commands.
  */
-type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert";
+type PluginWorktreeGitOperation = "merge" | "rebase" | "cherry-pick" | "revert" | "am";
 /**
  * How far a worktree's post-create setup has got.
  *
@@ -6277,6 +6890,58 @@ type PluginTerminalLifecycleEvent = (PluginTerminalLifecycleEventBase & {
  */
 type PluginSendToAgentRefusalReason = "unknown-terminal" | "not-agent" | "exited" | "input-bar-off" | "backend-unavailable" | "input-locked" | "restarting" | "input-busy" | "not-in-grid" | "fleet-armed" | "project-unavailable" | "launch-failed" | "prompt-open" | "busy";
 /**
+ * Where Pilot places an agent run, worst-first: the same band every Daintree
+ * surface sorts the run into, so a plugin's list and Pilot agree on which run
+ * needs the user. Read from the user's own decisions first, then the agent's
+ * own report, then Canopy's reading when it is on, then the state the host
+ * observed off the terminal — an ordering, never a guarantee about what the
+ * agent is doing.
+ *
+ * - `blocked` — stopped on an error.
+ * - `needs-you` — asking the user something: the agent printed that it needs
+ *   them, or Canopy read its stop as an approval or question the user hasn't
+ *   had in front of them.
+ * - `quiet` — working, but its terminal has been silent long enough to look
+ *   stalled.
+ * - `review` — stopped after work, or on an approval or question wait, that
+ *   the user hasn't looked at since.
+ * - `running` — working.
+ * - `done` — stopped after work the user has seen.
+ * - `parked` — the user parked it.
+ * - `snoozed` — the user snoozed it.
+ * - `idle` — nothing to report: a shell at its prompt, a session restored
+ *   with no work since, an ask already seen.
+ */
+type PluginAgentBand = "blocked" | "needs-you" | "quiet" | "review" | "running" | "done" | "parked" | "snoozed" | "idle";
+/**
+ * Canopy's reading, when it is what placed a run in its band: a suggestion
+ * from the local model the user turned on, never an observation. Advisory —
+ * show it as "read by Canopy", not as fact.
+ *
+ * What it read follows from the band it placed the run in: an ask for
+ * `needs-you` (or `idle` once seen), a wait that asks nothing for `review`
+ * (or `done` once seen), a screen standing still behind its spinner for
+ * `quiet`.
+ */
+interface PluginAgentCanopyNote {
+    /** When the screen behind the reading was read (epoch ms). */
+    readonly readAt: number;
+    /**
+     * Which ask the reading saw, when it read one: an approval of something the
+     * agent is about to do, or a question only the user can answer. Absent when
+     * the reading isn't an ask, or didn't say which.
+     */
+    readonly ask?: "approval" | "question";
+    /**
+     * The question, verbatim from the screen. Only on an ask, and only for a
+     * plugin that declares `terminal:read` and is a built-in or holds the user's
+     * lasting grant of it ("Allow and remember" at a
+     * {@link PluginTerminalsApi.readScreen} prompt): reading the list never
+     * raises the consent prompt itself. Up to 160 characters.
+     */
+    readonly quote?: string;
+}
+/**
  * One agent pane in the plugin's project, as {@link PluginAgentsApi.list}
  * reports it.
  *
@@ -6305,7 +6970,35 @@ interface PluginAgentPane {
     readonly canDraft: boolean;
     /** Why it would not, when `canDraft` is `false`. */
     readonly draftRefusal?: PluginSendToAgentRefusalReason;
+    /**
+     * Whether this plugin launched the agent with its own `agent.launch`, by the
+     * record the host keeps of its launches: the one the {@link PluginAgentsApi}
+     * input methods reach. A pane restored after a restart under the id it was
+     * launched with keeps it while the host still holds the record: one whose
+     * pane hasn't come back in 30 days lapses, and only the 200 most recent are
+     * kept. `false` for an agent the user, an
+     * assistant or another plugin started, for a launch that named its own
+     * `requestedId`, and for one launched before this plugin was last disabled
+     * or uninstalled. In a view of a Remote Host's project, `true` means a launch
+     * sent there with `{ hostId }` since this machine last started.
+     */
+    readonly launchedByThisPlugin: boolean;
+    /**
+     * The band Pilot places the run in. Absent when the host has no place for
+     * it: before it has read its agents once, for a pane it hasn't read yet, and
+     * in a view of a Remote Host's project.
+     */
+    readonly band?: PluginAgentBand;
+    /** Present when Canopy's reading is what placed the run in {@link band}. */
+    readonly canopy?: PluginAgentCanopyNote;
 }
+/**
+ * An agent pane as the project's view reports it: without
+ * `launchedByThisPlugin`, `band` or `canopy`. Who launched a pane, and where
+ * Pilot places it, are answered only from the host's own records, never from
+ * the pane itself.
+ */
+type PluginAgentPaneObservation = Omit<PluginAgentPane, "launchedByThisPlugin" | "band" | "canopy">;
 /**
  * One agent run anywhere in the app, as {@link PluginAgentsApi.listAll}
  * reports it — any open project or scratch, including ones whose view is not
@@ -6333,6 +7026,13 @@ interface PluginAgentRun {
     readonly agentId?: string;
     /** Last observed agent state, when there is one. An observation, not a fact. */
     readonly observedState?: AgentState;
+    /**
+     * The band Pilot places the run in. Present on every run the host reports;
+     * optional only so a test fixture written before it still compiles.
+     */
+    readonly band?: PluginAgentBand;
+    /** Present when Canopy's reading is what placed the run in {@link band}. */
+    readonly canopy?: PluginAgentCanopyNote;
 }
 /**
  * Every agent run across every open project and scratch, as
@@ -6360,8 +7060,11 @@ interface PluginAllAgentsSnapshot {
  * The kind of surface that has focus, as
  * {@link PluginActivationApi.onDidChangeFocusedPanel} reports it. A built-in
  * panel kind passes through as-is; every plugin-contributed panel, this
- * plugin's own included, is `"plugin"`; `"portal"` is the Portal (web chat)
- * dock.
+ * plugin's own included, is `"plugin"`.
+ *
+ * `"portal"` is deprecated and never reported: it was the Portal (web chat)
+ * dock, which Daintree no longer has. It stays in the type only so a plugin
+ * that still compares against it keeps compiling; drop the comparison.
  */
 type PluginFocusedPanelKind = "terminal" | "browser" | "dev-preview" | "review" | "file" | "file-browser" | "diff" | "plugin" | "portal";
 /**
@@ -6377,7 +7080,7 @@ interface PluginFocusedPanel {
     readonly kind: PluginFocusedPanelKind | null;
     /** The focused panel is a terminal currently running an agent. */
     readonly agent: boolean;
-    /** The focused panel's worktree, when it belongs to one. Always `null` for `"portal"`. */
+    /** The focused panel's worktree, when it belongs to one. */
     readonly worktreeId: string | null;
 }
 /**
@@ -6610,6 +7313,14 @@ interface PluginTerminalReadScreenOptions {
  *   `""` (and `lineCount` `0`) when the screen is blank — an empty screen, not a
  *   missing terminal. `truncated` is `true` when lines above the returned ones,
  *   or bytes past the 16 KiB cap, were left out; the newest content is kept.
+ *   `inputLine` says what the agent's input box holds: `empty`, `typed`, or
+ *   `suggestion` (the CLI's own suggested next prompt, which `text` shows as
+ *   ordinary characters), or `unknown` for an agent with no declared rule, a
+ *   box not found, or a terminal running no agent. It is read off the whole
+ *   screen, so it is there even when `lines` stops above the box, and from the
+ *   screen's styling, so it is an observation and never a verdict on who wrote
+ *   the text. The host always sends it; it is optional so mock fixtures written
+ *   before it still type-check.
  * - `exited`: the terminal is still listed but its process has exited.
  * - `not-found`: no terminal this plugin may read has that id. One answer for
  *   an unknown id, one in another project, and one that is not a user terminal.
@@ -6621,6 +7332,7 @@ type PluginTerminalScreenResult = {
     readonly text: string;
     readonly lineCount: number;
     readonly truncated: boolean;
+    readonly inputLine?: TerminalInputLine;
 } | {
     readonly status: "exited";
 } | {
@@ -6804,6 +7516,16 @@ interface PluginNotifyOptions {
      * inbox row and its OS banner — instead of stacking beside it.
      */
     dedupeKey?: string;
+    /**
+     * `"assistant"` also offers it to one Daintree Assistant that is watching for
+     * plugins' notifications, in a project where the user lets the Assistant use
+     * this plugin's tools. The Assistant is told this plugin's id, the project,
+     * severity, time and a short plain key; it reads the title and body with a
+     * call of its own, and acts only through this plugin's tools. The person's
+     * toast, inbox row and banner are unchanged. Needs a project: a project
+     * plugin's own, or for an installed plugin a `worktreeId` target.
+     */
+    audience?: "assistant";
 }
 /** What {@link PluginHostApi.notify} resolves with. */
 interface PluginNotifyResult {
@@ -6968,8 +7690,10 @@ interface PluginConfirmOptions {
  *   for a Daintree MCP session, and `"plugin"` for a plugin (a `host.dispatch`,
  *   a call from a panel through `plugin.invoke`, or an event route).
  * - `origin: "assistant"` means the person's Daintree Assistant made the MCP
- *   call. Provenance, not proof: the Assistant acts on what its pane is sent,
- *   and that includes other agents' replies.
+ *   call, and `origin: "global-assistant"` that their global Assistant made it
+ *   through `host.call` from outside the project. Provenance, not proof: an
+ *   assistant acts on what its pane is sent, and that includes other agents'
+ *   replies.
  * - `approval: "person"` means someone answered the host's confirm dialog for
  *   this very dispatch. It is never set by a standing answer: an automation
  *   grant, "Allow for this session", or the Assistant's Never ask leave it
@@ -6979,7 +7703,7 @@ interface PluginConfirmOptions {
  */
 interface PluginActionContext {
     readonly dispatchSource: ActionSource;
-    readonly origin?: "assistant";
+    readonly origin?: "assistant" | "global-assistant";
     readonly approval?: "person";
 }
 /**
@@ -8151,6 +8875,30 @@ interface PluginActivationApi {
      */
     registerWorktreeDeleteNotesProvider(descriptor: WorktreeDeleteNotesProviderDescriptor, impl: WorktreeDeleteNotesProviderImpl): Promise<() => void>;
     /**
+     * Bind the implementation of a cloud provider the manifest declares in
+     * `contributes.cloudProviders` (#17351). Daintree lists the provider, and
+     * names its accounts and machines, from the manifest; every call it makes
+     * of the provider (checking credentials, the catalog, creating, starting,
+     * stopping and deleting machines, SSH access) comes to `impl` here. A
+     * plugin that isn't running is activated for the call.
+     *
+     * Each call has 30 seconds, activation included. A late answer, a crash or
+     * a throw is a provider error on that account; a throw whose `code` is a
+     * `CloudHostErrorCode` keeps that code. The impl must have every method the
+     * declared capabilities need: `renewLifetime` for a renewable lifetime,
+     * `authorizeSsh` or `sshAccess` for the declared SSH key timing.
+     *
+     * Returns a disposer that unbinds the impl; the binding also goes when the
+     * plugin's worker stops or the plugin unloads. Must be called during
+     * `activate()`. Calling it again with the same id replaces the binding, and
+     * the older disposer becomes inert.
+     *
+     * @throws {Error} If called after activation resolves or times out, with an
+     *   id `contributes.cloudProviders` does not declare, or with an impl
+     *   missing a method the declaration needs.
+     */
+    registerCloudProvider(descriptor: CloudProviderDescriptor, impl: CloudProviderImpl): Promise<() => void>;
+    /**
      * Subscribe to active-worktree changes. The callback fires with the new
      * active snapshot (or `null` when none is active). Returns a disposer;
      * calling it more than once is a no-op. All subscriptions are automatically
@@ -8268,11 +9016,11 @@ interface PluginActivationApi {
     onDidChangeAllAgents(callback: (snapshot: PluginAllAgentsSnapshot) => void, options?: PluginHostSubscriptionOptions): Promise<() => void>;
     /**
      * Subscribe to which kind of panel has focus (#13221): a terminal, a browser
-     * panel, a diff, the Portal, … The callback receives a frozen
+     * panel, a diff, … The callback receives a frozen
      * {@link PluginFocusedPanel} with `kind: null` while Daintree is not the
      * foreground window or nothing that is a panel has focus. Gated on
      * `panel:focus-read`. A project plugin sees focus only inside its own
-     * project, and `kind: null` everywhere else, the Portal included.
+     * project, and `kind: null` everywhere else.
      *
      * The current focus is delivered once after subscribing, then every change.
      * Coalesced to the latest value with a 250ms default window, and a value
@@ -9306,8 +10054,10 @@ interface PluginActionContribution {
      * call the Assistant makes goes through the host's confirm dialog unless the
      * person has told Daintree not to ask (an automation grant, or the
      * Assistant's Never ask). The handler's {@link PluginActionContext} then says
-     * which: `approval: "person"` only when the dialog was answered. Agent panes
-     * and the global Assistant never reach it.
+     * which: `approval: "person"` only when the dialog was answered. The global
+     * Assistant reaches it too, through `host.call` on this machine while a view
+     * of the project is open, and always meets that view's dialog. Agent panes
+     * never reach it.
      */
     assistantReach?: "confirm-only";
     keywords?: string[];
@@ -9656,5 +10406,5 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
-export type { ActionDanger, ActionDispatchError, ActionDispatchResult, ActionDispatchSuccess, ActionError, ActionErrorCode, ActionExample, ActionHandler, ActionId, ActionKind, AgentContextDataTransfer, AgentContextDragData, AgentContextDragPayload, AgentContextReferenceDragPayload, AgentState, AnyForgeProviderImpl, AssistantKnowledgeContribution, AssistantKnowledgeEntry, AuthValidation, AutoMergeCapability, BuiltInActionId, BuiltInPluginCapability, CIStatus, CanopyViewContribution, CheckRun, CheckRunConclusion, CheckRunStatus, ChecksCapability, ContextMenuContribution, ContextMenuLocation, ContextProviderCallOptions, ContextProviderContent, ContextProviderContribution, ContextProviderDescriptor, ContextProviderImpl, ContextProviderItem, CreateIssueInput, CredentialImportCandidate, CredentialImportCapability, CredentialImportExpected, CredentialImportFailureReason, CredentialImportPreview, CredentialImportUnavailable, Credentials, DisableAutoMergeResult, ElementPickerDetectionKind, ElementPickerDetectionRule, ElementPickerProviderContribution, EnableAutoMergeInput, EnableAutoMergeResult, FetchOptions, FileDecoration, FileDecorationContribution, FileDecorationProviderDescriptor, FileDecorationProviderImpl, FileEditorContribution, FileEditorMode, ForgeCodeProviderImpl, ForgeIssueProviderImpl, ForgeLabel, ForgeNumberReference, ForgeProviderBaseImpl, ForgeProviderContribution, ForgeProviderDescriptor, ForgeProviderImpl, ForgeProviderKind, ForgeProviderRole, ForgeUser, Issue, KeybindingContribution, ListOptions, McpServerContribution, MenuItemContribution, MenuItemLocation, NormalizedIssueState, NormalizedPRState, PR, PRCommitSummary, PRMergeIntent, PRMergeMethod, PRMergeStatus, Page, PanelContribution, PanelMenuItemContribution, PanelReloadResult, PanelViewProps, PluginAccountAccessToken, PluginAccountApi, PluginAccountContribution, PluginAccountIdentity, PluginAccountKind, PluginAccountRef, PluginAccountState, PluginAccountTest, PluginActionContext, PluginActionContribution, PluginActionManifestEntry, PluginActionResultSchema, PluginActivate, PluginActivationApi, PluginAgentInputOptions, PluginAgentInputResult, PluginAgentInterruptResult, PluginAgentKeysInput, PluginAgentKeysResult, PluginAgentMcpContribution, PluginAgentMcpServerSource, PluginAgentMcpServerSourceTool, PluginAgentMcpToolGroup, PluginAgentMcpToolGroupAccess, PluginAgentPane, PluginAgentRun, PluginAgentSnapshot, PluginAgentsApi, PluginAllAgentsSnapshot, PluginApplicationDescriptor, PluginApplicationDestination, PluginApplicationNavigation, PluginApplicationNavigationApi, PluginApplicationNavigationParam, PluginApplicationSection, PluginApplicationTourRef, PluginArtifact, PluginArtifactApi, PluginArtifactCreateOptions, PluginArtifactDownloadOptions, PluginArtifactDownloadRequest, PluginArtifactImportSource, PluginArtifactListOptions, PluginArtifactProgress, PluginArtifactSource, PluginArtifactUploadOptions, PluginArtifactUploadRequest, PluginArtifactUploadResult, PluginAuthor, PluginCanDispatchResult, PluginCapability, PluginChannelSchema, PluginClipboardApi, PluginConfirmOptions, PluginConnectionContribution, PluginContextValue, PluginDatabase, PluginDatabaseApi, PluginDatabaseBackupResult, PluginDatabaseChangeEvent, PluginDatabaseColumn, PluginDatabaseContribution, PluginDatabaseLocation, PluginDatabaseLocationKind, PluginDatabaseOpenOptions, PluginDatabaseParams, PluginDatabaseQueryContribution, PluginDatabaseQueryParam, PluginDatabaseQueryParamFormat, PluginDatabaseQueryParamType, PluginDatabaseRunResult, PluginDatabaseStatements, PluginDispatchOptions, PluginDocumentsApi, PluginDuplexProcessHandle, PluginDuplexProcessSpawnOptions, PluginEventRoute, PluginEventRouteEvent, PluginEventRouteWake, PluginFileDocument, PluginFileDocumentChange, PluginFileDocumentReadResult, PluginFileDocumentSaveResult, PluginFocusedPanel, PluginFocusedPanelKind, PluginFsApi, PluginFsDirEntry, PluginFsReadFilesEncoding, PluginFsReadFilesEntry, PluginFsReadFilesErrorCode, PluginFsReadFilesOptions, PluginFsReadWithRevisionResult, PluginFsScope, PluginFsStat, PluginFsWalkEntry, PluginFsWalkOptions, PluginFsWalkResult, PluginFsWatchOptions, PluginGitApi, PluginGitCommitOptions, PluginGitCommitResult, PluginGitStatus, PluginGitStatusFile, PluginHandlerOptions, PluginHostActionsApi, PluginHostApi, PluginHostCallOptions, PluginHostSubscriptionOptions, PluginIdentity, PluginInputBoxOptions, PluginInvokeOrigin, PluginIpcContext, PluginIpcHandler, PluginLocalSocketScope, PluginLogger, PluginManifest, PluginManifestScopes, PluginMcpApi, PluginMcpCaller, PluginMcpJsonSchema, PluginMcpToolAnnotations, PluginMcpToolDefinition, PluginNavigationIntent, PluginNavigationLocation, PluginNavigationParamValue, PluginNavigationRefusal, PluginNavigationResult, PluginNetworkScope, PluginNotifyAction, PluginNotifyOptions, PluginNotifyResult, PluginNotifyTarget, PluginPanelActivity, PluginPanelActivityState, PluginPanelBadge, PluginPanelBadgeColor, PluginPanelLifecycleEvent, PluginPanelLifecyclePhase, PluginPanelToolbarItemState, PluginPdfMargins, PluginPdfPageSize, PluginProcessApi, PluginProcessDataChunk, PluginProcessHandle, PluginProcessMode, PluginProcessSpawnOptions, PluginProcessStreamEvent, PluginProjectPresence, PluginProjectPresenceState, PluginPromptCallOptions, PluginPtyProcessHandle, PluginPtyProcessSpawnOptions, PluginQuickPickItem, PluginQuickPickOptions, PluginRemoteHost, PluginRemoteHostProject, PluginRemoteHostsApi, PluginRenderPdfOptions, PluginRenderPdfResult, PluginRunRecipeOptions, PluginRunRecipeRefusalReason, PluginRunRecipeResult, PluginSearchContext, PluginSearchProvider, PluginSearchProviderContribution, PluginSearchResult, PluginSearchResultTarget, PluginSendToAgentOptions, PluginSendToAgentRefusalReason, PluginSendToAgentResult, PluginServiceCallContext, PluginServiceCallOptions, PluginServiceCaller, PluginServiceContract, PluginServiceFailureReason, PluginServiceHandlers, PluginServiceProvideContribution, PluginServiceProviderInfo, PluginServiceRequireContribution, PluginServiceResult, PluginServiceStatus, PluginServicesApi, PluginServicesContribution, PluginSettingsPageContribution, PluginSettingsScope, PluginSettingsViewContext, PluginSettingsViewFocus, PluginSetupStepAction, PluginSetupStepContribution, PluginSetupStepDone, PluginStorageScope, PluginSystemApi, PluginSystemWakeEvent, PluginTaskApi, PluginTaskHandle, PluginTaskProgress, PluginTaskResult, PluginTaskStartOptions, PluginTerminalKind, PluginTerminalLifecycleEvent, PluginTerminalLifecycleEventBase, PluginTerminalLifecycleEventType, PluginTerminalReadScreenOptions, PluginTerminalScreenResult, PluginTerminalStatus, PluginTerminalsApi, PluginToastOptions, PluginToolbarButtonRuntimeState, PluginTypedIpcHandler, PluginViewHostContext, PluginViewHostKind, PluginWorktreeCardStatus, PluginWorktreeDeleteNote, PluginWorktreeFileState, PluginWorktreeGitOperation, PluginWorktreeLinked, PluginWorktreeLinkedIssue, PluginWorktreeLinkedPR, PluginWorktreeReviewCheck, PluginWorktreeSetup, PluginWorktreeSetupStage, PluginWorktreeSetupState, PluginWorktreeSetupStepContext, PluginWorktreeSetupStepHandler, PluginWorktreeSnapshot, PluginWorktreeStatus, PluginWorktreeStatusFile, PluginWorktreesChange, PluginWorktreesResult, PluginWorktreesUnavailableReason, ProjectTemplateContribution, RateLimitInfo, RepoMergeSettings, RepoMetadata, RepoRef, ResourceRef, SettingDefinition, SettingFieldType, SettingsApi, StorageApi, SyncedCollection, SyncedCollectionDelta, SyncedCollectionHost, SyncedCollectionOptions, SyncedCollectionSnapshot, TerminalLinkContribution, TerminalLinkPatternArgs, TerminalLinkSubject, TerminalLinkUrlArgs, TerminalLinkUrlContribution, ToolbarButtonContribution, ToolbarButtonPopover, ViewContribution, ViewLocation, WaitingReason, WorkerRestartResult, WorktreeDeleteNotesContribution, WorktreeDeleteNotesProviderDescriptor, WorktreeDeleteNotesProviderImpl, WorktreeSetupStepContribution };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, CONTEXT_MENU_AVAILABILITY_CHANNEL, CONTEXT_MENU_AVAILABILITY_REASON_MAX, CONTEXT_MENU_AVAILABILITY_TIMEOUT_MS, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export type { ActionDanger, ActionDispatchError, ActionDispatchResult, ActionDispatchSuccess, ActionError, ActionErrorCode, ActionExample, ActionHandler, ActionId, ActionKind, AgentContextDataTransfer, AgentContextDragData, AgentContextDragPayload, AgentContextReferenceDragPayload, AgentState, AnyForgeProviderImpl, AssistantKnowledgeContribution, AssistantKnowledgeEntry, AuthValidation, AutoMergeCapability, BuiltInActionId, BuiltInPluginCapability, CIStatus, CanopyViewContribution, CheckRun, CheckRunConclusion, CheckRunStatus, ChecksCapability, CloudAccountCheckResult, CloudAccountScopeChoice, CloudBillingScope, CloudCredentialField, CloudCredentialValues, CloudHostErrorCode, CloudLifetimeModel, CloudMachineState, CloudMachineType, CloudProviderCallCredentials, CloudProviderCapabilities, CloudProviderCatalog, CloudProviderContribution, CloudProviderCreateRequest, CloudProviderDescriptor, CloudProviderImpl, CloudProviderMethod, CloudProviderPersistence, CloudProviderResource, CloudProviderSshAccess, CloudProvisioning, CloudProvisioningChoice, CloudProvisioningDimension, CloudProvisioningInput, CloudProvisioningOptions, CloudProvisioningSelection, CloudSshTransport, CloudSshTrust, CloudSshTunnelCommand, ContextMenuAvailabilityRequest, ContextMenuContribution, ContextMenuLocation, ContextProviderCallOptions, ContextProviderContent, ContextProviderContribution, ContextProviderDescriptor, ContextProviderImpl, ContextProviderItem, CreateIssueInput, CredentialImportCandidate, CredentialImportCapability, CredentialImportExpected, CredentialImportFailureReason, CredentialImportPreview, CredentialImportUnavailable, Credentials, Deployment, DeploymentState, DeploymentTarget, DeploymentsCapability, DisableAutoMergeResult, ElementPickerDetectionKind, ElementPickerDetectionRule, ElementPickerProviderContribution, EnableAutoMergeInput, EnableAutoMergeResult, FetchOptions, FileDecoration, FileDecorationContribution, FileDecorationProviderDescriptor, FileDecorationProviderImpl, FileEditorContribution, FileEditorMode, ForgeCodeProviderImpl, ForgeIssueProviderImpl, ForgeLabel, ForgeNumberReference, ForgeProviderBaseImpl, ForgeProviderContribution, ForgeProviderDescriptor, ForgeProviderImpl, ForgeProviderKind, ForgeProviderRole, ForgeUser, Issue, KeybindingContribution, ListOptions, McpServerContribution, MenuItemContribution, MenuItemLocation, NormalizedIssueState, NormalizedPRState, PR, PRCommitSummary, PRMergeIntent, PRMergeMethod, PRMergeStatus, Page, PanelContribution, PanelMenuItemContribution, PanelReloadResult, PanelViewProps, PluginAccountAccessToken, PluginAccountApi, PluginAccountContribution, PluginAccountIdentity, PluginAccountKind, PluginAccountRef, PluginAccountState, PluginAccountTest, PluginActionContext, PluginActionContribution, PluginActionManifestEntry, PluginActionResultSchema, PluginActivate, PluginActivationApi, PluginAgentBand, PluginAgentCanopyNote, PluginAgentInputOptions, PluginAgentInputResult, PluginAgentInterruptResult, PluginAgentKeysInput, PluginAgentKeysResult, PluginAgentMcpContribution, PluginAgentMcpServerSource, PluginAgentMcpServerSourceTool, PluginAgentMcpToolGroup, PluginAgentMcpToolGroupAccess, PluginAgentPane, PluginAgentPaneObservation, PluginAgentRun, PluginAgentSnapshot, PluginAgentsApi, PluginAllAgentsSnapshot, PluginApplicationDescriptor, PluginApplicationDestination, PluginApplicationNavigation, PluginApplicationNavigationApi, PluginApplicationNavigationParam, PluginApplicationSection, PluginApplicationTourRef, PluginArtifact, PluginArtifactApi, PluginArtifactCreateOptions, PluginArtifactDownloadOptions, PluginArtifactDownloadRequest, PluginArtifactImportSource, PluginArtifactListOptions, PluginArtifactProgress, PluginArtifactSource, PluginArtifactUploadOptions, PluginArtifactUploadRequest, PluginArtifactUploadResult, PluginAuthor, PluginCanDispatchResult, PluginCapability, PluginChannelSchema, PluginClipboardApi, PluginConfirmOptions, PluginConnectionContribution, PluginContextValue, PluginDatabase, PluginDatabaseApi, PluginDatabaseBackupResult, PluginDatabaseChangeEvent, PluginDatabaseColumn, PluginDatabaseContribution, PluginDatabaseLocation, PluginDatabaseLocationKind, PluginDatabaseOpenOptions, PluginDatabaseParams, PluginDatabaseQueryContribution, PluginDatabaseQueryParam, PluginDatabaseQueryParamFormat, PluginDatabaseQueryParamType, PluginDatabaseRunResult, PluginDatabaseStatements, PluginDispatchOptions, PluginDocumentsApi, PluginDuplexProcessHandle, PluginDuplexProcessSpawnOptions, PluginEventRoute, PluginEventRouteEvent, PluginEventRouteWake, PluginFileDocument, PluginFileDocumentChange, PluginFileDocumentReadResult, PluginFileDocumentSaveResult, PluginFocusedPanel, PluginFocusedPanelKind, PluginFsApi, PluginFsDirEntry, PluginFsReadFilesEncoding, PluginFsReadFilesEntry, PluginFsReadFilesErrorCode, PluginFsReadFilesOptions, PluginFsReadWithRevisionResult, PluginFsScope, PluginFsStat, PluginFsWalkEntry, PluginFsWalkOptions, PluginFsWalkResult, PluginFsWatchOptions, PluginGitApi, PluginGitCommitOptions, PluginGitCommitResult, PluginGitStatus, PluginGitStatusFile, PluginHandlerOptions, PluginHostActionsApi, PluginHostApi, PluginHostCallOptions, PluginHostSubscriptionOptions, PluginIdentity, PluginInputBoxOptions, PluginInvokeOrigin, PluginIpcContext, PluginIpcHandler, PluginLocalSocketScope, PluginLogger, PluginManifest, PluginManifestScopes, PluginMcpApi, PluginMcpCaller, PluginMcpJsonSchema, PluginMcpToolAnnotations, PluginMcpToolDefinition, PluginNavigationIntent, PluginNavigationLocation, PluginNavigationParamValue, PluginNavigationRefusal, PluginNavigationResult, PluginNetworkScope, PluginNotifyAction, PluginNotifyOptions, PluginNotifyResult, PluginNotifyTarget, PluginPanelActivity, PluginPanelActivityState, PluginPanelBadge, PluginPanelBadgeColor, PluginPanelLifecycleEvent, PluginPanelLifecyclePhase, PluginPanelToolbarItemState, PluginPdfMargins, PluginPdfPageSize, PluginProcessApi, PluginProcessDataChunk, PluginProcessHandle, PluginProcessMode, PluginProcessSpawnOptions, PluginProcessStreamEvent, PluginProjectPresence, PluginProjectPresenceState, PluginPromptCallOptions, PluginPtyProcessHandle, PluginPtyProcessSpawnOptions, PluginQuickPickItem, PluginQuickPickOptions, PluginRemoteHost, PluginRemoteHostProject, PluginRemoteHostsApi, PluginRenderPdfOptions, PluginRenderPdfResult, PluginRunRecipeOptions, PluginRunRecipeRefusalReason, PluginRunRecipeResult, PluginSearchContext, PluginSearchProvider, PluginSearchProviderContribution, PluginSearchResult, PluginSearchResultTarget, PluginSendToAgentOptions, PluginSendToAgentRefusalReason, PluginSendToAgentResult, PluginServiceCallContext, PluginServiceCallOptions, PluginServiceCaller, PluginServiceContract, PluginServiceFailureReason, PluginServiceHandlers, PluginServiceProvideContribution, PluginServiceProviderInfo, PluginServiceRequireContribution, PluginServiceResult, PluginServiceStatus, PluginServicesApi, PluginServicesContribution, PluginSettingsPageContribution, PluginSettingsScope, PluginSettingsViewContext, PluginSettingsViewFocus, PluginSetupStepAction, PluginSetupStepContribution, PluginSetupStepDone, PluginStorageScope, PluginSystemApi, PluginSystemWakeEvent, PluginTaskApi, PluginTaskHandle, PluginTaskProgress, PluginTaskResult, PluginTaskStartOptions, PluginTerminalKind, PluginTerminalLifecycleEvent, PluginTerminalLifecycleEventBase, PluginTerminalLifecycleEventType, PluginTerminalReadScreenOptions, PluginTerminalScreenResult, PluginTerminalStatus, PluginTerminalsApi, PluginToastOptions, PluginToolbarButtonRuntimeState, PluginTypedIpcHandler, PluginViewHostContext, PluginViewHostKind, PluginWorktreeCardStatus, PluginWorktreeDeleteNote, PluginWorktreeFileState, PluginWorktreeGitOperation, PluginWorktreeLinked, PluginWorktreeLinkedIssue, PluginWorktreeLinkedPR, PluginWorktreeReviewCheck, PluginWorktreeSetup, PluginWorktreeSetupStage, PluginWorktreeSetupState, PluginWorktreeSetupStepContext, PluginWorktreeSetupStepHandler, PluginWorktreeSnapshot, PluginWorktreeStatus, PluginWorktreeStatusFile, PluginWorktreesChange, PluginWorktreesResult, PluginWorktreesUnavailableReason, ProjectTemplateContribution, RateLimitInfo, RepoMergeSettings, RepoMetadata, RepoRef, ResourceRef, SettingDefinition, SettingFieldType, SettingsApi, StorageApi, SyncedCollection, SyncedCollectionDelta, SyncedCollectionHost, SyncedCollectionOptions, SyncedCollectionSnapshot, TerminalInputLine, TerminalInputLineState, TerminalLinkContribution, TerminalLinkPatternArgs, TerminalLinkSubject, TerminalLinkUrlArgs, TerminalLinkUrlContribution, ToolbarButtonContribution, ToolbarButtonPopover, ViewContribution, ViewLocation, WaitingReason, WorkerRestartResult, WorktreeDeleteNotesContribution, WorktreeDeleteNotesProviderDescriptor, WorktreeDeleteNotesProviderImpl, WorktreeSetupStepContribution };

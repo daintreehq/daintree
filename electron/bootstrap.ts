@@ -1,32 +1,47 @@
-// Environment setup must run before anything that reads `app.getPath("userData")`
-// — in dev mode it calls `app.setPath("userData", "daintree-dev")` so the dev
-// instance doesn't collide with the production app. Importing it here ensures
-// runBootMigrations, the compile-cache dir, and initializeStore all resolve to
-// the correct directory before main.ts re-imports it (idempotent via ESM cache).
-import { isSmokeTest } from "./setup/environment.js";
-
+// The app's entry. Its static imports are parsed before the compile cache is
+// on, and they are all the `--attach-stdio` bridge loads besides its own
+// module, so they stay on Node built-ins, Electron and pure helpers. The boot
+// proper (environment, migrations, store, main.js) is boot/appBoot.ts, imported
+// once the cache is enabled.
 import { enableCompileCache, flushCompileCache, constants as moduleConstants } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
-import { app, dialog } from "electron";
-import { BOOT_MIGRATIONS, runBootMigrations } from "./boot/migrations/index.js";
-import { isSafeModeActive } from "./services/CrashLoopGuardService.js";
+import { app } from "electron";
 import { setCompileCacheEnableStatus } from "./utils/hostPerformance.js";
-import { initializeStore, _peekStoreInstance, runDeferredStoreBackup } from "./store.js";
-import { formatErrorMessage } from "../shared/utils/errorMessage.js";
-import { installSpawnCensusFromEnv } from "./utils/spawnCensus.js";
-import { getIsIdleHarness } from "./setup/runtimeFlags.js";
-import { isAttachStdioRequested } from "./boot/hostModeLaunch.js";
-import { isRemoteHostSupported } from "./remote/buildGate.js";
-import { applyMainFileIoPolicy } from "./setup/mainFileIoPolicy.js";
+import {
+  isAttachStdioRequested,
+  isSshAskpassRequested,
+  shouldUseHeadlessOzone,
+} from "./boot/hostModeLaunch.js";
+import { isRemoteHostSupported, isRemoteShellSupported } from "./remote/buildGate.js";
+import {
+  applyDevUserDataPath,
+  applyHeadlessOzoneSwitches,
+  installStdioDeadFdGuards,
+  resetUserDataIfRequested,
+} from "./setup/earlyEnvironment.js";
+
+installStdioDeadFdGuards();
+
+// Before anything reads `app.getPath("userData")`: a dev instance keeps its
+// compile cache, migrations and store (and on macOS the attach bridge's host
+// socket) in its own profile, not the production app's.
+applyDevUserDataPath();
 
 // `--attach-stdio` carries a Shell's link to the Daintree already running here
 // (see remote/host/attachStdio.ts). It is dispatched before anything else
-// touches state: no boot migrations, no store, no compile cache, and never
-// main.js, whose single-instance lock would make it a second instance that
-// quits and hands its argv to the running one as a launch. stdout carries the
-// link. The process exits once either side of the pipe closes.
+// touches state: no environment setup, no boot migrations, no store, no
+// compile cache, and never main.js, whose single-instance lock would make it a
+// second instance that quits and hands its argv to the running one as a
+// launch. stdout carries the link. The process exits once either side of the
+// pipe closes.
 if (isRemoteHostSupported() && isAttachStdioRequested(process.argv)) {
+  // On Linux without a display it runs headless, like `--host-mode`.
+  if (
+    shouldUseHeadlessOzone({ platform: process.platform, argv: process.argv, env: process.env })
+  ) {
+    applyHeadlessOzoneSwitches({ hardwareAccelerationDisabled: false });
+  }
   let code = 1;
   if (__DAINTREE_REMOTE_HOST_ROLE__) {
     try {
@@ -41,10 +56,31 @@ if (isRemoteHostSupported() && isAttachStdioRequested(process.argv)) {
   await new Promise<never>(() => {});
 }
 
-// Idle harness spawn census (#12521). Needs both the runner's variable and an
-// unpackaged idle-harness launch; anything else drops the variable before a
-// host can inherit it. Before main.js loads, so every launch main makes is seen.
-installSpawnCensusFromEnv("main", { allowed: getIsIdleHarness() });
+// `--ssh-askpass` is ssh's SSH_ASKPASS while a Remote Hosts sign-in runs (see
+// remote/client/sshAskpass.ts): it hands one prompt to the Daintree that
+// started that ssh and prints the answer. Dispatched here for the same
+// reasons as the attach bridge; stdout carries the answer. Windows never
+// runs ssh for a host.
+if (
+  isRemoteShellSupported() &&
+  process.platform !== "win32" &&
+  isSshAskpassRequested(process.argv)
+) {
+  let code = 1;
+  if (__DAINTREE_REMOTE_HOSTS__) {
+    try {
+      const { runSshAskpassCli } = await import("./remote/client/sshAskpassCli.js");
+      code = await runSshAskpassCli();
+    } catch (error) {
+      process.stderr.write(`daintree: askpass failed: ${String(error)}\n`);
+    }
+  }
+  app.exit(code);
+  await new Promise<never>(() => {});
+}
+
+// Before the compile cache creates its directory inside userData.
+resetUserDataIfRequested();
 
 const cacheDir = path.join(app.getPath("userData"), "compile-cache");
 {
@@ -74,65 +110,7 @@ const cacheDir = path.join(app.getPath("userData"), "compile-cache");
   }
 }
 
-// Run forward-only boot migrations before anything in main.ts touches state.
-// Guarded on the registry so the common empty-registry boot skips the
-// safe-mode file read, the marker-file ENOENT read, and the awaited hop —
-// registering a migration in BOOT_MIGRATIONS reactivates this automatically.
-// Failures are logged but non-fatal — forward-only idempotency means the
-// failing migration retries on the next boot.
-try {
-  if (BOOT_MIGRATIONS.length > 0) {
-    await runBootMigrations({ isSafeMode: isSafeModeActive() });
-  }
-} catch (err) {
-  console.error("[Bootstrap] Boot migrations failed — continuing with existing state:", err);
-}
-
-// Initialize the persistent store at an explicit lifecycle point. Two failure
-// modes are surfaced via a native error dialog before the renderer ever loads:
-//   1. An unexpected throw escapes initializeStore() (defensive — the function
-//      catches its own constructor failures internally).
-//   2. initializeStore() falls back to the in-memory store (path === "") — this
-//      means the on-disk store is unrecoverable (e.g. EPERM, ENOSPC, or both
-//      config and backup are corrupt). Letting the app continue would lose any
-//      user changes on the next restart, silently.
-// dialog.showErrorBox is safe pre-app.whenReady() on macOS and Windows; on Linux
-// it falls back to stderr, which is still better than a silent failure.
-function showFatalStoreError(reason: string): void {
-  dialog.showErrorBox(
-    "Couldn't start Daintree",
-    `Failed to initialize settings.\n\nPath: ${app.getPath("userData")}\n\n${reason}`
-  );
-  app.exit(1);
-}
-
-try {
-  initializeStore();
-  if (_peekStoreInstance()?.path === "") {
-    showFatalStoreError(
-      "Settings file is unreadable and the on-disk fallback couldn't be created. The app would lose any changes on restart. Check disk space and folder permissions for the path above, then relaunch."
-    );
-  }
-} catch (err) {
-  showFatalStoreError(formatErrorMessage(err, "Unknown store initialization error"));
-}
-
-// Ahead of main.js, whose project reads would otherwise reach libuv's workers
-// first. Not awaited: it only queues pool work in front of theirs (#16361).
-void applyMainFileIoPolicy();
-
-await import("./main.js");
-
-// Refresh the config.json.bak copy (and tighten its permissions) off the
-// boot-critical path. initializeStore() used to do this synchronously before
-// main.js loaded; the previous session's .bak stays valid for corrupt-config
-// recovery until this fires, so deferring loses nothing.
-setImmediate(() => {
-  // A second launch kept open to ask about a headless Host (see
-  // remote/host/headlessHostTakeover.ts) doesn't own the settings.
-  if (!isSmokeTest && !app.hasSingleInstanceLock()) return;
-  runDeferredStoreBackup();
-});
+await import("./boot/appBoot.js");
 
 // Persist any compile-cache entries written during boot. enableCompileCache()
 // only flushes on a clean process exit, so a crash or SIGKILL before the first

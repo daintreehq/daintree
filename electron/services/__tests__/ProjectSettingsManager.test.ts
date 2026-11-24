@@ -6,6 +6,7 @@ import { ProjectSettingsManager } from "../ProjectSettingsManager.js";
 import { generateProjectId } from "../projectStorePaths.js";
 import { PROJECT_SETTINGS_SCHEMA_VERSION } from "../projectSettingsCodec.js";
 import { resilientAtomicWriteFile, resilientRename } from "../../utils/fs.js";
+import type { ProjectSettings } from "../../../shared/types/project.js";
 
 vi.mock("../../utils/fs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../utils/fs.js")>();
@@ -1115,6 +1116,217 @@ describe("ProjectSettingsManager caching", () => {
       });
 
       expect((await readFromDisk()).voiceDictionary).toBeUndefined();
+    });
+  });
+
+  describe("setRemoveMergedWorktrees (#17321)", () => {
+    const readFromDisk = () =>
+      new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);
+    const readRawSettings = async (): Promise<unknown> =>
+      JSON.parse(await fs.readFile(path.join(tempDir, projectId, "settings.json"), "utf8"));
+
+    it("turns the rule on and off, keeping every other field, and stores off as absent", async () => {
+      await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "dev" });
+
+      await manager.setRemoveMergedWorktrees(projectId, true);
+      expect(await readFromDisk()).toMatchObject({
+        devServerCommand: "dev",
+        removeMergedWorktrees: true,
+      });
+
+      await manager.setRemoveMergedWorktrees(projectId, false);
+      const settings = await readFromDisk();
+      expect(settings.devServerCommand).toBe("dev");
+      expect(settings.removeMergedWorktrees).toBeUndefined();
+      expect(JSON.stringify(await readRawSettings())).not.toContain("removeMergedWorktrees");
+    });
+
+    it("keeps the stored switch through whole saves that carry another value", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        removeMergedWorktrees: true,
+      });
+      expect((await readFromDisk()).removeMergedWorktrees).toBeUndefined();
+
+      await manager.setRemoveMergedWorktrees(projectId, true);
+      await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "dev" });
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        devServerCommand: "dev",
+        removeMergedWorktrees: false,
+      });
+      expect((await readFromDisk()).removeMergedWorktrees).toBe(true);
+    });
+  });
+
+  describe("changeLinks (#17091)", () => {
+    const readFromDisk = () =>
+      new ProjectSettingsManager(tempDir, createMockStore()).getProjectSettings(projectId);
+
+    it("adds a link to the settings on disk, keeping every other field", async () => {
+      await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "dev" });
+
+      const result = await manager.changeLinks(projectId, "assistant", {
+        op: "add",
+        title: " Staging ",
+        url: "https://staging.example.com",
+      });
+
+      expect(result).toMatchObject({
+        saved: true,
+        link: { title: "Staging", url: "https://staging.example.com/", addedByAssistant: true },
+      });
+      const settings = await readFromDisk();
+      expect(settings.links).toEqual(result.saved ? result.links : []);
+      expect(settings.devServerCommand).toBe("dev");
+    });
+
+    it("lands two changes made at once", async () => {
+      await Promise.all([
+        manager.changeLinks(projectId, "user", {
+          op: "add",
+          title: "One",
+          url: "https://one.example.com",
+        }),
+        manager.changeLinks(projectId, "assistant", {
+          op: "add",
+          title: "Two",
+          url: "https://two.example.com",
+        }),
+      ]);
+
+      expect((await readFromDisk()).links?.map((link) => link.title)).toEqual(["One", "Two"]);
+    });
+
+    it("refuses the Assistant a link the user added, writing nothing", async () => {
+      const added = await manager.changeLinks(projectId, "user", {
+        op: "add",
+        title: "Prod",
+        url: "https://prod.example.com",
+      });
+      if (!added.saved) throw new Error("add failed");
+
+      const removal = await manager.changeLinks(projectId, "assistant", {
+        op: "remove",
+        id: added.link.id,
+      });
+
+      expect(removal).toMatchObject({ saved: false, code: "not-added-by-assistant" });
+      expect((await readFromDisk()).links).toEqual(added.links);
+    });
+
+    it("keeps the stored links through saves that carry none or another list", async () => {
+      const added = await manager.changeLinks(projectId, "assistant", {
+        op: "add",
+        title: "Staging",
+        url: "https://staging.example.com",
+      });
+      if (!added.saved) throw new Error("add failed");
+
+      await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "dev" });
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        links: [{ id: "x", title: "Evil", url: "https://evil.example.com/" }],
+      });
+
+      expect((await readFromDisk()).links).toEqual(added.links);
+    });
+
+    it("keeps a removal through a save built from a copy read before it", async () => {
+      const added = await manager.changeLinks(projectId, "assistant", {
+        op: "add",
+        title: "Staging",
+        url: "https://staging.example.com",
+      });
+      if (!added.saved) throw new Error("add failed");
+      const copyBeforeRemoval = await manager.getProjectSettings(projectId);
+
+      const removal = manager.changeLinks(projectId, "user", {
+        op: "remove",
+        id: added.link.id,
+      });
+      const smuggled = manager.saveProjectSettings(projectId, {
+        ...copyBeforeRemoval,
+        links: [{ id: "x", title: "Evil", url: "https://evil.example.com/" }],
+      });
+      const staleSave = manager.saveProjectSettings(projectId, {
+        ...copyBeforeRemoval,
+        devServerCommand: "pnpm dev",
+      });
+      await Promise.all([removal, smuggled, staleSave]);
+
+      const settings = await readFromDisk();
+      expect(settings.devServerCommand).toBe("pnpm dev");
+      expect(settings.links).toEqual([]);
+    });
+
+    it("carries links stored as portalLinks over, the Assistant still held to its own (#17243)", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(
+        settingsPath,
+        JSON.stringify({
+          _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION,
+          runCommands: [],
+          portalLinks: [
+            {
+              id: "legacy-staging",
+              title: "Staging",
+              url: "https://staging.example.com/",
+              addedByAssistant: true,
+            },
+            { id: "legacy-prod", title: "Prod", url: "https://prod.example.com/" },
+          ],
+        }),
+        "utf-8"
+      );
+
+      expect((await manager.getProjectSettings(projectId)).links).toEqual([
+        {
+          id: "legacy-staging",
+          title: "Staging",
+          url: "https://staging.example.com/",
+          addedByAssistant: true,
+        },
+        { id: "legacy-prod", title: "Prod", url: "https://prod.example.com/" },
+      ]);
+
+      const refused = await manager.changeLinks(projectId, "assistant", {
+        op: "remove",
+        id: "legacy-prod",
+      });
+      expect(refused).toMatchObject({ saved: false, code: "not-added-by-assistant" });
+
+      const removed = await manager.changeLinks(projectId, "assistant", {
+        op: "remove",
+        id: "legacy-staging",
+      });
+      expect(removed).toMatchObject({ saved: true, link: { id: "legacy-staging" } });
+
+      const onDisk = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
+      expect(onDisk.links).toEqual([
+        { id: "legacy-prod", title: "Prod", url: "https://prod.example.com/" },
+      ]);
+      expect("portalLinks" in onDisk).toBe(false);
+    });
+
+    it("never writes a portalLinks list a whole save carries (#17243)", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        portalLinks: [
+          {
+            id: "x",
+            title: "Evil",
+            url: "https://evil.example.com/",
+            addedByAssistant: true,
+          },
+        ],
+      } as unknown as ProjectSettings);
+
+      const onDisk = JSON.parse(
+        await fs.readFile(path.join(tempDir, projectId, "settings.json"), "utf-8")
+      );
+      expect("portalLinks" in onDisk).toBe(false);
+      expect((await readFromDisk()).links).toBeUndefined();
     });
   });
 });

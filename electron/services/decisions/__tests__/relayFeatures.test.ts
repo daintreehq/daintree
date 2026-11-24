@@ -61,16 +61,21 @@ async function clients() {
 }
 
 describe("DaintreeRelayClient (#16229)", () => {
-  // Every feature a 0.4.0 bridge can ask to declare, follow-ups and snapshots included.
+  // Every feature a 0.9.0 bridge Daintree runs can ask to declare, follow-ups and snapshots included.
   const asked: readonly ProtocolFeature[] = bridgeFeatures({
     followUps: true,
     snapshots: { onRefresh: () => {} },
   });
 
   // Daintree declares a feature only once it handles it; each joins with its own work, and changes this test.
-  it("declares follow-ups, pane snapshots and phone images on event pages and socket tickets (#16231, #16230, #16233)", async () => {
+  it("declares follow-ups, pane snapshots, phone images, involvement hints, owner-desktop answers and follow-ups, person declines and owner-desktop declines on event pages and socket tickets (#16231, #16230, #16233, #17228, #17101, #17238, #17234, #17239)", async () => {
     const { sent, stock, daintree } = await clients();
     expect(BRIDGE_FEATURES).toContain("phone-images-v1");
+    expect(BRIDGE_FEATURES).toContain("involvement-v1");
+    expect(BRIDGE_FEATURES).toContain("owner-desktop-answers-v1");
+    expect(BRIDGE_FEATURES).toContain("person-declines-v1");
+    expect(BRIDGE_FEATURES).toContain("owner-desktop-declines-v1");
+    expect(asked).toContain("owner-desktop-messages-v1");
     expect(asked).toContain("pane-snapshots-v1");
 
     await stock.events(5, 10, asked);
@@ -81,20 +86,86 @@ describe("DaintreeRelayClient (#16229)", () => {
     await daintree.socketTicket(asked);
     const [page, ticket] = sent.slice(2);
     expect(page!.url.searchParams.get("features")).toBe(
-      "pane-snapshots-v1,phone-images-v1,thread-messages-v1"
+      "involvement-v1,owner-desktop-answers-v1,owner-desktop-declines-v1,owner-desktop-messages-v1,pane-snapshots-v1,person-declines-v1,phone-images-v1,thread-messages-v1"
     );
     expect(page!.url.searchParams.get("after")).toBe("5");
     expect(page!.url.searchParams.get("limit")).toBe("10");
     expect(ticket!.body).toHaveProperty("features", [
+      "involvement-v1",
+      "owner-desktop-answers-v1",
+      "owner-desktop-declines-v1",
+      "owner-desktop-messages-v1",
       "pane-snapshots-v1",
+      "person-declines-v1",
       "phone-images-v1",
       "thread-messages-v1",
     ]);
   });
 
+  it("declares every feature the 0.8.0 release's bridge asks for, so a phone and this computer can decline its questions and this computer can follow up on them (#17234, #17238, #17239)", async () => {
+    const { sent, daintree } = await clients();
+    const lastJoined: readonly ProtocolFeature[] = [
+      "owner-desktop-messages-v1",
+      "person-declines-v1",
+      "owner-desktop-declines-v1",
+    ];
+    for (const feature of lastJoined) expect(asked).toContain(feature);
+
+    await daintree.events(5, 10, asked);
+    await daintree.socketTicket(asked);
+
+    const declared = [
+      sent[0]!.url.searchParams.get("features")!.split(","),
+      (sent[1]!.body as { features: string[] }).features,
+    ];
+    for (const features of declared) expect([...features].sort()).toEqual([...asked].sort());
+  });
+
+  it("declares advisory deadlines for a bridge whose host delivers advisory outcomes, and only for it (#17941)", async () => {
+    const { sent, daintree } = await clients();
+    const advisory = bridgeFeatures({
+      followUps: true,
+      snapshots: { onRefresh: () => {} },
+      advisoryDeadlines: true,
+    });
+    expect(advisory).toContain("advisory-deadlines-v1");
+    // A bridge whose lifetime types no advisory outcome is never given advisoryDeadlines.
+    const host = bridgeFeatures({ followUps: true, snapshots: { onRefresh: () => {} } });
+
+    await daintree.events(5, 10, advisory);
+    await daintree.socketTicket(advisory);
+    await daintree.socketTicket(host);
+
+    expect(sent[0]!.url.searchParams.get("features")!.split(",")).toEqual(
+      [...advisory].sort((a, b) => a.localeCompare(b))
+    );
+    expect((sent[1]!.body as { features: string[] }).features).toContain("advisory-deadlines-v1");
+    expect((sent[2]!.body as { features: string[] }).features).not.toContain(
+      "advisory-deadlines-v1"
+    );
+  });
+
+  it("passes each call's options on, so a caller's abort stops the request", async () => {
+    const { sent, daintree } = await clients();
+    const aborted = AbortSignal.abort();
+
+    await expect(daintree.events(0, 10, asked, { signal: aborted })).rejects.toThrow();
+    await expect(daintree.socketTicket(asked, { signal: aborted })).rejects.toThrow();
+    expect(sent).toEqual([]);
+
+    await daintree.events(0, 10, asked, { signal: new AbortController().signal });
+    expect(sent).toHaveLength(1);
+  });
+
   it("declares nothing for a feature a later bridge asks for that Daintree doesn't handle", async () => {
     const { sent, daintree } = await clients();
-    const later = ["voice-notes-v1" as ProtocolFeature];
+    // Presence and the agent-stopped push are the relay's to advertise, never a desktop's (#17240, #17319);
+    // the voice note is one no release has.
+    const later: ProtocolFeature[] = [
+      "presence-v1",
+      "agent-stopped-push-v1",
+      "voice-notes-v1" as ProtocolFeature,
+    ];
 
     await daintree.events(5, 10, later);
     await daintree.socketTicket(later);
@@ -108,7 +179,15 @@ describe("DaintreeRelayClient (#16229)", () => {
 
     await daintree.socketTicket(bridgeFeatures({ followUps: true }));
 
-    expect(sent[0]!.body).toHaveProperty("features", ["phone-images-v1", "thread-messages-v1"]);
+    expect(sent[0]!.body).toHaveProperty("features", [
+      "involvement-v1",
+      "owner-desktop-answers-v1",
+      "owner-desktop-declines-v1",
+      "owner-desktop-messages-v1",
+      "person-declines-v1",
+      "phone-images-v1",
+      "thread-messages-v1",
+    ]);
   });
 
   it("keeps the library's defaults when the caller declares nothing", async () => {

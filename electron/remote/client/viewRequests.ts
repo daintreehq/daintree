@@ -3,8 +3,11 @@ import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/
 import type {
   McpBearerIdentity,
   McpConfirmationDecision,
+  McpDelegationOffer,
 } from "../../../shared/types/ipc/mcpServer.js";
 import type { RelayApprovalQuestion } from "../assistant/HostCallRuntime.js";
+import type { WindowApprovalAnswer } from "../assistant/HostSettingsRequests.js";
+import type { PreparedAssistantDelegation } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import {
   MCP_DISPATCH_ACTION_METHOD,
   MCP_GET_MANIFEST_METHOD,
@@ -14,6 +17,7 @@ import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { remoteHoldUntil } from "../../../shared/config/mcpConfirmWindow.js";
+import { ASSISTANT_PRESET_MOVE_DELEGATE } from "../../../shared/config/assistantConfirmationDelegation.js";
 import {
   NOTIFICATION_CLOSE_METHOD,
   NOTIFICATION_RECONCILE_METHOD,
@@ -63,6 +67,10 @@ const McpDispatchPayloadSchema = z.object({
   // one is shown, so it is taken as-is.
   approvalReason: z.enum(["above-tier", "protected-close"]).optional(),
   authorization: z.string().max(64).optional(),
+  // When the host's own assistant's preset move may run unasked (#17917).
+  // Believed as `authorization` is, and only for that move: this view still
+  // settles whether the pane meets it.
+  confirmationCondition: z.string().max(64).optional(),
   // This Shell's own assistant asked, through `host.call` (#13493). Display
   // only, and believed only while this Shell has a call out to that host: it
   // names who asked in the dialog and grants nothing.
@@ -106,36 +114,103 @@ function honoursSkipPreference(request: McpDispatchPayload): boolean {
 }
 
 /**
- * Whether a host's dispatch is one of this Shell's own assistant's relayed
- * calls that runs under that assistant's "Never ask" here (#15698): one this
- * view would ask about, matched to the call this Shell has out to that host,
- * in the project this view shows of it. The skip is read on this Shell; an
- * approval-only request exists to ask.
+ * The host's own assistant's preset move, offered as one this view may run
+ * unasked once it finds the move the pane's next own fallback step (#17917).
+ * Taken from the host as its skip is, and narrower: this view decides.
  */
-async function skipsOwnRelayedCall(
+function honoursNextFallback(request: McpDispatchPayload): boolean {
+  return (
+    !request.confirmed &&
+    request.sessionOrigin === "help" &&
+    request.confirmationCondition === "next-own-fallback" &&
+    request.actionId === ASSISTANT_PRESET_MOVE_DELEGATE &&
+    request.approvalOnly !== true &&
+    request.relayed !== true &&
+    request.relayCall === undefined
+  );
+}
+
+/**
+ * How a host's dispatch that is one of this Shell's own assistant's relayed
+ * calls may skip this view's dialog (#15698, #17917): one this view would ask
+ * about, matched to the call this Shell has out to that host, in the project
+ * this view shows of it. `skip` under that assistant's "Never ask" or a tick
+ * on the call; `next-fallback` for a preset move this view may run unasked if
+ * it is the pane's next own step. Read on this Shell; an approval-only request
+ * exists to ask.
+ */
+async function ownRelayedCallSkip(
   service: Awaited<ReturnType<typeof loadMcpServerService>>,
   hostId: string,
   webContentsId: number,
   request: McpDispatchPayload
-): Promise<boolean> {
+): Promise<{ kind: "skip" } | { kind: "next-fallback"; ran: () => void } | null> {
   const call = request.relayCall;
-  if (call === undefined || request.approvalOnly === true) return false;
+  if (call === undefined || request.approvalOnly === true) return null;
   const viewKey = getProjectForWebContents(webContentsId);
-  if (viewKey === null) return false;
+  if (viewKey === null) return null;
   const view = parseHostScopedKey(viewKey);
-  if (view.hostId !== hostId) return false;
+  if (view.hostId !== hostId) return null;
   // A call that wouldn't ask has no confirmation to skip, and its record
   // mustn't say it ran unasked.
-  if (!(await asksInView(service, webContentsId, request))) return false;
-  return (
-    getRemoteService("hostCallRelayClient")?.skipsRelayedDispatch(hostId, {
-      callId: call.callId,
-      helpSessionId: call.helpSessionId,
-      projectId: view.projectId,
-      actionId: request.actionId,
-      args: request.args,
-    }) === true
-  );
+  if (!(await asksInView(service, webContentsId, request))) return null;
+  const relay = getRemoteService("hostCallRelayClient");
+  const dispatch = {
+    callId: call.callId,
+    helpSessionId: call.helpSessionId,
+    projectId: view.projectId,
+    actionId: request.actionId,
+    args: request.args,
+  };
+  if (relay?.skipsRelayedDispatch(hostId, dispatch) === true) return { kind: "skip" };
+  const ran = relay?.offersNextFallback(hostId, dispatch) ?? null;
+  return ran !== null ? { kind: "next-fallback", ran } : null;
+}
+
+/**
+ * "Don't ask again for this kind of action" (#16752) for one of this Shell's
+ * own assistant's relayed calls the view will ask about, matched to the call
+ * this Shell has out to that host in the project this view shows of it, for
+ * the tool that assistant called. Null for anything else, a host's own
+ * assistant's call included: its preference isn't this Shell's to change.
+ */
+function relayedCallDelegation(
+  hostId: string,
+  webContentsId: number,
+  request: McpDispatchPayload
+): PreparedAssistantDelegation | null {
+  const call = request.relayCall;
+  if (call === undefined || request.approvalOnly === true) return null;
+  const viewKey = getProjectForWebContents(webContentsId);
+  if (viewKey === null) return null;
+  const view = parseHostScopedKey(viewKey);
+  if (view.hostId !== hostId) return null;
+  try {
+    return (
+      getRemoteService("hostCallRelayClient")?.relayedDelegation(hostId, {
+        callId: call.callId,
+        helpSessionId: call.helpSessionId,
+        projectId: view.projectId,
+        actionId: request.actionId,
+        args: request.args,
+      }) ?? null
+    );
+  } catch (error) {
+    logger.warn("Couldn't work out a relayed call's hand-over", { error });
+    return null;
+  }
+}
+
+/** The person's answer as the window reported it, with the tick only beside an approval. */
+function windowAnswer(envelope: {
+  confirmationDecision?: McpConfirmationDecision;
+  approvalScope?: string;
+}): WindowApprovalAnswer | null {
+  const decision = envelope.confirmationDecision;
+  if (decision === undefined) return null;
+  return decision === "approved" && envelope.approvalScope === "delegate"
+    ? { decision, delegate: true }
+    : { decision };
 }
 
 /** Whether this view raises a confirmation for the dispatch, by its own registry's danger. */
@@ -260,6 +335,28 @@ function hostDeadline(
     : { holdUntil: remoteHoldUntil(receivedAt, holdBudgetMs) };
 }
 
+/**
+ * One of this Shell's own calls its assistant cancelled (#17985): nothing
+ * more of it runs here, as no approval of it is given, and nobody is asked.
+ */
+function cancelledHere(hostId: string, request: McpDispatchPayload): boolean {
+  const call = request.relayCall;
+  return (
+    call !== undefined &&
+    getRemoteService("hostCallRelayClient")?.cancelledRelayedCall(hostId, call) === true
+  );
+}
+
+const CANCELLED_HERE = {
+  result: {
+    ok: false,
+    error: {
+      code: "CONFIRMATION_REQUIRED",
+      message: "The assistant's call was cancelled on the Shell, so nothing was run.",
+    },
+  },
+} as const;
+
 async function dispatchAction(
   hostId: string,
   webContentsId: number,
@@ -285,15 +382,26 @@ async function dispatchAction(
       },
     };
   }
+  if (cancelledHere(hostId, request)) return CANCELLED_HERE;
   const deadline = hostDeadline(request.holdBudgetMs, receivedAt);
-  const service = await loadMcpServerService();
   // Otherwise never pre-confirmed: a confirm-gated action raises this Shell's
   // own dialog, naming the host that asked, exactly as a local MCP client's
   // would. The origin stays `external` either way: the skip rides on
   // `authorization`, not on posing as one of this Shell's assistant surfaces.
   const hostSkip = honoursSkipPreference(request);
-  const ownSkip = !hostSkip && (await skipsOwnRelayedCall(service, hostId, webContentsId, request));
+  // Bound to the call out when this arrived, before anything awaits (#16752):
+  // one that settles meanwhile can't pass its place to a call that replaces it.
+  const offered = hostSkip ? null : relayedCallDelegation(hostId, webContentsId, request);
+  const service = await loadMcpServerService();
+  const own = hostSkip ? null : await ownRelayedCallSkip(service, hostId, webContentsId, request);
+  const ownSkip = own?.kind === "skip";
   const skipPreference = hostSkip || ownSkip;
+  const delegation = skipPreference ? null : offered;
+  // Settled by this view, which holds the pane (#17917).
+  const nextFallback =
+    !skipPreference && (own?.kind === "next-fallback" || honoursNextFallback(request));
+  // Read again past the awaits above: a cancel landing meanwhile asks nobody either.
+  if (cancelledHere(hostId, request)) return CANCELLED_HERE;
   const envelope = await service.dispatchActionForHost(
     webContentsId,
     request.actionId,
@@ -311,13 +419,29 @@ async function dispatchAction(
             ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
             ...deadline,
           }
-        : deadline,
+        : delegation !== null
+          ? {
+              ...deadline,
+              delegationOffer: delegation.offer,
+              onDelegationApproved: delegation.approved,
+            }
+          : nextFallback
+            ? { confirmationCondition: "next-own-fallback", ...deadline }
+            : deadline,
     describeHost(
       hostId,
       request.relayed === true &&
         getRemoteService("hostCallRelayClient")?.hasCallInFlight(hostId) === true
     )
   );
+  // This Shell's own preference, written here: the host hears only the decision.
+  if (windowAnswer(envelope)?.delegate === true) delegation?.commit();
+  // A move this view ran unasked: nobody was asked here either (#17917).
+  const ranUnasked =
+    nextFallback &&
+    envelope.confirmationDecision === undefined &&
+    envelope.authorization === "skip-preference";
+  if (ranUnasked && own?.kind === "next-fallback") own.ran();
   // Only what the host reads back: this machine's view identity stays here,
   // and no approval is ever handed out for the host to reuse. A skip this
   // Shell granted is said, so the host's audit doesn't read it as unasked; a
@@ -326,7 +450,7 @@ async function dispatchAction(
     result: narrowRegistryRead(request.actionId, envelope.result),
     ...(envelope.confirmationDecision !== undefined
       ? { confirmationDecision: envelope.confirmationDecision }
-      : ownSkip
+      : ownSkip || ranUnasked
         ? { authorization: "skip-preference" }
         : {}),
   };
@@ -341,7 +465,7 @@ async function dispatchAction(
 export async function askHostApprovalInWindow(
   webContentsId: number,
   ask: RelayApprovalQuestion
-): Promise<McpConfirmationDecision | null> {
+): Promise<WindowApprovalAnswer | null> {
   const service = await loadMcpServerService();
   try {
     const envelope = await service.dispatchActionForHost(
@@ -357,10 +481,11 @@ export async function askHostApprovalInWindow(
         // Inside the host's own wait for the answer (#15699), so the dialog
         // never outlasts it; a host too old to say waits about the plain deadline.
         ...(ask.holdUntil !== undefined ? { holdUntil: ask.holdUntil } : { fixedDeadline: true }),
+        ...(ask.delegation ? { delegationOffer: ask.delegation } : {}),
       },
       describeHost(ask.hostId, true)
     );
-    return envelope.confirmationDecision ?? null;
+    return windowAnswer(envelope);
   } catch (error) {
     logger.warn("Couldn't ask about a host's call in its assistant's window", { error });
     return null;
@@ -375,8 +500,14 @@ export async function askHostApprovalInWindow(
  */
 export async function askSettingsApprovalInWindow(
   webContentsId: number,
-  ask: { actionId: string; args: Record<string, unknown>; subject: string; lines: string[] }
-): Promise<McpConfirmationDecision | null> {
+  ask: {
+    actionId: string;
+    args: Record<string, unknown>;
+    subject: string;
+    lines: string[];
+    delegation?: McpDelegationOffer;
+  }
+): Promise<WindowApprovalAnswer | null> {
   const service = await loadMcpServerService();
   try {
     const envelope = await service.dispatchActionForHost(
@@ -386,10 +517,14 @@ export async function askSettingsApprovalInWindow(
       false,
       undefined,
       "external",
-      { approvalOnly: true, hostPreview: { lines: ask.lines, subject: ask.subject } },
+      {
+        approvalOnly: true,
+        hostPreview: { lines: ask.lines, subject: ask.subject },
+        ...(ask.delegation ? { delegationOffer: ask.delegation } : {}),
+      },
       { userAgent: "Your assistant, here", token4LastChars: "" }
     );
-    return envelope.confirmationDecision ?? null;
+    return windowAnswer(envelope);
   } catch (error) {
     logger.warn("Couldn't ask about a host settings change in its assistant's window", { error });
     return null;

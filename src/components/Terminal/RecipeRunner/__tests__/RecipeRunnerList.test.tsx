@@ -166,3 +166,37 @@ describe("RecipeRunnerList — only the filter owns the launch keys", () => {
     expect(seen).toEqual(["Enter"]);
   });
 });
+
+describe("RecipeRunnerList — result count announcement", () => {
+  function renderResults(results: TerminalRecipe[]) {
+    return render(
+      <RecipeRunnerList
+        sections={buildRecipeSections(RECIPES)}
+        searchQuery="dev"
+        searchResults={results.map((recipe) => ({ recipe, score: 1 }))}
+        focusedIndex={0}
+        focusedItemId={undefined}
+        showSearch
+        onSearchChange={noop}
+        onKeyDown={noop}
+        onRun={noop}
+        onEdit={noop}
+        onDuplicate={noop}
+        onPin={noop}
+        onUnpin={noop}
+        onDelete={noop}
+        onCreate={noop}
+      />
+    );
+  }
+
+  it("uses singular wording for one result", () => {
+    const { container } = renderResults([RECIPES[3]!]);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("1 recipe found");
+  });
+
+  it("uses plural wording for several results", () => {
+    const { container } = renderResults([RECIPES[3]!, RECIPES[4]!]);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("2 recipes found");
+  });
+});

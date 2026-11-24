@@ -387,8 +387,8 @@ export async function setupWindowServices(
   // never lose a race with the deferred cli-availability-check /
   // plugin-menu-rebuild rebuilds and clobber the availability-aware menu. On
   // already-drained queues (second windows) those rebuilds may run first and
-  // this build harmlessly rebuilds from the same cached availability/plugin
-  // state. The smoke and DAINTREE_E2E_DEFER_RENDERER_LOAD paths get the menu
+  // this build, from the same cached availability/plugin state, installs
+  // nothing new. The smoke and DAINTREE_E2E_DEFER_RENDERER_LOAD paths get the menu
   // here too, before their serial startRendererLoad below.
   console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
   createApplicationMenu(win, cliAvailabilityService ?? undefined);

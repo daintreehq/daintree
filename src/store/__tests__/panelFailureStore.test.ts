@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserPanelData, PanelInstance, PtyPanelData } from "@shared/types/panel";
 import {
   _resetPanelFailureStoreForTest,
@@ -243,6 +243,27 @@ describe("panelFailureStore seen marks", () => {
     write({ "t-1": {} });
     expect("t-1" in usePanelFailureStore.getState().seen).toBe(false);
     expect("t-1" in usePanelFailureStore.getState().occurrences).toBe(false);
+  });
+
+  it("reads only the records a write replaced", () => {
+    const write = recorder();
+    write({ "t-1": FAILED_EXIT, "t-2": SPAWN_ERROR, "t-3": {} });
+    const { observeRecord } = usePanelFailureStore.getState();
+    const observed = vi.fn(observeRecord);
+    usePanelFailureStore.setState({ observeRecord: observed });
+    try {
+      const prev = {
+        "t-1": terminal(FAILED_EXIT, "t-1"),
+        "t-2": terminal(SPAWN_ERROR, "t-2"),
+        "t-3": terminal({}, "t-3"),
+      };
+      observePanelFailures({ ...prev, "t-2": terminal({ title: "renamed" }, "t-2") }, prev);
+      expect(observed.mock.calls.map(([id]) => id)).toEqual(["t-2"]);
+      expect(tokenOf("spawn", "t-2")).toBeUndefined();
+      expect(tokenOf("exit")).toBeDefined();
+    } finally {
+      usePanelFailureStore.setState({ observeRecord });
+    }
   });
 
   it("writes nothing when no failure changed, and forgets only the removed panel", () => {

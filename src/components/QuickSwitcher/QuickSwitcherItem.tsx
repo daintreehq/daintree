@@ -23,13 +23,16 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TailKeepingText } from "@/components/ui/TailKeepingText";
 import { PathTail } from "@/components/ui/PathTail";
 import { pathTail, remapPathRanges, shortenPath } from "@/lib/pathTail";
+import { isMac } from "@/lib/platform";
+import { QuickSwitcherFileRow } from "./QuickSwitcherFileRow";
 
 export { pathTail };
 
 export interface QuickSwitcherItemProps {
   item: QuickSwitcherItemData;
   isSelected: boolean;
-  onSelect: (item: QuickSwitcherItemData) => void;
+  /** `modified` is the platform modifier held on the click. */
+  onSelect: (item: QuickSwitcherItemData, modified: boolean) => void;
   onHover?: () => void;
   ariaDescribedBy?: string;
   /** Fuse match ranges for this row, when it was ranked for a query. */
@@ -121,6 +124,18 @@ export function QuickSwitcherItem({
   query,
   showProvider = true,
 }: QuickSwitcherItemProps) {
+  if (item.type === "file") {
+    return (
+      <QuickSwitcherFileRow
+        item={item}
+        isSelected={isSelected}
+        onSelect={onSelect}
+        onHover={onHover}
+        ariaDescribedBy={ariaDescribedBy}
+        query={query}
+      />
+    );
+  }
   const isTerminal = item.type === "terminal";
   const isPlugin = item.type === "plugin";
   const providerTitle = isPlugin ? (item.pluginHit?.providerTitle ?? null) : null;
@@ -143,16 +158,19 @@ export function QuickSwitcherItem({
   const shortened = item.type === "worktree" && item.subtitle ? shortenPath(item.subtitle) : null;
   // A linked worktree is named by its branch, so its title is an identifier and
   // set in mono as the sidebar sets it; main is named by its folder, which stays
-  // a name and carries its branch beside it, as the worktree palette does.
+  // a name and carries its branch beside it, as the worktree palette does. A
+  // custom title displaces either, and the branch it displaced goes beside it
+  // in the same place.
   const isBranchTitled =
     item.type === "worktree" && !item.isMainWorktree && item.title === item.branchLabel;
   const worktreeQualifier =
-    item.type === "worktree" &&
-    item.isMainWorktree &&
-    item.branchLabel &&
-    item.branchLabel !== item.title
-      ? item.branchLabel
-      : null;
+    item.type !== "worktree"
+      ? null
+      : item.displaced !== undefined
+        ? item.displaced
+        : item.isMainWorktree && item.branchLabel && item.branchLabel !== item.title
+          ? item.branchLabel
+          : null;
   const hasDetail = !!terminalDetail || (isPlugin && !!item.subtitle) || shortened !== null;
 
   return (
@@ -168,7 +186,7 @@ export function QuickSwitcherItem({
         hasDetail ? "py-2" : "py-1.5",
         "text-text-secondary"
       )}
-      onClick={() => onSelect(item)}
+      onClick={(e) => onSelect(item, isMac() ? e.metaKey : e.ctrlKey)}
       aria-selected={isSelected}
       aria-current={item.isCurrent ? "true" : undefined}
       aria-describedby={ariaDescribedBy}
@@ -195,8 +213,11 @@ export function QuickSwitcherItem({
               indices={titleIndices}
               className={cn(
                 // Only the family changes for a branch: the title keeps the
-                // row's title size so it stays above the text-xs path line.
-                "text-sm font-medium text-text-primary",
+                // row's title size so it stays above the text-xs path line. Clipped,
+                // not overflowing, when its kept tail is wider than what the
+                // qualifier leaves, so the two never overlap; from its start, since the
+                // end is what tells branch-like titles apart.
+                "text-sm font-medium text-text-primary justify-end overflow-hidden",
                 isBranchTitled && "font-mono"
               )}
             />
@@ -213,11 +234,18 @@ export function QuickSwitcherItem({
             </span>
           )}
           {worktreeQualifier && (
-            <span className="shrink-0 font-mono text-xs text-text-secondary">
+            // Its own width, as before, capped at half the line: a long branch beside
+            // a long custom title would otherwise take the whole row from the title.
+            <span className="flex min-w-0 max-w-[50%] shrink-0 font-mono text-xs text-text-secondary">
               <span className="sr-only">, </span>
-              <HighlightedText
+              <TailKeepingText
                 text={worktreeQualifier}
-                indices={wordMatchIndices(worktreeQualifier, query)}
+                indices={
+                  wordMatchIndices(worktreeQualifier, query) ??
+                  (worktreeQualifier === item.displaced
+                    ? findMatchIndices(matches, "displaced")
+                    : undefined)
+                }
               />
             </span>
           )}

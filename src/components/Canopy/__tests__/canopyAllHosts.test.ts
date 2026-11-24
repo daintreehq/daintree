@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CanopyCard, CanopyRestoreOutcome, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 
@@ -17,12 +17,24 @@ const ownCalls = vi.hoisted(() => ({
   setMode: vi.fn(() => Promise.resolve()),
   refresh: vi.fn(() => Promise.resolve()),
   setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
+  markAllRead: vi.fn((targets: Array<{ runId: string; spawnedAt: number; turn: number }>) =>
+    Promise.resolve(
+      targets.map((target) => ({
+        ...target,
+        readTurn: target.turn,
+        markedUnreadAt: null,
+        version: 2,
+      }))
+    )
+  ),
   onTerminalData: vi.fn((_callback: (chunk: unknown) => void) => () => {}),
   restoreTrashed: vi.fn((runId: string, _target: unknown): Promise<CanopyRestoreOutcome> =>
     Promise.resolve({ runId })
   ),
   removeTrashed: vi.fn((_runId: string, _target: unknown) => Promise.resolve()),
   emptyTrash: vi.fn((targets: unknown[]) => Promise.resolve(targets.length)),
+  trash: vi.fn((_runId: string, _target: unknown): Promise<number | null> => Promise.resolve(7)),
+  untrash: vi.fn((_receipt: number) => Promise.resolve()),
   trashBatch: vi.fn((targets: Array<{ runId: string }>): Promise<unknown[]> =>
     Promise.resolve(targets.map((target) => ({ runId: target.runId, receipt: 11 })))
   ),
@@ -32,15 +44,22 @@ const ownCalls = vi.hoisted(() => ({
   readInputLines: vi.fn((targets: Array<{ runId: string }>): Promise<unknown[]> =>
     Promise.resolve(targets.map((target) => ({ runId: target.runId, state: "typed" })))
   ),
+  readWorktrees: vi.fn((targets: Array<{ runId: string }>): Promise<unknown[]> =>
+    Promise.resolve(
+      targets.map((target) => ({ runId: target.runId, work: { kind: "unreadable" } }))
+    )
+  ),
 }));
 
 vi.mock("@/clients/canopyHostClient", () => ({
   canopyHostClient: { invoke, onEvent, release: vi.fn(() => Promise.resolve()) },
 }));
 
+import { TRASH_TTL_MS } from "@shared/config/trash";
 import {
   allHostsKey,
   createAllHostsRoute,
+  createTrashReceipts,
   hostAway,
   hostsWithCanopyOff,
   mergeHostReadings,
@@ -307,6 +326,9 @@ describe("createAllHostsRoute", () => {
     invoke.mockReset();
     invoke.mockResolvedValue(undefined);
     Object.values(ownCalls).forEach((fn) => fn.mockClear());
+    // One-shot answers a failed test left queued must not answer the next test's calls.
+    ownCalls.trash.mockReset();
+    ownCalls.trashBatch.mockReset();
     Object.defineProperty(window, "electron", {
       value: { canopy: ownCalls },
       configurable: true,
@@ -417,6 +439,148 @@ describe("createAllHostsRoute", () => {
     expect(again[0]?.error).toBeTruthy();
   });
 
+  describe("trash receipts on a route left open", () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["performance"] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("sends a single or bulk Undo to its host up to the trash's lifetime", async () => {
+      invoke.mockImplementation(async (_hostId: string, channel: string, arg: unknown) => {
+        if (channel === "canopy:trash") return 21;
+        if (channel === "canopy:trash-batch") {
+          return (arg as Array<{ runId: string }>).map((target) => ({
+            runId: target.runId,
+            receipt: 22,
+          }));
+        }
+        if (channel === "canopy:untrash-batch") {
+          return (arg as number[]).map((receipt) => ({ receipt }));
+        }
+        return undefined;
+      });
+      const { api } = createAllHostsRoute("own", ["own", "remote"]);
+      const single = await api.trash(allHostsKey("remote", "r1"), { spawnedAt: 1 });
+      const [bulk] = await api.trashBatch([{ runId: allHostsKey("remote", "r2"), spawnedAt: 2 }]);
+      if (single === null || !bulk || !("receipt" in bulk)) throw new Error("expected trashed");
+
+      vi.advanceTimersByTime(TRASH_TTL_MS);
+      await api.untrash(single);
+      expect(invoke).toHaveBeenCalledWith("remote", "canopy:untrash", 21);
+      expect(await api.untrashBatch([bulk.receipt!])).toEqual([{ receipt: bulk.receipt }]);
+      expect(invoke).toHaveBeenCalledWith("remote", "canopy:untrash-batch", [22]);
+    });
+
+    it("keeps an Undo when the wall clock is set forward", async () => {
+      vi.useFakeTimers({ toFake: ["performance", "Date"] });
+      const { api } = createAllHostsRoute("own", ["own"]);
+      const single = await api.trash(allHostsKey("own", "o1"), { spawnedAt: 1 });
+      if (single === null) throw new Error("expected trashed");
+      vi.setSystemTime(Date.now() + 60 * 60_000);
+      await api.untrash(single);
+      expect(ownCalls.untrash).toHaveBeenCalledWith(7);
+    });
+
+    it("lets an undo go once the host's trash has, without asking the host", async () => {
+      const { api } = createAllHostsRoute("own", ["own"]);
+      const single = await api.trash(allHostsKey("own", "o1"), { spawnedAt: 1 });
+      const [bulk] = await api.trashBatch([{ runId: allHostsKey("own", "o2"), spawnedAt: 2 }]);
+      if (single === null || !bulk || !("receipt" in bulk)) throw new Error("expected trashed");
+
+      vi.advanceTimersByTime(TRASH_TTL_MS + 1);
+      await expect(api.untrash(single)).rejects.toThrow("That terminal has left the trash.");
+      expect(await api.untrashBatch([bulk.receipt!])).toEqual([
+        { receipt: bulk.receipt, error: "That terminal has left the trash." },
+      ]);
+      expect(ownCalls.untrash).not.toHaveBeenCalled();
+      expect(ownCalls.untrashBatch).not.toHaveBeenCalled();
+    });
+
+    it("puts back what a bulk Undo still can when some of it has lapsed", async () => {
+      ownCalls.trashBatch
+        .mockResolvedValueOnce([{ runId: "o1", receipt: 11 }])
+        .mockResolvedValueOnce([{ runId: "o2", receipt: 12 }]);
+      const { api } = createAllHostsRoute("own", ["own"]);
+      const [old] = await api.trashBatch([{ runId: allHostsKey("own", "o1"), spawnedAt: 1 }]);
+      vi.advanceTimersByTime(TRASH_TTL_MS);
+      const [fresh] = await api.trashBatch([{ runId: allHostsKey("own", "o2"), spawnedAt: 2 }]);
+      if (!old || !fresh || !("receipt" in old) || !("receipt" in fresh)) {
+        throw new Error("expected trashed");
+      }
+      vi.advanceTimersByTime(1);
+      const undone = await api.untrashBatch([old.receipt!, fresh.receipt!]);
+      // Only the live one is asked for, by the receipt its host gave.
+      expect(ownCalls.untrashBatch.mock.calls).toEqual([[[12]]]);
+      expect(undone).toEqual([
+        { receipt: old.receipt, error: "That terminal has left the trash." },
+        { receipt: fresh.receipt },
+      ]);
+    });
+
+    it("refuses the oldest undos and still sends the newest across many trashes on one route", async () => {
+      const { api } = createAllHostsRoute("own", ["own"]);
+      const singles: number[] = [];
+      const bulks: number[] = [];
+      for (let i = 0; i < 40; i += 1) {
+        ownCalls.trash.mockResolvedValueOnce(100 + i);
+        ownCalls.trashBatch.mockResolvedValueOnce([{ runId: `b${i}`, receipt: 200 + i }]);
+        const mine = await api.trash(allHostsKey("own", `o${i}`), { spawnedAt: i });
+        const [bulk] = await api.trashBatch([{ runId: allHostsKey("own", `b${i}`), spawnedAt: i }]);
+        if (mine === null || !bulk || !("receipt" in bulk)) throw new Error("expected trashed");
+        singles.push(mine);
+        bulks.push(bulk.receipt!);
+        vi.advanceTimersByTime(5_000);
+      }
+      expect(ownCalls.trash).toHaveBeenLastCalledWith("o39", { spawnedAt: 39 });
+      // The newest are still the host's to take back, by the receipts it gave them.
+      await api.untrash(singles.at(-1)!);
+      await api.untrashBatch([bulks.at(-1)!]);
+      expect(ownCalls.untrash.mock.calls).toEqual([[139]]);
+      expect(ownCalls.untrashBatch.mock.calls).toEqual([[[239]]]);
+      // The first lapsed long ago: refused here, never sent.
+      await expect(api.untrash(singles[0]!)).rejects.toThrow("That terminal has left the trash.");
+      expect(await api.untrashBatch([bulks[0]!])).toEqual([
+        { receipt: bulks[0], error: "That terminal has left the trash." },
+      ]);
+      expect(ownCalls.untrash).toHaveBeenCalledTimes(1);
+      expect(ownCalls.untrashBatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds exactly the receipts issued within the host's trash lifetime", () => {
+      const book = createTrashReceipts();
+      const step = 1_000;
+      for (let i = 0; i < 200; i += 1) {
+        book.issue(i % 2 === 0 ? "own" : "remote", i);
+        expect(book.size).toBe(Math.min(i + 1, Math.floor(TRASH_TTL_MS / step) + 1));
+        vi.advanceTimersByTime(step);
+      }
+    });
+
+    it("keeps a receipt to the end of its lifetime and lets it go one moment after", () => {
+      const book = createTrashReceipts();
+      const first = book.issue("own", 5);
+      vi.advanceTimersByTime(TRASH_TTL_MS);
+      // Two hosts numbering alike still get receipts of their own.
+      const second = book.issue("remote", 5);
+      expect(second).not.toBe(first);
+      expect(book.size).toBe(2);
+      vi.advanceTimersByTime(1);
+      const third = book.issue("own", 6);
+      expect(book.size).toBe(2);
+      expect(book.take(first)).toBeNull();
+      expect(book.take(second)).toEqual(expect.objectContaining({ hostId: "remote", receipt: 5 }));
+      // Spent once: a second take finds nothing.
+      expect(book.take(second)).toBeNull();
+      expect(book.size).toBe(1);
+      // Lapsed with no issue since to prune it: taking it still lets it go.
+      vi.advanceTimersByTime(TRASH_TTL_MS + 1);
+      expect(book.take(third)).toBeNull();
+      expect(book.size).toBe(0);
+    });
+  });
+
   it("says a host's refusal of a bulk trash for each of its runs, the other host's still going", async () => {
     invoke.mockRejectedValue(new Error("offline"));
     const { api } = createAllHostsRoute("own", ["own", "remote"]);
@@ -445,6 +609,38 @@ describe("createAllHostsRoute", () => {
     expect(readings).toEqual([{ runId: allHostsKey("own", "o1"), state: "typed" }]);
   });
 
+  it("reads worktrees on each run's host, leaving a host that can't answer, or doesn't know how, unread", async () => {
+    const dirty = { kind: "observed", unpushedCommits: 0, changedEntries: 1, hiddenFromStatus: 0 };
+    invoke.mockImplementation(async (hostId: string, _channel: string, targets: unknown) =>
+      hostId === "remote"
+        ? (targets as Array<{ runId: string }>).map((target) => ({
+            runId: target.runId,
+            work: dirty,
+          }))
+        : Promise.reject(new Error("No handler registered for 'canopy:read-worktrees'"))
+    );
+    const { api } = createAllHostsRoute("own", ["own", "remote", "old"]);
+    const readings = await api.readWorktrees([
+      { runId: allHostsKey("own", "t1"), spawnedAt: 1 },
+      { runId: allHostsKey("remote", "t1"), spawnedAt: 2 },
+      { runId: allHostsKey("old", "t1"), spawnedAt: 3 },
+      { runId: allHostsKey("gone", "t1"), spawnedAt: 4 },
+    ]);
+    expect(ownCalls.readWorktrees).toHaveBeenCalledWith([{ runId: "t1", spawnedAt: 1 }]);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:read-worktrees", [
+      { runId: "t1", spawnedAt: 2 },
+    ]);
+    expect(invoke).not.toHaveBeenCalledWith("gone", expect.anything(), expect.anything());
+    // The same run id on two hosts keeps each host's answer under its own key.
+    expect(readings).toEqual(
+      expect.arrayContaining([
+        { runId: allHostsKey("own", "t1"), work: { kind: "unreadable" } },
+        { runId: allHostsKey("remote", "t1"), work: dirty },
+      ])
+    );
+    expect(readings).toHaveLength(2);
+  });
+
   it("refuses a run that isn't on a host shown", async () => {
     const { api } = createAllHostsRoute("own", ["own"]);
     await expect(api.archive(allHostsKey("gone", "t1"), { spawnedAt: 1 })).rejects.toThrow();
@@ -471,6 +667,35 @@ describe("createAllHostsRoute", () => {
     const { api } = createAllHostsRoute("own", ["own", "remote"]);
     const after = await api.setRead(allHostsKey("remote", "t1"), { spawnedAt: 4 }, true, 2);
     expect(after).toEqual({ ...mark, runId: allHostsKey("remote", "t1") });
+  });
+
+  it("keeps the marks of the host that answered a bulk mark-read and names the host that didn't", async () => {
+    invoke.mockRejectedValue(new Error("offline"));
+    const { api, markAllReadReport } = createAllHostsRoute("own", ["own", "remote"]);
+    const targets = [
+      { runId: allHostsKey("own", "o1"), spawnedAt: 1, turn: 3 },
+      { runId: allHostsKey("remote", "r1"), spawnedAt: 2, turn: 4 },
+    ];
+    const report = await markAllReadReport(targets);
+    expect(report.refused).toEqual(["remote"]);
+    expect(report.marks.map((mark) => mark.runId)).toEqual([allHostsKey("own", "o1")]);
+    expect(ownCalls.markAllRead).toHaveBeenCalledWith([{ runId: "o1", spawnedAt: 1, turn: 3 }]);
+    await expect(api.markAllRead(targets)).resolves.toHaveLength(1);
+  });
+
+  it("names every host and carries the failure when no host answered a bulk mark-read", async () => {
+    invoke.mockRejectedValue(new Error("offline"));
+    ownCalls.markAllRead.mockRejectedValueOnce(new Error("own offline"));
+    const { api, markAllReadReport } = createAllHostsRoute("own", ["own", "remote"]);
+    const targets = [
+      { runId: allHostsKey("own", "o1"), spawnedAt: 1, turn: 3 },
+      { runId: allHostsKey("remote", "r1"), spawnedAt: 2, turn: 4 },
+    ];
+    const report = await markAllReadReport(targets);
+    expect(report).toMatchObject({ marks: [], refused: ["own", "remote"] });
+    expect(report.failure).toEqual(new Error("own offline"));
+    ownCalls.markAllRead.mockRejectedValueOnce(new Error("own offline"));
+    await expect(api.markAllRead(targets)).rejects.toThrow("own offline");
   });
 
   it("is refused by the hosts it writes to as a whole, not reported as done", async () => {
@@ -536,6 +761,57 @@ describe("createAllHostsRoute", () => {
       { runId: allHostsKey("remote", "t1"), spawnedAt: 2, terms: ["x"] },
     ]);
     expect(hits).toEqual([allHostsKey("own", "t1")]);
+  });
+
+  it("tells a host that couldn't search from one that found nothing (#17594)", async () => {
+    invoke.mockImplementation(async (host: string) => {
+      if (host === "down") throw new Error("offline");
+      return [];
+    });
+    const route = createAllHostsRoute("own", ["own", "quiet", "down"]);
+    const outcomes = await route.searchScreens([
+      { runId: allHostsKey("own", "t1"), spawnedAt: 1, terms: ["x"] },
+      { runId: allHostsKey("quiet", "t1"), spawnedAt: 1, terms: ["x"] },
+      { runId: allHostsKey("down", "t1"), spawnedAt: 1, terms: ["x"] },
+      // A host this route doesn't show is never asked, nor said to have failed.
+      { runId: allHostsKey("gone", "t1"), spawnedAt: 1, terms: ["x"] },
+    ]);
+    expect(outcomes).toEqual([
+      { hostId: "own", runIds: [allHostsKey("own", "t1")] },
+      { hostId: "quiet", runIds: [] },
+      { hostId: "down", failed: true },
+    ]);
+    expect(invoke.mock.calls.map((call) => call[0])).not.toContain("gone");
+  });
+
+  it("says nothing of a search the panel closed on, its own or its hosts'", async () => {
+    let ownAnswer: (ids: string[]) => void = () => {};
+    ownCalls.searchScreens.mockImplementationOnce(
+      () =>
+        new Promise<string[]>((resolve) => {
+          ownAnswer = resolve;
+        })
+    );
+    const refusals: Array<() => void> = [];
+    invoke.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          refusals.push(() => reject(new Error("offline")));
+        })
+    );
+    const hosts = ["own", "h1", "h2", "h3"];
+    const route = createAllHostsRoute("own", hosts);
+    const pending = route.searchScreens(
+      hosts.map((host) => ({ runId: allHostsKey(host, "t1"), spawnedAt: 1, terms: ["x"] }))
+    );
+    // Three at once: the fourth host is still queued when the panel closes.
+    expect(invoke).toHaveBeenCalledTimes(2);
+    route.close();
+    route.open();
+    ownAnswer(["t1"]);
+    refusals.forEach((refuse) => refuse());
+    await expect(pending).resolves.toEqual([]);
+    expect(invoke.mock.calls.map((call) => call[0])).not.toContain("h3");
   });
 
   it("runs no more than three host searches at once", async () => {

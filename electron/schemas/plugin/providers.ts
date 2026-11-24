@@ -1,4 +1,4 @@
-// Provider contributions: forge, element picker, context, file decoration, worktree delete notes and file editors.
+// Provider contributions: forge, element picker, context, file decoration, worktree delete notes, cloud providers and file editors.
 
 import { z } from "zod";
 import { SAFE_ID_PATTERN } from "../pluginIdentifiers.js";
@@ -11,7 +11,16 @@ import {
   CONTEXT_PROVIDER_PREFIX_PATTERN,
   CONTEXT_PROVIDER_RESERVED_PREFIXES,
 } from "../../../shared/utils/pluginContextReference.js";
-import { isSafePluginAssetPath } from "./common.js";
+import { isSafePluginAssetPath, refinePluginHttpsUrl } from "./common.js";
+import {
+  CLOUD_CREDENTIAL_FIELD_ID,
+  CLOUD_CREDENTIAL_FIELD_INPUTS,
+  MAX_CLOUD_CREDENTIAL_FIELDS,
+  MAX_CLOUD_TUNNEL_ARGS,
+  credentialFieldsProblem,
+  sshDeclarationProblem,
+} from "../../../shared/utils/cloudProviderDeclaration.js";
+import { FILE_EDITOR_MAX_BYTES_CEILING } from "../../../shared/types/plugin/fileEditors.js";
 
 /** Most `paths` patterns one `fileEditors` entry may declare. */
 export const FILE_EDITOR_MAX_PATH_PATTERNS = 20;
@@ -108,6 +117,7 @@ export const ForgeProviderContributionSchema = z
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     name: z.string().min(1),
     matches: z.array(z.string().min(1)),
+    matchesSettingRef: z.string().min(1).optional(),
     roles: z
       .array(z.enum(["issues", "code"]))
       .min(1)
@@ -266,6 +276,8 @@ export const FileDecorationContributionSchema = z
   .object({
     id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
     scopes: z.array(z.string().min(1)).min(1),
+    // One of this manifest's own `forgeProviders` ids, resolved in `superRefine`.
+    forgeProvider: z.string().min(1).max(64).regex(SAFE_ID_PATTERN).optional(),
   })
   .strict();
 
@@ -280,13 +292,148 @@ export const WorktreeDeleteNotesContributionSchema = z
   })
   .strict();
 
+/** Most cloud providers one plugin may declare. */
+export const CLOUD_PROVIDER_CONTRIBUTION_MAX = 8;
+
+const CloudProviderTextSchema = (max: number) =>
+  z
+    .string()
+    .max(max)
+    .refine((value) => value.trim().length > 0, { message: "must not be blank" });
+
+const cloudProviderLink = (field: string) =>
+  z
+    .string()
+    .max(2048)
+    .superRefine((value, ctx) => refinePluginHttpsUrl(value, ctx, `cloudProviders[].${field}`));
+
+/** One value an account's credentials are made of, as the provider declares it. */
+export const CloudCredentialFieldSchema = z
+  .object({
+    id: z.string().regex(CLOUD_CREDENTIAL_FIELD_ID),
+    label: CloudProviderTextSchema(64),
+    secret: z.boolean(),
+    input: z.enum(CLOUD_CREDENTIAL_FIELD_INPUTS),
+    required: z.boolean(),
+    help: z.string().max(280).nullable().default(null),
+  })
+  .strict();
+
+const CloudSshTunnelCommandSchema = z
+  .object({
+    command: z.string().min(1).max(64),
+    args: z.array(z.string().max(128)).max(MAX_CLOUD_TUNNEL_ARGS),
+    installUrl: cloudProviderLink("capabilities.tunnel.installUrl"),
+  })
+  .strict();
+
+const CloudProvisioningInputSchema = z.enum(["none", "optional", "required"]);
+const SecondsSchema = z.number().int().min(0).max(31_536_000);
+
+export const CloudProviderCapabilitiesSchema = z
+  .object({
+    persistence: z
+      .object({
+        kept: CloudProviderTextSchema(120),
+        lost: CloudProviderTextSchema(120),
+        retentionDays: z.number().int().min(0).max(3650).nullable(),
+        saveRetryBilled: z.boolean(),
+        stoppedComputeBilled: z.boolean(),
+        // Left out reads as a stop that ends billing, which is how Daintree words a provider that doesn't say.
+        stoppedStorageBilled: z.boolean().default(false),
+        stoppedBilling: CloudProviderTextSchema(280).optional(),
+      })
+      .strict(),
+    typicalStartSeconds: SecondsSchema.nullable(),
+    lifetime: z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("none") }).strict(),
+      z.object({ kind: z.literal("fixed-at-create"), canChangeWhileStopped: z.boolean() }).strict(),
+      z.object({ kind: z.literal("renewable") }).strict(),
+      z.object({ kind: z.literal("idle-sleep"), idleSeconds: SecondsSchema.nullable() }).strict(),
+    ]),
+    sshTrust: z.enum([
+      "pinned-from-api",
+      "confirm-on-first-connect",
+      "api-or-confirm",
+      "provider-tunnel",
+    ]),
+    transport: z.enum(["direct", "provider-command"]),
+    tunnel: CloudSshTunnelCommandSchema.nullable(),
+    provisioning: z
+      .object({
+        location: CloudProvisioningInputSchema,
+        image: CloudProvisioningInputSchema,
+        network: CloudProvisioningInputSchema,
+        sshKey: z.enum(["at-create", "after-create"]),
+      })
+      .strict(),
+    deletion: z.boolean(),
+  })
+  .strict();
+
 /**
- * Largest file a `contributes.fileEditors` entry may claim. Above this the
- * renderer holds the whole document in a CodeMirror buffer plus a draft copy,
- * so the ceiling is a memory bound, not a product limit — the built-in
- * Markdown editor asks for 2 MiB.
+ * `cloudProviders` manifest entry (#17351). Everything Daintree shows about the
+ * provider is declared here, so it is registered, and its accounts and
+ * machines named, before any of the plugin's code runs; the plugin binds the
+ * calls during `activate()` with `host.registerCloudProvider`.
  */
-export const FILE_EDITOR_MAX_BYTES_CEILING = 64 * 1024 * 1024;
+export const CloudProviderContributionSchema = z
+  .object({
+    id: z
+      .string()
+      .max(32)
+      .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
+        message: "must be lowercase letters and digits, joined by single hyphens",
+      }),
+    name: CloudProviderTextSchema(64),
+    description: CloudProviderTextSchema(280),
+    apiUrl: z
+      .string()
+      .max(2048)
+      .superRefine((value, ctx) => {
+        refinePluginHttpsUrl(value, ctx, "cloudProviders[].apiUrl");
+        let parsed: URL;
+        try {
+          parsed = new URL(value);
+        } catch {
+          return;
+        }
+        // An account is tied to the origin it connected with, so it names one and nothing more.
+        if (parsed.pathname !== "/" || parsed.search !== "" || parsed.hash !== "") {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `cloudProviders[].apiUrl must be an origin with no path, query or fragment: "${value}"`,
+          });
+        }
+      }),
+    apiKeyUrl: cloudProviderLink("apiKeyUrl"),
+    dashboardUrl: cloudProviderLink("dashboardUrl"),
+    docsUrl: cloudProviderLink("docsUrl"),
+    credentialFields: z.array(CloudCredentialFieldSchema).min(1).max(MAX_CLOUD_CREDENTIAL_FIELDS),
+    capabilities: CloudProviderCapabilitiesSchema,
+    createReplay: z.enum(["same-key", "lookup-only"]).optional(),
+  })
+  .strict()
+  .superRefine((provider, ctx) => {
+    const fields = credentialFieldsProblem(provider.credentialFields);
+    if (fields) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["credentialFields"],
+        message: `Cloud provider "${provider.id}" ${fields}`,
+      });
+    }
+    const ssh = sshDeclarationProblem(provider.capabilities);
+    if (ssh) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["capabilities"],
+        message: `Cloud provider "${provider.id}": ${ssh}`,
+      });
+    }
+  });
+
+export { FILE_EDITOR_MAX_BYTES_CEILING };
 
 /**
  * `fileEditors` manifest entry (#12323, #13809). Two forms, exactly one of

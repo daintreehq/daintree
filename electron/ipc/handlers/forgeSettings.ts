@@ -8,17 +8,13 @@ import {
   getForgeProviderUnavailableError,
   getRegisteredForgeProviders,
 } from "../../services/forgeProviderRegistry.js";
-import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
-import { resolveEffectiveRemoteUrl } from "./forgeResolution.js";
-import { projectStore } from "../../services/ProjectStore.js";
-import { gitServiceCache } from "../../services/GitServiceCache.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import { auditForgeCall } from "../../services/forge/forgeAuditService.js";
 import {
   credentialFieldsFor,
   pickPrimaryValue,
 } from "../../services/forge/forgeCredentialUtils.js";
-import { getImplForNamespaceActivating } from "./forgeResolution.js";
+import { getImplForNamespaceActivating, resolveProjectForgeProvider } from "./forgeResolution.js";
 import type {
   AuthValidation,
   CredentialImportCandidate,
@@ -364,53 +360,10 @@ export function registerForgeSettingsHandlers(): () => void {
       }
       try {
         await awaitPluginInit();
-        const project = projectStore.getProjectById(projectId);
-        if (!project) return { entry: null, resolvedVia: null };
-
-        const settings = await projectStore.getProjectSettings(projectId).catch(() => null);
-        const forgeProviderOverride = settings?.forgeProviderOverride ?? null;
-        const issueProviderOverride = settings?.issueProviderOverride ?? null;
-
-        let effectiveRemoteUrl: string | null;
-        if (typeof remoteUrl === "string" && remoteUrl.length > 0) {
-          // An explicit URL means the caller is asking about one specific
-          // remote (the Settings routing panel probes each in turn) — the
-          // project's selection must not override that.
-          effectiveRemoteUrl = remoteUrl;
-        } else {
-          // No URL: answer for whichever remote the project actually routes
-          // through (#11408). This is the toolbar's pill-visibility gate, so an
-          // origin-only lookup here hid issues and PRs on every fork or mirror
-          // whose forge remote is named something else.
-          const gitService = gitServiceCache.getGitService(project.path);
-          try {
-            effectiveRemoteUrl = await resolveEffectiveRemoteUrl(
-              gitService,
-              project.path,
-              settings?.forgeRemote ?? settings?.githubRemote ?? null,
-              forgeProviderOverride
-            );
-          } catch (error) {
-            // A stale code remote leaves no code provider, but a bound issues
-            // provider has no remote to go stale (#13700) — still answer for it.
-            if (!issueProviderOverride) throw error;
-            return resolveForgeProvider({
-              remoteUrl: null,
-              forgeProviderOverride: null,
-              globalDefaultProviderId: null,
-              issueProviderOverride,
-            });
-          }
-        }
-
-        const globalDefaultProviderId = readDefaultProviderId();
-
-        return resolveForgeProvider({
-          remoteUrl: effectiveRemoteUrl,
-          forgeProviderOverride,
-          globalDefaultProviderId,
-          issueProviderOverride,
-        });
+        return await resolveProjectForgeProvider(
+          projectId,
+          typeof remoteUrl === "string" ? remoteUrl : null
+        );
       } catch (error) {
         console.warn(`[forgeSettings] resolve failed for ${projectId}:`, error);
         return { entry: null, resolvedVia: null };

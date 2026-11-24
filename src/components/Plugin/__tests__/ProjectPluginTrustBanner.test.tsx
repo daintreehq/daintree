@@ -101,21 +101,52 @@ describe("ProjectPluginTrustBanner", () => {
     renderBanner();
     openPrompt([{ id: "acme.dashboard", displayName: name }]);
 
-    // The name is quoted and carries its full text as a title, so a bounded
-    // render still discloses the whole string. The quotes sit outside the
-    // element that holds the name, so a cut name still closes. Whether the
-    // name actually clips, and the warning never does, is pixel geometry —
-    // the capture harness owns that.
-    const quoted = screen.getByTitle(name);
+    // The name is quoted, and the full text is disclosed by a themed tooltip
+    // only once it actually clips, never by a native title. The quotes sit
+    // outside the element that holds the name, so a cut name still closes.
+    // Whether the name actually clips, and the warning never does, is pixel
+    // geometry — the capture harness owns that.
+    const inner = screen.getByText(name);
+    const quoted = inner.parentElement as HTMLElement;
     expect(quoted.textContent).toBe(`'${name}'`);
-    expect(quoted.firstElementChild?.textContent).toBe(name);
+    expect(document.querySelector("[title]")).toBeNull();
+  });
+
+  describe("name disclosure", () => {
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
+    afterEach(() => {
+      if (original) Object.defineProperty(HTMLElement.prototype, "scrollWidth", original);
+      else delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollWidth;
+    });
+
+    // jsdom has no layout, so a clipped name is simulated through its scrollWidth.
+    function clip(text: string) {
+      Object.defineProperty(HTMLElement.prototype, "scrollWidth", {
+        configurable: true,
+        get(this: HTMLElement) {
+          return this.textContent === text ? 500 : 0;
+        },
+      });
+    }
+
+    it("makes a clipped name a tab stop, and leaves a name that fits alone", () => {
+      clip("Long Name");
+      renderBanner();
+      openPrompt([{ id: "a.long", displayName: "Long Name" }]);
+      expect(screen.getByText("Long Name").getAttribute("tabindex")).toBe("0");
+
+      cleanup();
+      renderBanner();
+      openPrompt([{ id: "a.short", displayName: "Short" }]);
+      expect(screen.getByText("Short").hasAttribute("tabindex")).toBe(false);
+    });
   });
 
   it("falls back to the plugin id when the manifest's name has nothing visible in it", () => {
     renderBanner();
     openPrompt([{ id: "acme.dashboard", displayName: "   " }]);
 
-    expect(screen.getByTitle("acme.dashboard").textContent).toBe("'acme.dashboard'");
+    expect(screen.getByText("acme.dashboard").parentElement?.textContent).toBe("'acme.dashboard'");
   });
 
   it("offers exactly the three answers, and no per-capability choice", () => {

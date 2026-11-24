@@ -71,6 +71,8 @@ vi.mock("@/store/panelStore", () => ({
       watchedPanels: new Set<string>(),
       updateAgentState,
       setRuntimeStatus,
+      // The update-installed copy resync makes for each listed terminal (#17905).
+      setUpdateInstalled: () => {},
     }),
   },
 }));
@@ -109,6 +111,19 @@ vi.mock("@/store/hostDriverNavigation", () => ({
 vi.mock("@/store/slices/panelRegistry/helpers", () => ({
   deriveRuntimeStatus: () => "running",
 }));
+const dropAllHeldDurations = vi.hoisted(() => vi.fn());
+vi.mock("@/store/panelStatusBuffer", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/store/panelStatusBuffer")>()),
+  dropAllHeldDurations,
+}));
+const replayPanelLifecycle = vi.hoisted(() => vi.fn());
+const replayViewConsumers = vi.hoisted(() => vi.fn());
+vi.mock("@/services/plugin/pluginPanelLifecycle", () => ({
+  replayPluginPanelLifecycle: replayPanelLifecycle,
+}));
+vi.mock("@/services/plugin/pluginViewConsumers", () => ({
+  replayPluginViewConsumers: replayViewConsumers,
+}));
 
 import {
   _reloadHostConnectionSyncForTesting,
@@ -125,7 +140,7 @@ import {
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { onHostResync, type HostResync, type HydratedSettings } from "@/store/hostResyncSignal";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
-import type { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
+import { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
 import {
   _resetTerminalInputGateForTesting,
   getLeaseInputBlock,
@@ -428,6 +443,22 @@ describe("host connection sync", () => {
     await expect(heard[0]!.hydrated).resolves.toBe(settings);
     expect(heard[1]!.hydrated).toBeUndefined();
     offResync();
+  });
+
+  it("tells a fresh session's host which plugin views this one shows (#17068)", async () => {
+    installElectron();
+    bindView("studio-01");
+    replayPanelLifecycle.mockClear();
+    replayViewConsumers.mockClear();
+
+    // A resumed session kept every report this view made.
+    await resyncFromHost();
+    expect(replayPanelLifecycle).not.toHaveBeenCalled();
+    expect(replayViewConsumers).not.toHaveBeenCalled();
+
+    await resyncFromHost({ freshSession: true });
+    expect(replayPanelLifecycle).toHaveBeenCalledTimes(1);
+    expect(replayViewConsumers).toHaveBeenCalledTimes(1);
   });
 
   it("tells the listeners a fresh session's pass hydrated nothing when the view watches", async () => {
@@ -1555,6 +1586,51 @@ describe("runHostOperation", () => {
       })
     ).resolves.toBe(1);
     expect(waited).toBe(true);
+  });
+  it("follows an operation still running after a long offline gap to its recorded result", async () => {
+    vi.useFakeTimers();
+    try {
+      useHostConnectionStore.setState({
+        hostId: "studio-01",
+        connection: { status: "connecting", attempt: 1 },
+      });
+      const statuses: OperationOutcome[] = [
+        { status: "running", progress: null },
+        { status: "succeeded", result: "cloned", settledAt: 1 },
+      ];
+      const client = {
+        getStatus: vi.fn(async () => (statuses.length > 1 ? statuses.shift()! : statuses[0]!)),
+        onEvent: vi.fn(() => () => {}),
+      };
+      const run = vi.fn(() => Promise.reject(lost()));
+
+      let settled: { value?: unknown; error?: unknown } | undefined;
+      void runHostOperation("op-1", run, {
+        fromResult,
+        resolve: (opId, options) => resolveUnknownOutcome(opId, { ...options, client }),
+      }).then(
+        (value) => {
+          settled = { value };
+        },
+        (error: unknown) => {
+          settled = { error };
+        }
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(client.getStatus).not.toHaveBeenCalled();
+      vi.setSystemTime(Date.now() + 6 * 60_000);
+      useHostConnectionStore
+        .getState()
+        .applyConnection({ status: "connected", rttMs: 1, handshake: HANDSHAKE });
+      await vi.advanceTimersByTimeAsync(2_000);
+
+      expect(settled).toEqual({ value: "cloned" });
+      expect(run).toHaveBeenCalledOnce();
+      expect(client.getStatus).toHaveBeenCalledTimes(2);
+      expect(useHostConnectionStore.getState().checking).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -3162,5 +3238,24 @@ describe("one host's views after a fresh session", () => {
     } finally {
       for (const view of views) view.stop();
     }
+  });
+});
+
+describe("held pause durations across an event gap (#17575)", () => {
+  it("drops them when this view's host had to be resynced, not for another host", async () => {
+    const { emitHost } = installElectron();
+    bindView("studio-01");
+    const stop = startHostConnectionSync();
+    await flush();
+    dropAllHeldDurations.mockClear();
+
+    emitHost({ type: "resync-required", hostId: "studio-02", reason: "overflow" });
+    await flush();
+    expect(dropAllHeldDurations).not.toHaveBeenCalled();
+
+    emitHost({ type: "resync-required", hostId: "studio-01", reason: "overflow" });
+    await vi.waitFor(() => expect(dropAllHeldDurations).toHaveBeenCalledTimes(1));
+    await resyncFromHost();
+    stop();
   });
 });

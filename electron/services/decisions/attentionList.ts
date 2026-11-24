@@ -1,6 +1,11 @@
 import {
+  answeredOn,
+  closureInForce,
   formatAnswerNotice,
+  isClosure,
+  isUndeliveredMessage,
   formatFollowupNotice,
+  messageSentOn,
   noticeChunk,
   parseAnswers,
   parseMessages,
@@ -12,13 +17,23 @@ import {
   type StoredMessage,
 } from "@daintreehq/decisions-client";
 import type { PhoneImageReference } from "@daintreehq/decisions-protocol";
+import { createHash } from "node:crypto";
 import type { DecisionsAnswerPreview } from "../../../shared/types/decisionsAttention.js";
+import type { DecisionQuestionReference } from "../../../shared/types/decisionsQuestion.js";
 import {
+  displayText,
   parseDecisionNotice,
   renderCopiedAnswer,
   sanitizeAnswerText,
   type DecisionBlock,
 } from "./answerNotice.js";
+import {
+  NO_ADVISORY_HOST,
+  timeoutNoticeOf,
+  type AdvisoryHost,
+  type TimeoutNotice,
+} from "./questionRound.js";
+import { isAnswerOnlyCode } from "../../../shared/utils/decisionsDeliveryReasons.js";
 
 /**
  * The answers a person has marked handled (#16020), by question, at the
@@ -35,10 +50,22 @@ export type HandledAnswers = ReadonlyMap<string, number>;
 const QUESTION_ID = /^[A-Za-z0-9_-]{8,80}$/;
 
 export async function readHandledAnswers(store: MetaStore): Promise<Map<string, number>> {
+  let text: string | null;
+  try {
+    text = await store.getMeta(HANDLED_ANSWERS_META_KEY);
+  } catch {
+    // A record that can't be read hides nothing, as a damaged one doesn't.
+    return new Map();
+  }
+  return parseHandledAnswers(text);
+}
+
+/** The record as stored; null when there is none. */
+export function parseHandledAnswers(text: string | null): Map<string, number> {
   const handled = new Map<string, number>();
   let parsed: unknown;
   try {
-    parsed = JSON.parse((await store.getMeta(HANDLED_ANSWERS_META_KEY)) ?? "{}");
+    parsed = JSON.parse(text ?? "{}");
   } catch {
     // A damaged record hides nothing: every answer that needs a person shows.
     return handled;
@@ -71,6 +98,17 @@ export async function markAnswerHandled(
   }
   next[row.question_id] = answerRevision(row);
   await store.setMeta(HANDLED_ANSWERS_META_KEY, JSON.stringify(next));
+}
+
+/**
+ * The library's codes are short identifiers (`pane_gone`, `inject_ambiguous`).
+ * Anything else is passed on as `unspecified` rather than trimmed into shape,
+ * so free text can never reach a view through this field.
+ */
+const REASON_CODE = /^[a-z0-9_.-]{1,48}$/;
+
+export function reasonOf(code: string | null): string {
+  return typeof code === "string" && REASON_CODE.test(code) ? code : "unspecified";
 }
 
 /** Delivery stopped at a point where a person decides what happens next. Imported history never does. */
@@ -107,9 +145,88 @@ export function heldFollowUps(row: QuestionRow): StoredMessage[] {
     .sort((a, b) => a.event_seq - b.event_seq);
 }
 
-/** The question's answer needs a person, and they haven't marked it handled. */
+/**
+ * The question's answer needs a person, and they haven't marked it handled.
+ * A question over without an answer never does (`closedUnanswered`).
+ */
 export function answerNeedsAttention(row: QuestionRow, handled: HandledAnswers): boolean {
-  return needsAttention(row) && handled.get(row.question_id) !== answerRevision(row);
+  return (
+    needsAttention(row) &&
+    !closedUnanswered(row) &&
+    !stoppedOnReplacedClosure(row) &&
+    handled.get(row.question_id) !== answerRevision(row)
+  );
+}
+
+/**
+ * The question is over without an answer, and its closing notice is all that
+ * delivery can have stopped on (#18021), so there is nothing for a person to
+ * decide: the notice is news only for an agent still listening. It counts as
+ * handled, so it shows nowhere a person acts and keeps nothing of the question
+ * waiting, however its notice stopped; how far the notice got is still read
+ * from the row on its own.
+ *
+ * - **Cancelled:** a person's decline (#17234) or a withdrawal. Either drops
+ *   every answer and follow-up not yet typed, and a withdrawal leaves the
+ *   stopped status of an answer nothing will type.
+ * - **Expired, or never published:** only while the round's own notice is
+ *   untyped, nothing else of the answer waits to be typed, the code is no
+ *   answer's, and none of the person's follow-ups waits to be typed. While
+ *   one does, the notice stays theirs to resolve with it, so the two go back
+ *   in thread order (the library would hold one sequenced after it behind a
+ *   stopped notice). A possibly typed write stays the person's while the row
+ *   holds an untyped answer it could have been.
+ */
+export function closedUnanswered(row: QuestionRow): boolean {
+  if (row.local_status === "cancelled") return true;
+  if (row.local_status !== "expired" && row.local_status !== "publish-failed") return false;
+  if (isAnswerOnlyCode(row.error_code)) return false;
+  const entries = parseAnswers(row.answers_json);
+  if (!entries.some((entry) => roundNotice(entry, row) && !entry.delivered)) return false;
+  // As the delivery engine's own test: a notice of a round since replaced is never typed.
+  const live = pendingEntries(row).filter(
+    (entry) => !isClosure(entry) || closureInForce(entry, row)
+  );
+  if (live.some((entry) => !roundNotice(entry, row))) return false;
+  if (
+    row.delivery_status === "delivery-uncertain" &&
+    entries.some((entry) => !NOTICE_KINDS.has(entry.kind) && !entry.delivered)
+  ) {
+    return false;
+  }
+  return !parseMessages(row.messages_json).some(isUndeliveredMessage);
+}
+
+const NOTICE_KINDS: ReadonlySet<string> = new Set(["expired", "declined", "unpublished"]);
+
+/** The notice that closed the row's current round at its deadline: its expiry, or that it never reached the relay. */
+function roundNotice(entry: AnswerEntry, row: QuestionRow): boolean {
+  if (row.local_status === "expired") return entry.kind === "expired" && closureInForce(entry, row);
+  return (
+    row.local_status === "publish-failed" &&
+    entry.kind === "unpublished" &&
+    entry.revision === row.question_revision
+  );
+}
+
+/**
+ * Typing stopped on a closure notice whose round a reopen has since replaced
+ * (#17944): the library withdraws the notice but leaves the row's stopped
+ * status, and nothing of the answer waits to be typed any more, so there is
+ * nothing for a person to decide. Only while every entry of the newest round
+ * the row records is such a notice, untyped, and the code is no answer's. A
+ * possibly typed write keeps the question uncertain until the library
+ * releases it.
+ */
+export function stoppedOnReplacedClosure(row: QuestionRow): boolean {
+  if (row.delivery_status !== "needs-attention" || pendingEntries(row).length > 0) return false;
+  if (isAnswerOnlyCode(row.error_code)) return false;
+  const entries = parseAnswers(row.answers_json);
+  if (entries.length === 0) return false;
+  const newest = Math.max(...entries.map((entry) => entry.revision));
+  return entries
+    .filter((entry) => entry.revision === newest)
+    .every((entry) => isClosure(entry) && !entry.delivered && !closureInForce(entry, row));
 }
 
 /** Its answer or a follow-up after it needs a person. */
@@ -120,8 +237,36 @@ export function threadNeedsAttention(row: QuestionRow, handled: HandledAnswers):
 /** Its answer is handled, and no follow-up needs a person either. */
 export function isHandled(row: QuestionRow, handled: HandledAnswers): boolean {
   return (
-    needsAttention(row) && !answerNeedsAttention(row, handled) && heldFollowUps(row).length === 0
+    needsAttention(row) &&
+    // A reopened question whose old notice stopped is open again, not handled: it stays in every
+    // feed. One closed again since (a withdrawal) is over, whatever notice its earlier round left.
+    (closedUnanswered(row) || !stoppedOnReplacedClosure(row)) &&
+    !answerNeedsAttention(row, handled) &&
+    heldFollowUps(row).length === 0
   );
+}
+
+/**
+ * What a person is asked about `row` now, as an opaque fixed-length digest
+ * of ids and states only (#17944): the answer revision, every entry still to
+ * be typed, the held follow-ups, the delivery status, the round, and the run
+ * it goes to. An action confirmed against one token is refused once the row
+ * asks something else, so a confirmation shown before a correction, a new
+ * follow-up, a replaced round or a move from another window never acts on
+ * what the person didn't see.
+ */
+export function attentionToken(row: QuestionRow, handled: HandledAnswers): string {
+  const answerHeld = answerNeedsAttention(row, handled);
+  const { origin } = row;
+  const asked = JSON.stringify([
+    answerHeld ? answerRevision(row) : null,
+    answerHeld ? pendingEntries(row).map((entry) => entry.entry_id) : [],
+    heldFollowUps(row).map((message) => [message.message_id, message.delivery?.status ?? null]),
+    row.delivery_status,
+    row.question_revision,
+    [origin.host_id, origin.pane_id, origin.terminal_generation, origin.agent_incarnation],
+  ]);
+  return createHash("sha256").update(asked).digest("hex");
 }
 
 /** The rows as panes, Canopy and the list see them: without what a person marked handled. */
@@ -129,7 +274,24 @@ export function withoutHandled(
   rows: readonly QuestionRow[],
   handled: HandledAnswers
 ): QuestionRow[] {
-  return handled.size === 0 ? [...rows] : rows.filter((row) => !isHandled(row, handled));
+  // A stopped decline is handled with nothing marked, so every read filters.
+  return rows.filter((row) => !isHandled(row, handled));
+}
+
+/**
+ * The current round's timeout notice when it is what of the answer needs a
+ * person (#17944): still to be typed, its typing stopped or possibly done.
+ * Null for a notice of a round since replaced, which is never typed again.
+ */
+export function heldTimeoutNotice(
+  row: QuestionRow,
+  host: AdvisoryHost = NO_ADVISORY_HOST
+): TimeoutNotice | null {
+  const notice = timeoutNoticeOf(row, parseAnswers(row.answers_json), host);
+  if (notice === null) return null;
+  if (notice.delivery !== "needs-attention" && notice.delivery !== "uncertain") return null;
+  if (!pendingEntries(row).some((entry) => entry.entry_id === notice.entryId)) return null;
+  return notice;
 }
 
 /** What would be typed in, the delivery engine's own test: marked for delivery and not yet delivered. */
@@ -143,12 +305,159 @@ export function pendingEntries(row: QuestionRow): AnswerEntry[] {
 const PREVIEW_TEXT_CHARS = 4_000;
 const QUESTION_CHARS = 240;
 
-/** One line of a question, as data: controls gone, cut to fit a row. */
+const GENERIC_HEADINGS = new Set([
+  "context",
+  "question",
+  "questions",
+  "summary",
+  "background",
+  "overview",
+  "details",
+  "decision",
+  "decision needed",
+  "problem",
+  "issue",
+  "situation",
+  "options",
+  "tl;dr",
+  "tldr",
+]);
+
+const LINE_SCAN_CHARS = 4_000;
+
+/** Emphasis and links outside code spans; the line was already cut to a bounded length. */
+function stripInline(text: string): string {
+  return text
+    .replace(/!?\[([^\]]*)\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)/g, "$1")
+    .replace(/<(https?:\/\/[^>\s]+)>/g, "$1")
+    .replace(/(^|[^\w*_])(\*\*|__|~~)(?=\S)(.+?)(?<=\S)\2(?![\w*_])/g, "$1$3")
+    .replace(/(^|[^\w*_])([*_])(?=\S)(.+?)(?<=\S)\2(?![\w*_])/g, "$1$3");
+}
+
+/** A line's text without Markdown syntax: marks, emphasis, ticks and link syntax, keeping link labels. */
+function stripMarkdown(raw: string): string {
+  let line = sanitizeAnswerText(
+    raw.trim().replace(/\t/g, " ").slice(0, LINE_SCAN_CHARS),
+    LINE_SCAN_CHARS
+  );
+  line = unquote(line);
+  if (/^(?:=+|(?:[-*_]\s*){3,})$/.test(line)) return "";
+  line = line.replace(/^\s*(?:[-*+]|\d{1,9}[.)])\s+/, "");
+  const heading = /^\s*#{1,6}(?:\s+|$)/.test(line);
+  line = line.replace(/^\s*#{1,6}(?:\s+|$)/, "");
+  if (heading) line = line.replace(/\s+#+\s*$/, "");
+  let out = "";
+  let last = 0;
+  for (const span of line.matchAll(/(`+)(?!`)(.+?)(?<!`)\1(?!`)/g)) {
+    out += stripInline(line.slice(last, span.index)) + span[2];
+    last = span.index + span[0].length;
+  }
+  return (out + stripInline(line.slice(last))).trim();
+}
+
+function unquote(line: string): string {
+  return line.replace(/^\s{0,3}(?:>\s*)+/, "");
+}
+
+/** The fence a line opens or closes, when it is one: a fence closed on its own line is inline code. */
+function fenceOf(
+  raw: string
+): { char: string; length: number; bare: boolean; quoted: boolean } | null {
+  const line = unquote(raw.slice(0, LINE_SCAN_CHARS)).trim();
+  const marker = /^(?:`{3,}|~{3,})/.exec(line)?.[0];
+  if (marker === undefined) return null;
+  const rest = line.slice(marker.length);
+  if (marker[0] === "`" && rest.includes(marker)) return null;
+  return {
+    char: marker[0]!,
+    length: marker.length,
+    bare: rest.trim() === "",
+    quoted: unquote(raw) !== raw,
+  };
+}
+
+function isGenericHeading(text: string): boolean {
+  return GENERIC_HEADINGS.has(text.replace(/[\s:：.\-–—]+$/, "").toLowerCase());
+}
+
+/** One line of a question, as data: Markdown syntax and controls gone, cut to fit a row. */
 export function questionLine(question: string): string | null {
-  const first = question.split(/\r\n?|\n|\u2028|\u2029/).find((line) => line.trim() !== "");
-  if (first === undefined) return null;
-  const line = sanitizeAnswerText(first, QUESTION_CHARS);
-  return line === "" ? null : line;
+  const lines = question.split(/\r\n?|\n|\u2028|\u2029/);
+  // A fence that never closes is not a block: its text counts as the question's.
+  const inside: boolean[] = [];
+  let open: { char: string; length: number; quoted: boolean } | null = null;
+  let opened = 0;
+  for (const raw of lines) {
+    const fence = fenceOf(raw);
+    if (open === null) {
+      inside.push(fence !== null);
+      if (fence !== null) {
+        open = fence;
+        opened = inside.length - 1;
+      }
+    } else {
+      inside.push(true);
+      if (
+        fence !== null &&
+        fence.bare &&
+        fence.char === open.char &&
+        fence.quoted === open.quoted &&
+        fence.length >= open.length
+      ) {
+        open = null;
+      }
+    }
+  }
+  if (open !== null) inside.fill(false, opened + 1);
+  let first: string | undefined;
+  for (const [index, raw] of lines.entries()) {
+    if (inside[index] || raw.trim() === "" || fenceOf(raw) !== null) continue;
+    const text = sanitizeAnswerText(stripMarkdown(raw), QUESTION_CHARS);
+    if (text === "") continue;
+    first ??= text;
+    if (!isGenericHeading(text)) return text;
+  }
+  return first ?? null;
+}
+
+/** The whole question or the agent's plan, to read in place (#18055): controls gone, line breaks kept, nothing cut. */
+export function readableText(text: string | null | undefined): string | null {
+  if (text == null) return null;
+  const readable = displayText(text);
+  return readable === "" ? null : readable;
+}
+
+/**
+ * A row's question as the attention list shows it (#18055), from one
+ * readable text so the two never disagree: its first line for the heading,
+ * and the whole of it only when that says more than the heading does.
+ */
+export function attentionQuestion(question: string | null | undefined): {
+  line: string | null;
+  whole: string | null;
+} {
+  const whole = readableText(question);
+  if (whole === null) return { line: null, whole: null };
+  const more = whole.includes("\n") || whole.length > QUESTION_CHARS;
+  return { line: questionLine(whole), whole: more ? whole : null };
+}
+
+/** IDs as a reference by question carries them over IPC. */
+const REFERENCE_ID_CHARS = 256;
+
+/**
+ * The question as the question view opens it (#18055): by the machine,
+ * project and terminal that asked it. Null when its origin can't name it so.
+ */
+export function questionReference(
+  row: Pick<QuestionRow, "question_id" | "origin">
+): DecisionQuestionReference | null {
+  const { host_id: hostId, project_id: projectId, pane_id: terminalId } = row.origin;
+  const named = [hostId, projectId, terminalId].every(
+    (id) => id !== "" && id.length <= REFERENCE_ID_CHARS
+  );
+  if (!named || !QUESTION_ID.test(row.question_id)) return null;
+  return { hostId, projectId, terminalId, questionId: row.question_id };
 }
 
 /**
@@ -206,6 +515,7 @@ export function copiedAnswerText(
       alias: row.alias,
       revision: entry.revision,
       source: entry.source === "proxy" ? "proxy" : "human",
+      ...(answeredOn(entry) === "computer" ? { onComputer: true } : {}),
       choices: entry.choices,
       comment: entry.text,
       correction: entry.correction,
@@ -226,6 +536,7 @@ export function copiedAnswerText(
       text,
       // As the delivery engine tells it: an answer came before it in the thread.
       answered: given.some((entry) => seqOf(entry) < message.event_seq),
+      ...(messageSentOn(message) === "computer" ? { onComputer: true } : {}),
       ...(images.has(message.message_id) ? { images: images.get(message.message_id) } : {}),
       injectionId: copyId(opened.length + index),
     }),

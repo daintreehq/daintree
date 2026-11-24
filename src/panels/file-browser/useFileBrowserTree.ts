@@ -26,6 +26,7 @@ import {
   type HiddenRowCounts,
 } from "./fileBrowserTree";
 import { countHiddenRowsMemo, flattenTreeMemo } from "./fileTreeDerivations";
+import { missingRowStatus, type MissingRowStatus } from "./treeCursor";
 
 /**
  * Shared empty expansion set for the single-directory listing count. A fresh
@@ -345,6 +346,14 @@ export interface UseFileBrowserTreeResult {
    * instead of quietly swapping it for another view.
    */
   selectionMissing: boolean;
+  /**
+   * Whether a path that has no row is gone or just not here yet. A tree cursor
+   * that used to resolve and now doesn't is only stale once this says `absent`:
+   * a root change drops every listing but the root's own, so the rows under a
+   * cursor that is still in the tree vanish for a few frames and come back.
+   * Stable until the listings, expansion, root or filter change.
+   */
+  missingRowStatus: (path: string) => MissingRowStatus;
 }
 
 interface QueueEntry {
@@ -1303,6 +1312,12 @@ export function useFileBrowserTree({
     return snapshotFromListings(listingsRef.current, activeSource, rootPath);
   }, [sourceKey, rootPath]);
 
+  const missingRowStatusOf = useCallback(
+    (path: string) =>
+      missingRowStatus(path, listings, expandedSet, rootPath, isVisible, failedListings),
+    [listings, expandedSet, rootPath, isVisible, failedListings]
+  );
+
   return {
     rows,
     // A seeded tree is content, not loading: the skeleton is reserved for
@@ -1322,6 +1337,7 @@ export function useFileBrowserTree({
     listingHasHiddenDotfiles,
     listingHiddenCounts,
     selectionMissing,
+    missingRowStatus: missingRowStatusOf,
   };
 }
 

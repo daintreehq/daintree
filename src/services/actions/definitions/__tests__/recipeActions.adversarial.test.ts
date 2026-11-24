@@ -627,13 +627,23 @@ describe("recipeActions adversarial", () => {
       expect(event.detail.worktreeId).toBe("wt-ctx");
     });
 
-    it("throws instead of claiming an editor opened that the listener would drop", async () => {
+    it("opens a blank project draft when there is no worktree, as in a folder without git (#16906)", async () => {
       setRecipeState({});
 
       const run = setupActions();
+      const result = await run("recipe.editor.open", {});
 
-      await expect(run("recipe.editor.open", {})).rejects.toThrow(/No worktree/i);
-      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        opened: true,
+        mode: "blankDraft",
+        worktreeId: null,
+        recipeId: null,
+        terminalCount: 0,
+      });
+      const event = dispatchSpy.mock.calls[0]![0] as unknown as {
+        detail: { worktreeId?: string };
+      };
+      expect(event.detail.worktreeId).toBeUndefined();
     });
 
     it.each([1, 2])("reports the %i captured pane(s) from a live layout", async (count) => {

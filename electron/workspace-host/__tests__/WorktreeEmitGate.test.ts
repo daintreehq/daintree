@@ -47,6 +47,26 @@ describe("WorktreeEmitGate", () => {
     });
   });
 
+  it("sends a quiet fetch's start and finish as ticks carrying the fetch state", () => {
+    const gate = new WorktreeEmitGate();
+    const monitor = {};
+    gate.next(monitor, snap({ lastFetchedAt: 100 }));
+
+    expect(
+      gate.next(monitor, snap({ lastFetchedAt: 100, isFetchInFlight: true, timestamp: 2 }))
+    ).toMatchObject({ isFetchInFlight: true, lastFetchedAt: 100 });
+    const finished = gate.next(monitor, snap({ lastFetchedAt: 200, timestamp: 3 }));
+    expect(finished).toMatchObject({ lastFetchedAt: 200 });
+    expect(finished?.isFetchInFlight).toBeUndefined();
+  });
+
+  it("sends a fetch that moved the counts whole", () => {
+    const gate = new WorktreeEmitGate();
+    const monitor = {};
+    gate.next(monitor, snap({ lastFetchedAt: 100, behindCount: 0 }));
+    expect(gate.next(monitor, snap({ lastFetchedAt: 200, behindCount: 2 }))).toBeNull();
+  });
+
   it("sends a content change whole and compares later ticks against it", () => {
     const gate = new WorktreeEmitGate();
     const monitor = {};

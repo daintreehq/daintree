@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AlertTriangle } from "lucide-react";
@@ -9,6 +9,7 @@ import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
+import { useRendererCpuProfileStore } from "@/store/rendererCpuProfileStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { usePaletteStore } from "@/store/paletteStore";
 import { logError, logWarn } from "@/utils/logger";
@@ -155,101 +156,81 @@ export function DownloadDiagnosticsSection() {
 
 const CPU_PROFILE_DURATION_SECONDS = 15;
 
-export function RendererCpuProfileSection() {
-  const [phase, setPhase] = useState<"idle" | "starting" | "recording" | "saving">("idle");
-  const [secondsLeft, setSecondsLeft] = useState(CPU_PROFILE_DURATION_SECONDS);
-  const [error, setError] = useState<string | null>(null);
-  const expiresAtRef = useRef(0);
-  const startInFlightRef = useRef(false);
-  const stopInFlightRef = useRef(false);
+function secondsUntil(deadline: number): number {
+  return Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+}
 
-  const handleStop = useCallback(async () => {
-    if (stopInFlightRef.current) return;
-    stopInFlightRef.current = true;
-    setPhase("saving");
-    try {
-      const result = await systemClient.stopRendererCpuProfile();
-      if (
-        result.status === "failed" &&
-        result.reason !== "not-recording" &&
-        result.reason !== "already-stopping"
-      ) {
-        setError(
-          result.reason === "devtools-detached"
-            ? "Recording stopped because DevTools attached to this window. Close DevTools and try again."
-            : (result.message ??
-                (result.reason === "capture-failed"
-                  ? "Couldn't capture the profile"
-                  : "Couldn't save the profile"))
-        );
-      }
-    } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't capture the profile"));
-    } finally {
-      stopInFlightRef.current = false;
-      setPhase("idle");
-    }
-  }, []);
+export function RendererCpuProfileSection() {
+  const phase = useRendererCpuProfileStore((s) => s.phase);
+  const expiresAt = useRendererCpuProfileStore((s) => s.expiresAt);
+  const error = useRendererCpuProfileStore((s) => s.error);
+  const record = useRendererCpuProfileStore((s) => s.record);
+  const collect = useRendererCpuProfileStore((s) => s.collect);
+  // Seeded from the deadline, so a row reopened after it shows the finished
+  // capture on its first paint rather than a countdown.
+  const [tick, setTick] = useState(() => {
+    const deadline = useRendererCpuProfileStore.getState().expiresAt;
+    return { deadline, secondsLeft: secondsUntil(deadline) };
+  });
+  // A deadline this row hasn't ticked against yet belongs to a recording that
+  // has only just started.
+  const secondsLeft = tick.deadline === expiresAt ? tick.secondsLeft : CPU_PROFILE_DURATION_SECONDS;
+  const [mountedAt] = useState(() => Date.now());
 
   useEffect(() => {
     if (phase !== "recording") return;
+    const update = () => {
+      const remaining = secondsUntil(expiresAt);
+      setTick({ deadline: expiresAt, secondsLeft: remaining });
+      return remaining;
+    };
+    if (update() <= 0) {
+      // A row that was open before the deadline saves at it. One opened after
+      // it, because Settings was closed when it passed, mustn't throw a save
+      // dialog at the user; the row offers the capture instead.
+      if (mountedAt < expiresAt) void collect();
+      return;
+    }
     const interval = window.setInterval(() => {
-      const remaining = Math.max(0, Math.ceil((expiresAtRef.current - Date.now()) / 1000));
-      setSecondsLeft(remaining);
-      if (remaining <= 0) void handleStop();
+      if (update() <= 0) void collect();
     }, PROFILE_UPDATE_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [phase, handleStop]);
+  }, [phase, expiresAt, collect, mountedAt]);
 
-  const handleRecord = async () => {
-    // A lagging renderer is why this control gets used, so a second click often
-    // lands before the first start resolves; it must not send its own start.
-    if (startInFlightRef.current) return;
-    startInFlightRef.current = true;
-    setError(null);
-    setPhase("starting");
-    try {
-      const result = await systemClient.startRendererCpuProfile();
-      if (result.status === "failed") {
-        setError(
-          result.reason === "already-recording"
-            ? "A recording is already in progress. Wait for it to finish and try again."
-            : (result.message ?? "Couldn't start the profiler")
-        );
-        setPhase("idle");
-        return;
-      }
-      expiresAtRef.current = result.expiresAt;
-      setSecondsLeft(CPU_PROFILE_DURATION_SECONDS);
-      setPhase("recording");
-    } catch (err) {
-      setError(formatErrorMessage(err, "Couldn't start the profiler"));
-      setPhase("idle");
-    } finally {
-      startInFlightRef.current = false;
-    }
-  };
+  const captured = phase === "recording" && secondsLeft <= 0;
+  // Only the recording window is known to have passed: a debugger detach while
+  // Settings was closed surfaces when the save is attempted.
+  const description = captured
+    ? "Recording ended. Save the profile to open it in Chrome DevTools."
+    : phase === "recording"
+      ? `Reproduce the slow interaction — auto-stops in ${secondsLeft}s`
+      : "Captures 15 seconds of the interface's CPU activity to diagnose lag. The saved .cpuprofile file opens in Chrome DevTools.";
 
   return (
     <SettingsRow
       label="CPU profile"
-      description={
-        phase === "recording"
-          ? `Reproduce the slow interaction — auto-stops in ${secondsLeft}s`
-          : "Captures 15 seconds of the interface's CPU activity to diagnose lag. The saved .cpuprofile file opens in Chrome DevTools."
-      }
+      description={description}
       error={error && <span className="select-text">{error}</span>}
       control={
-        phase === "recording" ? (
-          <Button variant="outline" size="sm" onClick={() => void handleStop()}>
+        captured || phase === "saving" ? (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void collect()}
+            loading={phase === "saving"}
+          >
+            Save profile
+          </Button>
+        ) : phase === "recording" ? (
+          <Button variant="outline" size="sm" onClick={() => void collect()}>
             Stop recording
           </Button>
         ) : (
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void handleRecord()}
-            loading={phase === "starting" || phase === "saving"}
+            onClick={() => void record()}
+            loading={phase === "starting"}
           >
             Record profile
           </Button>

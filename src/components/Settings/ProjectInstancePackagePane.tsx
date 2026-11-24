@@ -14,6 +14,8 @@ import {
   type PaneSettingsFocus,
 } from "@/components/Settings/projectPluginsShared";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
+import { useProjectPluginUnsavedGuard } from "@/components/Plugin/useProjectPluginUnsavedGuard";
+import { ProjectPluginUnsavedDialog } from "@/components/Plugin/ProjectPluginUnsavedDialog";
 import { actionService } from "@/services/ActionService";
 import type { LoadedPluginInfo } from "@shared/types/plugin";
 
@@ -37,9 +39,13 @@ export function ProjectInstancePackagePane({
     isInstanceOn(plugin, s.instanceEnabled, s.viewProjectId ?? s.projectId)
   );
   const toggling = useProjectPluginStore((s) => s.instanceToggling.has(pluginId));
-  const setInstanceEnabled = useProjectPluginStore((s) => s.setInstanceEnabled);
+  // Turning it off unloads this project's copy, so that asks first when one of
+  // its panels holds unsaved work (#17215). Turning it on goes straight through.
+  const guard = useProjectPluginUnsavedGuard();
   const failure = useStoreFailure("instanceEnabled", pluginId);
   const name = plugin.manifest.displayName ?? pluginId;
+  const setInstanceEnabled = (enabled: boolean) =>
+    void guard.setInstanceEnabled(pluginId, enabled, name);
 
   const badges = (
     <>
@@ -98,7 +104,7 @@ export function ProjectInstancePackagePane({
                         : `Couldn't turn off ${name} in this project`
                     }
                     detail={failure.detail}
-                    onRetry={() => void setInstanceEnabled(pluginId, failure.source.enabled)}
+                    onRetry={() => setInstanceEnabled(failure.source.enabled)}
                   />
                 ) : undefined
               }
@@ -106,7 +112,7 @@ export function ProjectInstancePackagePane({
                 <SettingsSwitch
                   checked={on}
                   disabled={disabled || toggling}
-                  onCheckedChange={(next) => void setInstanceEnabled(pluginId, next)}
+                  onCheckedChange={setInstanceEnabled}
                   aria-label={`Run ${name} in this project`}
                   aria-describedby={descriptionId}
                   data-testid="installed-plugin-instance-switch"
@@ -129,6 +135,7 @@ export function ProjectInstancePackagePane({
           />
         </SettingsSection>
       )}
+      <ProjectPluginUnsavedDialog guard={guard} />
     </div>
   );
 }

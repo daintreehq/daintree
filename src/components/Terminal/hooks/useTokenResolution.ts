@@ -193,9 +193,10 @@ export interface SendTextOptions {
    *
    * `submissionToken` is given for a send carrying `@notes`, whose notes clear
    * only once the terminal reports that token written. An adapter that holds
-   * text back for later submits it under the token when it delivers it, and
-   * resolves only then, so a hold that is withdrawn or dropped leaves the notes
-   * pending.
+   * text back for later either submits it under the token when it delivers it,
+   * resolving only then, or hands the token to `noteSubmissionHeld`, so the
+   * notes follow the held send. Either way a hold that is withdrawn or dropped
+   * leaves the notes pending.
    */
   submit?: (text: string, submissionToken?: string) => Promise<ComposerSubmitOutcome>;
   /**
@@ -284,6 +285,11 @@ interface UseTokenResolutionParams {
    * (Canopy's reply): its target's id and project, which address the same draft.
    */
   voice?: { panelId: string; projectId?: string };
+  /**
+   * The project whose prompt history a send is kept in, apart from the draft's
+   * scope: an isolated composer's draft is no project's. None keeps no record.
+   */
+  historyProjectId?: string;
   cwd: string;
   agentId?: BuiltInAgentId;
   /**
@@ -308,6 +314,7 @@ export function useTokenResolution({
   setActiveCompletionContext,
   terminalId,
   voice,
+  historyProjectId,
   cwd,
   agentId,
   expandContext = true,
@@ -421,10 +428,10 @@ export function useTokenResolution({
           }, retract);
         }
         latest.resetHistoryIndex(latest.terminalId, latest.projectId);
-        if (latest.projectId) {
+        if (historyProjectId) {
           useCommandHistoryStore
             .getState()
-            .recordPrompt(latest.projectId, authored, agentId ?? null);
+            .recordPrompt(historyProjectId, authored, agentId ?? null);
         }
 
         // The whole composer reset is one decision: if the draft is newer than
@@ -456,6 +463,7 @@ export function useTokenResolution({
       agentId,
       cwd,
       expandContext,
+      historyProjectId,
       takesDiffNotes,
       terminalId,
       voiceId,

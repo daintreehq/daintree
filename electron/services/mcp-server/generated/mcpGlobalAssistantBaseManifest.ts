@@ -154,7 +154,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
         tool: {
           type: "string",
           minLength: 1,
-          maxLength: 128,
+          maxLength: 256,
           description:
             "A Daintree tool on the host, by id. Search the host's own tools through this.",
         },
@@ -1486,6 +1486,21 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               waitingReason: {
                 type: "string",
               },
+              updateInstalled: {
+                type: "object",
+                properties: {
+                  observedAt: {
+                    type: "number",
+                  },
+                  namesRestart: {
+                    type: "boolean",
+                  },
+                },
+                required: ["observedAt", "namesRestart"],
+                additionalProperties: false,
+                description:
+                  'Claude Code showed "Update installed" this run: when, and if its text named /restart.',
+              },
               lastTransitionAt: {
                 type: "number",
               },
@@ -1643,7 +1658,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
-      "One notice when a host's link or a fresh load sample first meets your condition, or an agent here or on a host starts to wait, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
+      "One notice when a host's link or a fresh load sample meets your condition, an agent here or on a host starts to wait, or a plugin notifies an assistant, so you can end your turn. It only observes: never dials, holds or acts. Watches expire.",
     enabled: true,
     id: "host.watch",
     inputSchema: {
@@ -1652,9 +1667,9 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
       properties: {
         operation: {
           type: "string",
-          enum: ["arm", "cancel", "list"],
+          enum: ["arm", "cancel", "list", "read"],
           description:
-            "arm: one notice when first observed. cancel: end one. list: yours, armed and ended.",
+            "arm: one notice when first observed. cancel: end one. list: yours. read: a notification's text.",
         },
         hostId: {
           description:
@@ -1701,10 +1716,26 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
           },
         },
         projectId: {
-          description: "With agentsWaiting: only that project.",
+          description: "Only that project's agents or notifications.",
           type: "string",
           minLength: 1,
           maxLength: 256,
+        },
+        pluginNotifications: {
+          description: "Arm on plugin notifications for assistants. Arm returns untaken ones.",
+          type: "boolean",
+          const: true,
+        },
+        pluginId: {
+          description: "Only that plugin.",
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+        },
+        notificationId: {
+          description: "For read.",
+          type: "string",
+          maxLength: 64,
         },
         expiresInSeconds: {
           description: "Default 1800.",
@@ -1737,6 +1768,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
       "agents",
       "waiting",
       "approval",
+      "plugin",
     ],
     kind: "command",
     mcpAnnotations: {
@@ -1845,6 +1877,26 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                       },
                     ],
                   },
+                  pluginNotifications: {
+                    anyOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          projectId: {
+                            type: ["string", "null"],
+                          },
+                          pluginId: {
+                            type: ["string", "null"],
+                          },
+                        },
+                        required: ["projectId", "pluginId"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
                 },
                 required: [
                   "connection",
@@ -1852,6 +1904,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                   "cpuIdleCoresAtLeast",
                   "memoryPressureAtMost",
                   "agentsWaiting",
+                  "pluginNotifications",
                 ],
                 additionalProperties: false,
               },
@@ -2126,6 +2179,101 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             },
           },
           required: ["matches", "omitted", "hosts"],
+          additionalProperties: false,
+        },
+        notifications: {
+          type: "object",
+          properties: {
+            matches: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  notificationId: {
+                    type: "string",
+                  },
+                  pluginId: {
+                    type: "string",
+                  },
+                  pluginName: {
+                    type: "string",
+                  },
+                  projectId: {
+                    type: "string",
+                  },
+                  dedupeKey: {
+                    type: ["string", "null"],
+                  },
+                  severity: {
+                    type: "string",
+                    enum: ["info", "warning", "error"],
+                  },
+                  createdAt: {
+                    type: "number",
+                  },
+                },
+                required: [
+                  "notificationId",
+                  "pluginId",
+                  "pluginName",
+                  "projectId",
+                  "dedupeKey",
+                  "severity",
+                  "createdAt",
+                ],
+                additionalProperties: false,
+              },
+            },
+            omitted: {
+              type: "number",
+            },
+          },
+          required: ["matches", "omitted"],
+          additionalProperties: false,
+        },
+        notification: {
+          type: "object",
+          properties: {
+            notificationId: {
+              type: "string",
+            },
+            pluginId: {
+              type: "string",
+            },
+            pluginName: {
+              type: "string",
+            },
+            projectId: {
+              type: "string",
+            },
+            dedupeKey: {
+              type: ["string", "null"],
+            },
+            severity: {
+              type: "string",
+              enum: ["info", "warning", "error"],
+            },
+            createdAt: {
+              type: "number",
+            },
+            title: {
+              type: "string",
+            },
+            body: {
+              type: "string",
+            },
+          },
+          required: [
+            "notificationId",
+            "pluginId",
+            "pluginName",
+            "projectId",
+            "dedupeKey",
+            "severity",
+            "createdAt",
+            "title",
+            "body",
+          ],
           additionalProperties: false,
         },
       },

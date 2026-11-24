@@ -39,6 +39,8 @@ const connected: DecisionsSettings = {
   askHumanAgents: ["claude", "acme.agent-2"],
   terminalSnapshots: true,
   terminalSnapshotsConsentedAt: 1_761_955_270_000,
+  holdPhonePushes: true,
+  agentStoppedPushes: true,
 };
 
 /** `connected`, with a recovery kit verified for its identity. */
@@ -83,6 +85,44 @@ describe("sanitizeDecisionsSettings", () => {
     const { store, current } = memoryStore({ ...connected, autoEnrollHosts: false });
     writeDecisionsSettings(store, readDecisionsSettings(store));
     expect(current()).toEqual({ ...connected, autoEnrollHosts: false });
+  });
+
+  it("holds phone pushes while present unless the saved value is exactly false (#17240)", () => {
+    // A setting saved before the field existed has none: it holds them, with no migration and no new consent.
+    const { holdPhonePushes: _absent, ...beforeTheField } = connected;
+    const before = sanitizeDecisionsSettings(beforeTheField);
+    expect(before.holdPhonePushes).toBe(true);
+    expect(before.consentedAt).toBe(connected.consentedAt);
+    expect(defaultDecisionsSettings().holdPhonePushes).toBe(true);
+    for (const value of [true, "false", 0, null, {}]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, holdPhonePushes: value }).holdPhonePushes,
+        String(value)
+      ).toBe(true);
+    }
+    // Turning it off survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore({ ...connected, holdPhonePushes: false });
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual({ ...connected, holdPhonePushes: false });
+  });
+
+  it("tells the phone when an agent stops only once the saved value is exactly true (#17319)", () => {
+    // A setting saved before the field existed has none: it sends nothing until turned on.
+    const { agentStoppedPushes: _absent, ...beforeTheField } = connected;
+    const before = sanitizeDecisionsSettings(beforeTheField);
+    expect(before.agentStoppedPushes).toBe(false);
+    expect(before.consentedAt).toBe(connected.consentedAt);
+    expect(defaultDecisionsSettings().agentStoppedPushes).toBe(false);
+    for (const value of [false, "true", 1, null, {}]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, agentStoppedPushes: value }).agentStoppedPushes,
+        String(value)
+      ).toBe(false);
+    }
+    // Turning it on survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore(connected);
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual(connected);
   });
 
   it("switches no agent on for ask_human until one is saved, and keeps only agent ids, once each", () => {
@@ -361,6 +401,21 @@ describe("sanitizeDecisionsSettings", () => {
     for (const consentedAt of [0, -1, Number.NaN, Infinity, "1761955200000", true, {}, null]) {
       const settings = sanitizeDecisionsSettings({ ...connected, consentedAt });
       expect(settings, String(consentedAt)).toEqual({ ...connected, consentedAt: null });
+    }
+  });
+
+  it("keeps the key file version a kit was verified against only in the form it is written (#18064)", () => {
+    const recoveryKit = verified.recoveryKit!;
+    const keys = "a".repeat(64);
+    expect(
+      sanitizeDecisionsSettings({ ...verified, recoveryKit: { ...recoveryKit, keys } }).recoveryKit
+    ).toEqual({ ...recoveryKit, keys });
+    for (const bad of ["", "A".repeat(64), "a".repeat(63), 42, null]) {
+      expect(
+        sanitizeDecisionsSettings({ ...verified, recoveryKit: { ...recoveryKit, keys: bad } })
+          .recoveryKit,
+        String(bad)
+      ).toEqual(recoveryKit);
     }
   });
 

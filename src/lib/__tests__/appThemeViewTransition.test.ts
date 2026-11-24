@@ -4,6 +4,7 @@ import {
   runThemeReveal,
   runThemeCrossfade,
   prefersReducedMotion,
+  subscribeReducedMotion,
   THEME_WIPE_DURATION,
 } from "../appThemeViewTransition";
 import { UI_ENTER_DURATION } from "../animationUtils";
@@ -102,6 +103,79 @@ describe("appThemeViewTransition", () => {
 
     it("returns false when neither reduced motion nor performance mode is set", () => {
       expect(prefersReducedMotion()).toBe(false);
+    });
+  });
+
+  describe("subscribeReducedMotion", () => {
+    // MutationObserver records are delivered as a microtask.
+    const flushMutations = () => Promise.resolve();
+
+    /** Listeners by query and event type, so only the right subscription counts. */
+    function captureMediaListeners() {
+      const added = new Map<string, Set<() => void>>();
+      const key = (query: string, type: string) => `${query}|${type}`;
+      Object.defineProperty(window, "matchMedia", {
+        writable: true,
+        configurable: true,
+        value: vi.fn().mockImplementation((query: string) => ({
+          matches: false,
+          media: query,
+          addEventListener: (type: string, listener: () => void) => {
+            const listeners = added.get(key(query, type)) ?? new Set();
+            listeners.add(listener);
+            added.set(key(query, type), listeners);
+          },
+          removeEventListener: (type: string, listener: () => void) => {
+            added.get(key(query, type))?.delete(listener);
+          },
+        })),
+      });
+      return {
+        dispatch: (query: string, type: string) =>
+          added.get(key(query, type))?.forEach((listener) => listener()),
+        count: () => [...added.values()].reduce((total, set) => total + set.size, 0),
+      };
+    }
+
+    it("hears the OS preference change", () => {
+      const media = captureMediaListeners();
+      const listener = vi.fn();
+      const off = subscribeReducedMotion(listener);
+      media.dispatch("(prefers-reduced-motion: reduce)", "change");
+      expect(listener).toHaveBeenCalledTimes(1);
+      off();
+    });
+
+    it.each(["reduceAnimations", "performanceMode"] as const)(
+      "hears the in-app %s flag change",
+      async (flag) => {
+        const listener = vi.fn();
+        const off = subscribeReducedMotion(listener);
+        document.body.dataset[flag] = "true";
+        await flushMutations();
+        expect(listener).toHaveBeenCalledTimes(1);
+        off();
+      }
+    );
+
+    it("ignores body attributes that cannot change the answer", async () => {
+      const listener = vi.fn();
+      const off = subscribeReducedMotion(listener);
+      document.body.dataset.powerSaving = "true";
+      await flushMutations();
+      expect(listener).not.toHaveBeenCalled();
+      off();
+      delete document.body.dataset.powerSaving;
+    });
+
+    it("stops listening to both sources once unsubscribed", async () => {
+      const media = captureMediaListeners();
+      const listener = vi.fn();
+      subscribeReducedMotion(listener)();
+      expect(media.count()).toBe(0);
+      document.body.dataset.reduceAnimations = "true";
+      await flushMutations();
+      expect(listener).not.toHaveBeenCalled();
     });
   });
 

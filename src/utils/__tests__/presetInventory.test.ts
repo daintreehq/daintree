@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import {
+  ownedProjectPresets,
   presetInventoryState,
   readLaunchPresetSources,
   waitForLaunchPresets,
@@ -39,6 +40,28 @@ describe("presetInventoryState", () => {
     expect(
       presetInventoryState(true, null, { projectId: undefined, scratchId: undefined }).project
     ).toBe(false);
+  });
+});
+
+describe("ownedProjectPresets", () => {
+  const presets = [{ id: "team", name: "Team" }];
+
+  it("hands a snapshot only to the project that owns it", () => {
+    expect(ownedProjectPresets(presets, "a", { projectId: "a", scratchId: undefined })).toBe(
+      presets
+    );
+    expect(
+      ownedProjectPresets(presets, "a", { projectId: "b", scratchId: undefined })
+    ).toBeUndefined();
+    expect(
+      ownedProjectPresets(presets, null, { projectId: "a", scratchId: undefined })
+    ).toBeUndefined();
+  });
+
+  it("never hands one to a scratch, though a scratch has no project presets to wait for", () => {
+    const scope = { projectId: undefined, scratchId: "s" };
+    expect(presetInventoryState(true, "a", scope).project).toBe(true);
+    expect(ownedProjectPresets(presets, "a", scope)).toBeUndefined();
   });
 });
 

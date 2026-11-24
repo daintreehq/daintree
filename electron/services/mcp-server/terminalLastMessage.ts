@@ -31,7 +31,7 @@ export async function handleTerminalReadLastMessageOwned(
   signal.throwIfAborted();
   const resolved = await resolveClaudeTerminal(terminalId);
   if ("status" in resolved) return { status: "unavailable", reason: resolved.reason };
-  const projectsRoot = getClaudePaneProjectsRoot(terminalId);
+  const projectsRoot = getClaudePaneProjectsRoot(terminalId, resolved.parentSessionId);
   if (!projectsRoot) return { status: "unavailable", reason: "store-unknown" };
   return readClaudeLastMessage(
     { projectsRoot, cwd: resolved.cwd, sessionId: resolved.parentSessionId },

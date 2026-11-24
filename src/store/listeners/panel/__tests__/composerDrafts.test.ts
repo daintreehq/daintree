@@ -9,11 +9,24 @@ vi.mock("@/clients/decisionsClient", () => ({
   decisionsClient: { reportComposerDrafts },
 }));
 
+const scanned = vi.hoisted(() => ({ keys: 0 }));
+vi.mock("@/lib/draftKey", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/draftKey")>();
+  return {
+    ...actual,
+    isOtherHostDraftKey: (key: string) => {
+      scanned.keys++;
+      return actual.isOtherHostDraftKey(key);
+    },
+  };
+});
+
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import {
   COMPOSER_DRAFT_REFRESH_MS,
   COMPOSER_DRAFT_RETRY_MS,
   draftKeysWithText,
+  draftsWithTextMayDiffer,
   setupComposerDraftListeners,
 } from "../composerDrafts";
 
@@ -60,6 +73,33 @@ describe("composer draft reports (#16282)", () => {
     store.setDraftInput("t1", "hello", "p1");
     store.setDraftInput("t1", "", "p1");
     expect(sent()).toEqual([[], ["p1:t1"], []]);
+  });
+
+  it("derives the set again only when a draft can start or stop holding text", () => {
+    const held = new Map([
+      ["p1:t1", "hello"],
+      ["p1:t2", "  "],
+    ]);
+    const typed = (key: string, value: string) => new Map(held).set(key, value);
+    expect(draftsWithTextMayDiffer(typed("p1:t1", "hello there"), held)).toBe(false);
+    expect(draftsWithTextMayDiffer(typed("p1:t2", "   \n"), held)).toBe(false);
+    expect(draftsWithTextMayDiffer(typed("p1:t2", "  x"), held)).toBe(true);
+    expect(draftsWithTextMayDiffer(typed("p1:t1", " \t"), held)).toBe(true);
+    expect(draftsWithTextMayDiffer(typed("p1:t3", "new"), held)).toBe(true);
+    const removed = new Map(held);
+    removed.delete("p1:t2");
+    expect(draftsWithTextMayDiffer(removed, held)).toBe(true);
+  });
+
+  it("never derives the whole set again while a draft holding text is typed into", () => {
+    const store = useTerminalInputStore.getState();
+    store.setDraftInput("t2", "another draft", "p1");
+    store.setDraftInput("t1", "h", "p1");
+    start();
+    scanned.keys = 0;
+    for (const draft of ["he", "hel", "hell", "hello"]) store.setDraftInput("t1", draft, "p1");
+    expect(scanned.keys).toBe(0);
+    expect(sent()).toEqual([["p1:t1", "p1:t2"]]);
   });
 
   it("leaves out a draft for another host's terminal", () => {

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   clearPluginHostedViewRegistry,
+  getPluginHostedViewOwner,
   getPluginHostedViews,
   registerPluginHostedViews,
   unregisterPluginHostedViews,
@@ -54,5 +55,19 @@ describe("PluginHostedViewRegistry", () => {
     getPluginHostedViews()[0].componentPath = "plugin://evil/prefs.js";
 
     expect(getPluginHostedViews()[0].componentPath).toBe("plugin://a/prefs.js");
+  });
+
+  it("names the plugin that registered a view id, and nobody for an unknown or withdrawn one", () => {
+    registerPluginHostedViews("acme.a", [view("acme.a", "plugin://a/prefs.js")]);
+    // The registering instance owns the view, whatever its descriptor says.
+    registerPluginHostedViews("acme.b", [
+      { ...view("acme.b", "plugin://b/prefs.js"), pluginId: "x" },
+    ]);
+
+    expect(getPluginHostedViewOwner("plugin-view:acme.a/prefs")).toBe("acme.a");
+    expect(getPluginHostedViewOwner("plugin-view:acme.b/prefs")).toBe("acme.b");
+    expect(getPluginHostedViewOwner("plugin-view:acme.c/prefs")).toBeUndefined();
+    unregisterPluginHostedViews("acme.b");
+    expect(getPluginHostedViewOwner("plugin-view:acme.b/prefs")).toBeUndefined();
   });
 });

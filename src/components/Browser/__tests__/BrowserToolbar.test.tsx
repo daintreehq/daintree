@@ -4,6 +4,7 @@ import { act, render, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { BrowserToolbar } from "../BrowserToolbar";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { normalizeBrowserUrl } from "../browserUtils";
 import { getFrecencySuggestions } from "@/store/urlHistoryStore";
 import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
@@ -395,85 +396,121 @@ describe("BrowserToolbar ARIA semantics", () => {
     expect(button.getAttribute("aria-label")).toBe("Copy URL");
   });
 
-  it("screenshot capture announces success in a polite live region and flips to a check", async () => {
-    const onCaptureScreenshot = vi.fn(() => Promise.resolve(true));
-    const { container, getByRole } = renderToolbar({
-      onCaptureScreenshot,
-      isWebviewReady: true,
+  describe("screenshot copy feedback", () => {
+    const SHOT = "Copy screenshot to clipboard";
+    const hasCheck = (button: HTMLElement) => button.querySelector(".lucide-check") !== null;
+
+    beforeEach(() => {
+      useAnnouncerStore.setState({ polite: null, assertive: null });
     });
 
-    await act(async () => {
-      fireEvent.click(getByRole("button", { name: "Copy screenshot to clipboard" }));
+    it("announces once through the shared polite announcer, flips to a check, and reverts after the dwell", async () => {
+      vi.useFakeTimers();
+      const realAnnounce = useAnnouncerStore.getState().announce;
+      const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
+      try {
+        const onCaptureScreenshot = vi.fn(() => Promise.resolve(true));
+        const { container, getByRole } = renderToolbar({
+          onCaptureScreenshot,
+          isWebviewReady: true,
+        });
+        const button = getByRole("button", { name: SHOT });
+
+        await act(async () => {
+          fireEvent.click(button);
+        });
+
+        expect(onCaptureScreenshot).toHaveBeenCalledOnce();
+        expect(announce).toHaveBeenCalledTimes(1);
+        expect(announce).toHaveBeenCalledWith("Screenshot copied to clipboard", "polite");
+        expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+        expect(hasCheck(button)).toBe(true);
+
+        await act(async () => {
+          vi.advanceTimersByTime(UI_ACTION_SUCCESS_DWELL_MS - 1);
+        });
+        expect(hasCheck(button)).toBe(true);
+        await act(async () => {
+          vi.advanceTimersByTime(1);
+        });
+        expect(hasCheck(button)).toBe(false);
+      } finally {
+        announce.mockRestore();
+        useAnnouncerStore.setState({ announce: realAnnounce });
+        vi.useRealTimers();
+      }
     });
 
-    expect(onCaptureScreenshot).toHaveBeenCalledOnce();
-    await waitFor(() => {
-      const liveRegions = container.querySelectorAll('[role="status"]');
-      const texts = Array.from(liveRegions).map((node) => node.textContent);
-      expect(texts).toContain("Screenshot copied to clipboard");
-    });
-  });
+    it("does not announce when the toolbar unmounts before the capture settles", async () => {
+      const realAnnounce = useAnnouncerStore.getState().announce;
+      const announce = vi.spyOn(useAnnouncerStore.getState(), "announce");
+      try {
+        let resolveCapture!: (ok: boolean) => void;
+        const onCaptureScreenshot = vi.fn(
+          () => new Promise<boolean>((resolve) => (resolveCapture = resolve))
+        );
+        const { getByRole, unmount } = renderToolbar({ onCaptureScreenshot, isWebviewReady: true });
 
-  it("screenshot capture shows no success feedback when the handler reports failure", async () => {
-    const onCaptureScreenshot = vi.fn(() => Promise.resolve(false));
-    const { container, getByRole } = renderToolbar({
-      onCaptureScreenshot,
-      isWebviewReady: true,
-    });
+        await act(async () => {
+          fireEvent.click(getByRole("button", { name: SHOT }));
+        });
+        unmount();
+        await act(async () => {
+          resolveCapture(true);
+        });
 
-    await act(async () => {
-      fireEvent.click(getByRole("button", { name: "Copy screenshot to clipboard" }));
-    });
-
-    expect(onCaptureScreenshot).toHaveBeenCalledOnce();
-    const liveRegions = container.querySelectorAll('[role="status"]');
-    const texts = Array.from(liveRegions).map((node) => node.textContent);
-    expect(texts).not.toContain("Screenshot copied to clipboard");
-  });
-
-  it("screenshot capture clears prior success feedback when a retry fails", async () => {
-    const onCaptureScreenshot = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
-    const { container, getByRole } = renderToolbar({
-      onCaptureScreenshot,
-      isWebviewReady: true,
-    });
-    const button = getByRole("button", { name: "Copy screenshot to clipboard" });
-
-    await act(async () => {
-      fireEvent.click(button);
-    });
-    await waitFor(() => {
-      const texts = Array.from(container.querySelectorAll('[role="status"]')).map(
-        (node) => node.textContent
-      );
-      expect(texts).toContain("Screenshot copied to clipboard");
+        expect(announce).not.toHaveBeenCalled();
+      } finally {
+        announce.mockRestore();
+        useAnnouncerStore.setState({ announce: realAnnounce });
+      }
     });
 
-    await act(async () => {
-      fireEvent.click(button);
+    it("shows no success feedback when the handler reports failure or rejects", async () => {
+      for (const outcome of [
+        () => Promise.resolve(false),
+        () => Promise.reject(new Error("capture failed")),
+      ]) {
+        useAnnouncerStore.setState({ polite: null, assertive: null });
+        const { getByRole, unmount } = renderToolbar({
+          onCaptureScreenshot: vi.fn(outcome),
+          isWebviewReady: true,
+        });
+        const button = getByRole("button", { name: SHOT });
+        await act(async () => {
+          fireEvent.click(button);
+        });
+        expect(useAnnouncerStore.getState().polite).toBeNull();
+        expect(hasCheck(button)).toBe(false);
+        unmount();
+      }
     });
 
-    const texts = Array.from(container.querySelectorAll('[role="status"]')).map(
-      (node) => node.textContent
-    );
-    expect(texts).not.toContain("Screenshot copied to clipboard");
-  });
+    it("clears prior success feedback when a retry fails", async () => {
+      const onCaptureScreenshot = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      const { getByRole } = renderToolbar({ onCaptureScreenshot, isWebviewReady: true });
+      const button = getByRole("button", { name: SHOT });
 
-  it("screenshot capture shows no success feedback when the handler rejects", async () => {
-    const onCaptureScreenshot = vi.fn(() => Promise.reject(new Error("capture failed")));
-    const { container, getByRole } = renderToolbar({
-      onCaptureScreenshot,
-      isWebviewReady: true,
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(hasCheck(button)).toBe(true);
+
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(hasCheck(button)).toBe(false);
     });
 
-    await act(async () => {
-      fireEvent.click(getByRole("button", { name: "Copy screenshot to clipboard" }));
+    it("keeps the disabled screenshot button inside a hoverable wrapper so its tooltip can open", () => {
+      const { getByRole } = renderToolbar({
+        onCaptureScreenshot: vi.fn(),
+        isWebviewReady: false,
+      });
+      const button = getByRole("button", { name: SHOT });
+      expect(button).toHaveProperty("disabled", true);
+      expect(button.parentElement?.tagName).toBe("SPAN");
     });
-
-    expect(onCaptureScreenshot).toHaveBeenCalledOnce();
-    const liveRegions = container.querySelectorAll('[role="status"]');
-    const texts = Array.from(liveRegions).map((node) => node.textContent);
-    expect(texts).not.toContain("Screenshot copied to clipboard");
   });
 
   it("Shift+Delete on a highlighted suggestion announces removal", async () => {
@@ -1101,23 +1138,20 @@ describe("BrowserToolbar zoom", () => {
     expect(queryByTestId("browser-zoom-indicator")?.textContent).toContain("125%");
   });
 
-  it("offers zoom, DevTools and Portal from the More menu", async () => {
+  it("offers zoom and DevTools from the More menu", async () => {
     const onZoomChange = vi.fn();
     const onToggleDevTools = vi.fn();
-    const onPromoteToPortal = vi.fn();
     const { getByLabelText } = renderToolbar({
       onZoomChange,
       onToggleDevTools,
-      onPromoteToPortal,
       isWebviewReady: true,
     });
     fireEvent.pointerDown(getByLabelText("More page actions"), { button: 0, ctrlKey: false });
     await waitFor(() => expect(document.querySelector('[role="menu"]')).toBeTruthy());
     const items = Array.from(document.querySelectorAll('[role="menuitem"]'));
     const labels = items.map((i) => i.textContent?.trim());
-    expect(labels).toEqual(
-      expect.arrayContaining(["Zoom in", "Zoom out", "Toggle DevTools", "Open in Portal"])
-    );
+    expect(labels).toEqual(expect.arrayContaining(["Zoom in", "Zoom out", "Toggle DevTools"]));
+    expect(labels).not.toContain("Open in Portal");
     fireEvent.click(items.find((i) => i.textContent?.trim() === "Zoom in")!);
     expect(onZoomChange).toHaveBeenCalledWith(1.25);
   });
@@ -1319,6 +1353,35 @@ describe("BrowserToolbar back/forward history menu", () => {
     fireEvent.click(items[1]!);
     expect(onGoToHistoryIndex).toHaveBeenCalledWith(0);
     expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it("shows history entries at their display address, never the raw proxy URL", async () => {
+    const proxy = "http://proj-pane.localhost:9999";
+    const toAddress = (url: string) => url.replace(proxy, "http://localhost:5173");
+    const { getByTestId, findByRole } = renderToolbar({
+      canGoBack: true,
+      toAddress,
+      navSnapshot: {
+        entries: [
+          { index: 0, url: `${proxy}/home`, title: "" },
+          { index: 1, url: `${proxy}/dashboard`, title: "Dashboard" },
+          { index: 2, url: `${proxy}/pricing`, title: "Pricing" },
+        ],
+        activeIndex: 2,
+        canGoBack: true,
+        canGoForward: false,
+      },
+    });
+    fireEvent.contextMenu(getByTestId("browser-back"));
+
+    const menu = await findByRole("menu", { name: "Back history" });
+    const items = Array.from(menu.querySelectorAll('[role="menuitem"]'));
+    const texts = items.map((item) => Array.from(item.children).map((c) => c.textContent));
+    expect(texts).toEqual([
+      ["Dashboard", "localhost:5173/dashboard"],
+      ["localhost:5173/home", "localhost:5173/home"],
+    ]);
+    expect(menu.textContent).not.toContain("proj-pane.localhost");
   });
 
   // Longer than the zero-delay task the deferred focus fallback runs on.

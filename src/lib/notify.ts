@@ -150,10 +150,19 @@ export const EVENT_KIND_LABEL: Record<NotificationEventKind, string> = {
   connectivity: "connection notifications",
 };
 
-const EVENT_KIND_VALUES: ReadonlySet<string> = new Set(Object.keys(EVENT_KIND_LABEL));
+export type SilenceableEventKind = "completed" | "waiting" | "workingPulse" | "uiFeedback";
 
-export function isNotificationEventKind(v: string | undefined): v is NotificationEventKind {
-  return v !== undefined && EVENT_KIND_VALUES.has(v);
+/**
+ * True only for kinds backed by a persisted user-override setting, i.e. the
+ * ones `project.silenceNotificationKind` accepts. Routing-only kinds ("git",
+ * "host", ...) pass `NotificationEventKind` but have nothing to silence.
+ */
+const SILENCEABLE_EVENT_KINDS: ReadonlySet<string> = new Set(
+  Object.keys(EVENT_KIND_TO_SETTING_KEY)
+);
+
+export function isSilenceableEventKind(v: string | undefined): v is SilenceableEventKind {
+  return v !== undefined && SILENCEABLE_EVENT_KINDS.has(v);
 }
 
 const INTERRUPTION_TO_PRIORITY: Record<EventInterruption, NotificationPriority> = {
@@ -288,6 +297,15 @@ interface NotifyPayloadBase {
    * or already archived.
    */
   supersedes?: string;
+  /**
+   * The inbox row's id, for an event every project view hears at once (a host
+   * broadcast). Each view files it under this id, so their writes merge into
+   * one row and a view already holding it files no second one; only the
+   * focused view toasts, as for any notification. Names the one event, never
+   * its kind. A rate-limited one keeps its own row rather than joining a
+   * summary row, which every other view's copy would duplicate.
+   */
+  historyId?: string;
   /**
    * Replace an earlier notification with the same key: its live toast is
    * dismissed and, unless `supersedeKey` says otherwise, its inbox row is
@@ -798,6 +816,12 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
   // A held-back replacement keeps its own inbox row (the caller writes it),
   // so it isn't counted again in a summary row.
   if (payload.replaceKey !== undefined) return true;
+  // So does an event every view hears, since the others file its own row and a
+  // summary here would be a second; the held-back toast is still announced.
+  if (payload.historyId !== undefined) {
+    announceOverflow(key, now);
+    return true;
+  }
 
   bucket.overflowCount += 1;
   const historyStore = useNotificationHistoryStore.getState();
@@ -851,13 +875,16 @@ function checkAndApplyRateLimit(payload: NotifyPayload): boolean {
     });
   }
 
+  announceOverflow(key, now);
+  return true;
+}
+
+function announceOverflow(key: string, now: number): void {
   const lastAnnounce = _overflowAnnouncementTimestamps.get(key);
   if (lastAnnounce === undefined || now - lastAnnounce >= OVERFLOW_ANNOUNCEMENT_COOLDOWN_MS) {
     useAnnouncerStore.getState().announce("Events suppressed — check notification inbox", "polite");
     _overflowAnnouncementTimestamps.set(key, now);
   }
-
-  return true;
 }
 
 let _quietUntil = 0;
@@ -1015,6 +1042,9 @@ export function notify(payload: NotifyPayload): string {
   }
 
   const historyMessage = inboxMessage ?? (typeof message === "string" ? message : undefined);
+  // A titled entry whose body would only repeat the title carries an empty
+  // message; it still belongs in the inbox, where the title is the row.
+  const hasHistory = historyMessage !== undefined && (historyMessage !== "" || Boolean(title));
 
   const allActions = [...(payload.actions ?? []), ...(payload.action ? [payload.action] : [])];
 
@@ -1072,7 +1102,7 @@ export function notify(payload: NotifyPayload): string {
       }
     }
     const entryId =
-      historyMessage && !payload.transient
+      hasHistory && !payload.transient
         ? useNotificationHistoryStore.getState().addEntry({
             type,
             title,
@@ -1084,6 +1114,7 @@ export function notify(payload: NotifyPayload): string {
             context,
             supersedeKey: payload.supersedeKey,
             supersedes: payload.supersedes,
+            id: payload.historyId,
           })
         : undefined;
     if (!notificationsEnabled || isQuiet) return "";
@@ -1170,8 +1201,9 @@ export function notify(payload: NotifyPayload): string {
     checkAndApplyRateLimit(payload)
   ) {
     // A replacement still retires the row it replaces and leaves its own
-    // buttons in the inbox; only its toast is held back.
-    if (payload.replaceKey !== undefined && historyMessage) {
+    // buttons in the inbox, and an event every view hears keeps its one row;
+    // only the toast is held back.
+    if ((payload.replaceKey !== undefined || payload.historyId !== undefined) && hasHistory) {
       useNotificationHistoryStore.getState().addEntry({
         type,
         title,
@@ -1183,13 +1215,14 @@ export function notify(payload: NotifyPayload): string {
         context,
         supersedeKey: payload.supersedeKey,
         supersedes: payload.supersedes,
+        id: payload.historyId,
       });
     }
     return "";
   }
 
   const historyEntryId =
-    historyMessage && !payload.transient
+    hasHistory && !payload.transient
       ? useNotificationHistoryStore.getState().addEntry({
           type,
           title,
@@ -1201,15 +1234,16 @@ export function notify(payload: NotifyPayload): string {
           context,
           supersedeKey: payload.supersedeKey,
           supersedes: payload.supersedes,
+          id: payload.historyId,
         })
       : undefined;
 
   if (!notificationsEnabled || isQuiet) return "";
 
-  if (shouldNative && historyMessage && typeof window !== "undefined") {
+  if (shouldNative && hasHistory && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({
       title: title ?? "Daintree",
-      body: historyMessage,
+      body: historyMessage ?? "",
     });
   }
 

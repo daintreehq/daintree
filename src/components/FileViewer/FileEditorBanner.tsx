@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useResolvedFileEditor } from "@/registry/fileEditorRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -7,14 +7,14 @@ import { actionService } from "@/services/ActionService";
 
 interface FileEditorBannerProps {
   filePath: string;
-  content: string;
+  /** The file's size in bytes, as the read reported it — never a re-encoding of its text. */
+  contentBytes: number;
   onEdit: () => void | Promise<void>;
 }
 
 /** Both readers use the same discovery route, even while the plugin's view is disabled. */
-export function FileEditorBanner({ filePath, content, onEdit }: FileEditorBannerProps) {
+export function FileEditorBanner({ filePath, contentBytes, onEdit }: FileEditorBannerProps) {
   const registration = useResolvedFileEditor(filePath);
-  const contentBytes = useMemo(() => new TextEncoder().encode(content).byteLength, [content]);
   const meta = usePluginRuntimeStore((state) =>
     registration ? state.pluginMetaById.get(registration.pluginId) : undefined
   );

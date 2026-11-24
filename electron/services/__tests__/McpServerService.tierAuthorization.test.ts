@@ -17,6 +17,7 @@ import type {
   ActionDanger,
 } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { ACTIONS_LIST_WALK_LIMIT } from "../../../shared/config/mcpIntrospection.js";
 import {
   CORE_TIER_TOOLS,
   FULL_TIER_ADDONS,
@@ -249,6 +250,7 @@ type DispatchRequest = {
   args?: unknown;
   confirmed?: boolean;
   callerInfo?: { token4LastChars: string; userAgent: string };
+  actionsListWalk?: boolean;
 };
 
 type TextToolResult = {
@@ -900,6 +902,36 @@ describe("McpServerService", () => {
       expect(records[0].result).toBe("success");
     });
 
+    it("takes an external session's actions.list walk from the focused view in one round trip (#17036)", async () => {
+      const dispatchMock = vi.fn((request: DispatchRequest): ActionDispatchResult => ({
+        ok: true,
+        result: {
+          actions: manifestForAllAllowlistedTools(),
+          total: manifestForAllAllowlistedTools().length,
+          limit: request.actionsListWalk ? ACTIONS_LIST_WALK_LIMIT : 100,
+          offset: 0,
+          hasMore: false,
+        },
+      }));
+      const { window } = createMockWindow({
+        getManifest: manifestForAllAllowlistedTools,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectHttpClient(service.currentPort!);
+      httpTransports.push(transport);
+
+      await client.callTool({ name: "actions.list", arguments: {} });
+
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock.mock.calls[0]![0]).toMatchObject({
+        actionId: "actions.list",
+        args: { offset: 0, limit: 100 },
+        actionsListWalk: true,
+      });
+    });
+
     it("Streamable HTTP transport with a pane token stamps core tier and gates dispatch", async () => {
       const dispatchMock = vi.fn((): ActionDispatchResult => ({ ok: true, result: { ok: true } }));
       const { window } = createMockWindow({
@@ -1073,6 +1105,24 @@ describe("McpServerService", () => {
         id: "terminal.restartOnPresetOwned" as ActionId,
         title: "Restart Owned Agent on Preset",
         description: "Respawn an agent this MCP session created on another preset",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "terminal.restartOnAccountOwned" as ActionId,
+        title: "Restart Owned Agent on Account",
+        description: "Respawn an agent this MCP session created on another account",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "terminal.applyClaudeUpdateOwned" as ActionId,
+        title: "Apply Claude Code update",
+        description: "Type /restart once into a Claude Code agent this MCP session created",
+        danger: "confirm",
+      }),
+      createManifestEntry({
+        id: "agent.addAccount" as ActionId,
+        title: "Add Agent Accounts",
+        description: "Add agent accounts.",
         danger: "confirm",
       }),
       ...(
@@ -1515,11 +1565,6 @@ describe("McpServerService", () => {
         description: "Restart the dev server for the dev preview panel",
       }),
       createManifestEntry({
-        id: "devPreview.promoteToPortal" as ActionId,
-        title: "Promote Dev Preview to Portal",
-        description: "Promote a dev preview panel to a portal tab",
-      }),
-      createManifestEntry({
         id: "portal.openUrl" as ActionId,
         title: "Open URL in Portal",
         description: "Open a URL in a new portal tab",
@@ -1533,11 +1578,6 @@ describe("McpServerService", () => {
         id: "portal.toggle" as ActionId,
         title: "Toggle Portal",
         description: "Show or hide the portal",
-      }),
-      createManifestEntry({
-        id: "portal.toggleDevDashboard" as ActionId,
-        title: "Toggle Dev Dashboard",
-        description: "Show or hide the portal dev dashboard",
       }),
       // Full-only (#12116). The git and forge writes and forge openers that
       // follow are on neither in-app set; they stay in the fixture so their
@@ -1784,6 +1824,7 @@ describe("McpServerService", () => {
           ["worktree.waitForPullRequest", "Wait For Pull Request"],
           ["agent.listAvailable", "List Available Agents"],
           ["agent.listPresets", "List Agent Presets"],
+          ["agent.listAccounts", "List Agent Accounts"],
           ["agent.listModels", "List Agent Models"],
           ["terminal.list", "List Terminals"],
           ["terminal.getStatus", "Get Terminal Status"],
@@ -1883,7 +1924,6 @@ describe("McpServerService", () => {
       "browser.openUrl",
       "browser.captureScreenshot",
       "panel.focus",
-      "devPreview.promoteToPortal",
       "portal.openUrl",
       "app.theme.pick",
     ] as const;

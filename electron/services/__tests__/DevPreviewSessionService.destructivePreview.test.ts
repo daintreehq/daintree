@@ -5,7 +5,12 @@ import path from "node:path";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, existsSync } from "node:fs";
 import fsPromises from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DevPreviewSessionService } from "../DevPreviewSessionService.js";
+import {
+  DevPreviewSessionService,
+  type DevPreviewDirSizeScan,
+} from "../DevPreviewSessionService.js";
+import { measureDirectorySize } from "../DirectoryDiskUsage.js";
+import { CACHE_DIRS } from "../DevPreviewDiskUsage.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { DevPreviewSessionState } from "../../../shared/types/ipc/devPreview.js";
 
@@ -126,6 +131,10 @@ describe("DevPreviewSessionService — destructive preview", () => {
     return { ...request(), cwd: tmpDir, devCommand: "npm run dev" };
   }
 
+  function sizesRequest() {
+    return { ...request(), sessionId: "opening-1" };
+  }
+
   describe("getDestructivePreviewMeta", () => {
     it("reports existence + mtime for each cache directory present", async () => {
       mkdirSync(path.join(tmpDir, ".next"), { recursive: true });
@@ -220,9 +229,20 @@ describe("DevPreviewSessionService — destructive preview", () => {
   });
 
   describe("getDestructivePreviewSizes", () => {
+    function scan(signal = new AbortController().signal): DevPreviewDirSizeScan {
+      return { signal, measure: (dirPath) => measureDirectorySize(dirPath, { signal }) };
+    }
+
+    function allNull() {
+      return {
+        cacheDirSizes: Object.fromEntries(CACHE_DIRS.map((relPath) => [relPath, null])),
+        nodeModulesSizeBytes: null,
+      };
+    }
+
     it("returns null for cache dirs that do not exist", async () => {
       await service.ensure(ensureRequest());
-      const sizes = await service.getDestructivePreviewSizes(request());
+      const sizes = await service.getDestructivePreviewSizes(sizesRequest(), scan());
 
       expect(sizes.cacheDirSizes[".next"]).toBeNull();
       expect(sizes.cacheDirSizes[".vite"]).toBeNull();
@@ -237,7 +257,7 @@ describe("DevPreviewSessionService — destructive preview", () => {
       writeFileSync(path.join(tmpDir, ".next", "build-output.txt"), sample);
 
       await service.ensure(ensureRequest());
-      const sizes = await service.getDestructivePreviewSizes(request());
+      const sizes = await service.getDestructivePreviewSizes(sizesRequest(), scan());
 
       expect(typeof sizes.cacheDirSizes[".next"]).toBe("number");
       expect(sizes.cacheDirSizes[".next"]).toBeGreaterThan(0);
@@ -247,13 +267,13 @@ describe("DevPreviewSessionService — destructive preview", () => {
       mkdirSync(path.join(tmpDir, "node_modules", "foo"), { recursive: true });
       writeFileSync(path.join(tmpDir, "node_modules", "foo", "index.js"), "module.exports = {};");
       await service.ensure(ensureRequest());
-      const sizes = await service.getDestructivePreviewSizes(request());
+      const sizes = await service.getDestructivePreviewSizes(sizesRequest(), scan());
       expect(typeof sizes.nodeModulesSizeBytes).toBe("number");
       expect(sizes.nodeModulesSizeBytes).toBeGreaterThan(0);
     });
 
     it("throws when the session does not exist", async () => {
-      await expect(service.getDestructivePreviewSizes(request())).rejects.toThrow(
+      await expect(service.getDestructivePreviewSizes(sizesRequest(), scan())).rejects.toThrow(
         /No dev-preview session/
       );
     });
@@ -265,13 +285,139 @@ describe("DevPreviewSessionService — destructive preview", () => {
       writeFileSync(path.join(tmpDir, ".next", "out"), "data");
 
       await service.ensure(ensureRequest());
-      const sizes = await service.getDestructivePreviewSizes({
-        ...request(),
-        skipNodeModules: true,
-      });
+      const sizes = await service.getDestructivePreviewSizes(
+        { ...sizesRequest(), skipNodeModules: true },
+        scan()
+      );
 
       expect(sizes.nodeModulesSizeBytes).toBeNull();
       expect(typeof sizes.cacheDirSizes[".next"]).toBe("number");
+    });
+
+    describe("scan scoping", () => {
+      function seed() {
+        mkdirSync(path.join(tmpDir, "node_modules", ".vite"), { recursive: true });
+        writeFileSync(path.join(tmpDir, "node_modules", ".vite", "deps.js"), "x".repeat(2048));
+        writeFileSync(path.join(tmpDir, "node_modules", "index.js"), "y".repeat(2048));
+        mkdirSync(path.join(tmpDir, ".next"), { recursive: true });
+        writeFileSync(path.join(tmpDir, ".next", "out"), "z".repeat(2048));
+      }
+
+      // Every root goes through the opening's scan, so its measure calls are the scanned roots.
+      function scannedRoots() {
+        const real = scan();
+        const measure = vi.fn(real.measure);
+        return {
+          scan: { signal: real.signal, measure },
+          roots: () => measure.mock.calls.map(([p]) => path.relative(tmpDir, String(p))),
+        };
+      }
+
+      it("reinstall scan measures only node_modules", async () => {
+        seed();
+        await service.ensure(ensureRequest());
+        const { scan: scoped, roots } = scannedRoots();
+        const sizes = await service.getDestructivePreviewSizes(
+          { ...sizesRequest(), skipCacheDirs: true },
+          scoped
+        );
+
+        expect(roots()).toEqual(["node_modules"]);
+        expect(sizes.cacheDirSizes).toEqual({});
+        expect(sizes.nodeModulesSizeBytes).toBeGreaterThan(0);
+      });
+
+      it("cache scan measures every cache dir once and never node_modules", async () => {
+        seed();
+        await service.ensure(ensureRequest());
+        const { scan: scoped, roots } = scannedRoots();
+        const sizes = await service.getDestructivePreviewSizes(
+          { ...sizesRequest(), skipNodeModules: true },
+          scoped
+        );
+
+        const scanned = roots();
+        expect(scanned).not.toContain("node_modules");
+        expect(scanned.filter((r) => r === path.join("node_modules", ".vite"))).toHaveLength(1);
+        expect(scanned).toHaveLength(7);
+        expect(sizes.nodeModulesSizeBytes).toBeNull();
+        expect(sizes.cacheDirSizes[".next"]).toBeGreaterThan(0);
+        expect(sizes.cacheDirSizes[path.join("node_modules", ".vite")]).toBeGreaterThan(0);
+      });
+    });
+
+    it("sends every directory, present or not, through the opening's scan", async () => {
+      mkdirSync(path.join(tmpDir, ".next"), { recursive: true });
+      await service.ensure(ensureRequest());
+      const relPaths = [...CACHE_DIRS, "node_modules"];
+      const sentinel = (dirPath: string) => 1000 + relPaths.indexOf(path.relative(tmpDir, dirPath));
+      const measure = vi.fn(async (dirPath: string) => sentinel(dirPath));
+
+      const sizes = await service.getDestructivePreviewSizes(sizesRequest(), {
+        signal: new AbortController().signal,
+        measure,
+      });
+
+      expect(measure.mock.calls.map(([dirPath]) => dirPath).sort()).toEqual(
+        relPaths.map((relPath) => path.join(tmpDir, relPath)).sort()
+      );
+      expect(sizes).toEqual({
+        cacheDirSizes: Object.fromEntries(
+          CACHE_DIRS.map((relPath) => [relPath, sentinel(path.join(tmpDir, relPath))])
+        ),
+        nodeModulesSizeBytes: sentinel(path.join(tmpDir, "node_modules")),
+      });
+    });
+
+    it("never measures node_modules for the cache tier", async () => {
+      await service.ensure(ensureRequest());
+      const measure = vi.fn(async (_dirPath: string) => 1);
+
+      await service.getDestructivePreviewSizes(
+        { ...sizesRequest(), skipNodeModules: true },
+        { signal: new AbortController().signal, measure }
+      );
+
+      expect(measure).not.toHaveBeenCalledWith(path.join(tmpDir, "node_modules"));
+      expect(measure).toHaveBeenCalledTimes(CACHE_DIRS.length);
+    });
+
+    it("answers every size null once the opening is stopped, even those already measured", async () => {
+      await service.ensure(ensureRequest());
+      const opening = new AbortController();
+      let releaseNodeModules: (bytes: number) => void = () => {};
+      const measure = vi.fn((dirPath: string) =>
+        path.basename(dirPath) === "node_modules"
+          ? new Promise<number>((resolve) => {
+              releaseNodeModules = resolve;
+            })
+          : Promise.resolve(4096)
+      );
+
+      const pending = service.getDestructivePreviewSizes(sizesRequest(), {
+        signal: opening.signal,
+        measure,
+      });
+      await vi.waitFor(() => expect(measure).toHaveBeenCalledTimes(CACHE_DIRS.length + 1));
+      opening.abort();
+      releaseNodeModules(4096);
+
+      expect(await pending).toEqual(allNull());
+    });
+
+    it("measures nothing for an opening stopped before it began", async () => {
+      await service.ensure(ensureRequest());
+      const opening = new AbortController();
+      opening.abort();
+      const measure = vi.fn(async (_dirPath: string) => 1);
+
+      const sizes = await service.getDestructivePreviewSizes(sizesRequest(), {
+        signal: opening.signal,
+        measure,
+      });
+
+      expect(measure).not.toHaveBeenCalled();
+      expect(sizes).toEqual(allNull());
     });
   });
 });

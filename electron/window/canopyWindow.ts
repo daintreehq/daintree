@@ -102,9 +102,7 @@ function detachGlobalAssistantWithView(view: WebContentsView): void {
   const viewId = webContents.id;
   const detach = (): void => {
     void import("../services/globalAssistant.js")
-      .then(({ peekGlobalAssistantService }) =>
-        peekGlobalAssistantService()?.detachWebContents(viewId)
-      )
+      .then(({ detachGlobalAssistantWebContents }) => detachGlobalAssistantWebContents(viewId))
       .catch((error: unknown) => {
         console.warn("[CanopyWindow] Detaching the global assistant failed:", error);
       });

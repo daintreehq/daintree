@@ -25,6 +25,42 @@ vi.mock("../../../services/SitePreviewBridge.js", () => ({
   getSitePreviewBridge: () => bridge,
 }));
 
+// A browser panel's guest as main sees it: registered kind, embedder, committed URL.
+const guests = vi.hoisted(
+  () => new Map<string, { id: number; kind: string; embedder: number; url: string }>()
+);
+function guestById(id: number) {
+  return [...guests.values()].find((guest) => guest.id === id);
+}
+vi.mock("../../../services/WebviewDialogService.js", () => ({
+  getWebviewDialogService: () => ({
+    getWebContentsId: (panelId: string) => guests.get(panelId)?.id,
+    getPanelKind: (id: number) => guestById(id)?.kind,
+  }),
+}));
+vi.mock("electron", () => ({
+  ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
+  webContents: {
+    fromId: (id: number) => {
+      const guest = guestById(id);
+      return guest
+        ? {
+            isDestroyed: () => false,
+            getURL: () => guest.url,
+            hostWebContents: { id: guest.embedder, isDestroyed: () => false },
+          }
+        : undefined;
+    },
+  },
+}));
+const listening = vi.hoisted(() => ({ cwd: null as string | null, ports: [] as number[] }));
+vi.mock("../../../utils/localPortListeners.js", () => ({
+  findPortListeners: async (port: number) => {
+    listening.ports.push(port);
+    return listening.cwd === null ? [] : [{ pid: 4242, cwd: listening.cwd }];
+  },
+}));
+
 const projectViews = vi.hoisted(
   () => new Map<string, Array<{ id: number; isDestroyed: () => boolean; send: unknown }>>()
 );
@@ -125,6 +161,9 @@ beforeEach(() => {
   Object.values(bridge).forEach((fn) => fn.mockClear());
   Object.values(host).forEach((fn) => fn.mockClear());
   projectViews.clear();
+  guests.clear();
+  listening.cwd = null;
+  listening.ports.length = 0;
   root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "picker-handlers-")));
   fs.writeFileSync(
     path.join(root, "package.json"),
@@ -318,6 +357,93 @@ describe("elementPicker handlers", () => {
     });
     // The opener's project rides along so provider ids are checked against what it can see.
     expect(host.resolve).toHaveBeenCalledWith(request, { projectId: "project-a" });
+  });
+
+  it("checks who serves a browser page only for the sender's own guest, at its committed URL", async () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "picker-handlers-other-"));
+    try {
+      store.worktrees.set("project-a", [
+        { id: "wt-1", path: root },
+        { id: "wt-2", path: other },
+      ]);
+      listening.cwd = other;
+      guests.set("browser-1", {
+        id: 50,
+        kind: "browser",
+        embedder: 1,
+        url: "http://localhost:5173/",
+      });
+      const all = await ops();
+      const request = { panelId: "browser-1", worktreeId: "wt-1" };
+      await expect(all.openWorkspace.handler(ctx("project-a", 1), request)).resolves.toEqual({
+        status: "unavailable",
+        reason: "other-worktree",
+        serverWorktreeId: "wt-2",
+      });
+      expect(listening.ports).toEqual([5173]);
+
+      // A view that doesn't embed that guest can't make main ask about its port.
+      await expect(all.openWorkspace.handler(ctx("project-a", 2), request)).resolves.toMatchObject({
+        status: "ready",
+      });
+      // Nor can one whose panel is a dev preview, whose server is its own.
+      guests.set("preview-1", {
+        id: 51,
+        kind: "dev-preview",
+        embedder: 1,
+        url: "http://localhost:5173/",
+      });
+      await expect(
+        all.openWorkspace.handler(ctx("project-a", 1), { panelId: "preview-1", worktreeId: "wt-1" })
+      ).resolves.toMatchObject({ status: "ready" });
+      expect(listening.ports).toEqual([5173]);
+      // The request has no field that names a port.
+      expect(all.openWorkspace.schema.safeParse({ ...request, listenerPort: 9 }).success).toBe(
+        false
+      );
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  it("closes a browser page's workspace at resolve once another worktree took its port", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "picker-handlers-other-"));
+    try {
+      store.worktrees.set("project-a", [
+        { id: "wt-1", path: root },
+        { id: "wt-2", path: other },
+      ]);
+      guests.set("browser-1", {
+        id: 50,
+        kind: "browser",
+        embedder: 1,
+        url: "http://localhost:5173/",
+      });
+      listening.cwd = root;
+      const all = await ops();
+      const opener = ctx("project-a", 1);
+      const opened = await all.openWorkspace.handler(opener, {
+        panelId: "browser-1",
+        worktreeId: "wt-1",
+      });
+      expect(opened).toMatchObject({ status: "ready", workspaceId: "ws-1" });
+      const request = { workspaceId: "ws-1", requestId: "r1" } as never;
+      await all.resolve.handler(opener, request);
+      expect(host.resolve).toHaveBeenCalledTimes(1);
+
+      listening.cwd = other;
+      vi.setSystemTime(Date.now() + 5_000);
+      await expect(all.resolve.handler(opener, request)).rejects.toMatchObject({
+        code: "NOT_FOUND",
+        message: ELEMENT_PICKER_WORKSPACE_CLOSED,
+      });
+      expect(host.resolve).toHaveBeenCalledTimes(1);
+      expect(host.releaseWorkspace).toHaveBeenCalledWith("ws-1");
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it("refuses a worktree of another project", async () => {

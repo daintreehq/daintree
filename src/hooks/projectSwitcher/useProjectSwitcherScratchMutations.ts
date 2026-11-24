@@ -5,7 +5,7 @@ import { notify } from "@/lib/notify";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import { logError } from "@/utils/logger";
 import { scratchClient } from "@/clients";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { distinctDetail, formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Project, Scratch } from "@shared/types";
 import type {
   DeleteAllScratchesSnapshot,
@@ -44,6 +44,148 @@ export interface UseProjectSwitcherScratchMutationsOptions {
   scratchResults: SearchableScratch[];
   /** Switches to a project the way picking its row would, closing the palette. */
   openProject: (project: Project) => void;
+}
+
+// The confirmations run outside the hook: React Compiler can't lower a `try`
+// with a `finally`, or one without a `catch`, and would give up on the whole
+// hook, handing the palette fresh actions on every render of the app root.
+async function deleteScratchConfirmed(
+  target: DeleteScratchTarget,
+  {
+    removeScratchActionStore,
+    isDeletingScratchRef,
+    setDeleteScratchConfirm,
+    setIsDeletingScratch,
+  }: {
+    removeScratchActionStore: (scratchId: string) => Promise<void>;
+    isDeletingScratchRef: { current: boolean };
+    setDeleteScratchConfirm: (target: DeleteScratchTarget | null) => void;
+    setIsDeletingScratch: (isDeleting: boolean) => void;
+  }
+): Promise<void> {
+  isDeletingScratchRef.current = true;
+  setIsDeletingScratch(true);
+
+  try {
+    await removeScratchActionStore(target.id);
+    const title = `Deleted '${target.name}'`;
+    // Close before announcing: VoiceOver drops live-region updates raised from
+    // outside a focused `aria-modal` subtree (lesson #9434).
+    closeAndAnnounce(() => setDeleteScratchConfirm(null), title);
+    // No toast: the row leaving is the confirmation, and `closeAndAnnounce`
+    // above carries it to screen readers.
+  } catch (error) {
+    // Another window may have deleted this scratch while our own call was in
+    // flight, which is how ours came to fail. The user asked for it gone and it
+    // is gone, so reconcile instead of reporting a failure — and close, because
+    // the error copy below leans on the dialog surviving as its retry surface,
+    // which the stale-target effect is about to take away.
+    const isAlreadyGone = !useScratchStore
+      .getState()
+      .scratches.some((scratch: Scratch) => scratch.id === target.id);
+    if (isAlreadyGone) {
+      closeAndAnnounce(() => setDeleteScratchConfirm(null), `Deleted '${target.name}'`);
+      return;
+    }
+    // The dialog stays open and its button re-arms: that button is the retry
+    // surface, so the toast needs no action of its own.
+    // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+    notify({
+      type: "error",
+      title: "Couldn't delete scratch",
+      message: formatErrorMessage(error, "Couldn't remove scratch workspace"),
+    });
+  } finally {
+    isDeletingScratchRef.current = false;
+    setIsDeletingScratch(false);
+  }
+}
+
+async function deleteAllScratchesConfirmed(
+  targets: DeleteAllScratchesSnapshot,
+  {
+    removeScratchActionStore,
+    isDeletingAllScratchesRef,
+    setDeleteAllScratchesConfirm,
+    setIsDeletingAllScratches,
+  }: {
+    removeScratchActionStore: (scratchId: string) => Promise<void>;
+    isDeletingAllScratchesRef: { current: boolean };
+    setDeleteAllScratchesConfirm: (snapshot: DeleteAllScratchesSnapshot | null) => void;
+    setIsDeletingAllScratches: (isDeleting: boolean) => void;
+  }
+): Promise<void> {
+  isDeletingAllScratchesRef.current = true;
+  setIsDeletingAllScratches(true);
+
+  const total = targets.length;
+  const noun = total === 1 ? "scratch workspace" : "scratch workspaces";
+
+  try {
+    // Fanned out rather than awaited in sequence: `scratch:remove` has no rate
+    // limiter and each scratch owns a disjoint folder, so there is nothing to
+    // serialize. `allSettled` also guarantees one bad target can't strand the rest.
+    const settled = await Promise.allSettled(
+      targets.map((target) => removeScratchActionStore(target.id))
+    );
+
+    const failures: { name: string; reason: string }[] = [];
+    settled.forEach((outcome, index) => {
+      if (outcome.status !== "rejected") return;
+      const target = targets[index]!;
+      failures.push({
+        name: target.name,
+        reason: formatErrorMessage(outcome.reason, "Deletion failed"),
+      });
+      logError(`[ProjectSwitcher] Failed to delete scratch ${target.id}`, outcome.reason);
+    });
+
+    const successCount = total - failures.length;
+    const firstFailure = failures[0];
+
+    // Close before announcing: VoiceOver drops live-region updates raised from
+    // outside a focused `aria-modal` subtree (lesson #9434).
+    const close = () => setDeleteAllScratchesConfirm(null);
+
+    if (failures.length === 0) {
+      const title = `Deleted ${total} ${noun}`;
+      closeAndAnnounce(close, title);
+      // No toast: the section emptying is the confirmation, and the announcer
+      // carries it to screen readers.
+    } else if (successCount === 0) {
+      const title = total === 1 ? "Couldn't delete scratch" : "Couldn't delete scratches";
+      closeAndAnnounce(close, title, "assertive");
+      // No recovery action: the scratch rows survived the failure and are
+      // themselves the retry surface.
+      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+      notify({
+        type: "error",
+        title,
+        message: firstFailure
+          ? `${firstFailure.name}: ${firstFailure.reason}`
+          : `All ${total} deletions failed.`,
+      });
+    } else {
+      const title = `Deleted ${successCount} of ${total} ${noun}`;
+      closeAndAnnounce(close, title);
+      // `priority` is set explicitly: `uiFeedback`'s passive policy would otherwise
+      // route this to the inbox, and a partial failure is precisely the outcome the
+      // user has to see — the survivors are still sitting in the list.
+      notify({
+        type: "warning",
+        title,
+        message:
+          failures.length === 1 && firstFailure
+            ? `${firstFailure.name} failed: ${firstFailure.reason}`
+            : `${failures.length} couldn't be deleted.`,
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+      });
+    }
+  } finally {
+    isDeletingAllScratchesRef.current = false;
+    setIsDeletingAllScratches(false);
+  }
 }
 
 /**
@@ -200,43 +342,12 @@ export function useProjectSwitcherScratchMutations({
     if (isDeletingScratchRef.current) return;
     const target = deleteScratchConfirm;
     if (!target) return;
-
-    isDeletingScratchRef.current = true;
-    setIsDeletingScratch(true);
-
-    try {
-      await removeScratchActionStore(target.id);
-      const title = `Deleted '${target.name}'`;
-      // Close before announcing: VoiceOver drops live-region updates raised from
-      // outside a focused `aria-modal` subtree (lesson #9434).
-      closeAndAnnounce(() => setDeleteScratchConfirm(null), title);
-      // No toast: the row leaving is the confirmation, and `closeAndAnnounce`
-      // above carries it to screen readers.
-    } catch (error) {
-      // Another window may have deleted this scratch while our own call was in
-      // flight, which is how ours came to fail. The user asked for it gone and it
-      // is gone, so reconcile instead of reporting a failure — and close, because
-      // the error copy below leans on the dialog surviving as its retry surface,
-      // which the stale-target effect is about to take away.
-      const isAlreadyGone = !useScratchStore
-        .getState()
-        .scratches.some((scratch: Scratch) => scratch.id === target.id);
-      if (isAlreadyGone) {
-        closeAndAnnounce(() => setDeleteScratchConfirm(null), `Deleted '${target.name}'`);
-        return;
-      }
-      // The dialog stays open and its button re-arms: that button is the retry
-      // surface, so the toast needs no action of its own.
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        title: "Couldn't delete scratch",
-        message: formatErrorMessage(error, "Couldn't remove scratch workspace"),
-      });
-    } finally {
-      isDeletingScratchRef.current = false;
-      setIsDeletingScratch(false);
-    }
+    await deleteScratchConfirmed(target, {
+      removeScratchActionStore,
+      isDeletingScratchRef,
+      setDeleteScratchConfirm,
+      setIsDeletingScratch,
+    });
   }, [deleteScratchConfirm, removeScratchActionStore]);
 
   const requestDeleteAllScratches = useCallback(() => {
@@ -271,78 +382,12 @@ export function useProjectSwitcherScratchMutations({
       setDeleteAllScratchesConfirm(null);
       return;
     }
-
-    isDeletingAllScratchesRef.current = true;
-    setIsDeletingAllScratches(true);
-
-    const total = targets.length;
-    const noun = total === 1 ? "scratch workspace" : "scratch workspaces";
-
-    try {
-      // Fanned out rather than awaited in sequence: `scratch:remove` has no rate
-      // limiter and each scratch owns a disjoint folder, so there is nothing to
-      // serialize. `allSettled` also guarantees one bad target can't strand the rest.
-      const settled = await Promise.allSettled(
-        targets.map((target) => removeScratchActionStore(target.id))
-      );
-
-      const failures: { name: string; reason: string }[] = [];
-      settled.forEach((outcome, index) => {
-        if (outcome.status !== "rejected") return;
-        const target = targets[index]!;
-        failures.push({
-          name: target.name,
-          reason: formatErrorMessage(outcome.reason, "Deletion failed"),
-        });
-        logError(`[ProjectSwitcher] Failed to delete scratch ${target.id}`, outcome.reason);
-      });
-
-      const successCount = total - failures.length;
-      const firstFailure = failures[0];
-
-      // Close before announcing: VoiceOver drops live-region updates raised from
-      // outside a focused `aria-modal` subtree (lesson #9434).
-      const close = () => setDeleteAllScratchesConfirm(null);
-
-      if (failures.length === 0) {
-        const title = `Deleted ${total} ${noun}`;
-        closeAndAnnounce(close, title);
-        // No toast: the section emptying is the confirmation, and the announcer
-        // carries it to screen readers.
-      } else if (successCount === 0) {
-        const title = total === 1 ? "Couldn't delete scratch" : "Couldn't delete scratches";
-        closeAndAnnounce(close, title, "assertive");
-        // No recovery action: the scratch rows survived the failure and are
-        // themselves the retry surface.
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          title,
-          message: firstFailure
-            ? `${firstFailure.name}: ${firstFailure.reason}`
-            : `All ${total} deletions failed.`,
-        });
-      } else {
-        const title = `Deleted ${successCount} of ${total} ${noun}`;
-        closeAndAnnounce(close, title);
-        // `priority` is set explicitly: `uiFeedback`'s passive policy would otherwise
-        // route this to the inbox, and a partial failure is precisely the outcome the
-        // user has to see — the survivors are still sitting in the list.
-        notify({
-          type: "warning",
-          title,
-          message:
-            failures.length === 1 && firstFailure
-              ? `${firstFailure.name} failed: ${firstFailure.reason}`
-              : `${failures.length} couldn't be deleted.`,
-          priority: "high",
-          context: { eventKind: "uiFeedback" },
-        });
-      }
-    } finally {
-      isDeletingAllScratchesRef.current = false;
-      setIsDeletingAllScratches(false);
-    }
+    await deleteAllScratchesConfirmed(targets, {
+      removeScratchActionStore,
+      isDeletingAllScratchesRef,
+      setDeleteAllScratchesConfirm,
+      setIsDeletingAllScratches,
+    });
   }, [deleteAllScratchesConfirm, removeScratchActionStore]);
 
   const saveAsProject = useCallback(
@@ -362,7 +407,10 @@ export function useProjectSwitcherScratchMutations({
         notify({
           type: "error",
           title: "Couldn't save scratch as project",
-          message: formatErrorMessage(error, "Couldn't save scratch as project"),
+          message: distinctDetail(
+            formatErrorMessage(error, "Couldn't save scratch as project"),
+            "Couldn't save scratch as project"
+          ),
         });
       }
     },

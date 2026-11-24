@@ -7,12 +7,13 @@ import { TourShortcutsContext, type CursorStep } from "@daintreehq/tour/kit";
 import { MockKitContext } from "@daintreehq/tour/mock-app";
 import { CURSOR as AGENTS_CURSOR } from "../scenes/AgentsScene";
 import { CURSOR as ASSISTANT_CURSOR } from "../scenes/AssistantScene";
-import { CURSOR as CONTEXT_CURSOR } from "../scenes/ContextScene";
+import { CURSOR as CANOPY_CURSOR } from "../scenes/CanopyScene";
+import { CURSOR as DECISIONS_CURSOR } from "../scenes/DecisionsScene";
 import { CURSOR as FILES_CURSOR } from "../scenes/FilesScene";
 import { CURSOR as FLEET_CURSOR } from "../scenes/FleetScene";
 import { CURSOR as GITHUB_CURSOR } from "../scenes/GitHubScene";
+import { CURSOR as HOSTS_CURSOR } from "../scenes/HostsScene";
 import { CURSOR as PREVIEW_CURSOR } from "../scenes/PreviewScene";
-import { CURSOR as REVIEW_CURSOR } from "../scenes/ReviewScene";
 import { CURSOR as STATE_CURSOR } from "../scenes/StateScene";
 import { CURSOR as WORKTREES_CURSOR } from "../scenes/WorktreesScene";
 import { TOUR_CHAPTERS } from "../tourChapters";
@@ -73,12 +74,13 @@ function sceneAt(chapterId: string, t: number, keyboard: TourKeyboard = "mac"): 
 const SCENE_CURSORS: Record<string, readonly CursorStep[]> = {
   agents: AGENTS_CURSOR,
   assistant: ASSISTANT_CURSOR,
-  context: CONTEXT_CURSOR,
+  canopy: CANOPY_CURSOR,
+  decisions: DECISIONS_CURSOR,
   files: FILES_CURSOR,
   fleet: FLEET_CURSOR,
   github: GITHUB_CURSOR,
+  hosts: HOSTS_CURSOR,
   preview: PREVIEW_CURSOR,
-  review: REVIEW_CURSOR,
   state: STATE_CURSOR,
   worktrees: WORKTREES_CURSOR,
 };

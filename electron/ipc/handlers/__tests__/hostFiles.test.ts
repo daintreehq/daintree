@@ -13,12 +13,18 @@ import { getHostPickerRoots, listHostDirectory } from "../hostFiles.js";
 
 let dir: string;
 
+function kindOfStats(stats: { isSymbolicLink(): boolean; isDirectory(): boolean }): string {
+  if (stats.isSymbolicLink()) return "symlink";
+  return stats.isDirectory() ? "directory" : "file";
+}
+
 beforeEach(async () => {
   dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "host-files-")));
   projects.list = [];
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -36,6 +42,21 @@ describe("listHostDirectory", () => {
       ["a.txt", "file", 1],
       ["b.txt", "file", 5],
     ]);
+  });
+
+  it("orders names numerically and case-insensitively like localeCompare, with kind first", async () => {
+    const names = ["file10", "file2", "File1", "Zeta", "alpha", "école", "eclair", "Ecole", "a"];
+    for (const name of names) await fs.writeFile(path.join(dir, name), "");
+    await fs.mkdir(path.join(dir, "zdir"));
+    const listing = await listHostDirectory({ path: dir });
+    const files = listing.entries.filter((e) => e.kind === "file").map((e) => e.name);
+    const expected = [...names].sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+    );
+    expect(listing.entries[0].name).toBe("zdir");
+    const base = (n: string) => n.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+    expect(files.map(base)).toEqual(expected.map(base));
+    expect(files.indexOf("file2")).toBeLessThan(files.indexOf("file10"));
   });
 
   it("hides dotfiles unless asked", async () => {
@@ -70,6 +91,22 @@ describe("listHostDirectory", () => {
     expect(all.truncated).toBe(false);
   });
 
+  it("lists the home folder for the home token, and only for the exact token", async () => {
+    const home = path.join(dir, "home");
+    await fs.mkdir(home);
+    await fs.writeFile(path.join(home, "notes.md"), "x");
+    vi.spyOn(os, "homedir").mockReturnValue(home);
+    const listing = await listHostDirectory({ path: "~" });
+    expect(listing.path).toBe(home);
+    expect(listing.parent).toBe(dir);
+    expect(listing.entries.map((entry) => entry.name)).toEqual(["notes.md"]);
+    for (const near of ["~/notes", "~ ", " ~"]) {
+      await expect(listHostDirectory({ path: near })).rejects.toMatchObject({
+        code: "INVALID_PATH",
+      });
+    }
+  });
+
   it("refuses relative, empty and NUL paths", async () => {
     await expect(listHostDirectory({ path: "relative" })).rejects.toMatchObject({
       code: "INVALID_PATH",
@@ -94,6 +131,133 @@ describe("listHostDirectory", () => {
     const listing = await listHostDirectory({ path: path.parse(dir).root });
     expect(listing.parent).toBeNull();
   });
+
+  it("reads modification times for every entry when no metadata mode is given", async () => {
+    await fs.mkdir(path.join(dir, "src"));
+    await fs.writeFile(path.join(dir, "a.txt"), "1");
+    await fs.utimes(path.join(dir, "src"), 1_000, 1_000);
+    await fs.utimes(path.join(dir, "a.txt"), 2_000, 2_000);
+    const lstat = vi.spyOn(fs, "lstat");
+    const listing = await listHostDirectory({ path: dir });
+    expect(lstat).toHaveBeenCalledTimes(2);
+    expect(listing.entries.map((e) => [e.name, e.mtimeMs])).toEqual([
+      ["src", 1_000_000],
+      ["a.txt", 2_000_000],
+    ]);
+  });
+});
+
+describe("listHostDirectory in picker mode", () => {
+  it("reads no per-entry metadata for a listing of folders", async () => {
+    await Promise.all(Array.from({ length: 130 }, (_, i) => fs.mkdir(path.join(dir, `d${i}`))));
+    const lstat = vi.spyOn(fs, "lstat");
+    const stat = vi.spyOn(fs, "stat");
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(listing.entries).toHaveLength(130);
+    expect(listing.entries.every((e) => e.kind === "directory" && e.size === null)).toBe(true);
+    expect(listing.entries.every((e) => e.mtimeMs === null)).toBe(true);
+    expect(lstat).not.toHaveBeenCalled();
+    expect(stat).not.toHaveBeenCalled();
+  });
+
+  it("reads sizes for regular files only, and no modification times", async () => {
+    await fs.mkdir(path.join(dir, "src"));
+    await fs.writeFile(path.join(dir, "b.txt"), "12345");
+    await fs.writeFile(path.join(dir, "a.txt"), "1");
+    await fs.symlink(path.join(dir, "b.txt"), path.join(dir, "alias"));
+    await fs.symlink(path.join(dir, "missing"), path.join(dir, "broken"));
+    const lstat = vi.spyOn(fs, "lstat");
+    const stat = vi.spyOn(fs, "stat");
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(listing.entries.map((e) => [e.name, e.kind, e.size, e.mtimeMs])).toEqual([
+      ["src", "directory", null, null],
+      ["alias", "symlink", null, null],
+      ["broken", "symlink", null, null],
+      ["a.txt", "file", 1, null],
+      ["b.txt", "file", 5, null],
+    ]);
+    expect(lstat.mock.calls.map(([target]) => path.basename(String(target))).sort()).toEqual([
+      "a.txt",
+      "b.txt",
+    ]);
+    expect(stat).not.toHaveBeenCalled();
+  });
+
+  it("reads every file's size when there are more files than one batch", async () => {
+    await Promise.all(
+      Array.from({ length: 70 }, (_, i) => fs.writeFile(path.join(dir, `f${i}`), "x".repeat(i + 1)))
+    );
+    const lstat = vi.spyOn(fs, "lstat");
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(listing.entries).toHaveLength(70);
+    for (const entry of listing.entries) expect(entry.size).toBe(Number(entry.name.slice(1)) + 1);
+    expect(lstat).toHaveBeenCalledTimes(70);
+  });
+
+  it("keeps a file that disappears before its size is read, without a size", async () => {
+    await fs.writeFile(path.join(dir, "gone.txt"), "12345");
+    await fs.writeFile(path.join(dir, "kept.txt"), "1");
+    const realLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (target, ...rest) => {
+      if (path.basename(String(target)) === "gone.txt") await fs.rm(String(target));
+      return realLstat(target, ...rest);
+    });
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(listing.entries.map((e) => [e.name, e.kind, e.size])).toEqual([
+      ["gone.txt", "file", null],
+      ["kept.txt", "file", 1],
+    ]);
+  });
+
+  it("shows no size for a file replaced by a link or a folder before its size is read", async () => {
+    await fs.writeFile(path.join(dir, "to-dir.txt"), "12345");
+    await fs.writeFile(path.join(dir, "to-link.txt"), "12345");
+    await fs.writeFile(path.join(dir, "target.txt"), "1234567");
+    const realLstat = fs.lstat.bind(fs);
+    const seen: Record<string, string> = {};
+    vi.spyOn(fs, "lstat").mockImplementation(async (target, ...rest) => {
+      const name = path.basename(String(target));
+      if (name !== "target.txt") await fs.rm(String(target));
+      if (name === "to-dir.txt") await fs.mkdir(String(target));
+      if (name === "to-link.txt") await fs.symlink(path.join(dir, "target.txt"), String(target));
+      const result = await realLstat(target, ...rest);
+      seen[name] = kindOfStats(result);
+      return result;
+    });
+    const listing = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(seen).toEqual({
+      "target.txt": "file",
+      "to-dir.txt": "directory",
+      "to-link.txt": "symlink",
+    });
+    expect(listing.entries.map((e) => [e.name, e.kind, e.size])).toEqual([
+      ["target.txt", "file", 7],
+      ["to-dir.txt", "file", null],
+      ["to-link.txt", "file", null],
+    ]);
+  });
+
+  it("hides dotfiles unless asked, and stops at the entry cap", async () => {
+    await fs.writeFile(path.join(dir, ".env"), "xx");
+    await Promise.all(
+      Array.from({ length: 6 }, (_, i) => fs.writeFile(path.join(dir, `f${i}`), "x"))
+    );
+    const hidden = await listHostDirectory({ path: dir, metadata: "picker" });
+    expect(hidden.entries.map((e) => e.name)).not.toContain(".env");
+    const shown = await listHostDirectory({ path: dir, showHidden: true, metadata: "picker" });
+    expect(shown.entries.find((e) => e.name === ".env")?.size).toBe(2);
+
+    const exact = await listHostDirectory({ path: dir, metadata: "picker" }, 6);
+    expect(exact.truncated).toBe(false);
+    expect(exact.entries).toHaveLength(6);
+
+    const lstat = vi.spyOn(fs, "lstat");
+    const capped = await listHostDirectory({ path: dir, metadata: "picker" }, 3);
+    expect(capped.truncated).toBe(true);
+    expect(capped.entries).toHaveLength(3);
+    expect(capped.entries.every((e) => e.size === 1)).toBe(true);
+    expect(lstat).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("getHostPickerRoots", () => {
@@ -107,5 +271,47 @@ describe("getHostPickerRoots", () => {
     expect(paths).toContain(dir);
     expect(paths).not.toContain(path.join(dir, "gone"));
     expect(paths.at(-1)).toBe(path.parse(os.homedir()).root);
+  });
+
+  it("never holds the home listing behind a project parent that stalls", async () => {
+    const home = path.join(dir, "home");
+    const stalled = path.join(dir, "mounts", "slow");
+    await fs.mkdir(home);
+    await fs.mkdir(stalled, { recursive: true });
+    await fs.writeFile(path.join(home, "notes.md"), "x");
+    vi.spyOn(os, "homedir").mockReturnValue(home);
+    projects.list = [{ path: path.join(stalled, "app") }];
+
+    const realStat = fs.stat.bind(fs);
+    let entered!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(fs, "stat").mockImplementation(async (target, ...rest) => {
+      if (String(target) === stalled) {
+        entered();
+        await gate;
+      }
+      return realStat(target, ...rest);
+    });
+
+    let rootsSettled = false;
+    const roots = getHostPickerRoots().finally(() => {
+      rootsSettled = true;
+    });
+    try {
+      await reached;
+      const listing = await listHostDirectory({ path: "~" });
+      expect(listing.path).toBe(home);
+      expect(listing.entries.map((entry) => entry.name)).toEqual(["notes.md"]);
+      expect(rootsSettled).toBe(false);
+    } finally {
+      release();
+    }
+    expect((await roots).roots.map((root) => root.path)).toContain(stalled);
   });
 });

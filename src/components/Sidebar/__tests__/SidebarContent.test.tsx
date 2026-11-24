@@ -1122,9 +1122,14 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     it("sets a single tab stop on the grid container (not on individual rows)", () => {
       // aria-activedescendant pattern: container holds tabIndex=0, rows stay -1.
       // An empty grid is no stop at all: it took focus with nothing to show.
-      expect(source).toMatch(
-        /role="grid"[\s\S]{0,400}tabIndex=\{keyboardItems\.length > 0 \? 0 : -1\}/
-      );
+      // Headers and the deleted rail are items but no row to land on, so the
+      // hook says whether there is a row (its tests cover the cases).
+      expect(source).toMatch(/hasRows: hasKeyboardRows,/);
+      expect(source).toMatch(/role="grid"[\s\S]{0,500}tabIndex=\{hasKeyboardRows \? 0 : -1\}/);
+    });
+
+    it("hands the search field's ArrowDown to the keyboard hook's first-row entry", () => {
+      expect(source).toContain("onArrowIntoResults={focusFirstRow}");
     });
 
     it("describes the grid's keys through a help text that is actually rendered", () => {
@@ -1361,10 +1366,12 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     it("threads keyboardCursorId through the Virtuoso context into both row paths", async () => {
       const source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
       expect(source).toMatch(/keyboardCursorId:\s*string \| null/);
-      expect(source).toContain("keyboardCursorId={context.keyboardCursorId}");
+      // Each row gets its own boolean, so a cursor step re-renders only the two
+      // rows it moved between (#17072).
+      expect(source).toContain("item.worktreeId === context.keyboardCursorId");
       // The pinned (main + integration) rows live outside the Virtuoso surface
-      // and must receive the cursor id directly from the hook return.
-      expect(source).toContain("keyboardCursorId={keyboardCursorId}");
+      // and must receive the cursor directly from the hook return.
+      expect(source).toContain("isKeyboardCursor={mainWorktree.id === keyboardCursorId}");
     });
 
     it("flags the cursor row via data-keyboard-cursor in both static and sortable paths", async () => {

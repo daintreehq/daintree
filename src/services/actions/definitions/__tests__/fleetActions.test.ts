@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterAll, beforeEach, afterEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
+import type { ActionDefinition, ActionId } from "@shared/types/actions";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
@@ -78,6 +79,8 @@ const { registerFleetActions } = await import("../fleetActions");
 // The run bodies load on first dispatch; load them here, under the mocks above.
 await import("../fleetActions.impl");
 const { useFleetRunStore } = await import("@/store/fleetRunStore");
+const { actionService } = await import("@/services/ActionService");
+const { registerActionActions } = await import("../actionActions");
 
 type ActionRegistry = Awaited<
   ReturnType<typeof import("@/services/actions/actionDefinitions").createActionDefinitions>
@@ -111,6 +114,7 @@ function resetStores(): void {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    crossHostTargets: [],
   });
   useFleetPendingActionStore.setState({ pending: null });
   useFleetFailureStore.getState().clear();
@@ -129,12 +133,56 @@ async function buildRegistry(): Promise<ActionRegistry> {
   return registry;
 }
 
-async function run(registry: ActionRegistry, id: string, args?: unknown): Promise<void> {
+async function run(
+  registry: ActionRegistry,
+  id: string,
+  args?: unknown,
+  ctx: { dispatchSource?: string } = {}
+): Promise<void> {
   const factory = registry.get(id);
   if (!factory) throw new Error(`action ${id} not registered`);
   const def = factory();
-  await def.run(args as never, {} as never);
+  await def.run(args as never, ctx as never);
 }
+
+describe("fleet.trash — close undo keeps whoever asked first (#17107)", () => {
+  beforeEach(async () => {
+    resetStores();
+    vi.clearAllMocks();
+    const history = await import("@/services/terminal/panelCloseHistory");
+    history.resetPanelCloseHistoryForTests();
+    history.connectPanelCloseHistory(usePanelStore);
+  });
+
+  afterEach(async () => {
+    const history = await import("@/services/terminal/panelCloseHistory");
+    history.connectPanelCloseHistory(null);
+  });
+
+  async function stageAndConfirm(stagedBy: string) {
+    const agents = Array.from({ length: 5 }, (_, i) => makeAgent(`a${i}`));
+    seedPanels(agents);
+    useFleetArmingStore.getState().armIds(agents.map((a) => a.id));
+    const registry = await buildRegistry();
+    await run(registry, "fleet.trash", undefined, { dispatchSource: stagedBy });
+    // The fleet bar clears its confirmation before re-dispatching as the person.
+    useFleetPendingActionStore.getState().clear();
+    await run(registry, "fleet.trash", { confirmed: true }, { dispatchSource: "user" });
+    expect(usePanelStore.getState().panelsById["a0"]?.location).toBe("trash");
+  }
+
+  it("keeps an agent's trash the person confirmed out of undo", async () => {
+    await stageAndConfirm("agent");
+    const { peekUndoCloseStep } = await import("@/services/terminal/panelCloseHistory");
+    expect(peekUndoCloseStep()).toBeNull();
+  });
+
+  it("records the person's own confirmed trash for undo", async () => {
+    await stageAndConfirm("keybinding");
+    const { peekUndoCloseStep } = await import("@/services/terminal/panelCloseHistory");
+    expect(peekUndoCloseStep()?.panels).toHaveLength(5);
+  });
+});
 
 describe("fleet actions — threshold confirmation", () => {
   beforeEach(() => {
@@ -372,6 +420,121 @@ describe("fleet actions — threshold confirmation", () => {
     const registry = await buildRegistry();
     await run(registry, "fleet.interrupt");
     expect(terminalClient.batchDoubleEscape).toHaveBeenCalledWith(["full"]);
+  });
+});
+
+describe("fleet actions never arm action.repeatLast (#17205)", () => {
+  const earlierRun = vi.fn().mockResolvedValue(undefined);
+
+  function resetActionService(): void {
+    // @ts-expect-error — private field reset for test isolation
+    actionService.registry = new Map();
+    // @ts-expect-error — private field reset for test isolation
+    actionService.lastAction = null;
+  }
+
+  beforeEach(async () => {
+    resetStores();
+    vi.clearAllMocks();
+    // action.repeatLast reads the singleton, so the fleet actions go there.
+    resetActionService();
+    const registry = await buildRegistry();
+    registerActionActions(registry);
+    for (const factory of registry.values()) actionService.register(factory() as ActionDefinition);
+    actionService.register({
+      id: "test.earlier" as ActionId,
+      title: "Earlier",
+      description: "Something the person ran before reaching for the fleet",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      run: earlierRun,
+    });
+    await actionService.dispatch("test.earlier" as ActionId, undefined, { source: "user" });
+  });
+
+  afterAll(() => {
+    resetActionService();
+  });
+
+  function armAgents(prefix: string, count: number, agentState: "waiting" | "working"): void {
+    const agents = Array.from({ length: count }, (_, i) =>
+      makeAgent(`${prefix}${i}`, { agentState })
+    );
+    seedPanels(agents);
+    useFleetArmingStore.getState().armIds(agents.map((a) => a.id));
+  }
+
+  async function repeatLast(): Promise<void> {
+    const result = await actionService.dispatch("action.repeatLast" as ActionId, undefined, {
+      source: "keybinding",
+    });
+    expect(result.ok).toBe(true);
+  }
+
+  function keystrokesSent(): number {
+    return (
+      (terminalClient.write as ReturnType<typeof vi.fn>).mock.calls.length +
+      (terminalClient.batchDoubleEscape as ReturnType<typeof vi.fn>).mock.calls.length
+    );
+  }
+
+  it.each([
+    { id: "fleet.reject", count: 5, agentState: "waiting", confirmSource: "user" },
+    { id: "fleet.reject", count: 5, agentState: "waiting", confirmSource: "keybinding" },
+    { id: "fleet.interrupt", count: 3, agentState: "working", confirmSource: "user" },
+    { id: "fleet.interrupt", count: 3, agentState: "working", confirmSource: "keybinding" },
+  ] as const)(
+    "$id confirmed by $confirmSource isn't replayed past its prompt",
+    async ({ id, count, agentState, confirmSource }) => {
+      armAgents("a", count, agentState);
+      await actionService.dispatch(id as ActionId, undefined, { source: "keybinding" });
+      expect(useFleetPendingActionStore.getState().pending).not.toBeNull();
+      // The fleet bar clears its confirmation before re-dispatching as the person.
+      useFleetPendingActionStore.getState().clear();
+      const confirmed = await actionService.dispatch(
+        id as ActionId,
+        { confirmed: true },
+        { source: confirmSource }
+      );
+      expect(confirmed.ok).toBe(true);
+      expect(keystrokesSent()).toBeGreaterThan(0);
+
+      // A different fleet is armed by the time the person reaches for repeat.
+      armAgents("b", count, agentState);
+      vi.clearAllMocks();
+      await repeatLast();
+
+      expect(keystrokesSent()).toBe(0);
+      expect(earlierRun).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("fleet.accept isn't replayed into whichever agents are waiting later", async () => {
+    armAgents("a", 1, "waiting");
+    await actionService.dispatch("fleet.accept" as ActionId, undefined, { source: "keybinding" });
+    expect(terminalClient.write).toHaveBeenCalledWith("a0", "y\r");
+
+    armAgents("b", 2, "waiting");
+    vi.clearAllMocks();
+    await repeatLast();
+
+    expect(terminalClient.write).not.toHaveBeenCalled();
+    expect(earlierRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("fleet.retryFailures isn't replayed against a later broadcast's failures", async () => {
+    useFleetFailureStore.setState({ failedIds: new Set(["t1"]), payload: "ls\r" });
+    await actionService.dispatch("fleet.retryFailures" as ActionId, undefined, { source: "user" });
+    expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
+
+    useFleetFailureStore.setState({ failedIds: new Set(["t2", "t3"]), payload: "git status\r" });
+    vi.clearAllMocks();
+    await repeatLast();
+
+    expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
+    expect(earlierRun).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -633,24 +796,46 @@ describe("fleet.retryFailures", () => {
     expect(runManagedFleetBroadcast).not.toHaveBeenCalled();
   });
 
-  it("routes the recorded payload through the managed broadcast as per-target overrides", async () => {
+  it("retries the draft as typed, so each target's recipe variables fill in again (#17513)", async () => {
     // #9950: the retry must run through the primary broadcast path so it gets
-    // batching, progress, directing-state, and a working Cancel button —
-    // passing the already-substituted payload as overrides (empty draft)
-    // bypasses recipe substitution without re-resolving a verbatim literal.
+    // batching, progress, directing-state, and a working Cancel button. The
+    // draft goes with no override for an unedited target: an override would
+    // skip its variables and send `{{branch_name}}` as braces.
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
-      payload: "ls\r",
+      payload: "Review {{branch_name}}",
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
-    const call = (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(call).toBeDefined();
-    const [draft, targets, overrides] = call as [string, string[], Record<string, string>];
-    expect(draft).toBe("");
+    const [draft, targets, overrides, opts] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
+    expect(draft).toBe("Review {{branch_name}}");
     expect(targets.slice().sort()).toEqual(["t1", "t2"]);
-    expect(overrides).toEqual({ t1: "ls\r", t2: "ls\r" });
+    expect(overrides).toBeUndefined();
+    expect(opts).toMatchObject({ isRetry: true });
+  });
+
+  it("sends a deliberately literal edit back as it was, beside a draft that resolves (#17513)", async () => {
+    useFleetFailureStore.getState().recordFailure("Review {{branch_name}}", ["t1", "t2"], 0, {
+      perTargetOverrides: { t2: "Review {{branch_name}} as written" },
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    const [draft, targets, overrides] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
+    expect(draft).toBe("Review {{branch_name}}");
+    expect(targets.slice().sort()).toEqual(["t1", "t2"]);
+    expect(overrides).toEqual({ t2: "Review {{branch_name}} as written" });
+  });
+
+  it("keeps an edit that matches the draft word for word as the target's own text (#17513)", async () => {
+    useFleetFailureStore.getState().recordFailure("Review {{branch_name}}", ["t1", "t2"], 0, {
+      perTargetOverrides: { t2: "Review {{branch_name}}" },
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    const [draft, , overrides] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
+    expect(draft).toBe("Review {{branch_name}}");
+    expect(overrides).toEqual({ t2: "Review {{branch_name}}" });
   });
 
   it("sends each target its own text again, with the broadcast's images (#15600)", async () => {
@@ -662,9 +847,10 @@ describe("fleet.retryFailures", () => {
     await run(registry, "fleet.retryFailures");
     expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
     const [draft, targets, overrides, opts] = vi.mocked(runManagedFleetBroadcast).mock.calls[0]!;
-    expect(draft).toBe("");
+    expect(draft).toBe("look at /tmp/shot.png");
     expect(targets.slice().sort()).toEqual(["t1", "t2", "t3"]);
-    expect(overrides).toEqual({ t1: "look at /tmp/shot.png", t2: "described in words", t3: "" });
+    // Only what was edited goes back as its own text, an emptied one included.
+    expect(overrides).toEqual({ t2: "described in words", t3: "" });
     expect(opts).toMatchObject({ isRetry: true, imagePaths: ["/tmp/shot.png"] });
   });
 
@@ -700,14 +886,20 @@ describe("fleet.retryFailures", () => {
     useFleetFailureStore.setState({
       failedIds: new Set(["t1", "t2"]),
       payload: "ls\r",
+      perTargetOverrides: { t2: "ls -la\r" },
     });
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     expect(runManagedFleetBroadcast).toHaveBeenCalledTimes(1);
     const call = (runManagedFleetBroadcast as ReturnType<typeof vi.fn>).mock.calls[0];
-    const [, targets, overrides] = call as [string, string[], Record<string, string>];
+    const [draft, targets, overrides] = call as [
+      string,
+      string[],
+      Record<string, string> | undefined,
+    ];
+    expect(draft).toBe("ls\r");
     expect(targets).toEqual(["t1"]);
-    expect(overrides).toEqual({ t1: "ls\r" });
+    expect(overrides).toBeUndefined();
   });
 
   it("keeps a locked pane's failure for after it's unlocked, while dismissing the retried one", async () => {
@@ -782,6 +974,63 @@ describe("fleet.retryFailures", () => {
     const registry = await buildRegistry();
     await run(registry, "fleet.retryFailures");
     expect(useFleetFailureStore.getState().failedIds.size).toBe(0);
+  });
+
+  it("keeps the failure of another host's agent a cancelled retry never reached (#17514)", async () => {
+    const reached = "host-fleet:studio:r-1";
+    const unreached = "host-fleet:studio:r-2";
+    const removed = "host-fleet:studio:r-3";
+    seedPanels([makeAgent("t1")]);
+    useFleetArmingStore.getState().armIds(["t1"]);
+    for (const terminalId of ["r-1", "r-2", "r-3"]) {
+      useFleetArmingStore.getState().armCrossHostTarget({
+        key: `host-fleet:studio:${terminalId}`,
+        hostId: "studio",
+        hostName: "Studio",
+        terminalId,
+        title: terminalId,
+      });
+    }
+    // Cancelled after the first batch: the local pane and one remote agent were
+    // sent, and the other two remote agents' batch never went out. One of those
+    // left the fleet while the retry ran.
+    vi.mocked(runManagedFleetBroadcast).mockImplementationOnce(async () => {
+      expect(useFleetArmingStore.getState().crossHostTargets.map((t) => t.key)).toContain(removed);
+      useFleetArmingStore.getState().disarmCrossHostTarget(removed);
+      expect(useFleetArmingStore.getState().crossHostTargets.map((t) => t.key)).not.toContain(
+        removed
+      );
+      return {
+        total: 2,
+        successCount: 2,
+        failureCount: 0,
+        perTarget: [
+          { terminalId: "t1", status: "fulfilled" },
+          { terminalId: reached, status: "fulfilled" },
+        ],
+        failedIds: [],
+        permanentlyFailedIds: [],
+        transientlyFailedIds: [],
+        cancelled: true,
+        skippedCount: 2,
+      };
+    });
+    useFleetFailureStore.getState().recordFailure("ls\r", ["t1", reached, unreached, removed], 0, {
+      perTargetOverrides: { [unreached]: "ls -la\r", [removed]: "pwd\r" },
+    });
+    const registry = await buildRegistry();
+    await run(registry, "fleet.retryFailures");
+    expect(vi.mocked(runManagedFleetBroadcast).mock.calls[0]?.[1]).toEqual([
+      "t1",
+      reached,
+      unreached,
+      removed,
+    ]);
+    const s = useFleetFailureStore.getState();
+    expect([...s.failedIds]).toEqual([unreached]);
+    // Its Retry still sends what it was sent the first time.
+    expect(s.payload).toBe("ls\r");
+    expect(s.perTargetOverrides).toEqual({ [unreached]: "ls -la\r" });
   });
 
   it("leaves out, and keeps failed, another host's agent whose safe retry window has passed", async () => {

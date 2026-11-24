@@ -16,6 +16,7 @@ import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { UnsavedChangesDot } from "@/components/ui/UnsavedChangesDot";
 import { Button } from "@/components/ui/button";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
@@ -54,6 +55,9 @@ import { FileBrowserViewer } from "./FileBrowserViewer";
 import { buildWorkingTreeDiffModel, type WorkingTreeFileChange } from "@/lib/workingTreeDiff";
 import { buildFileBrowserGitStatusIndex, isReadableRelativePath } from "./fileBrowserGitStatus";
 import { useFileBrowserTree } from "./useFileBrowserTree";
+import { navigateFileBrowserView } from "./guardedFileBrowserView";
+import type { FileBrowserViewPatch } from "@/store/slices/panelRegistry/fileBrowser";
+import { pickCursorReplacement, type CursorSighting } from "./treeCursor";
 import {
   FILE_BROWSER_SIDEBAR_DEFAULT_WIDTH,
   FILE_BROWSER_SIDEBAR_MAX_WIDTH,
@@ -115,32 +119,13 @@ export function FileBrowserPane({
   onTabRename,
   onAddTab,
 }: FileBrowserPaneProps) {
-  const updateFileBrowserView = usePanelStore((state) => state.setFileBrowserView);
   const project = useProjectStore((state) => state.currentProject);
   const { dirty, conflict } = useFileDocumentFlags(id);
-  const navigationRequest = useRef(0);
-  const setFileBrowserView = useCallback(
-    (panelId: string, patch: Parameters<typeof updateFileBrowserView>[1]) => {
-      const current = usePanelStore.getState().panelsById[panelId];
-      const changesDocument =
-        "browserSelectedPath" in patch &&
-        current?.kind === "file-browser" &&
-        (patch.browserSelectedPath ?? undefined) !== current.browserSelectedPath;
-      if (!changesDocument) {
-        updateFileBrowserView(panelId, patch);
-        return;
-      }
-      const request = ++navigationRequest.current;
-      if (!getFileDocumentProjection(panelId)?.dirty) {
-        updateFileBrowserView(panelId, patch);
-        return;
-      }
-      void consultPanelCloseGuards([panelId]).then((proceed) => {
-        if (proceed && navigationRequest.current === request) updateFileBrowserView(panelId, patch);
-      });
-    },
-    [updateFileBrowserView]
-  );
+  // Every write goes through the guarded path shared with the reveal actions,
+  // so a selection change over unsaved edits asks first wherever it came from.
+  const setFileBrowserView = useCallback((panelId: string, patch: FileBrowserViewPatch) => {
+    void navigateFileBrowserView(panelId, patch);
+  }, []);
   const handleClose = useCallback(() => {
     if (location !== "dialog" || !getFileDocumentProjection(id)?.dirty) {
       onClose?.();
@@ -385,7 +370,8 @@ export function FileBrowserPane({
   // identity the hook expects. Both sources are worktree-store maps, so a
   // workspace root gets nothing from them (#11482) — `externalChangeTick` below
   // is what covers it.
-  const worktreeChangeTick = Math.max(gitChangeTick ?? 0, fsChangeTick ?? 0) || undefined;
+  const latestChangeTick = Math.max(gitChangeTick ?? 0, fsChangeTick ?? 0);
+  const worktreeChangeTick = latestChangeTick || undefined;
 
   // The changed files this browser can mark up and summarise.
   //
@@ -491,6 +477,7 @@ export function FileBrowserPane({
     listingHasHiddenDotfiles,
     listingHiddenCounts,
     selectionMissing,
+    missingRowStatus,
   } = useFileBrowserTree({
     source,
     expandedPaths: stableExpandedPaths,
@@ -504,6 +491,44 @@ export function FileBrowserPane({
     sort,
     selectedPath,
   });
+
+  // Keep the tree cursor on a row. Collapse all, the dotfile toggle, a delete
+  // and a re-root each remove the cursor's row without touching the cursor, and
+  // a cursor that resolves to nothing kills every key that reads it — Enter, the
+  // left and right arrows, the row menu key and Cmd+I — until an up or down
+  // press restarts at row 0. The single-folder collapse has its own rehome in
+  // `handleToggleExpanded`; this is the general one, and it also covers rows
+  // removed by something other than a click (an agent deleting the file).
+  //
+  // Acts only on a cursor whose row was seen on screen and has since gone. A
+  // restored or revealed cursor lands before the listings under it do, and a
+  // cursor that never resolved is not stale, only early. A row that has gone
+  // away is also not proof of absence while an ancestor is unlisted — a re-root
+  // drops every listing but the root's, so a cursor still inside the tree loses
+  // its row for a few frames — which is what `missingRowStatus` rules on.
+  //
+  // Only the tree's own highlight moves. The viewer keeps what it had open, so
+  // this never routes through `handleTreeSelect`, which would open a file.
+  const cursorIndex = useMemo(
+    () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),
+    [rows, cursorPath]
+  );
+  const cursorSightingRef = useRef<{ id: string; sighting: CursorSighting } | null>(null);
+  useEffect(() => {
+    if (cursorPath === null) {
+      cursorSightingRef.current = null;
+      return;
+    }
+    if (cursorIndex >= 0) {
+      cursorSightingRef.current = { id, sighting: { path: cursorPath, rows, index: cursorIndex } };
+      return;
+    }
+    const seen = cursorSightingRef.current;
+    if (seen === null || seen.id !== id || seen.sighting.path !== cursorPath) return;
+    if (missingRowStatus(cursorPath) !== "absent") return;
+    cursorSightingRef.current = null;
+    setCursorPath(pickCursorReplacement(seen.sighting, rows));
+  }, [id, cursorPath, cursorIndex, rows, missingRowStatus]);
 
   // Persist the last-known tree at going-away points only (#11367): the
   // document actually being hidden (window minimize, window close, app quit —
@@ -857,7 +882,8 @@ export function FileBrowserPane({
   //
   // Clears the set outright rather than walking it: every expanded path is a
   // child of the root, so there is nothing to preserve, and the cursor is left
-  // alone — `FileTreeView` rehomes a cursor that a collapse put out of view.
+  // alone — the reconcile effect above rehomes a cursor the collapse put out of
+  // view.
   const handleCollapseAll = useCallback(() => {
     setFileBrowserView(id, { browserExpandedPaths: [] });
   }, [id, setFileBrowserView]);
@@ -888,11 +914,10 @@ export function FileBrowserPane({
     setFileBrowserView(id, { browserSidebarCollapsed: !sidebarCollapsed });
   }, [id, sidebarCollapsed, setFileBrowserView]);
 
-  // Tree-column resize, modeled on PortalDock's handle: delta math from a
-  // mousedown-captured start (no DOM measure), continuous writes through the
-  // 500ms-debounced panel store, and a ref-held teardown so an unmount mid-drag
-  // can drop the document listeners. The column is left-anchored, so dragging
-  // right widens (the mirror of PortalDock's right-anchored dock).
+  // Tree-column resize: delta math from a mousedown-captured start (no DOM
+  // measure), continuous writes through the 500ms-debounced panel store, and a
+  // ref-held teardown so an unmount mid-drag can drop the document listeners.
+  // The column is left-anchored, so dragging right widens.
   const [isResizing, setIsResizing] = useState(false);
   const dragCleanupRef = useRef<(() => void) | null>(null);
 
@@ -978,20 +1003,21 @@ export function FileBrowserPane({
   const treeColumnRef = useRef<HTMLDivElement>(null);
   const treeHeaderRef = useRef<HTMLDivElement>(null);
   const handleTreeHeaderKeyDown = useToolbarRoving(treeHeaderRef);
-  const focusTree = useCallback(() => {
-    requestAnimationFrame(() => {
-      const column = treeColumnRef.current;
-      if (!column) return;
-      // The tree when there are rows to land on, otherwise the first control the
-      // column still has: the loading, error and empty branches render no tree at
-      // all, and querying only for it would drop focus to the document in exactly
-      // the cases this exists to cover.
-      const target =
-        column.querySelector<HTMLElement>('[role="tree"]') ??
-        column.querySelector<HTMLElement>("button");
-      target?.focus();
-    });
+  const focusTreeNow = useCallback(() => {
+    const column = treeColumnRef.current;
+    if (!column) return;
+    // The tree when there are rows to land on, otherwise the first control the
+    // column still has: the loading, error and empty branches render no tree at
+    // all, and querying only for it would drop focus to the document in exactly
+    // the cases this exists to cover.
+    const target =
+      column.querySelector<HTMLElement>('[role="tree"]') ??
+      column.querySelector<HTMLElement>("button");
+    target?.focus();
   }, []);
+  const focusTree = useCallback(() => {
+    requestAnimationFrame(focusTreeNow);
+  }, [focusTreeNow]);
 
   // Collapsing the viewer unmounts everything in it, including its own controls.
   // The containment check is what keeps the common path intact: the toggle lives
@@ -1111,8 +1137,8 @@ export function FileBrowserPane({
   // shared core. `Copy context` moved into that core, where it covers files as
   // well and stays gated on a real worktree — keeping a folder-only copy here
   // too would render it twice on a directory row.
-  const rowContextMenu = useCallback(
-    (row: FileEntryLike): React.ReactNode =>
+  const renderRowMenu = useCallback(
+    (row: FileEntryLike, advertiseInsertShortcut: boolean): React.ReactNode =>
       // Every item names a path on disk, built by joining the row's relative
       // path onto the root. With no root the join yields a relative path that
       // `file.view` would resolve against whatever project is current — a
@@ -1151,20 +1177,23 @@ export function FileBrowserPane({
               <ContextMenuSeparator />
             </>
           )}
-          {renderFileRowMenuItems({
-            // `basePath` is the true worktree root even when the tree has been
-            // re-rooted to a subfolder, and `row.path` stays relative to it —
-            // so one join gives the absolute path and the row path copies
-            // verbatim.
-            absolutePath: join(basePath, row.path),
-            relativePath: row.path,
-            name: row.name,
-            isDirectory: row.isDirectory,
-            // Exact file status only. A folder's index entry is the worst
-            // status anywhere beneath it, which would offer "Open diff" on a
-            // directory that has no diff of its own.
-            status: row.isDirectory ? null : (gitStatusIndex?.fileStatus.get(row.path) ?? null),
-          })}
+          {renderFileRowMenuItems(
+            {
+              // `basePath` is the true worktree root even when the tree has been
+              // re-rooted to a subfolder, and `row.path` stays relative to it —
+              // so one join gives the absolute path and the row path copies
+              // verbatim.
+              absolutePath: join(basePath, row.path),
+              relativePath: row.path,
+              name: row.name,
+              isDirectory: row.isDirectory,
+              // Exact file status only. A folder's index entry is the worst
+              // status anywhere beneath it, which would offer "Open diff" on a
+              // directory that has no diff of its own.
+              status: row.isDirectory ? null : (gitStatusIndex?.fileStatus.get(row.path) ?? null),
+            },
+            { insertFileReferenceShortcut: advertiseInsertShortcut }
+          )}
         </>
       ),
     [
@@ -1175,6 +1204,18 @@ export function FileBrowserPane({
       basePath,
       gitStatusIndex,
     ]
+  );
+  // Cmd+I is the tree's own key and acts on its cursor row, so only that row's
+  // menu may advertise it: a right-click doesn't move the cursor, and on any
+  // other row the hint would name a file the chord doesn't insert. The folder
+  // listing lives in the viewer, where the chord isn't bound at all.
+  const treeRowContextMenu = useCallback(
+    (row: FileEntryLike): React.ReactNode => renderRowMenu(row, row.path === cursorPath),
+    [renderRowMenu, cursorPath]
+  );
+  const listingRowContextMenu = useCallback(
+    (row: FileEntryLike): React.ReactNode => renderRowMenu(row, false),
+    [renderRowMenu]
   );
 
   // The changed-files summary's rows (#13423): the same core as a tree row,
@@ -1245,8 +1286,17 @@ export function FileBrowserPane({
   // for an entry picked out of a folder listing whose parent is collapsed. Git
   // still covers what that cannot: a path whose parent directory has not been
   // listed at all, where there is no node to consult either way.
+  //
+  // Unsaved edits are a witness too. The document behind a dirty draft is
+  // released the moment the selection moves, so a dirty panel's draft is
+  // always the selected file's — and when that file is deleted or moved
+  // underneath it, the tree drops the row while the draft stands. Without
+  // this the viewer would fall back to the deleted-file body, which has no
+  // editor and so no way to save the draft somewhere else (#17197).
   const isSelectedReadableFile =
-    selectedNode === undefined ? isSelectedChangedFile : selectedNode.isDirectory === false;
+    selectedNode === undefined
+      ? isSelectedChangedFile || dirty
+      : selectedNode.isDirectory === false;
   // `selectionFilteredHidden` is part of the gate, not decoration: resolving the
   // node from the listings map means it survives the filter that removed its
   // row, so without this an entry hidden by the dotfile toggle would keep its
@@ -1256,6 +1306,186 @@ export function FileBrowserPane({
       ? join(basePath, selectedPath)
       : null;
   const selectedFileName = selectedPath ? (selectedPath.split("/").pop() ?? selectedPath) : "";
+
+  function renderTree() {
+    if (!source) {
+      return (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
+          {/* w-full: EmptyState is a CSS container (inline-size containment),
+              so as a bare flex item its width collapses and the copy wraps
+              word-by-word. */}
+          <EmptyState
+            variant="zero-data"
+            scale="sidebar"
+            icon={<FolderTree className="h-5 w-5" />}
+            title="Open a folder to browse its files"
+            className="w-full"
+          />
+        </div>
+      );
+    }
+
+    // The full-pane error is reserved for genuinely having nothing to show
+    // (#11367): with rows on screen — live or seeded from the last-known
+    // snapshot — a root failure renders inline above them instead, in the
+    // populated branch below. An error must never blank a populated tree.
+    if (rootError !== null && rows.length === 0) {
+      return (
+        <div className="p-2">
+          <InlineStatusBanner
+            severity="error"
+            icon={FolderTree}
+            title="Couldn't read this folder"
+            description={rootError}
+            action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
+          />
+        </div>
+      );
+    }
+
+    if (isInitialLoading) {
+      return (
+        // Predictable shape (a column of rows), so a skeleton rather than a
+        // spinner. `Skeleton` carries the 400ms anti-flicker gate.
+        <div className="p-2">
+          <Skeleton label="Loading files">
+            <SkeletonText lines={12} />
+          </Skeleton>
+        </div>
+      );
+    }
+
+    if (rows.length === 0) {
+      // Only offer "Show dotfiles" when it can actually help — the toggle is on
+      // and this root holds dotfiles it is what's hiding.
+      const canRevealDotfiles = hideDotfiles && hasHiddenDotfiles;
+      // Junk-only contents used to count as empty, which made the browser say
+      // "This folder is empty" about a folder that is not: a directory holding
+      // nothing but `.git` reads as deleted rather than filtered, and no
+      // affordance anywhere named the list doing the hiding. There is no
+      // in-panel recovery — the junk list is an app-global setting — so this
+      // does not offer a button it cannot honour; it stops lying instead.
+      return (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
+          <EmptyState
+            variant={canRevealDotfiles ? "filtered-empty" : "zero-data"}
+            scale="sidebar"
+            className="w-full"
+            {...(canRevealDotfiles ? {} : { icon: <FolderTree className="h-5 w-5" /> })}
+            title={
+              canRevealDotfiles
+                ? "Dotfiles are hidden here"
+                : hiddenCounts.alwaysHidden > 0
+                  ? "Everything here is on the always-hidden list"
+                  : rootPath
+                    ? "Add a file to this folder"
+                    : "Add a file to this worktree"
+            }
+            action={
+              canRevealDotfiles ? (
+                <Button variant="subtle" size="sm" onClick={handleShowDotfiles}>
+                  Show dotfiles
+                </Button>
+              ) : undefined
+            }
+          />
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <FileTreeView
+          rows={rows}
+          cursorPath={cursorPath}
+          // What the other column is showing, so the tree can mark it. Only
+          // meaningful now that it can differ from the cursor.
+          openPath={selectedPath}
+          onSelect={handleTreeSelect}
+          onToggleExpanded={handleToggleExpanded}
+          onActivate={handleActivate}
+          rowContextMenu={treeRowContextMenu}
+          onInsertFileReference={handleInsertFileReference}
+          canInsertFileReference={canInsertFileReference}
+          // Turns a dragged row's relative path absolute (#11576), the same
+          // join the insert-reference and copy-path handlers above use.
+          basePath={basePath}
+          // Names the scope, not just the panel: re-rooting changes which
+          // files the tree contains, and a screen-reader user re-entering it
+          // otherwise hears the same "Files in main" whether they are at the
+          // worktree root or three folders down inside it.
+          label={rootPath === "" ? `Files in ${title}` : `Files in ${title}/${rootPath}`}
+          gitStatusIndex={gitStatusIndex}
+          {...(isRemote && isWorktreeSource
+            ? { onAddFilesToProject: handleAddFilesToProject }
+            : {})}
+        />
+        {isRemote && (
+          <>
+            <PendingUploadChips
+              surface={uploadSurface}
+              className="shrink-0 border-t border-divider p-2"
+              // At once: the tree is already there, and a frame's wait could
+              // take focus back from whatever claimed it meanwhile.
+              onReturnFocus={focusTreeNow}
+            />
+            <LazyUploadConfirmHost />
+          </>
+        )}
+        {/* A root failure with a tree on screen: the banner joins the rows
+            rather than replacing them, so the last-known files stay usable
+            while the error is visible and retryable. Below the rows, like the
+            strips under it: a background refresh can fail at any moment, and
+            above the rows its arrival would shift them under a click in
+            progress. */}
+        {rootError !== null && (
+          <div className="shrink-0 border-t border-divider p-2">
+            <InlineStatusBanner
+              severity="error"
+              icon={FolderTree}
+              title={rootPath ? "Couldn't refresh this folder" : "Couldn't refresh this worktree"}
+              description={`Showing the last known files. ${rootError}`}
+              action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
+            />
+          </div>
+        )}
+        {/* What the dotfile filter is currently removing, and the one gesture
+            that puts it back. Conditional by construction — it renders nothing
+            while nothing is hidden — so the tree never pays height for it at
+            rest. Above the Reveal strip because it describes the whole view
+            while Reveal describes one selection. */}
+        <FileBrowserHiddenStrip counts={hiddenCounts} onShowDotfiles={handleShowDotfiles} />
+        {/* Below the tree, never above: the strip unmounts the instant a
+            click makes the selection reachable, and sitting above the rows it
+            would shift them mid-gesture — the second click of a double-click
+            would land one row off. */}
+        {/* Never for a selection that no longer exists: expanding its
+            ancestors cannot bring back a deleted row, so the strip would
+            promise something it cannot do. The viewer says it is gone. */}
+        {selectedPath !== null &&
+          selectionInRoot &&
+          !selectedIsReachable &&
+          !selectionFilteredHidden &&
+          !selectionMissing && (
+            <button
+              type="button"
+              onClick={revealSelection}
+              className={cn(
+                PANE_STATUS_FOOTER_CLASS,
+                // `block`, not the strip's flex: `truncate` only ellipsizes a
+                // block container's own text.
+                "block truncate text-left transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary",
+                // Inset, as for the strip above: an outset ring would be cut
+                // off at the pane's bottom edge.
+                "focus-visible:-outline-offset-2"
+              )}
+            >
+              Reveal {selectedFileName}
+            </button>
+          )}
+      </>
+    );
+  }
 
   return (
     <ContentPanel
@@ -1268,15 +1498,7 @@ export function FileBrowserPane({
       isMultiPanelGrid={isMultiPanelGrid}
       onFocus={onFocus}
       onClose={handleClose}
-      headerContent={
-        dirty ? (
-          <span
-            role="img"
-            aria-label={conflict ? "Unsaved changes, file changed on disk" : "Unsaved changes"}
-            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-text-secondary"
-          />
-        ) : undefined
-      }
+      headerContent={dirty ? <UnsavedChangesDot conflict={conflict} /> : undefined}
       onToggleMaximize={onToggleMaximize}
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
@@ -1528,7 +1750,7 @@ export function FileBrowserPane({
               folderHiddenCounts={listingHiddenCounts}
               onShowDotfiles={handleShowDotfiles}
               onSelectEntry={handleSelectListingEntry}
-              rowContextMenu={rowContextMenu}
+              rowContextMenu={listingRowContextMenu}
               changeContextMenu={changeContextMenu}
               renderFileMenuItems={basePath === "" ? undefined : renderFileRowMenuItems}
               basePath={basePath}
@@ -1566,183 +1788,6 @@ export function FileBrowserPane({
       </div>
     </ContentPanel>
   );
-
-  function renderTree() {
-    if (!source) {
-      return (
-        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
-          {/* w-full: EmptyState is a CSS container (inline-size containment),
-              so as a bare flex item its width collapses and the copy wraps
-              word-by-word. */}
-          <EmptyState
-            variant="zero-data"
-            scale="sidebar"
-            icon={<FolderTree className="h-5 w-5" />}
-            title="Open a folder to browse its files"
-            className="w-full"
-          />
-        </div>
-      );
-    }
-
-    // The full-pane error is reserved for genuinely having nothing to show
-    // (#11367): with rows on screen — live or seeded from the last-known
-    // snapshot — a root failure renders inline above them instead, in the
-    // populated branch below. An error must never blank a populated tree.
-    if (rootError !== null && rows.length === 0) {
-      return (
-        <div className="p-2">
-          <InlineStatusBanner
-            severity="error"
-            icon={FolderTree}
-            title="Couldn't read this folder"
-            description={rootError}
-            action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
-          />
-        </div>
-      );
-    }
-
-    if (isInitialLoading) {
-      return (
-        // Predictable shape (a column of rows), so a skeleton rather than a
-        // spinner. `Skeleton` carries the 400ms anti-flicker gate.
-        <div className="p-2">
-          <Skeleton label="Loading files">
-            <SkeletonText lines={12} />
-          </Skeleton>
-        </div>
-      );
-    }
-
-    if (rows.length === 0) {
-      // Only offer "Show dotfiles" when it can actually help — the toggle is on
-      // and this root holds dotfiles it is what's hiding.
-      const canRevealDotfiles = hideDotfiles && hasHiddenDotfiles;
-      // Junk-only contents used to count as empty, which made the browser say
-      // "This folder is empty" about a folder that is not: a directory holding
-      // nothing but `.git` reads as deleted rather than filtered, and no
-      // affordance anywhere named the list doing the hiding. There is no
-      // in-panel recovery — the junk list is an app-global setting — so this
-      // does not offer a button it cannot honour; it stops lying instead.
-      return (
-        <div className="flex min-h-0 flex-1 items-center justify-center p-4">
-          <EmptyState
-            variant={canRevealDotfiles ? "filtered-empty" : "zero-data"}
-            scale="sidebar"
-            className="w-full"
-            {...(canRevealDotfiles ? {} : { icon: <FolderTree className="h-5 w-5" /> })}
-            title={
-              canRevealDotfiles
-                ? "Dotfiles are hidden here"
-                : hiddenCounts.alwaysHidden > 0
-                  ? "Everything here is on the always-hidden list"
-                  : rootPath
-                    ? "Add a file to this folder"
-                    : "Add a file to this worktree"
-            }
-            action={
-              canRevealDotfiles ? (
-                <Button variant="subtle" size="sm" onClick={handleShowDotfiles}>
-                  Show dotfiles
-                </Button>
-              ) : undefined
-            }
-          />
-        </div>
-      );
-    }
-
-    return (
-      <>
-        <FileTreeView
-          rows={rows}
-          cursorPath={cursorPath}
-          // What the other column is showing, so the tree can mark it. Only
-          // meaningful now that it can differ from the cursor.
-          openPath={selectedPath}
-          onSelect={handleTreeSelect}
-          onToggleExpanded={handleToggleExpanded}
-          onActivate={handleActivate}
-          rowContextMenu={rowContextMenu}
-          onInsertFileReference={handleInsertFileReference}
-          canInsertFileReference={canInsertFileReference}
-          // Turns a dragged row's relative path absolute (#11576), the same
-          // join the insert-reference and copy-path handlers above use.
-          basePath={basePath}
-          // Names the scope, not just the panel: re-rooting changes which
-          // files the tree contains, and a screen-reader user re-entering it
-          // otherwise hears the same "Files in main" whether they are at the
-          // worktree root or three folders down inside it.
-          label={rootPath === "" ? `Files in ${title}` : `Files in ${title}/${rootPath}`}
-          gitStatusIndex={gitStatusIndex}
-          {...(isRemote && isWorktreeSource
-            ? { onAddFilesToProject: handleAddFilesToProject }
-            : {})}
-        />
-        {isRemote && (
-          <>
-            <PendingUploadChips
-              surface={uploadSurface}
-              className="shrink-0 border-t border-divider p-2"
-            />
-            <LazyUploadConfirmHost />
-          </>
-        )}
-        {/* A root failure with a tree on screen: the banner joins the rows
-            rather than replacing them, so the last-known files stay usable
-            while the error is visible and retryable. Below the rows, like the
-            strips under it: a background refresh can fail at any moment, and
-            above the rows its arrival would shift them under a click in
-            progress. */}
-        {rootError !== null && (
-          <div className="shrink-0 border-t border-divider p-2">
-            <InlineStatusBanner
-              severity="error"
-              icon={FolderTree}
-              title={rootPath ? "Couldn't refresh this folder" : "Couldn't refresh this worktree"}
-              description={`Showing the last known files. ${rootError}`}
-              action={{ id: "retry", label: "Retry", onClick: handleRefresh }}
-            />
-          </div>
-        )}
-        {/* What the dotfile filter is currently removing, and the one gesture
-            that puts it back. Conditional by construction — it renders nothing
-            while nothing is hidden — so the tree never pays height for it at
-            rest. Above the Reveal strip because it describes the whole view
-            while Reveal describes one selection. */}
-        <FileBrowserHiddenStrip counts={hiddenCounts} onShowDotfiles={handleShowDotfiles} />
-        {/* Below the tree, never above: the strip unmounts the instant a
-            click makes the selection reachable, and sitting above the rows it
-            would shift them mid-gesture — the second click of a double-click
-            would land one row off. */}
-        {/* Never for a selection that no longer exists: expanding its
-            ancestors cannot bring back a deleted row, so the strip would
-            promise something it cannot do. The viewer says it is gone. */}
-        {selectedPath !== null &&
-          selectionInRoot &&
-          !selectedIsReachable &&
-          !selectionFilteredHidden &&
-          !selectionMissing && (
-            <button
-              type="button"
-              onClick={revealSelection}
-              className={cn(
-                PANE_STATUS_FOOTER_CLASS,
-                // `block`, not the strip's flex: `truncate` only ellipsizes a
-                // block container's own text.
-                "block truncate text-left transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary",
-                // Inset, as for the strip above: an outset ring would be cut
-                // off at the pane's bottom edge.
-                "focus-visible:-outline-offset-2"
-              )}
-            >
-              Reveal {selectedFileName}
-            </button>
-          )}
-      </>
-    );
-  }
 }
 
 const EMPTY_PATHS: readonly string[] = [];

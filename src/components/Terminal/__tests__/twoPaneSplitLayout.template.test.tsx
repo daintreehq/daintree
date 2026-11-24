@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/react";
+import { render, cleanup, fireEvent, act } from "@testing-library/react";
 import type { PanelInstance } from "@shared/types/panel";
 import { TwoPaneSplitLayout } from "../TwoPaneSplitLayout";
 import { DIVIDER_WIDTH_PX } from "../TwoPaneSplitDivider";
@@ -13,6 +13,7 @@ import { load as loadTerminalService } from "@/services/terminal/terminalInstanc
 
 const services = vi.hoisted(() => ({
   lockResize: vi.fn<(id: string, locked: boolean) => void>(),
+  scheduleBatchResize: vi.fn<(ids: string[]) => void>(),
   commitRatioIfChanged:
     vi.fn<(worktreeId: string, ratio: number, panels: [string, string]) => void>(),
 }));
@@ -66,15 +67,17 @@ vi.mock("@/services/TerminalInstanceService", () => {
   const terminalInstanceService = {
     lockResize: services.lockResize,
     runResizePass: () => {},
-    scheduleBatchResize: () => {},
+    scheduleBatchResize: services.scheduleBatchResize,
   };
   return {
     createTerminalPaintPlane: () => terminalInstanceService,
   };
 });
 
+const measurement = vi.hoisted(() => ({ locked: true }));
+
 vi.mock("@/lib/layoutTransitionLock", () => ({
-  isSidebarMeasurementLocked: () => true,
+  isSidebarMeasurementLocked: () => measurement.locked,
   subscribeSidebarLayoutTransitionUnlock: () => () => {},
   subscribeSidebarHydrationUnlock: () => () => {},
 }));
@@ -141,7 +144,9 @@ beforeAll(async () => {
 describe("TwoPaneSplitLayout grid template", () => {
   beforeEach(() => {
     frames.clear();
+    measurement.locked = true;
     services.lockResize.mockClear();
+    services.scheduleBatchResize.mockClear();
     services.commitRatioIfChanged.mockClear();
     splitStore.current?.setState({ ratioByWorktreeId: {} });
     vi.stubGlobal("ResizeObserver", StubResizeObserver);
@@ -218,6 +223,57 @@ describe("TwoPaneSplitLayout grid template", () => {
     expect(leftFraction()).toBeLessThan(DEFAULT_RATIO);
     fireEvent.doubleClick(separator);
     expect(leftFraction()).toBeCloseTo(DEFAULT_RATIO);
+  });
+
+  it("leaves a container resize to each pane's own observer, and resizes for a ratio step", () => {
+    measurement.locked = false;
+    const observers: CapturingResizeObserver[] = [];
+    class CapturingResizeObserver implements ResizeObserver {
+      private target: Element | null = null;
+      constructor(private readonly cb: ResizeObserverCallback) {
+        observers.push(this);
+      }
+      observe(target: Element) {
+        this.target = target;
+      }
+      unobserve() {}
+      disconnect() {}
+      resizeTo(width: number) {
+        if (!this.target) return;
+        const entry: ResizeObserverEntry = {
+          target: this.target,
+          contentRect: DOMRect.fromRect({ width, height: 600 }),
+          borderBoxSize: [],
+          contentBoxSize: [],
+          devicePixelContentBoxSize: [],
+        };
+        this.cb([entry], this);
+      }
+    }
+    vi.stubGlobal("ResizeObserver", CapturingResizeObserver);
+    const { getByRole } = renderController(() => {});
+    const separator = getByRole("separator");
+    expect(services.scheduleBatchResize).toHaveBeenCalledWith(["a", "b"]);
+    services.scheduleBatchResize.mockClear();
+
+    // A window drag: the width the clamp reads moves on every frame, while the
+    // configured ratio stays inside the clamp at each of them.
+    const bounds: Array<string | null> = [];
+    for (const width of [1000, 1200, 1500]) {
+      act(() => {
+        for (const observer of observers) observer.resizeTo(width);
+        for (const [id, frame] of [...frames]) {
+          frames.delete(id);
+          frame(0);
+        }
+      });
+      bounds.push(separator.getAttribute("aria-valuemin"));
+    }
+    expect(new Set(bounds).size).toBe(3);
+    expect(services.scheduleBatchResize).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(separator, { key: "ArrowRight" });
+    expect(services.scheduleBatchResize).toHaveBeenCalledWith(["a", "b"]);
   });
 
   it("clears the template on unmount so the grid falls back to its own columns", () => {

@@ -33,6 +33,12 @@ const bus = vi.hoisted(() => {
   };
 });
 
+const frozenIds = vi.hoisted(() => new Set<number>());
+vi.mock("../../../../utils/webContentsLifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../../utils/webContentsLifecycle.js")>()),
+  isWebContentsFrozen: (wc: { id: number }) => frozenIds.has(wc.id),
+}));
+
 vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: () => [] },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn(), on: vi.fn(), removeListener: vi.fn() },
@@ -114,9 +120,12 @@ describe("terminal resource-metrics fan-out", () => {
     // One visible view (project 0) and five cached views (projects 1-5).
     registry.projectViewsRegistered = true;
     registry.pruneOnRead = false;
+    frozenIds.clear();
     registry.views = Array.from({ length: PROJECTS }, (_, p) => makeView(p + 1, `p${p}`, p !== 0));
     ptyClient = Object.assign(new EventEmitter(), {
-      getTerminalProjectId: (id: string) => (id.includes("-") ? id.split("-")[0]! : null),
+      // "p3-t0" belongs to p3; anything else, "resource-governor" included, to no project.
+      getTerminalProjectId: (id: string) => /^(\w+)-t\d+$/.exec(id)?.[1] ?? null,
+      isUnplacedTerminal: () => false,
     });
     const disposeTerminal = registerTerminalEventHandlers({
       ptyClient,
@@ -168,6 +177,118 @@ describe("terminal resource-metrics fan-out", () => {
     }
   });
 
+  describe("pause-duration gauge (#17575)", () => {
+    function gauge(held: Record<string, number>, clearedTerminalIds?: string[]) {
+      return {
+        terminalId: "resource-governor",
+        metricType: "pause-duration-gauge",
+        timestamp: 5,
+        perTerminalHeld: Object.entries(held).map(([terminalId, heldDurationMs]) => ({
+          terminalId,
+          heldDurationMs,
+        })),
+        ...(clearedTerminalIds ? { clearedTerminalIds } : {}),
+      };
+    }
+
+    function gaugesFor(view: FakeWc) {
+      return view.sends
+        .filter((s) => s.channel === CHANNELS.EVENTS_PUSH)
+        .map((s) => s.args[0] as { name: string; payload: Record<string, unknown> })
+        .filter((e) => e.name === "terminal:reliability-metric")
+        .map((e) => {
+          expect(e.payload.metricType).toBe("pause-duration-gauge");
+          return { held: e.payload.perTerminalHeld, cleared: e.payload.clearedTerminalIds };
+        });
+    }
+
+    it("hands each project view only its own terminals' durations", () => {
+      // Two shards' batches interleaved: neither may reach the other's view.
+      bus.emit("terminal:reliability-metric", gauge({ "p0-t0": 2000 }));
+      bus.emit("terminal:reliability-metric", gauge({ "p1-t0": 1000, "p1-t1": 800 }));
+      bus.emit("terminal:reliability-metric", gauge({ "p0-t0": 4000 }));
+
+      expect(gaugesFor(registry.views[0]!)).toEqual([
+        { held: [{ terminalId: "p0-t0", heldDurationMs: 2000 }], cleared: undefined },
+        { held: [{ terminalId: "p0-t0", heldDurationMs: 4000 }], cleared: undefined },
+      ]);
+      expect(gaugesFor(registry.views[1]!)).toEqual([
+        {
+          held: [
+            { terminalId: "p1-t0", heldDurationMs: 1000 },
+            { terminalId: "p1-t1", heldDurationMs: 800 },
+          ],
+          cleared: undefined,
+        },
+      ]);
+      for (const view of registry.views.slice(2)) expect(gaugesFor(view)).toEqual([]);
+    });
+
+    it("gives each project one envelope of its samples and clears", () => {
+      // One shard hosting several projects: an older renderer reads each
+      // envelope as its project's whole snapshot, so they never split.
+      bus.emit(
+        "terminal:reliability-metric",
+        gauge({ "p0-t0": 2000, "p2-t0": 1500 }, ["p2-t1", "p3-t0"])
+      );
+
+      expect(gaugesFor(registry.views[0]!)).toEqual([
+        { held: [{ terminalId: "p0-t0", heldDurationMs: 2000 }], cleared: undefined },
+      ]);
+      expect(gaugesFor(registry.views[2]!)).toEqual([
+        { held: [{ terminalId: "p2-t0", heldDurationMs: 1500 }], cleared: ["p2-t1"] },
+      ]);
+      expect(gaugesFor(registry.views[3]!)).toEqual([{ held: [], cleared: ["p3-t0"] }]);
+      for (const view of [1, 4, 5]) expect(gaugesFor(registry.views[view]!)).toEqual([]);
+    });
+
+    it("reaches a frozen view on a tick that clears, not on one that only samples", () => {
+      frozenIds.add(registry.views[1]!.id);
+
+      bus.emit("terminal:reliability-metric", gauge({ "p1-t0": 3000 }));
+      bus.emit("terminal:reliability-metric", gauge({ "p1-t1": 500 }, ["p1-t0"]));
+
+      expect(gaugesFor(registry.views[1]!)).toEqual([
+        { held: [{ terminalId: "p1-t1", heldDurationMs: 500 }], cleared: ["p1-t0"] },
+      ]);
+    });
+
+    it("does the same with no project views registered", () => {
+      registry.projectViewsRegistered = false;
+      frozenIds.add(registry.views[1]!.id);
+
+      bus.emit("terminal:reliability-metric", gauge({ "p1-t0": 3000 }));
+      bus.emit("terminal:reliability-metric", gauge({}, ["p1-t0"]));
+
+      expect(gaugesFor(registry.views[1]!)).toEqual([{ held: [], cleared: ["p1-t0"] }]);
+      expect(gaugesFor(registry.views[0]!)).toEqual([
+        { held: [{ terminalId: "p1-t0", heldDurationMs: 3000 }], cleared: undefined },
+        { held: [], cleared: ["p1-t0"] },
+      ]);
+    });
+
+    it("sends a terminal with no known project to every view, and a known one only home", () => {
+      bus.emit("terminal:reliability-metric", gauge({}, ["orphan", "p0-t0"]));
+
+      expect(gaugesFor(registry.views[0]!)).toEqual([{ held: [], cleared: ["p0-t0", "orphan"] }]);
+      for (const view of registry.views.slice(1)) {
+        expect(gaugesFor(view)).toEqual([{ held: [], cleared: ["orphan"] }]);
+      }
+    });
+
+    it("sends a project with no view of its own nothing, and nobody else its terminals", () => {
+      bus.emit(
+        "terminal:reliability-metric",
+        gauge({ "p0-t0": 2000, "gone-t0": 900 }, ["gone-t1"])
+      );
+
+      expect(gaugesFor(registry.views[0]!)).toEqual([
+        { held: [{ terminalId: "p0-t0", heldDurationMs: 2000 }], cleared: undefined },
+      ]);
+      for (const view of registry.views.slice(1)) expect(gaugesFor(view)).toEqual([]);
+    });
+  });
+
   it("gives each view, cached or not, only its own project's terminals", () => {
     ptyClient.emit("resource-metrics", makeBatch(), 42);
 
@@ -210,15 +331,51 @@ describe("terminal resource-metrics fan-out", () => {
     for (const k of keys.slice(1)) expect(k).toEqual(["gone-t0"]);
   });
 
-  it("still sends an empty slice to views with no sampled terminals", () => {
-    // Each batch is one tick of the renderer's leak detector, which also
-    // re-evaluates entries a batch omits.
+  it("sends nothing to views with no sampled terminals (#17194)", () => {
+    // Each pty-host shard reports its own terminals on its own tick; a view
+    // none of them belong to has nothing to evaluate.
     ptyClient.emit("resource-metrics", { "p2-t0": { cpuPercent: 1 } }, 1);
 
-    const sizes = registry.views.map(
-      (v) => Object.keys((v.sends[0]?.args[0] as { metrics: object }).metrics).length
-    );
-    expect(sizes).toEqual([0, 0, 1, 0, 0, 0]);
+    expect(registry.views.map((v) => v.sends.length)).toEqual([0, 0, 1, 0, 0, 0]);
+    expect(registry.views[2]!.sends[0]!.args[0]).toEqual({
+      metrics: { "p2-t0": { cpuPercent: 1 } },
+      timestamp: 1,
+    });
+  });
+
+  it("sends an empty batch to nobody, with or without project views", () => {
+    ptyClient.emit("resource-metrics", {}, 1);
+    registry.projectViewsRegistered = false;
+    ptyClient.emit("resource-metrics", {}, 2);
+
+    expect(registry.views.every((v) => v.sends.length === 0)).toBe(true);
+  });
+
+  it("sends a frozen cached view nothing until it thaws (#17038)", () => {
+    // p0's view is active, so a freeze it may still be leaving never holds it.
+    for (const view of registry.views) frozenIds.add(view.id);
+    const batch = { "p0-t0": { cpuPercent: 1 }, "p1-t0": { cpuPercent: 2 } };
+
+    for (let tick = 0; tick < 5; tick++) ptyClient.emit("resource-metrics", batch, tick);
+
+    expect(registry.views.map((v) => v.sends.length)).toEqual([5, 0, 0, 0, 0, 0]);
+
+    frozenIds.clear();
+    ptyClient.emit("resource-metrics", batch, 9);
+    expect(registry.views.map((v) => v.sends.length)).toEqual([6, 1, 0, 0, 0, 0]);
+    expect(registry.views[1]!.sends[0]!.args[0]).toEqual({
+      metrics: { "p1-t0": { cpuPercent: 2 } },
+      timestamp: 9,
+    });
+  });
+
+  it("leaves frozen cached views out of the whole-batch send too (#17038)", () => {
+    registry.projectViewsRegistered = false;
+    frozenIds.add(registry.views[3]!.id);
+
+    ptyClient.emit("resource-metrics", makeBatch(), 7);
+
+    expect(registry.views.map((v) => v.sends.length)).toEqual([1, 1, 1, 0, 1, 1]);
   });
 
   it("sends each view of a project the same slice", () => {

@@ -3,6 +3,7 @@ import {
   formatHostConnection,
   isReservedHostName,
   isValidRemoteHostId,
+  readPendingPlacement,
   readStoredHostConnection,
   sameHostAccount,
   sameHostConnection,
@@ -101,7 +102,9 @@ function normalizeConnection(value: unknown): HostConnection {
 }
 
 function storedSwitch(value: unknown, connection: HostConnection): boolean {
-  return value === undefined ? connection.kind === "ssh" : value === true;
+  return value === undefined
+    ? connection.kind === "ssh" || connection.kind === "cloud"
+    : value === true;
 }
 
 /** A readable id from the name, falling back to random when nothing usable is left. */
@@ -168,19 +171,46 @@ function sanitize(raw: unknown): HostDescriptor[] {
       // A field the record never had reads as an SSH host's default, on. Its
       // retired messaging switches were folded into it at migration (#13496).
       assistantControlEnabled: storedSwitch(host.assistantControlEnabled, connection),
+      ...(host.forwardSshAgent === true ? { forwardSshAgent: true } : {}),
       ...(typeof host.ownerWorktreeId === "string" && host.ownerWorktreeId
         ? { ownerWorktreeId: host.ownerWorktreeId }
         : {}),
       ...(connection.kind === "ssh" ? wakeOf(host.wake) : {}),
+      ...placementOf(host.pendingPlacement),
+      ...(host.startsOnConnect === true && connection.kind !== "wsl"
+        ? { startsOnConnect: true as const }
+        : {}),
     });
   }
   return out;
+}
+
+/** A stored pending placement that still reads as one; anything else is as if none was asked for. */
+function placementOf(value: unknown): { pendingPlacement?: HostDescriptor["pendingPlacement"] } {
+  const pendingPlacement = readPendingPlacement(value);
+  return pendingPlacement ? { pendingPlacement } : {};
 }
 
 /** A stored wake setup that still reads as one; anything else is as if none was set up. */
 function wakeOf(value: unknown): { wake?: HostWakeSetup } {
   const wake = normalizeHostWake(value);
   return wake ? { wake } : {};
+}
+
+/**
+ * Set, replace or remove the worktree waiting on this host's setup. A failure
+ * is news about one placement only: written after that placement was
+ * cancelled or replaced, it would bring back what the person let go.
+ */
+function applyPendingPlacement(next: HostDescriptor, value: unknown): void {
+  if (value === null) {
+    delete next.pendingPlacement;
+    return;
+  }
+  const placement = readPendingPlacement(value);
+  if (!placement) throw invalid("A pending placement needs its project, worktree and label.");
+  if (placement.failure && next.pendingPlacement?.requestedAt !== placement.requestedAt) return;
+  next.pendingPlacement = placement;
 }
 
 export class HostRegistry {
@@ -238,11 +268,17 @@ export class HostRegistry {
       notificationsEnabled: false,
       // A Shell that reaches a host over SSH can already run anything there as
       // that user; a tool run there, or an assistant started there, is no more.
-      assistantControlEnabled: connection.kind === "ssh",
+      assistantControlEnabled: connection.kind === "ssh" || connection.kind === "cloud",
       ...(typeof payload.ownerWorktreeId === "string" && payload.ownerWorktreeId
         ? { ownerWorktreeId: payload.ownerWorktreeId }
         : {}),
     };
+    if (payload.pendingPlacement !== undefined) {
+      applyPendingPlacement(descriptor, payload.pendingPlacement);
+    }
+    if (payload.startsOnConnect === true && connection.kind !== "wsl") {
+      descriptor.startsOnConnect = true;
+    }
     this.write([...hosts, descriptor]);
     return descriptor;
   }
@@ -263,6 +299,15 @@ export class HostRegistry {
     }
     if (payload.connection !== undefined) {
       next.connection = normalizeConnection(payload.connection);
+      // A cloud host's connection is its machine binding; it is never re-pointed by hand.
+      if (
+        current.connection.kind === "cloud" &&
+        !sameHostConnection(next.connection, current.connection)
+      ) {
+        throw invalid(
+          "A cloud host stays bound to its machine. Remove it and add the other machine instead."
+        );
+      }
       requireNewAccount(next.connection, hosts, current.id);
       if (!sameHostConnection(next.connection, current.connection)) {
         // A different machine may answer now; what we saw of the old one is not about it.
@@ -274,6 +319,12 @@ export class HostRegistry {
         delete next.ownerWorktreeId;
         // Nor is the adapter and LAN recorded for the old one its own.
         delete next.wake;
+        // Nor was the worktree waiting on its setup meant for this machine.
+        delete next.pendingPlacement;
+        // Nor is this computer's agent offered to a machine it wasn't offered to.
+        delete next.forwardSshAgent;
+        // Nor is how Daintree runs on the old machine anything the new one has said.
+        delete next.startsOnConnect;
       }
     }
     if (payload.wake !== undefined) {
@@ -293,6 +344,8 @@ export class HostRegistry {
         next.wake = wake;
       }
     }
+    if (payload.pendingPlacement !== undefined)
+      applyPendingPlacement(next, payload.pendingPlacement);
     if (payload.notificationsEnabled !== undefined) {
       if (typeof payload.notificationsEnabled !== "boolean") {
         throw invalid("notificationsEnabled must be true or false.");
@@ -305,7 +358,34 @@ export class HostRegistry {
       }
       next.assistantControlEnabled = payload.assistantControlEnabled;
     }
+    if (payload.forwardSshAgent !== undefined) {
+      if (typeof payload.forwardSshAgent !== "boolean") {
+        throw invalid("forwardSshAgent must be true or false.");
+      }
+      // Turned on for the machine it reaches now; a change of target in the
+      // same update drops it, even when this asks for it.
+      const retargeted =
+        payload.connection !== undefined &&
+        !sameHostConnection(next.connection, current.connection);
+      if (payload.forwardSshAgent && !retargeted) next.forwardSshAgent = true;
+      else delete next.forwardSshAgent;
+    }
     return next;
+  }
+
+  /**
+   * What a check of the host saw about how Daintree runs there. Written only
+   * when it changes: every poll of a setup reports it.
+   */
+  recordStartsOnConnect(hostId: HostId, startsOnConnect: boolean): HostDescriptor | null {
+    const current = this.get(hostId);
+    if (!current) return null;
+    const value = startsOnConnect && current.connection.kind !== "wsl";
+    if ((current.startsOnConnect === true) === value) return current;
+    const next: HostDescriptor = { ...current };
+    if (value) next.startsOnConnect = true;
+    else delete next.startsOnConnect;
+    return this.replace(next);
   }
 
   /** Record what a connection observed. Not a user edit, so it never validates names. */

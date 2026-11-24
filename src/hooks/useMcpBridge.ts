@@ -14,8 +14,6 @@ import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfir
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { runWithMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import {
-  buildWorktreeDeletePreview,
-  fetchWorktreeTeardownPreview,
   formatSubmodulePreviewLines,
   formatTeardownPreviewLines,
   formatWorktreeDeletePreviewLines,
@@ -25,19 +23,12 @@ import {
   worktreeDeleteRefusedBy,
   type WorktreeDeletePreviewOutcome,
   type WorktreeSubmoduleDeleteBlock,
-} from "@/components/Worktree/worktreeDeletePreview";
+} from "@shared/utils/worktreeDeletePreview";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
-import {
-  buildGitRemoteOperationPreview,
-  formatGitRemoteOperationPreviewLines,
-} from "@/components/Git/gitRemoteOperationPreview";
-import { formatRecipePreviewLines } from "@/components/TerminalRecipe/recipeConfirmPreview";
-import {
-  formatForgeCreateIssuePreviewLines,
-  formatForgeIssueCommentPreviewLines,
-  type ForgeCreateIssuePreview,
-  type ForgeIssueCommentPreview,
+import type {
+  ForgeCreateIssuePreview,
+  ForgeIssueCommentPreview,
 } from "@/components/Forge/forgeWritePreview";
 import {
   readDispatchRecipeId,
@@ -45,17 +36,13 @@ import {
   readDispatchTerminalCwd,
   TERMINAL_LAUNCH_ACTION_ID,
 } from "@/services/actions/effectiveDanger";
+import type { TerminalLaunchPreview } from "@/lib/mcpTerminalLaunchPreview";
+import type { StartHeldChoice, StartHeldPaneSnapshot } from "@/lib/mcpStartHeldPreview";
 import {
-  formatTerminalLaunchPreviewLines,
-  type TerminalLaunchPreview,
-} from "@/lib/mcpTerminalLaunchPreview";
-import {
+  agentPresetPreviewSubject,
   boundStartHeldTitle,
-  formatStartHeldPreviewLines,
   MAX_START_HELD_SUBJECT_CHARS,
-  type StartHeldChoice,
-  type StartHeldPaneSnapshot,
-} from "@/lib/mcpStartHeldPreview";
+} from "@/lib/mcpConfirmSubjects";
 import { useRecipeStore } from "@/store/recipeStore";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import {
@@ -69,6 +56,7 @@ import type {
   HostApprovedPush,
   HostApprovedRecipeRun,
   HostApprovedTarget,
+  HostCallerOrigin,
 } from "@shared/types/actions";
 import type {
   McpApprovalScope,
@@ -84,22 +72,32 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { MCP_PREVIEW_CAUTION_PREFIX } from "@shared/utils/mcpPreviewLines";
 import { resolveMcpConfirmRequester } from "@/lib/mcpConfirmRequester";
 import { waitForWorktreeSnapshot } from "@/store/worktreeSnapshotSync";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
 import {
-  agentPresetMutationFingerprint,
   isAgentPresetMutationAction,
-  planAgentPresetMutation,
-  type AgentPresetMutation,
   type AgentPresetMutationActionId,
-} from "@/services/actions/definitions/agentPresetMutation";
-import { readPresetWriteSources } from "@/services/actions/definitions/agentPresetSources";
-import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+} from "@/services/actions/definitions/agentPresetMutationIds";
+import type { AgentPresetMutation } from "@/services/actions/definitions/agentPresetMutation";
 import {
-  agentPresetPreviewSubject,
-  formatAgentPresetPreviewLines,
-} from "@/lib/mcpAgentPresetPreview";
+  accountRowLines,
+  accountRowTarget,
+  planAgentAccountAdd,
+  type PlannedAccountRow,
+} from "@/services/actions/definitions/agentAccountAdd";
+import { pluralize } from "@/lib/pluralize";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { ASSISTANT_PRESET_MOVE_DELEGATE } from "@shared/config/assistantConfirmationDelegation";
+import { OwnFallbackStepFailedError } from "@/services/actions/ownFallbackStep";
+
+/**
+ * What the approver reads when a preview could not be built at all, such as a
+ * preview module that failed to load. Empty lines would read as "nothing to
+ * show"; this says the content is unknown.
+ */
+const PREVIEW_UNAVAILABLE_LINE = `${MCP_PREVIEW_CAUTION_PREFIX}The preview could not be loaded, so what this will change could not be verified.`;
 
 const REJECTION_RESULT: ActionDispatchResult = {
   ok: false,
@@ -225,8 +223,10 @@ const MCP_SPAWN_TAGGED_ACTIONS = new Set([
 
 function shouldTagMcpSpawn(actionId: string): boolean {
   // The preset writes launch nothing, and their strict schemas would refuse the
-  // spawn fields as unknown (#16047).
+  // spawn fields as unknown (#16047). The account actions launch nothing either
+  // (#17079), and the add's rows are planned from these very arguments.
   if (isAgentPresetMutationAction(actionId)) return false;
+  if (actionId === "agent.addAccount" || actionId === "agent.listAccounts") return false;
   return actionId.startsWith("agent.") || MCP_SPAWN_TAGGED_ACTIONS.has(actionId);
 }
 
@@ -307,7 +307,14 @@ export type McpConfirmPreviewTarget =
    * change, and the env inside them reaches the argument summary only as
    * `<object>`. Planned again at `run()`, which writes what that plan says.
    */
-  | { kind: "agentPreset"; mutation: AgentPresetMutation };
+  | { kind: "agentPreset"; mutation: AgentPresetMutation }
+  /**
+   * The accounts an `agent.addAccount` dispatch asks for (#17079), a row each
+   * naming the folder it makes or uses. The same frozen, synchronous checklist
+   * as a batch kill: the rows come from the arguments, and the run plans the
+   * same arguments again and adds only the rows left ticked.
+   */
+  | { kind: "agentAccountAdd"; rows: readonly PlannedAccountRow[] };
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
@@ -325,6 +332,9 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   terminalStartHeld: "Held panel to be started",
   // Replaced per operation below. Present so the map stays exhaustive.
   agentPreset: "Launch preset",
+  // Shown only when a pane asks to reach the add above its tier; otherwise the
+  // checklist carries its own heading, like the panel ones above.
+  agentAccountAdd: "Accounts to be added",
 };
 
 const AGENT_PRESET_PREVIEW_TITLES: Record<AgentPresetMutation["operation"], string> = {
@@ -361,12 +371,22 @@ const PRESET_CHANGED_RESULT: ActionDispatchResult = {
   },
 };
 
-/** Plan a preset write against this view's stores, for its preview or its refusal. */
-function planPresetWriteHere(
+/**
+ * Plan a preset write against this view's stores, for its preview or its refusal.
+ *
+ * The planner and its zod schemas load on the first preset write, never at
+ * boot. The sources are read after the load, so a plan always reflects the
+ * stores at the moment it is made.
+ */
+async function planPresetWriteHere(
   actionId: AgentPresetMutationActionId,
   args: unknown,
   context: ActionContext | undefined
 ) {
+  const [{ planAgentPresetMutation }, { readPresetWriteSources }] = await Promise.all([
+    import("@/services/actions/definitions/agentPresetMutation"),
+    import("@/services/actions/definitions/agentPresetSources"),
+  ]);
   // Whole-object precedence, as `ActionService` applies a pinned context.
   const projectId = (context ?? actionService.getContext()).projectId;
   return planAgentPresetMutation(
@@ -394,7 +414,7 @@ async function presetWriteRefusal(
     .getState()
     .initialize()
     .catch(() => {});
-  const plan = planPresetWriteHere(actionId, args, context);
+  const plan = await planPresetWriteHere(actionId, args, context);
   return plan.ok
     ? undefined
     : { ok: false, error: { code: "VALIDATION_ERROR", message: plan.message } };
@@ -725,8 +745,27 @@ function resolvePreviewWorktreePath(
 }
 
 /**
+ * The preview target for a preset write. Async because planning loads the
+ * planner, which stays off the boot path; every other kind resolves through
+ * {@link resolveMcpConfirmPreviewTarget}, which returns undefined for a preset
+ * write.
+ *
+ * Exported for unit tests; the bridge is the only production caller.
+ */
+export async function resolveMcpPresetConfirmPreviewTarget(
+  actionId: string,
+  args: unknown,
+  context: ActionContext | undefined
+): Promise<McpConfirmPreviewTarget | undefined> {
+  if (!isAgentPresetMutationAction(actionId)) return undefined;
+  const plan = await planPresetWriteHere(actionId, args, context);
+  return plan.ok ? { kind: "agentPreset", mutation: plan.mutation } : undefined;
+}
+
+/**
  * Resolve what this dispatch should preview, or `undefined` when it has no
- * preview. Called ONCE per dispatch: the result drives `previewPending`, the
+ * preview. A preset write is the exception: it resolves through
+ * {@link resolveMcpPresetConfirmPreviewTarget}. Called ONCE per dispatch: the result drives `previewPending`, the
  * fetch, the modal heading, and — for git — the cwd the approved dispatch is
  * pinned to, so all four can never disagree.
  *
@@ -737,6 +776,10 @@ export function resolveMcpConfirmPreviewTarget(
   args: unknown,
   context: ActionContext | undefined
 ): McpConfirmPreviewTarget | undefined {
+  if (actionId === "agent.addAccount") {
+    const plan = planAgentAccountAdd(args);
+    return plan.ok ? { kind: "agentAccountAdd", rows: plan.rows } : undefined;
+  }
   if (actionId === "terminal.killBatch") {
     const terminalIds = terminalIdsArg(args);
     return terminalIds === undefined ? undefined : { kind: "terminalKillBatch", terminalIds };
@@ -744,10 +787,6 @@ export function resolveMcpConfirmPreviewTarget(
   if (actionId === "terminal.startHeld") {
     const target = startHeldArgs(args);
     return target === undefined ? undefined : { kind: "terminalStartHeld", ...target };
-  }
-  if (isAgentPresetMutationAction(actionId)) {
-    const plan = planPresetWriteHere(actionId, args, context);
-    return plan.ok ? { kind: "agentPreset", mutation: plan.mutation } : undefined;
   }
   if (actionId === "worktree.delete") {
     const worktreeId = worktreeIdArg(args);
@@ -857,6 +896,9 @@ export function resolveMcpConfirmSubject(
       return recipe?.name !== undefined && recipe.name.length > 0 ? recipe.name : undefined;
     }
     if (target.kind === "agentPreset") return agentPresetPreviewSubject(target.mutation);
+    if (target.kind === "agentAccountAdd") {
+      return pluralize(target.rows.length, "account");
+    }
     if (target.kind === "terminalStartHeld") {
       const title = readStartHeldPane(target.terminalId)?.title;
       return title !== undefined && title.length > 0
@@ -1001,7 +1043,11 @@ export async function buildMcpConfirmPreview(
   // The checklist IS this kind's preview, and it is already on the item before
   // the modal opens. There is nothing to fetch and nothing to patch in later.
   if (target.kind === "terminalKillBatch" || target.kind === "terminalClose") return { lines: [] };
+  // Built only for an above-tier ask, which lists the rows without ticks.
+  if (target.kind === "agentAccountAdd") return { lines: accountRowLines(target.rows) };
   if (target.kind === "recipe") {
+    const { formatRecipePreviewLines } =
+      await import("@/components/TerminalRecipe/recipeConfirmPreview");
     // Renderer state, so no fetch — but re-read here rather than closing over
     // the resolve-time recipe so the lines reflect the store at modal-open.
     const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId) ?? null;
@@ -1026,6 +1072,8 @@ export async function buildMcpConfirmPreview(
     // The teardown read rides alongside: the delete runs the project's
     // teardown before removing the tree, and an agent-initiated delete owes
     // the approver the same disclosure the local dialog makes.
+    const { buildWorktreeDeletePreview, fetchWorktreeTeardownPreview } =
+      await import("@/components/Worktree/worktreeDeletePreview");
     const [outcome, teardown] = await Promise.all([
       settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(target.worktreeId)),
       fetchWorktreeTeardownPreview(target.worktreeId),
@@ -1068,23 +1116,32 @@ export async function buildMcpConfirmPreview(
   // Synchronous, like `recipe`: the content is already in hand, so there is
   // nothing to fetch and nothing that could fail mid-modal.
   if (target.kind === "forgeCreateIssue") {
+    const { formatForgeCreateIssuePreviewLines } =
+      await import("@/components/Forge/forgeWritePreview");
     return { lines: formatForgeCreateIssuePreviewLines(target) };
   }
   if (target.kind === "forgeAddIssueComment") {
+    const { formatForgeIssueCommentPreviewLines } =
+      await import("@/components/Forge/forgeWritePreview");
     return { lines: formatForgeIssueCommentPreviewLines(target) };
   }
   if (target.kind === "terminalLaunch") {
+    const { formatTerminalLaunchPreviewLines } = await import("@/lib/mcpTerminalLaunchPreview");
     return { lines: formatTerminalLaunchPreviewLines(target) };
   }
   if (target.kind === "terminalStartHeld") {
+    const { formatStartHeldPreviewLines } = await import("@/lib/mcpStartHeldPreview");
     return {
       lines: formatStartHeldPreviewLines(target.start, readStartHeldPane(target.terminalId)),
     };
   }
   if (target.kind === "agentPreset") {
+    const { formatAgentPresetPreviewLines } = await import("@/lib/mcpAgentPresetPreview");
     return { lines: formatAgentPresetPreviewLines(target.mutation) };
   }
   const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
+  const { buildGitRemoteOperationPreview, formatGitRemoteOperationPreviewLines } =
+    await import("@/components/Git/gitRemoteOperationPreview");
   try {
     const preview = await buildGitRemoteOperationPreview(target.cwd, operation);
     return {
@@ -1149,8 +1206,14 @@ export function recheckWorktreeDeleteOutcome(
   // Clear on the winner either way: the loser of a race stays pending, and a
   // live timer holding the renderer awake for the rest of the budget after the
   // fetch already answered is a handle nobody asked for.
+  // The module load is inside the race, so a slow or failed load spends this
+  // budget and settles as an unread status rather than outliving it.
+  const read = import("@/components/Worktree/worktreeDeletePreview").then(
+    ({ buildWorktreeDeletePreview }) =>
+      settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktreeId))
+  );
   return Promise.race([
-    settleWorktreeDeleteOutcome(buildWorktreeDeletePreview(worktreeId)),
+    read.catch((): WorktreeDeletePreviewOutcome => ({ state: "failed", submodules: null })),
     expired,
   ]).finally(() => clearTimeout(timer));
 }
@@ -1245,6 +1308,8 @@ function withPreviewedWorktreeCwd(
   if (target.kind === "terminalStartHeld") return args;
   // Names a preset by id; settings aren't worktree-scoped.
   if (target.kind === "agentPreset") return args;
+  // The run plans its rows from these arguments, so they go as they came.
+  if (target.kind === "agentAccountAdd") return args;
   // Named per kind rather than left to a fall-through: every remaining kind
   // happens to carry a path today, and a future one that does not would
   // otherwise silently pin `cwd: undefined` onto a dispatch.
@@ -1342,7 +1407,7 @@ export function useMcpBridge(): void {
 
     const cleanupManifest = window.electron.mcpBridge.onGetManifestRequest((requestId) => {
       try {
-        const manifest = actionService.list();
+        const manifest = actionService.listForTransfer();
         window.electron.mcpBridge.sendGetManifestResponse(requestId, manifest);
       } catch (err) {
         logError("[MCP Bridge] Failed to build manifest", err);
@@ -1365,8 +1430,21 @@ export function useMcpBridge(): void {
         hostPreview,
         authorization,
         requester,
+        delegationOffer,
         dispatchDeadlineAt: sentDeadlineAt,
+        actionsListWalk,
+        confirmationCondition,
+        callerOrigin,
       }) => {
+        // Who asked, for a plugin action's handler (#16751, #18153): the
+        // project's Assistant by its session, or this machine's global
+        // Assistant by main's own say on its `host.call`.
+        const hostCallerOrigin: HostCallerOrigin | undefined =
+          sessionOrigin === "help"
+            ? "assistant"
+            : callerOrigin === "global-assistant"
+              ? "global-assistant"
+              : undefined;
         // Main started its clock when it sent this; ours starts a beat later.
         // Only a confirmation's first deadline reads it, until main grants a
         // hold, and an approval runs on main's own say-so, never on this.
@@ -1399,8 +1477,9 @@ export function useMcpBridge(): void {
             ? withReplayedWorktreeDetails(replayedContext, lookupViewWorktree)
             : replayedContext;
         let confirmationDecision: McpConfirmationDecision | undefined;
-        // Set only when the user ticked "Allow for this session" on a dialog
-        // main said may offer it (#12692); main mints the grant, never this.
+        // Set only when the user ticked "Allow for this session" (#12692) or
+        // "Don't ask again for this kind of action" (#16752) on a dialog main
+        // said may offer it; main mints the grant or writes the hand-over.
         let approvalScope: McpApprovalScope | undefined;
         // When the run main granted an approval ends (#14989). Undefined for a
         // dispatch nobody was asked about, which main times as it always did.
@@ -1487,6 +1566,46 @@ export function useMcpBridge(): void {
             }
           }
 
+          // An account add runs only on the rows a person ticks (#17079). Main
+          // never preconfirms it, but one that arrives confirmed anyway gets
+          // the checklist rather than a run with no rows to add.
+          if (effectiveConfirmed === true && actionId === "agent.addAccount") {
+            effectiveConfirmed = false;
+          }
+
+          // The assistant's next-fallback tick (#17917): main offers it on an
+          // unconfirmed preset move, and only the pane's own run, here, settles
+          // it. A hop that ran, or failed once admitted, is the answer; a move
+          // it doesn't cover changed nothing and asks below like any other.
+          if (
+            confirmationCondition === "next-own-fallback" &&
+            effectiveConfirmed !== true &&
+            approvalOnly !== true &&
+            actionId === ASSISTANT_PRESET_MOVE_DELEGATE &&
+            Date.now() < dispatchDeadlineAt
+          ) {
+            const attempt = await actionService.dispatch(actionId as ActionId, args, {
+              source: "agent",
+              ownFallbackStep: true,
+              contextOverride: context,
+              ...(hostCallerOrigin !== undefined ? { hostCallerOrigin } : {}),
+              dispatchDeadlineAt,
+            });
+            if (disposed) return;
+            if (attempt.ok || attempt.error.code !== "CONFIRMATION_REQUIRED") {
+              // Ran, or failed once admitted: either way the tick authorized
+              // it. A refusal before admission ran on nobody's say-so.
+              const admitted =
+                attempt.ok || attempt.error.details instanceof OwnFallbackStepFailedError;
+              window.electron.mcpBridge.sendDispatchActionResponse({
+                requestId,
+                result: attempt,
+                ...(admitted ? { authorization: "skip-preference" as const } : {}),
+              });
+              return;
+            }
+          }
+
           if (effectiveConfirmed !== true) {
             // Args-aware: a statically-safe composite carrying a recipeId has
             // an EFFECTIVE confirm tier that `ActionService.dispatch` will
@@ -1531,6 +1650,29 @@ export function useMcpBridge(): void {
                 return;
               }
             }
+            // Rows that can't be planned would raise a dialog with nothing to
+            // tick, so the call is refused before anyone is asked (#17079).
+            if (definition?.danger === "confirm" && actionId === "agent.addAccount") {
+              const plan = planAgentAccountAdd(args);
+              if (!plan.ok) {
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: { ok: false, error: { code: "VALIDATION_ERROR", message: plan.message } },
+                });
+                return;
+              }
+            }
+            // Planned before the request is tracked, so a view torn down while
+            // the planner loads leaves nothing behind.
+            let presetTarget: McpConfirmPreviewTarget | undefined;
+            if (
+              definition &&
+              (definition.danger === "confirm" || approvalOnly === true) &&
+              isAgentPresetMutationAction(actionId)
+            ) {
+              presetTarget = await resolveMcpPresetConfirmPreviewTarget(actionId, args, context);
+              if (disposed) return;
+            }
             if (definition && (definition.danger === "confirm" || approvalOnly === true)) {
               inFlightConfirms.add(requestId);
               // Fetch the fresh preview OFF the critical path so the modal
@@ -1544,7 +1686,9 @@ export function useMcpBridge(): void {
               const closeApproval = approvalOnly === true && approvalReason === "protected-close";
               previewTarget = closeApproval
                 ? closeApprovalPreviewTarget(args)
-                : resolveMcpConfirmPreviewTarget(actionId, args, context);
+                : isAgentPresetMutationAction(actionId)
+                  ? presetTarget
+                  : resolveMcpConfirmPreviewTarget(actionId, args, context);
               // A call another machine runs itself with no view of its own
               // open (#13501) arrives with that machine's preview, read where
               // the call acts. Shown as given: this view's stores know nothing
@@ -1562,17 +1706,28 @@ export function useMcpBridge(): void {
               // lines to fetch, so it must not arm the pending-preview gate —
               // that would leave its approve button disabled with nothing in
               // flight to ever re-enable it.
+              // An account add asked about above its tier lists its rows
+              // without ticks (#17079): main runs it unconfirmed once allowed,
+              // so its own checklist follows and is the one selection.
+              const accountChecklist =
+                previewTarget?.kind === "agentAccountAdd" && approvalOnly !== true;
               const hasAsyncPreview =
                 hostLines === undefined &&
                 previewTarget !== undefined &&
                 previewTarget.kind !== "terminalKillBatch" &&
-                previewTarget.kind !== "terminalClose";
+                previewTarget.kind !== "terminalClose" &&
+                !accountChecklist;
               const previewPending = hasAsyncPreview;
               // One runner for the open-time fetch and every Retry (#16436).
               // Only the latest fetch may land, and nothing lands once the
               // confirmation has settled: the evidence an approval is checked
               // against must be the answer the approver was last shown.
               let previewGeneration = 0;
+              // Whether any fetch landed. A preset write is approved only on a
+              // preview its approver actually read: its argument summary
+              // collapses `env` to `<object>`, so a preview that never loaded
+              // leaves nothing to have consented to.
+              let previewDelivered = false;
               let lastPreview: McpConfirmPreviewPatch | undefined;
               const runPreview = (target: McpConfirmPreviewTarget) => {
                 const generation = ++previewGeneration;
@@ -1586,6 +1741,7 @@ export function useMcpBridge(): void {
                       approvedPush: shown,
                     }) => {
                       if (disposed || generation !== previewGeneration) return;
+                      previewDelivered = true;
                       approvedTypedNameTarget = typedNameTarget;
                       approvedRecipeRun = offered;
                       approvedPush = shown;
@@ -1606,7 +1762,7 @@ export function useMcpBridge(): void {
                     approvedPush = undefined;
                     useMcpConfirmStore
                       .getState()
-                      .setPreview(requestId, lastPreview ?? { lines: [] });
+                      .setPreview(requestId, lastPreview ?? { lines: [PREVIEW_UNAVAILABLE_LINE] });
                   });
               };
               if (hasAsyncPreview && previewTarget !== undefined) runPreview(previewTarget);
@@ -1623,7 +1779,9 @@ export function useMcpBridge(): void {
                 previewTarget?.kind === "terminalKillBatch" ||
                 previewTarget?.kind === "terminalClose"
                   ? buildTerminalKillBatchTargets(previewTarget.terminalIds)
-                  : undefined;
+                  : accountChecklist && previewTarget?.kind === "agentAccountAdd"
+                    ? previewTarget.rows.map(accountRowTarget)
+                    : undefined;
               let resolution: McpConfirmResolution;
               try {
                 resolution = await requestMcpConfirmation(
@@ -1678,6 +1836,9 @@ export function useMcpBridge(): void {
                     ...(offerSessionApproval === true && isGenericNativeGrantEligible(actionId)
                       ? { offerSessionApproval: true }
                       : {}),
+                    // Main's own assistant's call, whatever the dialog's shape:
+                    // main settled the action on the id the assistant called.
+                    ...(delegationOffer !== undefined ? { delegationOffer } : {}),
                     // Another machine's call is not above any tier of this
                     // view's: it is that machine's question, asked here.
                     ...(approvalOnly === true && hostLines === undefined
@@ -1697,7 +1858,9 @@ export function useMcpBridge(): void {
                           selectionConfirmLabel:
                             previewTarget?.kind === "terminalClose"
                               ? { verb: "Close", one: "panel", many: "panels" }
-                              : { verb: "Remove", one: "panel", many: "panels" },
+                              : previewTarget?.kind === "agentAccountAdd"
+                                ? { verb: "Add", one: "account", many: "accounts" }
+                                : { verb: "Remove", one: "panel", many: "panels" },
                         }
                       : {}),
                   },
@@ -1736,7 +1899,9 @@ export function useMcpBridge(): void {
               }
               confirmationDecision = "approved";
               effectiveConfirmed = true;
-              if (resolution.scope === "session") approvalScope = "session";
+              if (resolution.scope === "session" || resolution.scope === "delegate") {
+                approvalScope = resolution.scope;
+              }
               if (approvalOnly === true) {
                 // Main runs the call itself, preconfirmed — which is also
                 // where a force delete's live D3 re-check happens, on the
@@ -1847,8 +2012,14 @@ export function useMcpBridge(): void {
               // check: with no preview, the approval covers no change.
               if (isAgentPresetMutationAction(actionId)) {
                 const shown =
-                  previewTarget?.kind === "agentPreset" ? previewTarget.mutation : undefined;
-                const now = planPresetWriteHere(actionId, args, context);
+                  previewTarget?.kind === "agentPreset" && (previewDelivered || !hasAsyncPreview)
+                    ? previewTarget.mutation
+                    : undefined;
+                const [{ agentPresetMutationFingerprint }, now] = await Promise.all([
+                  import("@/services/actions/definitions/agentPresetMutation"),
+                  planPresetWriteHere(actionId, args, context),
+                ]);
+                if (disposed) return;
                 const refusal: ActionDispatchResult | undefined = !now.ok
                   ? { ok: false, error: { code: "VALIDATION_ERROR", message: now.message } }
                   : shown === undefined ||
@@ -1929,12 +2100,14 @@ export function useMcpBridge(): void {
                 // handler (#16751). Only this callback's own approved dialog
                 // counts: a grant or Never ask arrives confirmed and shows no one
                 // anything.
-                ...(sessionOrigin === "help" ? { hostCallerOrigin: "assistant" as const } : {}),
+                ...(hostCallerOrigin !== undefined ? { hostCallerOrigin } : {}),
                 ...(confirmationDecision === "approved" ? { hostPersonApproved: true } : {}),
                 // An approval's run budget replaces the deadline main first
                 // sent; a dispatch nobody was asked about keeps that one. An
                 // action that waits on a person gives up at it (#15648).
                 dispatchDeadlineAt: runDeadlineAt ?? dispatchDeadlineAt,
+                // Main's own `actions.list` walk asks for one large page (#17036).
+                ...(actionsListWalk === true ? { actionsListWalk: true } : {}),
               }),
             actionId
           );

@@ -60,7 +60,7 @@ const CRASHED_BACKUP_PREFIX = "session-state.crashed-";
 // Previous-generation backup, kept as a Firefox-style rolling pair so a
 // corrupt write (truncated, partial, or unparseable) doesn't destroy the only
 // recovery snapshot. takeBackup() rotates current → previous before writing
-// new current; restoreBackup()/readBackupInfo() fall back to previous when
+// new current; restoreBackup()/resolveBackup() fall back to previous when
 // current is missing or fails to parse.
 const PREVIOUS_BACKUP_FILENAME = "session-state.previous.json";
 const BACKUP_INTERVAL_MS = 60_000;
@@ -256,8 +256,7 @@ export class CrashRecoveryService {
   }
 
   getLastBackupTimestamp(): number | null {
-    const info = this.readBackupInfo();
-    return info.exists && typeof info.timestamp === "number" ? info.timestamp : null;
+    return this.resolveBackup()?.timestamp ?? null;
   }
 
   getBackupPanelCount(allowDiskFallback: boolean = false): number | null {
@@ -267,25 +266,45 @@ export class CrashRecoveryService {
     // Without this guard, a "simplify to disk-first" refactor would silently
     // re-introduce the bleed-into-fresh-boot bug pinned by the test at
     // CrashRecoveryService.test.ts:1346.
-    if (this.cachedBackupSnapshot) {
-      return hasPanelSource(this.cachedBackupSnapshot)
-        ? collectSnapshotPanels(this.cachedBackupSnapshot).length
-        : null;
-    }
+    if (this.cachedBackupSnapshot) return this.cachedPanelCount();
     if (!allowDiskFallback) return null;
-    // Renderer-crash mid-session: no marker was ever consumed, so the cache
-    // is empty. readBackupInfo() resolves the parseable rotation file
-    // (current → previous) and readBackupFile() returns null on torn
-    // writes or non-restorable content. Both helpers are observation-only —
-    // they never mutate marker or backup state.
-    const info = this.readBackupInfo();
-    if (!info.exists || !info.path) return null;
-    const snapshot = this.readBackupFile(info.path);
+    return this.freshPanelCount(this.resolveBackup());
+  }
+
+  /**
+   * What the recovery page shows after a renderer crash: the backup's
+   * timestamp and its panel count, resolved from one read of the backup so
+   * the main thread parses it once per page load.
+   */
+  getRecoveryPageBackupInfo(): { backupTimestamp: number | null; panelCount: number | null } {
+    const backup = this.resolveBackup();
+    return {
+      backupTimestamp: backup?.timestamp ?? null,
+      panelCount: this.cachedBackupSnapshot
+        ? this.cachedPanelCount()
+        : this.freshPanelCount(backup),
+    };
+  }
+
+  private cachedPanelCount(): number | null {
+    const snapshot = this.cachedBackupSnapshot;
     if (!snapshot) return null;
+    return hasPanelSource(snapshot) ? collectSnapshotPanels(snapshot).length : null;
+  }
+
+  // Renderer-crash mid-session: no marker was ever consumed, so the cache is
+  // empty and the count comes from the resolved disk generation.
+  private freshPanelCount(backup: ResolvedBackup | null): number | null {
+    if (!backup) return null;
+    const { snapshot } = backup;
     // Freshness gate: a snapshot from a previous session must not surface a
-    // panel count on the current session's recovery page. Mirrors the
-    // watchdog freshness check at consumeWatchdogKillFlag (line 637).
-    if (snapshot.capturedAt < this.sessionStartMs) return null;
+    // panel count on the current session's recovery page, and one with no
+    // usable capture time can't show it isn't (comparing a parsed object
+    // could also throw here, on the main thread). Mirrors the watchdog
+    // freshness check at consumeWatchdogKillFlag (line 637).
+    if (!isFiniteTimestamp(snapshot.capturedAt) || snapshot.capturedAt < this.sessionStartMs) {
+      return null;
+    }
     return hasPanelSource(snapshot) ? collectSnapshotPanels(snapshot).length : null;
   }
 
@@ -1765,35 +1784,26 @@ export class CrashRecoveryService {
     return null;
   }
 
-  private readBackupInfo(): { exists: boolean; timestamp?: number; path?: string } {
-    // Prefer current; fall back to previous so the rotation pair is fully
-    // observable. `path` lets callers (consumeMarker, extractPanelSummaries)
-    // read from the file that readBackupInfo determined as usable.
-    // Parseability is verified before reporting `exists: true` — a stat-able
-    // but corrupt current would otherwise mislead the recovery UI into showing
-    // a timestamp that points to an unrestorable file while restore silently
-    // uses previous. The probe (readBackupFile) reads the whole file; this is
-    // acceptable because readBackupInfo is only called during marker consumption
-    // (startup) and when the user opens the recovery dialog.
-    const currentParseable = this.readBackupFile(this.backupPath) !== null;
-    if (currentParseable) {
+  /**
+   * The first parseable rotation generation (current, then previous) with its
+   * mtime. Parseability is checked before a generation is reported — a
+   * stat-able but corrupt current would otherwise mislead the recovery UI into
+   * showing a timestamp that points to an unrestorable file while restore
+   * silently uses previous. Each candidate is read at most once, and the
+   * parsed snapshot is returned so callers never read it again.
+   * Observation-only: it never mutates marker or backup state.
+   */
+  private resolveBackup(): ResolvedBackup | null {
+    for (const filePath of [this.backupPath, this.previousBackupPath]) {
+      const snapshot = this.readBackupFile(filePath);
+      if (!snapshot) continue;
       try {
-        const stat = fs.statSync(this.backupPath);
-        return { exists: true, timestamp: stat.mtimeMs, path: this.backupPath };
+        return { snapshot, timestamp: fs.statSync(filePath).mtimeMs };
       } catch {
-        // fall through to previous
+        // gone between the read and the stat; try the next generation
       }
     }
-    const previousParseable = this.readBackupFile(this.previousBackupPath) !== null;
-    if (previousParseable) {
-      try {
-        const stat = fs.statSync(this.previousBackupPath);
-        return { exists: true, timestamp: stat.mtimeMs, path: this.previousBackupPath };
-      } catch {
-        // ignore
-      }
-    }
-    return { exists: false };
+    return null;
   }
 
   private readBackupFile(filePath: string): SessionSnapshot | null {
@@ -1980,6 +1990,12 @@ interface SessionSnapshot {
    * where a modern session's panels are. Absent in legacy snapshots.
    */
   projectLayouts?: Record<string, unknown>;
+}
+
+interface ResolvedBackup {
+  snapshot: SessionSnapshot;
+  /** The generation file's mtime. */
+  timestamp: number;
 }
 
 /**

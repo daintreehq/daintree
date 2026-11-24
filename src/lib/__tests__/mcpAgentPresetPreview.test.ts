@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import type { AgentPresetMutation } from "@/services/actions/definitions/agentPresetMutation";
 import { isCautionPreviewLine } from "@/lib/mcpPreviewLines";
-import { agentPresetPreviewSubject, formatAgentPresetPreviewLines } from "../mcpAgentPresetPreview";
+import { formatAgentPresetPreviewLines } from "../mcpAgentPresetPreview";
+import { agentPresetPreviewSubject } from "../mcpConfirmSubjects";
 
 const TOKEN = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789";
 const MASKED_TOKEN = `••••••••${TOKEN.slice(-4)}`;
@@ -56,6 +57,7 @@ describe("formatAgentPresetPreviewLines", () => {
           fallbacks: ["user-fast"],
           fallbackOnRateLimit: true,
           keepConversationOnRateLimit: true,
+          continueAtLimitReset: true,
         },
         { "user-fast": "Fast" }
       )
@@ -68,12 +70,13 @@ describe("formatAgentPresetPreviewLines", () => {
       `  NOTE = ${MASKED_TOKEN}`,
       'Arguments: "-c" "model_reasoning_effort=high"',
       'Custom arguments: "--search"',
-      "Skip permissions: On",
+      "Permission prompts: Skip all",
       'Display title: "Work tab"',
       'Colour: "#3b82f6"',
       'Fallback presets: "Fast" (user-fast)',
       "Fall back on usage limits: On",
       "Keep the conversation on usage limits: On",
+      "Continue when usage limit resets: On",
       "Codex's default preset stays as it is.",
     ]);
   });
@@ -110,9 +113,39 @@ describe("formatAgentPresetPreviewLines", () => {
     expect(text).not.toContain(TOKEN);
     expect(text).toContain(`Custom arguments: "--search" → the agent's own`);
     expect(text).not.toMatch(/alt.screen|inline/i);
-    expect(text).toContain("Skip permissions: the agent's setting → On");
+    expect(text).toContain("Permission prompts: the agent's setting → Skip all");
     expect(text).not.toContain("KEEP");
     expect(text).not.toContain("Colour");
+  });
+
+  it("shows a preset moving between Skip all, Auto and the CLI default (#17435)", () => {
+    const preset = (dangerousMode?: "on" | "off" | "auto"): AgentPreset => ({
+      id: "user-work",
+      name: "Work",
+      ...(dangerousMode && { dangerousMode }),
+    });
+    const toAuto = formatAgentPresetPreviewLines(update(preset("on"), preset("auto"))).join("\n");
+    expect(toAuto).toContain("Permission prompts: Skip all → Auto");
+    const toDefault = formatAgentPresetPreviewLines(update(preset("auto"), preset("off"))).join(
+      "\n"
+    );
+    expect(toDefault).toContain("Permission prompts: Auto → CLI default");
+    const cleared = formatAgentPresetPreviewLines(update(preset("auto"), preset())).join("\n");
+    expect(cleared).toContain("Permission prompts: Auto → the agent's setting");
+  });
+
+  it("reads a legacy disabled flag as the agent's setting it defers to", () => {
+    const legacy = { id: "user-work", name: "Work", dangerousEnabled: false } as AgentPreset;
+    const text = formatAgentPresetPreviewLines(
+      update(legacy, { id: "user-work", name: "Work", dangerousMode: "off" })
+    ).join("\n");
+    expect(text).toContain("Permission prompts: the agent's setting → CLI default");
+    const enabled = { id: "user-work", name: "Work", dangerousEnabled: true } as AgentPreset;
+    expect(
+      formatAgentPresetPreviewLines(
+        update(enabled, { id: "user-work", name: "Work", dangerousMode: "auto" })
+      ).join("\n")
+    ).toContain("Permission prompts: Skip all → Auto");
   });
 
   it("shows the usage-limit settings changing apart from each other", () => {
@@ -129,6 +162,16 @@ describe("formatAgentPresetPreviewLines", () => {
     ).join("\n");
     expect(text).toContain("Keep the conversation on usage limits: Off → On");
     expect(text).not.toContain("Fall back on usage limits");
+  });
+
+  it("shows continuing at the limit's reset turned off (#17912)", () => {
+    const text = formatAgentPresetPreviewLines(
+      update(
+        { id: "user-work", name: "Work", continueAtLimitReset: true },
+        { id: "user-work", name: "Work" }
+      )
+    ).join("\n");
+    expect(text).toContain("Continue when usage limit resets: On → Off");
   });
 
   it("shows a fallback swap between two presets sharing a name", () => {

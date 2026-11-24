@@ -817,21 +817,79 @@ export function installTerminalBoundListeners(
     hostElement.removeEventListener("keydown", onKeydownScroll);
   });
 
-  const selectionDisposable = terminal.onSelectionChange(() => {
+  // `getSelection()` walks every selected buffer line. A mouse drag reports
+  // its selection once, on release, but a screen-reader DOM drag reaches
+  // `terminal.select()` on every `selectionchange`. So while the primary
+  // button is down a change only marks the cache stale, and the text is
+  // extracted once on release or blur. A read mid-drag extracts it then: xterm
+  // moves the selection on mousemove without reporting it, and Linux
+  // copy-on-select reads on the host's mouseup, before xterm's own release
+  // handler reports the change.
+  let selectionStale = false;
+  let selectionDragWindow: Window | null = null;
+  const syncSelection = () => {
+    selectionStale = false;
     const sel = terminal.getSelection();
     if (sel) {
       deps.setCachedSelection(id, sel);
     } else {
       deps.deleteCachedSelection(id);
     }
+  };
+  const syncCachedSelection = () => {
+    if (selectionStale || selectionDragWindow) syncSelection();
+  };
+  const stopSelectionDrag = () => {
+    const win = selectionDragWindow;
+    if (!win) return;
+    selectionDragWindow = null;
+    win.removeEventListener("mouseup", onSelectionDragEnd);
+    win.removeEventListener("blur", onSelectionDragBlur);
+  };
+  // Bubble phase on the window, so it runs after xterm's document-level
+  // release handler has reported the final selection.
+  const onSelectionDragEnd = () => {
+    stopSelectionDrag();
+    if (selectionStale) syncSelection();
+  };
+  // A release xterm never saw reports nothing, so take the selection as the
+  // drag left it.
+  const onSelectionDragBlur = () => {
+    stopSelectionDrag();
+    syncSelection();
+  };
+  const onSelectionDragStart = (event: MouseEvent) => {
+    if (event.button !== 0 || selectionDragWindow) return;
+    const win = hostElement.ownerDocument.defaultView;
+    if (!win) return;
+    selectionDragWindow = win;
+    win.addEventListener("mouseup", onSelectionDragEnd);
+    win.addEventListener("blur", onSelectionDragBlur);
+  };
+  hostElement.addEventListener("mousedown", onSelectionDragStart, { capture: true });
+  const selectionDisposable = terminal.onSelectionChange(() => {
+    if (selectionDragWindow) selectionStale = true;
+    else syncSelection();
   });
-  managed.listeners.push(() => selectionDisposable.dispose());
+  managed.syncCachedSelection = syncCachedSelection;
+  managed.listeners.push(() => {
+    selectionDisposable.dispose();
+    hostElement.removeEventListener("mousedown", onSelectionDragStart, { capture: true });
+    stopSelectionDrag();
+    selectionStale = false;
+    if (managed.syncCachedSelection === syncCachedSelection) {
+      managed.syncCachedSelection = undefined;
+    }
+  });
 
   if (isLinux()) {
     const removePrimaryListeners = installLinuxPrimarySelectionListeners({
       hostElement,
       terminalId: id,
-      getCachedSelection: () => deps.getCachedSelection(id),
+      getCachedSelection: () => {
+        syncCachedSelection();
+        return deps.getCachedSelection(id);
+      },
       getBracketedPasteMode: () => deps.getBracketedPasteMode(id),
       isDisposed: () => deps.isDisposed(id),
       isInputLocked: () => deps.isInputLocked(id),

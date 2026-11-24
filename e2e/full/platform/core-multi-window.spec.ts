@@ -27,8 +27,8 @@ import { randomUUID } from "crypto";
 const MULTI_WINDOW_READY_TIMEOUT = process.env.CI ? T_LONG * 4 : T_LONG * 2;
 const MULTI_WINDOW_SETUP_TIMEOUT = process.env.CI ? T_LONG * 8 : T_LONG * 4;
 
-// Multi-window isolation: per-window services (PortalManager, EventBuffer,
-// MessagePorts) must scope correctly while global singletons (PtyClient,
+// Multi-window isolation: per-window services (EventBuffer, MessagePorts)
+// must scope correctly while global singletons (PtyClient,
 // WorkspaceClient) stay shared. The spec opens two BrowserWindows with
 // distinct projects, then exercises the routing invariants from #4641,
 // #4715, and #4624.

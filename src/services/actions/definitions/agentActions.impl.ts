@@ -3,7 +3,7 @@
 // (#14268). Nothing here may import agentActions.ts at runtime.
 import type { ActionCallbacks, LaunchDecline } from "../actionTypes";
 import { requireExplicitWorktreeForAgentDispatch, requireWorktreeId } from "./locationArgs";
-import { resumeSessionIntoPanel } from "@/services/agentResume";
+import { bringResumedPaneForward, resumeSessionIntoPanel } from "@/services/agentResume";
 import { resolveResumeLaunchTarget } from "@/utils/resumeLaunch";
 import { inferWorktreeIdFromCwd } from "@/utils/worktreePaths";
 import { isForegroundDispatch } from "./dispatchSource";
@@ -45,10 +45,20 @@ import {
   type AgentPresetMutationActionId,
 } from "./agentPresetMutation";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { accountRowId, planAgentAccountAdd } from "./agentAccountAdd";
 import type { ActionContext } from "@shared/types/actions";
-import type { AgentPreset } from "@shared/config/agentRegistry";
+import { getAgentConfigFolderAccount, type AgentPreset } from "@shared/config/agentRegistry";
+import {
+  describeLaunchAccount,
+  launchAnswer,
+  listAgentAccountIdentities,
+} from "@shared/utils/agentAccounts";
+import { settleLaunchPreset } from "@shared/utils/agentPresets";
+import { findUnloadedLaunchPreset } from "@shared/utils/agentLaunchPlan";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 import {
+  AgentListAccountsArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
   BookmarkAndCloseArgsSchema,
@@ -332,9 +342,13 @@ async function runPresetWrite(
       "Preset write refused: the preset or its defaults changed after the user approved the change, so the approval doesn't cover what would be written. Nothing was written. Call again to raise a fresh confirmation."
     );
   }
+  // The whole list goes back, so main keeps every preset's continuation switch
+  // as stored: an MCP write can't arm panes, even from a stale view (#17912).
   await useAgentSettingsStore
     .getState()
-    .updateAgent(mutation.agentId, agentPresetMutationUpdates(mutation));
+    .updateAgent(mutation.agentId, agentPresetMutationUpdates(mutation), {
+      lockContinueAtLimitReset: true,
+    });
   const written = {
     presetId: mutation.preset.id,
     name: typeof mutation.preset.name === "string" ? mutation.preset.name : "",
@@ -589,13 +603,15 @@ export const agentActionRuns = {
     return { terminalId: result.terminalId, location: result.location };
   },
   "agent.browser": async (args: unknown, _ctx: ActionContext, callbacks: ActionCallbacks) => {
-    const { location, spawnedBy } = (args ?? {}) as {
+    const { location, spawnedBy, focusPolicy } = (args ?? {}) as {
       location?: "grid" | "dock" | "overlay";
       spawnedBy?: TerminalSpawnSource;
+      focusPolicy?: "auto" | "preserve" | "take";
     };
     const result = await callbacks.onLaunchAgent("browser", {
       location,
       spawnedBy,
+      focusPolicy,
     });
     if (!result) return null;
     return { terminalId: result.terminalId, location: result.location };
@@ -705,6 +721,7 @@ export const agentActionRuns = {
           spawnedAt: panel.startedAt ?? null,
           terminalId: panel.id,
           found: true,
+          ...(panel.updateInstalled !== undefined && { updateInstalled: panel.updateInstalled }),
         };
       }
     }
@@ -759,6 +776,9 @@ export const agentActionRuns = {
     return pageAgentFacingSessions(sessions, offset, limit);
   },
   "agentSessionHistory.resume": async (args: unknown, ctx: ActionContext) => {
+    // Before any await: a worktree chosen while the journal is read is already
+    // a newer choice than this call.
+    const selectedAtStart = useWorktreeSelectionStore.getState().activeWorktreeId;
     const parsed = ResumeSessionArgsSchema.parse(args);
     const { sessionId } = parsed;
     // Fail closed when a headless caller omits the worktree: the resolver
@@ -829,40 +849,40 @@ export const agentActionRuns = {
     // falls back to the project root or home — a different directory than the
     // one asserted, arrived at silently.
     const recordedCwd = record.cwd?.trim() ? record.cwd : undefined;
-    if (recordedCwd) {
-      // `inferWorktreeIdFromCwd` matches lexically, so a path that walks back
-      // out through `..` still carries the worktree root as its prefix and
-      // would be classified as inside it. Journal cwds come from terminals
-      // Daintree itself spawned, so this is belt-and-braces rather than a live
-      // attack path — but the cost of being wrong is launching an agent in a
-      // directory nobody asked for.
-      if (recordedCwd.split(/[\\/]/).includes("..")) {
-        throw new Error(
-          "That session's recorded directory can't be verified — it walks outside the worktree it was journaled under."
-        );
-      }
-      if (inferWorktreeIdFromCwd(recordedCwd, worktreeList) !== requestedWorktreeId) {
-        throw new Error(
-          "That session was recorded in a different directory. Resume it from the worktree it belongs to — relaunching it elsewhere would start a new conversation, not continue this one."
-        );
-      }
-    }
     const target = resolveResumeLaunchTarget(
       { worktreeId: record.worktreeId, cwd: recordedCwd },
       { defaultTerminalCwd: requestedWorktreePath, activeWorktreeId: requestedWorktreeId },
       worktreeList
     );
+    // Every refusal below is about where a NEW agent would start. A pane
+    // already running the session is handed back wherever it is filed
+    // (#18009), so these run only on the spawning path.
+    const spawnRefusal = ((): string | null => {
+      if (recordedCwd) {
+        // `inferWorktreeIdFromCwd` matches lexically, so a path that walks back
+        // out through `..` still carries the worktree root as its prefix and
+        // would be classified as inside it. Journal cwds come from terminals
+        // Daintree itself spawned, so this is belt-and-braces rather than a live
+        // attack path — but the cost of being wrong is launching an agent in a
+        // directory nobody asked for.
+        if (recordedCwd.split(/[\\/]/).includes("..")) {
+          return "That session's recorded directory can't be verified — it walks outside the worktree it was journaled under.";
+        }
+        if (inferWorktreeIdFromCwd(recordedCwd, worktreeList) !== requestedWorktreeId) {
+          return "That session was recorded in a different directory. Resume it from the worktree it belongs to — relaunching it elsewhere would start a new conversation, not continue this one.";
+        }
+      }
+      // Scope isolation. The caller asserted a worktree; if the session would
+      // launch in a different one, refuse rather than silently resuming it
+      // there — the caller's next action would be aimed at the wrong tree.
+      if ((target.worktreeId ?? null) !== requestedWorktreeId) {
+        return "That session was recorded in a different worktree. Resume it from the worktree it belongs to — it cannot be relaunched anywhere else.";
+      }
+      return null;
+    })();
 
-    // Scope isolation. The caller asserted a worktree; if the session would
-    // launch in a different one, refuse rather than silently resuming it
-    // there — the caller's next action would be aimed at the wrong tree.
-    if ((target.worktreeId ?? null) !== requestedWorktreeId) {
-      throw new Error(
-        "That session was recorded in a different worktree. Resume it from the worktree it belongs to — it cannot be relaunched anywhere else."
-      );
-    }
-
-    // Only a FOREGROUND dispatch gets `onBeforeSpawn`. An assistant- or
+    // Only a FOREGROUND dispatch moves the view: before a spawn to the session's
+    // worktree, and to the worktree a live pane is filed under. An assistant- or
     // plugin-driven resume must not yank the user's worktree selection: the
     // pane opens in its own worktree — backgrounded when that isn't the active
     // one — and the caller addresses it by the id returned here. A keybinding
@@ -870,16 +890,27 @@ export const agentActionRuns = {
     // person asked for this pane and expects to see it. `isForegroundDispatch`
     // rather than `!== "agent"`, so `"plugin"` and a missing source fall on the
     // don't-move-the-view side rather than the other way round.
+    const showWorktree = isForegroundDispatch(ctx.dispatchSource)
+      ? (worktreeId: string | undefined) => {
+          const selection = useWorktreeSelectionStore.getState();
+          if (worktreeId && worktreeId !== selection.activeWorktreeId) {
+            selection.selectWorktree(worktreeId, { source: "user" });
+          }
+        }
+      : undefined;
     const resumed = await resumeSessionIntoPanel(record, target, {
-      onBeforeSpawn: !isForegroundDispatch(ctx.dispatchSource)
-        ? undefined
-        : () => {
-            const selection = useWorktreeSelectionStore.getState();
-            if (target.worktreeId && target.worktreeId !== selection.activeWorktreeId) {
-              selection.selectWorktree(target.worktreeId, { source: "user" });
-            }
-          },
+      validateSpawn: () => {
+        if (spawnRefusal !== null) throw new Error(spawnRefusal);
+      },
+      onBeforeSpawn: showWorktree && (() => showWorktree(target.worktreeId)),
+      showWorktree,
     });
+    // A foreground caller that joined someone else's launch never ran its own
+    // callbacks; a worktree chosen meanwhile is a newer choice, and stands.
+    const selectedNow = useWorktreeSelectionStore.getState().activeWorktreeId;
+    if (showWorktree && (selectedNow === selectedAtStart || selectedNow === resumed.worktreeId)) {
+      bringResumedPaneForward(resumed, showWorktree);
+    }
 
     return {
       terminalId: resumed.terminalId,
@@ -1006,6 +1037,107 @@ export const agentActionRuns = {
         sources.projectPresets
       ),
     };
+  },
+  "agent.listAccounts": async (args: unknown, ctx: ActionContext) => {
+    const { agentId, worktreeId } = AgentListAccountsArgsSchema.parse(args ?? {});
+    if (!isRegisteredAgent(agentId))
+      throw new UnactionableTargetError(unknownAgentIdMessage(agentId));
+    if (!getAgentConfigFolderAccount(agentId)) {
+      throw new UnactionableTargetError(
+        `${getAgentDisplayTitle(agentId)} has no accounts: it signs in one way only.`
+      );
+    }
+    const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
+    if (!useAgentSettingsStore.getState().isInitialized) {
+      await useAgentSettingsStore.getState().initialize();
+    }
+    // An unread store is a failure, never an agent with no accounts.
+    const settings = useAgentSettingsStore.getState().settings;
+    if (!settings) throw new Error("Couldn't read the agent settings, so no accounts were listed.");
+    const agents = settings.agents;
+    const entry = agents && Object.hasOwn(agents, agentId) ? agents[agentId] : undefined;
+    const accounts = listAgentAccountIdentities(entry);
+    if (worktreeId === undefined) return { accounts };
+
+    // Refused as a launch refuses it, without echoing the id: a worktree id
+    // can be its path, which names the user.
+    const { worktrees, isInitialized } = getCurrentViewStore().getState();
+    if (isInitialized && !worktrees.has(worktreeId)) {
+      throw new UnactionableTargetError(
+        "No worktree in this project has that id. Use an id from the worktree listing."
+      );
+    }
+    const { readLaunchPresetSources } = await import("@/utils/presetInventory");
+    const sources = readLaunchPresetSources(agentId, {
+      projectId: ctx.projectId,
+      scratchId: ctx.scratchId,
+    });
+    const settled = settleLaunchPreset(
+      agentId,
+      entry ?? {},
+      worktreeId,
+      undefined,
+      sources.ccrPresets,
+      sources.projectPresets
+    );
+    const presetsComplete =
+      findUnloadedLaunchPreset({
+        agentId,
+        isAgent: true,
+        worktreeId,
+        settings,
+        options: undefined,
+        ...sources,
+      }) === undefined;
+    return {
+      accounts,
+      worktreeLaunch: launchAnswer(
+        describeLaunchAccount(entry, worktreeId, settled.preset),
+        presetsComplete
+      ),
+    };
+  },
+  "agent.addAccount": async (args: unknown, ctx: ActionContext) => {
+    const plan = planAgentAccountAdd(args);
+    if (!plan.ok) throw new UnactionableTargetError(plan.message);
+    // Only the rows a person kept ticked in this call's own dialog. A grant,
+    // Never ask or a bare `confirmed` names no rows, so it adds none.
+    const approved = ctx.hostApprovedTargets;
+    if (approved === undefined) {
+      throw new Error(
+        "Adding accounts needs the user to tick each one in Daintree's dialog. Nothing was added."
+      );
+    }
+    const kept = new Set(approved.map((target) => target.id));
+    const { useAgentSettingsStore } = await import("@/store/agentSettingsStore");
+    const accounts: Array<Record<string, unknown>> = [];
+    // One at a time: each add reads the saved accounts main just wrote, so a
+    // folder an earlier row took is refused rather than registered twice.
+    for (const row of plan.rows) {
+      const base = { index: row.index, agentId: row.agentId };
+      if (!kept.has(accountRowId(row.index))) {
+        accounts.push({ ...base, status: "declined" });
+        continue;
+      }
+      if (ctx.dispatchDeadlineAt !== undefined && Date.now() >= ctx.dispatchDeadlineAt) {
+        accounts.push({ ...base, status: "notAttempted" });
+        continue;
+      }
+      try {
+        const account = await useAgentSettingsStore
+          .getState()
+          .addAccount({ agentId: row.agentId, name: row.name, folder: row.folder });
+        accounts.push({ ...base, status: "added", accountId: account.id, name: account.name });
+      } catch (err) {
+        // Main's messages name a folder by its name only, never its path.
+        accounts.push({
+          ...base,
+          status: "failed",
+          error: formatErrorMessage(err, "Couldn't add the account"),
+        });
+      }
+    }
+    return { accounts };
   },
   "agent.createPreset": (args: unknown, ctx: ActionContext) =>
     runPresetWrite("agent.createPreset", args, ctx),

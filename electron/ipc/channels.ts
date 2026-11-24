@@ -57,6 +57,7 @@ export const CHANNELS = {
   TERMINAL_LOCATE: "terminal:locate",
   TERMINAL_ACKNOWLEDGE_DATA: "terminal:acknowledge-data",
   TERMINAL_FORCE_RESUME: "terminal:force-resume",
+  TERMINAL_RESET_MODES: "terminal:reset-modes",
   TERMINAL_GET_HOST_MEMORY_PAUSE: "terminal:get-host-memory-pause",
   TERMINAL_REQUEST_WORKER_INGEST_PORT: "terminal:request-worker-ingest-port",
   TERMINAL_RELEASE_WORKER_INGEST_PORT: "terminal:release-worker-ingest-port",
@@ -202,6 +203,7 @@ export const CHANNELS = {
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
   MENU_SHOW_APPLICATION: "menu:show-application",
+  MENU_SET_UNDO_CLOSE: "menu:set-undo-close",
 
   LOGS_GET_ALL: "logs:get-all",
   LOGS_GET_SOURCES: "logs:get-sources",
@@ -257,6 +259,15 @@ export const CHANNELS = {
   PROJECT_GET_SETTINGS: "project:get-settings",
   PROJECT_SAVE_SETTINGS: "project:save-settings",
   PROJECT_ADD_BROWSER_ALLOWED_HOST: "project:add-browser-allowed-host",
+  PROJECT_LINKS_CHANGE: "project-links:change",
+  PROJECT_LINKS_GET_DECLARED: "project-links:get-declared",
+  // The merged-worktree rule (#17321): its switch, its dry run, and the
+  // removals it made for this machine's views to put in their inbox.
+  MERGED_WORKTREE_CLEANUP_PREVIEW: "merged-worktree-cleanup:preview",
+  MERGED_WORKTREE_CLEANUP_SET_ENABLED: "merged-worktree-cleanup:set-enabled",
+  MERGED_WORKTREE_CLEANUP_TAKE_RECEIPTS: "merged-worktree-cleanup:take-receipts",
+  MERGED_WORKTREE_CLEANUP_ACK_RECEIPTS: "merged-worktree-cleanup:ack-receipts",
+  MERGED_WORKTREE_CLEANUP_RECEIPTS_READY: "merged-worktree-cleanup:receipts-ready",
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",
@@ -308,6 +319,7 @@ export const CHANNELS = {
   CANOPY_RUN_BRANCH: "canopy:run-branch",
   CANOPY_SEARCH_SCREENS: "canopy:search-screens",
   CANOPY_READ_INPUT_LINES: "canopy:read-input-lines",
+  CANOPY_READ_WORKTREES: "canopy:read-worktrees",
   CANOPY_WATCH_TERMINAL: "canopy:watch-terminal",
   CANOPY_WATCH_ASSISTANT_TERMINAL: "canopy:watch-assistant-terminal",
   CANOPY_RESOLVE_ASSISTANT: "canopy:resolve-assistant",
@@ -410,6 +422,7 @@ export const CHANNELS = {
   TERMINAL_CONFIG_SET_MEMORY_LEAK_DETECTION: "terminal-config:set-memory-leak-detection",
   TERMINAL_CONFIG_SET_MEMORY_LEAK_AUTO_RESTART: "terminal-config:set-memory-leak-auto-restart",
   TERMINAL_CONFIG_SET_CACHED_PROJECT_VIEWS: "terminal-config:set-cached-project-views",
+  TERMINAL_CONFIG_SET_OSC52_CLIPBOARD_ENABLED: "terminal-config:set-osc52-clipboard-enabled",
   TERMINAL_CONFIG_DEVICE_CHANGED: "terminal-config:device-changed",
   TERMINAL_CONFIG_HOST_CHANGED: "terminal-config:host-changed",
 
@@ -425,6 +438,8 @@ export const CHANNELS = {
   GIT_UNSTAGE_FILE: "git:unstage-file",
   GIT_STAGE_FILES: "git:stage-files",
   GIT_UNSTAGE_FILES: "git:unstage-files",
+  GIT_STAGE_HUNKS: "git:stage-hunks",
+  GIT_UNSTAGE_HUNKS: "git:unstage-hunks",
   GIT_STAGE_ALL: "git:stage-all",
   GIT_UNSTAGE_ALL: "git:unstage-all",
   GIT_COMMIT: "git:commit",
@@ -451,21 +466,6 @@ export const CHANNELS = {
   GIT_CHECKOUT_OURS_THEIRS: "git:checkout-ours-theirs",
   GIT_MARK_SAFE_DIRECTORY: "git:mark-safe-directory",
 
-  PORTAL_CREATE: "portal:create",
-  PORTAL_SHOW: "portal:show",
-  PORTAL_HIDE: "portal:hide",
-  PORTAL_RESIZE: "portal:resize",
-  PORTAL_CLOSE_TAB: "portal:close-tab",
-  PORTAL_NAVIGATE: "portal:navigate",
-  PORTAL_GO_BACK: "portal:go-back",
-  PORTAL_GO_FORWARD: "portal:go-forward",
-  PORTAL_RELOAD: "portal:reload",
-  PORTAL_NAV_EVENT: "portal:nav-event",
-  PORTAL_FOCUS: "portal:focus",
-  PORTAL_BLUR: "portal:blur",
-  PORTAL_TAB_EVICTED: "portal:tab-evicted",
-  PORTAL_TABS_EVICTED: "portal:tabs-evicted",
-
   SESSION_RESTORE_GET_CONFIG: "session-restore:get-config",
   SESSION_RESTORE_UPDATE_CONFIG: "session-restore:update-config",
   SESSION_RESTORE_VIEW_HYDRATED: "session-restore:view-hydrated",
@@ -491,6 +491,7 @@ export const CHANNELS = {
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
   WEBVIEW_DIALOG_DISMISS: "webview:dialog-dismiss",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+  WEBVIEW_SET_FIND_OPEN: "webview:set-find-open",
   WEBVIEW_RELOAD_SHORTCUT: "webview:reload-shortcut",
   WEBVIEW_CLOSE_SHORTCUT: "webview:close-shortcut",
   WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
@@ -554,6 +555,9 @@ export const CHANNELS = {
 
   SOUND_TRIGGER: "sound:trigger",
   SOUND_GET_DIR: "sound:get-dir",
+  NOTIFICATION_SOUNDS_LIST: "notification-sounds:list",
+  NOTIFICATION_SOUNDS_IMPORT: "notification-sounds:import",
+  NOTIFICATION_SOUNDS_GET_CUSTOM_DIR: "notification-sounds:get-custom-dir",
 
   NOTIFICATION_UPDATE: "notification:update",
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",
@@ -622,6 +626,7 @@ export const CHANNELS = {
   DEV_PREVIEW_GET_DIAGNOSTICS: "dev-preview:get-diagnostics",
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_META: "dev-preview:get-destructive-preview-meta",
   DEV_PREVIEW_GET_DESTRUCTIVE_PREVIEW_SIZES: "dev-preview:get-destructive-preview-sizes",
+  DEV_PREVIEW_CANCEL_DESTRUCTIVE_PREVIEW_SIZES: "dev-preview:cancel-destructive-preview-sizes",
   DEV_PREVIEW_STOP_BY_WORKTREE: "dev-preview:stop-by-worktree",
   DEV_PREVIEW_RESTART_BY_WORKTREE: "dev-preview:restart-by-worktree",
   DEV_PREVIEW_STOP_DEV_SERVER_BY_WORKTREE: "dev-preview:stop-dev-server-by-worktree",
@@ -635,6 +640,7 @@ export const CHANNELS = {
   // channel; see handlers/sitePreview.ts.
   SITE_PREVIEW_DETACH: "site-preview:detach",
   SITE_PREVIEW_SET_MODE: "site-preview:set-mode",
+  SITE_PREVIEW_SET_PAUSED: "site-preview:set-paused",
   SITE_PREVIEW_CLEAR_SELECTION: "site-preview:clear-selection",
   SITE_PREVIEW_CLEAR_HOVER: "site-preview:clear-hover",
 
@@ -689,12 +695,17 @@ export const CHANNELS = {
   HELP_GET_PINNED_ACTION_CONTEXT: "help:get-pinned-action-context",
   HELP_GLOBAL_ASSISTANT_ENSURE: "help:global-assistant-ensure",
   HELP_GLOBAL_ASSISTANT_STATE: "help:global-assistant-state",
+  HELP_GLOBAL_ASSISTANT_LIST: "help:global-assistant-list",
+  HELP_GLOBAL_ASSISTANT_START_NEW: "help:global-assistant-start-new",
+  HELP_GLOBAL_ASSISTANT_SET_COORDINATOR: "help:global-assistant-set-coordinator",
   HELP_GLOBAL_ASSISTANT_ATTACH: "help:global-assistant-attach",
   HELP_GLOBAL_ASSISTANT_DETACH: "help:global-assistant-detach",
   HELP_GLOBAL_ASSISTANT_CLAIM_INPUT: "help:global-assistant-claim-input",
   HELP_GLOBAL_ASSISTANT_RELEASE_INPUT: "help:global-assistant-release-input",
   HELP_GLOBAL_ASSISTANT_INPUT_ELIGIBLE: "help:global-assistant-input-eligible",
   HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
+  HELP_GLOBAL_ASSISTANT_CAN_RUN: "help:global-assistant-can-run",
+  HELP_GLOBAL_ASSISTANT_REPLACE: "help:global-assistant-replace",
   HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
   HELP_GLOBAL_ASSISTANT_CANCEL_LAUNCH: "help:global-assistant-cancel-launch",
   HELP_GLOBAL_ASSISTANT_CHANGED: "help:global-assistant-changed",
@@ -952,6 +963,7 @@ export const CHANNELS = {
   VOICE_DICTIONARY_REMOVE: "voice-dictionary:remove",
   VOICE_DICTIONARY_UPDATE: "voice-dictionary:update",
   VOICE_DICTIONARY_ACCEPT_SUGGESTION: "voice-dictionary:accept-suggestion",
+  VOICE_DICTIONARY_IMPORT_TERMS: "voice-dictionary:import-terms",
   VOICE_DICTIONARY_DISMISS_SUGGESTION: "voice-dictionary:dismiss-suggestion",
   VOICE_DICTIONARY_RECORD_SUGGESTIONS: "voice-dictionary:record-suggestions",
   VOICE_DICTIONARY_GET_PROJECT: "voice-dictionary:get-project",
@@ -968,6 +980,12 @@ export const CHANNELS = {
   VOICE_INPUT_LIVE_LEVEL: "voice-input:live-level",
   VOICE_INPUT_SET_PAUSED_LIVE: "voice-input:set-paused-live",
   VOICE_INPUT_PAUSE_REQUESTED: "voice-input:pause-requested",
+  VOICE_INPUT_SESSION_VOCABULARY: "voice-input:session-vocabulary",
+  VOICE_INPUT_GET_LOCAL_MODEL: "voice-input:get-local-model",
+  VOICE_INPUT_DOWNLOAD_LOCAL_MODEL: "voice-input:download-local-model",
+  VOICE_INPUT_CANCEL_LOCAL_MODEL: "voice-input:cancel-local-model",
+  VOICE_INPUT_REMOVE_LOCAL_MODEL: "voice-input:remove-local-model",
+  VOICE_INPUT_LOCAL_MODEL_STATUS: "voice-input:local-model-status",
   RECENT_DICTATIONS_RECORD: "recent-dictations:record",
   RECENT_DICTATIONS_SET_CORRECTED_TEXT: "recent-dictations:set-corrected-text",
   RECENT_DICTATIONS_LIST: "recent-dictations:list",
@@ -994,6 +1012,7 @@ export const CHANNELS = {
   ONBOARDING_DISMISS_SETUP_BANNER: "onboarding:dismiss-setup-banner",
   ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
+  ONBOARDING_CHECKLIST_REOPEN: "onboarding:checklist-reopen",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
   ONBOARDING_CHECKLIST_PUSH: "onboarding:checklist-push",
   ONBOARDING_TOUR_DISMISS_INVITE: "onboarding:tour-dismiss-invite",
@@ -1088,6 +1107,7 @@ export const CHANNELS = {
   FORGE_GET_ISSUE_URL: "forge:get-issue-url",
   FORGE_GET_REPO_URL: "forge:get-repo-url",
   FORGE_GET_NEW_PR_LINK: "forge:get-new-pr-link",
+  FORGE_GET_PULL_REQUEST_TERM: "forge:get-pull-request-term",
   FORGE_ASSIGN_ISSUE: "forge:assign-issue",
   FORGE_UNASSIGN_ISSUE: "forge:unassign-issue",
   FORGE_APPROVE_PR: "forge:approve-pr",
@@ -1113,6 +1133,7 @@ export const CHANNELS = {
   FORGE_GET_PR: "forge:get-pr",
   FORGE_GET_CI_STATUS: "forge:get-ci-status",
   FORGE_GET_CHECKS: "forge:get-checks",
+  FORGE_GET_DEPLOYMENTS: "forge:get-deployments",
   FORGE_GET_REPO_METADATA: "forge:get-repo-metadata",
   FORGE_GET_CURRENT_USER: "forge:get-current-user",
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
@@ -1195,6 +1216,9 @@ export const CHANNELS = {
   PLUGIN_PREVIEW_FROM_CATALOG: "plugin:preview-from-catalog",
   PLUGIN_INSTALL_FROM_CATALOG: "plugin:install-from-catalog",
   PLUGIN_BROWSE_CATALOG: "plugin:browse-catalog",
+  PLUGIN_CATALOG_SOURCES_GET: "plugin:catalog-sources-get",
+  PLUGIN_CATALOG_SOURCES_ADD: "plugin:catalog-sources-add",
+  PLUGIN_CATALOG_SOURCES_REMOVE: "plugin:catalog-sources-remove",
   PLUGIN_UNINSTALL: "plugin:uninstall",
   PLUGIN_CHECK_FOR_UPDATE: "plugin:check-for-update",
   PLUGIN_INVOKE: "plugin:invoke",
@@ -1267,6 +1291,8 @@ export const CHANNELS = {
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
   /** Renderer reports its live non-plugin panel ids, so `host.reloadPanel` can refuse them (#12610). */
   PLUGIN_REPORT_PANEL_INVENTORY: "plugin:report-panel-inventory",
+  /** Renderer reports the plugin views it has mounted outside the panel grid, for idle worker governance (#17068). */
+  PLUGIN_REPORT_VIEW_CONSUMERS: "plugin:report-view-consumers",
   /** Renderer reports which of its plugin panels say they hold unsaved work (#15031). */
   PLUGIN_REPORT_UNSAVED_PANELS: "plugin:report-unsaved-panels",
   /** A plugin's panels, in any view, that say they hold unsaved work (#15031). */
@@ -1491,6 +1517,13 @@ export const CHANNELS = {
   AGENT_TOOLBAR_PINS_SET: "agent-toolbar-pins:set",
   AGENT_TOOLBAR_PINS_CHANGED: "agent-toolbar-pins:changed",
 
+  // The sidebar's agent usage readout (#17318)
+  AGENT_USAGE_SET_FOLLOWING: "agent-usage:set-following",
+  AGENT_USAGE_CHANGED: "agent-usage:changed",
+  AGENT_USAGE_GET_TRACKING: "agent-usage:get-tracking",
+  AGENT_USAGE_SET_TRACKING: "agent-usage:set-tracking",
+  AGENT_USAGE_TRACKING_CHANGED: "agent-usage:tracking-changed",
+
   // The person's own prompt templates, from a folder on this machine (#16398)
   USER_PROMPT_TEMPLATES_LIST: "user-prompt-templates:list",
   USER_PROMPT_TEMPLATES_OPEN_FOLDER: "user-prompt-templates:open-folder",
@@ -1498,6 +1531,9 @@ export const CHANNELS = {
   // An agent's accounts (#16040)
   AGENT_ACCOUNTS_ADD: "agent-accounts:add",
   AGENT_ACCOUNTS_REMOVE: "agent-accounts:remove",
+  AGENT_ACCOUNTS_RENAME: "agent-accounts:rename",
+  AGENT_ACCOUNTS_LIST_CHOICES_AWAY: "agent-accounts:list-choices-away",
+  AGENT_ACCOUNTS_APPLY_EVERYWHERE: "agent-accounts:apply-everywhere",
 
   // Every copy of an agent's CLI, read when its settings page is open (#16409)
   AGENT_CLI_COPIES_LIST: "agent-cli-copies:list",
@@ -1560,6 +1596,10 @@ export const CHANNELS = {
   SCHEDULES_RUN_CLOSED: "schedules:run-closed",
 
   // An agent terminal's When done choice (#16171)
+  CODEX_LIMIT_CONTINUE_SET: "codex-limit-continue:set",
+  CODEX_LIMIT_CONTINUE_LIST: "codex-limit-continue:list",
+  /** An armed pane's continuation changed, or it was disarmed (#17909). */
+  CODEX_LIMIT_CONTINUE_CHANGED: "codex-limit-continue:changed",
   TERMINAL_WHEN_DONE_SET: "terminal-when-done:set",
   TERMINAL_WHEN_DONE_LIST: "terminal-when-done:list",
   TERMINAL_WHEN_DONE_CHANGED: "terminal-when-done:changed",
@@ -1569,18 +1609,51 @@ export const CHANNELS = {
   TERMINAL_WHEN_DONE_IN_USE_QUERY: "terminal-when-done:in-use-query",
   TERMINAL_WHEN_DONE_IN_USE_REPLY: "terminal-when-done:in-use-reply",
 
-  // A pane composer's send held while its agent works (#16379)
+  // A pane composer's send held for its pane's next prompt (#16379, #16872)
   COMPOSER_HOLD_HOLD: "composer-hold:hold",
   COMPOSER_HOLD_WITHDRAW: "composer-hold:withdraw",
   COMPOSER_HOLD_SEND_NOW: "composer-hold:send-now",
   COMPOSER_HOLD_LIST: "composer-hold:list",
   COMPOSER_HOLD_CHANGED: "composer-hold:changed",
 
+  // Bulk worktree creation runs, readable and controllable from every view (#17085)
+  BULK_WORKTREE_RUNS_PUBLISH: "bulk-worktree-runs:publish",
+  BULK_WORKTREE_RUNS_LIST: "bulk-worktree-runs:list",
+  BULK_WORKTREE_RUNS_COMMAND: "bulk-worktree-runs:command",
+  BULK_WORKTREE_RUNS_DISMISS: "bulk-worktree-runs:dismiss",
+  BULK_WORKTREE_RUNS_CHANGED: "bulk-worktree-runs:changed",
+  BULK_WORKTREE_RUNS_COMMANDED: "bulk-worktree-runs:commanded",
+
   // Decisions, as main observes it (#16001). The owner's machine only.
   DECISIONS_GET_STATUS: "decisions:get-status",
   // One pane's Decisions state, for its chrome to show on mount (#16016).
   // Read from the machine that owns the pane.
   DECISIONS_GET_PANE_STATE: "decisions:get-pane-state",
+  DECISIONS_GET_QUESTION_CONTENT: "decisions:get-question-content",
+  DECISIONS_GET_QUESTION_SUMMARIES: "decisions:get-question-summaries",
+  // A person withdrawing a pane's question from its view (#17099), on the machine that owns the pane.
+  DECISIONS_CANCEL_QUESTION: "decisions:cancel-question",
+  DECISIONS_GET_QUESTION_IMAGE: "decisions:get-question-image",
+  // Every question this computer's Decisions holds, and each one read by its
+  // reference from any of its windows (#17229). This computer's own.
+  DECISIONS_LIST_QUESTIONS: "decisions:list-questions",
+  DECISIONS_GET_QUESTION_CONTENT_BY_REFERENCE: "decisions:get-question-content-by-reference",
+  DECISIONS_GET_QUESTION_PANE_BY_REFERENCE: "decisions:get-question-pane-by-reference",
+  DECISIONS_GET_QUESTION_IMAGE_BY_REFERENCE: "decisions:get-question-image-by-reference",
+  DECISIONS_GET_QUESTION_SUMMARIES_BY_REFERENCE: "decisions:get-question-summaries-by-reference",
+  DECISIONS_CANCEL_QUESTION_BY_REFERENCE: "decisions:cancel-question-by-reference",
+  // The person seeing, clearing or restoring questions on this computer only (#17895).
+  DECISIONS_MARK_QUESTIONS: "decisions:mark-questions",
+  DECISIONS_ANSWER_QUESTION: "decisions:answer-question",
+  DECISIONS_GET_ANSWER_RESULT: "decisions:get-answer-result",
+  // The person's decline, signed by this computer's owner key (#17239).
+  DECISIONS_DECLINE_QUESTION: "decisions:decline-question",
+  DECISIONS_GET_DECLINE_RESULT: "decisions:get-decline-result",
+  DECISIONS_SEND_FOLLOW_UP: "decisions:send-follow-up",
+  DECISIONS_GET_FOLLOW_UP_RESULT: "decisions:get-follow-up-result",
+  // The person's involvement preference, read and changed from Daintree's own view (#17237).
+  DECISIONS_GET_INVOLVEMENT: "decisions:get-involvement",
+  DECISIONS_SET_INVOLVEMENT: "decisions:set-involvement",
   DECISIONS_SET_ENABLED: "decisions:set-enabled",
   // A relay URL's unsigned health and protocol check (#16005), from main.
   DECISIONS_CHECK_RELAY: "decisions:check-relay",
@@ -1606,18 +1679,22 @@ export const CHANNELS = {
   DECISIONS_APPROVE_PAIRING: "decisions:approve-pairing",
   DECISIONS_DECLINE_PAIRING: "decisions:decline-pairing",
   // Exporting the decision history, and deleting the relay's stored content
-  // or this computer's Decisions data (#16025), all in main.
+  // or this computer's Decisions data (#16025), all in main; removing this
+  // computer's settled questions (#18033).
   DECISIONS_EXPORT_DATA: "decisions:export-data",
   DECISIONS_DELETE_RELAY_DATA: "decisions:delete-relay-data",
   DECISIONS_DELETE_LOCAL_DATA: "decisions:delete-local-data",
-  // The trusted workflow gates, read-only, the proxy allowlist (#16013) and
-  // the default question expiry (#16122).
+  DECISIONS_REMOVE_SETTLED_QUESTIONS: "decisions:remove-settled-questions",
+  // The trusted workflow gates, read-only (#16013), and the default question
+  // expiry (#16122). Automatic answers are the decision model's (#18062).
   DECISIONS_GET_POLICY: "decisions:get-policy",
-  DECISIONS_SET_PROXY_ALLOWLISTED: "decisions:set-proxy-allowlisted",
   DECISIONS_SET_DEFAULT_QUESTION_EXPIRY: "decisions:set-default-question-expiry",
   DECISIONS_SET_AGENT_ASK_HUMAN: "decisions:set-agent-ask-human",
   // Whether the phone may show the asking pane's title, state and last lines (#16228).
   DECISIONS_SET_TERMINAL_SNAPSHOTS: "decisions:set-terminal-snapshots",
+  DECISIONS_SET_HOLD_PHONE_PUSHES: "decisions:set-hold-phone-pushes",
+  // Whether the phone is told when one of this computer's agents stops while the person is away (#17319).
+  DECISIONS_SET_AGENT_STOPPED_PUSHES: "decisions:set-agent-stopped-pushes",
   // Which terminals a view's hybrid input holds a draft for, which an answer waits behind (#16282).
   DECISIONS_REPORT_COMPOSER_DRAFTS: "decisions:report-composer-drafts",
   // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).
@@ -1645,6 +1722,7 @@ export const CHANNELS = {
   DECISIONS_LIST_ANSWER_DESTINATIONS: "decisions:list-answer-destinations",
   DECISIONS_REASSIGN_ANSWER: "decisions:reassign-answer",
   DECISIONS_MARK_ANSWER_HANDLED: "decisions:mark-answer-handled",
+  DECISIONS_HOST_ATTENTION: "decisions:host-attention",
   // The decision model's settings, evaluation and history (#16027).
   DECISIONS_GET_MODEL: "decisions:get-model",
   DECISIONS_SET_MODEL: "decisions:set-model",
@@ -1732,7 +1810,36 @@ export const CHANNELS = {
   REMOTE_HOSTS_LIST_PLUGIN_VIEW_CONSENTS: "remote-hosts:list-plugin-view-consents",
   REMOTE_HOSTS_RESET_PLUGIN_VIEW_CONSENT: "remote-hosts:reset-plugin-view-consent",
   REMOTE_HOSTS_PREPARE_PLUGIN_VIEW: "remote-hosts:prepare-plugin-view",
+  REMOTE_HOSTS_CHECK_AGENT_FORWARDING: "remote-hosts:check-agent-forwarding",
+  REMOTE_HOSTS_START_SSH_SIGN_IN: "remote-hosts:start-ssh-sign-in",
+  REMOTE_HOSTS_ANSWER_SSH_SIGN_IN: "remote-hosts:answer-ssh-sign-in",
+  REMOTE_HOSTS_CANCEL_SSH_SIGN_IN: "remote-hosts:cancel-ssh-sign-in",
   REMOTE_HOSTS_EVENT: "remote-hosts:event",
+  REMOTE_HOSTS_SSH_SIGN_IN_EVENT: "remote-hosts:ssh-sign-in-event",
+  CLOUD_HOSTS_GET_SNAPSHOT: "cloud-hosts:get-snapshot",
+  CLOUD_HOSTS_CHECK_ACCOUNT_KEY: "cloud-hosts:check-account-key",
+  CLOUD_HOSTS_ADD_ACCOUNT: "cloud-hosts:add-account",
+  CLOUD_HOSTS_REPLACE_ACCOUNT_KEY: "cloud-hosts:replace-account-key",
+  CLOUD_HOSTS_ALLOW_ACCOUNT_PROVIDER: "cloud-hosts:allow-account-provider",
+  CLOUD_HOSTS_RENAME_ACCOUNT: "cloud-hosts:rename-account",
+  CLOUD_HOSTS_REMOVE_ACCOUNT: "cloud-hosts:remove-account",
+  CLOUD_HOSTS_VALIDATE_ACCOUNT: "cloud-hosts:validate-account",
+  CLOUD_HOSTS_GET_CATALOG: "cloud-hosts:get-catalog",
+  CLOUD_HOSTS_LIST_RESOURCES: "cloud-hosts:list-resources",
+  CLOUD_HOSTS_CREATE_HOST: "cloud-hosts:create-host",
+  CLOUD_HOSTS_CREATE_HOST_FOR_WORKTREE: "cloud-hosts:create-host-for-worktree",
+  CLOUD_HOSTS_IMPORT_HOST: "cloud-hosts:import-host",
+  CLOUD_HOSTS_START_HOST: "cloud-hosts:start-host",
+  CLOUD_HOSTS_STOP_HOST: "cloud-hosts:stop-host",
+  CLOUD_HOSTS_RETRY_CREATE: "cloud-hosts:retry-create",
+  CLOUD_HOSTS_REFRESH_HOST: "cloud-hosts:refresh-host",
+  CLOUD_HOSTS_DELETE_MACHINE: "cloud-hosts:delete-machine",
+  CLOUD_HOSTS_SET_LIFETIME: "cloud-hosts:set-lifetime",
+  CLOUD_HOSTS_TRUST_HOST_KEY: "cloud-hosts:trust-host-key",
+  CLOUD_HOSTS_PREPARE_WORKTREE_CLEANUP: "cloud-hosts:prepare-worktree-cleanup",
+  CLOUD_HOSTS_SETTLE_WORKTREE_CLEANUP: "cloud-hosts:settle-worktree-cleanup",
+  CLOUD_HOSTS_RETRY_WORKTREE_CLEANUP: "cloud-hosts:retry-worktree-cleanup",
+  CLOUD_HOSTS_DISMISS_WORKTREE_CLEANUP: "cloud-hosts:dismiss-worktree-cleanup",
 
   // Remote Hosts: hostMode (shell).
   HOST_MODE_GET_STATUS: "host-mode:get-status",
@@ -1804,6 +1911,7 @@ export const CHANNELS = {
   HOST_METRICS_LIST_WORKTREES: "host-metrics:list-worktrees",
   HOST_METRICS_LINK_ACTIVITY: "host-metrics:link-activity",
   HOST_METRICS_PROCESS_INVENTORY: "host-metrics:process-inventory",
+  HOST_METRICS_SET_FOLLOWING: "host-metrics:set-following",
   HOST_METRICS_EVENT: "host-metrics:event",
 
   // Remote Hosts: canopyHost (shell).

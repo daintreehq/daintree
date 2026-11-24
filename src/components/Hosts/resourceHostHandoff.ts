@@ -11,11 +11,10 @@ import { isValidSshTarget } from "@shared/utils/sshTarget";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { requestHostSwitch } from "@/components/HostSwitch/hostSwitchRequests";
 import { defaultHostName } from "@/components/Settings/Hosts/hostLabels";
-import { openHostsSettingsTab } from "@/components/Settings/Hosts/hostSettingsRequests";
-import { requestHostUpdate } from "@/components/Settings/Hosts/hostUpdateRequests";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { isRemoteShellSupported, remoteConnectionKind } from "@/lib/remoteHosts";
 import { ClientAppError } from "@/utils/clientAppError";
+import { cancelPlacement, holdPlacement, retryPlacementSetup } from "./pendingPlacement";
 
 /** The host list's own limit on a name (`HostRegistry`), with no editor here to fix one. */
 const MAX_HOST_NAME_LENGTH = 64;
@@ -26,6 +25,8 @@ export interface ResourceBox {
   projectId: string;
   /** The ssh target the resource's `status` reported for its box. */
   sshTarget: string;
+  /** What the worktree is called where its placement shows: its branch or its name. */
+  label?: string;
   /** Asked for by an agent or a plugin: the switch dialog never moves the window by itself. */
   askFirst?: boolean;
   /**
@@ -34,15 +35,25 @@ export interface ResourceBox {
    * would have nothing left to remove it.
    */
   isCurrent?: () => boolean;
+  /**
+   * Whether the switch dialog may open now. When it may not (nobody can see
+   * this view, or another switch is under way), the worktree waits on the
+   * host instead, and the switch dialog opens, asking first, once it can.
+   */
+  placeNow?: () => boolean;
 }
 
 /**
  * Where the handoff left off: the switch dialog is placing the worktree on
- * the box, or the box needs Daintree set up first and Settings → Hosts has
- * opened its setup.
+ * the box; the box needs Daintree set up first and Settings → Hosts has
+ * opened its setup, with the worktree waiting to be placed once it finishes;
+ * or the box is ready and the worktree waits for the switch dialog to be
+ * able to open.
  */
 export type ResourceHandoffOutcome =
-  { status: "placing"; hostId: string } | { status: "setup"; hostId: string };
+  | { status: "placing"; hostId: string }
+  | { status: "setup"; hostId: string }
+  | { status: "waiting"; hostId: string };
 
 /**
  * A box can be offered as a host only from a window on this machine (a remote
@@ -72,6 +83,12 @@ export function freeHostName(sshTarget: string, hosts: HostListEntry[]): string 
   }
 }
 
+/** The worktree's folder name, for a placement asked for without a label. */
+function placementLabel(worktreePath: string): string {
+  const parts = worktreePath.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? worktreePath;
+}
+
 function gone(): ClientAppError {
   return new ClientAppError(
     "CANCELLED",
@@ -89,7 +106,8 @@ function isUsable(state: HostConnectionState): boolean {
  * Remote Host. A host already in the list for that target is used as it is
  * and stays the user's; otherwise one is added, owned by the worktree, so it
  * goes when the worktree or its resource does. A box whose Daintree isn't
- * listening gets Settings → Hosts' own setup (install, Host mode); one that is
+ * listening gets Settings → Hosts' own setup (install, Host mode), and the
+ * worktree waits on the host to be placed once that finishes; one that is
  * goes straight to the switch dialog, which places the branch there.
  */
 export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceHandoffOutcome> {
@@ -130,6 +148,7 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
       name: freeHostName(box.sshTarget, hosts),
       connection,
       ownerWorktreeId: box.worktreeId,
+      ...(probe.startsOnConnect === true ? { startsOnConnect: true } : {}),
     }));
   // Removed while the list was read or the host was added: main's cleanup has
   // already run for it, so a host added here would have nothing to remove it.
@@ -145,15 +164,40 @@ export async function openResourceBoxOnHost(box: ResourceBox): Promise<ResourceH
   };
   if (!stillCurrent()) return cancel();
 
-  const setup = (): ResourceHandoffOutcome => {
-    requestHostUpdate(host.id);
-    openHostsSettingsTab();
+  const hold = async (askFirst: boolean): Promise<void> => {
+    await holdPlacement(host.id, {
+      projectId: box.projectId,
+      worktreeId: box.worktreeId,
+      worktreePath: box.worktreePath,
+      label: box.label?.trim() || placementLabel(box.worktreePath),
+      ...(askFirst ? { askFirst: true as const } : {}),
+    });
+    if (!stillCurrent()) {
+      // A host that stays (the user's own) mustn't keep waiting for a worktree that's gone.
+      if (existing) await cancelPlacement(host.id).catch(() => {});
+      await cancel();
+    }
+  };
+  const setup = async (): Promise<ResourceHandoffOutcome> => {
+    // Set up where nobody can see it, or behind another switch: the switch
+    // that follows asks before it moves the window.
+    const askFirst = box.askFirst === true || (box.placeNow !== undefined && !box.placeNow());
+    await hold(askFirst);
+    // Hidden, or another switch begun, while the placement was written.
+    if (!askFirst && box.placeNow && !box.placeNow()) await hold(true);
+    retryPlacementSetup(host.id);
     return { status: "setup", hostId: host.id };
   };
   if (!probe.hostModeListening) return setup();
   const state = await remoteHostsClient.connectAndSettle(host.id);
   if (!stillCurrent()) return cancel();
   if (!isUsable(state)) return setup();
+  // Asked at the last moment, after every wait: the resume hook hands a held
+  // worktree to the switch dialog once the view is seen with no switch under way.
+  if (box.placeNow && !box.placeNow()) {
+    await hold(true);
+    return { status: "waiting", hostId: host.id };
+  }
 
   const requestId = requestHostSwitch({
     toHostId: host.id,

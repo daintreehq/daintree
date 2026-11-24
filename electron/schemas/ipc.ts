@@ -17,7 +17,7 @@ import {
   VOICE_RECENT_PROMPTS_MAX,
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
-} from "../../shared/config/voiceCorrection.js";
+} from "../../shared/config/voiceCorrectionPolicy.js";
 import {
   VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
   VOICE_WORKSPACE_NAME_MAX_LENGTH,
@@ -443,10 +443,16 @@ export const TerminalSpawnOptionsSchema = z.object({
   // Listed or zod strips it, and a resume that must be exact would start a
   // fresh conversation under the id instead (#16019).
   exactResume: z.boolean().optional(),
+  // Listed or zod strips it, and a conversation kept across an account switch
+  // is looked up by id in a folder that doesn't hold it (#17087).
+  conversationStore: z
+    .object({ sessionId: z.string().min(1).max(128), configDir: z.string().min(1).max(4096) })
+    .optional(),
   worktreeId: z.string().optional(),
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),
   originalAgentPresetId: z.string().optional(),
+  fallbackChainIndex: z.number().int().nonnegative().optional(),
   // Handback code for the initial prompt (#12488). Listed or zod strips it, and
   // held to the marker grammar because the pty-host searches for it literally.
   handbackCode: z.string().regex(HANDBACK_CODE_PATTERN).optional(),
@@ -547,6 +553,7 @@ export const FileSearchPayloadSchema = z.object({
   cwd: z.string().min(1),
   query: z.string(),
   limit: z.number().int().positive().max(100).optional(),
+  filesOnly: z.boolean().optional(),
 });
 
 export const SlashCommandListRequestSchema = z.object({
@@ -867,7 +874,7 @@ export const VoicePublishDetailsRequestSchema = z.object({
     locked: z.boolean(),
     wordCount: z.number().int().min(0).max(1_000_000),
     transcript: z.string().max(VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
-    provider: z.enum(["openai", "deepgram", "grok"]).nullable(),
+    provider: z.enum(["openai", "deepgram", "grok", "local"]).nullable(),
     clock: z
       .object({
         at: z.number().finite().min(0),

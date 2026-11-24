@@ -2650,7 +2650,7 @@ describe("PullRequestService", () => {
   });
 
   describe("issueTitle retry after PR resolved (#8851)", () => {
-    it("retries getIssue on subsequent checkForPRs runs after a resolved PR's first issue fetch returns null", async () => {
+    it("retries getIssue once a not-found number's retry time passes, then stops after the title lands", async () => {
       const mockImpl = mockForgeProviderResolved();
       const getIssue = vi
         .fn<() => Promise<{ number: number; title: string } | null>>()
@@ -2694,9 +2694,15 @@ describe("PullRequestService", () => {
         lastCheckAt: number;
       };
 
-      // Second pass: bypass the 5s throttle, then trigger another check.
-      // The worktree is in resolvedWorktrees but NOT in
-      // issueTitleFetchedWorktrees, so the issue lookup must run again.
+      // Second pass straight after: the forge just said the number doesn't
+      // exist, so it isn't asked again on every poll (#17070).
+      svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+      await svc.checkForPRs();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+
+      // Once its retry time passes, the worktree is in resolvedWorktrees but
+      // NOT in issueTitleFetchedWorktrees, so the issue lookup runs again.
+      vi.setSystemTime(Date.now() + 5 * 60_000 + 1);
       svc.lastCheckAt = Number.NEGATIVE_INFINITY;
       await svc.checkForPRs();
       expect(getIssue).toHaveBeenCalledTimes(2);
@@ -2714,6 +2720,291 @@ describe("PullRequestService", () => {
 
       unsubscribe();
       pullRequestService.destroy();
+    });
+  });
+
+  describe("issue lookup sharing and backoff (#17070)", () => {
+    const issue88 = {
+      number: 88,
+      title: "Shared issue",
+      state: "open",
+      rawState: "OPEN",
+      url: "https://github.com/o/r/issues/88",
+      rawData: null,
+    };
+
+    async function startWithSiblings(getIssue: ReturnType<typeof vi.fn>) {
+      const mockImpl = mockForgeProviderResolved();
+      mockImpl.getIssue = getIssue as unknown as typeof mockImpl.getIssue;
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+      const detected: DaintreeEventMap["sys:issue:detected"][] = [];
+      const notFound: DaintreeEventMap["sys:issue:not-found"][] = [];
+      const offDetected = events.on("sys:issue:detected", (p) => detected.push(p));
+      const offNotFound = events.on("sys:issue:not-found", (p) => notFound.push(p));
+      pullRequestService.initialize("/repo", "test-project-id");
+      for (const [worktreeId, branch] of [
+        ["wt-1", "feature/issue-88-a"],
+        ["wt-2", "feature/issue-88-b"],
+      ] as const) {
+        events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({ worktreeId, branch, issueNumber: 88 })
+        );
+      }
+      const svc = pullRequestService as unknown as {
+        checkForPRs: () => Promise<void>;
+        lastCheckAt: number;
+      };
+      const poll = async () => {
+        svc.lastCheckAt = Number.NEGATIVE_INFINITY;
+        await svc.checkForPRs();
+      };
+      return {
+        pullRequestService,
+        events,
+        detected,
+        notFound,
+        poll,
+        cleanup: () => {
+          offDetected();
+          offNotFound();
+          pullRequestService.destroy();
+        },
+      };
+    }
+
+    it("asks once for an issue several worktrees name and tells each of them", async () => {
+      const getIssue = vi.fn().mockResolvedValue(issue88);
+      const t = await startWithSiblings(getIssue);
+
+      await t.pullRequestService.refresh();
+
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(t.detected.map((d) => d.worktreeId).sort()).toEqual(["wt-1", "wt-2"]);
+      t.cleanup();
+    });
+
+    it("announces a remembered not-found once per worktree, not on every poll", async () => {
+      const getIssue = vi.fn().mockResolvedValue(null);
+      const t = await startWithSiblings(getIssue);
+
+      await t.pullRequestService.refresh();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(t.notFound.map((n) => n.worktreeId).sort()).toEqual(["wt-1", "wt-2"]);
+
+      await t.poll();
+      await t.poll();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(t.notFound).toHaveLength(2);
+
+      // A worktree arriving later learns the verdict without a request.
+      t.events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-3", branch: "feature/issue-88-c", issueNumber: 88 })
+      );
+      await t.poll();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(t.notFound.map((n) => n.worktreeId)).toContain("wt-3");
+      expect(t.notFound).toHaveLength(3);
+      t.cleanup();
+    });
+
+    it("waits longer after each repeated not-found", async () => {
+      const getIssue = vi.fn().mockResolvedValue(null);
+      const t = await startWithSiblings(getIssue);
+      await t.pullRequestService.refresh();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + 5 * 60_000 + 1);
+      await t.poll();
+      expect(getIssue).toHaveBeenCalledTimes(2);
+
+      // The second miss holds for ten minutes, not five.
+      vi.setSystemTime(Date.now() + 5 * 60_000 + 1);
+      await t.poll();
+      expect(getIssue).toHaveBeenCalledTimes(2);
+      vi.setSystemTime(Date.now() + 5 * 60_000);
+      await t.poll();
+      expect(getIssue).toHaveBeenCalledTimes(3);
+      t.cleanup();
+    });
+
+    it("backs off a failed lookup without reporting the issue missing", async () => {
+      const getIssue = vi.fn().mockRejectedValue(new Error("socket hang up"));
+      const t = await startWithSiblings(getIssue);
+
+      await t.pullRequestService.refresh();
+      await t.poll();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(t.notFound).toHaveLength(0);
+
+      getIssue.mockResolvedValue(issue88);
+      vi.setSystemTime(Date.now() + 60_000 + 1);
+      await t.poll();
+      expect(getIssue).toHaveBeenCalledTimes(2);
+      expect(t.detected).toHaveLength(2);
+      t.cleanup();
+    });
+
+    it("keeps the delay through a focus refresh and drops it on an explicit one", async () => {
+      const getIssue = vi.fn().mockResolvedValue(null);
+      const t = await startWithSiblings(getIssue);
+      await t.pullRequestService.refresh();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+
+      await t.pullRequestService.refresh({ preserveIssueBackoff: true });
+      expect(getIssue).toHaveBeenCalledTimes(1);
+
+      getIssue.mockResolvedValue(issue88);
+      await t.pullRequestService.refresh();
+      expect(getIssue).toHaveBeenCalledTimes(2);
+      expect(t.detected.map((d) => d.worktreeId).sort()).toEqual(["wt-1", "wt-2"]);
+      t.cleanup();
+    });
+
+    it("asks separately about different issues and different claims", async () => {
+      const getIssue = vi.fn(async (_repo: RepoRef, n: number) => ({ ...issue88, number: n }));
+      const t = await startWithSiblings(getIssue);
+      const bridge = lastMockBridge!;
+      bridge.getIssueForLink.mockImplementation(async (link) => ({
+        ...issue88,
+        title: `Claimed ${link.issueKey}`,
+      }));
+      t.events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-3", branch: "feature/issue-89-c", issueNumber: 89 })
+      );
+      for (const [worktreeId, issueKey] of [
+        ["wt-4", "ENG-88"],
+        ["wt-5", "OPS-88"],
+      ] as const) {
+        t.events.emit(
+          "sys:worktree:update",
+          makeWorktreeSnapshot({
+            worktreeId,
+            branch: `${issueKey.toLowerCase()}-${worktreeId}`,
+            issueNumber: 88,
+            issueProviderId: "acme.linear.linear",
+            issueKey,
+          })
+        );
+      }
+
+      await t.pullRequestService.refresh();
+
+      // wt-1 and wt-2 share #88; #89 and each claim are their own lookups, and
+      // a claim never shares the code forge's #88.
+      expect(getIssue.mock.calls.map(([, n]) => n).sort()).toEqual([88, 89]);
+      expect(bridge.getIssueForLink).toHaveBeenCalledTimes(2);
+      const titles = Object.fromEntries(t.detected.map((d) => [d.worktreeId, d.issueTitle]));
+      expect(titles).toEqual({
+        "wt-1": "Shared issue",
+        "wt-2": "Shared issue",
+        "wt-3": "Shared issue",
+        "wt-4": "Claimed ENG-88",
+        "wt-5": "Claimed OPS-88",
+      });
+      t.cleanup();
+    });
+
+    it("re-announces a remembered not-found when a worktree moves to another branch", async () => {
+      const getIssue = vi.fn().mockResolvedValue(null);
+      const t = await startWithSiblings(getIssue);
+      await t.pullRequestService.refresh();
+      expect(t.notFound.filter((n) => n.worktreeId === "wt-1")).toHaveLength(1);
+
+      t.events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/issue-88-z", issueNumber: 88 })
+      );
+      await t.poll();
+
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      expect(t.notFound.filter((n) => n.worktreeId === "wt-1")).toHaveLength(2);
+      expect(t.notFound.filter((n) => n.worktreeId === "wt-2")).toHaveLength(1);
+      t.cleanup();
+    });
+
+    it("re-asks on an explicit refresh that arrives while a focus pass is running", async () => {
+      const getIssue = vi.fn().mockResolvedValue(null);
+      const t = await startWithSiblings(getIssue);
+      await t.pullRequestService.refresh();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+
+      // Hold the focus pass on its PR lookups, after it has already read the
+      // remembered not-found for its issue lookups.
+      const bridge = lastMockBridge!;
+      let releasePRs!: () => void;
+      const prsHeld = new Promise<void>((resolve) => (releasePRs = resolve));
+      bridge.findPRByBranch.mockImplementation(async () => {
+        await prsHeld;
+        return makeMockForgePR();
+      });
+      getIssue.mockResolvedValue(issue88);
+      const focus = t.pullRequestService.refresh({ preserveIssueBackoff: true });
+      await flushLoaders();
+      expect(bridge.findPRByBranch).toHaveBeenCalled();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+
+      const manual = t.pullRequestService.refresh();
+      expect(manual).not.toBe(focus);
+      releasePRs();
+      await Promise.all([focus, manual]);
+
+      expect(getIssue).toHaveBeenCalledTimes(2);
+      expect(t.detected.map((d) => d.worktreeId).sort()).toEqual(["wt-1", "wt-2"]);
+      t.cleanup();
+    });
+
+    it("lets a focus pass join an explicit one, and explicit refreshes join each other", async () => {
+      const getIssue = vi.fn().mockResolvedValue(issue88);
+      const t = await startWithSiblings(getIssue);
+      const manual = t.pullRequestService.refresh();
+      expect(t.pullRequestService.refresh()).toBe(manual);
+      expect(t.pullRequestService.refresh({ preserveIssueBackoff: true })).toBe(manual);
+      await manual;
+      t.cleanup();
+    });
+
+    it("drops a title looked up for a provider invalidated before the lookup started", async () => {
+      const getIssue = vi.fn().mockResolvedValue(issue88);
+      const t = await startWithSiblings(getIssue);
+      const bridge = lastMockBridge!;
+      let releaseGate!: () => void;
+      bridge.getRateLimit.mockImplementationOnce(
+        () => new Promise((resolve) => (releaseGate = () => resolve(null)))
+      );
+
+      const pass = t.poll();
+      await flushLoaders();
+      expect(bridge.getRateLimit).toHaveBeenCalledTimes(1);
+      // Settings or remotes changed while the pass waited on the rate-limit gate.
+      t.pullRequestService.notifyForgeProviderRegistryUpdated();
+      releaseGate();
+      await pass;
+
+      expect(t.detected).toHaveLength(0);
+      t.cleanup();
+    });
+
+    it("delivers a shared answer only to worktrees still on the branch it was asked for", async () => {
+      let answer!: (value: typeof issue88) => void;
+      const getIssue = vi.fn(() => new Promise<typeof issue88>((resolve) => (answer = resolve)));
+      const t = await startWithSiblings(getIssue);
+
+      const pass = t.pullRequestService.refresh();
+      await flushLoaders();
+      expect(getIssue).toHaveBeenCalledTimes(1);
+      t.events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/other", issueNumber: 88 })
+      );
+      answer(issue88);
+      await pass;
+
+      expect(t.detected.map((d) => d.worktreeId)).toEqual(["wt-1"]);
+      t.cleanup();
     });
   });
 
@@ -2843,6 +3134,204 @@ describe("PullRequestService", () => {
       for (const pr of svc.detectedPRs.values()) {
         expect(pr.stagnantPollCount).toBe(0);
       }
+    });
+  });
+
+  it("a repeat start() while polling joins the first check instead of resolving at once (#17060)", async () => {
+    mockForgeProviderResolved();
+    const { pullRequestService } = await import("../PullRequestService.js");
+    pullRequestService.initialize("/repo", "test-project-id");
+    let finishCheck: () => void = () => {};
+    vi.spyOn(
+      pullRequestService as unknown as { checkForPRs: () => Promise<void> },
+      "checkForPRs"
+    ).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishCheck = resolve;
+        })
+    );
+
+    const first = pullRequestService.start(0);
+    let repeatSettled = false;
+    void pullRequestService.start(0).then(() => {
+      repeatSettled = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(repeatSettled).toBe(false);
+
+    finishCheck();
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(repeatSettled).toBe(true);
+
+    pullRequestService.destroy();
+  });
+
+  describe("revalidation cadence while blurred (#17060)", () => {
+    const WINDOW_MS = 30 * 60 * 1000;
+    const STEP_MS = 1000;
+
+    async function pollingService() {
+      mockForgeProviderResolved();
+      const { pullRequestService } = await import("../PullRequestService.js");
+      pullRequestService.initialize("/repo", "test-project-id");
+      const svc = pullRequestService as unknown as {
+        isPolling: boolean;
+        boostExpiresAt: number | null;
+        revalidateResolvedPRs: () => Promise<void>;
+        scheduleRevalidation: (delayMs?: number) => void;
+      };
+      svc.isPolling = true;
+      const revalidate = vi.spyOn(svc, "revalidateResolvedPRs").mockResolvedValue(undefined);
+      const ticksOver = async (ms: number) => {
+        revalidate.mockClear();
+        await vi.advanceTimersByTimeAsync(ms);
+        return revalidate.mock.calls.length;
+      };
+      // Time from now until the next tick runs, to the step.
+      const msUntilNextTick = async () => {
+        revalidate.mockClear();
+        let elapsed = 0;
+        while (revalidate.mock.calls.length === 0 && elapsed < WINDOW_MS) {
+          await vi.advanceTimersByTimeAsync(STEP_MS);
+          elapsed += STEP_MS;
+        }
+        return elapsed;
+      };
+      return { pullRequestService, svc, revalidate, ticksOver, msUntilNextTick };
+    }
+
+    it("revalidates resolved PRs less often while no window has focus", async () => {
+      const { pullRequestService, svc, ticksOver } = await pollingService();
+      svc.scheduleRevalidation();
+      const focusedTicks = await ticksOver(WINDOW_MS);
+
+      pullRequestService.setFocusCadence(false);
+      const blurredTicks = await ticksOver(WINDOW_MS);
+
+      expect(blurredTicks).toBeGreaterThan(0);
+      expect(blurredTicks).toBeLessThan(focusedTicks);
+
+      pullRequestService.destroy();
+    });
+
+    it("re-arms at the focused cadence the moment focus comes back", async () => {
+      const { pullRequestService, svc, ticksOver, msUntilNextTick } = await pollingService();
+      svc.scheduleRevalidation();
+      const focusedMs = await msUntilNextTick();
+
+      pullRequestService.setFocusCadence(false);
+      // Whatever ran next re-armed at the blurred cadence.
+      await msUntilNextTick();
+      await ticksOver(STEP_MS);
+      pullRequestService.setFocusCadence(true);
+
+      expect(await msUntilNextTick()).toBeLessThanOrEqual(focusedMs);
+
+      pullRequestService.destroy();
+    });
+
+    it("ignores an armed CI boost while blurred", async () => {
+      const { pullRequestService, svc, msUntilNextTick } = await pollingService();
+      pullRequestService.setFocusCadence(false);
+      svc.scheduleRevalidation();
+      const blurredMs = await msUntilNextTick();
+
+      svc.boostExpiresAt = Date.now() + 2 * WINDOW_MS;
+      svc.scheduleRevalidation();
+      expect(await msUntilNextTick()).toBe(blurredMs);
+
+      // The same boost does speed up a focused host.
+      pullRequestService.setFocusCadence(true);
+      expect(await msUntilNextTick()).toBeLessThan(blurredMs);
+
+      pullRequestService.destroy();
+    });
+
+    it("holds a local push's early revalidation until focus without postponing the blurred tick", async () => {
+      const { pullRequestService, svc, ticksOver, msUntilNextTick } = await pollingService();
+      pullRequestService.setFocusCadence(false);
+      svc.scheduleRevalidation();
+      const blurredMs = await msUntilNextTick();
+
+      await ticksOver(blurredMs / 2);
+      svc.scheduleRevalidation(3 * 1000);
+      expect(await ticksOver(10 * 1000)).toBe(0);
+      svc.scheduleRevalidation(3 * 1000);
+      // The armed tick keeps its time through repeated pushes.
+      expect(await ticksOver(blurredMs / 2 - 10 * 1000)).toBe(1);
+
+      svc.scheduleRevalidation(3 * 1000);
+      await ticksOver(10 * 1000);
+      pullRequestService.setFocusCadence(true);
+      expect(await ticksOver(STEP_MS)).toBe(1);
+
+      pullRequestService.destroy();
+    });
+
+    function holdNextPass(revalidate: {
+      mockImplementationOnce: (fn: () => Promise<void>) => void;
+    }) {
+      let release: () => void = () => {};
+      revalidate.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve;
+          })
+      );
+      return () => release();
+    }
+
+    it("a blur during a slow pass starts no second pass alongside it", async () => {
+      const { pullRequestService, svc, revalidate, ticksOver, msUntilNextTick } =
+        await pollingService();
+      const release = holdNextPass(revalidate);
+      svc.scheduleRevalidation();
+      await msUntilNextTick();
+
+      // The order main sends them in: the enrichment sweep reschedules first.
+      pullRequestService.setCIEnrichmentEnabled(false);
+      pullRequestService.setFocusCadence(false);
+      expect(await ticksOver(WINDOW_MS)).toBe(0);
+
+      // The pass re-arms once it settles.
+      release();
+      expect(await ticksOver(WINDOW_MS)).toBeGreaterThan(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("focus regained during a slow blurred pass starts no second pass alongside it", async () => {
+      const { pullRequestService, svc, revalidate, ticksOver, msUntilNextTick } =
+        await pollingService();
+      pullRequestService.setFocusCadence(false);
+      const release = holdNextPass(revalidate);
+      svc.scheduleRevalidation();
+      await msUntilNextTick();
+
+      pullRequestService.setFocusCadence(true);
+      expect(await ticksOver(WINDOW_MS)).toBe(0);
+
+      release();
+      expect(await ticksOver(WINDOW_MS)).toBeGreaterThan(0);
+
+      pullRequestService.destroy();
+    });
+
+    it("starts at the blurred cadence when polling starts while blurred", async () => {
+      const { pullRequestService, svc, ticksOver } = await pollingService();
+      svc.scheduleRevalidation();
+      const focusedTicks = await ticksOver(WINDOW_MS);
+      pullRequestService.stop();
+
+      pullRequestService.setFocusCadence(false);
+      svc.isPolling = true;
+      svc.scheduleRevalidation();
+
+      expect(await ticksOver(WINDOW_MS)).toBeLessThan(focusedTicks);
+
+      pullRequestService.destroy();
     });
   });
 

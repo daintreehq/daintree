@@ -396,4 +396,17 @@ describe("restoring the Canopy window at launch (#16336)", () => {
     expect(restoreCanopyWindow()).toBe(false);
     expect(windowMock.openCanopyWindow).not.toHaveBeenCalled();
   });
+
+  it("brings back the one Keep Agents Running closed, though it stood this session", () => {
+    windowMock.hasCanopyWindowOpenedThisSession.mockReturnValue(true);
+    expect(restoreCanopyWindow({ afterKeepAgentsRunning: true })).toBe(true);
+    expect(windowMock.openCanopyWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("still opens nothing after Keep Agents Running with Canopy off", () => {
+    state.mode = "hidden";
+    windowMock.hasCanopyWindowOpenedThisSession.mockReturnValue(true);
+    expect(restoreCanopyWindow({ afterKeepAgentsRunning: true })).toBe(false);
+    expect(windowMock.openCanopyWindow).not.toHaveBeenCalled();
+  });
 });

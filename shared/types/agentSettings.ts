@@ -20,6 +20,7 @@ import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
 import { hasUnclosedQuote, parseShellArgs } from "../utils/shellArgs.js";
 import { quoteLaunchPrompt } from "../utils/launchPromptArg.js";
 import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
+import type { DangerousMode } from "./dangerousMode.js";
 
 /**
  * Quotes one argument of an agent launch command, for the shell it runs under
@@ -59,14 +60,14 @@ function parseLaunchArgs(text: string | undefined): string[] {
 // reconciled. argv elements are C strings, so no real argument holds a NUL.
 const RECIPE_ARGS_SLOT = "\0recipe-args";
 
+export { DANGEROUS_MODES, isDangerousMode, type DangerousMode } from "./dangerousMode.js";
+
 /**
- * Tri-state permission-bypass intent. `"on"`/`"off"` are explicit user choices
- * (force-enable / force-disable); `"inherit"` defers to the next level up
- * (preset → agent → global). Modeled after VS Code workspace-vs-user override
- * and IAM explicit-deny precedence: a more-specific `"off"` always vetoes a
- * broader `"on"` (principle of least privilege).
+ * What a launch does about permission prompts once every scope is resolved:
+ * Daintree adds nothing (`"cli-default"`), the agent's declared Auto args, or
+ * its bypass args (`"skip"`).
  */
-export type DangerousMode = "inherit" | "on" | "off";
+export type PermissionLevel = "cli-default" | "auto" | "skip";
 
 /**
  * One of an agent's accounts (#16040): a config folder its CLI keeps
@@ -153,6 +154,8 @@ export interface AgentSettingsEntry {
     fallbackOnRateLimit?: boolean;
     /** Reopen the same conversation on a usage-limit hop (#16045). */
     keepConversationOnRateLimit?: boolean;
+    /** Launch panes armed to continue once their usage limit resets (#17912). */
+    continueAtLimitReset?: boolean;
     /** The account a launch of this preset signs in as, unless overridden (#16133). */
     accountId?: string;
   }>;
@@ -167,6 +170,13 @@ export interface AgentSettingsEntry {
    * Host-local: the folders are this machine's.
    */
   accounts?: AgentAccount[];
+  /**
+   * A name the user gave the CLI's own default login (#17080), shown beside
+   * "default login" wherever that login is offered. Display only: a launch on
+   * the default login still sets no account folder. Host-local, like
+   * `accounts`, since each machine's default login is its own.
+   */
+  defaultLoginName?: string;
   /**
    * Agent-level default account; absent launches on the CLI's default login.
    * A preset's own pinned account wins over it (#16133).
@@ -270,6 +280,18 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
 };
 
 /**
+ * The agent's own "approve without asking me, inside its rules" mode (#17435),
+ * declared beside its bypass flag and offered only where one exists. Codex's
+ * routes approval requests to its automatic reviewer and keeps its
+ * workspace-write sandbox, where its bypass flag turns the sandbox off.
+ * Plugin agents declare none.
+ */
+export const DEFAULT_AUTO_ARGS: Readonly<Record<string, readonly string[]>> = {
+  claude: ["--permission-mode", "auto"],
+  codex: ["--approve-for-me"],
+};
+
+/**
  * Bypass flags an agent's default used to be, before its CLI stopped accepting
  * them. Settings seeded from the old default, config bundles exported from
  * them, and captured launch flags all outlive the change, so a retired value
@@ -297,6 +319,11 @@ export function getDefaultDangerousArgs(agentId: string | undefined): string {
   const builtIn = ownEntry(DEFAULT_DANGEROUS_ARGS, agentId);
   if (builtIn !== undefined) return builtIn.trim();
   return getEffectiveAgentConfig(agentId)?.permissionBypassArgs?.join(" ") ?? "";
+}
+
+/** The args that put `agentId` in its own Auto permission mode, or none. */
+export function getPermissionAutoArgs(agentId: string | undefined): readonly string[] {
+  return ownEntry(DEFAULT_AUTO_ARGS, agentId) ?? [];
 }
 
 /**
@@ -511,10 +538,40 @@ export function resolveEffectiveBypass(
   agentId: string | undefined,
   globalSkipPermissions?: boolean
 ): boolean {
+  return resolveEffectivePermissionLevel(entry, agentId, globalSkipPermissions) === "skip";
+}
+
+/**
+ * The full permission decision behind {@link resolveEffectiveBypass}: an
+ * explicit `"auto"` is Auto where the agent declares Auto args and the CLI's
+ * default where it doesn't, never Skip all, so a saved Auto the agent can't
+ * honour (a user agent, a CLI that dropped the flag) still vetoes the global
+ * switch instead of falling through to it.
+ */
+export function resolveEffectivePermissionLevel(
+  entry: AgentSettingsEntry,
+  agentId: string | undefined,
+  globalSkipPermissions?: boolean
+): PermissionLevel {
   const mode = resolveDangerousMode(entry);
-  if (mode === "on") return true;
-  if (mode === "off") return false;
-  return !!globalSkipPermissions && isAgentTerminalBypassSupported(agentId);
+  if (mode === "on") return "skip";
+  if (mode === "off") return "cli-default";
+  if (mode === "auto") return getPermissionAutoArgs(agentId).length > 0 ? "auto" : "cli-default";
+  return globalSkipPermissions && isAgentTerminalBypassSupported(agentId) ? "skip" : "cli-default";
+}
+
+/**
+ * The args a launch at `level` adds for permissions: the resolved bypass args
+ * for Skip all, the declared Auto args, or nothing.
+ */
+export function permissionArgsForLevel(
+  level: PermissionLevel,
+  entry: Pick<AgentSettingsEntry, "dangerousArgs">,
+  agentId: string | undefined
+): string[] {
+  if (level === "auto") return [...getPermissionAutoArgs(agentId)];
+  if (level === "cli-default") return [];
+  return resolveDangerousArgs(entry.dangerousArgs, agentId).split(/\s+/).filter(Boolean);
 }
 
 /** Splits args into options, each paired with the non-option value after it. */
@@ -584,35 +641,9 @@ function bypassGroupAt(
 
 /**
  * Reconciles a persisted `agentLaunchFlags` snapshot against the current
- * effective bypass setting (#10432, the "resume trap").
- *
- * Strips the agent's canonical bypass flag (the resolved `dangerousArgs`, plus
- * the registry default as a fallback so a snapshot captured under a different
- * `dangerousArgs` still gets cleaned) from `flags`, then re-appends it only
- * when `effectiveBypass` is true. This makes every spawn/restart/restore/resume
- * idempotent: flipping the resolved decision off stops carrying a stale bypass
- * flag forward, and flipping it on re-adds it.
- *
- * `effectiveBypass` is the single source of truth — it already encodes the full
- * tri-state decision (preset/agent `"on"`/`"off"` and the support-gated global
- * inherit, via {@link resolveEffectiveBypass}). So this applies uniformly to
- * every agent: its flag is preserved when `effectiveBypass` is true, and an
- * explicit `"off"` veto strips a stale token when it is false. Agents with no
- * canonical token (no default from {@link getDefaultDangerousArgs} and no `dangerousArgs`)
- * fall through the empty-strip-set guard below and are left untouched.
- *
- * Bypass args are matched one option group at a time — an option together with
- * the value that follows it — never token by token: a custom Codex bypass like
- * `-c approval_policy=never` shares its `-c` with every other config override
- * in the list, and stripping that `-c` alone would orphan the value that
- * followed it (#13046). Groups rather than the whole sequence, so a bypass
- * whose other half another reconciler already rewrote is still recognised.
- *
- * @param bypassArgs - The agent's currently-resolved dangerous args (e.g.
- *   `entry.dangerousArgs`); falls back to {@link getDefaultDangerousArgs}.
- * @param pluginBypassArgHistory - Every bypass declaration a plugin has made for
- *   the agent ({@link getPluginBypassArgHistory}), stripped but never re-added,
- *   so a saved flag is recognised while the plugin's own declaration is absent.
+ * effective bypass setting (#10432, the "resume trap"); the boolean form of
+ * {@link reconcilePermissionFlags}, `true` being Skip all and `false` the CLI
+ * default.
  */
 export function reconcileBypassFlags(
   flags: readonly string[],
@@ -621,38 +652,183 @@ export function reconcileBypassFlags(
   bypassArgs?: string,
   pluginBypassArgHistory: readonly (readonly string[])[] = []
 ): string[] {
-  const resolved = resolveDangerousArgs(bypassArgs, agentId);
-  const groups = bypassArgGroups(bypassArgSources(agentId, resolved, pluginBypassArgHistory));
-  if (groups.length === 0) return [...flags];
-  // A standing instruction is free text that can equal a bypass token, and
-  // Codex's shares a `-c` with config-override bypass args (#12431). Stripping
-  // either half would orphan the other — a lone value becomes the first-turn
-  // prompt — so both are left alone.
-  const instruction = systemPromptArgPositions(flags, agentId);
-  const matchLengthAt = (index: number): number =>
-    groups.find((group) => bypassGroupAt(flags, index, group, instruction))?.length ?? 0;
+  return reconcilePermissionFlags(flags, agentId, effectiveBypass ? "skip" : "cli-default", {
+    bypassArgs,
+    pluginBypassArgHistory,
+  });
+}
 
-  // Bypass wanted: replace the first canonical occurrence in place with the
-  // currently-resolved args (preserving flag order so a snapshot that already
-  // carries the right flag is left untouched), drop any duplicates, and append
-  // if the flag was absent. Bypass not wanted: drop every occurrence.
-  const wanted = effectiveBypass && resolved ? resolved.split(/\s+/).filter(Boolean) : undefined;
+/**
+ * The args the user put on a launch themselves, for
+ * {@link reconcilePermissionFlags}: the effective entry's custom flags (a
+ * preset's replace the agent's) and the preset's own args.
+ */
+export function userPermissionArgs(
+  entry: Pick<AgentSettingsEntry, "customFlags">,
+  presetArgs?: readonly string[]
+): string[] {
+  return [...(presetArgs ?? []), ...parseLaunchArgs(entry.customFlags)];
+}
+
+/**
+ * The options of an argv list: what comes before a `--` terminator, after
+ * which a token that looks like a flag is a positional argument.
+ */
+function optionArgs(args: readonly string[] | undefined): readonly string[] {
+  if (!args) return [];
+  const end = args.indexOf("--");
+  return end === -1 ? args : args.slice(0, end);
+}
+
+export interface ReconcilePermissionFlagsOptions {
+  /** The agent's currently-resolved dangerous args; falls back to {@link getDefaultDangerousArgs}. */
+  bypassArgs?: string;
+  /**
+   * Every bypass declaration a plugin has made for the agent
+   * ({@link getPluginBypassArgHistory}), stripped but never re-added, so a
+   * saved flag is recognised while the plugin's own declaration is absent.
+   */
+  pluginBypassArgHistory?: readonly (readonly string[])[];
+  /**
+   * The user's own args today ({@link userPermissionArgs}). When they carry
+   * the agent's Auto group, the snapshot's copy is theirs and stays.
+   */
+  userArgs?: readonly string[];
+  /**
+   * Args the launch carries outside the snapshot (the caller's verbatim tail,
+   * #13046). An Auto group among them is the launch's one copy, so none is
+   * added to the snapshot.
+   */
+  carriedArgs?: readonly string[];
+}
+
+/**
+ * The permission level a launch-flag snapshot was captured at, read from the
+ * args it carries: the agent's bypass args (any declaration
+ * {@link reconcilePermissionFlags} strips) make it Skip all, its Auto args
+ * Auto, neither the CLI default.
+ */
+export function capturedPermissionLevel(
+  flags: readonly string[],
+  agentId: string,
+  options: Pick<ReconcilePermissionFlagsOptions, "bypassArgs" | "pluginBypassArgHistory"> = {}
+): PermissionLevel {
+  const resolved = resolveDangerousArgs(options.bypassArgs, agentId);
+  const groups = bypassArgGroups(
+    bypassArgSources(agentId, resolved, options.pluginBypassArgHistory ?? [])
+  );
+  const autoArgs = getPermissionAutoArgs(agentId);
+  const instruction = systemPromptArgPositions(flags, agentId);
+  const at = (group: readonly string[]) =>
+    group.length > 0 && flags.some((_, index) => bypassGroupAt(flags, index, group, instruction));
+  if (autoArgs.length > 0 && at(autoArgs)) return "auto";
+  return groups.some(at) ? "skip" : "cli-default";
+}
+
+/** The less permissive of two levels: the CLI default, then Auto, then Skip all. */
+export function lesserPermissionLevel(a: PermissionLevel, b: PermissionLevel): PermissionLevel {
+  const order: readonly PermissionLevel[] = ["cli-default", "auto", "skip"];
+  return order.indexOf(a) <= order.indexOf(b) ? a : b;
+}
+
+/**
+ * Reconciles a persisted `agentLaunchFlags` snapshot against the current
+ * permission level (#10432 the "resume trap", #17435).
+ *
+ * The bypass args (the resolved `dangerousArgs`, the registry default — a
+ * snapshot may predate a custom `dangerousArgs` — retired defaults and every
+ * plugin declaration) and the agent's declared Auto args are stripped, then the
+ * args the level wants take the first stripped slot, or go on the end when the
+ * snapshot held none. Every spawn/restart/restore/resume is idempotent: flipping
+ * the level replaces what a snapshot carries instead of stacking on it.
+ *
+ * Args are matched one option group at a time — an option together with the
+ * value that follows it — never token by token: a custom Codex bypass like
+ * `-c approval_policy=never` shares its `-c` with every other config override
+ * in the list, and stripping that `-c` alone would orphan the value that
+ * followed it (#13046). Groups rather than the whole sequence, so a bypass
+ * whose other half another reconciler already rewrote is still recognised. A
+ * standing instruction is free text that can equal a bypass token, and Codex's
+ * shares a `-c` with config-override bypass args (#12431), so neither half of
+ * one ever matches.
+ *
+ * An Auto group the user's own args carry is theirs, as a fresh launch would
+ * carry it whatever the level: it is never stripped, and at Auto it stands in
+ * for Daintree's copy. A launch carries at most one copy (Codex rejects
+ * `--approve-for-me` given twice), so later copies go, and none is added when
+ * the snapshot or the caller's tail already has one. The Auto group is matched
+ * before the bypass groups, so a custom bypass that spells it is still one
+ * group, read the same way on every pass.
+ */
+export function reconcilePermissionFlags(
+  flags: readonly string[],
+  agentId: string,
+  level: PermissionLevel,
+  options: ReconcilePermissionFlagsOptions = {}
+): string[] {
+  const resolved = resolveDangerousArgs(options.bypassArgs, agentId);
+  const groups = bypassArgGroups(
+    bypassArgSources(agentId, resolved, options.pluginBypassArgHistory ?? [])
+  );
+  const autoArgs = getPermissionAutoArgs(agentId);
+  if (groups.length === 0 && autoArgs.length === 0) return [...flags];
+  const instruction = systemPromptArgPositions(flags, agentId);
+  const bypassLengthAt = (index: number): number =>
+    groups.find((group) => bypassGroupAt(flags, index, group, instruction))?.length ?? 0;
+  // After a `--` every token is positional, the caller's tail included.
+  const terminator = flags.indexOf("--");
+  const optionEnd = terminator === -1 ? flags.length : terminator;
+  const autoAt = (index: number): boolean =>
+    autoArgs.length > 0 &&
+    index + autoArgs.length <= optionEnd &&
+    bypassGroupAt(flags, index, autoArgs, instruction);
+  const keepAuto =
+    level === "auto" ||
+    (autoArgs.length > 0 && findTokenSequence(optionArgs(options.userArgs), autoArgs) !== -1);
+  // A copy in the caller's tail is the launch's one copy, so the snapshot keeps none.
+  const carried =
+    autoArgs.length > 0 &&
+    terminator === -1 &&
+    findTokenSequence(optionArgs(options.carriedArgs), autoArgs) !== -1;
+  const autoPresent = level === "auto" && (carried || flags.some((_, index) => autoAt(index)));
+
+  // The level's args replace the first stripped group in place, preserving flag
+  // order so a snapshot that already carries them is left untouched.
+  const wanted =
+    level === "skip"
+      ? resolved.split(/\s+/).filter(Boolean)
+      : level === "auto" && !autoPresent
+        ? [...autoArgs]
+        : [];
   const reconciled: string[] = [];
   let inserted = false;
+  let autoKept = false;
+  const fillSlot = () => {
+    if (inserted) return;
+    reconciled.push(...wanted);
+    inserted = true;
+  };
   for (let index = 0; index < flags.length;) {
-    const matched = matchLengthAt(index);
-    if (matched > 0) {
-      if (wanted && !inserted) {
-        reconciled.push(...wanted);
-        inserted = true;
+    if (autoAt(index)) {
+      if (keepAuto && !autoKept && !carried) {
+        reconciled.push(...autoArgs);
+        autoKept = true;
+      } else if (!keepAuto) {
+        fillSlot();
       }
-      index += matched;
+      index += autoArgs.length;
+      continue;
+    }
+    const bypassLength = bypassLengthAt(index);
+    if (bypassLength > 0) {
+      fillSlot();
+      index += bypassLength;
     } else {
       reconciled.push(flags[index] as string);
       index += 1;
     }
   }
-  if (wanted && !inserted) reconciled.push(...wanted);
+  if (!inserted) reconciled.push(...wanted);
   return reconciled;
 }
 
@@ -691,6 +867,14 @@ export interface GenerateAgentFlagsOptions {
    * launches with it; see {@link resolveEffectiveBypass}.
    */
   globalSkipPermissions?: boolean;
+  /**
+   * Args the command carries ahead of these flags (a preset's, a recipe's) and
+   * after them (the caller's). An Auto group among their options, or among the
+   * custom flags, is left as the only copy: Codex rejects `--approve-for-me`
+   * given twice. Read in launch order, so a `--` makes what follows positional.
+   */
+  precedingArgs?: readonly string[];
+  followingArgs?: readonly string[];
 }
 
 export function generateAgentFlags(
@@ -699,16 +883,18 @@ export function generateAgentFlags(
   options?: GenerateAgentFlagsOptions
 ): string[] {
   const flags: string[] = [];
-  if (resolveEffectiveBypass(entry, agentId, options?.globalSkipPermissions)) {
-    // Use entry.dangerousArgs if set, otherwise fall back to default for this agent
-    const dangerousArgs = resolveDangerousArgs(entry.dangerousArgs, agentId);
-    if (dangerousArgs) {
-      flags.push(...dangerousArgs.split(/\s+/));
-    }
-  }
-  if (entry.customFlags) {
-    flags.push(...parseLaunchArgs(entry.customFlags));
-  }
+  const customFlags = entry.customFlags ? parseLaunchArgs(entry.customFlags) : [];
+  const level = resolveEffectivePermissionLevel(entry, agentId, options?.globalSkipPermissions);
+  const permissionArgs = permissionArgsForLevel(level, entry, agentId);
+  const launchOrder = [
+    ...(options?.precedingArgs ?? []),
+    ...customFlags,
+    ...(options?.followingArgs ?? []),
+  ];
+  const alreadyCarried =
+    level === "auto" && findTokenSequence(optionArgs(launchOrder), permissionArgs) !== -1;
+  if (!alreadyCarried) flags.push(...permissionArgs);
+  flags.push(...customFlags);
 
   // Decorative-effect opt-out (e.g. Codex's composer sparkles): the registry
   // args ride every launch unless the user keeps the effects. Custom flags
@@ -770,6 +956,11 @@ export interface GenerateAgentCommandOptions {
   /** Global skip-permissions override (#10432); forwarded to {@link generateAgentFlags}. */
   globalSkipPermissions?: boolean;
   /**
+   * The caller's verbatim flags (#13046), appended after this command by the
+   * launch plan. Read only so an Auto group they carry isn't doubled.
+   */
+  callerArgs?: readonly string[];
+  /**
    * Session id to ASSIGN to this launch, for agents declaring
    * `resume.assignSessionIdArgs` (#11782). Mint it with
    * {@link mintAssignedSessionId} and persist the same value on the panel, so
@@ -811,6 +1002,8 @@ export function generateAgentCommand(
   const flags = generateAgentFlags(entry, agentId, {
     clipboardDirectory: options?.clipboardDirectory,
     globalSkipPermissions: options?.globalSkipPermissions,
+    precedingArgs: [...(options?.presetArgs ?? []), ...parseLaunchArgs(options?.recipeArgs)],
+    followingArgs: options?.callerArgs,
   });
   const parts: string[] = [baseCommand];
   let registryArgsEnd = parts.length;
@@ -951,6 +1144,8 @@ export function buildAgentLaunchFlags(
     presetArgs?: string[];
     recipeArgs?: string;
     globalSkipPermissions?: boolean;
+    /** As {@link GenerateAgentCommandOptions.callerArgs}. */
+    callerArgs?: readonly string[];
   }
 ): string[] {
   const agentConfig = getEffectiveAgentConfig(agentId);
@@ -990,6 +1185,8 @@ export function buildAgentLaunchFlags(
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
   const settingsFlags = generateAgentFlags(entry, agentId, {
     globalSkipPermissions: options?.globalSkipPermissions,
+    precedingArgs: [...(options?.presetArgs ?? []), ...recipeArgs],
+    followingArgs: options?.callerArgs,
   });
   flags.push(...settingsFlags);
 
@@ -1382,6 +1579,44 @@ export function stripAssignedSessionIdArgs(command: string, agentId: string | un
 }
 
 /**
+ * Removes the agent's declared Auto args (#17435) from a launch command: the
+ * option and its value as separate words or fused as `--option=value`, and a
+ * lone flag with any `=value` after it. Works on shell words like
+ * {@link stripAssignedSessionIdArgs}, so a prompt that mentions the flag is
+ * one quoted word and stays. A command with a quote left open is returned
+ * as it is, since its words can't be told apart.
+ */
+export function stripPermissionAutoArgs(command: string, agentId: string | undefined): string {
+  const [option, ...values] = getPermissionAutoArgs(agentId);
+  if (!command || option === undefined) return command;
+  const { words, unterminated } = scanShellWords(command);
+  if (unterminated) return command;
+  const plain = words.map(unquoteShellWord);
+  const fused = values.length === 1 ? `${option}=${values[0]}` : undefined;
+  const lengthAt = (at: number): number => {
+    const word = plain[at] ?? "";
+    if (values.length === 0) return word === option || word.startsWith(`${option}=`) ? 1 : 0;
+    if (word === fused) return 1;
+    return [option, ...values].every((arg, offset) => plain[at + offset] === arg)
+      ? values.length + 1
+      : 0;
+  };
+  const kept: string[] = [];
+  let stripped = false;
+  for (let at = 0; at < words.length;) {
+    const length = lengthAt(at);
+    if (length > 0) {
+      stripped = true;
+      at += length;
+    } else {
+      kept.push(words[at] as string);
+      at += 1;
+    }
+  }
+  return stripped ? kept.join(" ") : command;
+}
+
+/**
  * Drops the arguments that pick a conversation — the agent's own resume, assign
  * and resume-latest shapes — from a list of launch flags. For a respawn that
  * promises a new conversation (#13746): a caller's verbatim `--continue` would
@@ -1698,6 +1933,71 @@ export function relaunchResumeAsAssignedSession(
   agentId: string | undefined
 ): AssignedSessionRelaunch | undefined {
   if (!command || !agentId || !supportsSessionIdAssignment(agentId)) return undefined;
+  const selector = findExactResumeSelector(command, agentId);
+  if (!selector) return undefined;
+  const { words, at, shapeLength, sessionId } = selector;
+  const assigning = buildAssignedSessionIdArgs(agentId, sessionId);
+  if (!assigning?.length) return undefined;
+  words.splice(
+    at,
+    shapeLength,
+    ...assigning.map((arg) => (isSafeShellOption(arg) ? arg : quoteAgentArgOptional(arg)))
+  );
+  return { sessionId, command: words.join(" ") };
+}
+
+/**
+ * Rewrites an exact-id resume to name the conversation's transcript file in
+ * place of its id (#17087). Claude Code takes either after `--resume`, and a
+ * path is found wherever it lies, where an id is looked up only in the config
+ * folder the CLI runs on: a conversation kept across an account switch lives
+ * in the folder it began in.
+ *
+ * Only the one selector `command` resumes `sessionId` with is touched, matched
+ * on shell words as {@link relaunchResumeAsAssignedSession} matches it.
+ * Returns `undefined` when the command resumes no such id.
+ */
+export function resumeByTranscriptPath(
+  command: string,
+  agentId: string | undefined,
+  sessionId: string,
+  transcriptPath: string
+): string | undefined {
+  if (!command || !agentId || !transcriptPath) return undefined;
+  const selector = findExactResumeSelector(command, agentId);
+  if (!selector || selector.sessionId !== sessionId) return undefined;
+  const { words, at, slotOffset, prefix, suffix } = selector;
+  words[at + slotOffset] = quoteAgentArgOptional(`${prefix}${transcriptPath}${suffix}`);
+  return words.join(" ");
+}
+
+/** The session id `command` resumes exactly, or undefined when it resumes none unambiguously. */
+export function exactResumeSessionId(
+  command: string,
+  agentId: string | undefined
+): string | undefined {
+  if (!command || !agentId) return undefined;
+  return findExactResumeSelector(command, agentId)?.sessionId;
+}
+
+interface ExactResumeSelector {
+  /** The command's shell words, for the caller to rewrite. */
+  words: string[];
+  /** Where the agent's resume args start among them. */
+  at: number;
+  shapeLength: number;
+  /** Which of those args holds the id, and the text fused around it. */
+  slotOffset: number;
+  prefix: string;
+  suffix: string;
+  sessionId: string;
+}
+
+/** The one resume of an exact session id in `command`, or nothing when it isn't unambiguous. */
+function findExactResumeSelector(
+  command: string,
+  agentId: string
+): ExactResumeSelector | undefined {
   const resume = getEffectiveAgentConfig(agentId)?.resume;
   if (resume?.kind !== "session-id") return undefined;
   const shape = resume.args(SESSION_ID_SLOT);
@@ -1731,14 +2031,7 @@ export function relaunchResumeAsAssignedSession(
     slotWord.slice(prefix.length, slotWord.length - suffix.length)
   );
   if (!ASSIGNABLE_SESSION_ID_PATTERN.test(sessionId)) return undefined;
-  const assigning = buildAssignedSessionIdArgs(agentId, sessionId);
-  if (!assigning?.length) return undefined;
-  words.splice(
-    at,
-    shape.length,
-    ...assigning.map((arg) => (isSafeShellOption(arg) ? arg : quoteAgentArgOptional(arg)))
-  );
-  return { sessionId, command: words.join(" ") };
+  return { words, at, shapeLength: shape.length, slotOffset, prefix, suffix, sessionId };
 }
 
 export interface BuildLaunchCommandFromFlagsOptions {

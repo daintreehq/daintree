@@ -1,5 +1,6 @@
 import { CHANNELS } from "../ipc/channels.js";
-import { typedBroadcast } from "../ipc/utils.js";
+import { typedBroadcastLatestWins } from "../ipc/utils.js";
+import { sendLatestWins } from "../window/frozenViewDelivery.js";
 import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { events } from "./events.js";
 import { classifyRun } from "./projectAgentCounts.js";
@@ -23,7 +24,7 @@ import {
   canopyRefinementFor,
   onCanopyRefinementsChanged,
 } from "./canopy/canopyRefinementSource.js";
-import { answerAttentionFor, onAnswerAttentionChanged } from "./runAnswerAttentionSource.js";
+import { decisionAttentionFor, onAnswerAttentionChanged } from "./runAnswerAttentionSource.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 
@@ -180,11 +181,12 @@ export class FleetSnapshotService {
   pushSnapshotTo(webContents: Electron.WebContents): void {
     if (webContents.isDestroyed()) return;
     if (this.lastBroadcast === null) return;
-    try {
-      webContents.send(CHANNELS.FLEET_SNAPSHOT_UPDATED, this.lastBroadcast);
-    } catch {
-      // Silently ignore send failures during window initialization/disposal.
-    }
+    sendLatestWins(
+      webContents,
+      CHANNELS.FLEET_SNAPSHOT_UPDATED,
+      CHANNELS.FLEET_SNAPSHOT_UPDATED,
+      this.lastBroadcast
+    );
   }
 
   /** {@link pushSnapshotTo} for a view attached over a link. */
@@ -307,6 +309,7 @@ export class FleetSnapshotService {
         x.handbackReport !== y.handbackReport ||
         x.quietSince !== y.quietSince ||
         x.answerAttention !== y.answerAttention ||
+        x.questionAttention !== y.questionAttention ||
         !sameCanopyRefinement(x.canopy, y.canopy)
       ) {
         return false;
@@ -363,7 +366,7 @@ export class FleetSnapshotService {
         const handBack = this.handBacks?.getRecord(terminal.id, terminal.spawnedAt);
         const wait = this.waitFor(terminal, readStartedAt);
         const canopy = canopyRefinementFor(terminal.id, terminal.spawnedAt);
-        const answerAttention = answerAttentionFor(terminal.id);
+        const decisions = decisionAttentionFor(terminal.id);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -408,7 +411,7 @@ export class FleetSnapshotService {
             ? { handbackReport: "needs-you" as const }
             : {}),
           ...(canopy !== undefined ? { canopy } : {}),
-          ...(answerAttention !== undefined ? { answerAttention } : {}),
+          ...decisions,
           // Stall cue: only for a working run, and only once the CURRENT
           // working stint has been silent past the threshold. Anchored on the
           // later of last output, the transition into this state and the
@@ -501,22 +504,7 @@ export class FleetSnapshotService {
   private onDecorationsChanged(): void {
     const previous = this.lastBroadcast;
     if (previous?.degraded === true) {
-      const runs = previous.runs.map((run) => {
-        const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
-        const wait =
-          run.wait === undefined ? undefined : this.handBacks?.getWait(run.runId, run.spawnedAt);
-        const answerAttention = answerAttentionFor(run.runId);
-        const rest = { ...run };
-        delete rest.canopy;
-        delete rest.wait;
-        delete rest.answerAttention;
-        return {
-          ...rest,
-          ...(wait !== undefined ? { wait } : {}),
-          ...(canopy !== undefined ? { canopy } : {}),
-          ...(answerAttention !== undefined ? { answerAttention } : {}),
-        };
-      });
+      const runs = this.redecorate(previous.runs);
       if (!this.runsEqual(runs, previous.runs)) {
         this.publish({ ...previous, runs, changedAt: Date.now() });
       }
@@ -524,12 +512,53 @@ export class FleetSnapshotService {
     this.debouncedCompute();
   }
 
+  /**
+   * Retained rows with the decorations as they stand now. A decoration that
+   * moved while the fleet was healthy only scheduled a read, so a read that
+   * then degrades must not carry the rows it moved on.
+   */
+  private redecorate(previous: readonly FleetRunRow[]): FleetRunRow[] {
+    // The user's park and snooze as they stand too: a fresh Decisions count
+    // beside a shelf the rows predate would raise a run the user set aside.
+    const parks = this.runAttention?.getAll();
+    const snoozes = this.runAttention?.getActiveSnoozes();
+    return previous.map((run) => {
+      const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
+      const wait =
+        run.wait === undefined ? undefined : this.handBacks?.getWait(run.runId, run.spawnedAt);
+      const park = this.runAttention ? parks?.get(run.runId) : run.park;
+      const snooze = this.runAttention ? snoozes?.get(run.runId) : run.snooze;
+      const rest = { ...run };
+      delete rest.canopy;
+      delete rest.wait;
+      delete rest.answerAttention;
+      delete rest.questionAttention;
+      delete rest.park;
+      delete rest.snooze;
+      return {
+        ...rest,
+        ...(park !== undefined ? { park } : {}),
+        ...(snooze !== undefined ? { snooze } : {}),
+        ...(wait !== undefined ? { wait } : {}),
+        ...(canopy !== undefined ? { canopy } : {}),
+        ...decisionAttentionFor(run.runId),
+      };
+    });
+  }
+
   private publishDegraded(): void {
     const previous = this.lastBroadcast;
-    if (previous?.degraded === true) return;
+    const runs = previous === null ? [] : this.redecorate(previous.runs);
+    const moved = previous !== null && !this.runsEqual(runs, previous.runs);
+    // Each failed read while degraded still carries a shelf released or lapsed
+    // since, and nothing else when nothing moved.
+    if (previous?.degraded === true) {
+      if (moved) this.publish({ ...previous, runs, changedAt: Date.now() });
+      return;
+    }
     this.publish({
-      runs: previous?.runs ?? [],
-      changedAt: previous?.changedAt ?? Date.now(),
+      runs,
+      changedAt: moved || previous === null ? Date.now() : previous.changedAt,
       degraded: true,
       lastSuccessfulAt: this.lastSuccessfulReadAt,
     });
@@ -537,7 +566,8 @@ export class FleetSnapshotService {
 
   private publish(snapshot: FleetSnapshot): void {
     this.lastBroadcast = snapshot;
-    typedBroadcast<"fleet:snapshot-updated">(CHANNELS.FLEET_SNAPSHOT_UPDATED, snapshot);
+    // A whole fleet each time, so a frozen view needs only the newest (#17038).
+    typedBroadcastLatestWins<"fleet:snapshot-updated">(CHANNELS.FLEET_SNAPSHOT_UPDATED, snapshot);
     // Snapshot the set so a listener that unsubscribes mid-delivery can't skip
     // a sibling, and isolate each one: a throwing listener must not be able to
     // turn a healthy read into the degraded path in `computeOnce`'s catch.
@@ -560,6 +590,6 @@ function sameCanopyRefinement(
   if (a.kind !== b.kind || a.quote !== b.quote || a.readAt !== b.readAt) return false;
   if (a.kind === "stalled" && b.kind === "stalled") return a.stalledSince === b.stalledSince;
   if (a.kind === "not-asking" && b.kind === "not-asking") return a.seen === b.seen;
-  if (a.kind === "asked" && b.kind === "asked") return a.seen === b.seen;
+  if (a.kind === "asked" && b.kind === "asked") return a.seen === b.seen && a.ask === b.ask;
   return true;
 }

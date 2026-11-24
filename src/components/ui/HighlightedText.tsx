@@ -53,6 +53,7 @@ export function HighlightedText({ text, indices }: HighlightedTextProps) {
       // `leading-tight` inside `truncate` clips anything lower.
       <span
         key={i}
+        data-highlight=""
         className="bg-overlay-medium text-text-primary underline decoration-text-secondary decoration-1 underline-offset-2"
       >
         {text.substring(start, end + 1)}

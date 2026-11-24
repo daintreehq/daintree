@@ -187,15 +187,45 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toMatchObject({ tier: "core", bypassPermissions: false });
   });
 
-  it("persists each touched key under helpAssistant.<field>", async () => {
+  it("persists every touched key in one helpAssistant write (#17026)", async () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
     await handler(null, { docSearch: false, bypassPermissions: true });
 
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.docSearch", false);
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.bypassPermissions", true);
-    expect(storeMock.set).toHaveBeenCalledTimes(2);
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      docSearch: false,
+      bypassPermissions: true,
+    });
+  });
+
+  it("merges a multi-field patch over the stored settings, keeping fields it doesn't name (#17026)", async () => {
+    storeMock.get.mockReturnValue({
+      docSearch: true,
+      tier: "core",
+      agentId: "claude",
+      modelIds: { claude: "opus" },
+    } as unknown as Partial<HelpAssistantSettings>);
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    await handler(null, {
+      docSearch: false,
+      tier: "full",
+      auditRetention: 30,
+      idleHibernateMinutes: 15,
+      modelIds: { codex: "gpt-6-sol" },
+      runbookSearch: "on" as unknown as boolean,
+    });
+
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      docSearch: false,
+      tier: "full",
+      agentId: "claude",
+      auditRetention: 30,
+      idleHibernateMinutes: 15,
+      modelIds: { claude: "opus", codex: "gpt-6-sol" },
+    });
   });
 
   it("persists loadGlobalHooksAndServers and rejects a non-boolean value", async () => {
@@ -203,7 +233,10 @@ describe("registerHelpAssistantHandlers", () => {
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
     await handler(null, { loadGlobalHooksAndServers: true });
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.loadGlobalHooksAndServers", true);
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ loadGlobalHooksAndServers: true })
+    );
 
     storeMock.set.mockClear();
     await handler(null, { loadGlobalHooksAndServers: "yes" as unknown as boolean });
@@ -222,7 +255,10 @@ describe("registerHelpAssistantHandlers", () => {
     const off = onHelpAssistantSettingsChanged(() => heard++);
     try {
       await set(null, { acceptRemoteControl: true });
-      expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.acceptRemoteControl", true);
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "helpAssistant",
+        expect.objectContaining({ acceptRemoteControl: true })
+      );
       expect(heard).toBe(1);
 
       storeMock.set.mockClear();
@@ -253,11 +289,17 @@ describe("registerHelpAssistantHandlers", () => {
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
     await handler(null, { daintreeConfirmations: "always-ask" });
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmations", "always-ask");
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ daintreeConfirmations: "always-ask" })
+    );
 
     storeMock.set.mockClear();
     await handler(null, { daintreeConfirmations: "never-ask" });
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmations", "never-ask");
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ daintreeConfirmations: "never-ask" })
+    );
 
     storeMock.set.mockClear();
     await handler(null, { daintreeConfirmations: "skip" as unknown as "inherit" });
@@ -272,17 +314,52 @@ describe("registerHelpAssistantHandlers", () => {
       daintreeConfirmations: "ask-except",
       daintreeConfirmationsExcept: ["host.settings", "worktree.delete", "worktree.deleteOwned"],
     });
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmations", "ask-except");
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.daintreeConfirmationsExcept", [
-      "worktree.deleteOwned",
-      "host.settings",
-    ]);
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["worktree.deleteOwned", "host.settings"],
+    });
 
     storeMock.set.mockClear();
     await handler(null, {
       daintreeConfirmationsExcept: "worktree.deleteOwned" as unknown as string[],
     });
     expect(storeMock.set).not.toHaveBeenCalled();
+  });
+
+  it("stops a tick offered before a hand change from landing (#16752)", async () => {
+    const { prepareAssistantDelegation } =
+      await import("../../../services/mcp-server/assistantConfirmationsPreference.js");
+    let stored: Partial<HelpAssistantSettings> = {
+      daintreeConfirmations: "ask-except",
+      daintreeConfirmationsExcept: ["host.settings"],
+    };
+    storeMock.get.mockImplementation(((key: string) =>
+      key === "helpAssistant" ? stored : undefined) as never);
+    storeMock.set.mockImplementation(((_key: string, value: Partial<HelpAssistantSettings>) => {
+      stored = value;
+    }) as never);
+    registerHelpAssistantHandlers();
+    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+    // A hand write before the approval came before the tick.
+    const before = prepareAssistantDelegation(null, "worktree.deleteOwned");
+    await handler(null, { daintreeConfirmations: "ask-except" });
+    before?.approved();
+    expect(before?.commit()).toBe(true);
+
+    // One while the approved call runs is newer, even one that changes nothing.
+    const during = prepareAssistantDelegation(null, "worktree.retireOwned");
+    during?.approved();
+    await handler(null, { daintreeConfirmationsExcept: ["worktree.deleteOwned", "host.settings"] });
+    expect(during?.commit()).toBe(false);
+    expect(stored.daintreeConfirmationsExcept).toEqual(["worktree.deleteOwned", "host.settings"]);
+
+    // Any other setting isn't a choice about confirmations.
+    const unrelated = prepareAssistantDelegation(null, "worktree.retireOwned");
+    unrelated?.approved();
+    await handler(null, { docSearch: false });
+    expect(unrelated?.commit()).toBe(true);
+    storeMock.set.mockReset();
   });
 
   it("reads a stored list back as the delegable ids alone (#16752)", async () => {
@@ -322,8 +399,14 @@ describe("registerHelpAssistantHandlers", () => {
     await handler(null, { tier: "full" });
     await handler(null, { tier: "core" });
 
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "full");
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.tier", "core");
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ tier: "full" })
+    );
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ tier: "core" })
+    );
     expect(storeMock.set).toHaveBeenCalledTimes(2);
   });
 
@@ -348,7 +431,9 @@ describe("registerHelpAssistantHandlers", () => {
 
     await handler(null, { docSearch: undefined, daintreeControl: false });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.daintreeControl", false);
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      daintreeControl: false,
+    });
   });
 
   it("rejects non-object payloads silently", async () => {
@@ -381,9 +466,18 @@ describe("registerHelpAssistantHandlers", () => {
     await handler(null, { auditRetention: 7 });
     await handler(null, { auditRetention: 30 });
 
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.auditRetention", 0);
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.auditRetention", 7);
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.auditRetention", 30);
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ auditRetention: 0 })
+    );
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ auditRetention: 7 })
+    );
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ auditRetention: 30 })
+    );
   });
 
   it("applies the new retention window to the MCP audit rings on a valid write (#10776)", async () => {
@@ -447,7 +541,9 @@ describe("registerHelpAssistantHandlers", () => {
     registerHelpAssistantHandlers();
     const set = ipcMainMock._handlers.get(SET_CHANNEL)!;
     await set(null, { runbookSearch: false });
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.runbookSearch", false);
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      runbookSearch: false,
+    });
 
     storeMock.get.mockReturnValue({ runbookSearch: false });
     const get = ipcMainMock._handlers.get(GET_CHANNEL)!;
@@ -466,7 +562,7 @@ describe("registerHelpAssistantHandlers", () => {
       unknownTool: true,
     } as unknown as Partial<HelpAssistantSettings>);
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.docSearch", false);
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", { docSearch: false });
   });
 
   it("falls back to defaults when stored data is corrupted", async () => {
@@ -520,12 +616,30 @@ describe("registerHelpAssistantHandlers", () => {
     }
 
     expect(storeMock.set).toHaveBeenCalledTimes(6);
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 0);
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 5);
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 15);
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 30);
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 60);
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.idleHibernateMinutes", 120);
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ idleHibernateMinutes: 0 })
+    );
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ idleHibernateMinutes: 5 })
+    );
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ idleHibernateMinutes: 15 })
+    );
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ idleHibernateMinutes: 30 })
+    );
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ idleHibernateMinutes: 60 })
+    );
+    expect(storeMock.set).toHaveBeenCalledWith(
+      "helpAssistant",
+      expect.objectContaining({ idleHibernateMinutes: 120 })
+    );
   });
 
   it("loads a valid stored idleHibernateMinutes from the store", async () => {
@@ -554,10 +668,9 @@ describe("registerHelpAssistantHandlers", () => {
 
     await handler(null, { customArgs: "--model sonnet" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
-      "helpAssistant.customArgs",
-      "--model sonnet"
-    );
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      customArgs: "--model sonnet",
+    });
   });
 
   it("normalizes newlines to spaces in customArgs", async () => {
@@ -566,10 +679,9 @@ describe("registerHelpAssistantHandlers", () => {
 
     await handler(null, { customArgs: "--model sonnet\n--verbose" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
-      "helpAssistant.customArgs",
-      "--model sonnet --verbose"
-    );
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      customArgs: "--model sonnet --verbose",
+    });
   });
 
   it("strips control characters from customArgs", async () => {
@@ -578,10 +690,9 @@ describe("registerHelpAssistantHandlers", () => {
 
     await handler(null, { customArgs: "--model\x00sonnet\x07" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
-      "helpAssistant.customArgs",
-      "--modelsonnet"
-    );
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      customArgs: "--modelsonnet",
+    });
   });
 
   it("rejects customArgs containing shell metacharacters", async () => {
@@ -645,10 +756,9 @@ describe("registerHelpAssistantHandlers", () => {
 
     await handler(null, { customArgs: "--prompt-suffix $TODAY" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith(
-      "helpAssistant.customArgs",
-      "--prompt-suffix $TODAY"
-    );
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      customArgs: "--prompt-suffix $TODAY",
+    });
   });
 
   it("rejects metacharacters past the 10000-char cap (check before truncation)", async () => {
@@ -696,8 +806,8 @@ describe("registerHelpAssistantHandlers", () => {
     await handler(null, { customArgs: "x".repeat(10500) });
 
     const call = storeMock.set.mock.calls[0];
-    expect(call?.[0]).toBe("helpAssistant.customArgs");
-    expect((call?.[1] as string).length).toBe(10000);
+    expect(call?.[0]).toBe("helpAssistant");
+    expect((call?.[1] as HelpAssistantSettings).customArgs.length).toBe(10000);
   });
 
   it("sanitizes corrupted stored customArgs back to empty string default", async () => {
@@ -729,8 +839,10 @@ describe("registerHelpAssistantHandlers", () => {
   it("persists a model for one agent as a whole-map write under a fixed path", async () => {
     await setModelIds({ claude: "claude-sonnet-4-6" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
-      claude: "claude-sonnet-4-6",
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      modelIds: {
+        claude: "claude-sonnet-4-6",
+      },
     });
   });
 
@@ -739,10 +851,12 @@ describe("registerHelpAssistantHandlers", () => {
 
     await setModelIds({ codex: "gpt-6-astra" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
-      claude: "opus",
-      gemini: "",
-      codex: "gpt-6-astra",
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      modelIds: {
+        claude: "opus",
+        gemini: "",
+        codex: "gpt-6-astra",
+      },
     });
   });
 
@@ -750,9 +864,7 @@ describe("registerHelpAssistantHandlers", () => {
     let stored: Partial<HelpAssistantSettings> | undefined = { modelIds: { claude: "opus" } };
     storeMock.get.mockImplementation(() => stored);
     storeMock.set.mockImplementation((key: string, value: unknown) => {
-      if (key === "helpAssistant.modelIds") {
-        stored = { ...stored, modelIds: value as Record<string, string> };
-      }
+      if (key === "helpAssistant") stored = value as Partial<HelpAssistantSettings>;
     });
 
     await setModelIds({ codex: "gpt-6-sol" });
@@ -777,8 +889,10 @@ describe("registerHelpAssistantHandlers", () => {
   it("persists an empty model so the agent launches with the CLI default", async () => {
     await setModelIds({ claude: "" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
-      claude: "",
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      modelIds: {
+        claude: "",
+      },
     });
   });
 
@@ -787,8 +901,10 @@ describe("registerHelpAssistantHandlers", () => {
 
     await setModelIds({ claude: null });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
-      codex: "gpt-6-sol",
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      modelIds: {
+        codex: "gpt-6-sol",
+      },
     });
   });
 
@@ -805,16 +921,20 @@ describe("registerHelpAssistantHandlers", () => {
   it("keeps a dotted agent ID as a literal key", async () => {
     await setModelIds({ "my.agent": "custom-model" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
-      "my.agent": "custom-model",
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      modelIds: {
+        "my.agent": "custom-model",
+      },
     });
   });
 
   it("trims surrounding whitespace from a model", async () => {
     await setModelIds({ codex: "  gpt-5.5  " });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
-      codex: "gpt-5.5",
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      modelIds: {
+        codex: "gpt-5.5",
+      },
     });
   });
 
@@ -836,8 +956,10 @@ describe("registerHelpAssistantHandlers", () => {
     const exact = "m".repeat(200);
     await setModelIds({ claude: exact });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
-      claude: exact,
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      modelIds: {
+        claude: exact,
+      },
     });
   });
 
@@ -874,9 +996,11 @@ describe("registerHelpAssistantHandlers", () => {
 
     await setModelIds({ claude: "$(whoami)", codex: "gpt-6-sol" });
 
-    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant.modelIds", {
-      claude: "opus",
-      codex: "gpt-6-sol",
+    expect(storeMock.set).toHaveBeenCalledExactlyOnceWith("helpAssistant", {
+      modelIds: {
+        claude: "opus",
+        codex: "gpt-6-sol",
+      },
     });
   });
 
@@ -884,8 +1008,8 @@ describe("registerHelpAssistantHandlers", () => {
     await setModelIds({ claude: "m".repeat(250) });
 
     const call = storeMock.set.mock.calls[0];
-    expect(call?.[0]).toBe("helpAssistant.modelIds");
-    expect((call?.[1] as Record<string, string>).claude.length).toBe(200);
+    expect(call?.[0]).toBe("helpAssistant");
+    expect((call?.[1] as HelpAssistantSettings).modelIds.claude!.length).toBe(200);
   });
 
   it("ignores the legacy scalar modelId in a patch", async () => {

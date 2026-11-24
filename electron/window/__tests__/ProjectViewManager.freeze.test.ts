@@ -117,6 +117,20 @@ vi.mock("../../services/ProjectStore.js", () => ({
   projectStore: { getProjectById: vi.fn(() => null) },
 }));
 
+// Holding for a frozen view is frozenViewDelivery.test.ts's subject; here every
+// latest-wins push is a plain send, as it is to a view that isn't frozen.
+vi.mock("../frozenViewDelivery.js", () => ({
+  sendLatestWins: (
+    wc: { isDestroyed: () => boolean; send: (channel: string, ...args: unknown[]) => void },
+    _key: string,
+    channel: string,
+    ...args: unknown[]
+  ) => {
+    if (!wc.isDestroyed()) wc.send(channel, ...args);
+  },
+  releaseHeldSends: vi.fn(),
+}));
+
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
   purgeMemoryWebContents: vi.fn().mockResolvedValue(false),
   readJsHeapUsedBytes: vi.fn().mockResolvedValue(null),
@@ -139,10 +153,16 @@ import {
   registerCachedViewWebContents,
   unregisterCachedViewWebContents,
 } from "../webContentsRegistry.js";
+import { releaseHeldSends } from "../frozenViewDelivery.js";
 import {
   _resetDictationViewHoldsForTests,
   holdDictationView,
 } from "../../services/voice/dictationViewHold.js";
+import {
+  BulkWorktreeRunRegistry,
+  _resetBulkWorktreeRunHoldsForTests,
+} from "../../services/BulkWorktreeRunRegistry.js";
+import type { BulkWorktreeRunSnapshot } from "../../../shared/types/ipc/bulkWorktreeRuns.js";
 import {
   CACHED_VIEW_FLUSH_TIMEOUT_MS,
   _resetCachedViewFlushForTests,
@@ -172,6 +192,28 @@ function createMockWindow() {
       removeChildView: vi.fn(),
     },
     webContents: createMockWebContents(),
+  };
+}
+
+function liveBulkRun(runId: string): BulkWorktreeRunSnapshot {
+  return {
+    runId,
+    projectId: "proj-a",
+    mode: "issue",
+    phase: "running",
+    items: [{ number: 1, title: "Issue 1", stage: "worktree-creating", attempt: 1 }],
+    startedAt: 0,
+    updatedAt: 0,
+    controllable: true,
+  };
+}
+
+/** Holds the view as a live bulk run does; the returned function ends the run. */
+function runBulkCreationIn(webContentsId: number): () => void {
+  const registry = new BulkWorktreeRunRegistry({ broadcast: () => {}, sendCommand: () => true });
+  registry.publish(webContentsId, "proj-a", liveBulkRun("run-1"));
+  return () => {
+    registry.publish(webContentsId, "proj-a", { ...liveBulkRun("run-1"), phase: "done" });
   };
 }
 
@@ -282,6 +324,35 @@ describe("ProjectViewManager — efficiency freeze", () => {
     // The renderer schedules its idle GC on that signal (lesson #4684).
     const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder[0];
     expect(cachedSignalOrder(initialWc)).toBeLessThan(freezeOrder);
+  });
+
+  describe("a view running a bulk worktree creation (#17085)", () => {
+    afterEach(() => _resetBulkWorktreeRunHoldsForTests());
+
+    it("isn't frozen as the user leaves it", async () => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      vi.mocked(freezeWebContents).mockClear();
+      runBulkCreationIn(initialWc.id);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+    });
+
+    it("is skipped by the batch freeze, and frozen once the run ends", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const endRun = runBulkCreationIn(initialWc.id);
+
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+
+      // The run's end freezes it on its own, with no sweep to wait for.
+      endRun();
+      vi.advanceTimersByTime(0);
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    });
   });
 
   describe("a view a dictation still needs (#14773)", () => {
@@ -474,26 +545,15 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalledWith(initialWc);
   });
 
-  it("resets the CPU rate BEFORE unfreezing on warm reactivation", async () => {
+  it("unfreezes on warm reactivation without a CPU-rate reset (#17039)", async () => {
     await manager.switchTo("proj-b", "/path/b");
     vi.mocked(unthrottleCpuWebContents).mockClear();
     vi.mocked(unfreezeWebContents).mockClear();
 
     await manager.switchTo("proj-a", "/path/a");
 
-    // The reset only acts on an already-attached debugger session, and the
-    // thaw attaches one — so the reset has to go first or it always fires.
-    const resetIdx = vi
-      .mocked(unthrottleCpuWebContents)
-      .mock.calls.findIndex((call) => (call[0] as unknown) === initialWc);
-    const unfreezeIdx = vi
-      .mocked(unfreezeWebContents)
-      .mock.calls.findIndex((call) => (call[0] as unknown) === initialWc);
-    expect(resetIdx).toBeGreaterThanOrEqual(0);
-    expect(unfreezeIdx).toBeGreaterThanOrEqual(0);
-    const resetOrder = vi.mocked(unthrottleCpuWebContents).mock.invocationCallOrder[resetIdx]!;
-    const unfreezeOrder = vi.mocked(unfreezeWebContents).mock.invocationCallOrder[unfreezeIdx]!;
-    expect(resetOrder).toBeLessThan(unfreezeOrder);
+    expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
+    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalled();
   });
 
   it("warm reactivation clears the cached mark", async () => {
@@ -1536,6 +1596,20 @@ describe("ProjectViewManager — background resize forwarding", () => {
     const sends = backgroundResizeSends(initialWc);
     expect(sends).toHaveLength(1);
     expect(sends[0][1]).toEqual({ width: 1280, height: 800 });
+  });
+
+  it("hands a returning view what was held for it once its cached mark is gone (#17038)", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    vi.mocked(releaseHeldSends).mockClear();
+    vi.mocked(unregisterCachedViewWebContents).mockClear();
+
+    await manager.switchTo("proj-a", "/path/a");
+
+    expect(releaseHeldSends).toHaveBeenCalledWith(initialWc);
+    expect(unregisterCachedViewWebContents).toHaveBeenCalledWith(initialWc.id);
+    expect(vi.mocked(unregisterCachedViewWebContents).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(releaseHeldSends).mock.invocationCallOrder[0]!
+    );
   });
 
   it("skips destroyed webContents without throwing", async () => {

@@ -8,7 +8,6 @@ const SIDEBAR_PATH = path.resolve(__dirname, "../Sidebar.tsx");
 const APP_PATH = path.resolve(__dirname, "../../../App.tsx");
 const TOOLBAR_PATH = path.resolve(__dirname, "../Toolbar.tsx");
 const TERMINAL_DOCK_PATH = path.resolve(__dirname, "../TerminalDockRegion.tsx");
-const PORTAL_DOCK_PATH = path.resolve(__dirname, "../../Portal/PortalDock.tsx");
 
 describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", () => {
   let source: string;
@@ -133,7 +132,7 @@ describe("AppLayout sidebar visibility — issue #5023 hide on welcome screen", 
     expect(ts.isJsxElement(container)).toBe(true);
     expect(ts.isParenthesizedExpression(container.parent)).toBe(true);
     expect(ts.isReturnStatement(container.parent.parent)).toBe(true);
-    const siblings = selfClosing("ImportConfigDialog");
+    const siblings = selfClosing("ImportConfigDialogGate");
     expect(siblings).toHaveLength(1);
     expect(siblings[0]!.parent).toBe(container);
     expect(source.match(/<ProjectDialogHost\b/g)).toHaveLength(1);
@@ -239,33 +238,17 @@ describe("AppLayout assistant push sidebar — issue #6619", () => {
     expect(source).toContain("[showAssistant]");
   });
 
-  it("publishes --portal-right-offset as portal-only (issue #6800)", () => {
-    // The Assistant is a flex sibling below the toolbar — it doesn't overlay
-    // the toolbar. Toolbar dropdowns must dodge the Portal (body-portaled web
-    // chat) but not the Assistant. The previous shared-max value pushed
-    // dropdowns left by Assistant width even when the Portal was closed.
-    expect(source).toMatch(/setProperty\("--portal-right-offset", `\$\{portalOffset\}px`\)/);
-    // The portal-only var must not be re-conflated with Assistant width.
-    expect(source).not.toMatch(/setProperty\("--portal-right-offset",[^)]*Math\.max\(portalOffset/);
-  });
-
-  it("publishes --right-obstruction-offset as max(portal, assistant) (issue #6629)", () => {
-    // Portal and Assistant are mutually exclusive; max(portal, assistant)
-    // rather than their sum keeps any overlap from double-counting. Toaster, popovers,
-    // ReEntrySummary, GettingStartedChecklist, and the ThemeBrowser overlay
-    // all read this var — they're body-portaled fixed elements that would
-    // otherwise be hidden behind the wider of the two panels.
-    expect(source).toContain("Math.max(portalOffset, effectiveAssistantWidth)");
+  it("publishes --right-obstruction-offset as the Assistant's width (issue #6629)", () => {
+    // Toaster, popovers, ReEntrySummary, GettingStartedChecklist, and the
+    // ThemeBrowser overlay all read this var — they're body-portaled fixed
+    // elements that would otherwise be hidden behind the Assistant.
     expect(source).toMatch(
-      /setProperty\("--right-obstruction-offset", `\$\{obstructionOffset\}px`\)/
+      /setProperty\("--right-obstruction-offset", `\$\{effectiveAssistantWidth\}px`\)/
     );
-    expect(source).toMatch(/\[layout\.portalOpen, layout\.portalWidth, effectiveAssistantWidth\]/);
-    // The old sum semantics must not be reintroduced.
-    expect(source).not.toMatch(/portalOffset \+ effectiveAssistantWidth/);
+    expect(source).toContain("[effectiveAssistantWidth]");
   });
 
-  it("removes both right-edge vars on cleanup", () => {
-    expect(source).toContain('removeProperty("--portal-right-offset")');
+  it("removes the right-edge var on cleanup", () => {
     expect(source).toContain('removeProperty("--right-obstruction-offset")');
   });
 });
@@ -427,51 +410,6 @@ describe("Sidebar unmount-mid-drag safety net — issue #7627", () => {
     expect(source).toMatch(/const onResizeEndRef = useRef\(onResizeEnd\)/);
     expect(source).toMatch(
       /if \(isResizingRef\.current\)[\s\S]{0,120}onResizeEndRef\.current\?\.\(\)/
-    );
-  });
-});
-
-describe("AppLayout portal viewport coverage — issue #6629", () => {
-  let source: string;
-
-  beforeEach(async () => {
-    source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
-  });
-
-  it("renders PortalDock via body portal so it covers the full viewport width", () => {
-    // Issue #6629: when the Assistant became a flex sibling of <main> in
-    // PR #6620, the Portal (rendered as `absolute right-0` inside <main>)
-    // stopped at the Assistant's left edge. Body-portaling with `position:
-    // fixed` lets the Portal escape <main>'s width and span the right edge.
-    expect(source).toMatch(/\{layout\.portalOpen &&\s*\n\s*createPortal\(/);
-    // Issue #11893: the top edge is driven by OVERLAY_TOP_OFFSET (toolbar height
-    // plus the measured global-banner height) rather than a static top-12, which
-    // a banner-shifted toolbar painted over.
-    expect(source).toMatch(
-      /<div(?=[^>]*className=\{cn\(\s*"(?=[^"]*\bfixed\b)(?=[^"]*\bright-0\b)(?=[^"]*\bbottom-0\b)(?=[^"]*z-\[var\(--z-portal\)\])[^"]*",\s*OVERLAY_SHEET_SHADOW_CLASS\s*\)\})(?=[^>]*style=\{\{[\s\S]{0,200}?\btop:\s*OVERLAY_TOP_OFFSET\b)[^>]*>[\s\S]{0,100}?<LazyPortalDock\s*\/>/
-    );
-    expect(source).not.toContain("fixed top-12 right-0 bottom-0");
-    // The portal target must be document.body to escape the inert subtrees and
-    // the <main> width constraint. A different target would silently reintroduce
-    // the bug.
-    expect(source).toMatch(
-      /\{layout\.portalOpen &&\s*\n\s*createPortal\([\s\S]+?<LazyPortalDock \/>[\s\S]+?document\.body\s*\)/
-    );
-    // The old in-<main> absolute wrapper must not be reintroduced.
-    expect(source).not.toContain(
-      '"absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-border-default"'
-    );
-  });
-
-  it("disables the Portal chrome when a full-screen overlay is open", () => {
-    // Body-portaling moved the PortalDock out of the inert main-content
-    // wrapper, so the inert prop must be applied directly to the new wrapper.
-    // Without this, the Portal tabs / toolbar / resize handle remain clickable
-    // through the ThemeBrowser overlay (Portal is --z-portal, ThemeBrowser is --z-panel).
-    // Since #9558 the same guard also covers the plugin-manager overlay via the
-    // shared `chromeInert` signal.
-    expect(source).toMatch(
-      /\{layout\.portalOpen &&\s*\n\s*createPortal\([\s\S]+?chromeInert \? \{ inert: true \} : \{\}[\s\S]+?<LazyPortalDock \/>/
     );
   });
 });
@@ -835,7 +773,7 @@ describe("AppLayout global banner mount — issue #9530", () => {
     expect(source).toContain("void preloadGlobalBannerCoordinator();");
   });
 
-  it("mounts the banner inside the flex column, after PortalVisibilityController and before the inert toolbar wrapper", () => {
+  it("mounts the banner inside the flex column, after the close-guard hosts and before the inert toolbar wrapper", () => {
     // Issue #9530: mounting the coordinator as a block-flow sibling above the
     // 100vh AppLayout root overflowed the viewport and clipped the dock. The
     // banner must be a direct child of the h-screen flex column so its
@@ -844,7 +782,7 @@ describe("AppLayout global banner mount — issue #9530", () => {
     // the direct flex child carrying shrink-0 — the ordering invariant is
     // unchanged, and the wrapper must hold the coordinator and nothing else.
     expect(source).toMatch(
-      /<PortalVisibilityController \/>\s*(?:\{\/\*[\s\S]*?\*\/\}\s*)?<div(?=[^>]*className="shrink-0")[^>]*>\s*<Suspense fallback=\{null\}>\s*<LazyGlobalBannerCoordinator \/>\s*<\/Suspense>\s*<\/div>\s*<div \{\.\.\.\(chromeInert \? \{ inert: true \}/
+      /<PluginPanelCloseGuardHost \/>\s*(?:\{\/\*[\s\S]*?\*\/\}\s*)?<div(?=[^>]*className="shrink-0")[^>]*>\s*<Suspense fallback=\{null\}>\s*<LazyGlobalBannerCoordinator \/>\s*<\/Suspense>\s*<\/div>\s*<div \{\.\.\.\(chromeInert \? \{ inert: true \}/
     );
   });
 });
@@ -1014,27 +952,6 @@ describe("ARIA page landmarks — issue #5416", () => {
       expect(source).toMatch(/setVisibility\("dock", hasDocked\)/);
     });
   });
-
-  describe("PortalDock <aside>", () => {
-    let source: string;
-    beforeEach(async () => {
-      source = await fs.readFile(PORTAL_DOCK_PATH, "utf-8");
-    });
-
-    it("uses an <aside> region landmark with an accessible name", () => {
-      expect(source).toMatch(/<aside[\s\S]*?aria-label="Portal"/);
-      expect(source).toMatch(/<aside[\s\S]*?role="region"/);
-    });
-
-    it("keeps tabIndex=-1 so the macro-focus cycler can target it", () => {
-      expect(source).toMatch(/<aside[\s\S]*?tabIndex=\{-1\}/);
-    });
-
-    it("links the resize separator to the dock it resizes via aria-controls", () => {
-      expect(source).toMatch(/<aside[\s\S]*?id=\{PORTAL_DOCK_ID\}/);
-      expect(source).toMatch(/<ResizeHandle[\s\S]*?aria-controls=\{PORTAL_DOCK_ID\}/);
-    });
-  });
 });
 
 describe("AppLayout theme browser mount gate — issue #5738", () => {
@@ -1045,8 +962,7 @@ describe("AppLayout theme browser mount gate — issue #5738", () => {
   });
 
   it("claims the viewport for the sheet's whole presence, under its own id (issue #15029)", () => {
-    // Settings no longer collapses the Portal, so leaving Settings for the
-    // browser must not leave a gap with no claim while the lazy ThemeBrowser
+    // Leaving Settings for the browser must not leave a gap with no claim while the lazy ThemeBrowser
     // chunk loads. The claim follows the presence the store flag drives, and
     // never shares ThemeBrowser's id, since one holder's cleanup would release
     // the other's.
@@ -1190,25 +1106,16 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
   });
 
   it("anchors ThemeBrowser right edge via shared --right-obstruction-offset (issues #6629, #6800)", () => {
-    // Both the Portal and the Assistant occupy the right edge of the viewport.
-    // ThemeBrowser must step left of whichever is wider — and previously, when
-    // only the Assistant was open, ThemeBrowser used `right: "0px"` and
-    // overlapped the panel. Routing through the shared CSS var fixes both
-    // cases with a single source of truth. The var was renamed from
-    // --portal-right-offset to --right-obstruction-offset in #6800 so that
-    // toolbar dropdowns can keep using --portal-right-offset (portal-only)
-    // without dodging the Assistant.
+    // The Assistant occupies the right edge of the viewport. ThemeBrowser must
+    // step left of it — previously it used `right: "0px"` and overlapped the
+    // panel. Routing through the shared CSS var keeps a single source of truth.
     expect(source).toContain('right: "var(--right-obstruction-offset, 0px)"');
-    // The old hand-computed ternary must not be reintroduced.
-    expect(source).not.toMatch(/right: layout\.portalOpen \? `\$\{layout\.portalWidth\}px` :/);
   });
 });
 
 describe("Right-obstruction CSS var consumers (issue #6800)", () => {
   // Source-scan guard: every fixed body-portaled consumer that should dodge
-  // both Portal and Assistant must read --right-obstruction-offset, NOT
-  // --portal-right-offset. The latter is portal-only and reserved for
-  // toolbar dropdowns (FixedDropdown).
+  // the Assistant must read --right-obstruction-offset.
   const consumers = [
     {
       name: "popover collision boundary",
@@ -1226,10 +1133,9 @@ describe("Right-obstruction CSS var consumers (issue #6800)", () => {
   ];
 
   for (const { name, file } of consumers) {
-    it(`${name} reads --right-obstruction-offset, not --portal-right-offset`, async () => {
+    it(`${name} reads --right-obstruction-offset`, async () => {
       const source = await fs.readFile(file, "utf-8");
       expect(source).toContain("--right-obstruction-offset");
-      expect(source).not.toContain("--portal-right-offset");
     });
   }
 });

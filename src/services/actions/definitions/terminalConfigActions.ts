@@ -52,6 +52,7 @@ export function registerTerminalConfigActions(
       memoryLeakDetectionEnabled: z.boolean().optional(),
       memoryLeakAutoRestartThresholdMb: z.number().optional(),
       cachedProjectViews: z.number().optional(),
+      osc52ClipboardEnabled: z.boolean().optional(),
     }),
     run: async () => {
       return await terminalConfigClient.get();

@@ -187,9 +187,21 @@ function isHostFacadeChunk(chunk) {
   return HOST_FACADE_NAME.test(name) || HOST_FACADE_FILE.test(file);
 }
 
+// The project shell is an entry too (scripts/lib/vite-project-shell.ts): the
+// HTML entry loads it at runtime for a project view only, so it is a
+// first-render seed, never the renderer entry.
+const PROJECT_SHELL_NAME = "project-shell";
+const PROJECT_SHELL_FILE = /(^|\/)project-shell-[\w-]{8}\.js$/;
+
+function isProjectShellChunk(chunk) {
+  const name = typeof chunk?.name === "string" ? chunk.name : "";
+  const file = typeof chunk?.file === "string" ? chunk.file : "";
+  return name === PROJECT_SHELL_NAME || PROJECT_SHELL_FILE.test(file);
+}
+
 export function findEntryKey(manifest) {
   for (const [key, chunk] of Object.entries(manifest)) {
-    if (chunk?.isEntry && !isHostFacadeChunk(chunk)) return key;
+    if (chunk?.isEntry && !isHostFacadeChunk(chunk) && !isProjectShellChunk(chunk)) return key;
   }
   return null;
 }

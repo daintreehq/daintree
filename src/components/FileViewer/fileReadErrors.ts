@@ -1,4 +1,5 @@
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import { isClientAppError } from "@/utils/clientAppError";
 
 /** User-facing messages for files.read failures — shared by the file viewer modal and the markdown panel. */
 export const FILE_READ_ERROR_MESSAGES: Record<FileReadErrorCode, string> = {
@@ -19,4 +20,22 @@ function isFileReadErrorCode(code: string): code is FileReadErrorCode {
 /** Narrow an untrusted error code from the IPC boundary; unknown codes map to INVALID_PATH. */
 export function toFileReadErrorCode(code: unknown): FileReadErrorCode {
   return typeof code === "string" && isFileReadErrorCode(code) ? code : "INVALID_PATH";
+}
+
+/**
+ * The size a read refused the file at for being too large, or null when the
+ * failure was something else or the host didn't say (an older one).
+ */
+export function refusedFileSize(error: unknown): number | null {
+  if (!isClientAppError(error) || error.code !== "FILE_TOO_LARGE") return null;
+  return error.details?.code === "FILE_TOO_LARGE" ? error.details.sizeBytes : null;
+}
+
+/**
+ * Whether a too-large refusal read the file through its own canonical path,
+ * so a watcher's directories can scope its re-reads as a successful read's can.
+ */
+export function refusedPathIsCanonical(error: unknown): boolean {
+  if (!isClientAppError(error) || error.code !== "FILE_TOO_LARGE") return false;
+  return error.details?.code === "FILE_TOO_LARGE" && error.details.pathIsCanonical === true;
 }

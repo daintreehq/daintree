@@ -40,6 +40,8 @@ import {
   firstRenderModulePreloadPlugin,
   latin400FontPreloadPlugin,
 } from "./scripts/lib/vite-boot-preload.ts";
+import { projectShellChunkPlugin } from "./scripts/lib/vite-project-shell.ts";
+import { PROJECT_SHELL_SOURCE } from "./shared/config/projectShell.ts";
 
 const devServerConfig = getDevServerConfig();
 
@@ -79,6 +81,9 @@ export default defineConfig(({ command, mode }) => {
         ],
       }),
       tailwindcss(),
+      // Emits the project window's shell as its own entry chunk and rewrites
+      // the URL src/main.tsx loads it from (scripts/lib/vite-project-shell.ts).
+      projectShellChunkPlugin(),
       // Must precede hostImportMapPlugin: it emits (and validates) the facade
       // chunks that plugin's transformIndexHtml resolves the map targets from.
       hostFacadePlugin(),
@@ -266,8 +271,10 @@ export default defineConfig(({ command, mode }) => {
                 // (slot/checkbox/switch) and the deferred overlay primitives.
                 // Splitting these out of `vendor-radix-overlay` prevents the
                 // eager `vendor-radix` chunk from pulling in the overlay chunk.
+                // `react-dismissable-layer` is here, not with the overlays,
+                // because `DialogDismissSurface` imports it on the boot path.
                 name: "vendor-radix-utils",
-                test: /node_modules[\\/]@radix-ui[\\/](primitive|react-compose-refs|react-context|react-presence|react-primitive|react-use-controllable-state|react-use-previous|react-use-size|react-use-callback-ref|react-use-layout-effect|react-use-escape-keydown|react-use-effect-event|react-use-rect|react-id|react-slot)[\\/]/,
+                test: /node_modules[\\/]@radix-ui[\\/](primitive|react-compose-refs|react-context|react-presence|react-primitive|react-use-controllable-state|react-use-previous|react-use-size|react-use-callback-ref|react-use-layout-effect|react-use-escape-keydown|react-use-effect-event|react-use-rect|react-id|react-slot|react-dismissable-layer)[\\/]/,
                 priority: 14,
               },
               {
@@ -278,7 +285,7 @@ export default defineConfig(({ command, mode }) => {
                 // slot/checkbox/switch path doesn't have to wait for the
                 // deferred chunk.
                 name: "vendor-radix-overlay",
-                test: /node_modules[\\/]@radix-ui[\\/](react-tooltip|react-popover|react-dropdown-menu|react-select|react-context-menu|react-menu|react-popper|react-arrow|react-collection|react-roving-focus|react-focus-scope|react-focus-guards|react-dismissable-layer|react-portal|react-visually-hidden|react-direction)[\\/]/,
+                test: /node_modules[\\/]@radix-ui[\\/](react-tooltip|react-popover|react-dropdown-menu|react-select|react-context-menu|react-menu|react-popper|react-arrow|react-collection|react-roving-focus|react-focus-scope|react-focus-guards|react-portal|react-visually-hidden|react-direction)[\\/]/,
                 priority: 13,
               },
               {
@@ -347,18 +354,22 @@ export default defineConfig(({ command, mode }) => {
                 // preserved.
                 name: "boot",
                 tags: ["$initial"],
-                // Never capture the entry facade or Vite's virtual modules:
-                // swallowing src/main.tsx or the index.html proxy demotes the
-                // entry chunk (the manifest loses isEntry), which breaks the
-                // first-render budget scripts and the modulepreload seed
-                // derivation. Virtual modules (\0-prefixed helpers, html
-                // proxies) stay wherever automatic chunking puts them.
-                // `src/pluginUi` belongs to the `plugin-ui` group below.
+                // Never capture an entry facade or Vite's virtual modules:
+                // swallowing src/main.tsx, the project shell, or the
+                // index.html proxy demotes that entry chunk (the manifest
+                // loses isEntry), which breaks the first-render budget scripts
+                // and the modulepreload seed derivation. Virtual modules
+                // (\0-prefixed helpers, html proxies) stay wherever automatic
+                // chunking puts them. `src/pluginUi` belongs to the
+                // `plugin-ui` group below.
                 test: (id: string) => {
                   if (id.includes("\0") || id.includes(".html")) return false;
                   if (isPluginUiSourceModule(id)) return false;
                   if (isPluginSdkReactSourceModule(id)) return false;
-                  return !id.split(path.sep).join("/").endsWith("src/main.tsx");
+                  const posixId = id.split(path.sep).join("/");
+                  return (
+                    !posixId.endsWith("src/main.tsx") && !posixId.endsWith(PROJECT_SHELL_SOURCE)
+                  );
                 },
                 priority: 1,
                 maxSize: 400_000,

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CPU_HISTORY_SIZE,
   isSettledResourceState,
@@ -23,7 +23,7 @@ function poll(s: TerminalResourceSample = sample()) {
 
 describe("resourceMonitoringStore.updateMetrics", () => {
   beforeEach(() => {
-    useResourceMonitoringStore.setState({ enabled: true, metrics: new Map() });
+    useResourceMonitoringStore.setState({ enabled: true, metrics: new Map(), lastBatch: null });
   });
 
   it("builds a new entry for every repeated sample until the history window is flat", () => {
@@ -46,20 +46,77 @@ describe("resourceMonitoringStore.updateMetrics", () => {
     for (let i = 0; i < 5; i++) expect(poll()).toBe(settled);
   });
 
-  it("still publishes a new metrics map for every batch, settled or not", () => {
-    // The leak detector evaluates every entry once per published map; its
-    // cadence must not depend on whether a sample moved.
+  it("publishes every non-empty batch, settled or not, without replacing a settled map", () => {
+    // The leak detector evaluates each published batch; its cadence must not
+    // depend on whether a sample moved.
+    const batches: unknown[] = [];
+    const unsubscribe = useResourceMonitoringStore.subscribe((curr, prev) => {
+      if (curr.lastBatch !== prev.lastBatch) batches.push(curr.lastBatch);
+    });
     for (let i = 0; i < CPU_HISTORY_SIZE; i++) poll();
+    const settledMap = useResourceMonitoringStore.getState().metrics;
+
+    const reused = { t1: sample() };
+    for (let i = 0; i < 3; i++) poll();
+    for (let i = 0; i < 2; i++) useResourceMonitoringStore.getState().updateMetrics(reused);
+    unsubscribe();
+
+    expect(batches).toHaveLength(CPU_HISTORY_SIZE + 5);
+    expect(new Set(batches).size).toBe(CPU_HISTORY_SIZE + 5);
+    expect(useResourceMonitoringStore.getState().lastBatch?.samples).toBe(reused);
+    expect(useResourceMonitoringStore.getState().metrics).toBe(settledMap);
+  });
+
+  it("publishes the sampling time the host stamped on the batch", () => {
+    useResourceMonitoringStore.getState().updateMetrics({ t1: sample() }, 1_234);
+    expect(useResourceMonitoringStore.getState().lastBatch?.sampledAt).toBe(1_234);
+
+    useResourceMonitoringStore.getState().updateMetrics({ t1: sample() }, 17_234);
+    expect(useResourceMonitoringStore.getState().lastBatch?.sampledAt).toBe(17_234);
+  });
+
+  it("stamps a batch with its arrival time when the caller gives none", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(9_876);
+    try {
+      useResourceMonitoringStore.getState().updateMetrics({ t1: sample() });
+      expect(useResourceMonitoringStore.getState().lastBatch?.sampledAt).toBe(9_876);
+
+      now.mockReturnValue(24_876);
+      useResourceMonitoringStore.getState().updateMetrics({ t1: sample() });
+      expect(useResourceMonitoringStore.getState().lastBatch?.sampledAt).toBe(24_876);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("leaves the store untouched for an empty batch (#17194)", () => {
+    poll();
+    const before = useResourceMonitoringStore.getState();
 
     let notified = 0;
-    const unsubscribe = useResourceMonitoringStore.subscribe((curr, prev) => {
-      if (curr.metrics !== prev.metrics) notified++;
-    });
-    for (let i = 0; i < 5; i++) poll();
+    const unsubscribe = useResourceMonitoringStore.subscribe(() => notified++);
     useResourceMonitoringStore.getState().updateMetrics({});
     unsubscribe();
 
-    expect(notified).toBe(6);
+    expect(notified).toBe(0);
+    expect(useResourceMonitoringStore.getState()).toBe(before);
+  });
+
+  it("publishes no batch when a panel is removed, the store cleared, or monitoring disabled", () => {
+    useResourceMonitoringStore.getState().updateMetrics({ t1: sample(), t2: sample() });
+    const batch = useResourceMonitoringStore.getState().lastBatch;
+
+    useResourceMonitoringStore.getState().removePanel("t2");
+    expect(useResourceMonitoringStore.getState().lastBatch).toBe(batch);
+    expect([...useResourceMonitoringStore.getState().metrics.keys()]).toEqual(["t1"]);
+
+    useResourceMonitoringStore.getState().clear();
+    expect(useResourceMonitoringStore.getState().lastBatch).toBeNull();
+
+    poll();
+    useResourceMonitoringStore.getState().setEnabled(false);
+    expect(useResourceMonitoringStore.getState().lastBatch).toBeNull();
+    expect(useResourceMonitoringStore.getState().metrics.size).toBe(0);
   });
 
   it("appends to the history as soon as a settled sample moves", () => {
@@ -97,5 +154,36 @@ describe("resourceMonitoringStore.updateMetrics", () => {
 
     expect(after.get("t1")).toBe(before.get("t1"));
     expect(after.get("t2")).not.toBe(before.get("t2"));
+  });
+
+  it("keeps the store and map when the removed panel has no metrics", () => {
+    useResourceMonitoringStore.getState().updateMetrics({ t1: sample() });
+    const before = useResourceMonitoringStore.getState();
+    const metricsBefore = before.metrics;
+    let notified = 0;
+    const unsubscribe = useResourceMonitoringStore.subscribe(() => notified++);
+
+    useResourceMonitoringStore.getState().removePanel("absent");
+    unsubscribe();
+
+    expect(notified).toBe(0);
+    expect(useResourceMonitoringStore.getState()).toBe(before);
+    expect(useResourceMonitoringStore.getState().metrics).toBe(metricsBefore);
+  });
+
+  it("notifies and preserves other panels when an existing sample is removed", () => {
+    useResourceMonitoringStore.getState().updateMetrics({ t1: sample(), t2: sample() });
+    const before = useResourceMonitoringStore.getState().metrics;
+    let notified = 0;
+    const unsubscribe = useResourceMonitoringStore.subscribe(() => notified++);
+
+    useResourceMonitoringStore.getState().removePanel("t2");
+    unsubscribe();
+
+    const after = useResourceMonitoringStore.getState().metrics;
+    expect(notified).toBe(1);
+    expect(after).not.toBe(before);
+    expect([...after.keys()]).toEqual(["t1"]);
+    expect(after.get("t1")).toBe(before.get("t1"));
   });
 });

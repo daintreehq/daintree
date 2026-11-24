@@ -31,6 +31,7 @@ import {
   expandDraftContext,
   listDraftContextTokens,
   shareContextReferenceResolutions,
+  shareWorkingDiffReads,
 } from "@/components/Terminal/draftContextExpansion";
 import { draftIsOnlyNotesTokens } from "@/components/Terminal/hybridInputParsing";
 import { isDiffNotesTarget } from "@/components/Terminal/diffNotesReference";
@@ -229,6 +230,25 @@ function noteRejected(terminalId: string): void {
     withTerminalService((service) => service.clearDirectingState(terminalId), terminalId);
 }
 
+/**
+ * One fixed note to one agent outside any fleet: Sleep's pause note (#17882).
+ * Goes through the same submit lane as a broadcast, refused while the agent is
+ * on a choice dialog the Enter would answer. The pane bookkeeping a fleet send
+ * does is done only when this view holds the pane; a background project's
+ * agent has no instance here, and making one would invent local state.
+ */
+export async function submitNoteToAgent(terminalId: string, text: string): Promise<void> {
+  const ownsPane = getNarrowPanel(usePanelStore.getState().panelsById, terminalId) !== undefined;
+  if (ownsPane) noteUserInput(terminalId, text);
+  try {
+    await terminalClient.submit(terminalId, text, undefined, undefined, "no-choice-dialog");
+  } catch (error) {
+    if (ownsPane) noteRejected(terminalId);
+    throw error;
+  }
+  if (ownsPane) noteSubmitted(terminalId);
+}
+
 interface ResolvedSubmission {
   terminalId: string;
   payload: string;
@@ -286,12 +306,14 @@ function imagesNamedBy(
  * Each agent here gets the context its own text names, from itself: `@diff`
  * from its own working directory, `@notes` from its own worktree, `@terminal`
  * and `@selection` from its own screen, as a send from its own composer would.
- * Plugin context is asked for once and handed to every agent alike.
+ * Plugin context is asked for once and handed to every agent alike, and each
+ * working directory's diff is read once for every agent in it (#17480).
  */
 async function expandSubmissionContext(
   submissions: ResolvedSubmission[]
 ): Promise<ResolvedSubmission[]> {
   const resolveReferences = shareContextReferenceResolutions();
+  const readDiff = shareWorkingDiffReads();
   const { panelsById } = usePanelStore.getState();
   return Promise.all(
     submissions.map(async (submission) => {
@@ -302,6 +324,7 @@ async function expandSubmissionContext(
       const payload = await expandDraftContext(submission.payload, {
         terminalId: submission.terminalId,
         cwd,
+        readDiff,
         resolveReferences,
         onDiffNotesTaken: (taken) => notes.push(...taken),
       });

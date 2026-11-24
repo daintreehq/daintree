@@ -1200,6 +1200,15 @@ function SiteSourceFailure({
           <Diagnostic text={workspace.message} />
         </InspectorNotice>
       );
+    case "served-elsewhere":
+      // What was seen, not concluded: the process listening on the page's port
+      // runs from that worktree. A browser opened there traces to its files.
+      return (
+        <InspectorNotice tone="warning" role="status" title={copy.title} density="compact">
+          Open it from a browser in that worktree to trace elements to source. Its server runs from
+          <Diagnostic text={workspace.message} />
+        </InspectorNotice>
+      );
   }
 }
 
@@ -1355,7 +1364,7 @@ function ResolvingHeader({ skeleton, resolving }: { skeleton: boolean; resolving
       {skeleton ? (
         <IdentitySkeleton label={slow ? "Finding the source — still working…" : undefined} />
       ) : (
-        <div className="h-20" aria-hidden="true" />
+        <div className="h-21" aria-hidden="true" />
       )}
     </div>
   );

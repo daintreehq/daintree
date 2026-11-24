@@ -1,4 +1,13 @@
-import { createContext, useCallback, useContext, useId, useRef, useState } from "react";
+import {
+  createContext,
+  type FocusEvent,
+  useCallback,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { CdpRemoteArg, CdpPropertyDescriptor } from "@shared/types/ipc/webviewConsole";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
@@ -8,6 +17,7 @@ import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
 import { DisclosureChevron } from "./DisclosureChevron";
 import { DISCLOSURE_TOGGLE_CLASS } from "./StackTrace";
 import { useRowFocusTooltip } from "./rowFocusTooltip";
+import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 
 interface ObjectInspectorProps {
   arg: CdpRemoteArg;
@@ -134,7 +144,8 @@ function PropertyTree({
               rowId={rowId}
               isStale={isStale}
               depth={depth + 1}
-              path={`${path}.${prop.name}`}
+              // Quoted so a name containing a dot can't collide with a nested path.
+              path={`${path}.${JSON.stringify(prop.name)}`}
             />
           ) : (
             <UnreadValue {...unreadValueText(prop)} />
@@ -173,6 +184,35 @@ export function ObjectInspector({
   const staleTooltip = useRowFocusTooltip();
   const disclosureRef = useRef<HTMLButtonElement>(null);
   const retryRef = useRef<HTMLButtonElement>(null);
+  /**
+   * The console row holding this value, while focus is anywhere inside it — its
+   * own controls or a nested value's, which go with it.
+   */
+  const focusedRowRef = useRef<HTMLElement | null>(null);
+  const trackFocus = useCallback((event: FocusEvent<HTMLElement>) => {
+    focusedRowRef.current = event.currentTarget.closest<HTMLElement>("[data-console-row]");
+  }, []);
+  const forgetFocus = useCallback(() => {
+    focusedRowRef.current = null;
+  }, []);
+  const canExpand =
+    arg.type === "object" &&
+    !!arg.objectId &&
+    webContentsId != null &&
+    !isStale &&
+    depth < MAX_DEPTH;
+
+  // The controls go when the value stops being expandable — its handles
+  // released, aged out of the live window, or gone with a navigation. Removing
+  // a focused element drops focus on the page, so it moves to the value's row.
+  useLayoutEffect(() => {
+    if (canExpand) return;
+    const row = focusedRowRef.current;
+    focusedRowRef.current = null;
+    if (row === null || !row.isConnected) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body) row.focus({ preventScroll: true });
+  }, [canExpand]);
 
   const handleExpand = useCallback(async () => {
     if (isExpanded) {
@@ -196,6 +236,9 @@ export function ObjectInspector({
     }
 
     setIsLoading(true);
+    // Before the request, as main pins it on receipt: the row must not lose its
+    // object ids to the live window while the answer is on its way.
+    useConsoleCaptureStore.getState().markInspected(paneId, rowId);
     try {
       const result = await window.electron.webview.getConsoleProperties(
         webContentsId,
@@ -203,6 +246,12 @@ export function ObjectInspector({
         rowId,
         arg.objectId
       );
+      if (result.released) {
+        // The row's values were freed before this request reached them. Blanking
+        // its ids re-renders this value as a plain preview.
+        useConsoleCaptureStore.getState().releaseRowHandles(paneId, rowId);
+        return;
+      }
       // A successful retry takes its button away; focus moves to the value
       // it opened rather than falling to the page.
       const retryHadFocus =
@@ -226,7 +275,6 @@ export function ObjectInspector({
   }
 
   // Object type
-  const canExpand = !!arg.objectId && webContentsId != null && !isStale && depth < MAX_DEPTH;
   const displayText = arg.preview ?? arg.description ?? arg.className ?? "Object";
 
   if (isStale) {
@@ -243,12 +291,28 @@ export function ObjectInspector({
     );
   }
 
+  if (!arg.objectId && depth === 0) {
+    return (
+      <Tooltip open={staleTooltip.open} onOpenChange={staleTooltip.onOpenChange}>
+        <TooltipTrigger asChild>
+          <span className="text-text-secondary" {...staleTooltip.triggerProps}>
+            {displayText}
+            <span className="sr-only"> (no longer inspectable)</span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          Only recent messages keep their values to inspect
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
   if (!canExpand) {
     return <span className="text-text-secondary">{displayText}</span>;
   }
 
   return (
-    <span className="inline">
+    <span className="inline" onFocus={trackFocus} onBlur={forgetFocus}>
       <button
         ref={disclosureRef}
         type="button"

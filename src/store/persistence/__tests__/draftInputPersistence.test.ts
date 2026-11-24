@@ -152,6 +152,92 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
   });
 
+  it("knows the drafts it saved: acknowledged, still on their way, or with the answer lost (#18161)", async () => {
+    const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, {});
+    const saved = (terminalId: string, text: string) =>
+      draftInputPersistence.savedFromHere(projectId).get(terminalId)?.has(text) === true;
+    setDraft(projectId, "t1", "acknowledged");
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    setDraft(projectId, "t2", "on its way");
+    let answer!: () => void;
+    setDraftInputsMock.mockImplementationOnce(
+      () => new Promise<void>((_resolve, reject) => (answer = () => reject(new Error("lost"))))
+    );
+    draftInputPersistence.flushAll();
+    await flushMicrotasks();
+    const whileOnItsWay = saved("t2", "on its way");
+    const baselineWhileOnItsWay = draftInputPersistence.getBaseline(projectId);
+    answer();
+    await draftInputPersistence.whenIdle();
+    expect(whileOnItsWay).toBe(true);
+    expect(baselineWhileOnItsWay).toEqual({ t1: "acknowledged" });
+
+    expect(saved("t1", "acknowledged")).toBe(true);
+    expect(saved("t2", "on its way")).toBe(true);
+    expect(saved("t1", "someone else's")).toBe(false);
+    expect(saved("t3", "acknowledged")).toBe(false);
+
+    // A read of the host's record settles what it holds.
+    draftInputPersistence.rebaseProject(projectId, {});
+    expect(saved("t1", "acknowledged")).toBe(false);
+    expect(saved("t2", "on its way")).toBe(false);
+  });
+
+  it("removes a draft the project switch saved once it is cleared (#18161)", async () => {
+    const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, {});
+    draftInputPersistence.noteOutgoingSave(projectId, { t1: "sent prompt" }, ["t1"]);
+    expect(draftInputPersistence.savedFromHere(projectId).get("t1")?.has("sent prompt")).toBe(true);
+
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+
+    expect(setDraftInputsMock).toHaveBeenCalledWith(projectId, {}, [], ["t1"]);
+    expect(draftInputPersistence.savedFromHere(projectId).size).toBe(0);
+  });
+
+  it("keeps a switch's save recorded after an earlier removal that is answered later (#18161)", async () => {
+    const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, { t1: "earlier" });
+    let answer!: () => void;
+    setDraftInputsMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (answer = resolve))
+    );
+    // The earlier draft's removal goes out.
+    draftInputPersistence.flushAll();
+    await flushMicrotasks();
+    // A new draft is typed and the switch saves it before that answer arrives.
+    draftInputPersistence.noteOutgoingSave(projectId, { t1: "sent prompt" }, ["t1"]);
+    answer();
+    await draftInputPersistence.whenIdle();
+
+    expect(draftInputPersistence.savedFromHere(projectId).get("t1")?.has("sent prompt")).toBe(true);
+    // Sent and cleared: the next flush still removes it.
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+    expect(setDraftInputsMock).toHaveBeenLastCalledWith(projectId, {}, [], ["t1"]);
+  });
+
+  it("forgets what a cleared project's write was saving, even when its answer comes later", async () => {
+    const projectId = freshProjectId();
+    let answer!: () => void;
+    setDraftInputsMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (answer = resolve))
+    );
+    setDraft(projectId, "t1", "old");
+    draftInputPersistence.flushAll();
+    await flushMicrotasks();
+
+    draftInputPersistence.clearProject(projectId);
+    const afterClear = draftInputPersistence.savedFromHere(projectId).size;
+    answer();
+    await draftInputPersistence.whenIdle();
+    expect(afterClear).toBe(0);
+  });
+
   it("sends no removal for an unacknowledged save once another screen has driven (#13283)", async () => {
     const projectId = freshProjectId();
     setDraft(projectId, "t1", "maybe saved");

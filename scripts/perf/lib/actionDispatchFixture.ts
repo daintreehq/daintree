@@ -479,8 +479,15 @@ function probeDefinitions(): unknown[] {
  * - Canopy's own window is offered only once Canopy is on, which main tells a
  *   view over IPC. The window here hears nothing, so Canopy stays unset, which
  *   is also every user who never turns it on.
+ * - Moving an agent's terminals to an account is offered only once that agent
+ *   has a saved account, which the settings store loads over IPC. The window
+ *   here has no settings, which is also every user who never adds an account.
  */
 export const CONTEXT_GATED_ACTION_IDS: ReadonlySet<string> = new Set([
+  "agent.moveTerminalsToAccount.claude",
+  "agent.moveTerminalsToAccount.codex",
+  "agent.moveTerminalsToAccount.kimi",
+  "agent.moveTerminalsToAccount.interpreter",
   "canopy.openWindow",
   "host.switch",
   "host.overview.open",

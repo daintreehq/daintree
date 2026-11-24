@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, MoreHorizontal, Trash2 } from "lucide-react";
 import {
-  WorktreeMenuItems,
+  WorktreeCardMenuItems,
   type WorktreeMenuActions,
   type WorktreeMenuComponents,
 } from "../WorktreeMenuItems";
@@ -210,7 +210,7 @@ export function WorktreeActionsToolbar({
           onContextMenu={(e) => e.stopPropagation()}
           className="w-64"
         >
-          <WorktreeMenuItems
+          <WorktreeCardMenuItems
             worktree={worktree}
             components={DROPDOWN_COMPONENTS}
             isPinned={isPinned}

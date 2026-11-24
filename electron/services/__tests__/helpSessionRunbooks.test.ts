@@ -154,4 +154,15 @@ describe("buildDelegatedConfirmationsAddendum (#16752)", () => {
     expect(note).not.toContain("`host.settings`");
     expect(note).toContain("Every other confirm-gated Daintree action still waits");
   });
+
+  it("names the tool a scoped tick covers, with what it leaves asking (#17917)", () => {
+    const note = buildDelegatedConfirmationsAddendum([
+      "terminal.restartOnPresetOwned.nextFallback",
+      "host.settings",
+    ]);
+    expect(note).toContain("- `terminal.restartOnPresetOwned`: move an agent it launched");
+    expect(note).not.toContain("`terminal.restartOnPresetOwned.nextFallback`");
+    expect(note).toContain("any other preset still asks");
+    expect(note).toContain("`host.settings`");
+  });
 });

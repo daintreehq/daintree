@@ -268,8 +268,20 @@ export function describeHostMenuState(
             row.lastSeenAt === null ? null : `Last seen ${formatRelativeTime(row.lastSeenAt, now)}`,
         };
       }
-      // The same answer the chip gives: SSH reached it and refused the login.
-      if (connection.stoppedRetrying) return { state: "Can't log in", note: null };
+      // The same answers the chip gives, by what stopped the retries.
+      if (connection.stoppedRetrying) {
+        switch (connection.blocker?.kind) {
+          case "ssh-access":
+            return { state: "Can't log in", note: null };
+          case "wsl-distro-missing":
+            return {
+              state: "Distro not found",
+              note: `WSL couldn't find ${connection.blocker.distro}`,
+            };
+          default:
+            return { state: "Unavailable", note: null };
+        }
+      }
       return {
         state: "Unreachable",
         note:
@@ -406,6 +418,10 @@ export type HostChipStatus =
   | "host-mode-off"
   /** ssh reached the machine and couldn't log in (auth or host key). */
   | "access-denied"
+  /** WSL has no distribution by the host's saved name. */
+  | "wsl-distro-missing"
+  /** Stopped retrying for another reason: a connection this machine can't use as set up. */
+  | "connection-unavailable"
   | "version-mismatch"
   | "build-differs"
   | "disconnected"
@@ -433,9 +449,14 @@ export function hostChipStatus(
     case "unreachable":
       // Between dials of an announced restart: still on its way back.
       if (connection.restarting) return "connecting";
-      // The machine answered in both; what it said is the state, not "unreachable".
+      // What answered is the state, not "unreachable".
       if (connection.hostModeOff) return "host-mode-off";
-      if (connection.stoppedRetrying) return "access-denied";
+      if (connection.stoppedRetrying) {
+        // Only ssh's own refusal is a login failure.
+        if (connection.blocker?.kind === "ssh-access") return "access-denied";
+        if (connection.blocker?.kind === "wsl-distro-missing") return "wsl-distro-missing";
+        return "connection-unavailable";
+      }
       return "unreachable";
     default:
       return connection.status;
@@ -455,6 +476,10 @@ export function hostChipStatusText(status: HostChipStatus): string | null {
       return "not listening";
     case "access-denied":
       return "can't log in";
+    case "wsl-distro-missing":
+      return "distro not found";
+    case "connection-unavailable":
+      return "unavailable";
     case "version-mismatch":
       return "can't connect";
     case "disconnected":

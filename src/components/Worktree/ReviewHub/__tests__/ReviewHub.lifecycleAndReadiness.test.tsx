@@ -313,6 +313,7 @@ const makeStatus = (overrides?: Partial<StagingStatus>): StagingStatus => ({
   pushDestination: { remote: "origin", branch: "feature/test" },
   pullSource: { remote: "origin", branch: "feature/test" },
   repoState: "DIRTY",
+  repoOperationId: null,
   rebaseStep: null,
   rebaseTotalSteps: null,
   rebaseSequence: null,
@@ -486,6 +487,87 @@ describe("ReviewHub", () => {
   });
 
   describe("autoStageOnOpen (issue #7886)", () => {
+    const overConflicts: Array<[string, Partial<StagingStatus>]> = [
+      [
+        "a halted merge with only an unrelated file unstaged",
+        {
+          repoState: "MERGING",
+          repoOperationId: "merge-a",
+          conflicted: ["src/conflict.ts"],
+          conflictedFiles: [{ path: "src/conflict.ts", xy: "UU", label: "both modified" }],
+        },
+      ],
+      [
+        "conflicts left with no operation in progress",
+        {
+          conflicted: ["src/conflict.ts"],
+          conflictedFiles: [{ path: "src/conflict.ts", xy: "UU", label: "both modified" }],
+        },
+      ],
+      ["a halted rebase between conflicts", { repoState: "REBASING", repoOperationId: "rb-1" }],
+    ];
+    it("stays spent once the operation it opened over finishes", async () => {
+      // Opened on a halted merge; Continue then commits it and leaves an
+      // unrelated edit behind. That edit is not what the hub was opened over.
+      const unrelated = {
+        path: "src/unrelated.ts",
+        status: "modified",
+        insertions: 1,
+        deletions: 0,
+      } as const;
+      // Nothing staged, so only the halted-operation guard can spend the one-shot.
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [],
+          unstaged: [unrelated],
+          conflicted: ["src/conflict.ts"],
+          conflictedFiles: [{ path: "src/conflict.ts", xy: "UU", label: "both modified" }],
+          repoState: "MERGING",
+          repoOperationId: "merge-a",
+        })
+      );
+      render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WORKTREE_PATH}
+          onClose={vi.fn()}
+          autoStageOnOpen={true}
+        />
+      );
+      await screen.findByTestId("conflict-panel");
+
+      getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], unstaged: [unrelated] }));
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(screen.getByText("unrelated.ts")).toBeTruthy());
+      expect(stageAllMock).not.toHaveBeenCalled();
+    });
+
+    it.each(overConflicts)("never stages everything over %s", async (_case, overrides) => {
+      // Staging everything would stage the conflicted file markers and all,
+      // which marks it resolved; opening the hub to continue is ordinary (#17559).
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [],
+          unstaged: [{ path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 }],
+          ...overrides,
+        })
+      );
+      render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WORKTREE_PATH}
+          onClose={vi.fn()}
+          autoStageOnOpen={true}
+        />
+      );
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalled());
+      await act(async () => {});
+      expect(stageAllMock).not.toHaveBeenCalled();
+    });
+
     it("stages all unstaged files exactly once on open when no files are staged", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeStatus({
@@ -564,6 +646,114 @@ describe("ReviewHub", () => {
       expect(stageAllMock).not.toHaveBeenCalled();
     });
 
+    // #17552: conflict rows sit in neither ordinary list, so an unrelated
+    // unstaged edit used to let the one-shot `git add -A` resolve them.
+    it.each([
+      ["a merge", "MERGING", "conflict-panel"],
+      ["a rebase", "REBASING", "conflict-panel"],
+      ["a stash pop", "DIRTY", "conflict-worklist"],
+    ] as const)(
+      "leaves unresolved entries alone when opened in %s conflict",
+      async (_label, repoState, conflictSurface) => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [],
+            unstaged: [
+              { path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 },
+            ],
+            conflicted: ["src/app.ts"],
+            conflictedFiles: [{ path: "src/app.ts", xy: "UU", label: "both modified" }],
+            repoState,
+          })
+        );
+        render(
+          <ReviewHubContent
+            isOpen={true}
+            worktreePath={WORKTREE_PATH}
+            onClose={vi.fn()}
+            autoStageOnOpen={true}
+          />
+        );
+        await waitFor(() => screen.getByTestId(conflictSurface));
+        await act(async () => {
+          capturedUpdateCallback!(makeWorktreeState());
+          await Promise.resolve();
+        });
+
+        expect(stageAllMock).not.toHaveBeenCalled();
+        expect(stageFilesMock).not.toHaveBeenCalled();
+        expect(stageFileMock).not.toHaveBeenCalled();
+        // Still on the worklist, with its explicit resolution control.
+        screen.getByRole("button", { name: "Mark src/app.ts as resolved" });
+      }
+    );
+
+    it("does not stage later in the same opening once the conflict clears", async () => {
+      const unrelated = {
+        path: "src/unrelated.ts",
+        status: "modified" as const,
+        insertions: 1,
+        deletions: 0,
+      };
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [],
+          unstaged: [unrelated],
+          conflicted: ["src/app.ts"],
+          conflictedFiles: [{ path: "src/app.ts", xy: "UU", label: "both modified" }],
+        })
+      );
+      const props = { worktreePath: WORKTREE_PATH, onClose: vi.fn(), autoStageOnOpen: true };
+      const { rerender } = render(<ReviewHubContent isOpen={true} {...props} />);
+      await waitFor(() => screen.getByRole("button", { name: "Mark src/app.ts as resolved" }));
+
+      // Resolved outside the hub: the file is back to an ordinary state and the
+      // unrelated edit is still unstaged.
+      getStagingStatusMock.mockResolvedValue(makeStatus({ staged: [], unstaged: [unrelated] }));
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Mark src/app.ts as resolved" })).toBeNull()
+      );
+      expect(stageAllMock).not.toHaveBeenCalled();
+
+      // A fresh opening is a fresh decision.
+      rerender(<ReviewHubContent isOpen={false} {...props} />);
+      rerender(<ReviewHubContent isOpen={true} {...props} />);
+      await waitFor(() => expect(stageAllMock).toHaveBeenCalledWith(WORKTREE_PATH));
+      expect(stageAllMock).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["MERGING", "REBASING", "CHERRY_PICKING", "REVERTING", "APPLYING_MAILBOX"] as const)(
+      "does not stage mid-operation (%s) even with no conflicts left",
+      async (repoState) => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [],
+            unstaged: [
+              { path: "src/unrelated.ts", status: "modified", insertions: 1, deletions: 0 },
+            ],
+            repoState,
+          })
+        );
+        render(
+          <ReviewHubContent
+            isOpen={true}
+            worktreePath={WORKTREE_PATH}
+            onClose={vi.fn()}
+            autoStageOnOpen={true}
+          />
+        );
+        await waitFor(() => screen.getByTestId("conflict-panel"));
+        await act(async () => {
+          await Promise.resolve();
+        });
+        expect(stageAllMock).not.toHaveBeenCalled();
+      }
+    );
+
     it("does not stage when autoStageOnOpen is omitted", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeStatus({
@@ -577,6 +767,48 @@ describe("ReviewHub", () => {
         await Promise.resolve();
       });
       expect(stageAllMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps a failure that lands after a move to another worktree off that worktree (#17584)", async () => {
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({
+          staged: [],
+          unstaged: [{ path: "src/a.ts", status: "modified", insertions: 1, deletions: 0 }],
+        })
+      );
+      let rejectStage: (reason: unknown) => void = () => {};
+      stageAllMock.mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            rejectStage = reject;
+          })
+      );
+      const { rerender } = render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WORKTREE_PATH}
+          onClose={vi.fn()}
+          autoStageOnOpen={true}
+        />
+      );
+      await waitFor(() => expect(stageAllMock).toHaveBeenCalledWith(WORKTREE_PATH));
+
+      rerender(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath="/home/user/other"
+          onClose={vi.fn()}
+          autoStageOnOpen={true}
+        />
+      );
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledWith("/home/user/other"));
+      await act(async () => {
+        rejectStage(new Error("index.lock exists"));
+      });
+
+      expect(screen.queryByText("Couldn't stage all files")).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
+      expect(stageAllMock).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1059,6 +1291,78 @@ describe("ReviewHub", () => {
       expect(unstageFileMock).not.toHaveBeenCalled();
     });
 
+    describe("the cursor after Space restages a row (#16895)", () => {
+      const entry = (path: string) => ({
+        path,
+        status: "modified" as const,
+        insertions: 1,
+        deletions: 0,
+      });
+      const focused = (path: string) =>
+        screen.getByTestId(`file-stage-row-${path}`).getAttribute("data-focused");
+
+      it("stays in Unstaged on the next row after staging one", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [entry("src/a.ts")],
+            unstaged: [entry("src/b.ts"), entry("src/c.ts")],
+          })
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByText("b.ts"));
+        act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+        act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+        expect(focused("src/b.ts")).toBe("true");
+
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [entry("src/a.ts"), entry("src/b.ts")],
+            unstaged: [entry("src/c.ts")],
+          })
+        );
+        act(() => void fireEvent.keyDown(document, { key: " " }));
+        await waitFor(() => expect(stageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/b.ts"));
+        await waitFor(() => expect(focused("src/c.ts")).toBe("true"));
+
+        // The next Space acts on that row, not on the file that just moved.
+        act(() => void fireEvent.keyDown(document, { key: " " }));
+        await waitFor(() =>
+          expect(stageFileMock).toHaveBeenLastCalledWith(WORKTREE_PATH, "src/c.ts")
+        );
+      });
+
+      it("stays in Staged on the row above after unstaging the last staged row", async () => {
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [entry("src/a.ts"), entry("src/b.ts")],
+            unstaged: [entry("src/c.ts")],
+          })
+        );
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByText("b.ts"));
+        act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+        act(() => void fireEvent.keyDown(document, { key: "ArrowDown" }));
+        expect(focused("src/b.ts")).toBe("true");
+
+        getStagingStatusMock.mockResolvedValue(
+          makeStatus({
+            staged: [entry("src/a.ts")],
+            unstaged: [entry("src/b.ts"), entry("src/c.ts")],
+          })
+        );
+        act(() => void fireEvent.keyDown(document, { key: " " }));
+        await waitFor(() =>
+          expect(unstageFileMock).toHaveBeenCalledWith(WORKTREE_PATH, "src/b.ts")
+        );
+        await waitFor(() => expect(focused("src/a.ts")).toBe("true"));
+
+        act(() => void fireEvent.keyDown(document, { key: " " }));
+        await waitFor(() =>
+          expect(unstageFileMock).toHaveBeenLastCalledWith(WORKTREE_PATH, "src/a.ts")
+        );
+      });
+    });
+
     it("Enter opens the diff for the focused row", async () => {
       await renderHub();
       // Focus row 1 (the unstaged file) so a wrong-file bug would be caught.
@@ -1242,7 +1546,7 @@ describe("ReviewHub", () => {
         expect(useGitPullRebaseConfirmStore.getState().pendingConfirm?.cwd).toBe(WORKTREE_PATH)
       );
       expect(pullRebaseMock).not.toHaveBeenCalled();
-      useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+      useGitPullRebaseConfirmStore.getState().resolveConfirmation(null);
     });
 
     it("surfaces failing PR CI with a click-through to the forge", async () => {

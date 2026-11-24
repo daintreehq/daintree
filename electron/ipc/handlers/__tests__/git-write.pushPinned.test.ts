@@ -13,8 +13,14 @@ const ipcMainMock = vi.hoisted(() => ({
 /** Runs once, synchronously, as the handler calls `push` — after every check. */
 const pushHook = vi.hoisted(() => ({ before: null as (() => void) | null }));
 
-/** Runs once, synchronously, the moment `git commit` returns — before anything reads it back. */
-const commitHook = vi.hoisted(() => ({ after: null as (() => void) | null }));
+/**
+ * Each runs once, synchronously: `before` just ahead of `git commit` (after every
+ * check), `after` the moment it returns, before anything reads it back.
+ */
+const commitHook = vi.hoisted(() => ({
+  before: null as (() => void) | null,
+  after: null as (() => void) | null,
+}));
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
@@ -42,7 +48,10 @@ vi.mock("../../../services/getSoundService.js", () => ({
  * against the same repository, with the repository moved in between, which is
  * the only way to show what an approved push actually publishes.
  */
-vi.mock("../../../utils/hardenedGit.js", () => ({
+// The rest stays real: the commit's conflict scan reads staged blobs through
+// a raw spawn that takes its env and config from here.
+vi.mock("../../../utils/hardenedGit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/hardenedGit.js")>()),
   validateCwd: vi.fn(),
   createHardenedGit: vi.fn(async (cwd: string) => withCommitHook(hermeticSimpleGit(cwd))),
   createAuthenticatedGit: vi.fn(async (cwd: string) => withPushHook(hermeticSimpleGit(cwd))),
@@ -52,6 +61,9 @@ vi.mock("../../../utils/hardenedGit.js", () => ({
 function withCommitHook<T extends { commit: (...args: never[]) => unknown }>(client: T): T {
   const commit = client.commit.bind(client) as (...args: never[]) => Promise<unknown>;
   client.commit = (async (...args: never[]) => {
+    const before = commitHook.before;
+    commitHook.before = null;
+    before?.();
     const result = await commit(...args);
     const hook = commitHook.after;
     commitHook.after = null;
@@ -72,7 +84,20 @@ function withPushHook<T extends { push: (...args: never[]) => unknown }>(client:
   return client;
 }
 
+// Real reads, spied so a test can show which operations never take them.
+vi.mock("../../../services/git/stagedSnapshot.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../../../services/git/stagedSnapshot.js")>();
+  return {
+    readStagedSnapshot: vi.fn(real.readStagedSnapshot),
+    readCommitStagedIdentity: vi.fn(real.readCommitStagedIdentity),
+  };
+});
+
 import { registerGitWriteHandlers } from "../git-write.js";
+import {
+  readCommitStagedIdentity,
+  readStagedSnapshot,
+} from "../../../services/git/stagedSnapshot.js";
 import { _resetRateLimitQueuesForTest } from "../../utils.js";
 
 function hermeticEnv(): Record<string, string> {
@@ -163,14 +188,20 @@ interface PushPreview {
   destination: { remote: string; branch: string };
   headOid: string;
   commits: Array<{ hash: string }>;
+  staged?: { identity: string; paths: string[] };
 }
 
 /** What the confirm reads to show the approver, through the real handler. */
-async function preview(cwd: string, branchName: string): Promise<PushPreview> {
+async function preview(
+  cwd: string,
+  branchName: string,
+  options: { includeStaged?: boolean } = {}
+): Promise<PushPreview> {
   return (await getHandler("git:list-push-commits")(FAKE_EVENT, {
     cwd,
     branchName,
     limit: 20,
+    ...options,
   })) as PushPreview;
 }
 
@@ -213,6 +244,7 @@ afterAll(() => {
 
 beforeEach(() => {
   pushHook.before = null;
+  commitHook.before = null;
   commitHook.after = null;
   ipcMainMock.handle.mockClear();
   _resetRateLimitQueuesForTest();
@@ -643,5 +675,315 @@ describe("commit then push — pinned to the commit just made (#16790)", () => {
     });
 
     expect(remoteTip(fixture.bare, "refs/heads/topic")).toBe(committed.oid);
+  });
+});
+
+// Review Hub's Commit & push on a branch with no commit yet (#17588): git names
+// no destination before the first commit, so the commit lands first and the
+// push is previewed and approved through the same handlers as any other.
+describe("first commit, then its reviewed push (#17588)", () => {
+  function unbornRepo(bare: string): string {
+    const repo = fs.mkdtempSync(path.join(tmpRoot, "unborn-"));
+    git(repo, ["init", "-q", "-b", "main"]);
+    git(repo, ["config", "user.email", "test@example.com"]);
+    git(repo, ["config", "user.name", "Test"]);
+    git(repo, ["remote", "add", "origin", bare]);
+    fs.writeFileSync(path.join(repo, "README.md"), "first\n");
+    git(repo, ["add", "README.md"]);
+    return repo;
+  }
+
+  async function commitFirst(repo: string): Promise<{ oid: string | null; parentOids: string[] }> {
+    return (await getHandler("git:commit")(FAKE_EVENT, {
+      cwd: repo,
+      message: "Initial commit",
+    })) as { oid: string | null; parentOids: string[] };
+  }
+
+  it("previews the root commit as creating the branch, and publishes exactly it", async () => {
+    const bare = makeBare();
+    const repo = unbornRepo(bare);
+
+    const committed = await commitFirst(repo);
+    expect(committed.parentOids).toEqual([]);
+    const shown = (await preview(repo, "main")) as PushPreview & { rangeBasis: string };
+
+    expect(shown.destination).toEqual({ remote: "origin", branch: "main" });
+    expect(shown.rangeBasis).toBe("creates");
+    expect(shown.headOid).toBe(committed.oid);
+    expect(shown.commits.map((c) => c.hash)).toEqual([committed.oid]);
+
+    await approvedPush(repo, "main", shown);
+
+    expect(remoteTip(bare, "refs/heads/main")).toBe(committed.oid);
+    expect(upstreamOf(repo, "main")).toBe("refs/remotes/origin/main");
+  });
+
+  it("leaves a remote branch with other history to git's own refusal", async () => {
+    const bare = makeBare();
+    const other = fs.mkdtempSync(path.join(tmpRoot, "other-"));
+    git(other, ["init", "-q", "-b", "main"]);
+    git(other, ["config", "user.email", "test@example.com"]);
+    git(other, ["config", "user.name", "Test"]);
+    const existing = commit(other, "theirs.txt");
+    git(other, ["push", "-q", bare, "main"]);
+    const repo = unbornRepo(bare);
+
+    await commitFirst(repo);
+    const shown = (await preview(repo, "main")) as PushPreview & { rangeBasis: string };
+
+    // The remote named a tip this repository has never fetched: no claim that
+    // the branch is being created, and none that it is level.
+    expect(shown.rangeBasis).toBe("unverified");
+    const error = await rejection(approvedPush(repo, "main", shown));
+
+    expect(error).toMatch(/\[GitError\|push-rejected-outdated\|/);
+    expect(remoteTip(bare, "refs/heads/main")).toBe(existing);
+  });
+});
+
+describe("commit & push — held to the staged changes its confirm listed (#17563)", () => {
+  interface ReviewedCommit {
+    oid: string | null;
+    parentOids: string[];
+    stagedIdentity?: string | null;
+  }
+
+  function stageText(repo: string, file: string, text: string): void {
+    fs.writeFileSync(path.join(repo, file), text);
+    git(repo, ["add", file]);
+  }
+
+  /** The confirm's read: the push range plus what is staged on the same tip. */
+  async function reviewCommit(repo: string, branch: string) {
+    const shown = await preview(repo, branch, { includeStaged: true });
+    if (!shown.staged) throw new Error("preview carried no staged snapshot");
+    return { shown, staged: shown.staged };
+  }
+
+  function commitAsReviewed(
+    repo: string,
+    branch: string,
+    shown: PushPreview,
+    message = "user change"
+  ): Promise<ReviewedCommit> {
+    return getHandler("git:commit")(FAKE_EVENT, {
+      cwd: repo,
+      message,
+      expectedBranch: branch,
+      expectedHeadOid: shown.headOid,
+      expectedStagedIdentity: shown.staged?.identity,
+    }) as Promise<ReviewedCommit>;
+  }
+
+  /** The refusal as main throws it: its reason, and the sentence the composer shows. */
+  function refusal(
+    promise: Promise<unknown>
+  ): Promise<{ reason?: string; message: string } | null> {
+    return promise.then(
+      () => null,
+      (e: { reason?: string; message: string }) => ({ reason: e.reason, message: e.message })
+    );
+  }
+
+  function expectCommitStale(error: { reason?: string; message: string } | null): void {
+    expect(error?.reason).toBe("commit-review-stale");
+    // Plain prose: the preload adds the one wire prefix the renderer strips.
+    expect(error?.message).toMatch(/^This commit changed after it was reviewed: /);
+    expect(error?.message).toMatch(/Nothing was committed or pushed/);
+  }
+
+  it("refuses a content-only restage under the same branch, tip and file list, and commits nothing", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    expect(staged.paths).toEqual(["user.txt"]);
+
+    // An agent restages the listed file while the confirm is open.
+    stageText(fixture.repo, "user.txt", "different text\n");
+    const now = await reviewCommit(fixture.repo, "topic");
+    expect(now.shown.headOid).toBe(shown.headOid);
+    expect(now.staged.paths).toEqual(staged.paths);
+    expect(now.staged.identity).not.toBe(staged.identity);
+
+    const error = await refusal(commitAsReviewed(fixture.repo, "topic", shown));
+
+    expectCommitStale(error);
+    expect(error?.message).toMatch(/the staged changes are different/);
+    expect(git(fixture.repo, ["rev-parse", "HEAD"])).toBe(fixture.reviewed);
+    expect(git(fixture.repo, ["show", ":user.txt"])).toBe("different text");
+  });
+
+  it("commits what was listed and reports the same identity back", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    // A mode-only change and an intent-to-add file: neither may make the
+    // index's identity and the commit's disagree.
+    git(fixture.repo, ["update-index", "--chmod=+x", "topic.txt"]);
+    fs.writeFileSync(path.join(fixture.repo, "later.txt"), "not staged");
+    git(fixture.repo, ["add", "-N", "later.txt"]);
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    expect(staged.paths).toEqual(["topic.txt", "user.txt"]);
+
+    const committed = await commitAsReviewed(fixture.repo, "topic", shown);
+
+    expect(committed.parentOids).toEqual([fixture.reviewed]);
+    expect(committed.stagedIdentity).toBe(staged.identity);
+    expect(git(fixture.repo, ["show", `${committed.oid}:user.txt`])).toBe("reviewed text");
+  });
+
+  it("reports what the commit holds when the index changes after the final check", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    commitHook.before = () => stageText(fixture.repo, "user.txt", "different text\n");
+    // Put the reviewed contents back in the index once the commit is made, so
+    // only a read of the commit itself, never of the index, can tell them apart.
+    commitHook.after = () => stageText(fixture.repo, "user.txt", "reviewed text\n");
+
+    const committed = await commitAsReviewed(fixture.repo, "topic", shown);
+
+    expect(git(fixture.repo, ["show", `${committed.oid}:user.txt`])).toBe("different text");
+    expect(committed.parentOids).toEqual([fixture.reviewed]);
+    expect(committed.stagedIdentity).toEqual(expect.any(String));
+    expect(committed.stagedIdentity).not.toBe(staged.identity);
+  });
+
+  it("vouches for nothing when a replace ref hides the commit's real parent", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    // After every check, an agent lands an empty commit, so the user's commit
+    // sits on it with exactly the reviewed contents; then a replace ref
+    // presents the reviewed tip as its parent.
+    commitHook.before = () => {
+      // Empty, and made without touching the index the user staged.
+      const tree = git(fixture.repo, ["rev-parse", "HEAD^{tree}"]);
+      const agent = git(fixture.repo, ["commit-tree", tree, "-p", "HEAD", "-m", "agent"]);
+      git(fixture.repo, ["update-ref", "refs/heads/topic", agent]);
+    };
+    commitHook.after = () => {
+      const made = git(fixture.repo, ["rev-parse", "HEAD"]);
+      git(fixture.repo, ["replace", "--graft", made, fixture.reviewed]);
+    };
+
+    const committed = await commitAsReviewed(fixture.repo, "topic", shown);
+
+    expect(committed.parentOids).toEqual([fixture.reviewed]);
+    expect(git(fixture.repo, ["--no-replace-objects", "rev-parse", `${committed.oid}^`])).not.toBe(
+      fixture.reviewed
+    );
+    expect(staged.identity).toEqual(expect.any(String));
+    expect(committed.stagedIdentity).toBeNull();
+  });
+
+  it("refuses when the branch gained a commit while the confirm was open", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown } = await reviewCommit(fixture.repo, "topic");
+    // An agent commits something else, leaving the user's file staged.
+    fs.writeFileSync(path.join(fixture.repo, "agent.txt"), "agent");
+    git(fixture.repo, ["add", "agent.txt"]);
+    git(fixture.repo, ["commit", "-q", "-m", "agent", "--", "agent.txt"]);
+    const agentTip = git(fixture.repo, ["rev-parse", "HEAD"]);
+
+    const error = await refusal(commitAsReviewed(fixture.repo, "topic", shown));
+
+    expectCommitStale(error);
+    expect(error?.message).toMatch(/'topic' moved to a different commit/);
+    expect(git(fixture.repo, ["rev-parse", "HEAD"])).toBe(agentTip);
+  });
+
+  it("refuses a switch to another branch at the same commit with the same changes staged", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown } = await reviewCommit(fixture.repo, "topic");
+    git(fixture.repo, ["checkout", "-q", "-b", "twin"]);
+
+    const error = await refusal(commitAsReviewed(fixture.repo, "topic", shown));
+
+    expectCommitStale(error);
+    expect(error?.message).toMatch(/switched from 'topic' to 'twin'/);
+    expect(git(fixture.repo, ["rev-parse", "twin"])).toBe(fixture.reviewed);
+  });
+
+  it.each([
+    ["the staged identity", { expectedStagedIdentity: undefined }],
+    ["the branch", { expectedBranch: undefined }],
+    ["the tip", { expectedHeadOid: undefined }],
+    ["a well-formed staged identity", { expectedStagedIdentity: "not-an-identity" }],
+    ["a lowercase staged identity", { expectedStagedIdentity: "E".repeat(64) }],
+  ])("refuses a review without %s, and commits nothing", async (_label, override) => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+
+    const error = await rejection(
+      getHandler("git:commit")(FAKE_EVENT, {
+        cwd: fixture.repo,
+        message: "user change",
+        expectedBranch: "topic",
+        expectedHeadOid: shown.headOid,
+        expectedStagedIdentity: staged.identity,
+        ...override,
+      })
+    );
+
+    expect(error).toMatch(/Invalid commit review/);
+    expect(git(fixture.repo, ["rev-parse", "HEAD"])).toBe(fixture.reviewed);
+  });
+
+  it("reads nothing staged unless asked, and reports no identity for an unreviewed commit", async () => {
+    const fixture = makeFixture();
+    stageText(fixture.repo, "user.txt", "reviewed text\n");
+    vi.mocked(readStagedSnapshot).mockClear();
+    vi.mocked(readCommitStagedIdentity).mockClear();
+
+    const shown = await preview(fixture.repo, "topic");
+    const committed = (await getHandler("git:commit")(FAKE_EVENT, {
+      cwd: fixture.repo,
+      message: "plain commit",
+    })) as ReviewedCommit;
+
+    expect(shown.staged).toBeUndefined();
+    expect("stagedIdentity" in committed).toBe(false);
+    expect(readStagedSnapshot).not.toHaveBeenCalled();
+    expect(readCommitStagedIdentity).not.toHaveBeenCalled();
+  });
+
+  it("won't describe another branch's index as staged on the named one", async () => {
+    const fixture = makeFixture();
+    git(fixture.repo, ["checkout", "-q", "-b", "twin", fixture.published]);
+    vi.mocked(readStagedSnapshot).mockClear();
+
+    const error = await refusal(preview(fixture.repo, "topic", { includeStaged: true }));
+
+    expect(error?.reason).toBe("commit-review-stale");
+    expect(error?.message).toMatch(/switched from 'topic' to 'twin'/);
+    expect(readStagedSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("agrees with the commit about a change inside a collapsed sparse directory", async () => {
+    const fixture = makeFixture();
+    fs.mkdirSync(path.join(fixture.repo, "in"));
+    fs.mkdirSync(path.join(fixture.repo, "out", "deep"), { recursive: true });
+    fs.writeFileSync(path.join(fixture.repo, "in", "a.txt"), "a");
+    fs.writeFileSync(path.join(fixture.repo, "out", "deep", "b.txt"), "b");
+    git(fixture.repo, ["add", "."]);
+    git(fixture.repo, ["commit", "-q", "-m", "tree"]);
+    fs.writeFileSync(path.join(fixture.repo, "out", "deep", "b.txt"), "b2");
+    git(fixture.repo, ["commit", "-q", "-am", "deep change"]);
+    git(fixture.repo, ["sparse-checkout", "set", "--cone", "--sparse-index", "in"]);
+    // The out-of-cone change is now staged inside the index's one `out/` entry.
+    git(fixture.repo, ["reset", "-q", "--soft", "HEAD^"]);
+    const tip = git(fixture.repo, ["rev-parse", "HEAD"]);
+    expect(git(fixture.repo, ["ls-files", "--sparse"])).toMatch(/^out\/$/m);
+
+    const { shown, staged } = await reviewCommit(fixture.repo, "topic");
+    const committed = await commitAsReviewed(fixture.repo, "topic", shown);
+
+    expect(staged.paths).toEqual(["out/deep/b.txt"]);
+    expect(committed.parentOids).toEqual([tip]);
+    expect(committed.stagedIdentity).toBe(staged.identity);
   });
 });

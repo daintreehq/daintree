@@ -8,7 +8,9 @@ const { projects, pty, gitProbe } = vi.hoisted(() => ({
   projects: [] as Array<{ id: string; path: string; name: string }>,
   pty: {
     tracked: new Map<string, string>(),
+    unplaced: new Set<string>(),
     recorded: new Map<string, string>(),
+    recordedUnplaced: new Set<string>(),
     timingOut: new Set<string>(),
     absent: false,
   },
@@ -34,14 +36,20 @@ vi.mock("../../window/serviceRefs.js", () => ({
       ? null
       : {
           getTerminalProjectId: (id: string) => pty.tracked.get(id) ?? null,
-          hasTerminal: (id: string) => pty.tracked.has(id),
+          isUnplacedTerminal: (id: string) => pty.unplaced.has(id),
+          hasTerminal: (id: string) => pty.tracked.has(id) || pty.unplaced.has(id),
           // As the real client: a timeout reads as no terminal unless asked to be strict.
           getTerminalAsync: async (id: string, _token?: string, options?: { strict?: boolean }) => {
             if (pty.timingOut.has(id)) {
               if (options?.strict) throw new Error("timed out");
               return null;
             }
-            return pty.recorded.has(id) ? { id, projectId: pty.recorded.get(id) } : null;
+            if (!pty.recorded.has(id) && !pty.recordedUnplaced.has(id)) return null;
+            return {
+              id,
+              projectId: pty.recorded.get(id),
+              ...(pty.recordedUnplaced.has(id) ? { unplaced: true } : {}),
+            };
           },
         },
 }));
@@ -66,7 +74,6 @@ function stubResolvers(overrides: Partial<LeaseTargetResolvers> = {}): LeaseTarg
     projectsForOperation: () => [],
     projectsForDevPreviewPanel: () => [],
     projectsForHelpSession: () => [],
-    currentProjectId: () => null,
     ...overrides,
   };
 }
@@ -247,23 +254,69 @@ describe("resolveLeaseTarget", () => {
     });
   });
 
-  it("checks the Host's current project for a spawn that names none, as its handler uses it", () => {
-    const resolvers = stubResolvers({ currentProjectId: () => "b" });
+  it("places a spawn that names no project in the caller's, as its handler does", () => {
+    const spawn = target("terminal:spawn");
+    expect(resolveLeaseTarget(spawn, [{ cols: 80, rows: 24 }], "a", stubResolvers())).toEqual({
+      kind: "projects",
+      projectIds: ["a"],
+    });
     expect(
-      resolveLeaseTarget(target("terminal:spawn"), [{ cols: 80, rows: 24 }], "a", resolvers)
+      resolveLeaseTarget(spawn, [{ cols: 80, rows: 24, projectId: "b" }], "a", stubResolvers())
     ).toEqual({ kind: "projects", projectIds: ["b"] });
+  });
+
+  // A window with no project has nothing anyone controls (#17926).
+  it("places a spawn from a window that shows no project in none", () => {
+    const spawn = target("terminal:spawn");
+    for (const args of [[{ cols: 80, rows: 24 }], [{ cols: 80, rows: 24, projectId: null }]]) {
+      expect(resolveLeaseTarget(spawn, args, null, stubResolvers()), JSON.stringify(args)).toEqual({
+        kind: "projects",
+        projectIds: [],
+      });
+    }
+    // A blank binding is none too, as the handler reads it.
+    expect(resolveLeaseTarget(spawn, [{ cols: 80, rows: 24 }], "  ", stubResolvers())).toEqual({
+      kind: "projects",
+      projectIds: [],
+    });
+    // Its folder still counts: a shell opened inside a project's repository changes that project.
     expect(
-      resolveLeaseTarget(
-        target("terminal:spawn"),
-        [{ cols: 80, rows: 24, projectId: "a" }],
-        "a",
-        resolvers
-      )
-    ).toEqual({ kind: "projects", projectIds: ["a"] });
+      resolveLeaseTarget(spawn, [{ cols: 80, rows: 24, cwd: "/repo/b" }], null, stubResolvers())
+    ).toEqual({ kind: "projects", projectIds: ["b"] });
+    // A strict caller fallback still refuses a call that can't be placed.
+    expect(
+      resolveLeaseTarget(target("artifact:save-to-file"), [{ content: "x" }], null, stubResolvers())
+    ).toMatchObject({ kind: "unresolved" });
+  });
+
+  it("lets only a canonical id of a terminal placed in no project change none", () => {
+    const resolvers = stubResolvers({
+      describeTerminal: (id) =>
+        id.trim() === "t-picker"
+          ? { projectId: null, unplaced: true }
+          : id === "t-stamped"
+            ? { projectId: "a", unplaced: true }
+            : "missing",
+    });
+    const kill = target("terminal:kill");
+    expect(resolveLeaseTarget(kill, ["t-picker"], null, resolvers)).toEqual({
+      kind: "projects",
+      projectIds: [],
+    });
+    for (const padded of [" t-picker ", "t-picker "]) {
+      expect(resolveLeaseTarget(kill, [padded], null, resolvers), padded).toMatchObject({
+        kind: "unresolved",
+      });
+    }
+    // A project on the record always wins.
+    expect(resolveLeaseTarget(kill, ["t-stamped"], null, resolvers)).toEqual({
+      kind: "projects",
+      projectIds: ["a"],
+    });
   });
 
   it("refuses a project id that a handler would trim into another project", () => {
-    const resolvers = stubResolvers({ currentProjectId: () => "b" });
+    const resolvers = stubResolvers();
     for (const projectId of [" b ", "b\n", "   "]) {
       expect(
         resolveLeaseTarget(
@@ -496,6 +549,39 @@ describe("createLeaseTargetResolvers", () => {
     await expect(Promise.resolve(r.describeTerminal("t-slow"))).resolves.toEqual({
       projectId: null,
     });
+  });
+
+  // #17926: placed in none by main itself, so whoever can see it may end it.
+  it("reads a terminal main placed in no project as changing none, unlike one it can't place", async () => {
+    pty.unplaced.add("t-picker");
+    const r = createLeaseTargetResolvers();
+    expect(r.describeTerminal("t-picker")).toEqual({ projectId: null, unplaced: true });
+    for (const channel of ["terminal:kill", "terminal:trash", "terminal:update-title"]) {
+      const args = channel === "terminal:update-title" ? [{ id: "t-picker" }] : ["t-picker"];
+      expect(resolveLeaseTarget(getChannelLeaseTarget(channel)!, args, "a", r), channel).toEqual({
+        kind: "projects",
+        projectIds: [],
+      });
+    }
+    // A preserved exit drops main's record; the host's still says so.
+    pty.recordedUnplaced.add("t-preserved");
+    await expect(Promise.resolve(r.describeTerminal("t-preserved"))).resolves.toEqual({
+      projectId: null,
+      unplaced: true,
+    });
+    // A project on the host's record wins over the marker.
+    pty.recorded.set("t-both", "b");
+    pty.recordedUnplaced.add("t-both");
+    await expect(Promise.resolve(r.describeTerminal("t-both"))).resolves.toEqual({
+      projectId: "b",
+    });
+    // A record with no project that main didn't place stays untraceable.
+    pty.recorded.set("t-host-shell", "");
+    await expect(
+      Promise.resolve(
+        resolveLeaseTarget(getChannelLeaseTarget("terminal:kill")!, ["t-host-shell"], "a", r)
+      )
+    ).resolves.toMatchObject({ kind: "unresolved" });
   });
 
   it("calls every terminal gone before the pty-host has started", () => {

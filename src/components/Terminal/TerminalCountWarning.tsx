@@ -9,6 +9,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelLimitStore, shouldShowSoftWarning } from "@/store/panelLimitStore";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { prepareUserClose } from "@/services/terminal/panelCloseHistory";
 import { pluralNoun } from "@/lib/pluralize";
 
 interface TerminalCountWarningProps {
@@ -97,12 +98,14 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
         }
       }
       if (idsToClose.length === 0) return;
+      const recordClose = prepareUserClose(idsToClose);
       requestPanelClose({
         hideIds: idsToClose,
-        commit: () => {
-          const latest = usePanelStore.getState();
-          idsToClose.forEach((id) => latest.trashPanel(id));
-        },
+        commit: () =>
+          recordClose(() => {
+            const latest = usePanelStore.getState();
+            idsToClose.forEach((id) => latest.trashPanel(id));
+          }),
       });
     }
   }, [onOpenBulkActions]);

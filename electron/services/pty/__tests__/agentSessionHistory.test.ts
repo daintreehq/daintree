@@ -18,6 +18,7 @@ import {
   removeFromCanopyTrash,
   adoptCanopyTrashClose,
   onSessionHistoryWritten,
+  resetSessionHistoryCacheForTesting,
   MAX_RECORDS_PER_WORKTREE,
   SESSION_HISTORY_TTL_MS,
 } from "../agentSessionHistory.js";
@@ -46,6 +47,8 @@ async function seedRecordAged(
   await import("node:fs/promises").then((fsp) =>
     fsp.writeFile(filePath, JSON.stringify([record, ...existing]))
   );
+  // Written behind the module's back, so it is read as a restart would read it.
+  resetSessionHistoryCacheForTesting();
 }
 
 describe("agentSessionHistory", () => {
@@ -309,6 +312,46 @@ describe("agentSessionHistory", () => {
       const [record] = await readSessionHistory(userDataDir);
       expect(record.agentId).toBe("codex");
       expect(record).not.toHaveProperty("scheduledRun");
+    });
+  });
+
+  // #17087: the account folder a conversation is stored in, for a resume.
+  describe("conversation store", () => {
+    const base = { agentId: "claude", worktreeId: "wt-1", title: null, projectId: null };
+    const store = (sessionId: string) => ({ sessionId, configDir: "/home/me/.claude-company" });
+
+    it("keeps a store only beside the session it names", async () => {
+      const filePath = getSessionHistoryPath(userDataDir)!;
+      const now = Date.now();
+      await fsp.writeFile(
+        filePath,
+        JSON.stringify([
+          { ...base, sessionId: "s1", savedAt: now, conversationStore: store("s1") },
+          { ...base, sessionId: "s2", savedAt: now - 1, conversationStore: store("s1") },
+          {
+            ...base,
+            sessionId: "s3",
+            savedAt: now - 2,
+            conversationStore: { sessionId: "s3", configDir: "relative" },
+          },
+        ])
+      );
+
+      const records = await readSessionHistory(userDataDir);
+      expect(records.find((r) => r.sessionId === "s1")?.conversationStore).toEqual(store("s1"));
+      expect(records.find((r) => r.sessionId === "s2")).not.toHaveProperty("conversationStore");
+      expect(records.find((r) => r.sessionId === "s3")).not.toHaveProperty("conversationStore");
+    });
+
+    it("stays with the conversation when it is journaled again without one", async () => {
+      await persistAgentSession(
+        { ...base, sessionId: "s1", conversationStore: store("s1") },
+        userDataDir
+      );
+      await persistAgentSession({ ...base, sessionId: "s1", title: "Carried on" }, userDataDir);
+
+      const [record] = await readSessionHistory(userDataDir);
+      expect(record).toMatchObject({ title: "Carried on", conversationStore: store("s1") });
     });
   });
 
@@ -634,7 +677,7 @@ describe("agentSessionHistory", () => {
   });
 
   describe("in-memory cache", () => {
-    it("reflects a direct on-disk change after a prior read cached it", async () => {
+    it("serves the journal it holds without touching the disk again", async () => {
       const filePath = getSessionHistoryPath(userDataDir)!;
       await persistAgentSession(
         {
@@ -646,16 +689,46 @@ describe("agentSessionHistory", () => {
         },
         userDataDir
       );
-      // Prime the cache.
-      expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["cached"]);
+      // Main is the journal's only writer, so a change behind its back — even
+      // the file vanishing — is invisible until the next write or restart.
+      await fsp.rm(filePath);
 
-      // Overwrite the journal directly, bypassing the writers — the stat gate
-      // must notice the size/mtime change and re-read rather than serve stale.
+      expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["cached"]);
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["cached"]);
+    });
+
+    it("reads the disk again after a restart", async () => {
+      const filePath = getSessionHistoryPath(userDataDir)!;
+      const external = (sessionId: string) => ({
+        sessionId,
+        agentId: "claude",
+        worktreeId: "wt-1",
+        title: null,
+        projectId: null,
+        savedAt: Date.now(),
+      });
+      await fsp.writeFile(filePath, JSON.stringify([external("before")]));
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["before"]);
+      await fsp.writeFile(filePath, JSON.stringify([external("after")]));
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["before"]);
+
+      resetSessionHistoryCacheForTesting();
+
+      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual(["after"]);
+    });
+
+    it.each([
+      ["sync", (dir: string) => Promise.resolve(readSessionHistorySync(dir))],
+      ["async", (dir: string) => readSessionHistory(dir)],
+    ] as const)("finds a journal that appears where there was none (%s read)", async (_, read) => {
+      // A harness can seed the journal after launch, once Main has already
+      // looked for it, so an absent file is never held as an empty journal.
+      expect(await read(userDataDir)).toEqual([]);
       await fsp.writeFile(
-        filePath,
+        getSessionHistoryPath(userDataDir)!,
         JSON.stringify([
           {
-            sessionId: "external",
+            sessionId: "seeded",
             agentId: "claude",
             worktreeId: "wt-1",
             title: null,
@@ -665,10 +738,7 @@ describe("agentSessionHistory", () => {
         ])
       );
 
-      expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual(["external"]);
-      expect(listAgentSessions(undefined, userDataDir).map((r) => r.sessionId)).toEqual([
-        "external",
-      ]);
+      expect((await read(userDataDir)).map((r) => r.sessionId)).toEqual(["seeded"]);
     });
 
     it("serves the same parsed array reference on a cache hit (no re-parse)", async () => {
@@ -821,10 +891,11 @@ describe("agentSessionHistory bookmarks", () => {
   async function seed(records: AgentSessionRecord[]): Promise<void> {
     const filePath = getSessionHistoryPath(userDataDir)!;
     await fsp.writeFile(filePath, JSON.stringify(records));
+    resetSessionHistoryCacheForTesting();
   }
 
   // Fresh temp dir per retention value (the beforeEach one is reused across the
-  // it.each rows) so the stat-gated read cache can't serve a prior row's records.
+  // it.each rows) so the read cache can't serve a prior row's records.
   it.each([7, 0] as const)(
     "keeps bookmarks across retention=%s while ordinary records age out",
     async (days) => {

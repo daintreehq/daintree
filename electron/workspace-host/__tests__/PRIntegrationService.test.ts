@@ -316,6 +316,56 @@ describe("PRIntegrationService", () => {
     });
   });
 
+  describe("while paused (#17060)", () => {
+    it("initialize() wires detection but starts no polling until resume()", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      service.pause();
+
+      await service.initialize("/repo", "test-project-id", () => []);
+
+      expect(prServiceMock.initialize).toHaveBeenCalledWith("/repo", "test-project-id");
+      expect(prServiceMock.start).not.toHaveBeenCalled();
+
+      service.resume();
+      expect(prServiceMock.start).toHaveBeenCalledWith(0);
+    });
+
+    it("resetPRState() reinitializes without restarting polling", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", "test-project-id", () => []);
+      service.pause();
+      vi.mocked(prServiceMock.start).mockClear();
+
+      service.resetPRState("/repo", "test-project-id");
+
+      expect(prServiceMock.reset).toHaveBeenCalled();
+      expect(prServiceMock.initialize).toHaveBeenLastCalledWith("/repo", "test-project-id");
+      expect(prServiceMock.start).not.toHaveBeenCalled();
+    });
+
+    it("updateForgeCredentials(null) reinitializes without restarting polling", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      await service.initialize("/repo", "test-project-id", () => []);
+      service.pause();
+      vi.mocked(prServiceMock.start).mockClear();
+
+      service.updateForgeCredentials("builtin.github", null, "/repo", "test-project-id");
+
+      expect(prServiceMock.initialize).toHaveBeenLastCalledWith("/repo", "test-project-id");
+      expect(prServiceMock.start).not.toHaveBeenCalled();
+    });
+
+    it("cleanup() does not clear the pause", async () => {
+      const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);
+      service.pause();
+      service.cleanup();
+
+      await service.initialize("/repo", "test-project-id", () => []);
+
+      expect(prServiceMock.start).not.toHaveBeenCalled();
+    });
+  });
+
   describe("updateForgeCredentials", () => {
     it("refreshes when credentials are truthy", () => {
       const service = new PRIntegrationService(prServiceMock, eventBus, callbacks);

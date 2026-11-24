@@ -4,7 +4,7 @@ import { isAgentRecipeType, isPluginRecipe, promptCarriesWhenDone } from "@share
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
-import { exitProjectHome } from "./storeAccessors";
+import { exitProjectHome, getCurrentProjectId } from "./storeAccessors";
 import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
 import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { recipeToolbarSourceId } from "@/utils/recipeScope";
@@ -14,7 +14,7 @@ import {
   PANEL_LIMIT_DECLINED_REASON,
 } from "@/services/actions/definitions/panelLimitError";
 import { countPanelLimitUsage } from "./slices/panelRegistry/panelCount";
-import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
+import { RecipeChangedSinceShownError, recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import { isAssistantFocused } from "./macroFocusStore";
 import {
@@ -60,6 +60,7 @@ import {
   recipeTerminalsUsePluginOnlyFeatures,
   recipeUsesPluginOnlyFeatures,
 } from "@/utils/pluginRecipeCopy";
+import { nextDuplicateName } from "@/utils/recipeDuplicate";
 import { MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import {
   prepareRecipeImport,
@@ -335,6 +336,7 @@ interface RecipeState {
   loadRecipes: (projectId: string, options?: { background?: boolean }) => Promise<void>;
   /** Replace the plugin tier wholesale from main's authoritative snapshot. */
   setPluginRecipes: (recipes: TerminalRecipe[]) => void;
+  /** `true` once written, `false` when the user cancelled the picker; throws when the row is gone or the write fails. */
   exportRecipeToFile: (id: string) => Promise<boolean>;
   /**
    * Opens the file picker and checks the file the way an import would, without
@@ -349,6 +351,12 @@ interface RecipeState {
     showInEmptyState?: boolean,
     autoAssign?: "always" | "never" | "prompt"
   ) => Promise<void>;
+  /**
+   * Copies the exact row with this id into a new unpinned recipe in the same
+   * tier. A team recipe has no `projectId` of its own, so its copy goes to the
+   * open project's repo and never to Global; with no project open it throws.
+   */
+  duplicateRecipe: (id: string) => Promise<void>;
   updateRecipe: (
     id: string,
     updates: Partial<Omit<TerminalRecipe, "id" | "projectId" | "createdAt">>
@@ -673,6 +681,36 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       });
       throw error;
     }
+  },
+
+  duplicateRecipe: async (id) => {
+    // The exact row, not `getRecipeById`: copying a row badged as overridden
+    // has to copy that row, not the team recipe that shadows it (#17200).
+    const source = get().recipes.find((r) => r.id === id);
+    if (!source) {
+      throw new Error(`Recipe ${id} not found`);
+    }
+    // Team identity comes first: a team recipe also carries no `projectId`, so
+    // passing that straight through would file its copy under Global.
+    let projectId = source.projectId;
+    if (isInRepoRecipeId(source)) {
+      // This store keeps the id it loaded for after the view drops to no
+      // project (slept from another window), so the live project has to agree.
+      const loadedFor = get().currentProjectId;
+      if (loadedFor === null || getCurrentProjectId() !== loadedFor) {
+        throw new Error("Open a project to save a copy of a team recipe");
+      }
+      projectId = loadedFor;
+    }
+    const existingNames = new Set(get().recipes.map((r) => r.name));
+    await get().createRecipe(
+      projectId,
+      nextDuplicateName(source.name, existingNames),
+      source.worktreeId,
+      source.terminals,
+      false,
+      source.autoAssign
+    );
   },
 
   updateRecipe: async (id, updates) => {
@@ -1148,16 +1186,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
   runRecipeWithResults: async (recipeId, worktreePath, worktreeId, context, options) => {
     const recipe = get().getRecipeById(recipeId);
-    if (!recipe) {
-      throw new Error(`Recipe ${recipeId} not found`);
-    }
     const expected = options?.expectedRecipe;
+    // A recipe deleted under the dialog changed too: the approval covered
+    // something that no longer exists.
     if (
       expected !== undefined &&
-      (recipe.id !== expected.id ||
+      (recipe?.id !== expected.id ||
         recipeApprovalDigest(recipe.terminals) !== expected.terminalsDigest)
     ) {
-      throw new Error("Recipe changed since it was shown");
+      throw new RecipeChangedSinceShownError();
+    }
+    if (!recipe) {
+      throw new Error(`Recipe ${recipeId} not found`);
     }
 
     // A recipe that needs its plugin's agent tools says so rather than starting
@@ -1723,8 +1763,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     return results;
   },
 
+  // The exact row, never `getRecipeById`: that follows a shadowed local recipe to
+  // the team recipe so a run launches the winner, but an export of the row the
+  // user picked has to be that row (#17200).
   exportRecipe: (id) => {
-    const recipe = get().getRecipeById(id);
+    const recipe = get().recipes.find((r) => r.id === id);
     if (!recipe) {
       return null;
     }
@@ -1741,8 +1784,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   },
 
   exportRecipeToFile: async (id) => {
-    const recipe = get().getRecipeById(id);
-    if (!recipe) return false;
+    const recipe = get().recipes.find((r) => r.id === id);
+    if (!recipe) throw new Error(`Recipe ${id} not found`);
     const { projectId: _p, shadowedBy: _s, origin: _o, ...exportable } = recipe;
     const json = JSON.stringify(exportable, null, 2);
     return projectClient.exportRecipeToFile(recipe.name, json);
