@@ -9,6 +9,7 @@ import {
 import { hydratedSettingsOf, type HydratedSettings } from "@/store/hostResyncSignal";
 import { getWorktreeIdSet, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { logWarn } from "@/utils/logger";
+import type { SavedDrafts } from "@/store/persistence/draftInputPersistence";
 
 /**
  * Each read of the host's drafts, numbered as it is asked. The host answers in
@@ -79,6 +80,7 @@ export async function rehydrateHostProjectState(
   // What this view last knew the host held, read before asking, so a write of
   // ours acknowledged while the answer travels can't pass for a host deletion.
   const baselineBefore = persistence.getBaseline(projectId) ?? {};
+  const savedBefore = persistence.savedFromHere(projectId);
   const draftRead = ++draftReadTicket;
   const hydrate: HydrateResult = await window.electron.app.hydrate();
   if (!options.isCurrent()) return;
@@ -168,6 +170,7 @@ export async function rehydrateHostProjectState(
     authoritative: options.authoritative,
     draftsBefore,
     baselineBefore,
+    savedBefore,
     useTerminalInputStore: drafts.useTerminalInputStore,
     draftInputPersistence,
   });
@@ -190,6 +193,7 @@ export async function refreshHostDrafts(
   if (!options.isCurrent()) return;
   const draftsBefore = useTerminalInputStore.getState().getProjectDraftInputs(projectId);
   const baselineBefore = draftInputPersistence.getBaseline(projectId) ?? {};
+  const savedBefore = draftInputPersistence.savedFromHere(projectId);
   const draftRead = ++draftReadTicket;
   const hostDrafts = await window.electron.project.getDraftInputs(projectId);
   if (!options.isCurrent()) return;
@@ -198,6 +202,7 @@ export async function refreshHostDrafts(
     authoritative: true,
     draftsBefore,
     baselineBefore,
+    savedBefore,
     useTerminalInputStore,
     draftInputPersistence,
   });
@@ -211,6 +216,8 @@ interface ApplyHostDraftsContext {
   draftsBefore: Record<string, string>;
   /** What this view last knew the host held, read before asking. */
   baselineBefore: Record<string, string>;
+  /** The drafts the host held only because this view saved them, read before asking. */
+  savedBefore: SavedDrafts;
   useTerminalInputStore: typeof import("@/store/terminalInputStore").useTerminalInputStore;
   draftInputPersistence: typeof import("@/store/persistence/draftInputPersistence").draftInputPersistence;
 }
@@ -225,9 +232,11 @@ function applyHostDrafts(
   // one (a fresh session's resync) mustn't keep a takeover's answer, asked
   // before it, from landing.
   if (context.authoritative) appliedDraftRead = context.read;
-  const { draftsBefore, baselineBefore, draftInputPersistence } = context;
+  const { draftsBefore, baselineBefore, savedBefore, draftInputPersistence } = context;
   const input = context.useTerminalInputStore.getState();
   const local = input.getProjectDraftInputs(projectId);
+  // Read again as well: a save acknowledged while the answer travelled.
+  const savedNow = draftInputPersistence.savedFromHere(projectId);
   const incoming: Record<string, string> = {};
   for (const [terminalId, text] of Object.entries(hostDrafts)) {
     if (typeof text !== "string" || text === "") continue;
@@ -235,12 +244,12 @@ function applyHostDrafts(
     if ((local[terminalId] ?? "") !== (draftsBefore[terminalId] ?? "")) continue;
     if (local[terminalId] === text) continue;
     // This view saved that text and has sent or cleared it since; the host
-    // holds it only until the removal lands. The rebase below keeps it in
-    // the baseline, so the next flush still sends that removal.
+    // holds it only until the removal lands (#18161). The rebase below keeps
+    // it in the baseline, so the next flush still sends that removal.
     if (
       !local[terminalId] &&
-      (baselineBefore[terminalId] === text ||
-        draftInputPersistence.savedFromHere(projectId, terminalId, text))
+      (draftInputPersistence.isSavedFromHere(savedBefore, terminalId, text) ||
+        draftInputPersistence.isSavedFromHere(savedNow, terminalId, text))
     ) {
       continue;
     }

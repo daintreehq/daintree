@@ -70,6 +70,7 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
 
 import { refreshHostDrafts, rehydrateHostProjectState } from "../hostProjectRehydrate";
 import { draftInputPersistence } from "../persistence/draftInputPersistence";
+import { dropDeferredHostOwnedWrites } from "../persistence/hostOwnedWrites";
 import {
   resetStoreAccessorsForTesting,
   setWorktreeIdSetAccessor,
@@ -300,6 +301,54 @@ describe("rehydrateHostProjectState", () => {
       expect(setDraftInputs).toHaveBeenCalledWith("proj-1", { t2: "unsent" }, [], ["t1"]);
     }
   );
+
+  it("doesn't bring back a draft sent here whose first save was still on its way", async () => {
+    draftInputPersistence.primeProject("proj-1", {});
+    let answerSave!: () => void;
+    setDraftInputs.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (answerSave = () => resolve(undefined)))
+    );
+    drafts.local = { t1: "sent prompt" };
+    draftInputPersistence.flushAll();
+    await vi.waitFor(() => expect(setDraftInputs).toHaveBeenCalledTimes(1));
+    drafts.local = {};
+    hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "sent prompt" } }));
+
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+    answerSave();
+    await draftInputPersistence.whenIdle();
+
+    expect(drafts.local).toEqual({});
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+    expect(setDraftInputs).toHaveBeenLastCalledWith("proj-1", {}, [], ["t1"]);
+  });
+
+  it("doesn't bring back a draft whose removal was acknowledged while the answer travelled", async () => {
+    draftInputPersistence.primeProject("proj-1", { t1: "sent prompt" });
+    drafts.local = {};
+    hydrate.mockImplementation(async () => {
+      // Read before the removal landed, answered after it was acknowledged.
+      draftInputPersistence.flushAll();
+      await draftInputPersistence.whenIdle();
+      return hostSaved({ draftInputs: { t1: "sent prompt" } });
+    });
+
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+
+    expect(drafts.local).toEqual({});
+  });
+
+  it("restores the same text once another screen has driven, since the host's copy may be its own", async () => {
+    draftInputPersistence.primeProject("proj-1", { t1: "sent prompt" });
+    drafts.local = {};
+    dropDeferredHostOwnedWrites("another screen took the project");
+    hydrate.mockResolvedValue(hostSaved({ draftInputs: { t1: "sent prompt" } }));
+
+    await rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+
+    expect(drafts.local).toEqual({ t1: "sent prompt" });
+  });
 
   it("still restores a host draft that differs from the one sent here", async () => {
     draftInputPersistence.primeProject("proj-1", { t1: "sent prompt" });

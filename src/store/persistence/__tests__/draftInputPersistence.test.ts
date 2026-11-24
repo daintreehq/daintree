@@ -152,29 +152,46 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     expect(setDraftInputsMock).toHaveBeenCalledTimes(2);
   });
 
-  it("knows the text of a save it made, acknowledged or with its answer lost (#18161)", async () => {
+  it("knows the drafts it saved: acknowledged, still on their way, or with the answer lost (#18161)", async () => {
     const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, {});
+    const saved = (terminalId: string, text: string) =>
+      draftInputPersistence.isSavedFromHere(
+        draftInputPersistence.savedFromHere(projectId),
+        terminalId,
+        text
+      );
     setDraft(projectId, "t1", "acknowledged");
-    setDraft(projectId, "t2", "maybe saved");
-    setDraftInputsMock.mockImplementationOnce(async (_id, _drafts, changedIds) => {
-      // t2's save goes up alone below; this first one carries both.
-      expect(changedIds).toEqual(["t1", "t2"]);
-    });
-    draftInputPersistence.flushAll();
-    await draftInputPersistence.whenIdle();
-    setDraft(projectId, "t2", "maybe saved, edited");
-    setDraftInputsMock.mockImplementationOnce(() => Promise.reject(new Error("answer lost")));
     draftInputPersistence.flushAll();
     await draftInputPersistence.whenIdle();
 
-    expect(draftInputPersistence.savedFromHere(projectId, "t1", "acknowledged")).toBe(true);
-    expect(draftInputPersistence.savedFromHere(projectId, "t2", "maybe saved, edited")).toBe(true);
-    expect(draftInputPersistence.savedFromHere(projectId, "t1", "someone else's")).toBe(false);
-    expect(draftInputPersistence.savedFromHere(projectId, "t3", "acknowledged")).toBe(false);
+    setDraft(projectId, "t2", "on its way");
+    let answer!: () => void;
+    setDraftInputsMock.mockImplementationOnce(
+      () => new Promise<void>((resolve, reject) => (answer = () => reject(new Error("lost"))))
+    );
+    draftInputPersistence.flushAll();
+    await flushMicrotasks();
+    const whileOnItsWay = saved("t2", "on its way");
+    answer();
+    await draftInputPersistence.whenIdle();
+    expect(whileOnItsWay).toBe(true);
 
-    // Another screen drove: what the host holds unacknowledged may be its own.
+    expect(saved("t1", "acknowledged")).toBe(true);
+    expect(saved("t2", "on its way")).toBe(true);
+    expect(saved("t1", "someone else's")).toBe(false);
+    expect(saved("t3", "acknowledged")).toBe(false);
+
+    // Another screen drove: the host's drafts may be its own now.
+    const before = draftInputPersistence.savedFromHere(projectId);
     dropDeferredHostOwnedWrites("another screen took the project");
-    expect(draftInputPersistence.savedFromHere(projectId, "t2", "maybe saved, edited")).toBe(false);
+    expect(draftInputPersistence.isSavedFromHere(before, "t1", "acknowledged")).toBe(false);
+    expect(saved("t1", "acknowledged")).toBe(false);
+    expect(saved("t2", "on its way")).toBe(false);
+
+    // Until it reads the host's record back.
+    draftInputPersistence.rebaseProject(projectId, { t1: "acknowledged" });
+    expect(saved("t1", "acknowledged")).toBe(true);
   });
 
   it("sends no removal for an unacknowledged save once another screen has driven (#13283)", async () => {
