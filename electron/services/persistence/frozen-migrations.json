@@ -202,6 +202,27 @@
       "when": 1794182400000,
       "breakpoints": true,
       "sha256": "87861b3543f2c8257375a07de076973c1bf9659cbb97282c3cad4d5201341755"
+    },
+    {
+      "idx": 29,
+      "tag": "0029_status_and_live_run_indexes",
+      "when": 1794268800000,
+      "breakpoints": true,
+      "sha256": "28d9f73015d2746e0ff9b77d5721b01c5b1b4b72e87fa9ffcaf93db00b77bfac"
+    },
+    {
+      "idx": 30,
+      "tag": "0030_decisions_missing_session_idx",
+      "when": 1794355200000,
+      "breakpoints": true,
+      "sha256": "43a9d658bd03ece717b15d954495bbb74f8b2e6203ec16951bd06efaf50a8145"
+    },
+    {
+      "idx": 31,
+      "tag": "0031_decisions_deleted_events_index",
+      "when": 1794441600000,
+      "breakpoints": true,
+      "sha256": "f2084fd78646658964a23ad7a6edf79a22c40279278d4fe0745105166cdb322c"
     }
   ]
 }
