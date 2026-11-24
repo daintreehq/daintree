@@ -1,7 +1,11 @@
 import { useEffect, useId, useState } from "react";
 import { ChevronRight, Gauge } from "lucide-react";
 import type { AgentUsageReadout } from "@shared/types/ipc/agentUsage";
-import { isAgentUsagePastAttention, tightestAgentUsage } from "@shared/utils/agentUsage";
+import {
+  agentUsageShownUntil,
+  isAgentUsagePastAttention,
+  tightestAgentUsage,
+} from "@shared/utils/agentUsage";
 import {
   setAgentUsageExpanded,
   useAgentUsageExpanded,
@@ -112,22 +116,24 @@ export function SidebarAgentUsage() {
 }
 
 /**
- * The minute clock, moved on at a shown reading's reset as well: the next
- * reading takes over then, not up to a minute later. A reset further off than
+ * The minute clock, moved on as a reading resets or ages out as well: the next
+ * reading takes over then, not up to a minute later. An end further off than
  * the next minute is that minute's to catch.
  */
 function useResetAwareClock(readouts: readonly AgentUsageReadout[], minute: number): number {
   const [atReset, setAtReset] = useState(0);
   const now = Math.max(minute, atReset);
   const next = Math.min(
-    ...readouts.flatMap(({ reading }) =>
-      reading.resetsAt !== null && reading.resetsAt > now ? [reading.resetsAt] : []
-    )
+    ...readouts.flatMap(({ reading }) => {
+      const until = agentUsageShownUntil(reading);
+      return until > now ? [until] : [];
+    })
   );
   useEffect(() => {
-    const wait = next - now;
+    // From the wall clock, not `now`: the minute sample can be most of a minute old.
+    const wait = next - Date.now();
     if (!Number.isFinite(wait) || wait > RESET_WAKE_HORIZON_MS) return;
-    const timer = setTimeout(() => setAtReset(next), wait + 1);
+    const timer = setTimeout(() => setAtReset(next), Math.max(0, wait) + 1);
     return () => clearTimeout(timer);
   }, [next, now]);
   return now;

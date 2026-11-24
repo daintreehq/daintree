@@ -50,9 +50,22 @@ export function isAgentUsagePastAttention(reading: AgentUsageReading): boolean {
   return rank(reading)[0] >= 2;
 }
 
-/** A reading whose reset has passed describes a window that is over. */
-export function hasAgentUsageReset(reading: AgentUsageReading, now: number): boolean {
-  return reading.resetsAt !== null && reading.resetsAt <= now;
+/**
+ * How long the sidebar shows a reading after it was last observed (#18159).
+ * Daintree never reads credentials, so a login switched since leaves no trace
+ * but the reading's age; the account picker and Settings keep theirs.
+ */
+export const AGENT_USAGE_SHOWN_FOR_MS = 6 * 60 * 60_000;
+
+/** When the sidebar stops showing a reading: at its reset, or once it has aged out. */
+export function agentUsageShownUntil(reading: AgentUsageReading): number {
+  const agedOutAt = reading.observedAt + AGENT_USAGE_SHOWN_FOR_MS;
+  return reading.resetsAt === null ? agedOutAt : Math.min(reading.resetsAt, agedOutAt);
+}
+
+/** A reading whose reset has passed describes a window that is over; one seen too long ago may be another login's. */
+export function hasAgentUsageEnded(reading: AgentUsageReading, now: number): boolean {
+  return agentUsageShownUntil(reading) <= now;
 }
 
 /**
@@ -73,8 +86,8 @@ export function compareAgentUsage(a: AgentUsageReading, b: AgentUsageReading): n
 }
 
 /**
- * The tightest reading whose reset hasn't passed, one per agent, in the order
- * each agent first appears. The first of two equal readings stands.
+ * The tightest reading still shown, one per agent, in the order each agent
+ * first appears. The first of two equal readings stands.
  */
 export function tightestAgentUsage<T>(
   items: readonly T[],
@@ -84,7 +97,7 @@ export function tightestAgentUsage<T>(
   const best = new Map<AgentUsageReading["agentId"], T>();
   for (const item of items) {
     const reading = readingOf(item);
-    if (hasAgentUsageReset(reading, now)) continue;
+    if (hasAgentUsageEnded(reading, now)) continue;
     const current = best.get(reading.agentId);
     if (current === undefined || compareAgentUsage(reading, readingOf(current)) > 0) {
       best.set(reading.agentId, item);
@@ -94,24 +107,23 @@ export function tightestAgentUsage<T>(
 }
 
 /**
- * Per agent, the tightest reading whose reset hasn't passed and, when that
- * one names a reset, the tightest of the rest that outlast it: what shows
- * once it resets. Sent together, so a machine whose clock reaches the reset
- * first still has the next reading to show.
+ * Per agent, the tightest reading still shown and the tightest of the rest
+ * shown longer: what takes over once it resets or ages out. Sent together, so
+ * a machine whose clock reaches that moment first still has the next reading
+ * to show.
  */
 export function agentUsageWithSuccessors(
   readings: readonly AgentUsageReading[],
   now: number
 ): AgentUsageReading[] {
   return tightestAgentUsage(readings, (reading) => reading, now).flatMap((winner) => {
-    const until = winner.resetsAt;
-    if (until === null) return [winner];
+    const until = agentUsageShownUntil(winner);
     const [successor] = tightestAgentUsage(
       readings.filter(
         (reading) =>
           reading !== winner &&
           reading.agentId === winner.agentId &&
-          (reading.resetsAt === null || reading.resetsAt > until)
+          agentUsageShownUntil(reading) > until
       ),
       (reading) => reading,
       now

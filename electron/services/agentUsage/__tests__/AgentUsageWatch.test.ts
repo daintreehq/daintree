@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeUsageAccount } from "../../../../shared/types/ipc/agentQuota.js";
 import type { CodexHomeQuota } from "../../codex/CodexQuotaService.js";
+import { AGENT_USAGE_SHOWN_FOR_MS } from "../../../../shared/utils/agentUsage.js";
 import {
   AgentUsageWatch,
   liveAgentFolders,
@@ -261,6 +262,46 @@ describe("AgentUsageWatch", () => {
     h.watch.dispose();
   });
 
+  it("stops sending a kept Codex reading once it has gone unobserved too long, and shows a new read again (#18159)", async () => {
+    const h = harness();
+    h.live.current = { complete: true, codexHomes: ["/accts/work"], claudeConfigDirs: [] };
+    // Read half a tick before the watch's first look, so its age-out falls between ticks.
+    const fetchedAt = START - TICK / 2;
+    const weekly = (usedPercent: number, at: number): CodexHomeQuota => ({
+      ...codexQuota("/accts/work", usedPercent, at),
+      result: {
+        status: "ok",
+        planType: null,
+        windows: [{ usedPercent, windowDurationMins: 10080, resetsAt: START + 86_400_000 }],
+        fetchedAt: at,
+      },
+    });
+    h.codexAnswers.set("/accts/work", () => weekly(70, fetchedAt));
+    h.watch.acquire();
+    await settle();
+    h.codexAnswers.set("/accts/work", () => ({
+      ...codexQuota("/accts/work", 0),
+      result: { status: "unavailable", reason: "timeout", fetchedAt: Date.now() },
+    }));
+    const changes: number[] = [];
+    h.watch.onChange((readings) => changes.push(readings.length));
+    await vi.advanceTimersByTimeAsync(AGENT_USAGE_SHOWN_FOR_MS - TICK / 2 - 1);
+    expect(h.readCodexHomes.mock.calls.length).toBeGreaterThan(2);
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 70, observedAt: fetchedAt }]);
+    // Woken at the age-out itself, not at the next tick.
+    await vi.advanceTimersByTimeAsync(2);
+    expect(h.watch.latest()).toEqual([]);
+    expect(changes).toEqual([0]);
+
+    h.codexAnswers.set("/accts/work", () => weekly(70, Date.now()));
+    await vi.advanceTimersByTimeAsync(CADENCE);
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 70 }]);
+    expect(h.watch.latest()[0]!.observedAt).toBeGreaterThan(
+      START + AGENT_USAGE_SHOWN_FOR_MS - TICK
+    );
+    h.watch.dispose();
+  });
+
   describe("tracking turned off and on again (#17981)", () => {
     function failing(): CodexHomeQuota {
       return {
@@ -427,6 +468,63 @@ describe("AgentUsageWatch", () => {
     await vi.advanceTimersByTimeAsync(TICK / 2 + 1);
     expect(h.watch.latest()).toMatchObject([{ window: "weekly limit", usedPercent: 30 }]);
     expect(h.watch.latest()).toHaveLength(1);
+    h.watch.dispose();
+  });
+
+  it("never sends a restored Claude Code reading observed more than six hours ago (#18159)", async () => {
+    const h = harness();
+    h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
+    h.claudeAccounts.current = [
+      claudeAccount("key:/accts/work", [
+        claudeReading({
+          usedPercent: 99,
+          resetsAt: START + 86_400_000,
+          observedAt: START - 7 * 60 * 60_000,
+        }),
+      ]),
+    ];
+    h.watch.acquire();
+    await settle();
+    expect(h.readClaudeAccounts).toHaveBeenCalled();
+    expect(h.watch.latest()).toEqual([]);
+    h.watch.dispose();
+  });
+
+  it("hands over from a Claude Code reading as it ages out, not a tick later (#18159)", async () => {
+    const h = harness();
+    h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
+    h.claudeAccounts.current = [
+      claudeAccount("key:/accts/work", [
+        claudeReading({
+          usedPercent: 99,
+          resetsAt: START + 86_400_000,
+          observedAt: START - AGENT_USAGE_SHOWN_FOR_MS + TICK / 2,
+        }),
+        claudeReading({ window: "5-hour limit", usedPercent: 20, resetsAt: START + 3_600_000 }),
+      ]),
+    ];
+    h.watch.acquire();
+    await settle();
+    expect(h.watch.latest()).toMatchObject([{ usedPercent: 99 }, { usedPercent: 20 }]);
+    await vi.advanceTimersByTimeAsync(TICK / 2 + 1);
+    expect(h.watch.latest()).toMatchObject([{ window: "5-hour limit", usedPercent: 20 }]);
+    expect(h.watch.latest()).toHaveLength(1);
+    h.watch.dispose();
+  });
+
+  it("arms no wake for a watch its own listener released during publish", async () => {
+    const h = harness();
+    h.live.current = { complete: true, codexHomes: [], claudeConfigDirs: ["/accts/work"] };
+    h.claudeAccounts.current = [
+      claudeAccount("key:/accts/work", [claudeReading({ resetsAt: START + TICK / 2 })]),
+    ];
+    let release: (() => void) | null = null;
+    h.watch.onChange((readings) => {
+      if (readings.length > 0) release?.();
+    });
+    release = h.watch.acquire();
+    await settle();
+    expect(vi.getTimerCount()).toBe(0);
     h.watch.dispose();
   });
 

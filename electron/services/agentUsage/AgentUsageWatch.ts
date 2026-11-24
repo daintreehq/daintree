@@ -15,6 +15,7 @@ import type { AgentUsageReading } from "../../../shared/types/ipc/agentUsage.js"
 import type { ClaudeUsageAccount } from "../../../shared/types/ipc/agentQuota.js";
 import {
   AGENT_USAGE_CODEX_READ_INTERVAL_MS,
+  agentUsageShownUntil,
   agentUsageWithSuccessors,
   boundAgentUsageAccountNames,
 } from "../../../shared/utils/agentUsage.js";
@@ -369,20 +370,23 @@ export class AgentUsageWatch {
     const now = this.deps.now();
     const shown = agentUsageWithSuccessors(readings, now);
     this.publish(shown);
+    // A listener that released the last hold during publish stopped the watch.
+    if (generation !== this.generation) return;
     this.wakeAtNextReset(shown, now);
   }
 
-  /** The runner-up shows as a window resets, not up to a tick later. */
+  /** The runner-up shows as a window resets or ages out, not up to a tick later. */
   private wakeAtNextReset(shown: readonly AgentUsageReading[], now: number): void {
     if (this.resetTimer !== null) clearTimeout(this.resetTimer);
     this.resetTimer = null;
     const next = Math.min(
-      ...shown.flatMap((reading) =>
-        reading.resetsAt !== null && reading.resetsAt > now ? [reading.resetsAt] : []
-      )
+      ...shown.flatMap((reading) => {
+        const until = agentUsageShownUntil(reading);
+        return until > now ? [until] : [];
+      })
     );
     const tickMs = this.deps.tickMs ?? AGENT_USAGE_TICK_MS;
-    // A reset past the next tick is that tick's to see.
+    // An end past the next tick is that tick's to see.
     if (!Number.isFinite(next) || next - now >= tickMs) return;
     this.resetTimer = setTimeout(() => void this.tick(), next - now + 1);
     this.resetTimer.unref?.();
