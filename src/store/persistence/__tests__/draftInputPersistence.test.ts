@@ -199,6 +199,28 @@ describe("draftInputPersistence.flushAll — close-time draft flush (#11352)", (
     expect(draftInputPersistence.savedFromHere(projectId).size).toBe(0);
   });
 
+  it("keeps a switch's save recorded after an earlier removal that is answered later (#18161)", async () => {
+    const projectId = freshProjectId();
+    draftInputPersistence.primeProject(projectId, { t1: "earlier" });
+    let answer!: () => void;
+    setDraftInputsMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (answer = resolve))
+    );
+    // The earlier draft's removal goes out.
+    draftInputPersistence.flushAll();
+    await flushMicrotasks();
+    // A new draft is typed and the switch saves it before that answer arrives.
+    draftInputPersistence.noteOutgoingSave(projectId, { t1: "sent prompt" }, ["t1"]);
+    answer();
+    await draftInputPersistence.whenIdle();
+
+    expect(draftInputPersistence.savedFromHere(projectId).get("t1")?.has("sent prompt")).toBe(true);
+    // Sent and cleared: the next flush still removes it.
+    draftInputPersistence.flushAll();
+    await draftInputPersistence.whenIdle();
+    expect(setDraftInputsMock).toHaveBeenLastCalledWith(projectId, {}, [], ["t1"]);
+  });
+
   it("forgets what a cleared project's write was saving, even when its answer comes later", async () => {
     const projectId = freshProjectId();
     let answer!: () => void;

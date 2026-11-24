@@ -204,6 +204,7 @@ class DraftInputPersistence {
         const sent = snapshot;
         const saving: Record<string, string> = {};
         for (const id of changedIds) saving[id] = sent[id]!;
+        const unackedAtSend = new Map(this.getUnacked(projectId) ?? []);
         try {
           const outcome = await sendHostOwnedWrite(
             `project-drafts:${projectId}`,
@@ -222,8 +223,15 @@ class DraftInputPersistence {
           // Not acknowledged: the baseline stays for the replay to diff against.
           if (outcome === "deferred") this.markUnacked(projectId, hostEpoch, changedIds, sent);
           if (outcome !== "sent") return;
+          // Settled only as this write left them: one recorded since (the
+          // switch's capture) is a newer save that this answer doesn't cover.
           const unacked = this.getUnacked(projectId);
-          for (const id of [...changedIds, ...removedIds]) unacked?.delete(id);
+          for (const id of [...changedIds, ...removedIds]) {
+            const text = unacked?.get(id);
+            if (text !== undefined && (text === unackedAtSend.get(id) || text === saving[id])) {
+              unacked?.delete(id);
+            }
+          }
           if (unacked?.size === 0) this.unackedByProject.delete(projectId);
           // The store merged exactly this delta, so apply it to the baseline as
           // it stands now: a rebase made while the write was in flight keeps
