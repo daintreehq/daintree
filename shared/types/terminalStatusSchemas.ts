@@ -156,7 +156,7 @@ export const TerminalStatusEntrySchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "False once the process exited, a kill was requested, or restore held the pane. Not a health probe: a wedged agent reads true. `renderer` sets it only when held."
+      "False once it exited, a kill was requested or restore held it. Not a health probe: a keep-open shell or a wedged agent still reads true. `renderer`: held panes only."
     ),
   restored: TerminalRestoredSchema.optional(),
   submission: TerminalSubmissionRecordSchema.optional().describe(
