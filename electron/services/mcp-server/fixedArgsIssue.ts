@@ -138,19 +138,11 @@ function predicateFor(issue: z.core.$ZodIssue, present: boolean, plainSubject: b
     case "invalid_key":
     case "invalid_element":
       return "has an entry that doesn't fit";
-    case "custom": {
-      // A rule the schema names itself (#18164): its own fixed words, never zod's.
-      const reason: unknown = issue.params?.reason;
-      if (typeof reason === "string") return reason;
-      return plainSubject
-        ? "don't pass one of this tool's checks"
-        : "doesn't pass one of its checks";
-    }
-    default:
-      return plainSubject
-        ? "don't pass one of this tool's checks"
-        : "doesn't pass one of its checks";
   }
+  // A rule the schema names itself (#18164) carries its own fixed words, never zod's.
+  const reason: unknown = issue.code === "custom" ? issue.params?.reason : undefined;
+  if (typeof reason === "string") return reason;
+  return plainSubject ? "don't pass one of this tool's checks" : "doesn't pass one of its checks";
 }
 
 /**
