@@ -364,7 +364,10 @@ export function CloudMachineSection({
         data-testid="cloud-machine-cleanup"
         title={`Can't stop it with ${worktreeLabel}`}
       >
-        <p>{`${providerName} has no stop: the machine runs, and bills, until it's deleted. Keep it, or remove the host to delete it.`}</p>
+        <p>
+          {cleanupError ??
+            `${providerName} has no stop: the machine runs, and bills, until it's deleted. Keep it, or remove the host to delete it.`}
+        </p>
         <div className="mt-2 flex flex-wrap gap-1.5">{keepButton}</div>
       </Callout>
     );
