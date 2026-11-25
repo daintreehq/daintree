@@ -20,9 +20,9 @@ import {
 
 // `auth status` and `auth login` both call the host's API, so they get longer
 // than the token read, which only touches local storage.
-export const GH_STATUS_TIMEOUT_MS = 10_000;
+const GH_STATUS_TIMEOUT_MS = 10_000;
 export const GH_LOGIN_TIMEOUT_MS = 20_000;
-export const GH_SETUP_GIT_TIMEOUT_MS = 10_000;
+const GH_SETUP_GIT_TIMEOUT_MS = 10_000;
 const GH_OUTPUT_LIMIT_CHARS = 16 * 1024;
 
 interface GhRun {
@@ -66,6 +66,10 @@ async function runGh(
   if (signal?.aborted) return { ok: false, reason: "cancelled" };
 
   const env = buildGhCredentialEnv();
+  // gh's debug tracing writes request details to stderr; nothing here reads
+  // them, and they have no business existing around a login.
+  delete env.GH_DEBUG;
+  delete env.DEBUG;
   let gh: string;
   try {
     gh = await resolveExecutableForSpawn("gh", env);

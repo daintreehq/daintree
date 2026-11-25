@@ -29,7 +29,7 @@ async function digestToken(token: string): Promise<string> {
 }
 
 /** A checked save, captured when it was submitted. */
-export interface GhSignInTicket {
+interface GhSignInTicket {
   generation: number;
   host: string;
   tokenDigest: string | null;
@@ -307,7 +307,7 @@ export function useGhCliSignIn(host: string | null, machine: string) {
   };
 }
 
-export type GhCliSignIn = ReturnType<typeof useGhCliSignIn>;
+type GhCliSignIn = ReturnType<typeof useGhCliSignIn>;
 
 /** The option itself, for a token form's group, between the field and its actions. */
 export function GhCliSignInRow({
