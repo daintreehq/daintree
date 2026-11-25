@@ -680,6 +680,17 @@ function checkedOpaqueId(raw: unknown, what: string): string {
   return raw;
 }
 
+/** Why an offer can't be leased as the person chose it; null when it can. */
+function offerRefusal(offer: CloudCreateOffer | undefined, sawHourly: number): string | null {
+  if (!offer) return "That offer isn't on the order now. Choose one from the list.";
+  if (!offer.choosable) return `That offer can't be chosen: ${offer.reason}`;
+  // The same offer id quoted again at another rate: never leased at a rate nobody saw.
+  if (Math.abs(offer.hourlyDollars - sawHourly) > 1e-9) {
+    return `That offer now quotes $${offer.hourlyDollars.toFixed(4)} an hour, not the rate you saw. Nothing was leased; check it and choose again.`;
+  }
+  return null;
+}
+
 interface RunningOperation extends CloudOperation {
   controller: AbortController;
   promise: Promise<void>;
@@ -2139,12 +2150,22 @@ export class CloudHostLifecycle {
    * through offers. Resolves once the provider answers with the machine and
    * it is bound to the host; the create then carries on as any other (wait
    * for it to run, then setup). An offer the provider turns down leaves the
-   * order open for another choice.
+   * order open for another choice. `hourlyDollars` is the rate the person
+   * saw: a bidder can quote again under the same offer id, and a lease is
+   * never sent at a rate nobody saw.
    */
-  async chooseOffer(hostId: unknown, orderId: unknown, offerId: unknown): Promise<void> {
+  async chooseOffer(
+    hostId: unknown,
+    orderId: unknown,
+    offerId: unknown,
+    hourlyDollars: unknown
+  ): Promise<void> {
     const binding = this.requireBindingForHost(hostId);
     const order = this.requireOpenOrder(binding, checkedOpaqueId(orderId, "order"));
     const offer = checkedOpaqueId(offerId, "offer");
+    if (typeof hourlyDollars !== "number" || !Number.isFinite(hourlyDollars) || hourlyDollars < 0) {
+      throw invalid("Missing the rate of the offer you chose.");
+    }
     if (this.removing.has(binding.id)) throw invalid("This host is being removed.");
     // Never joined: a second choice while one is leased would be a second lease asked for.
     if (this.operations.has(binding.id)) {
@@ -2152,13 +2173,22 @@ export class CloudHostLifecycle {
     }
     const read = this.offerReads.get(order.id);
     const known = read?.orderId === order.orderIds[0] ? read.offers : [];
-    const chosen = known.find((candidate) => candidate.id === offer);
-    if (!chosen) throw invalid("That offer isn't on the order now. Choose one from the list.");
-    if (!chosen.choosable) throw invalid(`That offer can't be chosen: ${chosen.reason}`);
+    const refusal = offerRefusal(
+      known.find((candidate) => candidate.id === offer),
+      hourlyDollars
+    );
+    if (refusal) throw invalid(refusal);
     let accepted!: () => void;
     const leased = new Promise<void>((resolve) => (accepted = resolve));
     const work = this.operate(binding.id, "creating", (signal) =>
-      this.runLease(binding.id, order.id, order.orderIds[0], offer, signal, accepted)
+      this.runLease(
+        binding.id,
+        order.id,
+        order.orderIds[0],
+        { id: offer, hourlyDollars },
+        signal,
+        accepted
+      )
     );
     work.catch(() => {});
     await Promise.race([leased, work]);
@@ -2168,10 +2198,11 @@ export class CloudHostLifecycle {
     bindingId: string,
     orderRecordId: string,
     orderId: string,
-    offerId: string,
+    chosen: { id: string; hourlyDollars: number },
     signal: AbortSignal,
     accepted: () => void
   ): Promise<void> {
+    const offerId = chosen.id;
     const binding = this.deps.store.binding(bindingId);
     if (!binding) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     const { provider, credentials } = await this.context(binding, signal);
@@ -2180,6 +2211,27 @@ export class CloudHostLifecycle {
     if (!offers || !this.stillRegistered(binding.providerId, provider)) {
       throw invalid(`${nameOf(provider)} changed while the offer was being leased. Try again.`);
     }
+    // Read again just before the lease: the offer the person saw may have gone or been
+    // quoted again since the last read. Nothing is leased then, and the order stays open.
+    this.stage(bindingId, `Checking the offer you chose with ${nameOf(provider)}`);
+    let current: CloudCreateOffer[];
+    try {
+      current = await offers.listOffers({ ...credentials, signal }, orderId);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw this.deps.accounts.asAppError(provider, error);
+    }
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    const latest = this.deps.store.createOrder(orderRecordId);
+    if (latest?.state === "open" && latest.orderIds?.[0] === orderId) {
+      this.offerReads.set(orderRecordId, { orderId, offers: current, readAt: this.now() });
+      this.deps.changed();
+    }
+    const refusal = offerRefusal(
+      current.find((candidate) => candidate.id === offerId),
+      chosen.hourlyDollars
+    );
+    if (refusal) throw invalid(refusal);
     // Written before the lease, the request that costs money: a lost answer is settled by
     // closing the order, never by leasing again.
     const marked = this.deps.store.updateCreateOrder(orderRecordId, (order) =>

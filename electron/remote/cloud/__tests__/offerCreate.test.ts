@@ -455,7 +455,7 @@ describe("offer-based create (#18230)", () => {
     env.api.offersOnPlace = [offer("a"), offer("b")];
     const hostId = await env.create();
     const choice = await env.awaitChoice();
-    await env.lifecycle.chooseOffer(hostId, choice.order.id, "b");
+    await env.lifecycle.chooseOffer(hostId, choice.order.id, "b", 0.5);
     // The lease was written down, naming that order and offer, before it was sent.
     expect(env.api.storedAtSend[1]![0]).toMatchObject({
       state: "leasing",
@@ -478,7 +478,9 @@ describe("offer-based create (#18230)", () => {
     const hostId = await env.create();
     const choice = await env.awaitChoice();
     env.api.plans.lease.push("refused");
-    await expect(env.lifecycle.chooseOffer(hostId, choice.order.id, "a")).rejects.toMatchObject({
+    await expect(
+      env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)
+    ).rejects.toMatchObject({
       userMessage: expect.stringContaining("the order is still open"),
     });
     await vi.waitFor(() =>
@@ -491,13 +493,37 @@ describe("offer-based create (#18230)", () => {
     expect(env.status()?.resourceId).toBeNull();
     // Nothing else was leased in its place.
     expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
-    await expect(env.lifecycle.chooseOffer(hostId, choice.order.id, "a")).rejects.toMatchObject({
+    await expect(
+      env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)
+    ).rejects.toMatchObject({
       code: "VALIDATION",
     });
 
-    await env.lifecycle.chooseOffer(hostId, choice.order.id, "b");
+    await env.lifecycle.chooseOffer(hostId, choice.order.id, "b", 0.5);
     await env.settled();
     expect(env.status()?.resourceId).toBe(`lease-${choice.order.id}`);
+  });
+
+  it("never leases an offer quoted again at a rate the person didn't see", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a", 0.5)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    // The bidder quotes again under the same id between two reads.
+    env.api.orders.get(choice.order.id)!.offers = [offer("a", 0.9)];
+    await expect(
+      env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)
+    ).rejects.toMatchObject({ userMessage: expect.stringContaining("Nothing was leased") });
+    expect(env.api.leaseOffer).not.toHaveBeenCalled();
+    // The order stays open, now showing the rate the bidder quotes.
+    expect(env.status()?.pendingCreate).toMatchObject({
+      order: { id: choice.order.id },
+      offers: [{ id: "a", hourlyDollars: 0.9 }],
+    });
+    await env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.9);
+    await env.settled();
+    expect(env.status()?.resourceId).toBe(`lease-${choice.order.id}`);
+    expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
   });
 
   describe("a lost reply to placing the order", () => {
@@ -574,7 +600,7 @@ describe("offer-based create (#18230)", () => {
       const hostId = await env.create();
       const choice = await env.awaitChoice();
       env.api.plans.lease.push("lost");
-      await env.lifecycle.chooseOffer(hostId, choice.order.id, "a");
+      await env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5);
       await env.settled();
       expect(env.status()?.resourceId).toBe(`lease-${choice.order.id}`);
       expect(env.status()?.machine).toBe("running");
@@ -589,7 +615,7 @@ describe("offer-based create (#18230)", () => {
       const hostId = await env.create();
       const choice = await env.awaitChoice();
       env.api.plans.lease.push("unsent");
-      await expect(env.lifecycle.chooseOffer(hostId, choice.order.id, "a")).rejects.toThrow();
+      await expect(env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)).rejects.toThrow();
       expect(env.api.orders.get(choice.order.id)?.state).toBe("closed");
       expect(env.status()?.resourceId).toBeNull();
       expect(env.status()?.pendingCreate).toBeUndefined();
@@ -607,7 +633,7 @@ describe("offer-based create (#18230)", () => {
       const hostId = await env.create();
       const choice = await env.awaitChoice();
       env.api.plans.lease.push("hang-commit");
-      const chosen = env.lifecycle.chooseOffer(hostId, choice.order.id, "a");
+      const chosen = env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5);
       chosen.catch(() => {});
       await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
       await env.lifecycle.cancelOrder(hostId, choice.order.id);
@@ -625,7 +651,7 @@ describe("offer-based create (#18230)", () => {
       const hostId = await env.create();
       const choice = await env.awaitChoice();
       env.api.plans.lease.push("hang");
-      const chosen = env.lifecycle.chooseOffer(hostId, choice.order.id, "a");
+      const chosen = env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5);
       await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
       await env.lifecycle.cancelOrder(hostId, choice.order.id);
       await expect(chosen).rejects.toThrow();
@@ -635,7 +661,9 @@ describe("offer-based create (#18230)", () => {
       expect(env.status()?.lastError?.message).toContain("cancelled");
       expect(env.store.createOrders()).toEqual([]);
       // A choice from the view that still shows the order changes nothing.
-      await expect(env.lifecycle.chooseOffer(hostId, choice.order.id, "a")).rejects.toMatchObject({
+      await expect(
+        env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)
+      ).rejects.toMatchObject({
         code: "VALIDATION",
       });
       expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
@@ -694,7 +722,7 @@ describe("offer-based create (#18230)", () => {
       const hostId = await env.create();
       const choice = await env.awaitChoice();
       env.api.plans.lease.push("hang-commit");
-      void env.lifecycle.chooseOffer(hostId, choice.order.id, "a").catch(() => {});
+      void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5).catch(() => {});
       await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
       env.crash();
       await vi.waitFor(() => expect(env.status()?.resourceId).toBe(`lease-${choice.order.id}`));
@@ -708,7 +736,7 @@ describe("offer-based create (#18230)", () => {
       const hostId = await env.create();
       const choice = await env.awaitChoice();
       env.api.plans.lease.push("hang");
-      void env.lifecycle.chooseOffer(hostId, choice.order.id, "a").catch(() => {});
+      void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5).catch(() => {});
       await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
       env.crash();
       await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
@@ -754,7 +782,7 @@ describe("offer-based create (#18230)", () => {
       const hostId = await env.create();
       const choice = await env.awaitChoice();
       env.api.plans.lease.push("hang-commit");
-      void env.lifecycle.chooseOffer(hostId, choice.order.id, "a").catch(() => {});
+      void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5).catch(() => {});
       await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
       await env.lifecycle.deleteMachine(hostId, null);
       expect(env.api.deleted).toEqual([`lease-${choice.order.id}`]);

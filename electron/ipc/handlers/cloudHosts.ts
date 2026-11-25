@@ -214,7 +214,8 @@ export const cloudHostsNamespace = defineIpcNamespace({
         requireRemoteService("cloudHosts").chooseOffer(
           field(payload, "hostId"),
           field(payload, "orderId"),
-          field(payload, "offerId")
+          field(payload, "offerId"),
+          field(payload, "hourlyDollars")
         )
     ),
     // Names the order the view showed, so a stale view never closes a later one.

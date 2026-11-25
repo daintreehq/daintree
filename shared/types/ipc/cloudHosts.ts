@@ -12,4 +12,10 @@ export interface CloudOrderRequest {
 /** One offer on that order, chosen by the person: the only path that leases a machine there. */
 export interface CloudOfferChoiceRequest extends CloudOrderRequest {
   offerId: string;
+  /**
+   * The rate the person saw for it, in dollars per running hour. A bidder can
+   * quote again under the same offer id; one that no longer quotes this rate
+   * is refused, with nothing leased and the order left open.
+   */
+  hourlyDollars: number;
 }

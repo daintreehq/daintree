@@ -140,8 +140,13 @@ export class CloudHosts {
     return this.lifecycle.retryCreate(hostId);
   }
 
-  chooseOffer(hostId: unknown, orderId: unknown, offerId: unknown): Promise<void> {
-    return this.lifecycle.chooseOffer(hostId, orderId, offerId);
+  chooseOffer(
+    hostId: unknown,
+    orderId: unknown,
+    offerId: unknown,
+    hourlyDollars: unknown
+  ): Promise<void> {
+    return this.lifecycle.chooseOffer(hostId, orderId, offerId, hourlyDollars);
   }
 
   cancelOrder(hostId: unknown, orderId: unknown): Promise<void> {
