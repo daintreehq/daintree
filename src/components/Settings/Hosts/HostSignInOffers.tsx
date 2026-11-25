@@ -35,7 +35,7 @@ const NO_FALLBACK = () => null;
  */
 export function HostSignInOffers() {
   const [offer, setOffer] = useState<HostSignInOffer | null>(null);
-  const showing = useRef<string | null>(null);
+  const showing = useRef<{ consumer: string; expiresAt: number } | null>(null);
   const taken = useRef(false);
 
   useEffect(() => {
@@ -45,11 +45,15 @@ export function HostSignInOffers() {
       if (event.kind !== "sign-in-offer") return;
       // Main ended it at this time; a push that arrived late opens nothing.
       if (Date.now() >= event.expiresAt) return;
-      if (showing.current !== null || signInDialogOpen()) {
+      // One Main already ended, never shown, gives way to a newer one.
+      const stale =
+        showing.current !== null && !taken.current && Date.now() >= showing.current.expiresAt;
+      if (showing.current !== null ? !stale : signInDialogOpen()) {
         letGo(event.consumer);
         return;
       }
-      showing.current = event.consumer;
+      if (stale && showing.current !== null) letGo(showing.current.consumer);
+      showing.current = { consumer: event.consumer, expiresAt: event.expiresAt };
       taken.current = false;
       setOffer({
         hostId: event.hostId,
@@ -66,7 +70,7 @@ export function HostSignInOffers() {
     if (offer === null) return undefined;
     const timer = setTimeout(
       () => {
-        if (taken.current || showing.current !== offer.consumer) return;
+        if (taken.current || showing.current?.consumer !== offer.consumer) return;
         showing.current = null;
         setOffer(null);
       },

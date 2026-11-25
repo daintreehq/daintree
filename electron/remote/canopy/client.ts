@@ -1019,6 +1019,10 @@ export class CanopyHostsClient {
       // A stream that ended shows nothing live any more, its answer still on its way included.
       if (chunk?.kind === "ended") {
         sub.signIn.endedWatches.add(chunk.watchId);
+        // Only a recent end can beat its answer here; a host can't grow it unbounded.
+        if (sub.signIn.endedWatches.size > 16) {
+          sub.signIn.endedWatches.delete(sub.signIn.endedWatches.values().next().value!);
+        }
         if (sub.signIn.liveWatch === chunk.watchId) sub.signIn.liveWatch = null;
       }
       this.options.send(sub.webContentsId, {

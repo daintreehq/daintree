@@ -189,4 +189,23 @@ describe("HostSignInOffers (#18197)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("lets a newer offer replace one Main already ended that was never shown", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<HostSignInOffers />);
+      await push(offer("ended-unseen", Date.now() + 30_000));
+      await screen.findByTestId("offer-dialog");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(31_000);
+      });
+      await push(offer("retry", Date.now() + 30_000));
+      expect((await screen.findByTestId("offer-dialog")).getAttribute("data-consumer")).toBe(
+        "retry"
+      );
+      expect(releaseSignIn.mock.calls).toEqual([["ended-unseen"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
