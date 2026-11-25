@@ -156,7 +156,7 @@ export function GitHubSettingsTab() {
     try {
       await window.electron.forge.clearCredential(BUILTIN_GITHUB_PROVIDER_ID);
       updateConfig({ hasToken: false });
-      ghSignIn.clearOutcome();
+      ghSignIn.supersede();
       setValidationResult(null);
       setErrorMessage(null);
     } catch (error) {
@@ -252,6 +252,7 @@ export function GitHubSettingsTab() {
       }
       // An imported token is a saved token: same confirmation, and the
       // connected line above names the account it belongs to.
+      ghSignIn.supersede();
       setGithubToken("");
       setErrorMessage(null);
       setValidationResult("success");

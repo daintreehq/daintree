@@ -10,8 +10,12 @@ export const GH_SIGN_IN_CHANNELS = {
 
 export type GhCliFailureReason = "cli-not-found" | "cli-timeout" | "cli-failed" | "cancelled";
 
-/** What gh holds for a host. `account` is null for a sign-in gh doesn't name. */
-export type GhAccountObservation = { signedIn: false } | { signedIn: true; account: string | null };
+/**
+ * What gh holds for a host. `account` is the active sign-in (null when gh
+ * doesn't name it); `accounts` every login gh names there, active included.
+ */
+export type GhAccountObservation =
+  { signedIn: false } | { signedIn: true; account: string | null; accounts: string[] };
 
 export type GhAccountStatus =
   ({ ok: true } & GhAccountObservation) | { ok: false; reason: GhCliFailureReason };

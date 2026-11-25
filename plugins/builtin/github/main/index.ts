@@ -138,19 +138,24 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   const disposeEnterprise = await registerGitHubEnterprise(host, () => {
     void syncCredentialPresenceToWorkspaceHosts();
   });
-  let disposeForge: () => void;
-  let disposeGhSignIn: () => void;
+  // Optional: a token save works without it, so its failure can't hold up
+  // the provider. A checked save then reports that gh couldn't be signed in.
+  let disposeGhSignIn: () => void = () => {};
   try {
     disposeGhSignIn = await registerGhSignIn(host);
-    try {
-      disposeForge = await host.registerForgeProvider({ id: "github" }, githubForgeProvider);
-    } catch (error) {
-      disposeGhSignIn();
-      throw error;
-    }
+  } catch (error) {
+    console.warn(
+      "[github-plugin] gh sign-in unavailable:",
+      error instanceof Error ? error.name : typeof error
+    );
+  }
+  let disposeForge: () => void;
+  try {
+    disposeForge = await host.registerForgeProvider({ id: "github" }, githubForgeProvider);
   } catch (error) {
     // A failed activation returns no disposer, so the Enterprise Server
     // session it hydrated would otherwise outlive it.
+    disposeGhSignIn();
     disposeEnterprise();
     throw error;
   }

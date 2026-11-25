@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { Checkbox, ConfirmDialog, Icon, SettingsRow } from "@daintreehq/plugin-ui";
 import { logError } from "@/utils/logger";
 import { GITHUB_PLUGIN_ID } from "../../shared/enterprise.js";
@@ -86,35 +86,53 @@ function asAccount(account: string | null): string {
  * these are ("this machine", or the attached host's name), where gh runs.
  */
 export function useGhCliSignIn(host: string | null, machine: string) {
-  // Each piece of state names the host it belongs to: when another window
-  // points the form at a different server, what was set for the old one
-  // reads as unset rather than carrying over.
-  const [checkedFor, setCheckedFor] = useState<string | null>(null);
+  const [checked, setChecked] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [pending, setPending] = useState<PendingConfirm | null>(null);
   // Persists, unlike "Checked and saved": a failure says what to do next.
-  const [outcome, setOutcome] = useState<(Outcome & { host: string }) | null>(null);
-  // Bumped by every new attempt and on unmount, so a late reply from an
-  // abandoned attempt changes nothing.
-  const generation = useRef(0);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  // Bumped by every save, Clear and Import, a server change and unmount, so a
+  // late reply from an abandoned attempt changes nothing.
+  const generation = useRef({ value: 0 });
 
-  useEffect(
-    () => () => {
-      generation.current++;
-    },
-    []
-  );
+  // Another window pointed the form at a different server: nothing set for
+  // the old one carries over.
+  const [ownerHost, setOwnerHost] = useState(host);
+  if (ownerHost !== host) {
+    setOwnerHost(host);
+    setChecked(false);
+    setPhase("idle");
+    setPending(null);
+    setOutcome(null);
+  }
+  // At commit, before a reply for the old server can land.
+  useLayoutEffect(() => {
+    const counter = generation.current;
+    counter.value++;
+    return () => {
+      counter.value++;
+    };
+  }, [host]);
 
-  const checked = host !== null && checkedFor === host;
-  const visiblePending = pending && pending.host === host ? pending : null;
-  const visibleOutcome = outcome && outcome.host === host ? outcome : null;
+  const isCurrent = (attempt: number) => attempt === generation.current.value;
 
-  const isCurrent = (attempt: number) => attempt === generation.current;
+  const supersede = () => {
+    generation.current.value++;
+    setPhase("idle");
+    setPending(null);
+    setOutcome(null);
+  };
 
-  const finish = (attempt: number, target: string, next: Outcome) => {
+  const finish = (attempt: number, next: Outcome) => {
     if (!isCurrent(attempt)) return;
     setPhase("idle");
-    setOutcome({ ...next, host: target });
+    setOutcome(next);
+  };
+
+  const ask = (attempt: number, next: PendingConfirm) => {
+    if (!isCurrent(attempt)) return;
+    setPending(next);
+    setPhase("confirming");
   };
 
   const commit = async (
@@ -125,6 +143,7 @@ export function useGhCliSignIn(host: string | null, machine: string) {
     expected: GhAccountObservation,
     retried = false
   ): Promise<void> => {
+    if (!isCurrent(attempt)) return;
     setPhase("signing-in");
     let result: GhSignInResult;
     try {
@@ -135,25 +154,22 @@ export function useGhCliSignIn(host: string | null, machine: string) {
       });
     } catch (error) {
       logError("Failed to sign in GitHub CLI", error);
-      finish(attempt, target, {
-        tone: "error",
-        message: `${SAVED} GitHub CLI couldn't be signed in.`,
-      });
+      finish(attempt, { tone: "error", message: `${SAVED} GitHub CLI couldn't be signed in.` });
       return;
     }
     if (!isCurrent(attempt)) return;
     if (result.ok) {
+      const who = asAccount(account) || " with the saved token";
       finish(
         attempt,
-        target,
         result.gitConfigured
           ? {
               tone: "success",
-              message: `GitHub CLI on ${machine} is signed in to ${target}${asAccount(account)}.`,
+              message: `GitHub CLI on ${machine} is signed in to ${target}${who}.`,
             }
           : {
               tone: "warning",
-              message: `GitHub CLI on ${machine} is signed in to ${target}${asAccount(account)}, but git isn't set up to use it. Run gh auth setup-git --hostname ${target} there.`,
+              message: `GitHub CLI on ${machine} is signed in to ${target}${who}, but git isn't set up to use it. Run gh auth setup-git --hostname ${target} there.`,
             }
       );
       return;
@@ -161,27 +177,23 @@ export function useGhCliSignIn(host: string | null, machine: string) {
     if (result.reason === "gh-changed") {
       // Another sign-in landed while this one waited: ask about what gh holds now.
       if (result.current.signedIn) {
-        setPending({
+        ask(attempt, {
           generation: attempt,
           host: target,
           tokenDigest,
           account,
           current: result.current,
         });
-        setPhase("confirming");
         return;
       }
       if (!retried) {
         await commit(attempt, target, tokenDigest, account, result.current, true);
         return;
       }
-      finish(attempt, target, {
-        tone: "error",
-        message: `${SAVED} GitHub CLI's sign-in kept changing.`,
-      });
+      finish(attempt, { tone: "error", message: `${SAVED} GitHub CLI's sign-in kept changing.` });
       return;
     }
-    finish(attempt, target, {
+    finish(attempt, {
       tone: "error",
       message: failureMessage(result.reason, machine, result.missingScopes),
     });
@@ -191,12 +203,14 @@ export function useGhCliSignIn(host: string | null, machine: string) {
     checked,
     busy: phase !== "idle",
 
-    /** Call as the save is submitted; null when the option is off. */
+    /**
+     * Call as any save is submitted, ticked or not: a new save supersedes
+     * whatever an earlier one started. Null when the option is off.
+     */
     async capture(token: string): Promise<GhSignInTicket | null> {
+      supersede();
       if (!checked || !host) return null;
-      const attempt = ++generation.current;
-      setPending(null);
-      setOutcome(null);
+      const attempt = generation.current.value;
       try {
         return { generation: attempt, host, tokenDigest: await digestToken(token) };
       } catch (error) {
@@ -210,12 +224,10 @@ export function useGhCliSignIn(host: string | null, machine: string) {
       if (!ticket || !isCurrent(ticket.generation)) return;
       const attempt = ticket.generation;
       const target = ticket.host;
-      setCheckedFor(null);
-      if (!ticket.tokenDigest) {
-        finish(attempt, target, {
-          tone: "error",
-          message: `${SAVED} GitHub CLI couldn't be signed in.`,
-        });
+      const tokenDigest = ticket.tokenDigest;
+      setChecked(false);
+      if (!tokenDigest) {
+        finish(attempt, { tone: "error", message: `${SAVED} GitHub CLI couldn't be signed in.` });
         return;
       }
       setPhase("checking");
@@ -224,85 +236,76 @@ export function useGhCliSignIn(host: string | null, machine: string) {
         status = await invoke<GhAccountStatus>(GH_SIGN_IN_CHANNELS.status, { host: target });
       } catch (error) {
         logError("Failed to read the GitHub CLI sign-in", error);
-        finish(attempt, target, {
-          tone: "error",
-          message: `${SAVED} GitHub CLI couldn't be signed in.`,
-        });
+        finish(attempt, { tone: "error", message: `${SAVED} GitHub CLI couldn't be signed in.` });
         return;
       }
       if (!isCurrent(attempt)) return;
       if (!status.ok) {
-        finish(attempt, target, { tone: "error", message: failureMessage(status.reason, machine) });
+        finish(attempt, { tone: "error", message: failureMessage(status.reason, machine) });
         return;
       }
       if (status.signedIn) {
-        setPending({
+        ask(attempt, {
           generation: attempt,
           host: target,
-          tokenDigest: ticket.tokenDigest,
+          tokenDigest,
           account: account ?? null,
-          current: { signedIn: true, account: status.account },
+          current: { signedIn: true, account: status.account, accounts: status.accounts },
         });
-        setPhase("confirming");
         return;
       }
-      await commit(attempt, target, ticket.tokenDigest, account ?? null, { signedIn: false });
+      await commit(attempt, target, tokenDigest, account ?? null, { signedIn: false });
     },
 
-    /** The token being edited: a result belongs to the save it came from. */
+    /** The credential changed another way (Clear, Import): drop what an earlier save started. */
+    supersede,
+
+    /** The token being edited: a finished result belongs to the save it came from. */
     clearOutcome() {
       if (phase === "idle") setOutcome(null);
     },
 
-    setChecked(next: boolean) {
-      setCheckedFor(next ? host : null);
-    },
+    setChecked,
 
-    status: visibleOutcome ? (
-      <span role="status" className="mt-1 flex items-start gap-1 select-text">
+    status: outcome ? (
+      <span className="mt-1 flex items-start gap-1 select-text">
         <Icon
           name={
-            visibleOutcome.tone === "success"
+            outcome.tone === "success"
               ? "circle-check"
-              : visibleOutcome.tone === "warning"
+              : outcome.tone === "warning"
                 ? "alert-triangle"
                 : "circle-x"
           }
           className={
-            visibleOutcome.tone === "success"
+            outcome.tone === "success"
               ? "w-3 h-3 shrink-0 mt-0.5"
-              : visibleOutcome.tone === "warning"
+              : outcome.tone === "warning"
                 ? "w-3 h-3 shrink-0 mt-0.5 text-status-warning"
                 : "w-3 h-3 shrink-0 mt-0.5 text-status-error"
           }
         />
-        <span>{visibleOutcome.message}</span>
+        <span>{outcome.message}</span>
       </span>
     ) : phase === "checking" || phase === "signing-in" ? (
       <span className="mt-1 block">Signing in GitHub CLI…</span>
     ) : null,
 
-    pending: visiblePending,
+    pending,
 
     async confirm(): Promise<void> {
-      if (!visiblePending || phase !== "confirming" || !isCurrent(visiblePending.generation)) {
-        return;
-      }
-      const { generation: attempt, host: target, tokenDigest, account, current } = visiblePending;
+      if (!pending || phase !== "confirming" || !isCurrent(pending.generation)) return;
+      const { generation: attempt, host: target, tokenDigest, account, current } = pending;
       setPending(null);
       await commit(attempt, target, tokenDigest, account, current);
     },
 
     cancel() {
       if (!pending) return;
-      const { generation: attempt, host: target, current } = pending;
+      const attempt = pending.generation;
       setPending(null);
-      finish(attempt, target, {
-        tone: "warning",
-        message: current.account
-          ? `GitHub CLI wasn't changed; it's still signed in as @${current.account}.`
-          : "GitHub CLI wasn't changed.",
-      });
+      // Only what Cancel establishes: gh may have changed elsewhere meanwhile.
+      finish(attempt, { tone: "warning", message: "GitHub CLI wasn't changed." });
     },
   };
 }
@@ -343,18 +346,29 @@ export function GhCliSignInConfirm({ signIn, machine }: { signIn: GhCliSignIn; m
   const current = pending?.current.account ?? null;
   const incoming = pending?.account ?? null;
   const host = pending?.host ?? "";
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
   let title: string;
-  let description: ReactNode;
-  if (current && incoming && current.toLowerCase() === incoming.toLowerCase()) {
+  let description: string;
+  if (current && incoming && same(current, incoming)) {
     title = `Replace GitHub CLI's token for @${current}?`;
     description = `GitHub CLI on ${machine} is already signed in to ${host} as @${current}. Its token for @${current} is replaced with the one you just saved.`;
-  } else if (current) {
-    title = `Replace GitHub CLI's sign-in for @${current}?`;
-    description = `GitHub CLI on ${machine} is signed in to ${host} as @${current}. Continuing signs it in with the token you just saved${asAccount(incoming)}, which gh then uses for ${host}.`;
   } else {
-    title = `Replace GitHub CLI's sign-in for ${host}?`;
-    description = `GitHub CLI on ${machine} already has a sign-in for ${host} that it doesn't name. Continuing signs it in with the token you just saved${asAccount(incoming)}, which gh then uses for ${host}.`;
+    title = current
+      ? `Replace GitHub CLI's sign-in for @${current}?`
+      : `Replace GitHub CLI's sign-in for ${host}?`;
+    description = `${
+      current
+        ? `GitHub CLI on ${machine} is signed in to ${host} as @${current}.`
+        : `GitHub CLI on ${machine} already has a sign-in for ${host} that it doesn't name.`
+    } Continuing signs it in with the token you just saved${asAccount(incoming)}, which gh then uses for ${host}.`;
+    const heldInactive =
+      incoming !== null && (pending?.current.accounts ?? []).some((login) => same(login, incoming));
+    if (heldInactive) {
+      description += ` gh also holds an older token for @${incoming}, which this replaces.`;
+    } else if (incoming === null) {
+      description += " Daintree couldn't tell which account that token belongs to.";
+    }
   }
 
   return (

@@ -206,7 +206,7 @@ export function GitHubEnterpriseSection({
         return;
       }
       setTokenFeedback(null);
-      ghSignIn.clearOutcome();
+      ghSignIn.supersede();
       await refreshStatus();
       afterTokenChange();
     } catch (error) {
@@ -258,6 +258,7 @@ export function GitHubEnterpriseSection({
         );
         return;
       }
+      ghSignIn.supersede();
       setToken("");
       setTokenFeedback({ kind: "saved", message: "Checked and saved" });
       await refreshStatus();

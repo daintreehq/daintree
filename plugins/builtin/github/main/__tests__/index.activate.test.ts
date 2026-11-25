@@ -106,20 +106,37 @@ describe("github plugin activate", () => {
 
   it("stops the gh sign-in channels when the provider can't register", async () => {
     const host = makeHost();
-    vi.mocked(host.registerForgeProvider).mockRejectedValue(new Error("registry refused"));
+    const order: string[] = [];
+    registerGhSignInMock.mockImplementation(async () => {
+      order.push("register gh sign-in");
+      return () => order.push("dispose gh sign-in");
+    });
+    vi.mocked(host.registerForgeProvider).mockImplementation(async () => {
+      order.push("register provider");
+      throw new Error("registry refused");
+    });
 
     await expect(activate(host)).rejects.toThrow("registry refused");
 
     expect(registerGhSignInMock).toHaveBeenCalledWith(host);
-    expect(disposeGhSignInMock).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["register gh sign-in", "register provider", "dispose gh sign-in"]);
   });
 
-  it("empties the Enterprise Server session when the gh sign-in channels can't register", async () => {
+  it("still registers the forge provider when the gh sign-in channels can't register", async () => {
     registerGhSignInMock.mockRejectedValue(new Error("channel taken"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = makeHost();
 
-    await expect(activate(makeHost())).rejects.toThrow("channel taken");
+    try {
+      const dispose = await activate(host);
 
-    expect(disposeEnterpriseMock).toHaveBeenCalledTimes(1);
+      expect(host.registerForgeProvider).toHaveBeenCalledTimes(1);
+      expect(disposeEnterpriseMock).not.toHaveBeenCalled();
+      dispose();
+      expect(disposeEnterpriseMock).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("stops the gh sign-in channels on deactivation", async () => {
