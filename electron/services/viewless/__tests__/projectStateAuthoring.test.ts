@@ -230,17 +230,20 @@ describe("setViewlessTerminalHold", () => {
     return writer;
   }
 
-  it("fails a hold the layout already has when the save it joins fails", async () => {
-    const state: ProjectState = {
-      projectId: "p-1",
-      sidebarWidth: 350,
-      terminals: [{ ...WORKER, holdOnRestart: true }],
-    };
+  it.each([true, false])(
+    "fails hold=%s the layout already has when the save it joins fails",
+    async (hold) => {
+      const state: ProjectState = {
+        projectId: "p-1",
+        sidebarWidth: 350,
+        terminals: [hold ? { ...WORKER, holdOnRestart: true } : WORKER],
+      };
 
-    await expect(
-      setViewlessTerminalHold(failingWriter(state), "p-1", "t-worker", true)
-    ).rejects.toThrow("disk full");
-  });
+      await expect(
+        setViewlessTerminalHold(failingWriter(state), "p-1", "t-worker", hold)
+      ).rejects.toThrow("disk full");
+    }
+  );
 
   it("reports a panel the layout doesn't hold without joining any save", async () => {
     const state: ProjectState = { projectId: "p-1", sidebarWidth: 350, terminals: [WORKER] };

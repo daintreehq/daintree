@@ -271,6 +271,8 @@ describe("findEquivalentMissingCliGate", () => {
     ["command", { command: "claude --resume" }],
     ["launch flags", { agentLaunchFlags: ["--verbose"] }],
     ["agent", { launchAgentId: "gemini" }],
+    // #18178: a held launch's gate isn't the gate of an unheld one.
+    ["restart hold", { holdOnRestart: true as const }],
   ])("keeps a gate whose %s differs separate", (_label, difference) => {
     const existing = gate({ id: "gate-existing" });
     const candidate = gate({ id: "gate-new", ...difference });
