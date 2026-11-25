@@ -1281,8 +1281,28 @@ describe("a leased machine's price (#18233)", () => {
     return statusOf(env, hostId)!;
   }
 
+  /** Every hosts write that first gave a binding its machine, by machine. */
+  function firstBoundWrites(env: Env): Map<string, Record<string, unknown>> {
+    const firsts = new Map<string, Record<string, unknown>>();
+    const set = env.saved.set.bind(env.saved);
+    env.saved.set = (key: string, value: unknown) => {
+      if (key === "cloudHosts") {
+        const bindings = (value as { bindings?: Record<string, unknown>[] }).bindings ?? [];
+        for (const binding of bindings) {
+          const resourceId = binding.resourceId;
+          if (typeof resourceId === "string" && !firsts.has(resourceId)) {
+            firsts.set(resourceId, structuredClone(binding));
+          }
+        }
+      }
+      return set(key, value);
+    };
+    return firsts;
+  }
+
   it("prices two machines of one size at the rates they were leased at, across a restart", async () => {
     const env = await offerCloud();
+    const firsts = firstBoundWrites(env);
     // The catalog lists the size at its own rate, which neither lease paid.
     await env.accounts.catalog(env.account.id);
     env.api.offersOnPlace = [offer("cheap", 0.3), offer("dear", 0.7)];
@@ -1301,6 +1321,14 @@ describe("a leased machine's price (#18233)", () => {
       machineType: "default",
       hourlyDollars: 0.7,
     });
+    // The rate went out in the write that bound each machine, so no restart finds one without it.
+    for (const [choice, hourlyDollars] of [
+      [firstChoice, 0.3],
+      [secondChoice, 0.7],
+    ] as const) {
+      const resourceId = `lease-${choice.order.id}`;
+      expect(firsts.get(resourceId)?.leaseRate).toEqual({ resourceId, hourlyDollars });
+    }
 
     env.crash();
     await env.accounts.catalog(env.account.id);
@@ -1328,18 +1356,53 @@ describe("a leased machine's price (#18233)", () => {
     expect(env.api.leaseOffer).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps the rate of a lease sent just before a crash, bound by the next run", async () => {
+  it.each([0.25, 0])(
+    "keeps the rate of a lease sent just before a crash, bound by the next run ($%s an hour)",
+    async (rate) => {
+      const env = await offerCloud();
+      env.api.offersOnPlace = [offer("a", rate)];
+      const hostId = await env.create();
+      const choice = await env.awaitChoice();
+      env.api.plans.lease.push("hang-commit");
+      void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", rate).catch(() => {});
+      await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+      env.crash();
+      await env.accounts.catalog(env.account.id);
+      await vi.waitFor(() => expect(env.status()?.resourceId).toBe(`lease-${choice.order.id}`));
+      expect(env.status()?.hourlyDollars).toBe(rate);
+    }
+  );
+
+  it("learns a lease's rate from a later close of its order, and never replaces one it knows", async () => {
     const env = await offerCloud();
-    env.api.offersOnPlace = [offer("a", 0.25)];
+    await env.accounts.catalog(env.account.id);
+    env.api.offersOnPlace = [offer("a", 0.45)];
     const hostId = await env.create();
     const choice = await env.awaitChoice();
+    const resourceId = `lease-${choice.order.id}`;
     env.api.plans.lease.push("hang-commit");
-    void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.25).catch(() => {});
+    void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.45).catch(() => {});
     await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+    const owed = { ...env.store.createOrders()[0]!, state: "close" as const, offerId: null };
+    // The close that binds the machine can't say its rate.
+    env.api.closeReportsRate = false;
+    await env.lifecycle.cancelOrder(hostId, choice.order.id);
+    expect(await runningOn(env, hostId)).toMatchObject({ resourceId, hourlyDollars: null });
+
+    // A crash after the bind, before the order was struck off: the next run closes it again.
+    env.store.putCreateOrder(owed);
+    env.api.closeReportsRate = true;
     env.crash();
-    await env.accounts.catalog(env.account.id);
-    await vi.waitFor(() => expect(env.status()?.resourceId).toBe(`lease-${choice.order.id}`));
-    expect(env.status()?.hourlyDollars).toBe(0.25);
+    await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
+    expect(env.status()).toMatchObject({ resourceId, hourlyDollars: 0.45 });
+
+    // Once known, a later answer about the same lease changes nothing.
+    env.store.putCreateOrder(owed);
+    env.api.orders.get(choice.order.id)!.leasedAt = 0.9;
+    env.crash();
+    await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
+    expect(env.status()).toMatchObject({ resourceId, hourlyDollars: 0.45 });
+    expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the rate when a cancel finds the lease won", async () => {

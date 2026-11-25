@@ -671,6 +671,14 @@ describe("CloudHostLifecycle.create", () => {
     expect(store.bindings()[0]?.leaseRate).toBeUndefined();
   });
 
+  it("prices a machine imported from a provider with list prices at its catalog rate (#18233)", async () => {
+    const { lifecycle, accounts, store } = await setup({ machineType: "xlarge" });
+    const accountId = store.accounts()[0]!.id;
+    await accounts.catalog(accountId);
+    await lifecycle.importMachine({ accountId, resourceId: "bx_23456789", name: "build" });
+    expect(lifecycle.statuses()[0]).toMatchObject({ machineType: "xlarge", hourlyDollars: 0.2 });
+  });
+
   it("sends the lifetime saved while a Retry was looking, not the one it began with (#17928)", async () => {
     const { lifecycle, provider, store } = await setup();
     vi.mocked(provider.create).mockRejectedValueOnce(
