@@ -117,6 +117,14 @@ const LEASE_REFUSALS = new Set<AkashApiError["kind"]>([
   "not-found",
 ]);
 
+/** Refusals of the caller itself, made before Console looks at the order: no lease comes with them. */
+const CALLER_REFUSALS = new Set<AkashApiError["kind"]>([
+  "unauthorized",
+  "forbidden",
+  "payment-required",
+  "rate-limited",
+]);
+
 /** What went wrong with a lease that stands, and the machine state it leaves when that is final. */
 interface LeaseNote {
   problem: string;
@@ -255,8 +263,18 @@ function replaced(lease: AkashLease, offer: AkashOfferId): boolean {
  * manifest may never have reached the provider, and Console takes the same
  * request again to send it. Never for a bid swapped in: that one is said.
  */
-function needsManifest(lease: AkashLease, offer: AkashOfferId): boolean {
-  return lease.state === "active" && !lease.status && !replaced(lease, offer);
+function needsManifest(lease: AkashLease, offer: AkashOfferId, chosen: AkashBid | null): boolean {
+  return lease.state === "active" && !lease.status && !swapped(lease, offer, chosen);
+}
+
+/** The lease is on other terms than the bid chosen: another of its bidder's bids, or another price. */
+function swapped(lease: AkashLease, offer: AkashOfferId, chosen: AkashBid | null): boolean {
+  return (
+    replaced(lease, offer) ||
+    (chosen !== null &&
+      (lease.price.denom !== chosen.price.denom ||
+        decimal(lease.price.amount) !== decimal(chosen.price.amount)))
+  );
 }
 
 /** Which of its bidder's bids a bid or lease is; 0 where the Console leaves it out. */
@@ -910,7 +928,8 @@ export class AkashProvider implements CloudProvider {
       } catch (error) {
         if (error instanceof AkashApiError && error.kind === "cancelled") throw error;
       }
-      if (needsManifest(taken, offer)) return this.sendLease(client, ctx, view, offer, chosen);
+      if (needsManifest(taken, offer, chosen))
+        return this.sendLease(client, ctx, view, offer, chosen);
       return this.leased(client, view, offer, chosen, ctx.signal);
     }
     const bids = await this.bidsOf(client, ctx, id);
@@ -976,7 +995,7 @@ export class AkashProvider implements CloudProvider {
           );
         }
         // A refusal Console named before leasing anything, with nothing yet saying a lease stands.
-        if (first && LEASE_REFUSALS.has(error.kind)) throw error;
+        if (first && CALLER_REFUSALS.has(error.kind)) throw error;
         if (error.code === "provider_manifest_invalid") {
           const back = await this.readBack(client, ctx, view.id, offer, INVALID);
           return this.answer(client, back, offer, chosen, null, INVALID, ctx.signal);
@@ -1001,7 +1020,7 @@ export class AkashProvider implements CloudProvider {
       // Anything else, an answer it can't read included, is settled by what the order holds;
       // a lease of the chosen bid standing with nothing reported of it gets its manifest again.
       const back = await this.readBack(client, ctx, view.id, offer, note);
-      if (attempt === 0 && back.taken && needsManifest(back.taken, offer)) {
+      if (attempt === 0 && back.taken && needsManifest(back.taken, offer, chosen)) {
         note = UNDELIVERED;
         continue;
       }
@@ -1081,12 +1100,7 @@ export class AkashProvider implements CloudProvider {
     const resource = await this.resourceOf(client, view, signal);
     const lease = view.leases.find((entry) => tupleOf(entry.id) === tupleOf(offer));
     if (!lease) return resource;
-    const swapped =
-      replaced(lease, offer) ||
-      (chosen !== null &&
-        (lease.price.denom !== chosen.price.denom ||
-          decimal(lease.price.amount) !== decimal(chosen.price.amount)));
-    if (!swapped) return resource;
+    if (!swapped(lease, offer, chosen)) return resource;
     const rate = lease.price.denom === AKASH_UACT ? akashHourlyDollars(lease.price.amount) : null;
     // Leased on terms nobody chose: it stops here for the person to keep or delete.
     return withNote(resource, {

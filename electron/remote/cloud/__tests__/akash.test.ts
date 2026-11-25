@@ -2182,6 +2182,41 @@ describe("AkashProvider orders and machines", () => {
     });
   });
 
+  it("reads the order back when a lease is refused as not open, in case another was leased", async () => {
+    const { fake, provider, account, order, dseq, deployment } = await placed();
+    const mine = fake.bid(dseq, "akash1mine", "1000");
+    const theirs = fake.bid(dseq, "akash1theirs", "900");
+    const [offer] = await provider.offerCreate.listOffers(account, order.id);
+    fake.onAnswered = (request) => {
+      // Someone leases the other offer on the Akash Console just before this one is sent.
+      if (request.path === "/bids") {
+        fake.onAnswered = null;
+        mine.state = "lost";
+        theirs.state = "active";
+        deployment.leases.push(liveLease(fake, "akash1theirs"));
+      }
+    };
+    const error = await rejection(provider.offerCreate.leaseOffer(account, order.id, offer!.id));
+    expect(code(provider, error)).toBe("outcome-unknown");
+  });
+
+  it("never sends a manifest for a lease priced unlike the bid chosen", async () => {
+    const { fake, provider, account, order, dseq } = await placed();
+    const bid = fake.bid(dseq, "akash1repriced", "1000");
+    const [offer] = await provider.offerCreate.listOffers(account, order.id);
+    fake.onAnswered = (request) => {
+      if (request.path === "/bids") {
+        fake.onAnswered = null;
+        bid.price = "3000";
+      }
+    };
+    fake.manifestFailures = 1;
+    fake.commitThen("POST", /^\/leases$/, () => reply(200, { data: { leases: [{}] } }));
+    const machine = await provider.offerCreate.leaseOffer(account, order.id, offer!.id);
+    expect(machine).toMatchObject({ machine: "error", error: expect.stringMatching(/replaced/) });
+    expect(sent(fake, "POST", "/leases")).toHaveLength(1);
+  });
+
   it("drops a manifest's warning once the provider reports the lease after all", async () => {
     const { fake, provider, account, order, dseq } = await placed();
     fake.bid(dseq, "akash1slow", "1000");
