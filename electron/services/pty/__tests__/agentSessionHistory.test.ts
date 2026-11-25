@@ -345,10 +345,18 @@ describe("agentSessionHistory", () => {
       expect(record).not.toHaveProperty("agentPresetId");
     });
 
-    it("takes them from the later run of a terminal, whichever capture lands last", async () => {
-      // The later run's capture lands first: on the default login, on a preset.
+    it("takes the later run of a terminal as the record, whichever capture lands last", async () => {
+      // The later run's capture lands first: on another account and preset, another model.
       await persistAgentSession(
-        { ...base, sessionId: "s1", title: "Later", agentPresetId: "backup", ...run(2) },
+        {
+          ...base,
+          sessionId: "s1",
+          title: "Later",
+          agentAccountId: "personal",
+          agentPresetId: "backup",
+          agentLaunchFlags: ["--model", "sonnet"],
+          ...run(2),
+        },
         userDataDir
       );
       // The earlier run's capture, delayed past it, lands last.
@@ -359,16 +367,45 @@ describe("agentSessionHistory", () => {
           title: "Earlier",
           agentAccountId: "work",
           agentPresetId: "zai",
+          agentLaunchFlags: ["--model", "opus"],
+          bookmark: { bookmarkedAt: 5, label: "Pinned" },
           ...run(1),
         },
         userDataDir
       );
 
       const [record] = await readSessionHistory(userDataDir);
-      // Everything else still follows arrival order.
-      expect(record.title).toBe("Earlier");
-      expect(record.agentPresetId).toBe("backup");
-      expect(record).not.toHaveProperty("agentAccountId");
+      // One run's launch, never the account of one and the flags of the other.
+      expect(record).toMatchObject({
+        title: "Later",
+        agentAccountId: "personal",
+        agentPresetId: "backup",
+        agentLaunchFlags: ["--model", "sonnet"],
+        terminal: { id: "terminal-1", spawnedAt: 2 },
+      });
+      // What describes the session rather than a run stays with it.
+      expect(record.bookmark).toEqual({ bookmarkedAt: 5, label: "Pinned" });
+    });
+
+    it("keeps the latest run whatever order three captures of a terminal land in", async () => {
+      const capture = (spawnedAt: number, agentAccountId?: string) =>
+        persistAgentSession(
+          {
+            ...base,
+            sessionId: "s1",
+            ...(agentAccountId ? { agentAccountId } : {}),
+            ...run(spawnedAt),
+          },
+          userDataDir
+        );
+      await capture(3, "work");
+      await capture(1, "personal");
+      // The second run, on the default login, lands last.
+      await capture(2);
+
+      const [record] = await readSessionHistory(userDataDir);
+      expect(record.terminal?.spawnedAt).toBe(3);
+      expect(record.agentAccountId).toBe("work");
     });
 
     it("follows arrival order for captures of different terminals", async () => {

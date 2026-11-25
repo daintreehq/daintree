@@ -781,7 +781,7 @@ describe("passive agent session capture", () => {
     });
 
     // #18191: the ids a resume reads the run's account and preset back by.
-    it("names the account and preset the run launched on, and neither for a later hand-started run", async () => {
+    it("names the account and preset the run launched on, and only the account for a later hand-started run", async () => {
       const terminal = track(createTerminal({ agentAccountId: "work", agentPresetId: "zai" }));
       promoteCodex(terminal);
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
@@ -794,7 +794,9 @@ describe("passive agent session capture", () => {
       mockPty(terminal).__emitData(`${codexHint(OTHER_SESSION_ID)}\n$ `);
       demote(terminal);
       await flushCapture();
-      expect(captured[1].record).not.toHaveProperty("agentAccountId");
+      expect(captured[1].record.sessionId).toBe(OTHER_SESSION_ID);
+      // The shell kept the folder the PTY was spawned with; the preset's arguments it didn't.
+      expect(captured[1].record.agentAccountId).toBe("work");
       expect(captured[1].record).not.toHaveProperty("agentPresetId");
     });
 

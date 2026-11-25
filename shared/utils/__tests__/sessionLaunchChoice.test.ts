@@ -3,6 +3,9 @@ import { launchChoiceForRecord } from "../sessionLaunchChoice.js";
 
 describe("launchChoiceForRecord", () => {
   it("names the account and preset of the run Daintree launched", () => {
+    expect(
+      launchChoiceForRecord({ agentAccountId: "work", agentPresetId: "zai", agentIncarnation: 0 })
+    ).toEqual({ agentAccountId: "work", agentPresetId: "zai" });
     expect(launchChoiceForRecord({ agentAccountId: "work", agentPresetId: "zai" })).toEqual({
       agentAccountId: "work",
       agentPresetId: "zai",
@@ -10,16 +13,35 @@ describe("launchChoiceForRecord", () => {
     expect(launchChoiceForRecord({})).toEqual({});
   });
 
-  it("names neither once another agent run has taken the terminal over", () => {
+  it("keeps the account for a later run of the same CLI in the shell, never the preset", () => {
     expect(
-      launchChoiceForRecord({ agentAccountId: "work", agentPresetId: "zai", agentIncarnation: 1 })
-    ).toEqual({});
+      launchChoiceForRecord({
+        agentAccountId: "work",
+        agentPresetId: "zai",
+        agentIncarnation: 1,
+        launchAgentId: "claude",
+        detectedAgentId: "claude",
+      })
+    ).toEqual({ agentAccountId: "work" });
+  });
+
+  it("names no account while another CLI is the one detected in the terminal", () => {
+    expect(
+      launchChoiceForRecord({
+        agentAccountId: "work",
+        agentPresetId: "zai",
+        launchAgentId: "claude",
+        detectedAgentId: "codex",
+      })
+    ).toEqual({ agentPresetId: "zai" });
   });
 
   it("drops an id that isn't one", () => {
     expect(
       launchChoiceForRecord({ agentAccountId: "work/../x", agentPresetId: "", agentIncarnation: 0 })
     ).toEqual({});
+    expect(launchChoiceForRecord({ agentPresetId: "line\nbreak" })).toEqual({});
+    expect(launchChoiceForRecord({ agentPresetId: "x".repeat(101) })).toEqual({});
     expect(launchChoiceForRecord({ agentAccountId: 7, agentPresetId: { id: "zai" } })).toEqual({});
   });
 });

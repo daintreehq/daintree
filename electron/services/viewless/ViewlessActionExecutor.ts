@@ -187,7 +187,11 @@ export interface ViewlessAgentSources {
   /** This machine's toolbar pins: with no view, there is no other screen to describe (#14702). */
   getToolbarPins(): Promise<AgentToolbarPins>;
   getCcrPresets(agentId: string): Promise<AgentPreset[] | undefined>;
-  getProjectPresets(projectPath: string): Promise<Record<string, AgentPreset[]>>;
+  /** `onUnreadable` hears each agent whose presets weren't all read (#18191). */
+  getProjectPresets(
+    projectPath: string,
+    options?: { onUnreadable?: (agentId: string) => void }
+  ): Promise<Record<string, AgentPreset[]>>;
   getCliDetail(agentId: string): Promise<AgentCliDetail | undefined>;
   /** The probe's per-agent states, and whether a live probe has completed. */
   getAvailability(): Promise<{

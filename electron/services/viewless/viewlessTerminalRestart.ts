@@ -18,6 +18,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { mergeTerminalLaunchEnv } from "../../../shared/utils/terminalLaunchOptions.js";
 import { readSpawnProvenance } from "../../../shared/utils/scheduledRunProvenance.js";
 import { conversationStoreFor } from "../../../shared/utils/conversationStore.js";
+import { paneAccountEnv } from "../../../shared/utils/agentAccounts.js";
 import type { TerminalFirstPrompt } from "../../../shared/types/panel.js";
 import type { ViewlessDeps } from "./ViewlessActionExecutor.js";
 
@@ -218,8 +219,10 @@ export async function restartTerminalWithoutView(
               agentPresetId: snapshot.agentPresetId,
               agentPresetColor: snapshot.agentPresetColor,
               originalAgentPresetId: snapshot.originalPresetId,
-              // The account whose folder `snapshot.env` carries (#18191).
-              agentAccountId: snapshot.agentAccountId,
+              // Only the account whose folder `snapshot.env` carries (#18191).
+              agentAccountId: paneAccountEnv(agentId, snapshot)
+                ? snapshot.agentAccountId
+                : undefined,
               fallbackChainIndex: snapshot.fallbackChainIndex,
               ...(keepsFirstPrompt ? { hasFirstPrompt: true } : {}),
               // Still the scheduled run's pane, so its next session names the

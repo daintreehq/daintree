@@ -53,7 +53,8 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
       const presets = await CcrConfigService.getInstance().loadAndApply();
       return presets.length > 0 ? presets : undefined;
     },
-    getProjectPresets: (projectPath) => projectStore.readInRepoPresets(projectPath),
+    getProjectPresets: (projectPath, options) =>
+      projectStore.readInRepoPresets(projectPath, options),
     // A launchable probe with a resolved path is reused, as the view's
     // launcher reuses it; anything else is probed again first.
     getCliDetail: async (agentId) => {

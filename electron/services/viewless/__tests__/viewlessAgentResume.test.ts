@@ -918,7 +918,7 @@ describe("resumeAgentSessionAsPane on what the session launched on (#18191)", ()
     const { deps, invoke, store } = resumeDeps({
       sessions: [record({ agentAccountId: "work" })],
       // The agent's default is another account now; the session's own wins.
-      settings: claudeSettings({ accounts: [WORK, PERSONAL], accountId: "personal" }),
+      settings: claudeSettings({ accounts: [PERSONAL, WORK], accountId: "personal" }),
     });
 
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
@@ -992,7 +992,12 @@ describe("resumeAgentSessionAsPane on what the session launched on (#18191)", ()
       sessions: [record({ agentPresetId: "zai", agentAccountId: "work" })],
       settings: claudeSettings({
         accounts: [WORK],
-        customPresets: [{ ...ZAI, env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-preset" } }],
+        customPresets: [
+          {
+            ...ZAI,
+            env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-preset", ANTHROPIC_BASE_URL: "https://z" },
+          },
+        ],
       }),
     });
 
@@ -1000,6 +1005,8 @@ describe("resumeAgentSessionAsPane on what the session launched on (#18191)", ()
 
     const [payload] = spawns(invoke);
     expect((payload!.env as Record<string, string>).CLAUDE_CONFIG_DIR).toBe(WORK.configDir);
+    // Only the account's own variable gives way; the rest of the preset's env stays.
+    expect((payload!.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe("https://z");
     expect(payload).toMatchObject({ agentPresetId: "zai", agentAccountId: "work" });
   });
 
@@ -1031,8 +1038,11 @@ describe("resumeAgentSessionAsPane on what the session launched on (#18191)", ()
     expect(store.read()?.terminals ?? []).toEqual([]);
   });
 
-  it("refuses when the settings that would name the account can't be read", async () => {
-    const { deps, invoke } = resumeDeps({ sessions: [record({ agentAccountId: "work" })] });
+  it.each([
+    ["the account", { agentAccountId: "work" }],
+    ["the preset", { agentPresetId: "zai" }],
+  ])("refuses when the settings that would name %s can't be read", async (_label, ids) => {
+    const { deps, invoke } = resumeDeps({ sessions: [record(ids)] });
     deps.agents.getSettings = async () => {
       throw new Error("store unreadable");
     };
@@ -1041,6 +1051,111 @@ describe("resumeAgentSessionAsPane on what the session launched on (#18191)", ()
 
     expect(result).toMatchObject({ status: "refused", reason: "settings-unavailable" });
     expect(spawns(invoke)).toEqual([]);
+  });
+
+  it("keeps a preset's Skip all off on resume, whatever the agent's own setting", async () => {
+    const { deps, invoke } = resumeDeps({
+      sessions: [
+        record({ agentPresetId: "careful", agentLaunchFlags: ["--dangerously-skip-permissions"] }),
+      ],
+      settings: {
+        agents: {
+          claude: { customPresets: [{ id: "careful", name: "Careful", dangerousMode: "off" }] },
+        },
+        globalSkipPermissions: true,
+      } as AgentSettings,
+    });
+
+    await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    const [payload] = spawns(invoke);
+    expect(payload!.command).not.toContain("--dangerously-skip-permissions");
+    expect(payload!.agentPresetId).toBe("careful");
+  });
+
+  it("names both when the session's account and preset are gone", async () => {
+    const { deps, invoke } = resumeDeps({
+      sessions: [record({ agentAccountId: "work", agentPresetId: "zai" })],
+      settings: claudeSettings({ accounts: [PERSONAL], customPresets: [] }),
+    });
+
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    expect(result).toMatchObject({ status: "refused", reason: "missing-account" });
+    const { message } = result as { message: string };
+    expect(message).toContain('"work"');
+    expect(message).toContain('"zai"');
+    expect(spawns(invoke)).toEqual([]);
+  });
+
+  it("refuses rather than throws on a saved preset list it can't read", async () => {
+    const { deps, invoke } = resumeDeps({
+      sessions: [record({ agentPresetId: "zai" })],
+      settings: claudeSettings({ customPresets: [null, ZAI] }),
+    });
+
+    await expect(resumeAgentSessionAsPane(REQUEST, deps, makeRuntime())).resolves.toMatchObject({
+      status: "refused",
+      reason: "settings-unavailable",
+    });
+    expect(spawns(invoke)).toEqual([]);
+  });
+
+  it("answers an abandoned call as cancelled, not with the launch's own refusal", async () => {
+    const { deps, invoke } = resumeDeps({
+      sessions: [record({ agentAccountId: "work" })],
+      settings: claudeSettings({ accounts: [PERSONAL] }),
+    });
+    const controller = new AbortController();
+    const runtime = makeRuntime({
+      isDirectory: vi.fn(async () => {
+        controller.abort();
+        return true;
+      }),
+    });
+
+    await expect(
+      resumeAgentSessionAsPane({ ...REQUEST, signal: controller.signal }, deps, runtime)
+    ).resolves.toMatchObject({ status: "refused", reason: "cancelled" });
+    expect(spawns(invoke)).toEqual([]);
+  });
+
+  it("refuses a repository-ranked id a skipped repository file might hold, rather than a lower source's", async () => {
+    const CCR_TEAM = {
+      id: "ccr-team",
+      name: "Team route",
+      env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:3456" },
+    };
+    const make = (skipped: boolean) => {
+      const made = resumeDeps({
+        sessions: [record({ agentPresetId: "ccr-team" })],
+        settings: claudeSettings({}),
+      });
+      made.deps.agents.getCcrPresets = async () => [CCR_TEAM];
+      // The repository's file for that id couldn't be read; the read still resolves.
+      made.deps.agents.getProjectPresets = async (_path, options) => {
+        if (skipped) options?.onUnreadable?.("claude");
+        return {};
+      };
+      return made;
+    };
+
+    const skipped = make(true);
+    await expect(
+      resumeAgentSessionAsPane(REQUEST, skipped.deps, makeRuntime())
+    ).resolves.toMatchObject({ status: "refused", reason: "settings-unavailable" });
+    expect(spawns(skipped.invoke)).toEqual([]);
+
+    // Read whole, the route is the preset, as a launch takes it.
+    const whole = make(false);
+    await expect(
+      resumeAgentSessionAsPane(REQUEST, whole.deps, makeRuntime())
+    ).resolves.toMatchObject({ status: "launched" });
+    const [payload] = spawns(whole.invoke);
+    expect(payload).toMatchObject({ agentPresetId: "ccr-team" });
+    expect((payload!.env as Record<string, string>).ANTHROPIC_BASE_URL).toBe(
+      CCR_TEAM.env.ANTHROPIC_BASE_URL
+    );
   });
 
   it("refuses a preset a repository's unread presets might hold, and resumes one the user's own settings hold", async () => {

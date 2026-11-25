@@ -37,6 +37,7 @@ import {
 import { getDriveLeaseSnapshot } from "@/services/terminal/inputGate";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
 import { conversationStoreFor } from "@shared/utils/conversationStore";
+import { paneAccountEnv } from "@shared/utils/agentAccounts";
 import { buildAgentLaunchContext } from "./agentLaunchContext";
 
 const TERMINAL_STARTUP_ATTACH_TIMEOUT_MS = 2500;
@@ -704,8 +705,11 @@ export function enqueuePtyStartup(
             agentPresetId: options.agentPresetId,
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
-            // So a session the run captures names its account (#18191).
-            agentAccountId: launchAgentId ? options.agentAccountId : undefined,
+            // So a session the run captures names its account (#18191): only
+            // with the folder in the launch env, which is what puts it there.
+            agentAccountId: paneAccountEnv(launchAgentId, options)
+              ? options.agentAccountId
+              : undefined,
             fallbackChainIndex: options.fallbackChainIndex,
             handbackCode: options.handbackCode,
             ...(options.whenDone !== undefined && { whenDone: options.whenDone }),

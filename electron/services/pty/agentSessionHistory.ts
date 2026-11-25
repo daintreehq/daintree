@@ -80,12 +80,24 @@ function isLaterRunOfSameTerminal(a: AgentSessionRecord, b: AgentSessionRecord):
   );
 }
 
-/** Both ids from `from`, an absent one included: the default login and no preset are choices too. */
-function takeLaunchChoice(into: AgentSessionRecord, from: AgentSessionRecord): void {
-  delete into.agentPresetId;
-  delete into.agentAccountId;
-  if (from.agentPresetId !== undefined) into.agentPresetId = from.agentPresetId;
-  if (from.agentAccountId !== undefined) into.agentAccountId = from.agentAccountId;
+/**
+ * Makes `winner`, the newest arrival, the later run's record (#18191): a
+ * capture delayed past its successor's lands last but describes the earlier
+ * launch, whose account, preset and flags a resume must not mix with the later
+ * run's. The arrival keeps its place and what describes the session rather
+ * than a run: its pin, and the title, run and store the later record lacks.
+ */
+function becomeLaterRun(winner: AgentSessionRecord, later: AgentSessionRecord): void {
+  const landed = { ...winner };
+  const fields = winner as unknown as Record<string, unknown>;
+  for (const key of Object.keys(fields)) delete fields[key];
+  Object.assign(winner, later, { savedAt: landed.savedAt });
+  if (landed.bookmark) winner.bookmark = landed.bookmark;
+  if (!winner.title && landed.title) winner.title = landed.title;
+  if (!winner.scheduledRun && landed.scheduledRun) winner.scheduledRun = landed.scheduledRun;
+  if (!winner.conversationStore && landed.conversationStore) {
+    winner.conversationStore = landed.conversationStore;
+  }
 }
 
 function evictRecords(
@@ -116,6 +128,8 @@ function evictRecords(
       const clone = { ...r };
       winners.set(r.sessionId, clone);
       deduped.push(clone);
+    } else if (existing.agentId === r.agentId && isLaterRunOfSameTerminal(r, existing)) {
+      becomeLaterRun(existing, r);
     } else if (existing.agentId === r.agentId) {
       // Carry a pin forward only within the same agent — a cross-agent sessionId
       // collision must never attach one agent's bookmark to another's record.
@@ -133,10 +147,6 @@ function evictRecords(
       if (!existing.conversationStore && r.conversationStore) {
         existing.conversationStore = r.conversationStore;
       }
-      // The account and preset a resume launches on are the latest run's
-      // (#18191). Arrival order says which run that is except for two of one
-      // terminal, where a capture delayed past its successor's lands last.
-      if (isLaterRunOfSameTerminal(r, existing)) takeLaunchChoice(existing, r);
     }
   }
 

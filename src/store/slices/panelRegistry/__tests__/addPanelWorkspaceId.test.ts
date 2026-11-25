@@ -207,7 +207,7 @@ describe("addPanel launch context (#12486)", () => {
   });
 
   // #18191: the host's record names the account, so the session it captures does.
-  it("hands an agent's account to the host, and none for a plain terminal", async () => {
+  it("hands an agent's account to the host only with its folder, and none for a plain terminal", async () => {
     await usePanelStore.getState().addPanel({
       requestedId: "claude-acct",
       launchAgentId: "claude",
@@ -220,13 +220,24 @@ describe("addPanel launch context (#12486)", () => {
       requestedId: "term-acct",
       bypassLimits: true,
       agentAccountId: "work",
+      env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-work" },
+    });
+    // A saved pane whose env lost the folder runs on the default login.
+    await usePanelStore.getState().addPanel({
+      requestedId: "claude-no-folder",
+      launchAgentId: "claude",
+      command: "claude",
+      bypassLimits: true,
+      agentAccountId: "work",
+      env: { SHARED: "1" },
     });
     await drainMicrotasks();
 
-    expect(spawnMock).toHaveBeenCalledTimes(2);
+    expect(spawnMock).toHaveBeenCalledTimes(3);
     const byId = new Map(spawnMock.mock.calls.map(([options]) => [options.id, options]));
     expect(byId.get("claude-acct")?.agentAccountId).toBe("work");
     expect(byId.get("term-acct")?.agentAccountId).toBeUndefined();
+    expect(byId.get("claude-no-folder")?.agentAccountId).toBeUndefined();
   });
 
   // #15977: the pane and the host's record both name a scheduled run, and a

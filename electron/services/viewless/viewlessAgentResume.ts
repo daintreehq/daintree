@@ -329,8 +329,6 @@ async function launchResumedPane(
   const held = await findPaneHoldingSession(project.id, sessionId, deps);
   if (held.status === "unavailable") return refused("terminals-unavailable", held.message);
   if (held.status === "found") return existingPane(project.id, held);
-  // After the holder scan, as every refusal that only a new launch earns is.
-  if (choice.refusal) return refused(choice.refusal.reason, choice.refusal.message);
 
   const defaults = computeHardwareDefaults(deps.hostPlatform.totalMemoryBytes);
   const panelLimit = buildPanelLimitSnapshot(panelCount, {
@@ -345,6 +343,9 @@ async function launchResumedPane(
     return refused("missing-cli", `${agentConfig.name} can't be launched on this machine.`);
   }
   if (request.signal?.aborted) return refused("cancelled", "The resume was abandoned.");
+  // After the holder scan and cancellation, as the refusals only a new launch
+  // earns are, so a joiner still retries a launch its leader abandoned.
+  if (choice.refusal) return refused(choice.refusal.reason, choice.refusal.message);
   const denied = request.authorizeSpawn?.();
   if (denied) return refused("not-authorized", denied);
 
@@ -451,10 +452,8 @@ interface ResumeLaunchChoice {
   refusal?: { reason: AgentSessionPaneRefusal; message: string };
 }
 
-/** An id a refusal can quote: one a record could only have got from Daintree. */
-function quotedId(id: string): string {
-  return /^[\w.:-]{1,128}$/.test(id) ? ` "${id}"` : "";
-}
+/** Launchable preset ids, as `sanitizePreset` admits them. */
+const PRESET_ID = /^[A-Za-z0-9_.-]{1,100}$/;
 
 /**
  * The preset and account a session's record says it launched on (#18191), read
@@ -484,7 +483,7 @@ async function readResumeLaunchChoice(
       return null;
     });
   } else {
-    sources = await readPresetSources(agentId, project.path, deps);
+    sources = await readPresetSources(agentId, project.path, deps, { strict: true });
     ({ settings, settingsRead } = sources);
   }
   const choice: ResumeLaunchChoice = { settings, preset: undefined, account: { kind: "default" } };
@@ -493,65 +492,73 @@ async function readResumeLaunchChoice(
     refusal: { reason, message },
   });
   if (presetId === undefined && accountId === undefined) return choice;
-  if (!settingsRead) {
-    return refuse(
-      "settings-unavailable",
-      "The agent settings couldn't be read, so what that session launched on can't be confirmed."
-    );
-  }
+  const unreadable = (what: string) =>
+    refuse("settings-unavailable", `${what}, so what that session launched on can't be confirmed.`);
+  if (!settingsRead) return unreadable("The agent settings couldn't be read");
 
+  let accountGone: string | undefined;
   if (accountId !== undefined) {
     const account = isAccountId(accountId)
       ? resolveLaunchAccount(agentId, settings?.agents?.[agentId], worktreeId, accountId)
       : undefined;
     // `default` too: an agent whose accounts were taken away can't put the
     // session back on the one it ran on, and the default login isn't it.
-    if (account?.kind !== "account") {
-      return refuse(
-        "missing-account",
-        isAccountId(accountId)
-          ? `The account that session launched on${quotedId(accountId)} isn't one of ${agentName}'s saved accounts any more.`
-          : "The account that session launched on can't be read."
-      );
-    }
-    choice.account = account;
+    if (account?.kind === "account") choice.account = account;
+    else accountGone = isAccountId(accountId) ? `the account "${accountId}"` : "its account";
   }
 
+  let presetGone: string | undefined;
   if (sources !== undefined) {
-    if (typeof presetId !== "string" || presetId === "") {
-      return refuse("missing-preset", "The preset that session launched on can't be read.");
+    if (typeof presetId !== "string" || !PRESET_ID.test(presetId)) {
+      presetGone = "its preset";
+    } else {
+      // An id a higher source might hold, unread, isn't the one a lower source has.
+      let unsettled: string | undefined;
+      let preset: AgentPreset | undefined;
+      try {
+        unsettled = findUnloadedLaunchPreset({
+          agentId,
+          isAgent: true,
+          worktreeId,
+          settings,
+          ccrPresets: sources.ccrPresets,
+          projectPresets: sources.projectPresets,
+          presetInventory: sources.presetInventory,
+          options: { presetId },
+        });
+        preset =
+          unsettled === undefined
+            ? getMergedPreset(
+                agentId,
+                presetId,
+                settings?.agents?.[agentId]?.customPresets,
+                sources.ccrPresets,
+                sources.projectPresets
+              )
+            : undefined;
+      } catch {
+        // A saved preset list this build can't read (a hand-edited entry).
+        return unreadable("The saved presets couldn't be read");
+      }
+      if (unsettled !== undefined) return unreadable("Not every preset source could be read");
+      if (preset) choice.preset = preset;
+      else presetGone = `the preset "${presetId}"`;
     }
-    // An id a higher source might hold, unread, isn't the one a lower source has.
-    const unsettled = findUnloadedLaunchPreset({
-      agentId,
-      isAgent: true,
-      worktreeId,
-      settings,
-      ccrPresets: sources.ccrPresets,
-      projectPresets: sources.projectPresets,
-      presetInventory: sources.presetInventory,
-      options: { presetId },
-    });
-    if (unsettled !== undefined) {
-      return refuse(
-        "settings-unavailable",
-        `Not every preset source could be read, so the preset that session launched on${quotedId(presetId)} can't be confirmed.`
-      );
-    }
-    const preset = getMergedPreset(
-      agentId,
-      presetId,
-      settings?.agents?.[agentId]?.customPresets,
-      sources.ccrPresets,
-      sources.projectPresets
+  }
+
+  // Both named when both are gone, so one fix doesn't only uncover the other.
+  if (accountGone !== undefined) {
+    const also = presetGone !== undefined ? `, and ${presetGone} isn't one of its presets` : "";
+    return refuse(
+      "missing-account",
+      `That session launched on ${accountGone}, which isn't one of ${agentName}'s saved accounts any more${also}.`
     );
-    if (!preset) {
-      return refuse(
-        "missing-preset",
-        `The preset that session launched on${quotedId(presetId)} isn't one of ${agentName}'s presets any more.`
-      );
-    }
-    choice.preset = preset;
+  }
+  if (presetGone !== undefined) {
+    return refuse(
+      "missing-preset",
+      `That session launched on ${presetGone}, which isn't one of ${agentName}'s presets any more.`
+    );
   }
   return choice;
 }
