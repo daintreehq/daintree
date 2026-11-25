@@ -1,0 +1,154 @@
+import { useEffect, useState } from "react";
+import { AppDialog } from "@/components/ui/AppDialog";
+import { Callout } from "@/components/ui/Callout";
+import { Spinner } from "@/components/ui/Spinner";
+import { CanopyTerminal } from "@/components/Canopy/CanopyTerminal";
+import { canopyHostClient } from "@/clients/canopyHostClient";
+import { clientErrorText } from "@/utils/clientAppError";
+import type { HostSignInTerminal } from "@shared/types/ipc/canopyHost";
+import type { HostId } from "@shared/types/remoteHosts";
+import {
+  agentSignInCommandLabel,
+  hostSignInTerminalApi,
+  newSignInConsumer,
+} from "./hostAgentSignIn";
+
+type Phase =
+  | { kind: "starting" }
+  | { kind: "running"; consumer: string; terminal: HostSignInTerminal }
+  | { kind: "failed"; message: string };
+
+const ENDED_MESSAGE = "The sign-in command has exited. Close this when you're done.";
+
+function SignInTerminal({
+  hostId,
+  consumer,
+  terminal,
+}: {
+  hostId: HostId;
+  consumer: string;
+  terminal: HostSignInTerminal;
+}) {
+  const [api] = useState(() => hostSignInTerminalApi(hostId, consumer));
+  return (
+    <CanopyTerminal
+      runId={terminal.terminalId}
+      spawnedAt={terminal.spawnedAt}
+      api={api}
+      endedMessage={ENDED_MESSAGE}
+    />
+  );
+}
+
+/**
+ * An agent CLI's own sign-in, run in a terminal on a host and shown here to
+ * see and type into (#18196). Opening it starts the sign-in; closing it ends
+ * it there, finished or not. Nothing here says whether it worked: the CLI's
+ * own screen is the only word on that.
+ */
+export function HostAgentSignInDialog({
+  hostId,
+  hostName,
+  agentId,
+  agentName,
+  onClose,
+}: {
+  hostId: HostId;
+  hostName: string;
+  agentId: string;
+  agentName: string;
+  onClose: () => void;
+}) {
+  const [attempt, setAttempt] = useState(0);
+  const [phase, setPhase] = useState<Phase>({ kind: "starting" });
+
+  useEffect(() => {
+    const consumer = newSignInConsumer();
+    let current = true;
+    canopyHostClient.startSignIn(consumer, hostId, agentId).then(
+      (terminal) => {
+        if (current) setPhase({ kind: "running", consumer, terminal });
+      },
+      (error: unknown) => {
+        if (current) {
+          setPhase({ kind: "failed", message: clientErrorText(error, "It didn't start.") });
+        }
+      }
+    );
+    return () => {
+      current = false;
+      // Ends it on the host, a start still in flight included.
+      void canopyHostClient.releaseSignIn(consumer).catch(() => {});
+    };
+  }, [hostId, agentId, attempt]);
+
+  const retry = () => {
+    setPhase({ kind: "starting" });
+    setAttempt((n) => n + 1);
+  };
+
+  const command = agentSignInCommandLabel(agentId);
+
+  return (
+    <AppDialog
+      isOpen
+      onClose={onClose}
+      size="4xl"
+      zIndex="nested"
+      initialFocus="cancel"
+      data-testid="host-agent-sign-in-dialog"
+    >
+      <AppDialog.Header>
+        <AppDialog.Title>
+          Sign in to {agentName} on {hostName}
+        </AppDialog.Title>
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
+      <AppDialog.Body>
+        <div className="space-y-3">
+          <p className="text-xs text-text-secondary">
+            {command ? (
+              <>
+                Runs <code className="select-text">{command}</code> on {hostName}.
+              </>
+            ) : (
+              <>Runs {agentName}&apos;s own sign-in on {hostName}.</>
+            )}{" "}
+            Links it prints open in this computer&apos;s browser. Closing this ends it.
+          </p>
+          {phase.kind === "failed" ? (
+            <Callout severity="error" title="Sign-in didn't start" role="alert">
+              <p className="select-text">{phase.message}</p>
+            </Callout>
+          ) : (
+            <div
+              className="flex h-96 min-h-0 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default"
+              data-testid="host-agent-sign-in-terminal"
+            >
+              {phase.kind === "running" ? (
+                <SignInTerminal
+                  key={phase.consumer}
+                  hostId={hostId}
+                  consumer={phase.consumer}
+                  terminal={phase.terminal}
+                />
+              ) : (
+                <p
+                  className="flex flex-1 items-center justify-center gap-2 text-sm text-text-secondary"
+                  role="status"
+                >
+                  <Spinner size="sm" />
+                  Starting on {hostName}…
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </AppDialog.Body>
+      <AppDialog.Footer
+        primaryAction={phase.kind === "failed" ? { label: "Try again", onClick: retry } : undefined}
+        secondaryAction={{ label: "Close", onClick: onClose }}
+      />
+    </AppDialog>
+  );
+}

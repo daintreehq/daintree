@@ -159,6 +159,8 @@ interface CanopyTerminalProps {
    * key, an answer — each a use of it, as a keystroke into it is.
    */
   uses?: number;
+  /** What the pane says once its terminal has exited; Canopy's own words by default. */
+  endedMessage?: string;
 }
 
 /**
@@ -201,6 +203,7 @@ export function CanopyTerminal({
   onGoTo,
   sizesOnUse = false,
   uses = 0,
+  endedMessage = "This terminal has exited. Archive it, or trash it to clear it away.",
 }: CanopyTerminalProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -1056,7 +1059,7 @@ export function CanopyTerminal({
               className="absolute inset-x-0 top-3 flex flex-col items-center gap-2 text-center text-xs text-text-secondary"
             >
               {status === "ended" ? (
-                <p>This terminal has exited. Archive it, or trash it to clear it away.</p>
+                <p>{endedMessage}</p>
               ) : (
                 <>
                   <p>Couldn't show this terminal here</p>
