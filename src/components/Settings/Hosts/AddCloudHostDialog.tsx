@@ -795,8 +795,16 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
 
   return (
     <InstallCommandHandoffContext.Provider
-      // A command opens in a terminal once Settings closes; never while a create or import is sent.
-      value={busy ? null : (inheritedHandoff ?? null)}
+      // A command opens in a terminal once Settings closes; never while a create or import is
+      // sent. Dismissed first, so a close Settings holds shows why, and nothing starts meanwhile.
+      value={
+        busy || !inheritedHandoff
+          ? null
+          : (open) => {
+              onClose();
+              inheritedHandoff(open);
+            }
+      }
     >
       <AppDialog
         isOpen={isOpen && connecting === null}

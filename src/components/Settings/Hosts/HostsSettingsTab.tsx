@@ -28,6 +28,7 @@ import { HostDetail } from "./HostDetail";
 import { HostsCopySettingsSection } from "./HostsCopySettingsSection";
 import { CloudProvidersSection } from "./CloudProvidersSection";
 import { AddCloudHostDialog } from "./AddCloudHostDialog";
+import { splitHostFix } from "@/components/Hosts/hostFixCommands";
 import { RemoveCloudHostDialog } from "./RemoveCloudHostDialog";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { useCloudMachineActions } from "@/components/Hosts/cloud/useCloudMachineActions";
@@ -374,7 +375,9 @@ function HostsSettingsContent() {
                               ? // The machine first (what bills), then the link, then cost and stop time.
                                 [
                                   cloudStatusLabel(cloud, stale),
-                                  machineDown ? null : connectionLabel(connection),
+                                  machineDown
+                                    ? null
+                                    : splitHostFix(connectionLabel(connection)).text,
                                   ...cloudCostFacts(
                                     cloud,
                                     cloudProviderFor(cloudSnapshot.providers, cloud)
@@ -392,7 +395,7 @@ function HostsSettingsContent() {
                                       {fact}
                                     </span>
                                   ))
-                              : connectionLabel(connection)}
+                              : splitHostFix(connectionLabel(connection)).text}
                             {/* How old the reading is: a cached "stopped" never passes for now. */}
                             {cloud?.observedAt != null && (
                               <>
@@ -414,8 +417,11 @@ function HostsSettingsContent() {
                     error={
                       // The provider's last refusal stays until an operation succeeds, wherever it was asked
                       // from: a refused stop leaves a running machine, and this is where it says why.
+                      // A refused start's command is offered on the host's own page, not in the list.
                       machineSaid || said || cloudSaid ? (
-                        <span role="alert">{machineSaid ?? said ?? cloudSaid}</span>
+                        <span role="alert">
+                          {splitHostFix((machineSaid ?? said ?? cloudSaid)!).text}
+                        </span>
                       ) : undefined
                     }
                     control={

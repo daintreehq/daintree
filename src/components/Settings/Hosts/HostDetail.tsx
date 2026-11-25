@@ -34,7 +34,7 @@ import { canDeleteMachines, cloudProviderFor } from "@/components/Hosts/cloud/cl
 import { HostWakeSetup } from "./HostWakeSetup";
 import { HostAgentForwardingRow } from "./HostAgentForwardingRow";
 import { HostRootCommand } from "./HostCommand";
-import { splitHostFix } from "./hostFixCommands";
+import { splitHostFix } from "@/components/Hosts/hostFixCommands";
 import { bringBackMessage, canBringBack, useHostBringBacks } from "./hostBringBack";
 import {
   buildLabel,

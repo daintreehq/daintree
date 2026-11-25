@@ -75,6 +75,14 @@ describe("readPendingPlacement", () => {
     expect(placement("feature", refusal)?.failure?.message).toBe(refusal);
   });
 
+  it("cuts a failure too long to keep before its command, never the command", () => {
+    const names = Array.from({ length: 80 }, (_, i) => `libmissing-${i}.so.0`).join(", ");
+    const refusal = `Daintree can't start on box: these libraries it needs aren't installed there: ${names}. ${HOST_PACKAGES_INSTRUCTION}`;
+    const kept = placement("feature", refusal)!.failure!.message;
+    expect(kept.length).toBeLessThan(refusal.length);
+    expect(kept.endsWith(`… ${HOST_PACKAGES_INSTRUCTION}`)).toBe(true);
+  });
+
   it("still cuts a long label, and bounds a failure too, by a longer measure", () => {
     const read = placement("x".repeat(2000), "y".repeat(2000));
     expect(read!.label.length).toBeLessThan(2000);

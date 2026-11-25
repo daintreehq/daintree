@@ -461,13 +461,15 @@ describe("CloudMachineSection SSH identity", () => {
     // Install first, then sign in.
     expect(install.compareDocumentPosition(signIn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(signIn).getByLabelText("Copy command to clipboard")).toBeTruthy();
-    // Each opens on its own, typed and not run; nothing re-checks a sign-in.
+    // Each opens on its own, typed and not run; nothing re-checks either.
     fireEvent.click(within(signIn).getByLabelText("Open command in a new terminal"));
-    expect(openInTerminal).toHaveBeenCalledWith("acme ssh setup", { kind: "manual" });
-    expect(openInTerminal).toHaveBeenCalledTimes(1);
+    expect(openInTerminal).toHaveBeenLastCalledWith("acme ssh setup", { kind: "manual" });
+    fireEvent.click(within(install).getByLabelText("Open command in a new terminal"));
+    expect(openInTerminal).toHaveBeenLastCalledWith("npm install -g acme", { kind: "manual" });
+    expect(openInTerminal).toHaveBeenCalledTimes(2);
   });
 
-  it("shows no setup lines while the tunnel works", () => {
+  it("shows no setup lines while the tunnel works, or beside another error", () => {
     const declared = tunnelProvider("provider-tunnel", true);
     declared.capabilities.tunnel = {
       ...declared.capabilities.tunnel!,
@@ -475,6 +477,12 @@ describe("CloudMachineSection SSH identity", () => {
       signInCommand: "acme ssh setup",
     };
     show(running(), [declared]);
+    expect(screen.queryByTestId("tunnel-setup-commands")).toBeNull();
+    cleanup();
+    show(running({ lastError: { code: "refused", message: "Acme turned this down.", at: 1 } }), [
+      declared,
+    ]);
+    expect(screen.getByRole("alert").textContent).toBe("Acme turned this down.");
     expect(screen.queryByTestId("tunnel-setup-commands")).toBeNull();
   });
 

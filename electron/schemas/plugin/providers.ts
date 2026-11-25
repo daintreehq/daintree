@@ -325,8 +325,8 @@ const CloudSshTunnelCommandSchema = z
     command: z.string().min(1).max(64),
     args: z.array(z.string().max(128)).max(MAX_CLOUD_TUNNEL_ARGS),
     installUrl: cloudProviderLink("capabilities.tunnel.installUrl"),
-    installCommand: z.string().max(MAX_CLOUD_TUNNEL_COMMAND_LINE).optional(),
-    signInCommand: z.string().max(MAX_CLOUD_TUNNEL_COMMAND_LINE).optional(),
+    installCommand: z.string().min(1).max(MAX_CLOUD_TUNNEL_COMMAND_LINE).optional(),
+    signInCommand: z.string().min(1).max(MAX_CLOUD_TUNNEL_COMMAND_LINE).optional(),
   })
   .strict();
 

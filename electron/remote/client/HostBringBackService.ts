@@ -13,6 +13,7 @@ import {
   type HostId,
 } from "../../../shared/types/remoteHosts.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { clipKeepingHostPackagesFix } from "../../../shared/config/linuxHostPackages.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { HostStartRefusal } from "./HostSetupService.js";
 import type { HostStartEvent } from "./hostStarts.js";
@@ -81,7 +82,8 @@ function clip(text: string | null, max = HOST_BRING_BACK_OBSERVED_MAX): string |
   if (text === null) return null;
   const trimmed = text.trim();
   if (trimmed.length === 0) return null;
-  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+  // A refused start's package install stays whole, so its command can still be offered.
+  return clipKeepingHostPackagesFix(trimmed, max);
 }
 
 /** One observation and then another, as sentences; the first takes half the room at most. */

@@ -69,7 +69,7 @@ import { AddHostNotes } from "./AddHostNotes";
 import { CloudSetupHostKey } from "./CloudHostKeyReview";
 import { WizardFooterActions, WizardStepBar, type WizardStepView } from "./AddHostWizardChrome";
 import { HostCommand, HostRootCommand } from "./HostCommand";
-import { splitHostFix } from "./hostFixCommands";
+import { splitHostFix } from "@/components/Hosts/hostFixCommands";
 import { hasTunnelSetupCommands, TunnelSetupCommands } from "./TunnelSetupCommands";
 import { SshRefusalHelp } from "./SshRefusalHelp";
 import { SshSignInDialog } from "./SshSignInDialog";
@@ -523,7 +523,7 @@ export function AddHostDialog({
   connectWhenDone = false,
 }: AddHostDialogProps) {
   const [step, setStep] = useState<Step>(existing ? "check" : "discover");
-  // A command opens in a terminal once Settings closes over the grid; never while a step can't stop.
+  // A command opens in a terminal once Settings closes over the grid.
   const inheritedHandoff = useContext(InstallCommandHandoffContext);
   const [discovered, setDiscovered] = useState<DiscoveredHost[] | null>(null);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
@@ -562,6 +562,10 @@ export function AddHostDialog({
   // The provider's own command that carries ssh to its machines, which the person signs in to.
   const cloudTunnel =
     cloudProviderFor(cloudHosts.snapshot.providers, machine)?.capabilities.tunnel ?? null;
+  // Recorded by the dial that found it missing (an imported machine skips create's check),
+  // and cleared once one gets through.
+  const tunnelMissing =
+    cloudTunnel !== null && machine?.lastError?.code === "ssh-tunnel-command-missing";
   /** A start asked for from here: under way, or done with its fresh check still to run. */
   const [machineStart, setMachineStart] = useState<"starting" | "started" | null>(null);
   /** Why the provider refused that start: said with the offer, and gone with it. */
@@ -750,6 +754,9 @@ export function AddHostDialog({
       setProbe(null);
       setPlan(null);
       setInstallResult(null);
+      // Its fix names the machine it failed on, never the one typed now.
+      setError(null);
+      setInstallError(null);
       setHostModeTurnedOn(false);
       setLingerRefused(null);
     }
@@ -1365,16 +1372,21 @@ export function AddHostDialog({
       };
       secondary = close;
     } else if (outcome.status === "unreachable") {
+      const detailFix = outcome.detail ? splitHostFix(outcome.detail) : null;
       body = (
         <Outcome severity="error" title={`Couldn't connect to ${savedHost.name}`}>
-          {outcome.detail && (
+          {detailFix && (
             <pre
               role="alert"
               className="whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-border-default bg-surface-input p-2 font-mono text-xs text-text-secondary select-text"
             >
-              {outcome.detail}
+              {detailFix.text}
             </pre>
           )}
+          {detailFix?.rootCommand && (
+            <HostRootCommand host={savedHost.name} command={detailFix.rootCommand} />
+          )}
+          {tunnelMissing && <TunnelSetupCommands tunnel={cloudTunnel} from="install" />}
           <p>
             It stays in your host list, so you can connect now or later from
             Settings&nbsp;→&nbsp;Hosts.
@@ -1710,6 +1722,11 @@ export function AddHostDialog({
                 {/* ssh hides what the tunnel said; what it shows is that the tunnel closed first.
                     Said beside a new machine's wait too: a CLI that isn't signed in would
                     otherwise go unnamed for every recheck. Never beside a refusal of ssh's own. */}
+                {tunnelMissing && (
+                  <div className="mt-3" data-testid="add-host-tunnel-missing">
+                    <TunnelSetupCommands tunnel={cloudTunnel} from="install" />
+                  </div>
+                )}
                 {cloudTunnel && refusal === null && isProxyClosedEarly(probe.sshError) && (
                   <div className="mt-3 space-y-2">
                     <p className="text-xs text-text-secondary" data-testid="add-host-tunnel-closed">
@@ -1958,13 +1975,19 @@ export function AddHostDialog({
           {ended && (failed || stoppedNote) ? (
             <Callout
               severity={failed ? "error" : "neutral"}
-              role={failed ? "alert" : undefined}
+              role={failed && !endedFix!.rootCommand ? "alert" : undefined}
               title={
                 failed ? (installFailureLead(installError!, hostLabel) ?? undefined) : undefined
               }
               className="select-text"
             >
-              {namedProgressMessage(endedFix!.text, hostLabel)}
+              {endedFix!.rootCommand ? (
+                <p role={failed ? "alert" : undefined}>
+                  {namedProgressMessage(endedFix!.text, hostLabel)}
+                </p>
+              ) : (
+                namedProgressMessage(endedFix!.text, hostLabel)
+              )}
               {endedFix!.rootCommand && (
                 <div className="mt-3">
                   <HostRootCommand host={hostLabel} command={endedFix!.rootCommand} />
@@ -2431,7 +2454,18 @@ export function AddHostDialog({
     ) : undefined;
 
   return (
-    <InstallCommandHandoffContext.Provider value={locked ? null : (inheritedHandoff ?? null)}>
+    <InstallCommandHandoffContext.Provider
+      // Never while a step can't stop. Dismissed first, so a close Settings holds shows why,
+      // and nothing here can start while it closes.
+      value={
+        locked || !inheritedHandoff
+          ? null
+          : (open) => {
+              onClose();
+              inheritedHandoff(open);
+            }
+      }
+    >
       <AppDialog
         isOpen={isOpen}
         onClose={onClose}

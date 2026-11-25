@@ -4,6 +4,8 @@ import { Callout } from "@/components/ui/Callout";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import type { HostConnectionState, HostId } from "@shared/types/remoteHosts";
 import { clientErrorText } from "@/utils/clientAppError";
+import { splitHostFix } from "@/components/Hosts/hostFixCommands";
+import { HostRootCommand } from "./HostCommand";
 import { connectionLabel, isLoginRefused } from "./hostLabels";
 
 /**
@@ -83,12 +85,22 @@ export function HostLinkStatus({
       </Button>
     );
 
+  // A refused start's package install, said by the status or a Retry, is offered once.
+  const statusFix = splitHostFix(connectionLabel(connection));
+  const errorFix = connectError ? splitHostFix(connectError) : null;
+  const rootCommand = errorFix?.rootCommand ?? statusFix.rootCommand;
   return (
     <Callout severity="neutral" role="status" title={title} action={action}>
       <p className="select-text">
-        {connectionLabel(connection)}. {consequence}
+        {statusFix.text}
+        {/[.!?]$/.test(statusFix.text) ? "" : "."} {consequence}
       </p>
-      {connectError && <p className="mt-1 text-text-primary select-text">{connectError}</p>}
+      {errorFix && <p className="mt-1 text-text-primary select-text">{errorFix.text}</p>}
+      {rootCommand && (
+        <div className="mt-3">
+          <HostRootCommand host={hostName} command={rootCommand} />
+        </div>
+      )}
     </Callout>
   );
 }

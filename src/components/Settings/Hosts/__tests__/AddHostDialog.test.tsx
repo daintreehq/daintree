@@ -617,6 +617,34 @@ describe("AddHostDialog", () => {
     expect(remoteHosts.connect).toHaveBeenLastCalledWith({ hostId: "studio" });
   });
 
+  it("ends on a refused start with its package install as a command, apart from its words (#18181)", async () => {
+    remoteHosts.connect!.mockResolvedValueOnce({ status: "connecting", attempt: 1 });
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    await walkToAddHost();
+    await waitFor(() => expect(remoteHosts.connect).toHaveBeenCalledOnce());
+    const words =
+      "Daintree can't start on greg@studio: these libraries it needs aren't installed there: libnspr4.so.";
+    act(() =>
+      listeners.forEach((l) =>
+        l({
+          type: "connection-changed",
+          hostId: "studio",
+          connection: {
+            status: "unreachable",
+            lastSeenAt: null,
+            detail: `${words} ${HOST_PACKAGES_INSTRUCTION}`,
+            stoppedRetrying: true,
+          },
+        })
+      )
+    );
+    expect(await screen.findByText("Couldn't connect to studio")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe(words);
+    const fix = screen.getByTestId("host-root-command");
+    expect(fix.textContent).toContain("run this on studio as root");
+    expect(fix.querySelector("code")?.textContent).toBe(HOST_PACKAGES_COMMAND);
+  });
+
   it("ends on Host mode being off there, with Set up…", async () => {
     remoteHosts.connect!.mockResolvedValueOnce({
       status: "unreachable",
@@ -779,6 +807,15 @@ describe("AddHostDialog", () => {
     // The words are announced without the command, and it runs there, never here.
     expect(screen.getByText(words).getAttribute("role")).toBe("alert");
     expect(screen.queryByLabelText("Open command in a new terminal")).toBeNull();
+
+    // Another machine: its fix never names this one.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+    fireEvent.change(await screen.findByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@build" },
+    });
+    expect(screen.queryByTestId("host-root-command")).toBeNull();
+    expect(screen.queryByText(words)).toBeNull();
   });
 
   it("saves what turning Host mode on saw there, not the check before it", async () => {
@@ -1525,6 +1562,37 @@ describe("AddHostDialog", () => {
         expect(signIn.textContent).toContain("agent37 ssh setup");
         // It was found, so signing in is what's left.
         expect(screen.queryByTestId("tunnel-install-command")).toBeNull();
+      });
+
+      it("offers the install and sign-in lines where the command is missing here (#18181)", async () => {
+        const declared = {
+          ...TUNNELLED,
+          capabilities: {
+            ...TUNNELLED.capabilities,
+            tunnel: {
+              ...TUNNELLED.capabilities.tunnel,
+              installCommand: "npm install -g agent37",
+              signInCommand: "agent37 ssh setup",
+            },
+          },
+        };
+        const said =
+          "Agent 37 machines are reached through its agent37 command, which isn't installed on this device or isn't on Daintree's PATH.";
+        // An imported machine skips create's check: the dial finds it missing and records it.
+        cloud = {
+          providers: [declared],
+          accounts: [],
+          hosts: [
+            machine({ lastError: { code: "ssh-tunnel-command-missing", message: said, at: 1 } }),
+          ],
+        };
+        remoteHosts.probe!.mockResolvedValueOnce(closedEarly(said));
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        const missing = screen.getByTestId("add-host-tunnel-missing");
+        expect(missing.textContent).toContain("npm install -g agent37");
+        expect(missing.textContent).toContain("agent37 ssh setup");
+        expect(screen.queryByTestId("add-host-tunnel-closed")).toBeNull();
       });
 
       it("says it when ssh, starting a master, kept only its own last line", async () => {

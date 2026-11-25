@@ -73,6 +73,7 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 import {
   __testing,
   openInstallCommandInTerminal,
+  recheckInstallTarget,
   type InstallCommandRequest,
 } from "../installCommandHandoff";
 import { installLineForCommands } from "../installCommandLine";
@@ -391,6 +392,12 @@ describe("re-checking after the command runs", () => {
     expect(recheckPrerequisite).not.toHaveBeenCalled();
     expect(cli.refresh).not.toHaveBeenCalled();
     expect(client.activity.size).toBe(0);
+  });
+
+  it("never probes anything to re-check a manual command", async () => {
+    await expect(recheckInstallTarget({ kind: "manual" })).resolves.toBe(false);
+    expect(recheckPrerequisite).not.toHaveBeenCalled();
+    expect(cli.refresh).not.toHaveBeenCalled();
   });
 
   it("ignores other terminals' activity", async () => {

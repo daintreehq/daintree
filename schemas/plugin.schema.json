@@ -2115,10 +2115,12 @@
                           },
                           "installCommand": {
                             "type": "string",
+                            "minLength": 1,
                             "maxLength": 512
                           },
                           "signInCommand": {
                             "type": "string",
+                            "minLength": 1,
                             "maxLength": 512
                           }
                         },

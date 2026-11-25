@@ -202,8 +202,13 @@ describe("contributes.cloudProviders", () => {
       "aws sso login\n",
       "aws sso login\nrm -rf ~",
       "aws\u2028sso login",
+      "aws\u2029sso login",
       "aws \u202esso login",
       "aws\tsso",
+      // Drawn as nothing, or as a plain space, while the shell reads something else.
+      "aws sso log\u034Fin",
+      "aws\u00A0sso login",
+      "aws  sso login",
       "x".repeat(513),
       42,
     ]) {

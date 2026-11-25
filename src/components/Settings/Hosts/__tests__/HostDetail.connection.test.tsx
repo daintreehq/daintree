@@ -290,6 +290,26 @@ describe("HostDetail connection controls", () => {
     expect(screen.getAllByTestId("host-root-command")).toHaveLength(1);
   });
 
+  it("offers the package install when only a Connect says it", async () => {
+    const words =
+      "Daintree can't start on greg@studio: these libraries it needs aren't installed there: libnspr4.so.";
+    client.connectAndSettle.mockResolvedValueOnce({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: `${words} ${HOST_PACKAGES_INSTRUCTION}`,
+      stoppedRetrying: true,
+    });
+    render(<HostDetail entry={entry({ status: "disconnected" })} onBack={() => {}} />);
+    expect(screen.queryByTestId("host-root-command")).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    });
+    expect(screen.getByRole("alert").textContent).toBe(`Couldn't connect: ${words}`);
+    expect(screen.getByTestId("host-root-command").querySelector("code")?.textContent).toBe(
+      HOST_PACKAGES_COMMAND
+    );
+  });
+
   it("leaves Host mode off to its own row rather than calling it a failed connect", async () => {
     client.connectAndSettle.mockResolvedValueOnce({
       status: "unreachable",

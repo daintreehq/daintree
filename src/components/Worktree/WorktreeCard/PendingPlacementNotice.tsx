@@ -12,6 +12,7 @@ import { getViewHostId } from "@/hooks/useHostConnection";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/projectStore";
 import { clientErrorText } from "@/utils/clientAppError";
+import { splitHostFix } from "@/components/Hosts/hostFixCommands";
 import { useCardFocusHandoff } from "./hooks/useCardFocusHandoff";
 
 // Only a worktree waiting on a machine made for it needs the cloud picture.
@@ -97,7 +98,10 @@ function WaitingNotice({
   const content = (
     <div className="flex min-w-0 flex-1 flex-col gap-2">
       <span className="break-words text-text-secondary select-text">
-        {failure ?? "It opens there once Daintree is set up and connected."}
+        {/* A refused start's command is offered where setup runs, not on the card. */}
+        {failure
+          ? splitHostFix(failure).text
+          : "It opens there once Daintree is set up and connected."}
       </span>
       {cancelError && <span className="text-text-primary">{cancelError}</span>}
       <div className="flex flex-wrap items-center gap-2">

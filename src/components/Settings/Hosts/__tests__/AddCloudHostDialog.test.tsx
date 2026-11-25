@@ -984,27 +984,41 @@ describe("AddCloudHostDialog showing the tunnel's setup lines (#18181)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
     await screen.findByTestId("add-cloud-host-tunnel-found");
     expect(screen.queryByTestId("tunnel-install-command")).toBeNull();
-    expect(screen.getByTestId("tunnel-sign-in-command").textContent).toContain(
-      "Sign in to agent37 on this device"
-    );
+    const signIn = screen.getByTestId("tunnel-sign-in-command");
+    expect(signIn.textContent).toContain("Sign in to agent37 on this device");
+    expect(signIn.textContent).toContain("agent37 ssh setup");
+    expect(signIn.textContent).not.toContain("npm install");
   });
 
   it("hands a line to a terminal only through Settings closing over the grid", async () => {
     placement.current = { ready: true, cwd: "/home/u", worktreeId: "wt" };
-    const handoff = vi.fn();
+    const order: string[] = [];
+    const handoff = vi.fn((_open: () => void) => order.push("handoff"));
+    const onClose = vi.fn(() => order.push("dismissed"));
     client.findTunnel.mockResolvedValueOnce({ command: "agent37", found: false });
     cloud.snapshot = { providers: [declared()], accounts: [account("agent37")], hosts: [] };
     client.getCatalog.mockResolvedValue(catalog());
     render(
       <InstallCommandHandoffContext.Provider value={handoff}>
-        <AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />
+        <AddCloudHostDialog isOpen onClose={onClose} onReady={() => {}} />
       </InstallCommandHandoffContext.Provider>
     );
     const install = await screen.findByTestId("tunnel-install-command");
     fireEvent.click(
       install.querySelector('[aria-label="Open command in a new terminal"]') as HTMLElement
     );
-    expect(handoff).toHaveBeenCalledTimes(1);
+    // Out of the way first, so a close Settings holds shows why, and nothing starts meanwhile.
+    expect(order).toEqual(["dismissed", "handoff"]);
+    expect(handoff.mock.calls[0]![0]).toEqual(expect.any(Function));
+  });
+
+  it("stays copy-only without a Settings close to hand off to", async () => {
+    placement.current = { ready: true, cwd: "/home/u", worktreeId: "wt" };
+    client.findTunnel.mockResolvedValueOnce({ command: "agent37", found: false });
+    open(declared(), catalog());
+    await screen.findByTestId("tunnel-install-command");
+    // A dialog covers the grid, so a terminal opened behind it couldn't be typed into.
+    expect(screen.queryByLabelText("Open command in a new terminal")).toBeNull();
   });
 
   it("names the setup lines once the machine's create was refused for the missing command", async () => {
@@ -1038,6 +1052,7 @@ describe("AddCloudHostDialog showing the tunnel's setup lines (#18181)", () => {
     expect(screen.getByTestId("tunnel-install-command").textContent).toContain(
       "npm install -g agent37"
     );
+    expect(screen.getByTestId("tunnel-sign-in-command").textContent).toContain("agent37 ssh setup");
     expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
 
     // Refused for another reason: nothing about the command.

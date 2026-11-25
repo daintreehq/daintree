@@ -65,8 +65,12 @@ const WORD = /^[A-Za-z0-9._:/=@+,-]{1,128}$/;
 const TOKENS: ReadonlySet<string> = new Set(["%h", "%p", "%r", "%n"]);
 export const MAX_CLOUD_TUNNEL_ARGS = 16;
 export const MAX_CLOUD_TUNNEL_COMMAND_LINE = 512;
-/** Control, line and paragraph separators, and invisible formatting: what would submit or disguise a typed line. */
-const UNTYPEABLE = /[\p{Cc}\p{Cf}\u2028\u2029]/u;
+/**
+ * What would submit, complete or disguise a typed line: control and format
+ * characters, characters that draw nothing, any space but a plain one, and
+ * runs of spaces, which a wrapped command row shows as one.
+ */
+const UNTYPEABLE = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\u2028\u2029]|[^\S ]| {2}/u;
 
 function isHttpsUrl(value: unknown): boolean {
   if (typeof value !== "string") return false;

@@ -50,3 +50,20 @@ export const HOST_PACKAGES_COMMAND = `apt-get update && apt-get satisfy -y --no-
  * travelled, and shows it as a command to copy rather than inside a sentence.
  */
 export const HOST_PACKAGES_INSTRUCTION = `On Debian or Ubuntu, run this there as root, then try again: ${HOST_PACKAGES_COMMAND}`;
+
+/**
+ * `text` cut to at most `max` characters, ending in "…" where it was cut.
+ * Where it carries {@link HOST_PACKAGES_INSTRUCTION} whole, the words before
+ * it are cut instead, and anything after it dropped, so the command stays
+ * whole and can still be offered.
+ */
+export function clipKeepingHostPackagesFix(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const at = text.indexOf(HOST_PACKAGES_INSTRUCTION);
+  const tail = ` ${HOST_PACKAGES_INSTRUCTION}`;
+  if (at < 0 || tail.length >= max) return `${text.slice(0, max - 1)}…`;
+  return `${text
+    .slice(0, at)
+    .trimEnd()
+    .slice(0, max - tail.length - 1)}…${tail}`;
+}

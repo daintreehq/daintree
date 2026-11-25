@@ -166,8 +166,10 @@ describe("checkLinuxStart", () => {
     expect(error.userMessage).toContain("build-box");
     expect(error.userMessage).toContain("libnspr4.so, libnss3.so");
     expect(error.userMessage!.endsWith(HOST_PACKAGES_COMMAND)).toBe(true);
-    // The renderer finds the command to offer by this exact text.
+    // The renderer finds the command to offer by this exact text, in either field: the
+    // installer's recovery notes build on the message.
     expect(error.userMessage!.endsWith(` ${HOST_PACKAGES_INSTRUCTION}`)).toBe(true);
+    expect(error.message.endsWith(` ${HOST_PACKAGES_INSTRUCTION}`)).toBe(true);
     // The names come before the command, so a shortened copy still names them.
     expect(error.userMessage!.indexOf("libnss3.so")).toBeLessThan(
       error.userMessage!.indexOf("apt-get")
