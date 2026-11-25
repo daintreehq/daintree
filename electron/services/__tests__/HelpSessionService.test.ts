@@ -191,6 +191,8 @@ import {
   projectRuleRoots,
 } from "../HelpSessionService.js";
 import { loadedHelpSessionService } from "../helpSessionRuntime.js";
+import { events } from "../events.js";
+import { EventEmitter } from "node:events";
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { parse as parseToml } from "smol-toml";
 import { HELP_MCP_TOOL_TIMEOUT_MS } from "../../../shared/types/replyWait.js";
@@ -3698,6 +3700,9 @@ describe("HelpSessionService", () => {
       clear: ReturnType<typeof vi.fn>;
       flush: ReturnType<typeof vi.fn>;
       recordResumeAtLaunch: ReturnType<typeof vi.fn>;
+      isKeptRunning: ReturnType<typeof vi.fn>;
+      setKeepRunning: ReturnType<typeof vi.fn>;
+      setRunning: ReturnType<typeof vi.fn>;
     };
 
     beforeEach(() => {
@@ -3707,6 +3712,9 @@ describe("HelpSessionService", () => {
         clear: vi.fn().mockResolvedValue(undefined),
         flush: vi.fn().mockResolvedValue(undefined),
         recordResumeAtLaunch: vi.fn().mockResolvedValue(undefined),
+        isKeptRunning: vi.fn().mockReturnValue(false),
+        setKeepRunning: vi.fn().mockResolvedValue(true),
+        setRunning: vi.fn().mockResolvedValue(undefined),
       };
       service.setPendingHibernationStore(hibernationStore as never);
     });
@@ -4371,6 +4379,220 @@ describe("HelpSessionService", () => {
         await expect(taking).resolves.toEqual(
           expect.objectContaining({ agentSessionId: "codex-thread-captured" })
         );
+      });
+
+      describe("lanes kept running across restarts (#18177)", () => {
+        const lane = slotKey("proj-1", 0);
+        let keptLanes: Set<string>;
+        let marks: Map<string, boolean>;
+
+        beforeEach(() => {
+          keptLanes = new Set([lane]);
+          marks = new Map();
+          const mark = (key: string, live: boolean) => {
+            if (keptLanes.has(key)) marks.set(key, live);
+          };
+          hibernationStore.isKeptRunning.mockImplementation((key: string) => keptLanes.has(key));
+          hibernationStore.set.mockImplementation((key: string, entry: Entry, running?: boolean) => {
+            backing.set(key, entry);
+            if (running !== undefined) mark(key, running);
+            return Promise.resolve();
+          });
+          hibernationStore.setRunning.mockImplementation((running: Record<string, boolean>) => {
+            for (const [key, live] of Object.entries(running)) mark(key, live);
+            return Promise.resolve();
+          });
+          hibernationStore.setKeepRunning.mockImplementation(
+            (key: string, keep: boolean, running = false) => {
+              if (keep) keptLanes.add(key);
+              else keptLanes.delete(key);
+              if (keep) marks.set(key, running);
+              else marks.delete(key);
+              return Promise.resolve(true);
+            }
+          );
+          hibernationStore.clear.mockImplementation(
+            (key: string, options?: { keepRunningChoice?: boolean }) => {
+              backing.delete(key);
+              if (options?.keepRunningChoice) mark(key, false);
+              else {
+                keptLanes.delete(key);
+                marks.delete(key);
+              }
+              return Promise.resolve();
+            }
+          );
+        });
+
+        async function launchSlot(
+          slot: number,
+          terminalId: string,
+          agentSessionId: string,
+          options?: Parameters<HelpSessionService["recordLaneLaunchForToken"]>[2]
+        ) {
+          const result = await service.provisionSession({ ...provisionInput(), slot });
+          if (!result) throw new Error("expected provision");
+          expect(service.markTerminalForToken(result.token, terminalId)).toBe(true);
+          await service.recordLaneLaunchForToken(result.token, agentSessionId, options);
+          return result;
+        }
+
+        it("marks a kept lane's run with its pointer, and not a sibling's, a refused spawn's or a fork's", async () => {
+          keptLanes.add(slotKey("proj-1", 2)).add(slotKey("proj-1", 3));
+          await launchSlot(0, "term-0", "conv-0");
+          await launchSlot(1, "term-1", "conv-1");
+          await launchSlot(2, "term-2", "conv-2", { spawnRefused: true });
+          await launchSlot(3, "term-3", "conv-3", { forkedConversation: true });
+
+          expect(Object.fromEntries(marks)).toEqual({
+            [lane]: true,
+            [slotKey("proj-1", 2)]: false,
+            [slotKey("proj-1", 3)]: false,
+          });
+          expect(backing.get(lane)?.agentSessionId).toBe("conv-0");
+        });
+
+        it("unmarks a run that ended, and only on its own terminal's end", async () => {
+          await launchSlot(0, "term-0", "conv-0");
+
+          service.noteStandingRunEnded("term-other");
+          expect(marks.get(lane)).toBe(true);
+          service.noteStandingRunEnded("term-0");
+          expect(marks.get(lane)).toBe(false);
+        });
+
+        it("leaves an old run's end alone once the lane has started another", async () => {
+          await launchSlot(0, "term-old", "conv-0");
+          await service.discardConversation("proj-1", 0, { keepRunningChoice: true });
+          await launchSlot(0, "term-new", "conv-1");
+
+          service.noteStandingRunEnded("term-old");
+          expect(marks.get(lane)).toBe(true);
+        });
+
+        it("follows the PTY client's exits, refused spawns and lost runs, and the agent CLI quitting", async () => {
+          const pty = new EventEmitter();
+          service.watchStandingRuns(pty as never);
+          service.watchStandingRuns(pty as never);
+          expect(pty.listenerCount("exit")).toBe(1);
+          const ended = async (end: () => void) => {
+            await launchSlot(0, "term-0", "conv-0");
+            expect(marks.get(lane)).toBe(true);
+            end();
+            return marks.get(lane);
+          };
+
+          expect(await ended(() => pty.emit("exit", "term-0"))).toBe(false);
+          expect(
+            await ended(() => pty.emit("spawn-result", "term-0", { success: false, id: "term-0" }))
+          ).toBe(false);
+          expect(
+            await ended(() => pty.emit("incarnation-lost", { terminalId: "term-0", launchGeneration: 1 }))
+          ).toBe(false);
+          expect(
+            await ended(() =>
+              events.emit("agent:exited", {
+                terminalId: "term-0",
+                timestamp: Date.now(),
+                exitKind: "subcommand",
+              })
+            )
+          ).toBe(false);
+          // A process icon clearing isn't the agent going, and a spawn that went is no end.
+          expect(
+            await ended(() => {
+              events.emit("agent:exited", { terminalId: "term-0", timestamp: Date.now() });
+              pty.emit("spawn-result", "term-0", { success: true, id: "term-0" });
+            })
+          ).toBe(true);
+
+          service.dispose();
+          expect(pty.listenerCount("exit")).toBe(0);
+        });
+
+        it("holds the runs a quit stops, so the quit's own ends leave them marked, and unmarks one already gone", async () => {
+          keptLanes.add(slotKey("proj-1", 1));
+          await launchSlot(0, "term-0", "conv-0");
+          await launchSlot(1, "term-1", "conv-1");
+
+          await service.holdStandingRunsForQuit(new Set(["term-0"]));
+          service.noteStandingRunEnded("term-0");
+          service.noteStandingRunUnsettled("term-0");
+
+          expect(Object.fromEntries(marks)).toEqual({
+            [lane]: true,
+            [slotKey("proj-1", 1)]: false,
+          });
+        });
+
+        it("holds every marked run as it is when the quit couldn't snapshot the terminals", async () => {
+          await launchSlot(0, "term-0", "conv-0");
+
+          await service.holdStandingRunsForQuit(null);
+          service.noteStandingRunEnded("term-0");
+
+          expect(marks.get(lane)).toBe(true);
+        });
+
+        it("marks a fork's run at quit only once the capture names its conversation", async () => {
+          await launchSlot(0, "term-0", "parent-conv", { forkedConversation: true });
+          const lanes = service.snapshotLaneTerminals();
+          await service.holdStandingRunsForQuit(new Set(["term-0"]));
+          expect(marks.get(lane)).toBe(false);
+
+          await service.noteQuitCapture(lanes.get("term-0")!, "forked-conv");
+
+          expect(marks.get(lane)).toBe(true);
+          expect(backing.get(lane)?.agentSessionId).toBe("forked-conv");
+        });
+
+        it("leaves a run the PTY host replayed unmarked until a capture confirms its conversation", async () => {
+          await launchSlot(0, "term-0", "conv-0");
+          service.noteStandingRunUnsettled("term-0");
+          expect(marks.get(lane)).toBe(false);
+          const lanes = service.snapshotLaneTerminals();
+          await service.holdStandingRunsForQuit(new Set(["term-0"]));
+          expect(marks.get(lane)).toBe(false);
+
+          await service.noteQuitCapture(lanes.get("term-0")!, "conv-0");
+
+          expect(marks.get(lane)).toBe(true);
+        });
+
+        it("drops the run and the choice on a Stop, even during a quit, and keeps the choice through a clear", async () => {
+          keptLanes.add(slotKey("proj-1", 1));
+          await launchSlot(0, "term-0", "conv-0");
+          await launchSlot(1, "term-1", "conv-1");
+          await service.holdStandingRunsForQuit(new Set(["term-0", "term-1"]));
+
+          await service.discardConversation("proj-1", 0);
+          await service.discardConversation("proj-1", 1, { keepRunningChoice: true });
+
+          expect(keptLanes).toEqual(new Set([slotKey("proj-1", 1)]));
+          expect(Object.fromEntries(marks)).toEqual({ [slotKey("proj-1", 1)]: false });
+          expect(hibernationStore.clear).toHaveBeenCalledWith(lane);
+        });
+
+        it("marks the running lane at once when turned on, and lets it go when turned off", async () => {
+          keptLanes.clear();
+          await launchSlot(0, "term-0", "conv-0");
+          expect(marks.size).toBe(0);
+
+          await expect(service.setLaneKeepRunning("proj-1", 0, true)).resolves.toBe(true);
+          expect(hibernationStore.setKeepRunning).toHaveBeenLastCalledWith(lane, true, true);
+          expect(service.isLaneKeptRunning("proj-1", 0)).toBe(true);
+          service.noteStandingRunEnded("term-0");
+          expect(marks.get(lane)).toBe(false);
+
+          await service.setLaneKeepRunning("proj-1", 1, true);
+          expect(hibernationStore.setKeepRunning).toHaveBeenLastCalledWith(
+            slotKey("proj-1", 1),
+            true,
+            false
+          );
+          await service.setLaneKeepRunning("proj-1", 0, false);
+          expect(service.isLaneKeptRunning("proj-1", 0)).toBe(false);
+        });
       });
 
       it("records each lane an update quit stops, by the id its capture settled on (#16753)", async () => {
@@ -5230,6 +5452,7 @@ describe("HelpSessionService", () => {
           backing.delete(projectId);
           return Promise.resolve();
         }),
+        isKeptRunning: vi.fn(() => false),
       };
       service.setPendingHibernationStore(statefulStore as never);
 
@@ -5300,6 +5523,7 @@ describe("HelpSessionService", () => {
           backing.delete(projectId);
           return Promise.resolve();
         }),
+        isKeptRunning: vi.fn(() => false),
       };
       service.setPendingHibernationStore(statefulStore as never);
 
@@ -5361,6 +5585,7 @@ describe("HelpSessionService", () => {
           backing.delete(projectId);
           return Promise.resolve();
         }),
+        isKeptRunning: vi.fn(() => false),
       };
       service.setPendingHibernationStore(statefulStore as never);
 

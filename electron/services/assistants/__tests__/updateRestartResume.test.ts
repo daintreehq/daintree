@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { assistantSlotKey } from "../../../../shared/config/assistantSlots.js";
 import type { AssistantLaunchRequest, AssistantLaunchResult } from "../assistantLaunch.js";
-import { resumeLanesAfterUpdate, type UpdateRestartResumeDeps } from "../updateRestartResume.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
+import {
+  resumeGlobalSessionsAtLaunch,
+  resumeLanesAfterUpdate,
+  type GlobalSessionResumeDeps,
+  type UpdateRestartResumeDeps,
+} from "../updateRestartResume.js";
 
 type Pointer = { agentId: string; agentSessionId: string; cwd: string };
 
@@ -58,7 +64,7 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
       [assistantSlotKey("p2", 1)]: pointer("thread-1", "codex"),
     });
 
-    const outcomes = await resumeLanesAfterUpdate({ recordedAt: 1, lanes }, deps);
+    const outcomes = await resumeLanesAfterUpdate({ lanes }, deps);
 
     expect(outcomes).toEqual(
       expect.arrayContaining([
@@ -142,7 +148,7 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
     });
     held.set(assistantSlotKey("p1", 1), "a-view's-claim");
 
-    const outcomes = await resumeLanesAfterUpdate({ recordedAt: 1, lanes }, deps);
+    const outcomes = await resumeLanesAfterUpdate({ lanes }, deps);
 
     expect(deps.start).not.toHaveBeenCalled();
     expect(outcomes).toEqual(
@@ -170,7 +176,7 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
       throw new Error("spawn exploded");
     });
 
-    const outcomes = await resumeLanesAfterUpdate({ recordedAt: 1, lanes }, deps);
+    const outcomes = await resumeLanesAfterUpdate({ lanes }, deps);
 
     expect(outcomes).toEqual(
       expect.arrayContaining([
@@ -200,7 +206,7 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
       return { status: "refused", reason: "launch-failed" };
     });
 
-    const outcomes = await resumeLanesAfterUpdate({ recordedAt: 1, lanes }, deps);
+    const outcomes = await resumeLanesAfterUpdate({ lanes }, deps);
 
     // Wanted until the quit began, and not once it had.
     expect(wanted[0]).toEqual([true, false]);
@@ -224,7 +230,7 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
       return { status: "refused", reason: "launch-failed" };
     });
 
-    await resumeLanesAfterUpdate({ recordedAt: 1, lanes: { [key]: "conv-0" } }, deps);
+    await resumeLanesAfterUpdate({ lanes: { [key]: "conv-0" } }, deps);
 
     expect(wanted).toEqual([true, false]);
   });
@@ -250,9 +256,115 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
       return base(request);
     });
 
-    const outcomes = await resumeLanesAfterUpdate({ recordedAt: 1, lanes }, deps);
+    const outcomes = await resumeLanesAfterUpdate({ lanes }, deps);
 
     expect(outcomes.filter((outcome) => outcome.status === "resumed")).toHaveLength(5);
     expect(peak).toBe(3);
+  });
+
+  it("resumes a lane kept running across restarts as a standing one, and only while it is still kept (#18177)", async () => {
+    const kept = assistantSlotKey("p1", 0);
+    const dropped = assistantSlotKey("p1", 1);
+    const update = assistantSlotKey("p1", 2);
+    const { deps } = harness({
+      [kept]: pointer("conv-0"),
+      [dropped]: pointer("conv-1"),
+      [update]: pointer("conv-2"),
+    });
+    const stillKept = new Set([kept]);
+    const wanted: Array<boolean | undefined> = [];
+    const withKept: UpdateRestartResumeDeps = {
+      ...deps,
+      isKept: (projectId, slot) => stillKept.has(assistantSlotKey(projectId, slot)),
+      start: async (request) => {
+        wanted.push(request.stillWanted?.());
+        if (request.slot === 0) {
+          // Turned off while it comes back: it stands down before its spawn.
+          stillKept.delete(kept);
+          wanted.push(request.stillWanted?.());
+        }
+        return deps.start(request);
+      },
+    };
+
+    const outcomes = await resumeLanesAfterUpdate(
+      {
+        lanes: { [kept]: "conv-0", [dropped]: "conv-1", [update]: "conv-2" },
+        standing: new Set([kept, dropped]),
+      },
+      withKept
+    );
+
+    expect(outcomes).toEqual(
+      expect.arrayContaining([
+        { projectId: "p1", slot: 1, status: "skipped", reason: "no-longer-kept" },
+        { projectId: "p1", slot: 2, status: "resumed" },
+      ])
+    );
+    expect(wanted).toEqual(expect.arrayContaining([true, false]));
+    expect(
+      Object.fromEntries(deps.start.mock.calls.map(([request]) => [request.slot, request.startedBy]))
+    ).toEqual({ 0: { kind: "standing-restart" }, 2: { kind: "update-restart" } });
+  });
+
+  it("leaves the global sessions to their own start (#18177)", async () => {
+    const { deps } = harness({});
+    const outcomes = await resumeLanesAfterUpdate(
+      { lanes: { [assistantSlotKey(GLOBAL_ASSISTANT_ID, 1)]: "conv-g" } },
+      deps
+    );
+    expect(outcomes).toEqual([]);
+    expect(deps.claim).not.toHaveBeenCalled();
+  });
+});
+
+describe("resumeGlobalSessionsAtLaunch (#18177)", () => {
+  function globalDeps(kept: number[]) {
+    return {
+      resume: vi.fn(async () => {}),
+      isKept: vi.fn((slot: number) => kept.includes(slot)),
+      isShuttingDown: vi.fn(() => false),
+    } satisfies GlobalSessionResumeDeps;
+  }
+
+  it("resumes each kept session into its conversation, the second alone too, and no project lane", async () => {
+    const deps = globalDeps([1]);
+    const outcomes = await resumeGlobalSessionsAtLaunch(
+      {
+        lanes: {
+          [assistantSlotKey(GLOBAL_ASSISTANT_ID, 1)]: "conv-g1",
+          [assistantSlotKey("p1", 0)]: "conv-p",
+        },
+      },
+      deps
+    );
+    expect(outcomes).toEqual([{ slot: 1, status: "resumed" }]);
+    expect(deps.resume).toHaveBeenCalledExactlyOnceWith(1, "conv-g1");
+  });
+
+  it("starts nothing for a session no longer kept or once a quit begins, and reports a refusal by its code", async () => {
+    const lanes = {
+      [assistantSlotKey(GLOBAL_ASSISTANT_ID, 0)]: "conv-g0",
+      [assistantSlotKey(GLOBAL_ASSISTANT_ID, 1)]: "conv-g1",
+    };
+    const dropped = globalDeps([1]);
+    const refused = globalDeps([0, 1]);
+    refused.resume.mockRejectedValue(Object.assign(new Error("moved"), { code: "NOT_FOUND" }));
+    const quitting = globalDeps([0, 1]);
+    quitting.isShuttingDown.mockReturnValue(true);
+
+    expect(await resumeGlobalSessionsAtLaunch({ lanes }, dropped)).toEqual([
+      { slot: 0, status: "skipped", reason: "no-longer-kept" },
+      { slot: 1, status: "resumed" },
+    ]);
+    expect(await resumeGlobalSessionsAtLaunch({ lanes }, refused)).toEqual([
+      { slot: 0, status: "refused", reason: "NOT_FOUND" },
+      { slot: 1, status: "refused", reason: "NOT_FOUND" },
+    ]);
+    expect(await resumeGlobalSessionsAtLaunch({ lanes }, quitting)).toEqual([
+      { slot: 0, status: "skipped", reason: "shutting-down" },
+      { slot: 1, status: "skipped", reason: "shutting-down" },
+    ]);
+    expect(quitting.resume).not.toHaveBeenCalled();
   });
 });

@@ -1894,25 +1894,25 @@ export class HelpSessionService {
         const panelWasOpen = opts?.rendererGone
           ? panelOpenAtCapture
           : this.panelOpenByProjectId.get(record.projectId) === true;
-        void this.pendingHibernationStore
-          .set(
-            slotKey,
-            {
-              agentId: record.agentId,
-              agentSessionId: capturedAgentSessionId,
-              cwd: record.sessionPath,
-              capturedAt: Date.now(),
-              panelWasOpen,
-              ...this.ownershipAfterCapture(slotKey, {
-                agentId: record.agentId,
-                agentSessionId: record.agentSessionId ?? "",
-                conversationOwnershipId: record.conversationOwnershipId,
-                captured: capturedAgentSessionId,
-              }),
-            },
-            // A global session's quit capture names its conversation (#18177).
-            this.confirmQuitRun(slotKey) || undefined
-          )
+        const captured = {
+          agentId: record.agentId,
+          agentSessionId: capturedAgentSessionId,
+          cwd: record.sessionPath,
+          capturedAt: Date.now(),
+          panelWasOpen,
+          ...this.ownershipAfterCapture(slotKey, {
+            agentId: record.agentId,
+            agentSessionId: record.agentSessionId ?? "",
+            conversationOwnershipId: record.conversationOwnershipId,
+            captured: capturedAgentSessionId,
+          }),
+        };
+        // A global session's quit capture names its conversation (#18177).
+        void (
+          this.confirmQuitRun(slotKey)
+            ? this.pendingHibernationStore.set(slotKey, captured, true)
+            : this.pendingHibernationStore.set(slotKey, captured)
+        )
           .catch((err) => {
             console.warn(
               "[HelpSessionService] Failed to persist pending hibernation:",
@@ -2124,24 +2124,27 @@ export class HelpSessionService {
     this.bumpLaneRevision(slotKey);
     // The launch that held the claim has spent it.
     this.claimsBySlotKey.delete(slotKey);
+    const entry = {
+      agentId: record.agentId,
+      agentSessionId: agentSessionId ?? "",
+      cwd: record.sessionPath,
+      capturedAt: Date.now(),
+      ...(conversationOwnershipId !== undefined ? { conversationOwnershipId } : {}),
+    };
     // A kept lane's run is marked in the same write as its pointer (#18177);
     // one the PTY client refused never ran, and a fork names no conversation yet.
-    const running = this.bindStandingRun(
-      slotKey,
-      options?.spawnRefused === true ? undefined : this.terminalBySessionId.get(record.sessionId),
-      options?.forkedConversation !== true
-    );
-    const written = this.pendingHibernationStore.set(
-      slotKey,
-      {
-        agentId: record.agentId,
-        agentSessionId: agentSessionId ?? "",
-        cwd: record.sessionPath,
-        capturedAt: Date.now(),
-        ...(conversationOwnershipId !== undefined ? { conversationOwnershipId } : {}),
-      },
-      running
-    );
+    let written: Promise<void>;
+    if (this.pendingHibernationStore.isKeptRunning(slotKey)) {
+      const running = this.bindStandingRun(
+        slotKey,
+        options?.spawnRefused === true ? undefined : this.terminalBySessionId.get(record.sessionId),
+        options?.forkedConversation !== true
+      );
+      written = this.pendingHibernationStore.set(slotKey, entry, running);
+    } else {
+      this.standingRuns.delete(slotKey);
+      written = this.pendingHibernationStore.set(slotKey, entry);
+    }
     if (conversationOwnershipId !== undefined) {
       try {
         this.conversationOwnership?.bind(record.sessionId, conversationOwnershipId);
@@ -2283,21 +2286,20 @@ export class HelpSessionService {
       return running ? this.pendingHibernationStore.setRunning({ [lane.slotKey]: true }) : Promise.resolve();
     }
     const { conversationOwnershipId, ...rest } = entry;
-    return this.pendingHibernationStore.set(
-      lane.slotKey,
-      {
-        ...rest,
-        agentSessionId,
-        capturedAt: Date.now(),
-        ...this.ownershipAfterCapture(lane.slotKey, {
-          agentId: entry.agentId,
-          agentSessionId: entry.agentSessionId,
-          conversationOwnershipId,
-          captured: agentSessionId,
-        }),
-      },
-      running || undefined
-    );
+    const captured = {
+      ...rest,
+      agentSessionId,
+      capturedAt: Date.now(),
+      ...this.ownershipAfterCapture(lane.slotKey, {
+        agentId: entry.agentId,
+        agentSessionId: entry.agentSessionId,
+        conversationOwnershipId,
+        captured: agentSessionId,
+      }),
+    };
+    return running
+      ? this.pendingHibernationStore.set(lane.slotKey, captured, true)
+      : this.pendingHibernationStore.set(lane.slotKey, captured);
   }
 
   /**
@@ -2450,7 +2452,7 @@ export class HelpSessionService {
     terminalId: string | undefined,
     confirmed: boolean
   ): boolean {
-    if (terminalId === undefined || !this.pendingHibernationStore?.isKeptRunning(slotKey)) {
+    if (terminalId === undefined) {
       this.standingRuns.delete(slotKey);
       return false;
     }
@@ -2733,7 +2735,9 @@ export class HelpSessionService {
       }
     }
     for (const id of forgotten) this.forgetConversationOwnership(id);
-    await this.pendingHibernationStore.clear(slotKey, options);
+    await (options
+      ? this.pendingHibernationStore.clear(slotKey, options)
+      : this.pendingHibernationStore.clear(slotKey));
   }
 
   /**
