@@ -3988,12 +3988,18 @@ describe("CloudHostLifecycle with a provider whose machines can only be deleted 
     env.untouched();
   });
 
-  it.each([
-    { machine: "stopped", rawState: "archived" },
-    { machine: "running" },
-    { machine: "stopped", rawState: "archived", dataExpired: true },
-  ] as const)("refuses a Start of a machine read as %o before reading it again", async (initial) => {
-    const env = await imported(initial);
+  it.each([{ machine: "stopped", rawState: "archived" }, { machine: "running" }] as const)(
+    "refuses a Start of a machine read as %o before reading it again",
+    async (initial) => {
+      const env = await imported(initial);
+      await expect(env.lifecycle.startMachine("build")).rejects.toMatchObject(ONLY_DELETED);
+      env.untouched();
+    }
+  );
+
+  it("refuses a Start before a read could find the disk gone and record that", async () => {
+    const env = await imported({ machine: "stopped", rawState: "archived" });
+    env.state.machine = resource({ machine: "stopped", rawState: "archived", dataExpired: true });
     await expect(env.lifecycle.startMachine("build")).rejects.toMatchObject(ONLY_DELETED);
     env.untouched();
   });
