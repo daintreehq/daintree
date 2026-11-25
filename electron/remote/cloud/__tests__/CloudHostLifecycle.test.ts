@@ -3462,6 +3462,31 @@ describe("CloudHostLifecycle worktree marks", () => {
     expect(other.lifecycle.statuses()[0]?.createdFor).toBeNull();
   });
 
+  it("refuses a worktree's machine on an offer-based provider before anything is stored or sent", async () => {
+    const offers = (provider: CloudProvider) => {
+      const info = provider.info.bind(provider);
+      provider.info = (platform) => ({ ...info(platform), createMode: "offers" });
+    };
+    const { lifecycle, provider, store, account, hosts } = await setup({}, { adapt: offers });
+    const put = vi.spyOn(store, "putBinding");
+    const placement: PendingHostPlacement = {
+      projectId: MARK.projectId,
+      worktreeId: MARK.worktreeId,
+      worktreePath: MARK.worktreeId,
+      label: MARK.worktreeName,
+      requestedAt: 1_000,
+      createdMachine: true,
+    };
+    const refused = lifecycle.create(request(account.id), MARK, placement);
+    await expect(refused).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(refused).rejects.toThrow(/offer/);
+    expect(put).not.toHaveBeenCalled();
+    expect(store.bindings()).toEqual([]);
+    expect(hosts).toEqual([]);
+    expect(provider.catalog).not.toHaveBeenCalled();
+    expect(provider.create).not.toHaveBeenCalled();
+  });
+
   it("refuses a mark missing the worktree's identity, and takes 'local' as this device", async () => {
     const { lifecycle, provider, store, account } = await setup();
     await expect(

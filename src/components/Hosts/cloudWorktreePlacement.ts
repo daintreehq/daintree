@@ -42,14 +42,18 @@ export function canOfferCloudMachine(): boolean {
 
 /**
  * Every connected account on a provider this machine can use, and may hand
- * its credentials to now, in the snapshot's order.
+ * its credentials to now, in the snapshot's order. A provider whose create
+ * goes through offers is left out: placement asks for the machine without
+ * opening Add cloud host, so there'd be nowhere to choose an offer.
  */
 export function cloudMachineAccounts(snapshot: CloudHostsSnapshot): CloudMachineAccount[] {
   const out: CloudMachineAccount[] = [];
   for (const account of snapshot.accounts) {
     if (account.providerUnavailable !== null) continue;
     const provider = snapshot.providers.find((entry) => entry.id === account.providerId);
-    if (provider && provider.unsupportedReason === null) out.push({ account, provider });
+    if (provider && provider.unsupportedReason === null && provider.createMode !== "offers") {
+      out.push({ account, provider });
+    }
   }
   return out;
 }
