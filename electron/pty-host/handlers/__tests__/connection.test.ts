@@ -750,6 +750,28 @@ describe("worker-ingest dedicated ports (#10960)", () => {
     expect(h.windowPort.posted).toEqual([]);
   });
 
+  it("a remote connection starts away and follows its bridge's client presence (#18185)", () => {
+    const h = makeWorkerIngestHarness();
+    h.handlers["connect-port"]({ windowId: -7 }, [h.windowPort] as never);
+    const conn = () => h.ctx.rendererConnections.get(-7)!;
+    expect(conn().clientAway).toBe(true);
+
+    h.windowPort.emit("message", { data: { type: "client-presence", present: true } });
+    expect(conn().clientAway).toBe(false);
+
+    h.windowPort.emit("message", { data: { type: "client-presence", present: false } });
+    expect(conn().clientAway).toBe(true);
+  });
+
+  it("a local renderer port is never away, whatever it posts", () => {
+    const h = makeWorkerIngestHarness();
+    h.handlers["connect-port"]({ windowId: 1 }, [h.windowPort] as never);
+
+    h.windowPort.emit("message", { data: { type: "client-presence", present: false } });
+
+    expect(h.ctx.rendererConnections.get(1)!.clientAway).toBe(false);
+  });
+
   it("engage without a dedicated connection never posts the marker", () => {
     const h = makeWorkerIngestHarness();
     h.handlers["connect-port"]({ windowId: 1 }, [h.windowPort] as never);

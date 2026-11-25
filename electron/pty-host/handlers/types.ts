@@ -30,6 +30,12 @@ export interface RendererConnection {
    * project view (SurfacePortBroker).
    */
   holderWebContentsId?: number;
+  /**
+   * A remote endpoint's client is not reading this connection's output: its
+   * stream bridge keeps the port while the client is away (#18185). Remote
+   * connections start away until their bridge says the client is there.
+   */
+  clientAway?: boolean;
 }
 
 /**

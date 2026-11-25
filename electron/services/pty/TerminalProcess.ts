@@ -220,6 +220,14 @@ export interface TerminalProcessDependencies {
    * legacy in-thread path (the DAINTREE_DISABLE_ANALYSIS_WORKERS fallback).
    */
   analysisWorkerPool?: AnalysisWorkerPool | null;
+  /**
+   * Whether a view is parsing this terminal's live output, so its xterm.js
+   * answers the program's queries itself. The headless mirror's replies then
+   * stay off the PTY (#18185): with two responders every query is answered
+   * twice, and the host's faster reply breaks the order a program fences its
+   * queries in. Absent, no view ever answers and the mirror always does.
+   */
+  hasAnsweringView?: (terminalId: string) => boolean;
 }
 
 /**
@@ -824,14 +832,7 @@ export class TerminalProcess {
         this.handleAnalysisActivityState(spawnedAt, state, metadata),
       onWaitingTimeout: (spawnedAt) => this.handleAnalysisWaitingTimeout(spawnedAt),
       onBootComplete: (timestamp) => this.recordBootComplete(timestamp),
-      onPtyResponse: (data) => {
-        if (this.terminalInfo.wasKilled) return;
-        try {
-          this.terminalInfo.ptyProcess.write(data);
-        } catch (error) {
-          this.logWriteError(error, { operation: "write(headless-responder)" });
-        }
-      },
+      onPtyResponse: (data) => this.writeHeadlessReply(data, "write(headless-responder)"),
       onViewport: (lines) => this.noteOutputProgress(lines),
       onOutputPromotion: () => {
         this.flushAgentOutput();
@@ -892,6 +893,21 @@ export class TerminalProcess {
     );
   }
 
+  /**
+   * A reply the headless mirror made to a query in this terminal's output.
+   * Decided when the reply is ready rather than when the responder was
+   * installed, since views come and go for the terminal's whole life.
+   */
+  private writeHeadlessReply(data: string, operation: string): void {
+    if (this.terminalInfo.wasKilled) return;
+    if (this.deps.hasAnsweringView?.(this.id)) return;
+    try {
+      this.terminalInfo.ptyProcess.write(data);
+    } catch (error) {
+      this.logWriteError(error, { operation });
+    }
+  }
+
   private createWorkerAnalysisDelegate(): WorkerAnalysisDelegate {
     return {
       onActivityState: (spawnedAt, state, metadata) =>
@@ -899,12 +915,8 @@ export class TerminalProcess {
       onWaitingTimeout: (spawnedAt) => this.handleAnalysisWaitingTimeout(spawnedAt),
       onBootComplete: (timestamp) => this.recordBootComplete(timestamp),
       onPtyResponse: (data) => {
-        if (this.terminalInfo.wasKilled || !this.lifecycle.isAlive) return;
-        try {
-          this.terminalInfo.ptyProcess.write(data);
-        } catch (error) {
-          this.logWriteError(error, { operation: "write(analysis-responder)" });
-        }
+        if (!this.lifecycle.isAlive) return;
+        this.writeHeadlessReply(data, "write(analysis-responder)");
       },
       getProcessState: () => {
         const validator = createProcessStateValidator(

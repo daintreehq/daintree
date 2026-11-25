@@ -115,6 +115,7 @@ export class PtyManager extends EventEmitter {
   private lineageLedger: LineageKillSource | null = null;
   private imagePathProbe: ImagePathProbe | null = null;
   private gracefulCaptureHost: GracefulCaptureHost | null = null;
+  private answeringViewProbe: ((terminalId: string) => boolean) | null = null;
   private analysisWorkerPool: AnalysisWorkerPool | null = null;
   private activeProjectId: string | null = null;
   private sabModeEnabled = false;
@@ -208,6 +209,14 @@ export class PtyManager extends EventEmitter {
    */
   setGracefulCaptureHost(host: GracefulCaptureHost | null): void {
     this.gracefulCaptureHost = host;
+  }
+
+  /**
+   * The pty-host's view of which terminals a view answers queries for
+   * (#18185). Without one, every terminal's headless mirror answers.
+   */
+  setAnsweringViewProbe(probe: ((terminalId: string) => boolean) | null): void {
+    this.answeringViewProbe = probe;
   }
 
   /**
@@ -685,6 +694,7 @@ export class PtyManager extends EventEmitter {
           lineageLedger: this.lineageLedger,
           imagePathProbe: this.imagePathProbe,
           analysisWorkerPool: this.analysisWorkerPool,
+          hasAnsweringView: (termId) => this.answeringViewProbe?.(termId) ?? false,
         },
         spawnContext,
         ptyProcess,
@@ -893,6 +903,13 @@ export class PtyManager extends EventEmitter {
     const next = new Map<string, PtyHostDriveLease>();
     for (const lease of leases) next.set(lease.projectId, lease);
     this.driveLeases = next;
+  }
+
+  /** Whether this machine's own views may drive terminal `id`: no remote endpoint holds its lease. */
+  mayDriveLocally(id: string): boolean {
+    const projectId = this.registry.get(id)?.getInfo().projectId;
+    if (projectId === undefined || projectId === null) return true;
+    return (this.driveLeases.get(projectId)?.holderConnection ?? null) === null;
   }
 
   /**

@@ -1960,7 +1960,11 @@ export type RendererToPtyHostMessage =
   // terminal, posts `serialize-fence` back FIFO behind it, and only then takes
   // the snapshot it answers with in `serialized-state`: every byte before the
   // fence is in the snapshot, every byte after it is not.
-  | { type: "serialize-fence"; id: string; requestId: number };
+  | { type: "serialize-fence"; id: string; requestId: number }
+  // Whether a remote endpoint's client is reading the stream (its bridge,
+  // never a renderer). While it is, its xterm.js answers the terminals'
+  // queries and the host's headless mirror stays silent (#18185).
+  | { type: "client-presence"; present: boolean };
 
 /**
  * Messages sent from Pty Host → Renderer via MessagePort (direct channel).

@@ -218,9 +218,11 @@ export class InThreadAnalysisBackend implements AnalysisBackend {
     }
 
     // The headless responder answers device-attribute queries (CSI 6n, 5n)
-    // for plain terminals so zsh et al. don't block waiting. When an agent
-    // is live the renderer's xterm.js is the sole responder (installing
-    // both would double-respond and corrupt TUI parsers), so skip.
+    // for plain terminals so zsh et al. don't block waiting while no view
+    // is parsing them; TerminalProcess drops its replies while one is
+    // (#18185). When an agent is live the renderer's xterm.js is the sole
+    // responder (installing both would double-respond and corrupt TUI
+    // parsers), so skip.
     if (!this.deps.isAgentLive() && (data.includes("\x1b[6n") || data.includes("\x1b[5n"))) {
       this.ensureHeadlessResponder();
     }

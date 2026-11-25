@@ -402,6 +402,7 @@ export class TerminalStreamBridge {
     if (!session) return;
     this.session = null;
     this.resumed = false;
+    this.postPresence();
     for (const cleanup of this.sessionCleanup.splice(0)) cleanup();
     for (const stream of this.streams.values()) {
       this.settleOutstanding(stream);
@@ -436,6 +437,7 @@ export class TerminalStreamBridge {
   resume(request: TerminalResumeRequest): TerminalResumeResult {
     const firstResume = !this.resumed;
     this.resumed = true;
+    if (firstResume) this.postPresence();
     const outcomes: { id: string; outcome: TerminalResumeOutcome }[] = [];
     const mentioned = new Set<string>();
     for (const entry of request.terminals) {
@@ -529,9 +531,20 @@ export class TerminalStreamBridge {
     return this.projectId !== null && this.opts.ownerOf(terminalId) === this.projectId;
   }
 
+  /**
+   * Tell the pty-host whether the client reads this stream (#18185). While it
+   * does, its xterm.js answers the terminals' queries; while it is away, the
+   * host's headless mirror answers them, so nothing waits on a reply the
+   * client cannot send.
+   */
+  private postPresence(): void {
+    safePost(this.port, { type: "client-presence", present: this.isResumed });
+  }
+
   private adoptPort(port: PortLike): void {
     this.port = port;
     this.connected = true;
+    this.postPresence();
     port.onMessage((message) => {
       if (this.port === port) this.onPtyMessage(message);
     });
