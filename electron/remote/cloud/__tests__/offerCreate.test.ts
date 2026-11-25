@@ -903,6 +903,24 @@ describe("offer-based create (#18230)", () => {
       expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
     });
 
+    it("keeps showing the choice while its lease is out, so a refusal reaches the view that chose", async () => {
+      const env = await offerCloud();
+      env.api.offersOnPlace = [offer("a")];
+      const hostId = await env.create();
+      const choice = await env.awaitChoice();
+      env.api.plans.lease.push("hang");
+      const chosen = env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5);
+      chosen.catch(() => {});
+      await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+      expect(env.status()?.operation?.kind).toBe("creating");
+      expect(env.status()?.pendingCreate).toMatchObject({
+        order: { id: choice.order.id },
+        waitingSince: choice.waitingSince,
+      });
+      await env.lifecycle.cancelOrder(hostId, choice.order.id);
+      expect(env.status()?.pendingCreate).toBeUndefined();
+    });
+
     it("closes the order when the cancel won, leasing nothing", async () => {
       const env = await offerCloud();
       env.api.offersOnPlace = [offer("a")];

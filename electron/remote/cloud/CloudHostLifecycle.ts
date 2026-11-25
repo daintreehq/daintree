@@ -1762,11 +1762,15 @@ export class CloudHostLifecycle {
       : this.deps.accounts.provider(providerId);
   }
 
-  /** Each host's create waiting on a choice, with its order's offers as last read. */
+  /**
+   * Each host's create waiting on a choice, with its order's offers as last
+   * read. Shown while the chosen offer's lease is out too, so the view that
+   * sent the choice is still there to say why, if the provider refuses it.
+   */
   private offerChoices(): Map<string, CloudCreateOfferChoice> {
     const choices = new Map<string, CloudCreateOfferChoice>();
     for (const order of this.actionableOrders()) {
-      if (order.state !== "open") continue;
+      if (order.state !== "open" && order.state !== "leasing") continue;
       const orderId = order.orderIds![0]!;
       const read = this.offerReads.get(order.id);
       const current = read?.orderId === orderId ? read : null;
@@ -2498,7 +2502,7 @@ export class CloudHostLifecycle {
         (provider ? this.deps.accounts.asAppError(provider, error).userMessage : undefined) ??
           formatErrorMessage(error, "No answer")
       );
-      const message = `The order couldn't be closed yet. ${said} Daintree keeps trying, and a machine a lease made is this host's.`;
+      const message = `The order couldn't be closed yet. ${said} Daintree keeps trying, and a machine a lease made is this host's. Retry closes it first, then places a new order.`;
       this.recordError(binding.id, { code: "outcome-unknown", message, at: this.now() });
       throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
     }
