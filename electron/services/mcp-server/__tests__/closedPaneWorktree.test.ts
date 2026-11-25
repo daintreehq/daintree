@@ -100,26 +100,19 @@ describe("readClosingAgentPaneFrom (#18173)", () => {
     ).toBeNull();
   });
 
-  it("says a pane main launched is unreadable when the host doesn't answer, never its launch facts", async () => {
+  it("says the pane is unreadable when the host doesn't answer, whatever main launched there", async () => {
     const timedOut = async () => {
       throw new Error("TIMEOUT");
     };
-    const launchOf = vi.fn(() => launch);
-    // Another run may hold the id by now, so its launch facts aren't read.
-    expect(await readClosingAgentPaneFrom("t1", timedOut, launchOf)).toEqual({
-      terminalId: "t1",
-      unread: true,
-    });
-    expect(launchOf).toHaveBeenCalledWith("t1");
-    // A shell launch may be running an agent started by hand.
-    expect(
-      await readClosingAgentPaneFrom("t1", timedOut, () => ({
-        facts: { projectId: "p1", worktreeId: "/wt/launch" },
-        detectedAgentIds: [],
-      }))
-    ).toEqual({ terminalId: "t1", unread: true });
-    // Nothing main launched, such as a browser panel: no worktree to speak of.
-    expect(await readClosingAgentPaneFrom("t1", timedOut, () => undefined)).toBeNull();
+    // Another run may hold the id by now, so no launch facts are read, and a
+    // launch main has since forgotten doesn't make the pane one with no worktree.
+    for (const launchOf of [vi.fn(() => launch), vi.fn(() => undefined)]) {
+      expect(await readClosingAgentPaneFrom("t1", timedOut, launchOf)).toEqual({
+        terminalId: "t1",
+        unread: true,
+      });
+      expect(launchOf).not.toHaveBeenCalled();
+    }
   });
 });
 

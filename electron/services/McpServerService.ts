@@ -649,8 +649,8 @@ export class McpServerService {
           { signal, deadlineMs: GLOBAL_CLOSE_WORKTREE_READ_DEADLINE_MS }
         );
       },
-      // Strict, so a pty-host slow to answer falls back on the launch facts
-      // rather than reading as a pane that never ran an agent.
+      // Strict, so a pty-host slow to answer reads as unreadable rather than
+      // as a pane that never ran an agent.
       readClosingAgentPane: (terminalId) =>
         readClosingAgentPaneFrom(
           terminalId,

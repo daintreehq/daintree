@@ -74,9 +74,8 @@ export function closingAgentPaneFromLaunch(
  * The agent pane a close names, from the host's record of it, or from the
  * launch facts main kept when the host has no record: the host drops the
  * record of an agent that exited on an error. A host that didn't answer in
- * time can't say what runs under the id now, so a pane main launched there
- * is unreadable, and anything main never launched, such as a browser panel,
- * has no worktree to speak of. Never rejects.
+ * time can't say what runs under the id now, or that nothing does, so the
+ * pane is unreadable. Never rejects.
  */
 export async function readClosingAgentPaneFrom(
   terminalId: string,
@@ -89,7 +88,7 @@ export async function readClosingAgentPaneFrom(
   try {
     record = await readRecord(terminalId);
   } catch {
-    return launchOf(terminalId) !== undefined ? { terminalId, unread: true } : null;
+    return { terminalId, unread: true };
   }
   return record !== null
     ? closingAgentPane(terminalId, record)
