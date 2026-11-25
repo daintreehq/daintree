@@ -779,6 +779,11 @@ export interface CloudHostStatus {
   machineType: string | null;
   vcpu: number | null;
   memoryGB: number | null;
+  /**
+   * What it costs per running hour: on a provider that leases offers, the
+   * rate its lease runs at; otherwise its account's list price for the size.
+   * Null when that isn't known, never a guess.
+   */
   hourlyDollars: number | null;
   /** Whether and how its provider stops a machine by itself; null while its provider isn't registered. */
   lifetime: CloudLifetimeModel | null;

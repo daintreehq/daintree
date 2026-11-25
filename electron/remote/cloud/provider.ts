@@ -90,8 +90,16 @@ export type GuestPowerOffCheck =
       problem: string;
     };
 
-/** How a close left an order: closed, or kept because one of its offers was leased, with that machine. */
-export type CloseOrderOutcome = { kind: "closed" } | { kind: "leased"; resource: ProviderResource };
+/**
+ * How a close left an order: closed, or kept because one of its offers was
+ * leased, with that machine and the rate its lease runs at in dollars per
+ * running hour. The rate is the provider's own word, never the rate Daintree
+ * asked for: a close may find a lease made elsewhere, at another rate. Null
+ * when it can't say, and the machine then shows no price.
+ */
+export type CloseOrderOutcome =
+  | { kind: "closed" }
+  | { kind: "leased"; resource: ProviderResource; hourlyDollars: number | null };
 
 /**
  * A create that goes through offers (`createMode: "offers"`): an order is
@@ -138,8 +146,8 @@ export interface OfferCreate {
   /**
    * Closes an order nobody chose from: `closed` once it is, and when it
    * already was. Never ends a lease: when one of its offers was leased it
-   * leaves the order and answers `leased` with that machine, which only
-   * `delete` ends, so a lease whose answer was lost is still bound.
+   * leaves the order and answers `leased` with that machine and its rate,
+   * which only `delete` ends, so a lease whose answer was lost is still bound.
    */
   closeOrder(credentials: ProviderCredentials, orderId: string): Promise<CloseOrderOutcome>;
 }

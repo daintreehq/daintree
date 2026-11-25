@@ -186,6 +186,19 @@ export interface StoredCloudBinding {
    * or for a machine other than `resourceId`.
    */
   keepAwake?: StoredKeepAwake;
+  /**
+   * The rate the machine was leased at through an offer (#18233), kept from
+   * the write that bound it. Absent for a lease whose rate nobody said, for a
+   * machine imported or made by an immediate create, and for a machine other
+   * than `resourceId`.
+   */
+  leaseRate?: StoredLeaseRate;
+}
+
+/** What one leased machine costs, in dollars per running hour, as its lease said. */
+export interface StoredLeaseRate {
+  resourceId: string;
+  hourlyDollars: number;
 }
 
 export interface StoredKeepAwake {
@@ -704,7 +717,26 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
     ...(value.idleTimeChosen === true ? { idleTimeChosen: true as const } : {}),
     ...(value.mcpServerOnConnect === true ? { mcpServerOnConnect: true as const } : {}),
     ...readKeepAwake(value.keepAwake, resourceId),
+    ...readLeaseRate(value.leaseRate, resourceId),
   };
+}
+
+function readLeaseRate(
+  raw: unknown,
+  resourceId: string | null
+): { leaseRate: StoredLeaseRate } | Record<string, never> {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object" || resourceId === null) return {};
+  const hourlyDollars = value.hourlyDollars;
+  if (
+    value.resourceId !== resourceId ||
+    typeof hourlyDollars !== "number" ||
+    !Number.isFinite(hourlyDollars) ||
+    hourlyDollars < 0
+  ) {
+    return {};
+  }
+  return { leaseRate: { resourceId, hourlyDollars } };
 }
 
 function readKeepAwake(

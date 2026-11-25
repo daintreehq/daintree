@@ -117,6 +117,8 @@ interface FakeOrder {
   state: "open" | "closed" | "leased";
   offers: CloudCreateOffer[];
   machine: ProviderResource | null;
+  /** The rate its lease runs at, once leased. */
+  leasedAt?: number;
 }
 
 /** An offer-based provider's account: orders, their offers, and the machines leased from them. */
@@ -131,6 +133,8 @@ class FakeOffers {
   };
   /** Offers every new order gets. */
   offersOnPlace: CloudCreateOffer[] = [];
+  /** Whether a close that finds a lease says the rate it runs at. */
+  closeReportsRate = true;
   /** What was stored when each placement and lease reached the provider. */
   readonly storedAtSend: Array<StoredCreateOrder[]> = [];
   storedNow: () => StoredCreateOrder[] = () => [];
@@ -233,6 +237,7 @@ class FakeOffers {
       const leased = machine(`lease-${orderId}`, order.labels, "starting");
       order.state = "leased";
       order.machine = leased;
+      order.leasedAt = quoted.hourlyDollars;
       this.machines.set(leased.resourceId, machine(leased.resourceId, order.labels));
       if (plan === "lost") throw lost();
       if (plan === "hang-commit") return this.hang<ProviderResource>(credentials.signal);
@@ -243,17 +248,24 @@ class FakeOffers {
   readonly closeOrder = vi.fn(async (_credentials: unknown, orderId: string) => {
     if (this.plan("close") === "fail") throw lost();
     const order = this.orders.get(orderId);
-    if (order?.state === "leased") return { kind: "leased" as const, resource: order.machine! };
+    if (order?.state === "leased") {
+      return {
+        kind: "leased" as const,
+        resource: order.machine!,
+        hourlyDollars: this.closeReportsRate ? (order.leasedAt ?? null) : null,
+      };
+    }
     if (order) order.state = "closed";
     return { kind: "closed" as const };
   });
 
   /** A lease made where this device never saw it: the person's console, say. */
-  leaseElsewhere(orderId: string): string {
+  leaseElsewhere(orderId: string, hourlyDollars = 0.5): string {
     const order = this.orders.get(orderId)!;
     const leased = machine(`lease-${orderId}`, order.labels);
     order.state = "leased";
     order.machine = leased;
+    order.leasedAt = hourlyDollars;
     this.machines.set(leased.resourceId, leased);
     return leased.resourceId;
   }
@@ -1340,6 +1352,38 @@ describe("a leased machine's price (#18233)", () => {
     expect(await runningOn(env, hostId)).toMatchObject({
       resourceId: `lease-${choice.order.id}`,
       hourlyDollars: 0.45,
+    });
+  });
+
+  it("prices a lease made elsewhere at the rate the close reports, not the one Daintree asked for", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a", 0.3)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    // Daintree's lease never lands; one made in the provider's console at another rate does.
+    env.api.plans.lease.push("hang");
+    void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.3).catch(() => {});
+    await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+    env.api.leaseElsewhere(choice.order.id, 0.9);
+    await env.lifecycle.cancelOrder(hostId, choice.order.id);
+    expect(await runningOn(env, hostId)).toMatchObject({
+      resourceId: `lease-${choice.order.id}`,
+      hourlyDollars: 0.9,
+    });
+  });
+
+  it("shows no price for a lease found by a close that can't say its rate", async () => {
+    const env = await offerCloud();
+    await env.accounts.catalog(env.account.id);
+    env.api.closeReportsRate = false;
+    env.api.offersOnPlace = [offer("a", 0.3)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    env.api.plans.lease.push("lost");
+    await env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.3);
+    expect(await runningOn(env, hostId)).toMatchObject({
+      resourceId: `lease-${choice.order.id}`,
+      hourlyDollars: null,
     });
   });
 
