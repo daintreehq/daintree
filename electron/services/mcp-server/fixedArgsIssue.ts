@@ -3,8 +3,8 @@ import { z } from "zod";
 /** Most accepted values a refusal lists before it stops. */
 const MAX_LISTED_VALUES = 8;
 
-/** The schema one path step leads to, or null past anything the schema doesn't name itself. */
-function stepInto(schema: z.ZodType, key: PropertyKey): z.ZodType | null {
+/** The schemas one path step can lead to: none past anything the schema doesn't name itself. */
+function stepInto(schema: z.ZodType, key: PropertyKey): z.ZodType[] {
   if (
     schema instanceof z.ZodOptional ||
     schema instanceof z.ZodNullable ||
@@ -20,19 +20,28 @@ function stepInto(schema: z.ZodType, key: PropertyKey): z.ZodType | null {
   if (schema instanceof z.ZodPipe) return stepInto(schema.in as z.ZodType, key);
   if (schema instanceof z.ZodObject) {
     return typeof key === "string" && Object.hasOwn(schema.shape, key)
-      ? (schema.shape[key] as z.ZodType)
-      : null;
+      ? [schema.shape[key] as z.ZodType]
+      : [];
   }
   if (schema instanceof z.ZodArray) {
-    return typeof key === "number" ? (schema.element as z.ZodType) : null;
+    return typeof key === "number" ? [schema.element as z.ZodType] : [];
   }
+  // Every option, since a discriminated union's later branch may be the one the path runs through.
   if (schema instanceof z.ZodUnion) {
-    for (const option of schema.options as readonly z.ZodType[]) {
-      const found = stepInto(option, key);
-      if (found !== null) return found;
-    }
+    return (schema.options as readonly z.ZodType[]).flatMap((option) => stepInto(option, key));
   }
-  return null;
+  return [];
+}
+
+/** How many leading steps of a path the schema declares itself. */
+function declaredDepth(schema: z.ZodType, path: readonly PropertyKey[]): number {
+  if (path.length === 0) return 0;
+  let deepest = 0;
+  for (const next of stepInto(schema, path[0]!)) {
+    deepest = Math.max(deepest, 1 + declaredDepth(next, path.slice(1)));
+    if (deepest === path.length) break;
+  }
+  return deepest;
 }
 
 /**
@@ -44,14 +53,23 @@ function declaredPath(
   schema: z.ZodType,
   path: readonly PropertyKey[]
 ): { path: PropertyKey[]; whole: boolean } {
-  const declared: PropertyKey[] = [];
-  let at: z.ZodType | null = schema;
-  for (const key of path) {
-    at = at === null ? null : stepInto(at, key);
-    if (at === null) return { path: declared, whole: false };
-    declared.push(key);
-  }
-  return { path: declared, whole: true };
+  const depth = declaredDepth(schema, path);
+  return { path: path.slice(0, depth), whole: depth === path.length };
+}
+
+/**
+ * A union none of whose branches took the input names the one branch whose
+ * shape it had, when only one did: `includeOutput: { lines: "10" }` is a
+ * wrong `lines`, not a wrong `includeOutput`.
+ */
+function innermost(issue: z.core.$ZodIssue): z.core.$ZodIssue {
+  if (issue.code !== "invalid_union") return issue;
+  const shaped = issue.errors.filter((branch) => {
+    const first = branch[0];
+    return first !== undefined && !(first.code === "invalid_type" && first.path.length === 0);
+  });
+  const inner = shaped.length === 1 ? shaped[0]![0]! : null;
+  return inner === null ? issue : innermost({ ...inner, path: [...issue.path, ...inner.path] });
 }
 
 function valueAt(args: unknown, path: readonly PropertyKey[]): unknown {
@@ -157,8 +175,9 @@ export function describeArgsIssue(
   error: z.ZodError,
   lead: string
 ): string {
-  const issue = error.issues[0];
-  if (issue === undefined) return `${lead}.`;
+  const first = error.issues[0];
+  if (first === undefined) return `${lead}.`;
+  const issue = innermost(first);
   const { path, whole } = declaredPath(schema, issue.path);
   const plainSubject = path.length === 0;
   const subject = plainSubject ? "the arguments" : `'${z.core.toDotPath(path)}'`;

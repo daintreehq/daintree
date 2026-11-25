@@ -1,6 +1,9 @@
 import type { z } from "zod";
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
-import { HOST_THROWAWAY_TOOL_SIGNATURES } from "../../../shared/types/hostThrowaway.js";
+import {
+  HOST_THROWAWAY_TOOL_SIGNATURES,
+  HostThrowawayCallSchema,
+} from "../../../shared/types/hostThrowaway.js";
 import {
   HOST_BRING_BACK_TOOL,
   HOST_CALL_TOOL,
@@ -144,6 +147,9 @@ export async function readHostInventory(): Promise<HostInventorySnapshot | null>
 
 export const HOST_CONTROL_NOT_ELIGIBLE_MESSAGE =
   "Only a Daintree Assistant running on this machine can reach its hosts.";
+/** An assistant's call with no host-control runtime to take it: none installed, or one stopped. */
+export const HOST_CONTROL_UNAVAILABLE_MESSAGE =
+  "Host tools aren't available on this machine right now.";
 /** A `host.call` or `host.status` from a session admitted at neither assistant tier. */
 const TIER_NOT_ELIGIBLE_MESSAGE =
   "This tool needs a session at the core or full tool set, and this one has neither.";
@@ -182,6 +188,21 @@ function invalidArgs(message = INVALID_ARGS_MESSAGE): {
 /** The first field a parse refused, named by the schema and never by what was sent (#18164). */
 function parseRefusal(schema: z.ZodType, raw: unknown, error: z.ZodError) {
   return invalidArgs(describeArgsIssue(schema, raw, error, INVALID_ARGS_LEAD));
+}
+
+/**
+ * A throwaway call that broke its own rule (#14446): the field a known tool's
+ * arguments got wrong, or the tools it takes when it named none of them.
+ */
+function throwawayRefusal(tool: unknown, args: unknown) {
+  const call = { tool, args: args ?? {} };
+  const parsed = HostThrowawayCallSchema.safeParse(call);
+  if (parsed.success || parsed.error.issues[0]?.path[0] === "tool") {
+    return invalidArgs(INVALID_THROWAWAY_MESSAGE);
+  }
+  return invalidArgs(
+    describeArgsIssue(HostThrowawayCallSchema, call, parsed.error, INVALID_ARGS_LEAD)
+  );
 }
 
 /** Fields that each parse but don't go together for the operation named, a schema value. */
@@ -302,15 +323,23 @@ async function dispatch(
       if (context === undefined) return notEligible(TIER_NOT_ELIGIBLE_MESSAGE);
       const parsed = HostCallArgsSchema.safeParse(raw);
       if (parsed.success) return runtime.call(helpSessionId, parsed.data, context);
-      // Only a throwaway call that broke a rule across its fields is told the
-      // throwaway tools; any field it got wrong first is named like any call's.
+      // A throwaway call with one target whose first failure is a rule across
+      // its fields broke the throwaway rule: it is told what that rule wants.
+      // Anything it got wrong first is named like any call's.
       const first = parsed.error.issues[0];
+      const sent = raw as {
+        throwaway?: unknown;
+        projectId?: unknown;
+        tool?: unknown;
+        args?: unknown;
+      };
       const throwawayRule =
-        (raw as { throwaway?: unknown } | null)?.throwaway === true &&
+        sent.throwaway === true &&
+        sent.projectId === undefined &&
         first?.code === "custom" &&
         first.path.length === 0;
       return throwawayRule
-        ? invalidArgs(INVALID_THROWAWAY_MESSAGE)
+        ? throwawayRefusal(sent.tool, sent.args)
         : parseRefusal(HostCallArgsSchema, raw, parsed.error);
     }
     case HOST_ENSURE_PROJECT_TOOL: {
@@ -377,7 +406,12 @@ export function bindHostControl(resolveHelpSessionId: () => string | undefined):
     },
     run: async (toolId, args, context) => {
       const found = caller();
-      if (found === null) return notEligible();
+      if (found === null) {
+        // An assistant is told the tools are missing here, not that it isn't one.
+        return resolveHelpSessionId() === undefined
+          ? notEligible()
+          : notEligible(HOST_CONTROL_UNAVAILABLE_MESSAGE);
+      }
       const refusal = found.runtime.callerRefusal(found.helpSessionId);
       if (refusal !== null) return notEligible(refusal);
       return dispatch(found.runtime, found.helpSessionId, toolId, args, context);

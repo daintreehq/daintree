@@ -613,8 +613,8 @@ describe("installHostControl (#13493)", () => {
     expect(runtime.callerRefusal("remote")).toMatch(/window on another machine/);
     expect(runtime.callerRefusal("viewless")).toMatch(/window of its project on this machine/);
     expect(runtime.callerRefusal("moved")).toBe(runtime.callerRefusal("viewless"));
-    expect(runtime.callerRefusal("stopped")).toMatch(/terminal isn't running/);
-    expect(runtime.callerRefusal("nobody")).toMatch(/session has ended/);
+    expect(runtime.callerRefusal("stopped")).toMatch(/no running terminal/);
+    expect(runtime.callerRefusal("nobody")).toMatch(/ending or was revoked/);
     await expect(runtime.list("viewless")).resolves.toEqual({
       ok: false,
       code: "NOT_ELIGIBLE",

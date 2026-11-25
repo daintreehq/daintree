@@ -688,6 +688,11 @@ describe("host control tools (#13493)", () => {
         code: "INVALID_ARGS",
         message: "The arguments don't match this tool's schema: 'targets' is required.",
       });
+      // A bad field is audited as one, not as a caller it refused.
+      expect(vi.mocked(deps.appendAuditRecord).mock.calls[2]?.[0]).toMatchObject({
+        toolId: "host.status",
+        outcome: { value: { ok: false, error: { code: "VALIDATION_ERROR" } } },
+      });
       const read = await callTool(server, { name: "host.status", arguments: valid });
       expect(read.isError).toBeFalsy();
       expect(status).toHaveBeenCalledTimes(1);

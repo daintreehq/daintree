@@ -1,6 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  HostCallArgsSchema,
+  HostEnsureProjectArgsSchema,
+  HostListArgsSchema,
+  HostSettingsArgsSchema,
+  HostStatusArgsSchema,
+  HostWatchArgsSchema,
+} from "../../../../shared/types/hostControl.js";
+import {
   bindHostControl,
+  HOST_CONTROL_NOT_ELIGIBLE_MESSAGE,
+  HOST_CONTROL_UNAVAILABLE_MESSAGE,
   readHostInventory,
   runHostControlTool,
   setHostControlRuntime,
@@ -121,6 +131,14 @@ describe("runHostControlTool (#13493)", () => {
     const runtime = fakeRuntime();
     const uninstall = setHostControlRuntime(runtime);
     const access = bindHostControl(() => "viewless");
+    const parses = [
+      HostCallArgsSchema,
+      HostEnsureProjectArgsSchema,
+      HostListArgsSchema,
+      HostSettingsArgsSchema,
+      HostStatusArgsSchema,
+      HostWatchArgsSchema,
+    ].map((schema) => vi.spyOn(schema, "safeParse"));
     const answers = await Promise.all([
       runHostControlTool("host.status", {}, access, { tier: "full" }),
       runHostControlTool(
@@ -133,17 +151,42 @@ describe("runHostControlTool (#13493)", () => {
       runHostControlTool("host.list", { includeAgents: "yes" }, access),
       runHostControlTool("host.settings", { operation: "read" }, access),
       runHostControlTool("host.watch", "not even an object", access),
+      runHostControlTool("host.ensureProject", {}, access),
+      runHostControlTool("host.bringBack", { hostId: "studio" }, access),
       runHostControlTool("host.retired", {}, access),
     ]);
     uninstall();
     for (const answer of answers) {
       expect(answer).toEqual({ ok: false, code: "NOT_ELIGIBLE", message: LACKS_WINDOW });
     }
+    // Nothing it sent was even parsed.
+    for (const parse of parses) {
+      expect(parse).not.toHaveBeenCalled();
+      parse.mockRestore();
+    }
     expect(runtime.callerRefusal).toHaveBeenCalledWith("viewless");
     for (const method of [runtime.status, runtime.call, runtime.list, runtime.settings]) {
       expect(method).not.toHaveBeenCalled();
     }
     expect(runtime.watch).not.toHaveBeenCalled();
+    expect(runtime.bringBack).not.toHaveBeenCalled();
+  });
+
+  it("tells an assistant the tools are missing here, and anyone else that only an assistant may call (#18164)", async () => {
+    const assistant = bindHostControl(() => "hub");
+    const stranger = bindHostControl(() => undefined);
+    await expect(runHostControlTool("host.list", {}, assistant)).resolves.toEqual({
+      ok: false,
+      code: "NOT_ELIGIBLE",
+      message: HOST_CONTROL_UNAVAILABLE_MESSAGE,
+    });
+    const uninstall = setHostControlRuntime(fakeRuntime());
+    await expect(runHostControlTool("host.list", {}, stranger)).resolves.toEqual({
+      ok: false,
+      code: "NOT_ELIGIBLE",
+      message: HOST_CONTROL_NOT_ELIGIBLE_MESSAGE,
+    });
+    uninstall();
   });
 
   it("names the first field a parse refused, by the schema's own names, never what was sent (#18164)", async () => {
@@ -212,6 +255,50 @@ describe("runHostControlTool (#13493)", () => {
         { targets: [{ hostId: "local", projectId: "p" }], includeOutput: "all" },
         "'includeOutput' matches none of its accepted forms.",
       ],
+      // A union branch the value has the shape of names its own field.
+      [
+        "host.status",
+        { targets: [{ hostId: "local", projectId: "p" }], includeOutput: { lines: "10" } },
+        "'includeOutput.lines' should be a number.",
+      ],
+      // Of two independent failures, the first is the one named.
+      [
+        "host.status",
+        { targets: [], includeOutput: { lines: 0 } },
+        "'targets' should have at least 1 item.",
+      ],
+      // A known throwaway tool's own args are named; only an unknown tool gets the list of tools.
+      [
+        "host.call",
+        { hostId: "h", throwaway: true, tool: "throwaway.close", args: { runId: 7 } },
+        "'args.runId' should be a string.",
+      ],
+      [
+        "host.call",
+        { hostId: "h", throwaway: true, tool: "throwaway.close" },
+        "'args.runId' is required.",
+      ],
+      [
+        "host.call",
+        {
+          hostId: "h",
+          throwaway: true,
+          tool: "throwaway.launch",
+          args: { agentId: "claude", cwd: "/" },
+        },
+        "'args' has a field this tool doesn't take.",
+      ],
+      [
+        "host.call",
+        {
+          hostId: "h",
+          projectId: "p",
+          throwaway: true,
+          tool: "throwaway.close",
+          args: { runId: 7 },
+        },
+        "the arguments should name one target: a projectId, or throwaway: true.",
+      ],
       [
         "host.settings",
         { operation: "apply", ticket: "t", hostIds: ["h"] },
@@ -254,6 +341,33 @@ describe("runHostControlTool (#13493)", () => {
     expect(JSON.stringify(badValue)).not.toContain("sk-live-secret");
     expect(badValue).toMatchObject({
       message: `${lead}'patch.canopyMode' should be one of "unset", "on", "hidden".`,
+    });
+    // A key under a tool's own args is the caller's: the field stops short of it.
+    const secretKey = Symbol("sk-live-secret");
+    const recordKey = await runHostControlTool(
+      "host.call",
+      { hostId: "h", projectId: "p", tool: "t", args: { [secretKey]: 1 } },
+      access,
+      { tier: "core" }
+    );
+    expect(recordKey).toEqual({
+      ok: false,
+      code: "INVALID_ARGS",
+      message: `${lead}'args' has an entry that doesn't fit.`,
+    });
+    const leakedKey = await runHostControlTool(
+      "host.call",
+      {
+        hostId: "h",
+        throwaway: true,
+        tool: "throwaway.close",
+        args: { runId: "r", "sk-live-secret": 1 },
+      },
+      access,
+      { tier: "core" }
+    );
+    expect(leakedKey).toMatchObject({
+      message: `${lead}'args' has a field this tool doesn't take.`,
     });
     uninstall();
     expect(runtime.status).not.toHaveBeenCalled();

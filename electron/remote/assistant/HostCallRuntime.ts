@@ -87,10 +87,11 @@ import {
   type HostId,
   type HostMetricsSummary,
 } from "../../../shared/types/remoteHosts.js";
-import type {
-  HostCallContext,
-  HostSettingsContext,
-  HostControlRuntimeHandle,
+import {
+  HOST_CONTROL_UNAVAILABLE_MESSAGE,
+  type HostCallContext,
+  type HostSettingsContext,
+  type HostControlRuntimeHandle,
 } from "../../services/mcp-server/hostControlTools.js";
 import type {
   HostInventoryHost,
@@ -379,16 +380,20 @@ export interface HostCallRuntimeDeps {
 const ERROR_MESSAGE = "Hosts can't be reached right now.";
 const NOT_ELIGIBLE_MESSAGE =
   "Only a Daintree Assistant running on this machine can reach its hosts.";
-const DISPOSED_MESSAGE = "Host tools aren't available on this machine right now.";
-/** What a refused caller is told it lacks (#18164): fixed words, since refusals reach the audit log. */
+/**
+ * What a refused caller is told it lacks (#18164), as the check saw it:
+ * fixed words, since refusals reach the audit log.
+ */
 const CALLER_REFUSAL_MESSAGES: Record<HostCallerRefusal, string> = {
-  ended: "This assistant session has ended, so it can't call host tools.",
-  replaced: "This session isn't the assistant running in its pane, so it can't call host tools.",
+  ended: "This assistant session is ending or was revoked, so it can't call host tools.",
+  replaced:
+    "This session isn't the assistant running in its pane right now, so it can't call host tools.",
   "remote-view":
     "This assistant is attached to a window on another machine, so it can't call this machine's host tools.",
   "no-window":
-    "This assistant isn't attached to a window of its project on this machine, which host tools need. Open the project in a window here, and retry once that window has taken the assistant over.",
-  "terminal-down": "This assistant's terminal isn't running, so it can't call host tools.",
+    "This assistant isn't attached to a window of its project on this machine, which host tools need. Retry once it is.",
+  "terminal-down":
+    "Daintree sees no running terminal for this assistant, so it can't call host tools.",
 };
 
 /**
@@ -1167,7 +1172,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
 
   /** The run a calling session answers in, or the fixed words on what it lacks. */
   private callerOrRefusal(helpSessionId: string): { run: OpenRun } | { refusal: string } {
-    if (this.disposed) return { refusal: DISPOSED_MESSAGE };
+    if (this.disposed) return { refusal: HOST_CONTROL_UNAVAILABLE_MESSAGE };
     const found = this.deps.callerRun(helpSessionId);
     if (found === null) return { refusal: NOT_ELIGIBLE_MESSAGE };
     return typeof found === "string" ? { refusal: CALLER_REFUSAL_MESSAGES[found] } : { run: found };
