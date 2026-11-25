@@ -1293,7 +1293,10 @@ describe("a leased machine's price (#18233)", () => {
     const secondChoice = await choiceFor(env, second);
     await env.lifecycle.chooseOffer(second, secondChoice.order.id, "dear", 0.7);
 
-    expect(await runningOn(env, first)).toMatchObject({ machineType: "default", hourlyDollars: 0.3 });
+    expect(await runningOn(env, first)).toMatchObject({
+      machineType: "default",
+      hourlyDollars: 0.3,
+    });
     expect(await runningOn(env, second)).toMatchObject({
       machineType: "default",
       hourlyDollars: 0.7,

@@ -2078,7 +2078,9 @@ export class CloudHostLifecycle {
       // Bound before the order is struck off, so a crash between the two binds it again.
       if (outcome.kind === "leased") {
         leased = true;
-        if (this.adoptLease(order, provider, outcome.resource, reportedRate(outcome.hourlyDollars))) {
+        if (
+          this.adoptLease(order, provider, outcome.resource, reportedRate(outcome.hourlyDollars))
+        ) {
           bound = true;
         }
       }
@@ -2107,7 +2109,8 @@ export class CloudHostLifecycle {
     const binding = this.deps.store.binding(order.bindingId);
     // The host as it is now: one rewritten for another account meanwhile is never given it.
     const ours = binding?.accountId === order.accountId && binding.providerId === order.providerId;
-    const bound = binding && ours ? this.bindCreated(binding.id, resource, hourlyDollars) : "settled";
+    const bound =
+      binding && ours ? this.bindCreated(binding.id, resource, hourlyDollars) : "settled";
     if (bound === "bound") {
       const key = this.placedKeys.get(order.id);
       if (key) this.heldKeys.set(order.bindingId, key);

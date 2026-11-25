@@ -98,8 +98,7 @@ export type GuestPowerOffCheck =
  * when it can't say, and the machine then shows no price.
  */
 export type CloseOrderOutcome =
-  | { kind: "closed" }
-  | { kind: "leased"; resource: ProviderResource; hourlyDollars: number | null };
+  { kind: "closed" } | { kind: "leased"; resource: ProviderResource; hourlyDollars: number | null };
 
 /**
  * A create that goes through offers (`createMode: "offers"`): an order is
