@@ -27,7 +27,7 @@ import {
   normalizeOperationId,
 } from "../../services/operations/OperationRegistry.js";
 import { AppError } from "../../utils/errorTypes.js";
-import type { CommandRunner } from "./commandRunner.js";
+import type { CommandResult, CommandRunner } from "./commandRunner.js";
 import {
   connectionKey,
   requireHostConnection,
@@ -52,10 +52,12 @@ import {
   macStartScript,
   parseDetachedAlive,
   parseDetachedLaunch,
+  serviceLaunchTarget,
   UNPACKED_LISTEN_TIMEOUT_MS,
   type LinuxLaunchTarget,
 } from "./hostModeBootstrap.js";
 import { liveHostRecord, probeHost, type ProbeOutcome } from "./hostProbe.js";
+import { checkLinuxStart, type LibraryCheckTarget } from "./linuxHostLibraries.js";
 import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -109,6 +111,13 @@ export interface HostSetupDeps {
   cloudChannel?(bindingId: string): HostCommandChannel;
   /** Drops what reaching a cloud machine left here: its master and ssh files. */
   forgetCloud?(bindingId: string): Promise<void>;
+  /**
+   * Installs a Linux Host's system packages on a cloud machine, as the login
+   * its provider allows for that; null where Daintree installs none there.
+   */
+  cloudPackageInstaller?(
+    bindingId: string
+  ): ((signal?: AbortSignal) => Promise<CommandResult>) | null;
   /** Every check that reached a host, so what it saw can be kept with the host's record. */
   onProbed?(connection: HostConnection, result: HostProbeResult): void;
   /**
@@ -327,6 +336,7 @@ export class HostSetupService {
             sleep: this.deps.sleep ?? abortableSleep,
             now: this.deps.now,
             idlePollMs: this.deps.idlePollMs,
+            checkLinuxStart: this.linuxStartCheck(connection, shell),
           },
           controller.signal,
           (progress) => handle.progress(progress)
@@ -377,6 +387,7 @@ export class HostSetupService {
         sleep: this.deps.sleep ?? abortableSleep,
         now: this.deps.now,
         updateChannel: this.deps.clientBuild().channel,
+        checkLinuxStart: this.linuxStartCheck(connection, channel),
       });
     } finally {
       // Host mode may be on there now, whatever a dial that checked meanwhile saw.
@@ -466,13 +477,21 @@ export class HostSetupService {
       script = LINUX_START_SCRIPT;
     }
     if (!script) return unstartable("host-mode-off");
+    const busy = () =>
+      signal?.aborted || this.isInstallRunning(connection) || this.deps.isRetiring?.(connection);
     // Last look before changing anything on the host.
-    if (
-      signal?.aborted ||
-      this.isInstallRunning(connection) ||
-      this.deps.isRetiring?.(connection)
-    ) {
-      return refused("busy");
+    if (busy()) return refused("busy");
+    const checkTarget =
+      probe.platform === "linux" ? (detached ?? serviceLaunchTarget(outcome.parsed, probe)) : null;
+    if (checkTarget) {
+      try {
+        await this.linuxStartCheck(connection, channel)(checkTarget, signal);
+      } catch (error) {
+        if (signal?.aborted) return "not-startable";
+        throw error;
+      }
+      // The check can take minutes (an install as root among them): looked at again.
+      if (busy()) return refused("busy");
     }
     const label = formatHostConnection(connection);
     onStart?.();
@@ -565,6 +584,30 @@ export class HostSetupService {
     const key = connectionKey(connection);
     this.rechecks.set(key, (this.rechecks.get(key) ?? 0) + 1);
     this.unstartable.delete(key);
+  }
+
+  /** The check a Linux start on this connection runs first: see linuxHostLibraries.ts. */
+  private linuxStartCheck(
+    connection: HostConnection,
+    channel: HostCommandChannel
+  ): (
+    target: LibraryCheckTarget,
+    signal?: AbortSignal,
+    options?: { install?: boolean }
+  ) => Promise<void> {
+    return (target, signal, options) =>
+      checkLinuxStart(
+        {
+          channel,
+          hostLabel: formatHostConnection(connection),
+          installPackages:
+            connection.kind === "cloud" && options?.install !== false
+              ? (this.deps.cloudPackageInstaller?.(connection.bindingId) ?? null)
+              : null,
+        },
+        target,
+        signal
+      );
   }
 
   /** The payload's connection, if this platform's Shell can reach hosts that way. */

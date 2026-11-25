@@ -298,6 +298,26 @@ export function sshCommonArgs(controlPath: string, controlPersist = "10m"): stri
 }
 
 /**
+ * One command on a connection of its own that shares no master and leaves
+ * none behind: for a login used once (root through a cloud provider's
+ * tunnel), so nothing has to close a master for it afterwards.
+ */
+export function sshOneShotArgs(): string[] {
+  return [
+    ...OWN_COMMAND_ARGS,
+    "-o",
+    "BatchMode=yes",
+    ...CONNECT_TIMEOUT,
+    ...KEEPALIVE,
+    ...NO_FORWARDING,
+    "-o",
+    "ControlMaster=no",
+    "-o",
+    "ControlPath=none",
+  ];
+}
+
+/**
  * A sign-in may wait on a person: behind a ProxyJump the host's banner only
  * arrives once the jump host has its answer, so the banner wait (which
  * ConnectTimeout also bounds) is unbounded there; Cancel ends it.

@@ -1,47 +1,8 @@
 import crypto from "node:crypto";
+import { LINUX_HOST_PACKAGES } from "../../client/linuxHostLibraries.js";
 
 /** The unprivileged login a Droplet is prepared with; the Host runs as this user, never as root. */
 export const DROPLET_SSH_USER = "daintree";
-
-/**
- * What a Daintree Host on Linux needs from apt: the release deb's own
- * dependencies (electron-builder.config.cjs, `deb.depends`, which a test holds
- * this to), plus FUSE's mount helper for the AppImage and the tools a host's
- * projects use. Written as `apt-get satisfy` relations, so an alternative
- * keeps the order the deb gives it.
- */
-export const DROPLET_HOST_PACKAGES: readonly string[] = [
-  "libc6 (>= 2.34)",
-  "libgtk-3-0",
-  "libnss3",
-  "libasound2t64 | libasound2",
-  "libgbm1",
-  "libxkbcommon0",
-  "libxrandr2",
-  "libxshmfence1",
-  "libxss1",
-  "libxtst6",
-  "libx11-6",
-  "libx11-xcb1",
-  "libxcb1",
-  "libxdamage1",
-  "libxfixes3",
-  "libatk1.0-0",
-  "libatk-bridge2.0-0",
-  "libcups2",
-  "libdbus-1-3",
-  "libdrm2",
-  "libexpat1",
-  "libnotify4",
-  "libnspr4",
-  "libsecret-1-0",
-  "xdg-utils",
-  "fuse3 | fuse",
-  "git",
-  "ca-certificates",
-  "curl",
-  "procps",
-];
 
 const KEY_TYPES = new Set([
   "ssh-ed25519",
@@ -90,7 +51,7 @@ export function md5Fingerprint(key: ParsedPublicKey): string {
  */
 export function dropletUserData(key: ParsedPublicKey): string {
   const user = DROPLET_SSH_USER;
-  const packages = DROPLET_HOST_PACKAGES.join(", ");
+  const packages = LINUX_HOST_PACKAGES.join(", ");
   return [
     "#!/bin/sh",
     "# Prepared by Daintree: a user for its Host, the libraries the Host needs, then that user's SSH key.",

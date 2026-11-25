@@ -4188,6 +4188,18 @@ export class CloudHostLifecycle {
   }
 
   /**
+   * The login that may install the Host's system packages on this machine:
+   * only one Daintree created, on a provider that declares such a login. An
+   * imported machine is the person's own to change.
+   */
+  hostPackagesLogin(bindingId: string): string | null {
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding?.resourceId || binding.ownership !== "created-by-daintree") return null;
+    if (this.deps.accounts.providerUnavailable(binding.providerId) !== null) return null;
+    return this.deps.accounts.provider(binding.providerId).hostPackagesLogin ?? null;
+  }
+
+  /**
    * Removes every host bound to the account from this device, as Settings →
    * Remove host does, and the bindings with them, including one whose host was
    * never added (#17353). Their machines are untouched: whatever runs keeps

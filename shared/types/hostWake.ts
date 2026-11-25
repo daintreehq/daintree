@@ -147,8 +147,11 @@ export const HOST_WAKE_RESULTS = [
 ] as const;
 export type HostWakeResult = (typeof HOST_WAKE_RESULTS)[number];
 
-/** Longest observed text an answer carries. */
-export const HOST_BRING_BACK_OBSERVED_MAX = 500;
+/**
+ * Longest observed text an answer carries: room for a start refused for
+ * missing libraries, with every one named and the whole install command.
+ */
+export const HOST_BRING_BACK_OBSERVED_MAX = 1500;
 
 export const HostBringBackAnswerSchema = z.object({
   status: z.enum(HOST_BRING_BACK_STATUSES),

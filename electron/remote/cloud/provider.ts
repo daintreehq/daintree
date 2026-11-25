@@ -103,6 +103,12 @@ export interface CloudProvider {
    * key, where a second send could make a second machine.
    */
   readonly createReplay?: "same-key" | "lookup-only";
+  /**
+   * The login that installs a Host's system packages on a machine Daintree
+   * created here, through the provider's own tunnel with the same key, where
+   * the Host's own login can't (no sudo). Absent where Daintree installs none.
+   */
+  readonly hostPackagesLogin?: string;
   info(platform: NodeJS.Platform): CloudProviderInfo;
   /**
    * Checks credentials the person entered, already normalised against the

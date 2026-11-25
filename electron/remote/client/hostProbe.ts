@@ -199,6 +199,11 @@ export interface ParsedProbe {
   /** What the host's Daintree last recorded about Host mode (host-mode.json). */
   hostModeState: HostModeObservation | null;
   complete: boolean;
+  /**
+   * The AppImage the Host mode service starts, when it names one: what that
+   * service runs even where a deb is installed too.
+   */
+  unitAppImage?: string;
 }
 
 function archFromMachine(machine: string): HostArch | null {
@@ -380,6 +385,7 @@ export function parseHostProbe(stdout: string): ParsedProbe {
     install,
     appImages,
     appImageConflict,
+    ...(isAppImagePath(unitImage) ? { unitAppImage: unitImage } : {}),
     keyringProcess: keyringText && keyringText !== "none" ? keyringText : null,
     appRunning: one("running") === "yes",
     hostModeListening: one("listening") === "yes",
