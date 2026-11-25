@@ -7,7 +7,9 @@ import {
   type CodexLimitContinueState,
   type CodexLimitStopRef,
 } from "../../../shared/types/codexLimitContinuation.js";
+import type { CodexLimitCheckpoint } from "../../../shared/types/codexLimitReset.js";
 import type { CodexLimitStop } from "../codex/CodexLimitReset.js";
+import type { ContinuationStore, SavedLimitStop } from "./ContinuationStore.js";
 import type { LimitFallback } from "./limitFallback.js";
 
 /**
@@ -18,8 +20,12 @@ import type { LimitFallback } from "./limitFallback.js";
 export const CONTINUE_AFTER_RESET_MS = 60_000;
 /** Node can't hold a timer longer than this; a later deadline is looked at again then. */
 const MAX_TIMER_MS = 2_147_483_647;
-/** Reset instants remembered per pane, so one already continued never fires twice. */
-const MAX_FIRED_PER_PANE = 8;
+/**
+ * How long a restored pane's resumed agent has to redraw the stop saved before
+ * a cold restart (#18193), from its confirmed spawn: one that loads a long
+ * conversation prints for a while before it settles.
+ */
+export const RESTORE_BIND_MS = 2 * 60_000;
 /**
  * How long after the machine wakes before a wait is judged: the pty host holds
  * its terminals' reads for a moment after a resume and releases them one by
@@ -49,6 +55,8 @@ export interface ContinuationTerminal {
   spawnedAt: number | undefined;
   /** The ledger generation the pane's process runs under, when its host says. */
   launchGeneration: number | undefined;
+  /** The conversation the pane's agent runs, when its host names one. */
+  agentSessionId: string | undefined;
 }
 
 export type Timer = unknown;
@@ -68,6 +76,27 @@ export interface ContinuationLaunch {
    * noted only so it can't take an older launch's default for its own.
    */
   arms: boolean | "keep";
+  /**
+   * Set on a restore's launch (#18193): what it resumes, for the stop the
+   * previous run saved with the pane to be waited out again.
+   */
+  restore?: ContinuationRestore;
+}
+
+/** What a restore's launch resumes, as the spawn handler sent it. */
+export interface ContinuationRestore {
+  agentId: string;
+  /** The conversation it resumes; none for a launch that resumes no named one. */
+  sessionId: string | undefined;
+  /** The launch starts a new conversation, whatever the restore asked for. */
+  startsFresh: boolean;
+}
+
+/** The newest transcript entry of a conversation, where Daintree can read one (#18193). */
+export interface ContinuationTurn {
+  uuid: string;
+  /** The entry is the agent's own notice of a failed reply, its usage limit among them. */
+  apiError: boolean;
 }
 
 /** A host's answer to a spawn, as far as arming reads it. */
@@ -86,8 +115,22 @@ export interface CodexLimitContinuationDeps {
   decideFallback(terminal: ContinuationTerminal): Promise<LimitFallback>;
   /** The host's check and write at the reset; rejects when it didn't answer. */
   continueAt(terminalId: string, stop: CodexLimitStopRef): Promise<CodexLimitContinueResult>;
-  /** Tell the pane's host whether to report its settled stop. */
-  setHostArmed(terminalId: string, armed: boolean): void;
+  /**
+   * Tell the pane's host whether to report its settled stop, and which saved
+   * stop its restored process may redraw (#18193); null forgets that one.
+   */
+  setHostArmed(terminalId: string, armed: boolean, restoreIdentity?: string | null): void;
+  /** Menu choices, saved stops and continued resets, across a cold restart (#18193). */
+  store: ContinuationStore;
+  /**
+   * What an armed pane holds as Daintree quits (#18193); undefined when its
+   * host didn't answer.
+   */
+  readCheckpoint(terminalId: string): Promise<CodexLimitCheckpoint | null | undefined>;
+  /** The newest entry of the pane's Claude Code transcript, or undefined when it can't be read. */
+  readTurn(terminalId: string): Promise<ContinuationTurn | undefined>;
+  /** Daintree is quitting: the exits its teardown causes are no reason to forget a saved stop. */
+  isQuitting(): boolean;
   notify(projectId: string, change: CodexLimitContinueChange): void;
   setTimer(callback: () => void, delayMs: number): Timer;
   clearTimer(timer: Timer): void;
@@ -109,7 +152,15 @@ export class CodexLimitContinuationError extends Error {
 }
 
 interface PendingWait {
-  stop: CodexLimitStopRef;
+  /**
+   * The stop it is for. Null for one restored from a cold restart until its
+   * resumed process redraws that stop (#18193).
+   */
+  stop: CodexLimitStopRef | null;
+  /** What was saved for it, for a restored wait. */
+  saved?: SavedLimitStop;
+  /** A restored wait not bound by then is given up. */
+  bindBy?: number;
   resetsAt: number;
   continueAt: number;
   /** Taken for checking and typing: a timer and a wake landing together share it. */
@@ -147,20 +198,15 @@ interface PendingLaunch extends ContinuationLaunch {
  * then, and has the host check the pane and type the line. Lives in main, so
  * it runs whether or not any view of the project is on screen, and on a
  * Remote Host with no Shell attached. A preset can arm every pane launched on
- * it (#17912), and the pane's menu outranks that. Held in memory: an app
- * restart forgets every menu choice, and a restored pane takes its preset's.
+ * it (#17912), and the pane's menu outranks that. Menu choices, the stop a
+ * pane waits at and the resets it continued are saved with it, so a pane
+ * restored after a cold restart is armed as it was and its wait is picked up
+ * again, against the saved reset (#18193).
  */
 export class CodexLimitContinuation {
   private readonly panes = new Map<string, ArmedPane>();
   /** The latest arm or disarm asked per pane, so an earlier one answered late changes nothing. */
   private readonly requests = new Map<string, number>();
-  private readonly fired = new Map<string, number[]>();
-  /**
-   * The user's menu choice per pane, by the project it was made from (#17912).
-   * It outranks the pane's preset at every launch there, so it sticks across
-   * the preset being edited, until the pane is closed for good.
-   */
-  private readonly overrides = new Map<string, Map<string, boolean>>();
   /**
    * Launches whose preset default waits on the host confirming the spawn,
    * oldest generation first: a duplicate spawn queued behind a live one
@@ -180,6 +226,8 @@ export class CodexLimitContinuation {
   private timerAt: number | null = null;
   /** No wait is judged before this, after the machine wakes. */
   private wakeHoldUntil = 0;
+  /** Daintree is quitting: what is saved stays, and nothing more is typed. */
+  private quitting = false;
 
   constructor(private readonly deps: CodexLimitContinuationDeps) {
     this.nextRevision = deps.now();
@@ -329,8 +377,10 @@ export class CodexLimitContinuation {
         .at(-1);
       this.dropLaunches(terminalId, (held) => held.launchGeneration <= generation);
     }
-    if (launch && this.applyLaunch(launch, result.spawnedAt, generation)) return;
-    this.handleSpawn(terminalId, result.spawnedAt, generation);
+    const applied = launch !== undefined && this.applyLaunch(launch, result.spawnedAt, generation);
+    if (!applied) this.handleSpawn(terminalId, result.spawnedAt, generation);
+    // After the spawn's own transition, which drops any wait of the process before.
+    if (launch?.restore) this.applyRestore(launch, launch.restore);
   }
 
   private dropLaunches(terminalId: string, matches: (held: PendingLaunch) => boolean): void {
@@ -345,10 +395,13 @@ export class CodexLimitContinuation {
     else this.launches.delete(terminalId);
   }
 
+  /**
+   * The user's menu choice for a pane of `projectId` (#17912). It outranks the
+   * pane's preset at every launch there, so it sticks across the preset being
+   * edited and a cold restart (#18193), until the pane is closed for good.
+   */
   private setOverride(terminalId: string, projectId: string, armed: boolean): void {
-    const choices = this.overrides.get(terminalId) ?? new Map<string, boolean>();
-    choices.set(projectId, armed);
-    this.overrides.set(terminalId, choices);
+    this.deps.store.setOverride(projectId, terminalId, armed);
   }
 
   /**
@@ -357,8 +410,7 @@ export class CodexLimitContinuation {
    * from its own preset.
    */
   forgetPane(terminalId: string): void {
-    this.overrides.delete(terminalId);
-    this.fired.delete(terminalId);
+    this.deps.store.forgetPane(terminalId);
     this.dropLaunches(terminalId, () => true);
     // An arm still waiting on its host read arms nothing now.
     const suffix = `\u0000${terminalId}`;
@@ -376,13 +428,9 @@ export class CodexLimitContinuation {
   forgetProject(projectId: string): void {
     for (const pane of [...this.panes.values()]) {
       if (pane.projectId !== projectId) continue;
-      this.fired.delete(pane.terminalId);
       this.disarm(pane.terminalId);
     }
-    for (const [terminalId, choices] of [...this.overrides]) {
-      choices.delete(projectId);
-      if (choices.size === 0) this.overrides.delete(terminalId);
-    }
+    this.deps.store.forgetProject(projectId);
     for (const terminalId of [...this.launches.keys()]) {
       this.dropLaunches(terminalId, (held) => held.projectId === projectId);
     }
@@ -407,7 +455,7 @@ export class CodexLimitContinuation {
       return this.applyLaunch(launch, spawnedAt, generation);
     }
     if (launch.arms === "keep") return false;
-    const wanted = this.overrides.get(terminalId)?.get(projectId) ?? launch.arms;
+    const wanted = this.deps.store.override(projectId, terminalId) ?? launch.arms;
     if (wanted && !pane) {
       this.arm(terminalId, projectId, spawnedAt, generation);
       return true;
@@ -445,6 +493,7 @@ export class CodexLimitContinuation {
     const pane = this.panes.get(terminalId);
     if (!pane) return;
     this.panes.delete(terminalId);
+    this.forgetSavedStop(pane);
     this.deps.setHostArmed(terminalId, false);
     this.deps.notify(pane.projectId, {
       terminalId,
@@ -465,19 +514,24 @@ export class CodexLimitContinuation {
 
   /**
    * An armed pane's host reports its settled stop: fall back, record why it
-   * can't be waited on, or wait for the reset.
+   * can't be waited on, or wait for the reset. A restored pane's redraw of the
+   * stop saved before a cold restart takes up that stop's wait (#18193).
    */
   async handleStop(terminalId: string, stop: CodexLimitStopRef): Promise<void> {
     const pane = this.panes.get(terminalId);
-    if (!pane) return;
+    if (!pane || this.quitting) return;
     const { wait } = pane;
-    if (wait && wait.stop.run === stop.run && wait.stop.seq === stop.seq) return;
+    if (wait?.stop && wait.stop.run === stop.run && wait.stop.seq === stop.seq) return;
     const epoch = ++pane.epoch;
+    // A restored wait not yet bound may be what this report is about: it
+    // stays until the answer says.
+    const restoring = wait !== null && wait.stop === null ? wait : null;
     // A newer stop replaces a wait for an older one, and the answer to one
     // already being typed: the host refuses it, as its banner has changed.
-    if (wait) {
+    if (wait && !restoring) {
       pane.wait = null;
       this.reschedule();
+      this.forgetSavedStop(pane);
       // Its time goes with it: a view must never show a deadline no timer
       // holds, while the new stop is read or after it comes to nothing.
       this.setState(pane, { status: "armed" });
@@ -493,27 +547,42 @@ export class CodexLimitContinuation {
       typeof terminal === "string"
         ? null
         : await this.deps.decideFallback(terminal).catch(() => "unknown" as const);
-    const { reset, stamp, skipAtStop } = await reading;
+    const { reset, stamp, skipAtStop, restored } = await reading;
     if (this.panes.get(terminalId) !== pane || pane.epoch !== epoch) return;
+    const stamped = stamp !== null && stamp.run === stop.run && stamp.seq === stop.seq;
+    const binds = restoring !== null && pane.wait === restoring && restored === true && stamped;
+    if (!binds) {
+      // A stop of the pane's own after its restore replaces the restored wait.
+      if (restoring !== null && pane.wait === restoring) {
+        this.endWait(pane);
+        this.setState(pane, { status: "armed" });
+      }
+      // The redraw of a stop no longer waited for is nothing new.
+      if (restored === true) return;
+    }
     if (terminal === "gone") return;
-    if (terminal === "unanswered") return this.record(pane, "host-unanswered");
+    if (terminal === "unanswered") return this.skipStop(pane, "host-unanswered");
     // An id another project now runs under is not the pane that was armed.
     if (terminal.projectId !== pane.projectId) return this.disarm(terminalId);
     pane.spawnedAt = terminal.spawnedAt ?? pane.spawnedAt;
-    if (fallback === "fallback") return this.record(pane, "falls-back");
-    if (fallback !== "none") return this.record(pane, "fallback-undetermined");
+    if (fallback === "fallback") return this.skipStop(pane, "falls-back");
+    if (fallback !== "none") return this.skipStop(pane, "fallback-undetermined");
+    if (binds) return this.bindRestored(pane, restoring, stop, epoch);
     // A stop its user took over (#18192), whatever its reset says: only one
     // about this very sighting, so a verdict on another never suppresses it.
-    if (skipAtStop !== undefined && stamp?.run === stop.run && stamp.seq === stop.seq) {
-      return this.record(pane, skipAtStop);
+    if (skipAtStop !== undefined && stamped) return this.skipStop(pane, skipAtStop);
+    if (reset.status === "unknown") return this.skipStop(pane, reset.reason);
+    if (!stamped) return this.skipStop(pane, "banner-changed");
+    const { projectId } = pane;
+    if (this.deps.store.fired(projectId, terminalId).includes(reset.resetsAt)) {
+      return this.skipStop(pane, "already-continued");
     }
-    if (reset.status === "unknown") return this.record(pane, reset.reason);
-    if (stamp === null || stamp.run !== stop.run || stamp.seq !== stop.seq) {
-      return this.record(pane, "banner-changed");
-    }
-    if (this.fired.get(terminalId)?.includes(reset.resetsAt)) {
-      return this.record(pane, "already-continued");
-    }
+    const agentId = terminal.detectedAgentId ?? terminal.launchAgentId;
+    // The conversation's entry the limit was, where it can be read: a cold
+    // restore compares it with the conversation it resumes.
+    const turn =
+      agentId === "claude" ? await this.deps.readTurn(terminalId).catch(() => undefined) : undefined;
+    if (this.panes.get(terminalId) !== pane || pane.epoch !== epoch) return;
     const continueAt = reset.resetsAt + CONTINUE_AFTER_RESET_MS;
     pane.wait = {
       stop,
@@ -522,8 +591,110 @@ export class CodexLimitContinuation {
       claimed: false,
       pausedRetries: 0,
     };
+    // Saved from the pane's own sighting, for a cold restart to wait out again.
+    if (agentId !== undefined && stamp.identity !== undefined) {
+      this.deps.store.saveStop(projectId, terminalId, {
+        agentId,
+        resetsAt: reset.resetsAt,
+        identity: stamp.identity,
+        savedAt: this.deps.now(),
+        ...(terminal.agentSessionId !== undefined && { sessionId: terminal.agentSessionId }),
+        ...(turn?.apiError === true && { turn: turn.uuid }),
+      });
+    }
     this.setState(pane, { status: "waiting", resetsAt: reset.resetsAt, continueAt });
     this.checkDue();
+  }
+
+  /**
+   * The restored process redrew the saved stop (#18193): the wait goes on at
+   * the saved reset, for this sighting. A conversation whose newest entry
+   * isn't the one saved took a turn since, wherever it was taken.
+   */
+  private async bindRestored(
+    pane: ArmedPane,
+    wait: PendingWait,
+    stop: CodexLimitStopRef,
+    epoch: number
+  ): Promise<void> {
+    const saved = wait.saved;
+    if (saved?.turn !== undefined) {
+      const turn = await this.deps.readTurn(pane.terminalId).catch(() => undefined);
+      if (this.panes.get(pane.terminalId) !== pane || pane.epoch !== epoch || pane.wait !== wait) {
+        return;
+      }
+      if (turn !== undefined && turn.uuid !== saved.turn) {
+        return this.skipStop(pane, "banner-not-last");
+      }
+    }
+    wait.stop = stop;
+    delete wait.bindBy;
+    this.reschedule();
+    this.checkDue();
+  }
+
+  /**
+   * A restore's launch was confirmed (#18193): the stop the previous run saved
+   * with the pane is waited out again, at its saved reset, once the resumed
+   * process redraws it; a launch that doesn't resume that conversation drops
+   * it.
+   */
+  private applyRestore(launch: ContinuationLaunch, restore: ContinuationRestore): void {
+    const { terminalId, projectId } = launch;
+    const saved = this.deps.store.takeBootStop(projectId, terminalId);
+    if (!saved) return;
+    const pane = this.panes.get(terminalId);
+    if (!pane || pane.projectId !== projectId) {
+      this.deps.store.clearStop(projectId, terminalId);
+      return;
+    }
+    const resumed =
+      restore.agentId === saved.agentId &&
+      !restore.startsFresh &&
+      restore.sessionId !== undefined &&
+      (saved.sessionId === undefined || saved.sessionId === restore.sessionId);
+    if (!resumed) return this.skipStop(pane, "process-changed");
+    if (this.deps.store.fired(projectId, terminalId).includes(saved.resetsAt)) {
+      return this.skipStop(pane, "already-continued");
+    }
+    this.endWait(pane);
+    pane.epoch++;
+    const continueAt = saved.resetsAt + CONTINUE_AFTER_RESET_MS;
+    pane.wait = {
+      stop: null,
+      saved,
+      bindBy: this.deps.now() + RESTORE_BIND_MS,
+      resetsAt: saved.resetsAt,
+      continueAt,
+      claimed: false,
+      pausedRetries: 0,
+    };
+    this.setState(pane, { status: "waiting", resetsAt: saved.resetsAt, continueAt });
+    this.deps.setHostArmed(terminalId, true, saved.identity);
+    this.reschedule();
+  }
+
+  /** Record why a stop isn't waited on: a wait it replaces goes, and so does its saved stop. */
+  private skipStop(pane: ArmedPane, reason: CodexLimitContinueSkipReason): void {
+    this.endWait(pane);
+    this.forgetSavedStop(pane);
+    this.record(pane, reason);
+  }
+
+  /** Drop the pane's wait, and the stop saved for it unless Daintree is quitting. */
+  private endWait(pane: ArmedPane): void {
+    const wait = pane.wait;
+    if (wait === null) return;
+    pane.wait = null;
+    this.reschedule();
+    // Its host stops looking for the saved stop's redraw.
+    if (wait.stop === null) this.deps.setHostArmed(pane.terminalId, true, null);
+    this.forgetSavedStop(pane);
+  }
+
+  private forgetSavedStop(pane: ArmedPane): void {
+    if (this.quitting || this.deps.isQuitting()) return;
+    this.deps.store.clearStop(pane.projectId, pane.terminalId);
   }
 
   /**
@@ -540,9 +711,8 @@ export class CodexLimitContinuation {
       return;
     }
     pane.epoch++;
-    const hadWait = pane.wait !== null;
-    pane.wait = null;
-    if (hadWait) this.reschedule();
+    // Ended by a quit's teardown, the stop stays saved for the restore.
+    this.endWait(pane);
     if (pane.state.status !== "armed") this.setState(pane, { status: "armed" });
   }
 
@@ -573,10 +743,10 @@ export class CodexLimitContinuation {
    */
   checkDue(): void {
     const now = this.deps.now();
-    if (now >= this.wakeHoldUntil) {
+    if (now >= this.wakeHoldUntil && !this.quitting) {
       for (const pane of this.panes.values()) {
         const wait = pane.wait;
-        if (wait && !wait.claimed && wait.continueAt <= now) {
+        if (wait && !wait.claimed && dueAt(wait) <= now) {
           wait.claimed = true;
           void this.fire(pane, wait);
         }
@@ -593,22 +763,74 @@ export class CodexLimitContinuation {
       for (const launch of held) this.deps.clearTimer(launch.timer);
     }
     this.launches.clear();
-    this.overrides.clear();
     this.panes.clear();
     this.updateActive();
   }
 
+  /**
+   * Daintree is quitting (#18193), before its terminals are stopped: each armed
+   * pane's host says what the pane holds now. A stop still untouched keeps what
+   * was saved for it; Claude Code's own wait, which ends with its process, is
+   * saved from the pane's own sighting; anything else drops the saved stop.
+   * Nothing is typed from here on, and the store is written once more.
+   */
+  async checkpointForQuit(): Promise<void> {
+    this.quitting = true;
+    await Promise.all([...this.panes.values()].map((pane) => this.checkpoint(pane)));
+    await this.deps.store.close();
+  }
+
+  private async checkpoint(pane: ArmedPane): Promise<void> {
+    const { terminalId, projectId } = pane;
+    const wait = pane.wait;
+    // A restored wait its redraw hasn't bound yet is still owed.
+    if (wait !== null && wait.stop === null) return;
+    const held = await this.deps.readCheckpoint(terminalId).catch(() => undefined);
+    // An unanswered host leaves what was saved.
+    if (held === undefined || this.panes.get(terminalId) !== pane) return;
+    if (held?.kind === "stop" && wait?.stop?.run === held.run && wait.stop.seq === held.seq) return;
+    if (
+      held?.kind === "own-wait" &&
+      wait === null &&
+      !this.deps.store.fired(projectId, terminalId).includes(held.resetsAt)
+    ) {
+      const [terminal, turn] = await Promise.all([
+        this.deps.readTerminal(terminalId).catch(() => null),
+        this.deps.readTurn(terminalId).catch(() => undefined),
+      ]);
+      if (terminal?.projectId === projectId) {
+        this.deps.store.saveStop(projectId, terminalId, {
+          agentId: "claude",
+          resetsAt: held.resetsAt,
+          identity: held.identity,
+          savedAt: this.deps.now(),
+          ...(terminal.agentSessionId !== undefined && { sessionId: terminal.agentSessionId }),
+          ...(turn?.apiError === true && { turn: turn.uuid }),
+        });
+        return;
+      }
+    }
+    this.deps.store.clearStop(projectId, terminalId);
+  }
+
   private async fire(pane: ArmedPane, wait: PendingWait): Promise<void> {
+    const { terminalId, projectId } = pane;
+    if (wait.stop === null) return this.giveUpRestored(pane, wait);
+    // Counted before the host is asked: a quit while the line is on its way
+    // must never let a restore type it again.
+    this.deps.store.addFired(projectId, terminalId, wait.resetsAt);
     const result = await this.deps
-      .continueAt(pane.terminalId, wait.stop)
+      .continueAt(terminalId, wait.stop)
       .catch((): CodexLimitContinueResult => ({ status: "skipped", reason: "host-unanswered" }));
-    if (this.panes.get(pane.terminalId) !== pane || pane.wait !== wait) return;
+    if (this.panes.get(terminalId) !== pane || pane.wait !== wait) return;
     // Output held unread says nothing yet: the same wait is judged again soon.
     if (
       result.status === "skipped" &&
       result.reason === "reads-paused" &&
       wait.pausedRetries < READS_PAUSED_RETRIES
     ) {
+      // Nothing was typed: the reset is still owed, here and after a restart.
+      this.deps.store.removeFired(projectId, terminalId, wait.resetsAt);
       wait.pausedRetries++;
       wait.claimed = false;
       wait.continueAt = this.deps.now() + READS_PAUSED_RETRY_MS;
@@ -620,15 +842,29 @@ export class CodexLimitContinuation {
       this.reschedule();
       return;
     }
-    const fired = this.fired.get(pane.terminalId) ?? [];
-    fired.push(wait.resetsAt);
-    this.fired.set(pane.terminalId, fired.slice(-MAX_FIRED_PER_PANE));
     pane.wait = null;
+    this.forgetSavedStop(pane);
     if (result.status === "continued") {
       this.setState(pane, { status: "continued", at: this.deps.now(), line: result.line });
       return;
     }
     this.record(pane, result.reason);
+  }
+
+  /**
+   * A restored wait whose resumed process never redrew the saved stop in time
+   * (#18193): nothing is typed, and why is recorded from what the pane shows.
+   */
+  private async giveUpRestored(pane: ArmedPane, wait: PendingWait): Promise<void> {
+    const { reset, stamp } = await this.deps.readStop(pane.terminalId);
+    if (this.panes.get(pane.terminalId) !== pane || pane.wait !== wait) return;
+    const reason: CodexLimitContinueSkipReason =
+      stamp !== null
+        ? "banner-changed"
+        : reset.status === "unknown" && reset.reason !== "no-banner"
+          ? reset.reason
+          : "banner-gone";
+    this.skipStop(pane, reason);
   }
 
   private record(pane: ArmedPane, reason: CodexLimitContinueSkipReason): void {
@@ -658,8 +894,8 @@ export class CodexLimitContinuation {
     let earliest: number | null = null;
     for (const pane of this.panes.values()) {
       const wait = pane.wait;
-      if (wait && !wait.claimed && (earliest === null || wait.continueAt < earliest)) {
-        earliest = wait.continueAt;
+      if (wait && !wait.claimed && (earliest === null || dueAt(wait) < earliest)) {
+        earliest = dueAt(wait);
       }
     }
     if (earliest !== null) earliest = Math.max(earliest, this.wakeHoldUntil);
@@ -675,4 +911,12 @@ export class CodexLimitContinuation {
       this.checkDue();
     }, delay);
   }
+}
+
+/**
+ * When a wait is next acted on: its continuation, or for a restored wait not
+ * yet bound to its redraw, when it is given up (#18193).
+ */
+function dueAt(wait: PendingWait): number {
+  return wait.stop === null ? (wait.bindBy ?? wait.continueAt) : wait.continueAt;
 }

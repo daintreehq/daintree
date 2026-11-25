@@ -124,7 +124,11 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
     },
 
     "set-codex-limit-continue": (msg) => {
-      ptyManager.setCodexLimitContinueArmed(msg.id, msg.armed === true);
+      const restoreIdentity =
+        typeof msg.restoreIdentity === "string" || msg.restoreIdentity === null
+          ? msg.restoreIdentity
+          : undefined;
+      ptyManager.setCodexLimitContinueArmed(msg.id, msg.armed === true, restoreIdentity);
     },
 
     // Answered once the line is typed or refused: the lane may hold it a while.

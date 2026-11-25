@@ -850,9 +850,17 @@ export class PtyManager extends EventEmitter {
     );
   }
 
-  /** Arm or disarm reporting the terminal's settled Codex stop (#17909). */
-  setCodexLimitContinueArmed(id: string, armed: boolean): void {
-    this.registry.get(id)?.setCodexLimitContinueArmed(armed);
+  /**
+   * Arm or disarm reporting the terminal's settled Codex stop (#17909), naming
+   * the stop saved before a cold restart its restored process may redraw (#18193).
+   */
+  setCodexLimitContinueArmed(id: string, armed: boolean, restoreIdentity?: string | null): void {
+    this.registry.get(id)?.setCodexLimitContinueArmed(armed, restoreIdentity);
+  }
+
+  /** The host wrote the terminal's own launch input, if any (#18193). */
+  markLaunchInputDone(id: string): void {
+    this.registry.get(id)?.markLaunchInputDone();
   }
 
   /**

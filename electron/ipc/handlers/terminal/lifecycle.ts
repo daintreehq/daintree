@@ -1464,6 +1464,9 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       !isBoundHelpTerminal(id)
         ? await import("../../../services/codexLimitContinuation/codexLimitContinuationLive.js")
         : null;
+    // What the previous run saved for the pane is read before the spawn goes
+    // out, however soon the host answers it (#18193).
+    await continuationLive?.prepareContinuationLaunch();
 
     // Main can't see a Windows pane's Claude store (its PowerShell profile may
     // move it), so the lookup above stays unsure there and an untouched pane
@@ -1683,6 +1686,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             presetId: validatedOptions.agentPresetId,
             originalPresetId:
               validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
+            // A restore may pick up the stop saved with the pane (#18193), only
+            // on the conversation it was in. A Windows launch script that may
+            // start afresh can't say which it ran.
+            ...(validatedOptions.restore === true && {
+              restore: {
+                agentId: launchAgentId,
+                sessionId: spawnAgentSessionId,
+                startsFresh: startsFreshConversation || windowsClaudeResume !== undefined,
+              },
+            }),
           });
         } else {
           noteContinuationSpawn(id, projectId, launchGeneration);

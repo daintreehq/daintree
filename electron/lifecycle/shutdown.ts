@@ -67,6 +67,7 @@ import {
 import { haltDeferredQueue } from "../window/deferredInitQueue.js";
 import { freezeAndSnapshotOpenWindows } from "../window/openWindowsTracker.js";
 import { cancelBackgroundRestores } from "./projectRestore.js";
+import { checkpointContinuationForQuit } from "../services/codexLimitContinuation/forgetPane.js";
 import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
@@ -145,6 +146,8 @@ const REMOTE_HOSTS_STOP_BUDGET_MS = 2_000;
 // Long enough for Windows' verified tree kill (3s) and the partial checkout's
 // removal; a clone still going past it is recovered as failed on next boot.
 const CLONE_STOP_BUDGET_MS = 4_000;
+/** How long armed panes' hosts get to say what each pane holds before the kills (#18193). */
+const CONTINUATION_CHECKPOINT_BUDGET_MS = 2_000;
 
 let isConfirmingQuit = false;
 
@@ -521,6 +524,16 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     })(),
     CLONE_STOP_BUDGET_MS + 500,
     "background clones stop"
+  );
+
+  // What armed panes hold for a cold restore (#18193), read while their
+  // processes still run: the graceful kills below end every wait.
+  await settleWithin(
+    checkpointContinuationForQuit().catch((err: unknown) => {
+      console.warn("[MAIN] Saving limit continuations at quit failed:", err);
+    }),
+    CONTINUATION_CHECKPOINT_BUDGET_MS,
+    "limit continuation checkpoint"
   );
 
   const ptyClient = deps.getPtyClient();

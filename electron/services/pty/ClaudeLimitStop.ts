@@ -5,6 +5,7 @@ import type {
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { resolveResetsAt } from "./ClaudeUsageWarnings.js";
 import { readClaudeLimitScreen } from "./claudeLimitStopScreen.js";
+import { limitStopIdentity } from "./limitStopIdentity.js";
 
 /** Claude prints the reset's minute without its seconds: it has passed once that minute ends. */
 const MINUTE_MS = 60_000;
@@ -38,6 +39,16 @@ export interface ClaudeLimitStop {
   seq: number;
   /** The banner and whether Claude's wait was cancelled, as the reset's check compares it. */
   bannerKey: string;
+  /**
+   * The banner alone, whether or not a wait of Claude's was drawn with it, as
+   * a digest: what a stop saved before a cold restart is matched on (#18193).
+   */
+  identity: string;
+  /**
+   * First seen by a restored process before any input reached it, so a
+   * redraw of the conversation it resumed rather than a limit it hit (#18193).
+   */
+  replay: boolean;
   /** The history above the banner, the most of it any look showed. */
   context: string;
   incarnation: number;
@@ -68,6 +79,21 @@ export interface ClaudeLimitLook {
   observedSince: number | null;
   /** When the pane first showed `window`'s reached limit with `resetText`, if that is known. */
   shownAt(window: ClaudeUsageWindow, resetText: string): number | null;
+  /** A restored process that has taken no input yet: what it shows is its resumed history (#18193). */
+  replay?: boolean;
+}
+
+/**
+ * Claude Code's own wait for the reset, on screen in an armed pane (#18193). It
+ * is a timer inside the CLI's process, so a cold restart loses it; Daintree
+ * saves it as Daintree quits, and never acts on it while it runs.
+ */
+export interface ClaudeOwnWait {
+  identity: string;
+  incarnation: number;
+  reset: ClaudeLimitStop["reset"];
+  /** The terminal's input count when it first showed. */
+  inputSeq: number;
 }
 
 interface EscapeNote {
@@ -94,6 +120,7 @@ interface EscapeNote {
  */
 export class ClaudeLimitStopTracker {
   private stop: ClaudeLimitStop | null = null;
+  private countdown: ClaudeOwnWait | null = null;
   private escapes: EscapeNote[] = [];
   /** When a look first showed a live banner, since the last that showed none (monotonic). */
   private bannerSince: number | null = null;
@@ -106,9 +133,15 @@ export class ClaudeLimitStopTracker {
     return this.stop;
   }
 
+  /** Claude's own wait as the latest look showed it, or null. */
+  ownWait(): ClaudeOwnWait | null {
+    return this.countdown;
+  }
+
   /** Forget everything: the pane torn down. */
   clear(): void {
     this.stop = null;
+    this.countdown = null;
     if (this.escapes.length > 0) this.escapes = [];
     this.bannerSince = null;
     this.armedAt = null;
@@ -121,6 +154,7 @@ export class ClaudeLimitStopTracker {
    */
   hide(): void {
     this.bannerSince = null;
+    this.countdown = null;
     if (this.stop) {
       this.stop.shown = false;
       this.stop.ownWait = false;
@@ -154,6 +188,7 @@ export class ClaudeLimitStopTracker {
     // place) says nothing either way.
     if (screen === "no-composer") return;
     const held = this.stop;
+    if (screen === null || !screen.last || !screen.countdown) this.countdown = null;
     if (screen === null || !screen.last) {
       this.bannerSince = null;
       if (held) {
@@ -166,10 +201,20 @@ export class ClaudeLimitStopTracker {
       return;
     }
     this.bannerSince ??= look.tick;
+    const identity = limitStopIdentity("claude", JSON.stringify([screen.window, screen.resetText]));
     if (screen.countdown) {
       if (held) {
         held.shown = false;
         held.ownWait = true;
+      }
+      const seen = this.countdown;
+      if (seen === null || seen.identity !== identity || seen.incarnation !== look.incarnation) {
+        this.countdown = {
+          identity,
+          incarnation: look.incarnation,
+          reset: resetOf(screen.window, screen.resetText, look),
+          inputSeq: look.inputSeq,
+        };
       }
       return;
     }
@@ -194,6 +239,8 @@ export class ClaudeLimitStopTracker {
     this.stop = {
       seq: this.nextSeq(),
       bannerKey: screen.bannerKey,
+      identity,
+      replay: resumed ? kept.replay : look.replay === true,
       context,
       incarnation: look.incarnation,
       observedSince: look.observedSince,
