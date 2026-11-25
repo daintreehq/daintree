@@ -67,13 +67,14 @@ vi.mock("../../services/PluginService.js", async () => ({
 const remote = vi.hoisted(() => ({
   scripts: [] as string[],
   answer: (_script: string): Promise<string> => Promise.resolve(""),
+  exitCode: (_script: string): number => 0,
 }));
 vi.mock("../client/remoteShell.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../client/remoteShell.js")>();
   const run = async (script: string) => {
     remote.scripts.push(script);
     return {
-      code: 0,
+      code: remote.exitCode(script),
       stdout: await remote.answer(script),
       stderr: "",
       spawnError: null,
@@ -96,6 +97,7 @@ vi.mock("../client/remoteShell.js", async (importOriginal) => {
   };
 });
 
+import { waitUntil } from "./harness/poll.js";
 import { makeShortTempRoot } from "./harness/privateSshd.js";
 import { HOST_ID, startRemoteHarness, type RemoteHarness } from "./harness/remoteHarness.js";
 import { HostModeOffError, createDirectTransport } from "../client/transport.js";
@@ -113,6 +115,7 @@ afterEach(async () => {
   root = null;
   remote.scripts = [];
   remote.answer = () => Promise.resolve("");
+  remote.exitCode = () => 0;
 });
 
 /** What the host is doing, as its Host mode record and listener say. */
@@ -247,5 +250,54 @@ describe("bringing a host back over the harness (#16170)", () => {
     expect(answer.observed).toContain("Host mode isn't on");
     expect(remote.scripts.filter(isAppStart)).toEqual([]);
     expect(h.isConnected()).toBe(false);
+  }, 30_000);
+});
+
+describe("setup starting Host mode on a host whose link parked (#18182)", () => {
+  it("brings the parked link up with no window showing the host", async () => {
+    const host: HostSide = { enabled: false, stopped: false, listening: false };
+    h = await harnessFor(host);
+    const answer = remote.answer;
+    // Setup's start switches Host mode on there as it launches it.
+    remote.answer = (script) => {
+      if (startsHostMode(script) && script.includes("--enable-host-mode")) host.enabled = true;
+      return answer(script);
+    };
+    await expect(h.shell().client.connectAndWait(HOST_ID, 10_000)).resolves.toBe("host-mode-off");
+    expect(h.manager.connectionState(HOST_ID)).toMatchObject({
+      status: "unreachable",
+      hostModeOff: true,
+      stoppedRetrying: true,
+    });
+
+    await requireRemoteService("hostSetup").startHostMode({
+      connection: { kind: "ssh", target: "studio.example" },
+    });
+
+    // Nothing else dials it: no window, no Connect, no Bring back.
+    await waitUntil(h.isConnected, "the parked link to come up");
+    expect(remote.scripts.filter(startsHostMode)).toHaveLength(1);
+  }, 30_000);
+
+  it("leaves the link parked when the start fails there", async () => {
+    const host: HostSide = { enabled: false, stopped: false, listening: false };
+    h = await harnessFor(host);
+    await expect(h.shell().client.connectAndWait(HOST_ID, 10_000)).resolves.toBe("host-mode-off");
+    const answer = remote.answer;
+    // No one is logged in there, so the launch is refused and nothing starts.
+    remote.exitCode = (script) => (startsHostMode(script) ? 1 : 0);
+    remote.answer = (script) => (startsHostMode(script) ? Promise.resolve("") : answer(script));
+
+    await expect(
+      requireRemoteService("hostSetup").startHostMode({
+        connection: { kind: "ssh", target: "studio.example" },
+      })
+    ).rejects.toBeInstanceOf(Error);
+
+    expect(h.manager.connectionState(HOST_ID)).toMatchObject({
+      status: "unreachable",
+      hostModeOff: true,
+      stoppedRetrying: true,
+    });
   }, 30_000);
 });
