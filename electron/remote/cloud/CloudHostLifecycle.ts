@@ -129,6 +129,12 @@ function nameOf(provider: CloudProvider): string {
   return provider.info(process.platform).name;
 }
 
+/** A start or stop for a provider whose machines have none, refused before anything is sent. */
+function noStopOrStart(provider: CloudProvider): AppError {
+  const message = `${nameOf(provider)} machines don't stop or start. Delete the machine to end it.`;
+  return new AppError({ code: "UNSUPPORTED", message, userMessage: message });
+}
+
 function sameError(a: CloudHostError | null, b: CloudHostError | null): boolean {
   return a === b || (!!a && !!b && a.at === b.at && a.code === b.code && a.message === b.message);
 }
@@ -1855,6 +1861,7 @@ export class CloudHostLifecycle {
       startable = true;
     }
     if (startable) {
+      if (typeof provider.start !== "function") throw noStopOrStart(provider);
       this.stage(bindingId, "Starting the machine");
       // A wake is a Start asked for another way: the machine is meant to run from here.
       if (wake && binding.intent !== "run") {
@@ -1929,6 +1936,7 @@ export class CloudHostLifecycle {
     const { provider, credentials } = await this.context(binding, signal);
     // A delete or shutdown that took over meanwhile: the provider never hears of this stop.
     if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    if (typeof provider.stop !== "function") throw noStopOrStart(provider);
     this.stage(bindingId, "Saving the disk and stopping");
     try {
       const ticket = this.ticket();
@@ -3928,6 +3936,7 @@ export class CloudHostLifecycle {
     resourceId: string,
     signal: AbortSignal
   ): Promise<void> {
+    if (typeof provider.stop !== "function") throw noStopOrStart(provider);
     const ticket = this.ticket();
     let answer: ProviderResource | null;
     try {
