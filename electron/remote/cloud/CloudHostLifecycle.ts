@@ -129,10 +129,16 @@ function nameOf(provider: CloudProvider): string {
   return provider.info(process.platform).name;
 }
 
-/** A start or stop for a provider whose machines have none, refused before anything is sent. */
+/**
+ * A start or stop refused because the machine's provider has neither, before
+ * anything is sent. Its own class so a Bring back can tell it from a start
+ * that was tried and failed: such a machine has no wake to fail.
+ */
+export class NoStopOrStartError extends AppError {}
+
 function noStopOrStart(provider: CloudProvider): AppError {
   const message = `${nameOf(provider)} machines don't stop or start, so this one can only be deleted.`;
-  return new AppError({ code: "UNSUPPORTED", message, userMessage: message });
+  return new NoStopOrStartError({ code: "UNSUPPORTED", message, userMessage: message });
 }
 
 /** Whether the provider declares that its machines end only by Delete (#18227). */

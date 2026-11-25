@@ -48,7 +48,7 @@ import {
   revealWindow,
   type ProjectOwner,
 } from "../../window/projectOwnership.js";
-import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
+import { CloudHostLifecycle, NoStopOrStartError } from "../cloud/CloudHostLifecycle.js";
 import { CloudGuestPowerOff } from "../cloud/CloudGuestPowerOff.js";
 import { CloudKeepAwakeLinks } from "../cloud/CloudKeepAwakeLinks.js";
 import {
@@ -1029,7 +1029,13 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     wakeRoute: (wake) => wakeRouteFor(wake),
     sendWake: (mac, route, signal) => sendWakePacket(mac, route, { signal }),
     wakeCloud: (hostId, bindingId, signal, sent) =>
-      requireCloudLifecycle().wakeIfAsleep(hostId, bindingId, signal, sent),
+      requireCloudLifecycle()
+        .wakeIfAsleep(hostId, bindingId, signal, sent)
+        .catch((error: unknown) => {
+          // A machine that can only be deleted has no wake: none went, and none failed.
+          if (error instanceof NoStopOrStartError) return false;
+          throw error;
+        }),
   });
   const recheckStart = (hostId: HostId): void => {
     const descriptor = registry.get(hostId);

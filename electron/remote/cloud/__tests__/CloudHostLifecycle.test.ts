@@ -25,7 +25,7 @@ import { BoatApiError } from "../boat/BoatClient.js";
 import { BoatProvider } from "../boat/BoatProvider.js";
 import { CloudAccountService } from "../CloudAccountService.js";
 import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
-import { CloudHostLifecycle } from "../CloudHostLifecycle.js";
+import { CloudHostLifecycle, NoStopOrStartError } from "../CloudHostLifecycle.js";
 import { CloudHosts } from "../CloudHosts.js";
 import {
   CloudHostStore,
@@ -190,6 +190,27 @@ const DELETE_ONLY = {
     delete provider.renewLifetime;
   },
 } satisfies Parameters<typeof setup>[1];
+
+/** How a stop or start for such a machine is refused. */
+const ONLY_DELETED = {
+  code: "UNSUPPORTED",
+  userMessage: expect.stringMatching(/only be deleted/),
+};
+
+/** What a call threw, or null when it returned. */
+function thrownBy(call: () => unknown): unknown {
+  try {
+    call();
+  } catch (error) {
+    return error;
+  }
+  return null;
+}
+
+/** The worktree-cleanup phase of the first binding in each write the store made. */
+function cleanupPhases(writes: { mock: { calls: Array<[string, CloudHostsValue]> } }): unknown[] {
+  return writes.mock.calls.map(([, value]) => value.bindings[0]?.worktreeCleanup?.phase ?? null);
+}
 
 let root: string;
 
@@ -3956,11 +3977,6 @@ describe("CloudHostLifecycle.deleteMachine by the provider's declaration (#17346
 });
 
 describe("CloudHostLifecycle with a provider whose machines can only be deleted (#18228)", () => {
-  const ONLY_DELETED = {
-    code: "UNSUPPORTED",
-    userMessage: expect.stringMatching(/only be deleted/),
-  };
-
   /** A machine of that provider, imported, with what a refusal must leave alone watched from here. */
   async function imported(initial: Partial<ProviderResource> = {}) {
     const env = await setup(initial, DELETE_ONLY);
@@ -3971,11 +3987,13 @@ describe("CloudHostLifecycle with a provider whose machines can only be deleted 
       name: "build",
     });
     const credentials = vi.spyOn(env.accounts, "credentials");
+    const writes = vi.spyOn(env.backend, "set");
     vi.mocked(env.provider.inspect).mockClear();
     env.disconnect.mockClear();
     const before = env.store.bindings()[0]!;
     /** Nothing was written, let go, read or asked: the machine is as the refusal found it. */
     const untouched = () => {
+      expect(writes).not.toHaveBeenCalled();
       expect(env.store.bindings()[0]).toEqual(before);
       expect(credentials).not.toHaveBeenCalled();
       expect(env.provider.inspect).not.toHaveBeenCalled();
@@ -3989,6 +4007,45 @@ describe("CloudHostLifecycle with a provider whose machines can only be deleted 
     const env = await imported({ machine: "running" });
     await expect(env.lifecycle.stopMachine("build")).rejects.toMatchObject(ONLY_DELETED);
     env.untouched();
+  });
+
+  it("refuses a Stop while a create brings the machine up, leaving that create to finish", async () => {
+    const { lifecycle, provider, store, state, disconnect } = await setup({}, DELETE_ONLY);
+    const coming = resource({ machine: "starting", rawState: "provisioning" });
+    vi.mocked(provider.create).mockImplementationOnce(async (_credentials, request) => {
+      state.machine = { ...coming, labels: request.labels };
+      return state.machine;
+    });
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    vi.mocked(provider.inspect).mockImplementation(async () => {
+      await held;
+      return state.machine;
+    });
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: null,
+    });
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]).toMatchObject({
+        resourceId: "bx_23456789",
+        operation: { kind: "creating" },
+      })
+    );
+    disconnect.mockClear();
+
+    await expect(lifecycle.stopMachine("build")).rejects.toMatchObject(ONLY_DELETED);
+    expect(lifecycle.statuses()[0]?.operation?.kind).toBe("creating");
+    expect(store.bindings()[0]!.intent).not.toBe("stop");
+    expect(disconnect).not.toHaveBeenCalled();
+
+    state.machine = resource({ machine: "running", labels: state.machine.labels });
+    release();
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
+    );
   });
 
   it.each([{ machine: "stopped", rawState: "archived" }, { machine: "running" }] as const)(
@@ -4007,22 +4064,33 @@ describe("CloudHostLifecycle with a provider whose machines can only be deleted 
     env.untouched();
   });
 
-  it("refuses a Bring back's wake before reading the machine, and says no start went", async () => {
+  it("refuses a Bring back's wake before reading the machine, as a refusal it can tell apart", async () => {
     for (const initial of [
       { machine: "stopped", rawState: "sleeping", asleep: true },
       { machine: "running" },
     ] as const) {
       const env = await imported(initial);
       const sent = vi.fn();
-      await expect(
-        env.lifecycle.wakeIfAsleep("build", env.bindingId, new AbortController().signal, sent)
-      ).rejects.toMatchObject(ONLY_DELETED);
-      expect(sent).not.toHaveBeenCalled();
-      env.untouched();
-      // A wake for a host the machine isn't on is still nothing to wake.
+      const woke = env.lifecycle.wakeIfAsleep(
+        "build",
+        env.bindingId,
+        new AbortController().signal,
+        sent
+      );
+      await expect(woke).rejects.toMatchObject(ONLY_DELETED);
+      // What the Bring back's wake reads as no wake at all, never as one that failed.
+      await expect(woke).rejects.toBeInstanceOf(NoStopOrStartError);
+      // A wake for a host the machine isn't on, or one given up, is still nothing to wake.
       await expect(
         env.lifecycle.wakeIfAsleep("other", env.bindingId, new AbortController().signal, sent)
       ).resolves.toBe(false);
+      const gaveUp = new AbortController();
+      gaveUp.abort();
+      await expect(
+        env.lifecycle.wakeIfAsleep("build", env.bindingId, gaveUp.signal, sent)
+      ).resolves.toBe(false);
+      expect(sent).not.toHaveBeenCalled();
+      env.untouched();
     }
   });
 
@@ -6333,16 +6401,26 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
   });
 
   it("refuses a stop for a machine that can only be deleted, writing nothing, and still keeps or deletes it (#18228)", async () => {
-    const { lifecycle, provider, store, hosts } = await marked(MARK, DELETE_ONLY);
+    const { lifecycle, provider, store, hosts, backend } = await marked(MARK, DELETE_ONLY);
+    const writes = vi.spyOn(backend, "set");
+    // Refused whether or not an earlier attempt already chose for the machine.
+    expect(
+      thrownBy(() => lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop")))
+    ).toMatchObject(ONLY_DELETED);
+    expect(writes).not.toHaveBeenCalled();
     lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     const chosen = cleanupOf(store);
-    expect(() => lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"))).toThrow(
-      /only be deleted/
-    );
+    writes.mockClear();
+    expect(
+      thrownBy(() => lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop")))
+    ).toMatchObject(ONLY_DELETED);
+    expect(writes).not.toHaveBeenCalled();
     expect(cleanupOf(store)).toEqual(chosen);
 
     lifecycle.prepareWorktreeCleanup(WORKTREE, []);
     expect(cleanupOf(store)).toBeNull();
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([]);
+    expect(provider.delete).not.toHaveBeenCalled();
     lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
     expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([
       { hostId: "build", machineName: "build", choice: "delete", error: null },
@@ -6351,53 +6429,82 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     expect(hosts).toEqual([]);
   });
 
+  /** A machine that can only be deleted, with a stop chosen for it as a provider that had one left it. */
+  async function savedStop(phase: "due" | "waiting") {
+    const env = await marked(MARK, DELETE_ONLY);
+    env.store.updateBinding(env.store.bindings()[0]!.id, (current) => ({
+      ...current,
+      worktreeCleanup: {
+        attemptId: "attempt-1",
+        mutationId: null,
+        choice: "stop",
+        resourceId: "bx_23456789",
+        worktree: WORKTREE,
+        phase,
+        error: null,
+        requestedAt: 0,
+      },
+    }));
+    const intent = env.store.bindings()[0]!.intent;
+    // Every account service's, so a lifecycle built by a restart is watched too.
+    const credentials = vi.spyOn(CloudAccountService.prototype, "credentials");
+    onTestFinished(() => credentials.mockRestore());
+    const writes = vi.spyOn(env.backend, "set");
+    vi.mocked(env.provider.inspect).mockClear();
+    env.disconnect.mockClear();
+    env.worktreeGone.mockClear();
+    /** The choice failed as it stood, saying why, and nothing else was done to the machine. */
+    const refused = (store: CloudHostStore) => {
+      expect(cleanupOf(store)).toMatchObject({
+        phase: "failed",
+        attemptId: "attempt-1",
+        error: { code: "unsupported", message: expect.stringMatching(/only be deleted/) },
+      });
+      // Written once, straight to failed: never first marked due as one to carry out.
+      expect(cleanupPhases(writes)).toEqual(["failed"]);
+      expect(store.bindings()[0]!.intent).toBe(intent);
+      expect(credentials).not.toHaveBeenCalled();
+      expect(env.provider.inspect).not.toHaveBeenCalled();
+      expect(env.disconnect).not.toHaveBeenCalled();
+      expect(env.hosts.map((host) => host.id)).toEqual(["build"]);
+    };
+    return { ...env, writes, refused };
+  }
+
   it.each(["due", "waiting"] as const)(
     "fails a stop chosen %s before its provider had none when Daintree starts again, touching nothing (#18228)",
     async (phase) => {
-      const { lifecycle, provider, store, hosts, disconnect, restart } = await marked(
-        MARK,
-        DELETE_ONLY
-      );
-      store.updateBinding(store.bindings()[0]!.id, (current) => ({
-        ...current,
-        worktreeCleanup: {
-          attemptId: "attempt-1",
-          mutationId: null,
-          choice: "stop",
-          resourceId: "bx_23456789",
-          worktree: WORKTREE,
-          phase,
-          error: null,
-          requestedAt: 0,
-        },
-      }));
-      const intent = store.bindings()[0]!.intent;
-      vi.mocked(provider.inspect).mockClear();
-      disconnect.mockClear();
-
-      const next = restart(lifecycle);
-      await vi.waitFor(() =>
-        expect(cleanupOf(next.store)).toMatchObject({
-          phase: "failed",
-          error: { code: "unsupported", message: expect.stringMatching(/only be deleted/) },
-        })
-      );
-      expect(next.store.bindings()[0]!.intent).toBe(intent);
-      expect(provider.inspect).not.toHaveBeenCalled();
-      expect(disconnect).not.toHaveBeenCalled();
-      expect(hosts.map((host) => host.id)).toEqual(["build"]);
+      const env = await savedStop(phase);
+      const next = env.restart(env.lifecycle);
+      onTestFinished(() => next.lifecycle.dispose());
+      await vi.waitFor(() => expect(cleanupOf(next.store)).toMatchObject({ phase: "failed" }));
+      env.refused(next.store);
       expect(next.lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null });
 
-      // Retry refuses as the stop did; Keep leaves the machine running as it is.
-      await expect(next.lifecycle.retryWorktreeCleanup("build")).rejects.toMatchObject({
-        code: "UNSUPPORTED",
-      });
-      expect(cleanupOf(next.store)).toMatchObject({ phase: "failed", attemptId: "attempt-1" });
+      // Retry refuses before it does anything; Keep leaves the machine running as it is.
+      env.writes.mockClear();
+      await expect(next.lifecycle.retryWorktreeCleanup("build")).rejects.toMatchObject(
+        ONLY_DELETED
+      );
+      expect(env.writes).not.toHaveBeenCalled();
       next.lifecycle.dismissWorktreeCleanup("build");
       expect(cleanupOf(next.store)).toBeNull();
-      next.lifecycle.dispose();
     }
   );
+
+  it("fails a waiting stop when its worktree's delete settles, and Retry refuses before looking (#18228)", async () => {
+    const env = await savedStop("waiting");
+    await expect(env.lifecycle.retryWorktreeCleanup("build")).rejects.toMatchObject(ONLY_DELETED);
+    expect(env.worktreeGone).not.toHaveBeenCalled();
+    expect(env.writes).not.toHaveBeenCalled();
+
+    const [outcome] = await env.lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    expect(outcome).toMatchObject({
+      choice: "stop",
+      error: expect.stringMatching(/only be deleted/),
+    });
+    env.refused(env.store);
+  });
 });
 
 describe("CloudHostLifecycle with a lost create's label on a machine it didn't make (#17927)", () => {
