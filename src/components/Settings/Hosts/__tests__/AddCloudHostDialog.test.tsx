@@ -29,6 +29,7 @@ vi.mock("@/components/Hosts/cloud/cloudHostsState", async (importOriginal) => ({
 vi.mock("@/clients/cloudHostsClient", () => ({ cloudHostsClient: client }));
 
 import { AddCloudHostDialog } from "../AddCloudHostDialog";
+import { takeFirstConnect } from "../hostCopySettingsRequests";
 
 const NONE: CloudProvisioning = {
   location: "none",
@@ -375,5 +376,44 @@ describe("AddCloudHostDialog connecting an account", () => {
     expect(screen.queryByTestId("add-cloud-host-name")).toBeNull();
     expect(screen.getByRole("button", { name: "Connect Acme account" })).toBeTruthy();
     expect(client.getCatalog).not.toHaveBeenCalled();
+  });
+});
+
+// The Copy settings offer is armed as the host is recorded, not on handover: closing the
+// dialog while the machine boots doesn't stop setup, and the host's first connection,
+// wherever it happens, still finds the offer (#18186).
+describe("AddCloudHostDialog arming the Copy settings offer", () => {
+  it("arms it for a machine it creates, once the create answers", async () => {
+    const answer = deferred<{ hostId: string }>();
+    client.createHost.mockReturnValue(answer.promise);
+    open(provider("boat", "Boat", NONE), catalog());
+    await create();
+    expect(takeFirstConnect("made")).toBe(false);
+
+    answer.resolve({ hostId: "made" });
+    await screen.findByTestId("add-cloud-host-progress");
+    expect(takeFirstConnect("made")).toBe(true);
+    expect(takeFirstConnect("made")).toBe(false);
+  });
+
+  it("arms it for a machine it adds from the account", async () => {
+    client.listResources.mockResolvedValue([
+      {
+        resourceId: "vm_1",
+        name: "old",
+        machine: "running",
+        boundHostId: null,
+        vcpu: 4,
+        memoryGB: 8,
+      },
+    ]);
+    client.importHost.mockResolvedValue({ hostId: "old" });
+    open(provider("boat", "Boat", NONE), catalog());
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /^old/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
+    await screen.findByTestId("add-cloud-host-progress");
+    expect(client.importHost).toHaveBeenCalledTimes(1);
+    expect(takeFirstConnect("old")).toBe(true);
   });
 });
