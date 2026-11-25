@@ -2235,6 +2235,14 @@ interface AgentDetectionConfig {
      */
     choiceDialogFooterPatterns?: string[];
     /**
+     * The note a CLI draws under a numbered menu it opens over a turn it keeps
+     * running, one that closes by itself (#18167). Matched against the screen's
+     * last paragraph with its rows joined by single spaces, however the pane
+     * wraps it, right under the list: the pane stays working with no waiting
+     * edge, and sends are held until the menu is gone. Case-insensitive.
+     */
+    workingDialogFooterPatterns?: string[];
+    /**
      * Number of lines from end of output to scan (default: 10).
      */
     scanLineCount?: number;
