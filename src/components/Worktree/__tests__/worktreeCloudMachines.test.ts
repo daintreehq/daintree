@@ -189,17 +189,28 @@ describe("a worktree's machine whose provider has no stop (#18229)", () => {
     expect(leasy().choices).toEqual(["keep", "delete"]);
     expect(leasy({ machine: "stopped" }).choices).toEqual(["keep", "delete"]);
     expect(leasy({ machine: "error" }).choices).toEqual(["keep", "delete"]);
+    expect(leasy({ machine: "unknown" }).choices).toEqual(["keep", "delete"]);
   });
 
   it("still only keeps one it can't act on yet", () => {
-    expect(leasy({ resourceId: null }).choices).toEqual(["keep"]);
-    expect(leasy({ providerUnavailable: "Leasy is unavailable" }).choices).toEqual(["keep"]);
+    expect(leasy({ resourceId: null })).toMatchObject({
+      choices: ["keep"],
+      keptBecause:
+        "'login-box' wasn't finished being set up, so it's kept. Retry or remove it from Settings → Hosts.",
+    });
+    expect(leasy({ providerUnavailable: "Leasy is unavailable" })).toMatchObject({
+      choices: ["keep"],
+      keptBecause: "Leasy isn't available right now, so 'login-box' is kept.",
+    });
   });
 
   it("says keeping it bills until it's deleted, and deleting it takes everything on it", () => {
     const machine = leasy();
     expect(cleanupChoiceCopy(machine, "keep", NOW).description).toBe(
       "It keeps running, and billing Personal, until it's deleted."
+    );
+    expect(cleanupChoiceCopy(leasy({ machine: "unknown" }), "keep", NOW).description).toBe(
+      "Daintree can't tell whether it's running; check on Leasy, where it keeps billing until it's deleted."
     );
     expect(cleanupChoiceCopy(machine, "delete", NOW).description).toBe(
       "It and everything on its disk are deleted from Leasy for good once the worktree is deleted, and Personal stops paying for it. Its host leaves your list."

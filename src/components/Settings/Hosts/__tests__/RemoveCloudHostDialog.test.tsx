@@ -398,12 +398,16 @@ describe("RemoveCloudHostDialog for a machine whose provider has no stop (#18229
       ...overrides,
     });
 
-  it("says keeping it bills until it's deleted, never until it stops or that its disk is kept", () => {
+  it("says keeping it bills until it's deleted, never until it stops or that its disk is kept", async () => {
     open(leasy(), DELETE_ONLY_PROVIDER);
     expect(dialogText()).toContain(
       "It keeps running, and billing Personal, until it's deleted. You can add it back from Add host."
     );
     expect(dialogText()).not.toMatch(/until it stops|kept for|stays stopped/);
+    // Keep, the default, only forgets the host.
+    fireEvent.click(screen.getByRole("button", { name: "Remove host" }));
+    await waitFor(() => expect(remoteClient.forget).toHaveBeenCalledWith("build"));
+    expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
   });
 
   it("states that deleting it loses everything on it, disk included, behind the typed name", async () => {
@@ -414,6 +418,9 @@ describe("RemoveCloudHostDialog for a machine whose provider has no stop (#18229
     expect(dialogText()).toContain(
       "Its machine and everything on it, its disk included, are deleted from Leasy for good, and Personal stops paying for it. The host leaves your list."
     );
+    fireEvent.click(screen.getByRole("button", { name: "Delete machine" }));
+    expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Login" } });
     fireEvent.click(screen.getByRole("button", { name: "Delete machine" }));
     expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Login box" } });

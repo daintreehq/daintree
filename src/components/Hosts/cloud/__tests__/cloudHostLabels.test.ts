@@ -753,6 +753,7 @@ describe("a provider that has no stop (#18229)", () => {
     ).toBe(false);
     // The same readings on a provider that stops, and on one not registered, still offer both.
     expect(canStartMachine(leasy({ machine: "stopped" }), BOAT_PROVIDER)).toBe(true);
+    expect(canStartMachine(leasy({ machine: "error" }), BOAT_PROVIDER)).toBe(true);
     expect(canStopMachine(leasy({ machine: "running" }), BOAT_PROVIDER)).toBe(true);
     expect(canStartMachine(leasy({ machine: "stopped" }), null)).toBe(true);
     expect(canStopMachine(leasy({ machine: "running" }), null)).toBe(true);
@@ -760,6 +761,7 @@ describe("a provider that has no stop (#18229)", () => {
 
   it("reads delete-only from the declaration alone", () => {
     expect(isDeleteOnly(DELETE_ONLY_PROVIDER)).toBe(true);
+    expect(isDeleteOnly({ stopMode: "delete-only" })).toBe(true);
     expect(isDeleteOnly(BOAT_PROVIDER)).toBe(false);
     expect(isDeleteOnly(null)).toBe(false);
     expect(isDeleteOnly(undefined)).toBe(false);
@@ -772,6 +774,19 @@ describe("a provider that has no stop (#18229)", () => {
     ]);
     expect(cloudCostFacts(leasy({ machine: "stopped" }), DELETE_ONLY_PROVIDER)).toEqual([]);
     expect(stoppedBillingSentence(DELETE_ONLY_PROVIDER)).toBeNull();
+    // Whatever its persistence says of a stopped machine, one that never stops has none.
+    const billed = {
+      ...DELETE_ONLY_PROVIDER,
+      capabilities: {
+        ...DELETE_ONLY_PROVIDER.capabilities,
+        persistence: {
+          ...DELETE_ONLY_PROVIDER.capabilities.persistence,
+          stoppedComputeBilled: true,
+          stoppedStorageBilled: true,
+        },
+      },
+    };
+    expect(stoppedBillingSentence(billed)).toBeNull();
   });
 
   it("says it runs, and bills, until it's deleted where a lifetime or a stop would be", () => {
@@ -779,6 +794,9 @@ describe("a provider that has no stop (#18229)", () => {
     expect(lifetimeSentence(null, null, DELETE_ONLY_PROVIDER)).toBe(DELETE_ONLY_RUNS);
     expect(providerStopSentence({ kind: "none" }, "Leasy", "delete-only")).toBe(
       "Leasy has no stop: a machine runs, and bills, until it's deleted."
+    );
+    expect(providerStopSentence({ kind: "none" }, "Akash", "delete-only")).toBe(
+      "Akash has no stop: a machine runs, and bills, until it's deleted."
     );
     expect(DELETE_ONLY_RUNS).toBe("It runs, and bills, until it's deleted.");
     expect(DELETE_ONLY_LOSS).toBe("Deleting it loses everything on it, its disk included.");
@@ -800,6 +818,13 @@ describe("a provider that has no stop (#18229)", () => {
     ).toBe(
       "Daintree can't tell whether it's running; check on Leasy, where it keeps billing until it's deleted."
     );
+    expect(
+      keepMachineDescription(leasy({ machine: "starting" }), "Leasy", false, false, 0, false, true)
+    ).toBe("It keeps running, and billing Personal, until it's deleted.");
+    // A machine its provider reported deleted isn't said to bill on.
+    expect(
+      keepMachineDescription(leasy({ machine: "deleted" }), "Leasy", false, false, 0, true, true)
+    ).toBe("Leasy last reported it deleted.");
     expect(keepMachineDescription(leasy(), "Leasy", false, false, 0, false)).toBe(
       "It's running and keeps billing Personal until it stops on Leasy."
     );

@@ -21,7 +21,9 @@ import {
 import { FormRow } from "@/components/Worktree/views/WorktreeFormLayout";
 import type { CloudHostCreateRequest } from "@shared/types/cloudHosts";
 import {
+  DELETE_ONLY_LOSS,
   formatHourly,
+  isDeleteOnly,
   lifetimeLabel,
   lifetimeSentence,
   machineSpecLabel,
@@ -93,7 +95,7 @@ function reviewLine(choice: CloudMachineAccount, form: CloudMachineForm): string
   return [
     `Billed to ${payer} on ${provider.name}${price}.`,
     lifetime,
-    stoppedBillingSentence(provider),
+    isDeleteOnly(provider) ? DELETE_ONLY_LOSS : stoppedBillingSentence(provider),
   ]
     .filter(Boolean)
     .join(" ");

@@ -509,7 +509,9 @@ describe("ConnectCloudAccountDialog for a provider that has no stop (#18229)", (
   it("says the key creates and deletes machines, never that it starts or stops them", () => {
     render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={DELETE_ONLY_PROVIDER} />);
     const said = screen.getByText(/^Daintree uses/).textContent ?? "";
-    expect(said).toContain("to create and delete machines in your Leasy account");
+    expect(said).toContain(
+      "Daintree uses an API key to create and delete machines in your Leasy account"
+    );
     expect(said).not.toMatch(/start|stop/);
   });
 
@@ -517,6 +519,17 @@ describe("ConnectCloudAccountDialog for a provider that has no stop (#18229)", (
     render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={EC2} />);
     expect(screen.getByText(/^Daintree uses/).textContent).toContain(
       "to create, start, stop and delete machines in your"
+    );
+    cleanup();
+    render(
+      <ConnectCloudAccountDialog
+        isOpen
+        onClose={() => {}}
+        provider={{ ...EC2, capabilities: { ...EC2.capabilities, deletion: false } }}
+      />
+    );
+    expect(screen.getByText(/^Daintree uses/).textContent).toContain(
+      "to create, start and stop machines in your"
     );
   });
 });

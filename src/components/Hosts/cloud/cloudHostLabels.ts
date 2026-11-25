@@ -664,6 +664,8 @@ function keepDeleteOnlyState(
     case "starting":
     case "stopping":
       return `It keeps running, and billing ${status.accountName}, until it's deleted.${back}`;
+    case "deleted":
+      return `${providerName} last reported it deleted.`;
     default:
       return `Daintree can't tell whether it's running; check on ${providerName}, where it keeps billing until it's deleted.`;
   }

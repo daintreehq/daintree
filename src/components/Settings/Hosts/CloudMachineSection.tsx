@@ -355,7 +355,20 @@ export function CloudMachineSection({
     </Button>
   );
   let cleanupNotice: ReactNode = null;
-  if (cleanup) {
+  if (cleanup?.choice === "stop" && isDeleteOnly(provider)) {
+    // A stop recorded before its provider said it has none: nothing here can carry it out.
+    cleanupNotice = (
+      <Callout
+        severity="warning"
+        className="mb-3"
+        data-testid="cloud-machine-cleanup"
+        title={`Can't stop it with ${worktreeLabel}`}
+      >
+        <p>{`${providerName} has no stop: the machine runs, and bills, until it's deleted. Keep it, or remove the host to delete it.`}</p>
+        <div className="mt-2 flex flex-wrap gap-1.5">{keepButton}</div>
+      </Callout>
+    );
+  } else if (cleanup) {
     const verb = cleanup.choice === "delete" ? "delete" : "stop";
     const done = cleanup.choice === "delete" ? "deleted" : "stopped";
     const retryButton = (label: string) => (

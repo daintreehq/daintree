@@ -181,10 +181,9 @@ describe("HostChip for a machine whose provider has no stop (#18229)", () => {
     );
     expect(machines.confirmStart).not.toHaveBeenCalled();
 
-    const again = await (async () => {
-      fireEvent.keyDown(screen.getByTestId("host-chip"), { key: "Enter" });
-      return screen.findByRole("menu");
-    })();
+    await waitFor(() => expect(menu.isConnected).toBe(false));
+    fireEvent.keyDown(screen.getByTestId("host-chip"), { key: "Enter" });
+    const again = await screen.findByRole("menu");
     fireEvent.click(again.querySelector("[data-host-id='boat-box']")!);
     expect(machines.confirmStart).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: "boat-box" })
@@ -203,6 +202,19 @@ describe("HostChip for a machine whose provider has no stop (#18229)", () => {
     expect(machines.requestStop).not.toHaveBeenCalled();
     expect(machines.start).not.toHaveBeenCalled();
     expect(cloudItem("boat-box").textContent).toContain("Stop boat-box");
+    fireEvent.click(cloudItem("boat-box"));
+    expect(machines.requestStop).toHaveBeenCalledWith("boat-box", "boat-box");
+  });
+
+  it("goes to one that reports an error as it is, too", async () => {
+    const menu = await openWith("error");
+    const lease = menu.querySelector<HTMLElement>("[data-host-id='lease-box']")!;
+    expect(lease.textContent).not.toContain("Opening it starts the machine");
+    fireEvent.click(lease);
+    await waitFor(() =>
+      expect(switchWindowHost).toHaveBeenCalledWith({ hostId: "lease-box", newWindow: false })
+    );
+    expect(machines.confirmStart).not.toHaveBeenCalled();
   });
 
   it("offers no Start for one that reports stopped", async () => {
@@ -210,5 +222,7 @@ describe("HostChip for a machine whose provider has no stop (#18229)", () => {
     await openCloudMachines();
     expect(cloudItem("lease-box").textContent).not.toContain("Start lease-box");
     expect(cloudItem("boat-box").textContent).toContain("Start boat-box");
+    fireEvent.click(cloudItem("boat-box"));
+    expect(machines.start).toHaveBeenCalledWith("boat-box");
   });
 });

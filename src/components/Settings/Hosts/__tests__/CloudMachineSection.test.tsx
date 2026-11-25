@@ -1272,6 +1272,10 @@ describe("CloudMachineSection for a machine whose provider has no stop (#18229)"
   const pageText = () => document.body.textContent ?? "";
 
   it("offers no Stop while it runs, and says it runs, and bills, until it's deleted", () => {
+    // The same reading on Boat has its Stop, so the absence below is the provider's.
+    show({ ...leasy(), providerId: BOAT_PROVIDER.id }, [BOAT_PROVIDER]);
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    cleanup();
     show(leasy(), [DELETE_ONLY_PROVIDER]);
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
@@ -1286,6 +1290,12 @@ describe("CloudMachineSection for a machine whose provider has no stop (#18229)"
   });
 
   it("says deleting it loses everything on it, and never promises a kept disk", () => {
+    show({ ...leasy(), providerId: BOAT_PROVIDER.id }, [BOAT_PROVIDER]);
+    expect(pageText()).toContain(
+      "Files in its home folder are saved when it stops and kept at least 14 days while it's stopped"
+    );
+    expect(pageText()).not.toContain("Kept only while the machine exists");
+    cleanup();
     show(leasy(), [DELETE_ONLY_PROVIDER]);
     expect(pageText()).toContain(
       "Kept only while the machine exists. Deleting it loses everything on it, its disk included."
@@ -1296,11 +1306,44 @@ describe("CloudMachineSection for a machine whose provider has no stop (#18229)"
 
   it("offers no Start for one that reports stopped or an error", () => {
     for (const machine of ["stopped", "error"] as const) {
+      show({ ...leasy({ machine }), providerId: BOAT_PROVIDER.id }, [BOAT_PROVIDER]);
+      expect(screen.getByRole("button", { name: "Start" })).toBeTruthy();
+      cleanup();
       show(leasy({ machine }), [DELETE_ONLY_PROVIDER]);
       expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
       expect(screen.getByTestId("cloud-machine-state").textContent).not.toContain("when started");
       cleanup();
     }
+  });
+
+  it("offers no Retry for a stop its worktree's delete recorded, only Keep", () => {
+    show(
+      leasy({
+        createdFor: {
+          hostId: null,
+          projectId: "0f1e2d3c",
+          worktreeId: "/Users/me/code/app-worktrees/feature-login",
+          projectName: "app",
+          worktreeName: "feature/login",
+          hostName: null,
+        },
+        worktreeCleanup: {
+          choice: "stop",
+          phase: "failed",
+          worktreeHostId: null,
+          error: { code: "failed", message: "Leasy refused the stop.", at: 1 },
+        },
+      }),
+      [DELETE_ONLY_PROVIDER]
+    );
+    const notice = screen.getByTestId("cloud-machine-cleanup");
+    expect(notice.textContent).toContain("Can't stop it with 'feature/login'");
+    expect(notice.textContent).toContain(
+      "Leasy has no stop: the machine runs, and bills, until it's deleted. Keep it, or remove the host to delete it."
+    );
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Keep machine" }));
+    expect(dismissWorktreeCleanup).toHaveBeenCalledWith("build");
   });
 });

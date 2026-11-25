@@ -18,6 +18,7 @@ import {
   cloudProviderName,
   cloudStateWord,
   credentialsNoun,
+  isDeleteOnly,
   sentenceCase,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
@@ -230,11 +231,17 @@ export function CloudProvidersSection() {
     );
 
   const unsupported = providers.length > 0 && usable.length === 0;
+  // Start and stop are promised only where a listed provider's machines have them.
+  const noStop = usable.filter((provider) => isDeleteOnly(provider)).length;
+  const allNoStop = noStop > 0 && noStop === usable.length;
+  const uses = allNoStop
+    ? "Accounts Daintree uses to create cloud machines as hosts and delete them when you're done"
+    : `Accounts Daintree uses to create cloud machines as hosts, start and stop them when you ask${noStop > 0 ? " where their provider can" : ""}, and delete them when you're done`;
 
   return (
     <SettingsSection
       title="Cloud providers"
-      description="Accounts Daintree uses to create cloud machines as hosts, start and stop them when you ask, and delete them when you're done"
+      description={uses}
       action={accounts.length > 0 ? connectButton : undefined}
       id="hosts-cloud-providers"
     >
@@ -255,7 +262,7 @@ export function CloudProvidersSection() {
               ? "Loading cloud accounts"
               : unsupported
                 ? providers[0]!.unsupportedReason
-                : "Connect a cloud provider account to create machines that run projects and agents, then stop or delete them when you're done"}
+                : `Connect a cloud provider account to create machines that run projects and agents, then ${allNoStop ? "delete" : "stop or delete"} them when you're done`}
           </SettingsEmptyRow>
         ) : (
           accounts.map((account) => {

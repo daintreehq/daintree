@@ -62,15 +62,20 @@ interface AddCloudHostDialogProps {
 type Mode = "create" | "import";
 
 /**
- * What an account lets Daintree do with machines, across every provider it
- * could be on: start and stop only where one of them stops its machines,
- * delete only where all of them can.
+ * What an account lets Daintree do with its machines, across every provider
+ * it could be on: delete only where all of them can, and start and stop only
+ * where its provider does, said so when some can't.
  */
 function machineVerbs(providers: readonly CloudProviderInfo[]): string {
-  const stops = providers.length === 0 || providers.some((entry) => !isDeleteOnly(entry));
   const deletes = providers.every((entry) => entry.capabilities.deletion);
-  if (!stops) return deletes ? "create and delete" : "create";
-  return deletes ? "create, start, stop and delete" : "create, start and stop";
+  const noStop = providers.filter((entry) => isDeleteOnly(entry)).length;
+  if (noStop === 0) {
+    return deletes ? "create, start, stop and delete machines" : "create, start and stop machines";
+  }
+  const ends = deletes ? "create and delete machines" : "create machines";
+  return noStop === providers.length
+    ? ends
+    : `${ends}, and to start and stop them where their provider can`;
 }
 
 /** One clause stays a bare line; several are sentences, each ended once. */
@@ -404,7 +409,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     body = (
       <div className="space-y-3">
         <p className="text-sm text-text-secondary">
-          {`Connect a cloud provider account first. Daintree uses its ${usable.length > 0 && usable.every((entry) => credentialsNoun(entry) === "key") ? "API key" : "credentials"} to ${machineVerbs(usable)} machines; the account pays for them.`}
+          {`Connect a cloud provider account first. Daintree uses its ${usable.length > 0 && usable.every((entry) => credentialsNoun(entry) === "key") ? "API key" : "credentials"} to ${machineVerbs(usable)}; the account pays for them.`}
         </p>
         <div className="flex flex-wrap gap-2">
           {usable.map((entry) => (
@@ -424,6 +429,12 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     // Unknown is no reason to offer Start: the way forward is asking again.
     const unknown = machine === "unknown" && !operation;
     const stoppedImport = mode === "import" && !startRequested && startable;
+    // Nothing brings back a machine whose provider has no stop: say what it is, not progress.
+    const settledDown =
+      !failed &&
+      !operation &&
+      isDeleteOnly(addedProvider) &&
+      (machine === "stopped" || machine === "error");
     // The provider the machine is bound to, which a create refused for its tunnel command names.
     const addedTunnelMissing =
       failed && status?.lastError?.code === "ssh-tunnel-command-missing"
@@ -439,6 +450,10 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
         ) : unknown ? (
           <p className="text-sm text-text-primary">
             {`It's in your host list, but Daintree couldn't check its machine's state. It may still be running and billing ${status?.accountName ?? "its account"}.`}
+          </p>
+        ) : settledDown ? (
+          <p className="text-sm text-text-primary">
+            {`It's in your host list. Its machine reports ${cloudMachineLabel(machine).toLowerCase()}, and machines on ${addedProvider?.name ?? "its provider"} can't be started again. ${DELETE_ONLY_LOSS}`}
           </p>
         ) : (
           !failed && (
@@ -479,6 +494,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
       secondary = { label: `Leave ${parked}`, onClick: onClose };
     } else if (unknown) {
       primary = { label: "Check status", onClick: checkAdded };
+      secondary = { label: "Close", onClick: onClose };
+    } else if (settledDown) {
       secondary = { label: "Close", onClick: onClose };
     } else if (failed && status?.resourceId === null) {
       primary = { label: "Retry", onClick: retry };
@@ -821,6 +838,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                           ? "Adding it doesn't change it"
                           : "Adding it doesn't start it or change its auto-stop",
                         providerStopSentence(lifetimeModel, provider.name, provider.stopMode),
+                        isDeleteOnly(provider) ? DELETE_ONLY_LOSS : null,
                         // Nothing can hand this device's key to a machine that didn't take it when it was made.
                         provider.capabilities.provisioning.sshKey === "at-create"
                           ? `${provider.name} takes an SSH key only when a machine is created, so Daintree connects only to one that already accepts this account's key from this device`

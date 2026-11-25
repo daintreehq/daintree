@@ -86,6 +86,16 @@ export const DELETE_ONLY_PROVIDER: CloudProviderInfo = {
   name: "Leasy",
   description: "Leased containers with no stop.",
   dashboardUrl: "https://leasy.example.com/leases",
+  credentialFields: [
+    {
+      id: "apiKey",
+      label: "API key",
+      secret: true,
+      input: "single-line",
+      required: true,
+      help: null,
+    },
+  ],
   capabilities: {
     ...BOAT_PROVIDER.capabilities,
     persistence: {

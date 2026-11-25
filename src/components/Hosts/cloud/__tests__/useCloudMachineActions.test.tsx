@@ -171,7 +171,10 @@ describe("useCloudMachineActions for a machine that sleeps when idle (#17347)", 
 });
 
 describe("useCloudMachineActions for a machine whose provider has no stop (#18229)", () => {
-  afterEach(() => vi.mocked(cloudHostsClient.startHost).mockClear());
+  afterEach(() => {
+    vi.mocked(cloudHostsClient.startHost).mockClear();
+    vi.mocked(cloudHostsClient.stopHost).mockClear();
+  });
 
   it("opens no Stop or Start confirm, and sends nothing", () => {
     show(status(), DELETE_ONLY_PROVIDER);
@@ -182,6 +185,37 @@ describe("useCloudMachineActions for a machine whose provider has no stop (#1822
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(cloudHostsClient.startHost).not.toHaveBeenCalled();
     expect(cloudHostsClient.stopHost).not.toHaveBeenCalled();
+    // Refused, not queued: nothing appears once the declaration is gone.
+    act(() => {
+      cloud.snapshot = { ...cloud.snapshot, providers: [] };
+    });
+    cleanup();
+    render(<Harness />);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("drops a Stop confirm asked for before the provider said it has no stop, for good", async () => {
+    cloud.snapshot = {
+      providers: [],
+      accounts: [],
+      hosts: [{ ...status(), providerId: DELETE_ONLY_PROVIDER.id }],
+    };
+    const { rerender } = render(<Harness />);
+    act(() => actions!.requestStop("build", "build"));
+    const confirm = screen.getByRole("button", { name: "Stop machine" });
+
+    cloud.snapshot = { ...cloud.snapshot, providers: [DELETE_ONLY_PROVIDER] };
+    rerender(<Harness />);
+    // A press on the confirm that was showing sends nothing.
+    fireEvent.click(confirm);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(cloudHostsClient.stopHost).not.toHaveBeenCalled();
+
+    // Its host going away later, so its provider can't be read, doesn't bring it back.
+    cloud.snapshot = { providers: [DELETE_ONLY_PROVIDER], accounts: [], hosts: [] };
+    rerender(<Harness />);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("closes a Start confirm asked for before the provider said it has no stop", async () => {
@@ -194,12 +228,12 @@ describe("useCloudMachineActions for a machine whose provider has no stop (#1822
     const { rerender } = render(<Harness />);
     act(() => actions!.confirmStart({ hostId: "build", name: "build" }));
     expect(screen.getByRole("dialog").textContent).toContain("Start 'build'?");
+    const confirm = screen.getByRole("button", { name: "Start machine" });
 
     cloud.snapshot = { ...cloud.snapshot, providers: [DELETE_ONLY_PROVIDER] };
     rerender(<Harness />);
-    // A press that lands while it closes sends nothing either.
-    const confirm = screen.queryByRole("button", { name: "Start machine" });
-    if (confirm) fireEvent.click(confirm);
+    // A press on the confirm that was showing sends nothing.
+    fireEvent.click(confirm);
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(cloudHostsClient.startHost).not.toHaveBeenCalled();
   });

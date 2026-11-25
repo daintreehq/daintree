@@ -158,18 +158,32 @@ async function showRows(state: CloudHostStatus["machine"]) {
   await screen.findByText("lease-box");
 }
 
+/** A host's row: the widest element around its Details button that doesn't take in the other host. */
+function rowOf(hostId: string, other: string): HTMLElement {
+  let row = document.querySelector<HTMLElement>(`[data-host-details='${hostId}']`)!;
+  while (row.parentElement && !row.parentElement.textContent?.includes(other)) {
+    row = row.parentElement;
+  }
+  return row;
+}
+
 describe("HostsSettingsTab rows for a machine whose provider has no stop (#18229)", () => {
   it("offers no Stop on its row while it runs, beside a Boat row that still does", async () => {
     await showRows("running");
     expect(screen.queryByRole("button", { name: "Stop lease-box" })).toBeNull();
     expect(screen.getByRole("button", { name: "Stop boat-box" })).toBeTruthy();
-    expect(document.body.textContent).toContain("runs until deleted");
+    expect(rowOf("lease-box", "boat-box").textContent).toContain("Leasy");
+    expect(rowOf("lease-box", "boat-box").textContent).toContain("runs until deleted");
+    expect(rowOf("boat-box", "lease-box").textContent).not.toContain("runs until deleted");
   });
 
   it("offers no Start on its row while it reports stopped or an error", async () => {
     await showRows("stopped");
     expect(screen.queryByRole("button", { name: "Start lease-box" })).toBeNull();
     expect(screen.getByRole("button", { name: "Start boat-box" })).toBeTruthy();
+    // No start price for a machine that can't be started; Boat's stays.
+    expect(rowOf("lease-box", "boat-box").textContent).not.toContain("when started");
+    expect(rowOf("boat-box", "lease-box").textContent).toContain("$0.036/h when started");
     cleanup();
     await showRows("error");
     expect(screen.queryByRole("button", { name: "Start lease-box" })).toBeNull();

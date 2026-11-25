@@ -1362,6 +1362,30 @@ describe("AddCloudHostDialog on a provider that has no stop (#18229)", () => {
       hosts: [],
     };
     render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+    expect(connectText()).toContain(
+      "to create and delete machines, and to start and stop them where their provider can;"
+    );
+    cleanup();
+
+    // One that stops but can't delete: delete is promised only where all of them can.
+    const keeper = provider("keeper", "Keeper", NONE);
+    cloud.snapshot = {
+      providers: [
+        DELETE_ONLY_PROVIDER,
+        { ...keeper, capabilities: { ...keeper.capabilities, deletion: false } },
+      ],
+      accounts: [],
+      hosts: [],
+    };
+    render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+    expect(connectText()).toContain(
+      "to create machines, and to start and stop them where their provider can;"
+    );
+    cleanup();
+
+    // Every other list reads as it did.
+    cloud.snapshot = { providers: [provider("boat", "Boat", NONE)], accounts: [], hosts: [] };
+    render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
     expect(connectText()).toContain("to create, start, stop and delete machines;");
   });
 
@@ -1375,6 +1399,101 @@ describe("AddCloudHostDialog on a provider that has no stop (#18229)", () => {
       "It runs, and bills, until it's deleted. Deleting it loses everything on it, its disk included."
     );
     expect(review).not.toMatch(/Stopping|kept for|at least 0 days|until you stop it/);
+  });
+  it("says the same in the review of an offer-based create", async () => {
+    open({ ...DELETE_ONLY_PROVIDER, createMode: "offers" }, catalog());
+    const review = (await screen.findByTestId("add-cloud-host-review")).textContent ?? "";
+    expect(review).toContain("at the price of the offer you lease");
+    expect(review).toContain(
+      "It runs, and bills, until it's deleted. Deleting it loses everything on it, its disk included."
+    );
+    expect(screen.getByRole("button", { name: "Get offers" })).toBeTruthy();
+  });
+
+  it("adds an existing machine with its end said, and offers no Start once it's added", async () => {
+    client.listResources.mockResolvedValue([
+      {
+        resourceId: "lease-9",
+        name: "old",
+        machine: "stopped",
+        rawState: "closed",
+        machineType: null,
+        vcpu: 4,
+        memoryGB: 8,
+        createdAt: null,
+        stoppedAt: null,
+        dataExpired: false,
+        boundHostId: null,
+        restricted: false,
+        asleep: false,
+      } satisfies CloudResourceSummary,
+    ]);
+    client.importHost.mockResolvedValue({ hostId: "host-old" });
+    cloud.snapshot = {
+      providers: [DELETE_ONLY_PROVIDER],
+      accounts: [account(DELETE_ONLY_PROVIDER.id)],
+      hosts: [],
+    };
+    client.getCatalog.mockResolvedValue(catalog());
+    const dialog = () => <AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />;
+    const view = render(dialog());
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /^old/ }));
+    expect(screen.getByTestId("add-cloud-host-import-note").textContent).toBe(
+      "Adding it doesn't change it. Leasy has no stop: a machine runs, and bills, until it's deleted. Deleting it loses everything on it, its disk included."
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
+    await waitFor(() => expect(client.importHost).toHaveBeenCalledTimes(1));
+
+    cloud.snapshot = {
+      ...cloud.snapshot,
+      hosts: [
+        {
+          hostId: "host-old",
+          providerId: DELETE_ONLY_PROVIDER.id,
+          providerUnavailable: null,
+          accountId: "ca_0123456789",
+          accountName: "Personal",
+          resourceId: "lease-9",
+          machineName: "old",
+          ownership: "imported",
+          createdFor: null,
+          worktreeCleanup: null,
+          provisioning: null,
+          machine: "stopped",
+          rawState: "closed",
+          machineType: null,
+          vcpu: 4,
+          memoryGB: 8,
+          hourlyDollars: 0.05,
+          lifetime: { kind: "none" },
+          autoStopAt: null,
+          lifetimeSeconds: null,
+          stoppedAt: null,
+          stop: null,
+          lastSnapshotAt: null,
+          dataExpired: false,
+          operation: null,
+          lastError: null,
+          observedAt: Date.now(),
+          lastEndpoint: null,
+          hostKeyFingerprint: null,
+          hostKeyReview: null,
+          keptRunningAt: null,
+          asleep: false,
+        },
+      ],
+    };
+    view.rerender(dialog());
+    await waitFor(() =>
+      expect(screen.getByTestId("add-cloud-host-progress").textContent).toBe(
+        "It's in your host list. Its machine reports stopped, and machines on Leasy can't be started again. Deleting it loses everything on it, its disk included."
+      )
+    );
+    expect(screen.queryByRole("button", { name: "Start machine" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Leave / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+    expect(client.startHost).not.toHaveBeenCalled();
   });
 
   it("offers no Start for its machine once added, even after a failed create", async () => {
@@ -1433,6 +1552,11 @@ describe("AddCloudHostDialog on a provider that has no stop (#18229)", () => {
       hosts: [leasyStatus({ machine: "stopped", lastError: null })],
     };
     view.rerender(dialog());
+    // Settled, not coming up: no progress that would never end.
+    expect(screen.getByTestId("add-cloud-host-progress").textContent).toContain(
+      "can't be started again"
+    );
+    expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.queryByRole("button", { name: "Start machine" })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Leave / })).toBeNull();
     expect(client.startHost).not.toHaveBeenCalled();

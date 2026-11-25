@@ -180,14 +180,15 @@ export function useCloudMachineActions(): {
   const startProvider = cloudProviderFor(snapshot.providers, startStatus);
   const stopBusy = stopAsk !== null && pending.has(stopAsk.hostId);
   const startBusy = startAsk !== null && pending.has(startAsk.hostId);
-  // An ask the provider's declaration has since taken away closes, unless it was already sent.
-  const stopOpen = stopAsk !== null && (stopBusy || !isDeleteOnly(stopProvider));
-  const startOpen = startAsk !== null && (startBusy || !isDeleteOnly(startProvider));
+  // An ask the provider's declaration has since taken away is dropped, unless it was already
+  // sent: hiding it alone would bring it back if that host's status later went missing.
+  if (stopAsk !== null && !stopBusy && isDeleteOnly(stopProvider)) setStopAsk(null);
+  if (startAsk !== null && !startBusy && isDeleteOnly(startProvider)) setStartAsk(null);
 
   const dialogs = (
     <>
       <ConfirmDialog
-        isOpen={stopOpen}
+        isOpen={stopAsk !== null}
         // Closing never cancels: the stop goes on, followed by the row and the menu.
         onClose={() => setStopAsk(null)}
         variant="destructive"
@@ -226,7 +227,7 @@ export function useCloudMachineActions(): {
         )}
       </ConfirmDialog>
       <ConfirmDialog
-        isOpen={startOpen}
+        isOpen={startAsk !== null}
         // Closing never cancels: the start goes on, and the host still opens once it's up.
         onClose={() => setStartAsk(null)}
         variant="default"
