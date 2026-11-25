@@ -124,6 +124,7 @@ describe("sizes tied to locations (#18189)", () => {
     expect(cloudChoiceFitsLocation({}, null)).toBe(true);
     expect(cloudChoiceFitsLocation({ locations: null }, "eu")).toBe(true);
     expect(cloudChoiceFitsLocation({ locations: ["us"] }, "us")).toBe(true);
+    expect(cloudChoiceFitsLocation({ locations: ["us", "eu"] }, "eu")).toBe(true);
     expect(cloudChoiceFitsLocation({ locations: ["us"] }, "eu")).toBe(false);
     expect(cloudChoiceFitsLocation({ locations: ["us"] }, null)).toBe(false);
     expect(cloudChoiceFitsLocation({ locations: [] }, "us")).toBe(false);
@@ -141,6 +142,22 @@ describe("sizes tied to locations (#18189)", () => {
     expect(cloudMachineTypeLocationReason({ locations: [] }, regions, "us")).toBe(
       "not offered in any region"
     );
+    expect(
+      cloudMachineTypeLocationReason({ locations: [] }, { ...regions, label: "Datacenter" }, "us")
+    ).toBe("not offered in any datacenter");
+    // Only a location the account can pick is offered as the way out.
+    const usClosed = {
+      ...regions,
+      choices: regions.choices.map((choice) =>
+        choice.id === "us" ? { ...choice, available: false, reason: "closed" } : choice
+      ),
+    };
+    expect(cloudMachineTypeLocationReason({ locations: ["us", "eu"] }, usClosed, null)).toBe(
+      "choose Europe to use it"
+    );
+    expect(cloudMachineTypeLocationReason({ locations: ["us"] }, usClosed, null)).toBe(
+      "not offered in any region this account can use"
+    );
     // A location the catalog doesn't list is named by its id.
     expect(cloudMachineTypeLocationReason({ locations: ["us"] }, regions, "mars")).toBe(
       "not offered in mars"
@@ -150,7 +167,7 @@ describe("sizes tied to locations (#18189)", () => {
   it("reads a location list that arrives as data, narrowing what doesn't read", () => {
     expect(cloudLocationsFrom(undefined)).toBeNull();
     expect(cloudLocationsFrom(null)).toBeNull();
-    expect(cloudLocationsFrom(["us", 3, "eu"])).toEqual(["us", "eu"]);
+    expect(cloudLocationsFrom(["us", 3, true, { id: "x" }, null, "eu"])).toEqual(["us", "eu"]);
     expect(cloudLocationsFrom("us")).toEqual([]);
     expect(cloudLocationsFrom({ us: true })).toEqual([]);
   });

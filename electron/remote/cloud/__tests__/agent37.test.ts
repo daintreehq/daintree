@@ -389,8 +389,8 @@ describe("Agent37Provider", () => {
 
   it("prices each size as what its create asks for, at its type's compute rate", async () => {
     const { api, provider, credentials } = env();
-    // A workspace that can hold the largest awake, so every size can be created.
-    api.billing = { ...api.billing, tier: 2, memory_limit_gb: 200 };
+    // A workspace that can hold every size awake at once, as this makes them all.
+    api.billing = { ...api.billing, tier: 3, memory_limit_gb: 800 };
     const catalog = await provider.catalog(credentials);
     const rate: Record<string, number> = { default: 1, vm: 2.5, performance: 4 };
     const previous: Record<string, number> = {};
@@ -438,6 +438,7 @@ describe("Agent37Provider", () => {
       "ap-south",
     ]);
     expect(catalog.provisioning?.location?.defaultId).toBe("us");
+    expect(catalog.provisioning?.location?.choices.every((choice) => choice.available)).toBe(true);
     // The four sizes that existed before keep their ids and run in the US only.
     const defaults = catalog.machineTypes.filter((type) => !/^(vm|performance)-/.test(type.id));
     expect(defaults.map((type) => type.id)).toEqual(["2x4", "4x8", "4x16", "4x32"]);
@@ -453,7 +454,7 @@ describe("Agent37Provider", () => {
     const free = await provider.catalog(credentials);
     const unavailable = free.machineTypes.filter((type) => !type.available);
     expect(unavailable.map((type) => type.memoryGB)).toEqual([64, 64]);
-    expect(unavailable[0]!.reason).toContain("32 GB");
+    expect(unavailable.every((type) => type.reason?.includes("32 GB"))).toBe(true);
     expect(free.machineTypes.find((type) => type.id === "4x32")!.available).toBe(true);
 
     api.billing = { ...api.billing, tier: 1, memory_limit_gb: 40 };
@@ -475,6 +476,7 @@ describe("Agent37Provider", () => {
 
   it("sends the type and the region chosen, and no region when none was (#18189)", async () => {
     const { api, provider, credentials } = env();
+    api.billing = { ...api.billing, tier: 2, memory_limit_gb: 200 };
     const sent = async (machineType: string, location: string | null) => {
       await provider.create(
         credentials,
@@ -492,6 +494,10 @@ describe("Agent37Provider", () => {
       region: "ap-south",
       resources: { cpu: 4, memory: 16, disk: 24 },
     });
+    expect(await sent("performance-2x4", "eu")).toMatchObject({
+      type: "performance",
+      region: "eu",
+    });
     expect(await sent("2x4", "us")).toMatchObject({ type: "default", region: "us" });
     const unnamed = await sent("vm-2x4", null);
     expect(unnamed).toMatchObject({ type: "vm" });
@@ -499,6 +505,7 @@ describe("Agent37Provider", () => {
     expect([...api.instances.values()].map((entry) => [entry.type, entry.region])).toEqual([
       ["vm", "eu"],
       ["performance", "ap-south"],
+      ["performance", "eu"],
       ["default", "us"],
       ["vm", "us"],
     ]);
@@ -524,6 +531,8 @@ describe("Agent37Provider", () => {
         )
         .catch((e: unknown) => e);
       expect(unknownRegion).toBeInstanceOf(Agent37ApiError);
+      // Refused before anything was asked of Agent 37, the key included.
+      expect(api.requests).toHaveLength(0);
       // What Agent 37 itself answers that pair, should one reach it.
       const refused = await client
         .createInstance(ctx, {
@@ -538,6 +547,7 @@ describe("Agent37Provider", () => {
         })
         .catch((e: unknown) => e);
       expect(refused).toMatchObject({ status: 400, code: "invalid_request" });
+      api.requests.length = 0;
     }
     expect(api.instances.size).toBe(0);
     // Through the provider's own send, the same 400 is a refusal that made nothing.
@@ -575,6 +585,17 @@ describe("Agent37Provider", () => {
       type: "performance",
       resources: { cpu: 2, memory: 4, disk: 12 },
     });
+    const otherCores = api.seed({ type: "vm", resources: { cpu: 4, memory: 4, disk: 12 } });
+    // An answer without a type: a default instance where one can run, nothing to price elsewhere.
+    const untypedUs = api.seed({
+      type: undefined as never,
+      resources: { cpu: 2, memory: 4, disk: 12 },
+    });
+    const untypedEu = api.seed({
+      type: undefined as never,
+      region: "eu",
+      resources: { cpu: 2, memory: 4, disk: 12 },
+    });
     const standard = api.seed({ type: "default", resources: { cpu: 2, memory: 4, disk: 12 } });
     const sizes = Object.fromEntries(
       (await provider.list(credentials)).map((entry) => [entry.resourceId, entry.machineType])
@@ -585,13 +606,17 @@ describe("Agent37Provider", () => {
       [asDefault.id]: null,
       [performance.id]: "performance-2x4",
       [standard.id]: "2x4",
+      [otherCores.id]: null,
+      [untypedUs.id]: "2x4",
+      [untypedEu.id]: null,
     });
   });
 
-  it("looks for a lost create only in the region it was sent to, keeping one that doesn't say (#18189)", async () => {
+  it("looks for a lost create only in the region it was sent to, an unsaid one being the US (#18189)", async () => {
     const { api, provider, credentials } = env();
     const label = "daintree-binding=cb_0123456789ab";
     const eu = api.seed({ metadata: LABELS, type: "vm", region: "eu" });
+    api.seed({ metadata: { daintree: "1" }, type: "vm", region: "eu" });
     api.seed({ metadata: LABELS, type: "vm", region: "ap-south" });
     const us = api.seed({ metadata: LABELS, region: "us" });
     const ids = async (location?: string) =>
@@ -601,8 +626,10 @@ describe("Agent37Provider", () => {
     expect(await ids("eu")).toEqual([eu.id]);
     expect(await ids("us")).toEqual([us.id]);
     expect(await ids()).toHaveLength(3);
+    // Where Agent 37 runs an instance that names no region: never matched to a lookup elsewhere.
     api.unsayRegion = true;
-    expect(await ids("eu")).toHaveLength(3);
+    expect(await ids("eu")).toEqual([]);
+    expect(await ids("us")).toHaveLength(3);
   });
 
   it("says when the wallet is suspended", async () => {

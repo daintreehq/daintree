@@ -1840,13 +1840,13 @@ describe("normalizeMachineTypes", () => {
   };
 
   it("ties a size to locations only when the provider takes one (#18189)", () => {
-    const sizes = [size("unsaid"), size("tied", ["us"]), size("as-text", "us")];
+    const sizes = [size("unsaid"), size("tied", ["us", 4, "eu"]), size("as-text", "us")];
     const withLocation = normalizeMachineTypes(sizes, {
       location: region,
       image: null,
       network: null,
     });
-    expect(withLocation.map((type) => type.locations)).toEqual([undefined, ["us"], []]);
+    expect(withLocation.map((type) => type.locations)).toEqual([undefined, ["us", "eu"], []]);
     const without = normalizeMachineTypes(sizes, { location: null, image: null, network: null });
     expect(without.map((type) => type.locations)).toEqual([undefined, null, null]);
   });

@@ -85,8 +85,11 @@ export function useCloudMachineForm(
   provider: CloudProviderInfo | null,
   enabled = true
 ): CloudMachineForm {
-  /** The size the person picked, for the account they picked it for: until then it follows the location. */
-  const [pickedType, setPickedType] = useState<{ accountId: string; id: string } | null>(null);
+  /**
+   * The size each account has, once the person picked one or changed what it
+   * runs on: until then it follows where the account starts.
+   */
+  const [pickedTypes, setPickedTypes] = useState<Readonly<Record<string, string>>>({});
   /** What the person picked, for the provider they picked it for: another provider starts at its own default. */
   const [pickedLifetime, setPickedLifetime] = useState<{
     providerId: string;
@@ -140,12 +143,11 @@ export function useCloudMachineForm(
     const reason = cloudMachineTypeLocationReason(type, locationOptions, provisioning.location);
     return reason === null ? type : { ...type, available: false, reason };
   });
-  // A pick is kept when the location changes under it, shown unavailable rather than swapped
-  // for another size at another price; until one, the first size the location can take.
+  // A size is kept when the location changes under it, shown unavailable rather than swapped
+  // for another at another price; until then, the first size the starting location can take.
+  const pickedId = currentCatalog ? pickedTypes[currentCatalog.accountId] : undefined;
   const pickedSize =
-    pickedType && pickedType.accountId === currentCatalog?.accountId
-      ? machineTypes.find((type) => type.id === pickedType.id)
-      : undefined;
+    pickedId === undefined ? undefined : machineTypes.find((type) => type.id === pickedId);
   const chosenType =
     pickedSize ??
     machineTypes.find((type) => type.id === "default" && type.available) ??
@@ -160,7 +162,9 @@ export function useCloudMachineForm(
         ? null
         : `${chosenType.label} isn't available: ${chosenType.reason ?? "not on this account"}.`;
   const setMachineType = (id: string) => {
-    if (currentCatalog) setPickedType({ accountId: currentCatalog.accountId, id });
+    if (!currentCatalog) return;
+    const accountId = currentCatalog.accountId;
+    setPickedTypes((current) => ({ ...current, [accountId]: id }));
   };
   // Only a provider that holds a machine to a deadline takes one; the rest are sent none,
   // whatever the selector held for the last account.
@@ -176,10 +180,13 @@ export function useCloudMachineForm(
 
   const pick = (dimension: CloudProvisioningDimension, id: string | null) => {
     if (!currentCatalog) return;
-    setPicked({
-      accountId: currentCatalog.accountId,
-      selection: { ...provisioning, [dimension]: id },
-    });
+    const accountId = currentCatalog.accountId;
+    setPicked({ accountId, selection: { ...provisioning, [dimension]: id } });
+    // The size on screen stays put: choosing it again picked nothing a control could see.
+    if (pickedId === undefined && machineType !== null) {
+      const shown = machineType;
+      setPickedTypes((current) => ({ ...current, [accountId]: shown }));
+    }
   };
 
   const request = (name: string): CloudHostCreateRequest | null => {

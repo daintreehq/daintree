@@ -455,7 +455,13 @@ export function cloudMachineTypeLocationReason(
   const offered = type.locations ?? [];
   if (offered.length === 0) return `not offered in any ${noun}`;
   if (location !== null) return `not offered in ${labelOf(location)}`;
-  return `choose ${offered.map(labelOf).join(" or ")} to use it`;
+  // Only what the account can pick: a location it can't would be no way out.
+  const usable = options
+    ? offered.filter((id) => options.choices.some((choice) => choice.id === id && choice.available))
+    : offered;
+  return usable.length > 0
+    ? `choose ${usable.map(labelOf).join(" or ")} to use it`
+    : `not offered in any ${noun} this account can use`;
 }
 
 /** A dimension's name inside a sentence: "region", "AMI". */

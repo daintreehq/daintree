@@ -193,6 +193,11 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
     expect(count("POST /ssh-keys")).toBe(2);
     expect(api.sshKeys).toHaveLength(1);
     expect(count("POST /instances")).toBe(1);
+    // The region it was asked for before the crash, named as it was.
+    expect(api.calls("POST", "/instances")[0]!.body).toMatchObject({
+      type: "default",
+      region: "us",
+    });
     const [instance] = [...api.instances.values()];
     expect(next.lifecycle.statuses()[0]).toMatchObject({
       resourceId: instance!.id,
@@ -230,10 +235,13 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
     await create("eu");
     await until(() => sent.includes("POST /instances"));
     await until(() => api.instances.size === 1);
+    // A machine in the US carrying the same label, made in the same window, isn't the one sent.
+    const [binding] = first.store.bindings();
+    api.seed({ metadata: { daintree: "1", "daintree-binding": binding!.id }, region: "us" });
 
     const next = first.crash();
     await until(() => next.lifecycle.statuses()[0]?.resourceId != null);
-    const [instance] = [...api.instances.values()];
+    const [instance] = [...api.instances.values()].filter((entry) => entry.region === "eu");
     expect(instance).toMatchObject({ type: "vm", region: "eu" });
     expect(next.lifecycle.statuses()[0]!.resourceId).toBe(instance!.id);
     expect(count("POST /instances")).toBe(1);

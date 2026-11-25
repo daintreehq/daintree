@@ -192,7 +192,11 @@ function isoFromEpochSeconds(seconds: number | null | undefined): string | null 
  * has no size id, and its price reads as unknown rather than as a near one.
  */
 function shapeOf(instance: Agent37Instance): string | null {
-  const type = instance.type ?? "default";
+  // An answer without a type is a default instance only where one can run.
+  const region = instance.region ?? DEFAULT_REGION;
+  const type =
+    instance.type ?? (INSTANCE_TYPES.default.regions?.includes(region) ? "default" : null);
+  if (type === null) return null;
   const resources = instance.resources;
   return (
     SHAPES.find(
@@ -460,12 +464,10 @@ export class Agent37Provider implements CloudProvider {
     options: { label?: string; location?: string } = {}
   ): Promise<ProviderResource[]> {
     const instances = await this.clientFor(credentials.apiUrl).listInstances(ctx(credentials));
-    // One list holds every region's; an instance that doesn't say where it runs is kept, so a
-    // lost create is never hidden by a missing answer.
+    // One list holds every region's. An instance that doesn't say where it runs is where
+    // Agent 37 puts one by default: a lost create is never matched to a machine elsewhere.
     const located = options.location
-      ? instances.filter(
-          (instance) => (instance.region ?? null) === null || instance.region === options.location
-        )
+      ? instances.filter((instance) => (instance.region ?? DEFAULT_REGION) === options.location)
       : instances;
     const resources = located.map(agent37Resource);
     if (!options.label) return resources;

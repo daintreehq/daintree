@@ -3647,6 +3647,33 @@ describe("CloudHostLifecycle provisioning", () => {
     });
   });
 
+  it("refuses a size outside its regions for a provider that needs a region too (#18189)", async () => {
+    const { lifecycle, provider, account, store } = await setup(
+      {},
+      {
+        adapt: (adapted) => {
+          offerRegions(adapted);
+          const catalog = adapted.catalog;
+          adapted.catalog = vi.fn(async (credentials) => {
+            const base = await catalog(credentials);
+            return {
+              ...base,
+              machineTypes: base.machineTypes.map((type) =>
+                type.id === "default" ? { ...type, locations: ["us-east-1"] } : type
+              ),
+            };
+          });
+        },
+      }
+    );
+    await expect(lifecycle.create(request(account.id))).rejects.toMatchObject({
+      code: "VALIDATION",
+      userMessage: "Default isn't available: not offered in Europe (Ireland).",
+    });
+    expect(provider.create).not.toHaveBeenCalled();
+    expect(store.bindings()).toEqual([]);
+  });
+
   it("refuses a region for a provider that takes none, and leaves Boat's hosts without any", async () => {
     const { lifecycle, provider, account, store } = await setup();
     await expect(

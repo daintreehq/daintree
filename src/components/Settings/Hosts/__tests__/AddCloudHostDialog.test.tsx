@@ -370,7 +370,8 @@ describe("AddCloudHostDialog sizes tied to a region (#18189)", () => {
       machineTypes: [
         size("2x4", "Small", ["us"]),
         size("vm-2x4", "VM small", null),
-        size("vm-8x64", "VM huge", null, { available: false, reason: "too big for this wallet" }),
+        // Tied to the US as well, so the account's own reason has to win over the region's.
+        size("vm-8x64", "VM huge", ["us"], { available: false, reason: "too big for this wallet" }),
       ],
       provisioning: {
         location: {
@@ -388,16 +389,20 @@ describe("AddCloudHostDialog sizes tied to a region (#18189)", () => {
   const reasonOf = (input: HTMLInputElement) =>
     document.getElementById(input.getAttribute("aria-describedby") ?? "")?.textContent;
 
-  it("starts on the US with its first size, and moves a size nobody picked to one Europe runs", async () => {
+  it("starts on the US with its first size, and keeps the size shown when the region moves", async () => {
     open(A37(), regionCatalog());
     await waitFor(() => expect(shown("location")?.textContent).toBe("United States"));
     expect(radio(/^Small/).checked).toBe(true);
+    // Never swapped for another size at another price behind the person's back.
     await choose(shown("location")!, "Europe");
-    await waitFor(() => expect(radio(/^VM small/).checked).toBe(true));
-    expect(radio(/^Small/).disabled).toBe(true);
+    await waitFor(() => expect(radio(/^Small/).disabled).toBe(true));
+    expect(radio(/^Small/).checked).toBe(true);
     expect(reasonOf(radio(/^Small/))).toBe("Not offered in Europe");
+    expect(screen.queryByTestId("add-cloud-host-review")).toBeNull();
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
     // The account's own reason stands wherever it runs.
     expect(reasonOf(radio(/^VM huge/))).toBe("Too big for this wallet");
+    fireEvent.click(radio(/^VM small/));
     const sent = await create();
     expect(sent).toMatchObject({
       machineType: "vm-2x4",
@@ -430,7 +435,31 @@ describe("AddCloudHostDialog sizes tied to a region (#18189)", () => {
     await waitFor(() => expect(shown("location")?.textContent).toBe("Europe"));
     expect(radio(/^VM small/).checked).toBe(true);
     expect(radio(/^Small/).checked).toBe(false);
-    expect((await create()).machineType).toBe("vm-2x4");
+    expect(await create()).toMatchObject({
+      machineType: "vm-2x4",
+      provisioning: { location: "eu", image: null, network: null },
+    });
+  });
+
+  it("keeps each account's size when the person moves between accounts", async () => {
+    cloud.snapshot = {
+      providers: [A37()],
+      accounts: [account("agent37"), account("agent37", "ca_abcdefghij", "Team")],
+      hosts: [],
+    };
+    client.getCatalog.mockImplementation(async (accountId: string) => regionCatalog({ accountId }));
+    render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+    fireEvent.change(screen.getByTestId("add-cloud-host-name"), { target: { value: "build" } });
+    await waitFor(() => expect(radio(/^Small/).checked).toBe(true));
+    fireEvent.click(radio(/^VM small/));
+    await choose(screen.getAllByRole("combobox")[0]!, "Team");
+    await waitFor(() => expect(radio(/^Small/).checked).toBe(true));
+    // A pick on the second account leaves the first account's alone.
+    fireEvent.click(radio(/^VM small/));
+    fireEvent.click(radio(/^Small/));
+    await choose(screen.getAllByRole("combobox")[0]!, /^Personal/);
+    await waitFor(() => expect(radio(/^VM small/).checked).toBe(true));
+    expect(await create()).toMatchObject({ accountId: "ca_0123456789", machineType: "vm-2x4" });
   });
 });
 

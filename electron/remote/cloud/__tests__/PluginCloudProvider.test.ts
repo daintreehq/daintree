@@ -319,7 +319,7 @@ describe("PluginCloudProvider", () => {
       machineTypes: [
         size("unsaid"),
         size("anywhere", { locations: null }),
-        size("tied", { locations: ["us-east-1", 7] }),
+        size("tied", { locations: ["us-east-1", 7, "eu-west-1"] }),
         size("as-text", { locations: "us-east-1" }),
       ],
       canStart: true,
@@ -329,7 +329,7 @@ describe("PluginCloudProvider", () => {
     expect(Object.fromEntries(machineTypes.map((type) => [type.id, type.locations]))).toEqual({
       unsaid: undefined,
       anywhere: null,
-      tied: ["us-east-1"],
+      tied: ["us-east-1", "eu-west-1"],
       "as-text": [],
     });
   });
