@@ -40,6 +40,9 @@ function makeDeps(name: string, overrides: Partial<MockedDeps> = {}) {
     keptRunning: vi.fn(() => false),
     savePinnedAgent: vi.fn(() => {}),
     coordinates: vi.fn(() => true),
+    confirmSwitch: vi.fn(() => {}),
+    laneWork: vi.fn(() => undefined),
+    keptConversation: vi.fn(() => null),
     ...overrides,
   };
   return { deps, calls };
