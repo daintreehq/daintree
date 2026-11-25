@@ -188,6 +188,28 @@ describe("GlobalAssistantService", () => {
       expect(service.getState().phase).toBe("running");
     });
 
+    it("leaves a Start queued behind a cancelled restore following the default", async () => {
+      const taken = deferred<{ agentId: string; agentSessionId: string; claimId: string } | null>();
+      const { deps } = makeDeps();
+      deps.takeResume.mockReturnValueOnce(taken.promise);
+      const service = new GlobalAssistantService(deps);
+      const restoring = service.resumeAfterRestart("conv").catch(() => {});
+      await vi.waitFor(() => expect(deps.takeResume).toHaveBeenCalled());
+      await service.cancelLaunch();
+      const provisioned = deferred<null>();
+      deps.provision.mockReturnValueOnce(provisioned.promise);
+      const started = service.ensureSession().catch(() => {});
+
+      taken.resolve({ ...kept, agentId: "codex" });
+      await restoring;
+      await vi.waitFor(() => expect(deps.provision).toHaveBeenCalledWith("claude"));
+      await service.onAgentChanged("antigravity");
+
+      expect(service.getState().phase).toBe("absent");
+      provisioned.resolve(null);
+      await started;
+    });
+
     it("starts nothing when the agent it ran can't run here now, and hands the claim back", async () => {
       const { deps } = makeDeps({ canRun: vi.fn(async (agentId: string) => agentId !== "codex") });
       deps.takeResume.mockResolvedValue({ ...kept, agentId: "codex" });

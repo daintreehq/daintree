@@ -402,7 +402,6 @@ export class GlobalAssistantService {
     ) {
       agentId = pending.agentId;
       this.launchAgentId = agentId;
-      this.launchChosen = true;
       restoredElsewhere = true;
     }
     const resume =
@@ -415,6 +414,8 @@ export class GlobalAssistantService {
       await releaseResume();
       throw stoppedWhileStarting();
     }
+    // Only once it is still this launch, so a superseded one can't hand it to the next.
+    if (restoredElsewhere) this.launchChosen = true;
     // A restore after a restart reopens exactly the conversation the run was
     // on, on the agent a Start chooses, or nothing (#18177).
     if (exact !== null && resume?.agentSessionId !== exact) {

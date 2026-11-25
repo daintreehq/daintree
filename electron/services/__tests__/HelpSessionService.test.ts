@@ -4549,6 +4549,13 @@ describe("HelpSessionService", () => {
 
           pty.emit("exit", "term-0");
           expect(marks.get(lane)).toBe(true);
+          // A duplicate spawn refused because the terminal already runs ends nothing.
+          pty.emit("spawn-result", "term-0", {
+            success: false,
+            id: "term-0",
+            error: { code: "TERMINAL_ALREADY_LIVE", message: "live" },
+          });
+          expect(marks.get(lane)).toBe(true);
           pty.emit("spawn-result", "term-0", { success: false, id: "term-0" });
           expect(marks.get(lane)).toBe(false);
         });

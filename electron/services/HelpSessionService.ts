@@ -2395,9 +2395,14 @@ export class HelpSessionService {
     if (this.standingRunsPty === pty) return;
     this.unwatchStandingRuns?.();
     const onExit = (terminalId: string) => this.noteStandingRunEnded(terminalId);
-    // A refused spawn never ran, a quit under way or not.
-    const onSpawnResult = (terminalId: string, result: { success: boolean }) => {
-      if (!result.success) this.noteStandingRunEnded(terminalId, { neverRan: true });
+    // A refused spawn never ran, a quit under way or not; one refused because
+    // the terminal already runs leaves that run be.
+    const onSpawnResult = (
+      terminalId: string,
+      result: { success: boolean; error?: { code?: string } }
+    ) => {
+      if (result.success || result.error?.code === "TERMINAL_ALREADY_LIVE") return;
+      this.noteStandingRunEnded(terminalId, { neverRan: true });
     };
     const onIncarnationLost = (fact: { terminalId: string }) =>
       this.noteStandingRunUnsettled(fact.terminalId);
