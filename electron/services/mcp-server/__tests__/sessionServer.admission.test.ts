@@ -22,6 +22,7 @@ import {
   listTools,
   seedLiveSession,
   makeManifestEntry,
+  toolErrorPayload,
 } from "./helpers/sessionServerFixture.js";
 import { setPluginAssistantReachSource } from "../../plugin/pluginAssistantReach.js";
 
@@ -263,10 +264,13 @@ describe("sessionServer tier-mismatch notifier", () => {
     });
 
     it("leaves it out when no tier would admit the tool", async () => {
-      // No target tier, so the banner carries no Allow button.
-      const text = await refusalText(helpDeps(), "worktree.create");
-      expect(text).toContain("TIER_NOT_PERMITTED");
+      // No tier to raise, so no banner at all: the assistant is told it isn't
+      // there (#18163).
+      const deps = helpDeps();
+      const text = await refusalText(deps, "worktree.create");
+      expect(text).toContain("NOT_FOUND");
       expect(text).not.toContain(HINT);
+      expect(deps.notifyTierMismatch).not.toHaveBeenCalled();
     });
 
     it("leaves it out when the banner reached no live view", async () => {
@@ -1416,7 +1420,7 @@ describe("unscoped terminal input by session origin (#12407)", () => {
     }
   );
 
-  it("names the owned form to another machine's assistant without calling it someone it isn't", async () => {
+  it("names the owned form to another machine's assistant as the call that is there", async () => {
     const deps = originDeps("external", "full");
     (deps as { relay?: unknown }).relay = {
       shellName: "studio-01",
@@ -1429,11 +1433,12 @@ describe("unscoped terminal input by session origin (#12407)", () => {
       arguments: { terminalId: "user-shell", command: "ls" },
     });
 
-    const text = JSON.stringify(result.content);
-    expect(text).toContain("TIER_NOT_PERMITTED");
-    expect(text).toContain("'terminal.sendCommandOwned'");
-    expect(text).toContain("another machine's assistant");
-    expect(text).not.toContain("reserved for Daintree's own assistant");
+    // No tier gives a relay the unscoped form, so it isn't there for it
+    // (#18163); the owned form it may call is (#13493).
+    const payload = toolErrorPayload(result);
+    expect(payload.code).toBe("NOT_FOUND");
+    expect(payload.message).toContain('Use "terminal.sendCommandOwned"');
+    expect(payload.message).not.toContain("reserved for Daintree's own assistant");
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
 
@@ -1682,4 +1687,152 @@ describe("sessionServer forge reads at core (#15399)", () => {
       }
     }
   );
+});
+
+// An id no higher tool set would admit is not a tier problem for a session that
+// has one to raise (#18163): the Assistant and a relayed session are told it
+// isn't there, the way `actions.getSchema` tells them, and the miss is no tier
+// probe. External clients and agent panes keep the one answer they always had.
+describe("a tool id no higher tier would admit (#18163)", () => {
+  type Caller = "assistant" | "relay" | "external" | "pane";
+
+  function missDeps(caller: Caller, tier: "core" | "full" | "external") {
+    const notifyTierMismatch = vi.fn(() => true);
+    const recordDenial = vi.fn(() => ({ tripped: false }));
+    const deps = fakeDeps({ sessionStore: fakeSessionStore(tier), notifyTierMismatch, recordDenial });
+    if (caller === "assistant") deps.sessionStore.sessionOriginMap.set("s-miss", "help");
+    if (caller === "relay") {
+      (deps as { relay?: unknown }).relay = {
+        shellName: "studio-01",
+        refuseWrite: vi.fn(() => null),
+      };
+    }
+    if (caller === "pane") deps.requestApproval = vi.fn();
+    return { deps, notifyTierMismatch, recordDenial };
+  }
+
+  async function call(deps: ReturnType<typeof fakeDeps>, name: string) {
+    const server = createSessionServer("s-miss", deps);
+    await server.connect(makeMockTransport());
+    return (await callTool(server, { name, arguments: {} })) as {
+      isError?: boolean;
+      content: Array<{ text: string }>;
+    };
+  }
+
+  it.each([
+    ["assistant", "core"],
+    ["assistant", "full"],
+    ["relay", "core"],
+    ["relay", "full"],
+  ] as const)("tells a %s session at %s that an unknown id isn't there", async (caller, tier) => {
+    const { deps, notifyTierMismatch, recordDenial } = missDeps(caller, tier);
+    const incrementDenial = vi.spyOn(deps.sessionStore.grantCache, "incrementDenial");
+
+    const result = await call(deps, "no.such.tool");
+
+    expect(result.isError).toBe(true);
+    const payload = toolErrorPayload(result);
+    expect(payload.code).toBe("NOT_FOUND");
+    expect(payload.message).toContain("no.such.tool");
+    expect(payload.message).toContain("actions.search");
+    expect(payload.message).not.toContain("tier");
+    expect(notifyTierMismatch).not.toHaveBeenCalled();
+    expect(recordDenial).not.toHaveBeenCalled();
+    expect(incrementDenial).not.toHaveBeenCalled();
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+    expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "no.such.tool",
+        outcome: {
+          kind: "result",
+          value: expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({ code: "NOT_FOUND" }),
+          }),
+        },
+      })
+    );
+  });
+
+  it("answers NOT_FOUND for a real action on neither of the Assistant's tool sets", async () => {
+    // `worktree.create` left MCP for `worktree.createWithRecipe`; no Tool set
+    // reaches it, and `actions.getSchema` already says so.
+    const { deps, notifyTierMismatch, recordDenial } = missDeps("assistant", "full");
+
+    const payload = toolErrorPayload(await call(deps, "worktree.create"));
+
+    expect(payload.code).toBe("NOT_FOUND");
+    expect(notifyTierMismatch).not.toHaveBeenCalled();
+    expect(recordDenial).not.toHaveBeenCalled();
+  });
+
+  it("never lets a run of typos end an Assistant's session", async () => {
+    const { deps, recordDenial } = missDeps("assistant", "full");
+    const server = createSessionServer("s-miss", deps);
+    await server.connect(makeMockTransport());
+
+    for (let i = 0; i < 6; i++) {
+      const result = await callTool(server, { name: `no.such.tool${i}`, arguments: {} });
+      expect(toolErrorPayload(result).code).toBe("NOT_FOUND");
+    }
+    expect(recordDenial).not.toHaveBeenCalled();
+  });
+
+  it("keeps the tier refusal, its banner and its count when a higher Tool set admits the tool", async () => {
+    const { deps, notifyTierMismatch, recordDenial } = missDeps("assistant", "core");
+
+    const payload = toolErrorPayload(await call(deps, "project.runCheck"));
+
+    expect(payload.code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(notifyTierMismatch).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "project.runCheck", targetTier: "full" })
+    );
+    expect(recordDenial).toHaveBeenCalledWith("s-miss", "tierMismatch");
+  });
+
+  it.each([
+    ["external", "external"],
+    ["external", "core"],
+    ["pane", "core"],
+    ["pane", "full"],
+  ] as const)(
+    "keeps one answer for a %s session at %s and counts the miss",
+    async (caller, tier) => {
+      const { deps, recordDenial } = missDeps(caller, tier);
+
+      const payload = toolErrorPayload(await call(deps, "no.such.tool"));
+
+      expect(payload.code).toBe(TIER_NOT_PERMITTED_CODE);
+      expect(recordDenial).toHaveBeenCalledWith("s-miss", "tierMismatch");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    }
+  );
+
+  it("tells an api-key client an unknown id and a real one above its tier the same way", async () => {
+    // `project.runCheck` is real, and off the external list (#12139).
+    const unknown = missDeps("external", "external");
+    const real = missDeps("external", "external");
+
+    const unknownPayload = toolErrorPayload(await call(unknown.deps, "no.such.tool"));
+    const realPayload = toolErrorPayload(await call(real.deps, "project.runCheck"));
+
+    expect(unknownPayload.code).toBe(realPayload.code);
+    expect(unknownPayload.message.replace("no.such.tool", "X")).toBe(
+      realPayload.message.replace("project.runCheck", "X")
+    );
+    expect(unknown.recordDenial.mock.calls).toEqual(real.recordDenial.mock.calls);
+  });
+
+  it("points a core relay at search, not at an owned form only full carries", async () => {
+    // `terminal.inject`'s owned twin is full-only, so naming it would be a
+    // call this session is refused too.
+    const { deps } = missDeps("relay", "core");
+
+    const payload = toolErrorPayload(await call(deps, "terminal.inject"));
+
+    expect(payload.code).toBe("NOT_FOUND");
+    expect(payload.message).toContain("actions.search");
+    expect(payload.message).not.toContain("terminal.injectOwned");
+  });
 });

@@ -1605,7 +1605,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       );
 
     const admission = admitToolCall(
-      { sessionStore, notifyTierMismatch, recordDenial, clearDenialState, notifySessionRevoked },
+      {
+        sessionStore,
+        notifyTierMismatch,
+        recordDenial,
+        clearDenialState,
+        notifySessionRevoked,
+        hostCallOffered,
+      },
       sessionSurface,
       facts,
       callers,

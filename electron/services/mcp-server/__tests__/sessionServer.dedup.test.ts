@@ -9,7 +9,6 @@ vi.mock("electron", () => ({
 import { createSessionServer, type SessionServerDeps } from "../sessionServer.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import {
-  TIER_NOT_PERMITTED_CODE,
   MCP_DEDUP_KEY_COLLISION_CODE,
   MCP_DEDUP_ALLOWLIST,
   minimumPermittingTier,
@@ -844,7 +843,7 @@ describe("worktree.create redispatch (#11880)", () => {
     options: { baseBranch: "develop", newBranch: "bugfix/issue-6463", path: "/repo-wt-a" },
   };
 
-  it("refuses worktree.create from the assistant's full tool set without dispatching", async () => {
+  it("tells the assistant's full tool set worktree.create isn't there, without dispatching", async () => {
     const dispatchAction = vi.fn();
     const deps = fakeDeps({ sessionStore: fakeSessionStore("full"), dispatchAction });
     deps.sessionStore.sessionOriginMap.set("recreate-11880", "help");
@@ -852,7 +851,8 @@ describe("worktree.create redispatch (#11880)", () => {
 
     const result = await callTool(server, { name: "worktree.create", arguments: createArgs });
 
-    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    // No Tool set reaches it, so it is not a tier refusal (#18163).
+    expect(toolErrorPayload(result).code).toBe("NOT_FOUND");
     expect(dispatchAction).not.toHaveBeenCalled();
   });
 });

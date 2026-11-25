@@ -19,6 +19,9 @@ import {
   isWithheldFromRelaySession,
   isWithheldFromRelayDiscovery,
   isTierPermitted,
+  isExistenceCatalogVisible,
+  higherPermittingTier,
+  actionNotFoundMessage,
   pluginActionMinimumTier,
   sessionReachesPluginActions,
   isApprovalRequestable,
@@ -164,6 +167,7 @@ export function admitToolCall(
       SessionStore,
       "grantCache" | "sessionWebContentsMap" | "isRendererOwnedOrigin" | "revokeSession"
     >;
+    readonly hostCallOffered: () => boolean;
   },
   sessionSurface: Readonly<SessionSurfacePolicy>,
   facts: CallFacts,
@@ -172,8 +176,14 @@ export function admitToolCall(
 ): CallGate<CallAdmission> {
   const { sessionId, actionId, args, tier, startedAt, capturedTurnId, rendererOwnedOrigin } = facts;
   const { commandRunnerCaller, assistantControlCaller } = callers;
-  const { sessionStore, notifyTierMismatch, recordDenial, clearDenialState, notifySessionRevoked } =
-    deps;
+  const {
+    sessionStore,
+    notifyTierMismatch,
+    recordDenial,
+    clearDenialState,
+    notifySessionRevoked,
+    hostCallOffered,
+  } = deps;
   // Layered authorization (#8442):
   //   1. Static tier floor (`TIER_ALLOWLISTS`) — core/full membership
   //      stays the default. The "Always allow" project setting
@@ -200,21 +210,17 @@ export function admitToolCall(
   // A relayed session is refused what it is never listed (#13493), whatever
   // its tier, and no grant stands in for that: it has none to consult.
   const relayWithheld = sessionSurface.relay === true && isWithheldFromRelaySession(actionId);
+  const pluginReach = sessionReachesPluginActions({
+    rendererOwnedOrigin,
+    relayPluginReach: sessionSurface.relayPluginReach,
+  });
   const tierPermitted =
     !relayWithheld &&
     (actionId === PROJECT_RUN_COMMAND_TOOL
       ? commandRunnerCaller
       : ASSISTANT_CONTROL_TOOL_IDS.has(actionId)
         ? assistantControlCaller
-        : isTierPermitted(
-            tier,
-            actionId,
-            rendererOwnedOrigin,
-            sessionReachesPluginActions({
-              rendererOwnedOrigin,
-              relayPluginReach: sessionSurface.relayPluginReach,
-            })
-          ));
+        : isTierPermitted(tier, actionId, rendererOwnedOrigin, pluginReach));
   // An agent pane's tier is an auto-approval line, not a ceiling (#12692).
   const paneApproval = sessionSurface.paneApproval === true;
   let grantIssuedAt: number | undefined;
@@ -279,6 +285,51 @@ export function admitToolCall(
     nativeGrantId === undefined &&
     isApprovalRequestable(tier, actionId, paneApproval);
   if (!authorizedWithoutNativeGrant && nativeGrantId === undefined && !approvalRequired) {
+    // A session with a Tool set to raise is told that an id no higher one would
+    // admit isn't here, as `actions.getSchema` tells it (#18163): a tier refusal
+    // sends its assistant to the user for a change that can't help. That covers
+    // a typo, a removed tool, and a real tool this origin never reaches, which
+    // is also why none of them raises the banner or counts as a tier probe. An
+    // api-key client and an agent pane keep the one answer below, misses
+    // counted alike, so a real id above an external tier still reads the same
+    // as an unknown one (#12139).
+    const existence = {
+      tier,
+      rendererOwnedOrigin,
+      relay: sessionSurface.relay === true,
+      relayGlobal: sessionSurface.relayGlobal === true,
+      relayPluginReach: sessionSurface.relayPluginReach === true,
+    };
+    if (
+      isExistenceCatalogVisible(existence) &&
+      higherPermittingTier(actionId, { ...existence, hostCall: hostCallOffered() }) === null
+    ) {
+      const twin = (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[actionId];
+      const message = actionNotFoundMessage(
+        actionId,
+        twin !== undefined &&
+          isTierPermitted(tier, twin, rendererOwnedOrigin, pluginReach) &&
+          !isWithheldFromRelayDiscovery(twin, sessionSurface)
+          ? twin
+          : undefined
+      );
+      try {
+        appendAuditRecord({
+          toolId: actionId,
+          sessionId,
+          tier,
+          args,
+          durationMs: Date.now() - startedAt,
+          startedAt,
+          outcome: { kind: "result", value: { ok: false, error: { code: "NOT_FOUND", message } } },
+          capturedTurnId,
+          rendererOwnedOrigin,
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append audit record:", err);
+      }
+      return { kind: "return", result: buildToolError({ code: "NOT_FOUND", message }) };
+    }
     // Increment first, then ask the cache whether to suppress. The
     // post-increment count reflects "this denial counted"; the cache's
     // threshold compares against that. With threshold=2 the 1st and
@@ -356,13 +407,13 @@ export function admitToolCall(
     const ownedTwin = withheldByOrigin
       ? (OWNED_TWIN_TOOLS as Readonly<Record<string, string>>)[actionId]
       : undefined;
-    // A relayed caller is another machine's own assistant, so "reserved for
-    // Daintree's own assistant" would tell it it is something it isn't (#13493).
-    const relayed = sessionSurface.relay === true;
+    // A relayed caller never reaches these three: no tier list a relay is
+    // admitted against carries a plugin's action or an unscoped tool, so it was
+    // told above that they aren't here (#18163).
     // Without this the assistant only heard a refusal, and its instructions
     // said a new session was the way past it.
     const allowHint =
-      allowOffered && !relayed
+      allowOffered && sessionSurface.relay !== true
         ? " The user can allow it from the Assistant panel; retry once told it's allowed."
         : "";
     return {
@@ -370,17 +421,11 @@ export function admitToolCall(
       result: buildToolError({
         code: TIER_NOT_PERMITTED_CODE,
         message: pluginAssistantOnly
-          ? relayed
-            ? `action '${actionId}' is a plugin's, offered only to the assistant of the machine it runs on.`
-            : `action '${actionId}' is a plugin's, offered only to Daintree's own assistant.`
+          ? `action '${actionId}' is a plugin's, offered only to Daintree's own assistant.`
           : ownedTwin !== undefined
-            ? relayed
-              ? `action '${actionId}' can reach any terminal or worktree on this host, so another machine's assistant uses '${ownedTwin}' here, which acts on what its calls created or started.`
-              : `action '${actionId}' can reach any terminal or worktree, so it is reserved for Daintree's own assistant. Use '${ownedTwin}', which acts on what this connection created.`
+            ? `action '${actionId}' can reach any terminal or worktree, so it is reserved for Daintree's own assistant. Use '${ownedTwin}', which acts on what this connection created.`
             : withheldByOrigin
-              ? relayed
-                ? `action '${actionId}' can reach any terminal on this host, so another machine's assistant may only act on terminals its calls created or started here.`
-                : `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only act on terminals it created.`
+              ? `action '${actionId}' can reach any terminal, so it is reserved for Daintree's own assistant. This connection may only act on terminals it created.`
               : `action '${actionId}' is not permitted for the '${tier}' tier.${allowHint}`,
       }),
     };

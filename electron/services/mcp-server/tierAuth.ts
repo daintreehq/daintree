@@ -1018,9 +1018,9 @@ const LADDER_RANK: Readonly<Record<LadderTier, number>> = {
  * An absent snapshot is a denial. Every introspection call in `sessionServer`
  * supplies one; its absence means a caller this module cannot classify.
  */
-function isExistenceCatalogVisible(
-  snapshot: TargetPolicySessionSnapshot | undefined
-): snapshot is TargetPolicySessionSnapshot & { tier: LadderTier } {
+export function isExistenceCatalogVisible<
+  T extends Pick<TargetPolicySessionSnapshot, "tier" | "rendererOwnedOrigin" | "relay">,
+>(snapshot: T | undefined): snapshot is T & { tier: LadderTier } {
   if (snapshot === undefined) return false;
   if (!snapshot.rendererOwnedOrigin && snapshot.relay !== true) return false;
   // Named positively rather than as `!== "external"`. A second flat peer added
@@ -1028,6 +1028,41 @@ function isExistenceCatalogVisible(
   // with no tier to report and nothing here to notice; this form refuses it
   // until someone puts it on the ladder deliberately.
   return snapshot.tier === "core" || snapshot.tier === "full";
+}
+
+/**
+ * The Tool set above this session's that would admit `id`, or null when raising
+ * it would change nothing (#12117). Asked only of a session that may see the
+ * existence catalog ({@link isExistenceCatalogVisible}), and shared by the
+ * existence stub and the dispatch refusal (#18163), so `actions.getSchema` and
+ * a call to the same id draw the line between "not at your tier" and "not here"
+ * in the same place.
+ */
+export function higherPermittingTier(
+  id: string,
+  session: Pick<
+    TargetPolicySessionSnapshot,
+    "rendererOwnedOrigin" | "relay" | "relayGlobal" | "relayPluginReach" | "hostCall"
+  > & { readonly tier: LadderTier }
+): LadderTier | null {
+  // No tier makes these exist for anything but an assistant, so "raise your tier" would be wrong.
+  if (HOST_CONTROL_TOOL_IDS.has(id) && session.hostCall !== true) return null;
+  if (ASSISTANT_CONTROL_TOOL_IDS.has(id)) return null;
+  if (isWithheldFromRelayDiscovery(id, session)) return null;
+  const minimumTier = minimumPermittingTier(id, session.rendererOwnedOrigin === true);
+  if (minimumTier === null) return null;
+  return LADDER_RANK[minimumTier] > LADDER_RANK[session.tier] ? minimumTier : null;
+}
+
+/**
+ * What a session that may see the existence catalog is told about an id it
+ * cannot reach at any tier, from `actions.getSchema` and from a call alike
+ * (#18163). Names the owned twin when the caller would be admitted to it.
+ */
+export function actionNotFoundMessage(id: string, callableTwin: string | undefined): string {
+  return callableTwin !== undefined
+    ? `No action found with id "${id}" for this session. Use "${callableTwin}", which acts on what this session created or started.`
+    : `No action found with id "${id}". Use actions.search to find available actions.`;
 }
 
 /**
@@ -1075,10 +1110,6 @@ export function buildUnavailableStub(
   if (!isExistenceCatalogVisible(snapshot)) return null;
   const id = readEntryId(entry);
   if (id === null) return null;
-  // No tier makes these exist for anything but an assistant, so "raise your tier" would be wrong.
-  if (HOST_CONTROL_TOOL_IDS.has(id) && snapshot.hostCall !== true) return null;
-  if (ASSISTANT_CONTROL_TOOL_IDS.has(id)) return null;
-  if (isWithheldFromRelayDiscovery(id, snapshot)) return null;
   const record = entry as Partial<ActionManifestEntry>;
 
   if (record.mcpVisibility === "hidden") return null;
@@ -1088,9 +1119,8 @@ export function buildUnavailableStub(
   if (typeof title !== "string" || title.length === 0) return null;
   if (typeof category !== "string" || category.length === 0) return null;
 
-  const minimumTier = minimumPermittingTier(id, snapshot.rendererOwnedOrigin === true);
+  const minimumTier = higherPermittingTier(id, snapshot);
   if (minimumTier === null) return null;
-  if (LADDER_RANK[minimumTier] <= LADDER_RANK[snapshot.tier]) return null;
 
   return {
     id,
@@ -1353,10 +1383,10 @@ export function filterIntrospectionResultForSession(
         policy: null,
         error: {
           code: "NOT_FOUND",
-          message:
-            twin !== undefined && permittedActionIds.has(twin)
-              ? `No action found with id "${requestedId}" for this session. Use "${twin}", which acts on what this session created or started.`
-              : `No action found with id "${requestedId ?? "unknown"}". Use actions.search to find available actions.`,
+          message: actionNotFoundMessage(
+            requestedId ?? "unknown",
+            twin !== undefined && permittedActionIds.has(twin) ? twin : undefined
+          ),
         },
       },
     };
