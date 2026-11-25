@@ -1122,21 +1122,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
         }
       }
     },
-    onHostModeStarted: (connection) => {
-      for (const host of registry.list()) {
-        if (!sameHostConnection(host.connection, connection)) continue;
-        // Only a link that stopped because no Daintree listened there: one up,
-        // dialling, let go, or stopped for another reason (ssh refused) is left be.
-        const state = manager.connectionState(host.id);
-        if (state.status !== "unreachable" || !state.stoppedRetrying || !state.hostModeOff)
-          continue;
-        const link = manager.get(host.id);
-        if (!link) continue;
-        // Parked a while with nothing using it: the dial gets the whole idle window.
-        manager.touch(host.id);
-        link.retryNow();
-      }
-    },
+    onHostModeStarted: (connection) => client.hostModeStarted(connection),
   });
   // A host whose Daintree answered is checked afresh the next time it isn't serving.
   const stopStartRechecks = manager.onStateChange((hostId, state) => {

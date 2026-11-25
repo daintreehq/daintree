@@ -109,13 +109,16 @@ let h: RemoteHarness | null = null;
 let root: string | null = null;
 
 afterEach(async () => {
-  await h?.dispose();
-  h = null;
-  if (root) await fs.rm(root, { recursive: true, force: true });
-  root = null;
-  remote.scripts = [];
-  remote.answer = () => Promise.resolve("");
-  remote.exitCode = () => 0;
+  try {
+    await h?.dispose();
+    h = null;
+    if (root) await fs.rm(root, { recursive: true, force: true });
+    root = null;
+  } finally {
+    remote.scripts = [];
+    remote.answer = () => Promise.resolve("");
+    remote.exitCode = () => 0;
+  }
 });
 
 /** What the host is doing, as its Host mode record and listener say. */
@@ -283,6 +286,7 @@ describe("setup starting Host mode on a host whose link parked (#18182)", () => 
     const host: HostSide = { enabled: false, stopped: false, listening: false };
     h = await harnessFor(host);
     await expect(h.shell().client.connectAndWait(HOST_ID, 10_000)).resolves.toBe("host-mode-off");
+    const retryNow = vi.spyOn(h.manager.get(HOST_ID)!, "retryNow");
     const answer = remote.answer;
     // No one is logged in there, so the launch is refused and nothing starts.
     remote.exitCode = (script) => (startsHostMode(script) ? 1 : 0);
@@ -292,8 +296,10 @@ describe("setup starting Host mode on a host whose link parked (#18182)", () => 
       requireRemoteService("hostSetup").startHostMode({
         connection: { kind: "ssh", target: "studio.example" },
       })
-    ).rejects.toBeInstanceOf(Error);
+    ).rejects.toMatchObject({ userMessage: expect.stringContaining("Couldn't start Daintree on") });
 
+    expect(remote.scripts.filter(startsHostMode)).toHaveLength(1);
+    expect(retryNow).not.toHaveBeenCalled();
     expect(h.manager.connectionState(HOST_ID)).toMatchObject({
       status: "unreachable",
       hostModeOff: true,

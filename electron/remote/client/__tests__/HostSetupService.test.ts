@@ -321,48 +321,66 @@ describe("HostSetupService", () => {
     const connection = { kind: "ssh", target: "studio" } as const;
     const starting = (outputs: string[], open: () => { code: number }) => {
       const onHostModeStarted = vi.fn();
+      const launches: string[] = [];
+      /** How many times the host's link had been told, at each probe and launch. */
+      const toldBy: number[] = [];
       const deps: Partial<HostSetupDeps> = {
         onHostModeStarted,
         run: async (_command, args) => {
           const script = args.at(-1) ?? "";
+          toldBy.push(onHostModeStarted.mock.calls.length);
           if (script.includes("@@dt:uname"))
             return ok(outputs.length > 1 ? outputs.shift()! : outputs[0]!);
-          if (script.includes("open -n -g -a")) return { ...ok(), ...open() };
+          if (script.includes("open -n -g -a")) {
+            launches.push(script);
+            return { ...ok(), ...open() };
+          }
           return ok();
         },
       };
-      return { deps, onHostModeStarted };
+      return { deps, onHostModeStarted, launches, toldBy };
     };
 
-    it("says Host mode is on once a start there reads back", async () => {
-      const { deps, onHostModeStarted } = starting([stopped, on], () => ({ code: 0 }));
+    it("says Host mode is on once a start there reads back, and not before", async () => {
+      const { deps, onHostModeStarted, launches, toldBy } = starting([stopped, on], () => ({
+        code: 0,
+      }));
       const { setup } = service("", deps);
       await setup.startHostMode({ connection });
+      expect(launches).toEqual([expect.stringContaining("--enable-host-mode")]);
+      // Not while launching, nor before the read-back that confirmed it.
+      expect(toldBy.length).toBeGreaterThan(2);
+      expect(toldBy.every((told) => told === 0)).toBe(true);
       expect(onHostModeStarted).toHaveBeenCalledExactlyOnceWith(connection);
     });
 
     it("says so for a host found already on, as a second Retry finds it", async () => {
-      const { deps, onHostModeStarted } = starting([on], () => ({ code: 0 }));
+      const { deps, onHostModeStarted, launches } = starting([on], () => ({ code: 0 }));
       const { setup } = service("", deps);
       await setup.startHostMode({ connection });
+      expect(launches).toEqual([]);
       expect(onHostModeStarted).toHaveBeenCalledExactlyOnceWith(connection);
     });
 
     it("says nothing when the start fails, so a parked link stays parked", async () => {
-      const { deps, onHostModeStarted } = starting([stopped], () => ({ code: 1 }));
+      const { deps, onHostModeStarted, launches } = starting([stopped], () => ({ code: 1 }));
       const { setup } = service("", deps);
-      await expect(setup.startHostMode({ connection })).rejects.toBeInstanceOf(Error);
+      await expect(setup.startHostMode({ connection })).rejects.toMatchObject({
+        userMessage: expect.stringContaining("Couldn't start Daintree on"),
+      });
+      expect(launches).toHaveLength(1);
       expect(onHostModeStarted).not.toHaveBeenCalled();
     });
 
     it("says nothing about a host that began being removed while it started", async () => {
       let retiring = false;
-      const { deps, onHostModeStarted } = starting([stopped, on], () => {
+      const { deps, onHostModeStarted, launches } = starting([stopped, on], () => {
         retiring = true;
         return { code: 0 };
       });
       const { setup } = service("", { ...deps, isRetiring: () => retiring });
       await setup.startHostMode({ connection });
+      expect(launches).toHaveLength(1);
       expect(onHostModeStarted).not.toHaveBeenCalled();
     });
   });
