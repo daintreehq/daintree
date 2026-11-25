@@ -1829,6 +1829,7 @@ export const CHANNELS = {
   CLOUD_HOSTS_VALIDATE_ACCOUNT: "cloud-hosts:validate-account",
   CLOUD_HOSTS_GET_CATALOG: "cloud-hosts:get-catalog",
   CLOUD_HOSTS_LIST_RESOURCES: "cloud-hosts:list-resources",
+  CLOUD_HOSTS_FIND_TUNNEL: "cloud-hosts:find-tunnel",
   CLOUD_HOSTS_CREATE_HOST: "cloud-hosts:create-host",
   CLOUD_HOSTS_CREATE_HOST_FOR_WORKTREE: "cloud-hosts:create-host-for-worktree",
   CLOUD_HOSTS_IMPORT_HOST: "cloud-hosts:import-host",

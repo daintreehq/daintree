@@ -17,6 +17,7 @@ import type {
   CloudCredentialValues,
   CloudHostsSnapshot,
   CloudResourceSummary,
+  CloudTunnelLookup,
   CloudWorktreeCleanupOutcome,
   CloudWorktreeCleanupRequest,
   CloudWorktreeRef,
@@ -152,6 +153,12 @@ export const cloudHostsNamespace = defineIpcNamespace({
       CLOUD_HOSTS_METHOD_CHANNELS.listResources,
       async (payload: { accountId: string }): Promise<CloudResourceSummary[]> =>
         requireRemoteService("cloudHosts").listResources(field(payload, "accountId"))
+    ),
+    // This device's PATH, whatever host the asking window shows: the tunnel runs here.
+    findTunnel: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.findTunnel,
+      async (payload: { providerId: string }): Promise<CloudTunnelLookup | null> =>
+        requireRemoteService("cloudHosts").findTunnel(field(payload, "providerId"))
     ),
     createHost: op(
       CLOUD_HOSTS_METHOD_CHANNELS.createHost,

@@ -11,6 +11,7 @@ export const CLOUD_HOSTS_METHOD_CHANNELS = {
   validateAccount: "cloud-hosts:validate-account",
   getCatalog: "cloud-hosts:get-catalog",
   listResources: "cloud-hosts:list-resources",
+  findTunnel: "cloud-hosts:find-tunnel",
   createHost: "cloud-hosts:create-host",
   createHostForWorktree: "cloud-hosts:create-host-for-worktree",
   importHost: "cloud-hosts:import-host",
