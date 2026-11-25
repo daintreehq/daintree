@@ -108,7 +108,9 @@ export function HostAgentSignInDialog({
                 Runs <code className="select-text">{labels.command}</code> on {hostName}.
               </>
             ) : (
-              <>Runs {agentName}&apos;s own sign-in on {hostName}.</>
+              <>
+                Runs {agentName}&apos;s own sign-in on {hostName}.
+              </>
             )}{" "}
             {labels?.prompt && (
               <>

@@ -197,9 +197,9 @@ describe("a host's agent CLI sign-ins", () => {
   it("starts one sign-in per viewer, and a bounded number at once", async () => {
     const s = setup();
     await s.signIn({ viewerId: "a", op: "start", agentId: "claude" });
-    await expect(
-      s.signIn({ viewerId: "a", op: "start", agentId: "codex" })
-    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(s.signIn({ viewerId: "a", op: "start", agentId: "codex" })).rejects.toMatchObject({
+      code: "VALIDATION",
+    });
     for (let i = 1; i < MAX_HOST_SIGN_INS; i++) {
       await s.signIn({ viewerId: `v${i}`, op: "start", agentId: "claude" });
     }

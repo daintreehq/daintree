@@ -339,7 +339,9 @@ export class ShardRecoveryCoordinator {
   private dropNeverReplayedSpawns(shard: PtyShard): void {
     for (const id of [...this.deps.pendingSpawns.keys()]) {
       const neverReplayed =
-        isHostThrowawayTerminalId(id) || isDecisionsRelayTerminalId(id) || isHostSignInTerminalId(id);
+        isHostThrowawayTerminalId(id) ||
+        isDecisionsRelayTerminalId(id) ||
+        isHostSignInTerminalId(id);
       if (!neverReplayed || this.deps.ownerKey(id) !== shard.key) continue;
       this.deps.pendingSpawns.delete(id);
       this.deps.displacedSpawns.delete(id);

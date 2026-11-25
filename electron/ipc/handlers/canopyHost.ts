@@ -110,12 +110,7 @@ export const canopyHostNamespace = defineIpcNamespace({
      */
     startSignIn: op(
       CANOPY_HOST_METHOD_CHANNELS.startSignIn,
-      async (
-        ctx,
-        consumer: string,
-        hostId: string,
-        agentId: string
-      ): Promise<HostSignInTerminal> =>
+      async (ctx, consumer: string, hostId: string, agentId: string): Promise<HostSignInTerminal> =>
         requireRemoteService("canopyHosts").startSignIn(
           ctx.webContentsId,
           consumer,

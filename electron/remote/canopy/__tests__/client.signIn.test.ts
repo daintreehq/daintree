@@ -259,9 +259,9 @@ describe("CanopyHostsClient sign-ins", () => {
       },
     ]);
     // Its viewer went with the old link: nothing is started or watched again.
-    expect(s.calls.slice(before).filter((call) => call.method === CanopyLinkMethod.SIGN_IN)).toEqual(
-      []
-    );
+    expect(
+      s.calls.slice(before).filter((call) => call.method === CanopyLinkMethod.SIGN_IN)
+    ).toEqual([]);
     expect(s.inUse("studio")).toBe(false);
     await expect(
       s.client.signInStep(VIEW, "dialog-1", { op: "input", watchId: 9, data: "y" })

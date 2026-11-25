@@ -611,7 +611,8 @@ class AgentNotificationService {
         this.activeSeedTouched = null;
         let seeded = false;
         for (const terminal of terminals) {
-          if (isHostThrowawayTerminalId(terminal.id) || isHostSignInTerminalId(terminal.id)) continue;
+          if (isHostThrowawayTerminalId(terminal.id) || isHostSignInTerminalId(terminal.id))
+            continue;
           // Read each live terminal's project now, while the host still names
           // it: a natural exit drops that attribution before its last event.
           const projectId = ptyClient.getTerminalProjectId(terminal.id) ?? terminal.projectId;
