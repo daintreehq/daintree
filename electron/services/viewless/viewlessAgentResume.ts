@@ -410,7 +410,9 @@ async function launchResumedPane(
   if (!outcome.started) {
     return refused(
       "spawn-failed",
-      outcome.code ? `${NOT_STARTED}: the terminal host reported ${outcome.code}.` : `${NOT_STARTED}.`
+      outcome.code
+        ? `${NOT_STARTED}: the terminal host reported ${outcome.code}.`
+        : `${NOT_STARTED}.`
     );
   }
 

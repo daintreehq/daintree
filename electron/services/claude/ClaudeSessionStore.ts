@@ -169,7 +169,9 @@ export function describeClaudeProjectsRoot(projectsRoot: string, home = os.homed
     return `$HOME/${relative.split(path.sep).join("/")}`;
   }
   const configFolder = path.basename(path.dirname(projectsRoot));
-  return configFolder ? `${configFolder}/projects outside $HOME` : "a projects folder outside $HOME";
+  return configFolder
+    ? `${configFolder}/projects outside $HOME`
+    : "a projects folder outside $HOME";
 }
 
 const unreachableUntil = new Map<string, number>();
