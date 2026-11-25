@@ -707,6 +707,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { accountId: string; consent: string }];
     result: import("../cloudHosts.js").CloudAccountSummary;
   };
+  "cloud-hosts:cancel-order": {
+    args: [payload: import("./cloudHosts.js").CloudOrderRequest];
+    result: void;
+  };
   "cloud-hosts:check-account-key": {
     args: [
       payload: {
@@ -716,6 +720,10 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: import("../cloudHosts.js").CloudAccountCheckResult;
+  };
+  "cloud-hosts:choose-offer": {
+    args: [payload: import("./cloudHosts.js").CloudOfferChoiceRequest];
+    result: void;
   };
   "cloud-hosts:create-host": {
     args: [payload: import("../cloudHosts.js").CloudHostCreateRequest];
@@ -765,6 +773,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "cloud-hosts:refresh-host": {
     args: [payload: { hostId: string }];
+    result: void;
+  };
+  "cloud-hosts:refresh-offers": {
+    args: [payload: import("./cloudHosts.js").CloudOrderRequest];
     result: void;
   };
   "cloud-hosts:remove-account": {

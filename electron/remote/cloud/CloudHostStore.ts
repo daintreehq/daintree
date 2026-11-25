@@ -319,9 +319,48 @@ export interface CloudHostsValue {
   providerConsents?: StoredProviderConsent[];
 }
 
+/**
+ * An order an offer-based create placed, or is about to (#18230). Written
+ * before the provider is asked, so a lost answer or a restart finds it again
+ * by its labels and key; kept past its host until the provider confirms it
+ * closed. Lives in its own store key, `cloudCreateOrders`: a build from before
+ * it rewrites `cloudHosts` whole, and would drop an order's last record.
+ */
+export interface StoredCreateOrder {
+  /** This placement's own id; every order a create places gets a new one. */
+  id: string;
+  bindingId: string;
+  accountId: string;
+  providerId: CloudProviderId;
+  /** What the placement carried, which `findOrders` matches. */
+  labels: Record<string, string>;
+  idempotencyKey: string;
+  /**
+   * `placing` until the provider answers, `open` while it waits on a choice,
+   * `leasing` once the chosen offer's lease is sent, and `close` once nothing
+   * may be leased from it: cancelled, its host removed, or a lease unconfirmed.
+   */
+  state: "placing" | "open" | "leasing" | "close";
+  /**
+   * The provider's ids for it: one once placed, several when a lost answer
+   * left more, the ones still to close while closing. Null while the
+   * placement's answer is unknown, so the order is looked for by its labels.
+   */
+  orderIds: string[] | null;
+  /** When the placement was sent. */
+  placedAt: number;
+  /** When this device began waiting on the choice; null before then. */
+  waitingSince: number | null;
+  /** The offer whose lease was sent, while `leasing`. */
+  offerId: string | null;
+}
+
+export type CloudCreateOrdersValue = StoredCreateOrder[];
+
 export interface CloudHostsStoreBackend {
-  get(key: "cloudHosts"): unknown;
+  get(key: "cloudHosts" | "cloudCreateOrders"): unknown;
   set(key: "cloudHosts", value: CloudHostsValue): void;
+  set(key: "cloudCreateOrders", value: CloudCreateOrdersValue): void;
 }
 
 export { isValidCloudAccountId };
@@ -711,6 +750,58 @@ function readMachineKey(raw: unknown): StoredMachineKey | null {
   };
 }
 
+const CREATE_ORDER_STATES = new Set(["placing", "open", "leasing", "close"]);
+
+function readStringList(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const ids = value.filter((id): id is string => typeof id === "string" && id.length > 0);
+  return ids.length === value.length ? ids : null;
+}
+
+function readLabels(value: unknown): Record<string, string> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0 || entries.some(([, label]) => typeof label !== "string")) return null;
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+/**
+ * An order record that doesn't read is never acted on: nothing here could
+ * tell which order it names. A state that needs an order id reads only with one.
+ */
+function readCreateOrder(raw: unknown): StoredCreateOrder | null {
+  const value = raw as Record<string, unknown> | null;
+  if (!value || typeof value !== "object") return null;
+  const id = nonEmpty(value.id);
+  const bindingId = nonEmpty(value.bindingId);
+  const accountId = nonEmpty(value.accountId);
+  const providerId = nonEmpty(value.providerId);
+  const idempotencyKey = nonEmpty(value.idempotencyKey);
+  const labels = readLabels(value.labels);
+  if (!id || !bindingId || !accountId || !providerId || !idempotencyKey || !labels) return null;
+  if (!isCloudProviderId(providerId) || !CREATE_ORDER_STATES.has(value.state as string)) return null;
+  const state = value.state as StoredCreateOrder["state"];
+  const orderIds = value.orderIds === null ? null : readStringList(value.orderIds);
+  if (orderIds === null && value.orderIds !== null) return null;
+  const offerId = nonEmpty(value.offerId);
+  if (state === "placing" && orderIds !== null) return null;
+  if ((state === "open" || state === "leasing") && orderIds?.length !== 1) return null;
+  if (state === "leasing" && !offerId) return null;
+  return {
+    id,
+    bindingId,
+    accountId,
+    providerId,
+    labels,
+    idempotencyKey,
+    state,
+    orderIds,
+    placedAt: num(value.placedAt) ?? 0,
+    waitingSince: num(value.waitingSince),
+    offerId: state === "leasing" ? offerId : null,
+  };
+}
+
 function readProviderConsent(raw: unknown): StoredProviderConsent | null {
   const value = raw as Record<string, unknown> | null;
   if (!value || typeof value !== "object") return null;
@@ -847,8 +938,21 @@ export class CloudHostStore {
     return next;
   }
 
-  /** Removes the binding and, in the same write, marks every key its machine was given for revoking. */
+  /**
+   * Removes the binding and, in the same write, marks every key its machine was
+   * given for revoking. Its orders are marked for closing first, in their own
+   * key: a crash between the two writes leaves a close to finish, never an
+   * order nothing here names.
+   */
   removeBinding(id: string): void {
+    this.mutateOrders((orders) =>
+      orders.map((entry) => {
+        const order = readCreateOrder(entry);
+        return order?.bindingId === id && order.state !== "close"
+          ? { ...order, state: "close" as const, offerId: null }
+          : entry;
+      })
+    );
     this.mutate((raw) => {
       raw.bindings = raw.bindings.filter((entry) => (entry as { id?: unknown })?.id !== id);
       raw.machineKeys = raw.machineKeys.map((entry) => {
@@ -894,6 +998,60 @@ export class CloudHostStore {
     this.mutate((raw) => {
       raw.machineKeys = raw.machineKeys.filter((entry) => (entry as { id?: unknown })?.id !== id);
     });
+  }
+
+  private rawOrders(): unknown[] {
+    const value = this.backend.get("cloudCreateOrders");
+    return Array.isArray(value) ? value : [];
+  }
+
+  createOrders(): StoredCreateOrder[] {
+    return this.rawOrders()
+      .map(readCreateOrder)
+      .filter((order): order is StoredCreateOrder => order !== null);
+  }
+
+  createOrder(id: string): StoredCreateOrder | null {
+    return this.createOrders().find((order) => order.id === id) ?? null;
+  }
+
+  putCreateOrder(order: StoredCreateOrder): void {
+    this.mutateOrders((orders) => {
+      const index = orders.findIndex((entry) => (entry as { id?: unknown } | null)?.id === order.id);
+      if (index < 0) return [...orders, order];
+      const next = [...orders];
+      next[index] = order;
+      return next;
+    });
+  }
+
+  /** Changes one order record in place; one that is gone stays gone. */
+  updateCreateOrder(
+    id: string,
+    change: (order: StoredCreateOrder) => StoredCreateOrder
+  ): StoredCreateOrder | null {
+    const current = this.createOrder(id);
+    if (!current) return null;
+    const next = change(current);
+    if (next !== current) this.putCreateOrder(next);
+    return next;
+  }
+
+  removeCreateOrder(id: string): void {
+    this.mutateOrders((orders) =>
+      orders.filter((entry) => (entry as { id?: unknown } | null)?.id !== id)
+    );
+  }
+
+  /** Writes the order list only when a change leaves it different, so a store with none stays without the key. */
+  private mutateOrders(change: (orders: unknown[]) => unknown[]): void {
+    const before = this.rawOrders();
+    const after = change(before);
+    if (after.length === before.length && after.every((entry, index) => entry === before[index])) {
+      return;
+    }
+    this.backend.set("cloudCreateOrders", after as StoredCreateOrder[]);
+    this.notify();
   }
 
   onChange(listener: () => void): () => void {
