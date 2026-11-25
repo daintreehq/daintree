@@ -843,7 +843,7 @@ export const HostStartAgentSignInArgsSchema = z.object({
     .string()
     .min(1)
     .max(256)
-    .describe("An agentId the host list names in that host's installed CLIs."),
+    .describe("An installed CLI's agentId, as the host list names it."),
 });
 export type HostStartAgentSignInArgs = z.infer<typeof HostStartAgentSignInArgsSchema>;
 

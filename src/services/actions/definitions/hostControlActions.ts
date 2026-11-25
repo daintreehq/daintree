@@ -231,15 +231,15 @@ export function registerHostControlActions(actions: ActionRegistry): void {
 
   actions.set("host.startAgentSignIn", () => ({
     id: "host.startAgentSignIn",
-    title: "Start an agent CLI sign-in on a host",
+    title: "Sign in to a host's agent CLI",
     description:
-      "Open an installed agent CLI's own sign-in on a connected host, in a terminal in the window showing you, as its Sign in in Settings → Hosts does. The person approves in the browser and types any code there; you can't. ok means the window opened it, not that it worked.",
+      "Open a host's agent CLI sign-in in a terminal in the window showing you, as Settings → Hosts does. The person finishes it there; you can't type or read it. ok: opened, not signed in.",
     category: "help",
     kind: "command",
     danger: "safe",
     denyPluginDispatch: true,
     scope: "renderer",
-    keywords: ["host", "remote", "agent", "cli", "sign in", "login", "auth"],
+    keywords: ["host", "cli", "sign in", "login", "auth"],
     palette: { mode: "hidden" },
     argsSchema: HostStartAgentSignInArgsSchema,
     resultSchema: HostStartAgentSignInResultSchema,
