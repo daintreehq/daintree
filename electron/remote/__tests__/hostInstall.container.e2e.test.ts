@@ -3,33 +3,22 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { IpcEnvelope } from "../../../shared/types/ipc/errors.js";
-import type { HostHandshakeInfo } from "../../../shared/types/remoteHosts.js";
-import { REMOTE_PROTOCOL_VERSION } from "../../../shared/types/remoteHosts.js";
-import { CHANNELS } from "../../ipc/channels.js";
 import { lookupArtifactChecksum } from "../client/clientBuild.js";
 import { HostSetupService } from "../client/HostSetupService.js";
 import type { ClientBuild, ClientBundle } from "../client/installPlan.js";
-import { LinkClient } from "../client/LinkClient.js";
-import { closeSshMaster, SshTransport } from "../client/sshTransport.js";
-import { Lane } from "../link/frames.js";
-import { ControlKind, InteractiveKind } from "../link/messages.js";
-import type { LinkSession } from "../link/session.js";
-import { TERMINAL_RESUME_METHOD } from "../terminal/protocol.js";
+import { closeSshMaster } from "../client/sshTransport.js";
 import {
   appImageArch,
   buildImages,
-  dockerArch,
   makeFeedTls,
   readAppImageMarker,
-  remainingContainers,
   repackAppImage,
-  requireDocker,
   startContainerHost,
   type ContainerHost,
   type FeedTls,
 } from "./harness/containerHost.js";
-import { waitUntil } from "./harness/poll.js";
+import { dockerArch, remainingContainers, requireDocker } from "./harness/docker.js";
+import { connectLink, expectWorkingTerminal } from "./harness/hostLink.js";
 import { listProcesses, makeShortTempRoot } from "./harness/privateSshd.js";
 import {
   feedEntryFor,
@@ -143,145 +132,18 @@ function install(setup: HostSetupService, host: ContainerHost) {
   });
 }
 
-function unwrap<T>(envelope: IpcEnvelope): T {
-  if (envelope.ok) return envelope.data as T;
-  throw new Error(`[${envelope.error.code ?? "UNKNOWN"}] ${envelope.error.message}`);
-}
-
 /**
  * Dial the host as a client on this build would and wait for the link. With
  * `setup`, a dial that finds no Host serving starts it, as a Shell's does.
  */
-async function connect(
-  host: ContainerHost,
-  buildCommit = commit,
-  setup?: HostSetupService
-): Promise<{ link: LinkClient; session: LinkSession; handshake: HostHandshakeInfo }> {
-  const link = new LinkClient({
-    transport: new SshTransport({
-      target: host.target,
-      clientDir: host.clientDir,
-      spawn: host.spawnSsh,
-      ...(setup
-        ? {
-            ensureRunning: async (signal: AbortSignal) =>
-              (await setup.ensureHostRunning(host.connection, signal)) !== "not-startable",
-          }
-        : {}),
-    }),
-    handshake: {
-      version,
-      commit: buildCommit,
-      protocolVersion: REMOTE_PROTOCOL_VERSION,
-      platform: "linux",
-      arch,
-    },
-    client: {
-      clientId: crypto.randomUUID(),
-      clientName: "host-install-e2e",
-      platform: "linux",
-      // One install across its connections: it takes back the lease it left.
-      deviceId: DEVICE_ID,
-    },
+function connect(host: ContainerHost, buildCommit = commit, setup?: HostSetupService) {
+  return connectLink({
+    host,
+    build: { version, commit: buildCommit, arch },
+    clientName: "host-install-e2e",
+    deviceId: DEVICE_ID,
+    setup,
   });
-  try {
-    const session = await new Promise<LinkSession>((resolve, reject) => {
-      const timer = setTimeout(
-        () => reject(new Error(`No link: ${JSON.stringify(link.getState())}`)),
-        TERMINAL_TIMEOUT_MS
-      );
-      link.onSession((established) => {
-        clearTimeout(timer);
-        resolve(established.session);
-      });
-      link.start();
-    });
-    const state = link.getState();
-    if (state.status !== "connected") throw new Error(`Link is ${state.status}`);
-    return { link, session, handshake: state.handshake };
-  } catch (err) {
-    await link.stop();
-    throw err;
-  }
-}
-
-/**
- * A real terminal on the host: the packaged app's pty-host running a shell in a
- * project, input through the link's stream, and output that only the shell's
- * arithmetic could have produced.
- */
-async function expectWorkingTerminal(host: ContainerHost, session: LinkSession): Promise<void> {
-  const endpointId = `e2e-${crypto.randomUUID()}`;
-  const openId = crypto.randomUUID();
-  session.post({
-    lane: Lane.CONTROL,
-    kind: ControlKind.ENDPOINT_OPEN,
-    body: { endpointId, projectId: null, openId },
-  });
-  const projectPath = `${host.home}/e2e-project`;
-  await host.shell(`mkdir -p "${projectPath}" && git -C "${projectPath}" init --quiet`);
-  const project = unwrap<{ id: string; path: string }>(
-    await session.invoke(endpointId, CHANNELS.PROJECT_ADD, [projectPath])
-  );
-  session.post({
-    lane: Lane.CONTROL,
-    kind: ControlKind.ENDPOINT_REBIND,
-    body: { endpointId, projectId: project.id },
-  });
-
-  // What a view's relay says on every session: the host holds its stream until then.
-  await session.call(TERMINAL_RESUME_METHOD, { endpointId, terminals: [] });
-
-  const terminalId = `e2e-terminal-${crypto.randomUUID()}`;
-  let output = "";
-  const decoder = new TextDecoder();
-  const stopListening = session.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_OUT, (body) => {
-    if (body.endpointId !== endpointId || body.terminalId !== terminalId) return;
-    const message = body.message as { type?: string; data?: Uint8Array; bytes?: number };
-    if (message.type !== "data" || !message.data) return;
-    output += decoder.decode(message.data);
-    session.post({
-      lane: Lane.INTERACTIVE,
-      kind: InteractiveKind.TERMINAL_IN,
-      body: { endpointId, message: { type: "ack", id: terminalId, bytes: message.bytes ?? 0 } },
-    });
-  });
-  try {
-    unwrap(
-      await session.invoke(endpointId, CHANNELS.TERMINAL_SPAWN, [
-        { id: terminalId, kind: "terminal", projectId: project.id, cols: 100, rows: 30 },
-      ])
-    );
-    const nonce = crypto.randomBytes(6).toString("hex");
-    const write = () =>
-      session.post({
-        lane: Lane.INTERACTIVE,
-        kind: InteractiveKind.TERMINAL_IN,
-        body: {
-          endpointId,
-          message: {
-            type: "write",
-            id: terminalId,
-            // The echoed line reads "$((6*7))"; only the shell turns it into 42.
-            data: `echo "${nonce}-$((6*7))-$(uname -s)"\r`,
-          },
-        },
-      });
-    write();
-    await waitUntil(
-      () => output.includes(`${nonce}-42-Linux`),
-      `the terminal's answer (saw ${JSON.stringify(output.slice(-400))})`,
-      TERMINAL_TIMEOUT_MS
-    );
-    unwrap(await session.invoke(endpointId, CHANNELS.TERMINAL_KILL, [terminalId]));
-  } finally {
-    stopListening();
-    session.post({
-      lane: Lane.CONTROL,
-      kind: ControlKind.ENDPOINT_CLOSE,
-      body: { endpointId },
-    });
-  }
 }
 
 /** The fingerprint of what is installed and running there, to compare across an install. */

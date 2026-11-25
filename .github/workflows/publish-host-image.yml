@@ -1,0 +1,250 @@
+name: Publish Host Image
+
+# Publishes the Daintree Host container image (build/host-image,
+# docs/host-image.md) to ghcr.io/daintreehq/daintree-host, which container
+# clouds run as a Remote Host and reference by digest. Versioned on its own
+# tags, `host-image-vX.Y.Z`, apart from the app's `v*`; a manual run is a dry
+# run from any ref and publishes nothing.
+#
+# The image is built once, tested, and those bytes are what's pushed: the
+# smoke job builds it, boots it and runs Daintree's Host setup against it
+# (hostImage.container.e2e.test.ts) with an AppImage packaged from the same
+# commit, then hands the saved image to the publish job, the only one that can
+# write packages. Each version is pushed once, under its version tag only and
+# never `latest`: GHCR can't make a tag write-once, so
+# scripts/ci/host-image-registry.mjs refuses a version that already holds
+# another image, and a rerun after a push records the image it finds there
+# rather than pushing again.
+
+on:
+  push:
+    tags:
+      - "host-image-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Every write to the package goes through one run at a time.
+  group: publish-host-image
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "22"
+  IMAGE_REPOSITORY: daintreehq/daintree-host
+
+jobs:
+  smoke:
+    name: Build and smoke-test the image
+    runs-on: ubuntu-24.04
+    # Packaging the AppImage in a container takes most of it.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
+      image_id: ${{ steps.build.outputs.image_id }}
+      archive_sha256: ${{ steps.save.outputs.archive_sha256 }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          # The "on main" check below needs the history.
+          fetch-depth: 0
+
+      # A published image is a release: its commit is on main, as the app's are.
+      - name: Resolve the version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            version="${GITHUB_REF_NAME#host-image-v}"
+            if ! printf '%s' "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+              echo "::error::Tag $GITHUB_REF_NAME isn't host-image-vMAJOR.MINOR.PATCH"
+              exit 1
+            fi
+            git fetch origin main
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::Tagged commit $GITHUB_SHA is not reachable from main"
+              exit 1
+            fi
+            publish=true
+          else
+            version="0.0.0-dry-run"
+            publish=false
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        uses: ./.github/actions/install
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # The Dockerfile's packages against the list the Host needs, and this
+      # workflow's own shape: a Dockerfile-only change reaches neither through
+      # an import, so PR CI may not have run them.
+      - name: Contract tests
+        run: npx vitest run scripts/ci/host-image.test.mjs scripts/ci/host-image-registry.test.mjs
+
+      - name: Build the image
+        id: build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx build \
+            --platform linux/amd64 \
+            --provenance=false \
+            --sbom=false \
+            --load \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --tag daintree-host:candidate \
+            build/host-image
+          echo "image_id=$(docker image inspect --format '{{.Id}}' daintree-host:candidate)" >> "$GITHUB_OUTPUT"
+
+      # Packages this commit as an x64 AppImage in a container, then runs the
+      # image suite against the image just built.
+      - name: Smoke-test the image with Daintree's Host setup
+        env:
+          DAINTREE_HOST_IMAGE: daintree-host:candidate
+        run: node scripts/host-install-e2e.mjs image
+
+      - name: Save the tested image
+        id: save
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        run: |
+          set -euo pipefail
+          docker save daintree-host:candidate | gzip -1 > "$RUNNER_TEMP/host-image.tar.gz"
+          echo "archive_sha256=$(sha256sum "$RUNNER_TEMP/host-image.tar.gz" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the tested image
+        if: ${{ steps.version.outputs.publish == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: host-image
+          path: ${{ runner.temp }}/host-image.tar.gz
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: Publish the tested image
+    needs: smoke
+    if: ${{ github.event_name == 'push' && github.repository == 'daintreehq/daintree' && needs.smoke.outputs.publish == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      # The build-provenance attestation, kept by GitHub and on the registry.
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.smoke.outputs.version }}
+      IMAGE_ID: ${{ needs.smoke.outputs.image_id }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Download the tested image
+        uses: actions/download-artifact@v8
+        with:
+          name: host-image
+          path: ${{ runner.temp }}/host-image
+
+      - name: Load the tested image
+        env:
+          ARCHIVE_SHA256: ${{ needs.smoke.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/host-image/host-image.tar.gz"
+          echo "${ARCHIVE_SHA256}  ${archive}" | sha256sum --check --strict
+          gunzip -c "$archive" | docker load
+          loaded=$(docker image inspect --format '{{.Id}}' daintree-host:candidate)
+          if [ "$loaded" != "$IMAGE_ID" ]; then
+            echo "::error::Loaded image $loaded isn't the tested $IMAGE_ID"
+            exit 1
+          fi
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Check the version is free
+        id: check
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/host-image-registry.mjs check "$IMAGE_REPOSITORY" "$VERSION" "$IMAGE_ID"
+
+      - name: Push the version tag
+        if: ${{ steps.check.outputs.push == 'true' }}
+        run: |
+          set -euo pipefail
+          docker tag daintree-host:candidate "ghcr.io/${IMAGE_REPOSITORY}:${VERSION}"
+          docker push "ghcr.io/${IMAGE_REPOSITORY}:${VERSION}"
+
+      - name: Resolve the published digest
+        id: resolve
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci/host-image-registry.mjs resolve "$IMAGE_REPOSITORY" "$VERSION" "$IMAGE_ID"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ env.IMAGE_REPOSITORY }}
+          subject-digest: ${{ steps.resolve.outputs.digest }}
+          push-to-registry: true
+
+      # A new package on GHCR starts private: providers pull anonymously, so a
+      # person makes it public once (see .github/workflows/README.md).
+      - name: Check anyone can pull it
+        env:
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          if node scripts/ci/host-image-registry.mjs anonymous "$IMAGE_REPOSITORY" "$DIGEST"; then
+            echo "Anyone can pull ghcr.io/${IMAGE_REPOSITORY}@${DIGEST}"
+          else
+            echo "::warning::ghcr.io/${IMAGE_REPOSITORY} isn't public yet, so providers can't pull it: make the package public in its settings"
+          fi
+
+      - name: Record the reference
+        env:
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          set -euo pipefail
+          reference="ghcr.io/${IMAGE_REPOSITORY}@${DIGEST}"
+          jq -n \
+            --arg reference "$reference" \
+            --arg version "$VERSION" \
+            --arg digest "$DIGEST" \
+            --arg commit "$GITHUB_SHA" \
+            --arg platform "linux/amd64" \
+            --arg run "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{reference: $reference, version: $version, digest: $digest, commit: $commit, platform: $platform, run: $run}' \
+            > "$RUNNER_TEMP/host-image.json"
+          {
+            echo "### Daintree Host image ${VERSION}"
+            echo
+            echo "Reference it by digest:"
+            echo
+            echo '```'
+            echo "$reference"
+            echo '```'
+            echo
+            echo "Built from \`${GITHUB_SHA}\` for linux/amd64, and smoke-tested with an AppImage of the same commit."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the record
+        uses: actions/upload-artifact@v7
+        with:
+          name: host-image-record
+          path: ${{ runner.temp }}/host-image.json
+          retention-days: 90
+          if-no-files-found: error

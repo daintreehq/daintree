@@ -1,9 +1,12 @@
 #!/usr/bin/env node
-// The host install end to end (electron/remote/__tests__/hostInstall.container.e2e.test.ts):
-// runs it against DAINTREE_CONTAINER_E2E_APPIMAGE, or against the current commit
-// packaged in a container. Native modules link against what they're built on, so
-// a Linux build can't come from another OS, and a worktree's node_modules is
-// shared with its main checkout, so nothing here installs in place.
+// The container end to ends: the host install onto a bare machine
+// (hostInstall.container.e2e.test.ts) and the published Host image
+// (hostImage.container.e2e.test.ts), both unless named, as
+// `node scripts/host-install-e2e.mjs [install] [image]`. Runs them against
+// DAINTREE_CONTAINER_E2E_APPIMAGE, or against the current commit packaged in a
+// container. Native modules link against what they're built on, so a Linux
+// build can't come from another OS, and a worktree's node_modules is shared
+// with its main checkout, so nothing here installs in place.
 import { execFileSync, spawnSync } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
@@ -11,7 +14,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SUITE = "electron/remote/__tests__/hostInstall.container.e2e.test.ts";
+const SUITES = {
+  install: "electron/remote/__tests__/hostInstall.container.e2e.test.ts",
+  image: "electron/remote/__tests__/hostImage.container.e2e.test.ts",
+};
 
 function text(file, args) {
   return execFileSync(file, args, { cwd: root, encoding: "utf8" }).trim();
@@ -105,9 +111,19 @@ function packageCurrentCommit() {
   return out;
 }
 
+const named = process.argv.slice(2);
+const unknown = named.filter((name) => !Object.hasOwn(SUITES, name));
+if (unknown.length > 0) {
+  process.stderr.write(
+    `No such suite: ${unknown.join(", ")}. Name any of: ${Object.keys(SUITES).join(", ")}\n`
+  );
+  process.exit(2);
+}
+const suites = (named.length > 0 ? named : Object.keys(SUITES)).map((name) => SUITES[name]);
+
 try {
   const appImage = process.env.DAINTREE_CONTAINER_E2E_APPIMAGE || packageCurrentCommit();
-  const run = spawnSync("npx", ["vitest", "run", SUITE], {
+  const run = spawnSync("npx", ["vitest", "run", ...suites], {
     cwd: root,
     stdio: "inherit",
     env: {
