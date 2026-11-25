@@ -43,11 +43,12 @@ const PROMPT_SCREEN = [
 
 const monitors: ActivityMonitor[] = [];
 
-function startPane(id: string, agentId = "codex") {
+function startPane(id: string, agentId = "codex", completionPatterns?: RegExp[]) {
   const onStateChange = vi.fn();
   let visible = ["booting"];
   const monitor = new ActivityMonitor(id, 1000, onStateChange, {
     agentId,
+    completionPatterns,
     getVisibleLines: (n) => visible.slice(-n),
     getCursorLine: () => visible.at(-1) ?? null,
     initialState: "idle",
@@ -59,6 +60,10 @@ function startPane(id: string, agentId = "codex") {
     visible = lines;
     monitor.onData("\x1b[H redraw");
   };
+  // What the mirror shows, changed without a byte arriving: a chunk it parses late.
+  const parse = (lines: string[]) => {
+    visible = lines;
+  };
   for (let i = 1; i <= 4; i++) {
     vi.advanceTimersByTime(650);
     draw([`• Working (${i}s • esc to interrupt)`]);
@@ -66,7 +71,7 @@ function startPane(id: string, agentId = "codex") {
   }
   expect(monitor.getState()).toBe("busy");
   onStateChange.mockClear();
-  return { monitor, onStateChange, draw };
+  return { monitor, onStateChange, draw, parse };
 }
 
 type Call = [string, number, string, Record<string, unknown> | undefined];
@@ -220,5 +225,80 @@ describe("ActivityMonitor and a menu over a running turn (#18167)", () => {
     monitor.reconfigure("claude");
 
     expect(closed(onStateChange)).toHaveLength(1);
+  });
+
+  it("sees the picker close when the mirror parses the redraw late", () => {
+    const { monitor, onStateChange, draw, parse } = startPane("late-parse");
+
+    draw(PICKER);
+    vi.advanceTimersByTime(5_000);
+    // The turn ends: the bytes arrive, and the mirror shows them 1.4s on.
+    monitor.onData("\x1b[H composer");
+    vi.advanceTimersByTime(1_400);
+    parse(PROMPT_SCREEN);
+    vi.advanceTimersByTime(20_000);
+
+    expect(monitor.getState()).toBe("idle");
+    expect(closed(onStateChange)).toHaveLength(1);
+    expect(settles(onStateChange).at(-1)?.[3]?.waitingReason).toBe("prompt");
+  });
+
+  it("undoes a completion when the picker opens during its hold", () => {
+    // Codex's own completion pattern, which tool output mid-turn can match.
+    const { monitor, onStateChange, draw } = startPane("completion", "codex", [
+      /\d+\s+files?\s+changed/i,
+    ]);
+
+    draw([...TRANSCRIPT, "• Edited the parser", "  2 files changed", ""]);
+    const completed = () => calls(onStateChange).some(([, , state]) => state === "completed");
+    for (let waited = 0; waited < 5_000 && !completed(); waited += 50) {
+      vi.advanceTimersByTime(50);
+    }
+    expect(completed()).toBe(true);
+    vi.advanceTimersByTime(100);
+    draw(PICKER);
+    vi.advanceTimersByTime(20_000);
+
+    expect(monitor.getState()).toBe("busy");
+    expect(calls(onStateChange).some(([, , state]) => state === "idle")).toBe(false);
+    expect(opened(onStateChange).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("never publishes an approval for a picker drawn on a pane read as idle", () => {
+    const { monitor, onStateChange, draw } = startPane("idle-redraw");
+
+    draw(PROMPT_SCREEN);
+    vi.advanceTimersByTime(10_000);
+    expect(monitor.getState()).toBe("idle");
+    onStateChange.mockClear();
+
+    draw(PICKER);
+    vi.advanceTimersByTime(5_000);
+
+    expect(monitor.getState()).toBe("busy");
+    expect(opened(onStateChange)).toHaveLength(1);
+    expect(calls(onStateChange).filter(([, , , m]) => m?.waitingReason === "approval")).toEqual([]);
+  });
+
+  it("keeps sends held from the picker to the retry confirmation that takes its place", () => {
+    const { monitor, onStateChange, draw } = startPane("retry");
+
+    draw(PICKER);
+    vi.advanceTimersByTime(5_000);
+    draw([
+      ...TRANSCRIPT,
+      "•   Stop this attempt and retry?",
+      "",
+      "    This will stop the current attempt and retry in a new thread.",
+      "",
+      "  › 1. Keep waiting",
+      "    2. Stop and retry",
+    ]);
+    vi.advanceTimersByTime(20_000);
+
+    // No close between the two: the settle on the confirmation ends the hold.
+    expect(closed(onStateChange)).toEqual([]);
+    expect(monitor.getState()).toBe("idle");
+    expect(settles(onStateChange).at(-1)?.[3]?.waitingReason).toBe("approval");
   });
 });

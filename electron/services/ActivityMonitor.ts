@@ -335,6 +335,8 @@ export class ActivityMonitor {
   private workingDialogSeen = false;
   private workingDialogReadAt = 0;
   private workingDialogGoneSince = 0;
+  // The menu's place was taken by a dialog that waits on an answer (#18167).
+  private workingDialogGaveWayToDialog = false;
   private readonly lineRewriteDetector: LineRewriteDetector;
   private readonly completionTimer: CompletionTimer;
   private readonly bootDetector: BootDetector;
@@ -1193,6 +1195,8 @@ export class ActivityMonitor {
       return;
     }
     this.waitingReasonReadAt = now;
+    // Drawn over a turn that runs on (#18167): never an approval to publish.
+    if (this.holdForWorkingDialog(now)) return;
     const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);
     const promptResult = detectPrompt(
       lines,
@@ -2096,59 +2100,73 @@ export class ActivityMonitor {
    * it closes; an idle agent is moved back to busy.
    */
   private holdForWorkingDialog(now: number): boolean {
-    if (!this.seesWorkingDialog(now)) return false;
-    this.recordWorkingSignal(now);
-    if (this.workingDialogShown) return true;
-    this.workingDialogShown = true;
-    const metadata: ActivityStateMetadata = {
-      trigger: "pattern",
-      patternConfidence: WORKING_DIALOG_CONFIDENCE,
-      workingDialog: true,
-    };
-    if (this.state === "busy") {
-      this.onStateChange(this.terminalId, this.spawnedAt, "busy", metadata);
-    } else {
-      this.becomeBusy(metadata, now);
+    if (this.seesWorkingDialog(now)) {
+      this.recordWorkingSignal(now);
+      if (this.workingDialogShown) return true;
+      this.workingDialogShown = true;
+      const metadata: ActivityStateMetadata = {
+        trigger: "pattern",
+        patternConfidence: WORKING_DIALOG_CONFIDENCE,
+        workingDialog: true,
+      };
+      if (this.state === "busy") {
+        this.onStateChange(this.terminalId, this.spawnedAt, "busy", metadata);
+      } else {
+        this.becomeBusy(metadata, now);
+      }
+      return true;
     }
-    return true;
+    // A dialog that does wait on an answer in its place, such as Codex's
+    // stop-and-retry confirmation, keeps sends held until the agent settles on
+    // it, which ends the hold in the same step; anything else ends it now.
+    if (this.workingDialogShown && !this.workingDialogGaveWayToDialog) {
+      this.forgetWorkingDialog();
+    }
+    return false;
   }
 
   /**
-   * Whether the menu counts as on screen. The screen is read again only while
-   * it may still be changing: until a read lands a settle window after its
-   * last change, since the mirror parses a chunk after it arrives. A menu
-   * that seemed gone counts as closed only once reads have found it gone for
-   * that window, so a redraw caught halfway never lets a send through.
+   * Whether the menu counts as on screen. The screen is read again while it
+   * may still be changing, until a read lands a settle window after its last
+   * change, and again whenever the last read has aged, since the mirror can
+   * parse a chunk well after it arrives. A menu that seemed gone counts as
+   * closed only once reads have found it gone for that window, so a redraw
+   * caught halfway never lets a send through.
    */
   private seesWorkingDialog(now: number): boolean {
     if (!this.getVisibleLines || !hasWorkingDialog(this.agentId)) return false;
     const changedAt = Math.max(this.lastDataTimestamp, this.simpleSnapshotSettleFrom);
+    const sinceRead = now - this.workingDialogReadAt;
     if (
-      this.workingDialogReadAt - changedAt < SIMPLE_SNAPSHOT_SETTLE_MS &&
-      now - this.workingDialogReadAt >= SIMPLE_SNAPSHOT_MIN_INTERVAL_MS
+      sinceRead >= SIMPLE_SNAPSHOT_MIN_INTERVAL_MS &&
+      (this.workingDialogReadAt - changedAt < SIMPLE_SNAPSHOT_SETTLE_MS ||
+        sinceRead >= WORKING_HOLD_MS)
     ) {
       this.workingDialogReadAt = now;
-      this.workingDialogSeen = endsOnWorkingDialog(
-        this.getVisibleLines(WHOLE_VIEWPORT_ROWS),
-        this.agentId
-      );
+      const lines = this.getVisibleLines(WHOLE_VIEWPORT_ROWS);
+      this.workingDialogSeen = endsOnWorkingDialog(lines, this.agentId);
+      this.workingDialogGaveWayToDialog =
+        !this.workingDialogSeen &&
+        this.workingDialogShown &&
+        endsOnDrawnSelector(lines, this.agentId);
       if (this.workingDialogSeen) this.workingDialogGoneSince = 0;
       else if (this.workingDialogShown && this.workingDialogGoneSince === 0) {
         this.workingDialogGoneSince = now;
       }
     }
     if (this.workingDialogSeen) return true;
-    if (!this.workingDialogShown) return false;
-    if (now - this.workingDialogGoneSince < SIMPLE_SNAPSHOT_SETTLE_MS) return true;
-    this.forgetWorkingDialog();
-    return false;
+    return this.workingDialogShown && now - this.workingDialogGoneSince < SIMPLE_SNAPSHOT_SETTLE_MS;
   }
 
-  /** The menu is gone, or no longer this monitor's to watch: its hold on sends ends. */
+  /**
+   * The menu is gone, or no longer this monitor's to watch. A busy agent's
+   * hold on sends ends with it; an agent going idle ends it by settling.
+   */
   private forgetWorkingDialog(): void {
     const shown = this.workingDialogShown;
     this.workingDialogShown = false;
     this.workingDialogSeen = false;
+    this.workingDialogGaveWayToDialog = false;
     this.workingDialogReadAt = 0;
     this.workingDialogGoneSince = 0;
     if (shown && this.state === "busy" && !this.isDisposed) {
@@ -2175,7 +2193,22 @@ export class ActivityMonitor {
         return;
       }
       this.completionTimer.emitted = false;
+      // A completion line still in view when the menu opened over the turn
+      // (#18167): the completed state already published is undone, and the
+      // hold the menu puts on sends, cleared with it, is put back.
+      const shownBefore = this.workingDialogShown;
+      if (this.holdForWorkingDialog(Date.now())) {
+        if (shownBefore) {
+          this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
+            trigger: "pattern",
+            patternConfidence: WORKING_DIALOG_CONFIDENCE,
+            workingDialog: true,
+          });
+        }
+        return;
+      }
       this.state = "idle";
+      this.forgetWorkingDialog();
       this.idleSince = Date.now();
       this.patternBuf.clear();
       this.idleWaitingReason = undefined;
@@ -2243,6 +2276,7 @@ export class ActivityMonitor {
     if (this.holdForWorkingDialog(now)) return;
     if (this.trySimpleCompletion(now)) return;
     this.state = "idle";
+    this.forgetWorkingDialog();
     this.idleSince = now;
     this.patternBuf.clear();
     let reading: { waitingReason?: WaitingReason; promptDrawnAt?: number; inputRowEmpty?: true } =
