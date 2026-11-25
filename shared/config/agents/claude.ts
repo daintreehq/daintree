@@ -75,6 +75,7 @@ export const config: AgentConfig = {
   // macOS and Windows the package manager (Homebrew, WinGet), which runs without
   // a shell, comes last.
   signInArgs: ["auth", "login"],
+  signInPrompt: "/login",
   install: {
     docsUrl: "https://code.claude.com/docs/en/setup",
     byOs: {

@@ -950,6 +950,12 @@ export interface AgentConfig {
    * or command. Daintree only starts it: it never reads what the CLI saves.
    */
   signInArgs?: readonly string[];
+  /**
+   * What the person types at the CLI's own prompt to sign in, for when the
+   * CLI opens without asking (already signed in, or a build older than its
+   * sign-in command). Shown beside a host's sign-in, never typed for them.
+   */
+  signInPrompt?: string;
   capabilities?: {
     scrollback?: number;
     blockAltScreen?: boolean;

@@ -11,14 +11,20 @@ export function newSignInConsumer(): string {
 }
 
 /**
- * The command the host runs, as this machine's registry names it: what the
- * person sees before it runs. The host resolves its own copy of the CLI, so
- * the path may differ; null for an agent this machine doesn't know.
+ * The command the host runs, as this machine's registry names it, and what to
+ * type in the CLI should it open without asking to sign in: what the person
+ * sees before it runs. The host resolves its own copy of the CLI, so the path
+ * may differ; null for an agent this machine doesn't know.
  */
-export function agentSignInCommandLabel(agentId: string): string | null {
+export function agentSignInLabels(
+  agentId: string
+): { command: string; prompt: string | null } | null {
   const config = getAgentConfig(agentId);
   if (!config) return null;
-  return [config.command, ...(config.signInArgs ?? [])].join(" ");
+  return {
+    command: [config.command, ...(config.signInArgs ?? [])].join(" "),
+    prompt: config.signInPrompt ?? null,
+  };
 }
 
 const NO_CLEANUP = () => () => {};

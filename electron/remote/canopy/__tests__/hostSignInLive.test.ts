@@ -1,12 +1,17 @@
 import { EventEmitter } from "node:events";
+import { mkdtempSync, statSync } from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { quoteLaunchArgOptional } from "../../../../shared/utils/shellEscape.js";
 
 const refs = vi.hoisted(() => ({
   ptyClient: null as unknown,
   cliService: null as unknown,
+  userData: "",
 }));
+
+vi.mock("electron", () => ({ app: { getPath: () => refs.userData } }));
 
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: () => refs.ptyClient,
@@ -46,6 +51,7 @@ function fakePtyClient(succeeds = true) {
 beforeEach(() => {
   refs.ptyClient = null;
   refs.cliService = null;
+  refs.userData = mkdtempSync(path.join(os.tmpdir(), "sign-in-"));
 });
 
 describe("the command a host's sign-in runs", () => {
@@ -77,7 +83,9 @@ describe("liveHostSignInDeps().spawn", () => {
     expect(id).toBe("daintree-sign-in-1");
     expect(options.projectId).toBeNull();
     expect(options.kind).toBe("terminal");
-    expect(options.cwd).toBe(os.homedir());
+    // A folder of Daintree's own, never the person's home or a project.
+    expect(options.cwd).toBe(path.join(refs.userData, "agent-sign-in"));
+    expect(statSync(options.cwd).isDirectory()).toBe(true);
     expect(options.restore).toBe(false);
     if (process.platform !== "win32") {
       const script = options.args?.at(-1) ?? "";

@@ -120,6 +120,9 @@ describe("HostDetail agent CLI sign-in", () => {
     const dialog = screen.getByTestId("host-agent-sign-in-dialog");
     expect(dialog.textContent).toContain("Sign in to Claude on studio-01");
     expect(dialog.textContent).toContain("Runs claude auth login on studio-01.");
+    expect(dialog.textContent).toContain(
+      "If Claude opens without asking you to sign in, type /login in it."
+    );
     expect(screen.getByTestId("sign-in-pane").getAttribute("data-run-id")).toBe(
       "daintree-sign-in-1"
     );
@@ -130,9 +133,9 @@ describe("HostDetail agent CLI sign-in", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in to Gemini on studio-01" }));
     await settle();
     expect(signIns.startSignIn.mock.calls[0]![2]).toBe("gemini");
-    expect(screen.getByTestId("host-agent-sign-in-dialog").textContent).toContain(
-      "Runs gemini on studio-01."
-    );
+    const text = screen.getByTestId("host-agent-sign-in-dialog").textContent;
+    expect(text).toContain("Runs gemini on studio-01.");
+    expect(text).toContain("If Gemini opens without asking you to sign in, type /auth in it.");
   });
 
   it("ends the sign-in on the host when the dialog closes", async () => {

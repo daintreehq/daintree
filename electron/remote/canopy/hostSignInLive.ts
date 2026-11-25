@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import os from "node:os";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { AppError } from "../../utils/errorTypes.js";
 import { getCliAvailabilityServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import {
@@ -11,6 +12,13 @@ import {
   watchTerminal,
 } from "../../ipc/handlers/canopyTerminalWatch.js";
 import type { HostSignInDeps } from "./hostSignIn.js";
+
+/**
+ * The folder every sign-in starts in, the same one each time and no project's:
+ * a CLI opened as it is (no sign-in command of its own) trusts, indexes or
+ * offers to set up this empty folder rather than the person's home.
+ */
+export const HOST_SIGN_IN_DIR_NAME = "agent-sign-in";
 
 /** What a sign-in's terminal opens at, before its dialog sizes it. */
 const START_COLS = 80;
@@ -97,11 +105,14 @@ export function liveHostSignInDeps(): HostSignInDeps {
           userMessage: `${config.name}'s sign-in can't run in this host's shell.`,
         });
       }
+      const { app } = await import("electron");
+      const cwd = path.join(app.getPath("userData"), HOST_SIGN_IN_DIR_NAME);
+      await mkdir(cwd, { recursive: true });
       const started = await spawnAndConfirm(
         client,
         async () => {
           client.spawn(terminalId, {
-            cwd: os.homedir(),
+            cwd,
             shell: launch.shell,
             args: launch.args,
             cols: START_COLS,

@@ -52,6 +52,7 @@ export const config: AgentConfig = {
   update: {
     npm: "npm install -g @google/gemini-cli@latest",
   },
+  signInPrompt: "/auth",
   install: {
     docsUrl: "https://github.com/google-gemini/gemini-cli#readme",
     byOs: {

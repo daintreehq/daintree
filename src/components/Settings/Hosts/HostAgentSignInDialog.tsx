@@ -7,11 +7,7 @@ import { canopyHostClient } from "@/clients/canopyHostClient";
 import { clientErrorText } from "@/utils/clientAppError";
 import type { HostSignInTerminal } from "@shared/types/ipc/canopyHost";
 import type { HostId } from "@shared/types/remoteHosts";
-import {
-  agentSignInCommandLabel,
-  hostSignInTerminalApi,
-  newSignInConsumer,
-} from "./hostAgentSignIn";
+import { agentSignInLabels, hostSignInTerminalApi, newSignInConsumer } from "./hostAgentSignIn";
 
 type Phase =
   | { kind: "starting" }
@@ -87,7 +83,7 @@ export function HostAgentSignInDialog({
     setAttempt((n) => n + 1);
   };
 
-  const command = agentSignInCommandLabel(agentId);
+  const labels = agentSignInLabels(agentId);
 
   return (
     <AppDialog
@@ -107,13 +103,19 @@ export function HostAgentSignInDialog({
       <AppDialog.Body>
         <div className="space-y-3">
           <p className="text-xs text-text-secondary">
-            {command ? (
+            {labels ? (
               <>
-                Runs <code className="select-text">{command}</code> on {hostName}.
+                Runs <code className="select-text">{labels.command}</code> on {hostName}.
               </>
             ) : (
               <>Runs {agentName}&apos;s own sign-in on {hostName}.</>
             )}{" "}
+            {labels?.prompt && (
+              <>
+                If {agentName} opens without asking you to sign in, type{" "}
+                <code className="select-text">{labels.prompt}</code> in it.{" "}
+              </>
+            )}
             Links it prints open in this computer&apos;s browser. Closing this ends it.
           </p>
           {phase.kind === "failed" ? (
