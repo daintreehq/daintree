@@ -93,6 +93,11 @@ export const AgentSessionPaneRefusalSchema = z.enum([
   "terminals-unavailable",
   "panel-limit",
   "missing-cli",
+  // The account or preset the session launched on isn't saved any more, or
+  // the settings that would say couldn't be read (#18191).
+  "missing-account",
+  "missing-preset",
+  "settings-unavailable",
   "spawn-failed",
   "cancelled",
   "not-authorized",

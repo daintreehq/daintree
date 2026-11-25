@@ -132,6 +132,8 @@ export interface PtyHostSpawnOptions {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops for revert UX. */
   originalAgentPresetId?: string;
+  /** The account the launch runs on (#16040), named by a session the run captures (#18191). */
+  agentAccountId?: string;
   /** Fallback hops the pane has taken from its original preset (#17909: main reads the next one). */
   fallbackChainIndex?: number;
   /**
@@ -1492,6 +1494,8 @@ export interface PtyHostTerminalInfo {
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops. */
   originalAgentPresetId?: string;
+  /** The account the launch runs on (#16040), named by a session the run captures (#18191). */
+  agentAccountId?: string;
   /** Fallback hops taken from the original preset, as the launch said (#17909). */
   fallbackChainIndex?: number;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */

@@ -140,13 +140,21 @@ function ownBucket(
  * exactly the presets `agent.launch` accepts (#14139). A source that fails to
  * read makes the read incomplete, and `presetInventory` says which, so a
  * launch never takes an unread preset for a deleted one (#15025).
+ *
+ * `strict` also takes a repository read that skipped one of this agent's
+ * files as incomplete: a resume must not take a lower source's preset for the
+ * same id an unreadable repository file might hold (#18191). A launch keeps
+ * reading past a malformed file, as a view's does.
  */
-async function readPresetSources(
+export async function readPresetSources(
   agentId: string,
   projectPath: string | undefined,
-  deps: ViewlessDeps
+  deps: ViewlessDeps,
+  options: { strict?: boolean } = {}
 ): Promise<{
   settings: AgentSettings | null;
+  /** False when the settings read failed, as against settings that hold nothing yet. */
+  settingsRead: boolean;
   ccrPresets: AgentPreset[] | undefined;
   projectPresets: AgentPreset[] | undefined;
   presetInventory: PresetInventoryState;
@@ -166,7 +174,16 @@ async function readPresetSources(
     projectPath === undefined
       ? Promise.resolve(undefined)
       : deps.agents
-          .getProjectPresets(projectPath)
+          .getProjectPresets(
+            projectPath,
+            options.strict
+              ? {
+                  onUnreadable: (unread) => {
+                    if (unread === agentId) presetInventory.project = false;
+                  },
+                }
+              : undefined
+          )
           .then((byAgent) => ownBucket(byAgent, agentId))
           .catch(() => {
             presetInventory.project = false;
@@ -175,6 +192,7 @@ async function readPresetSources(
   ]);
   return {
     settings,
+    settingsRead,
     ccrPresets,
     projectPresets,
     presetInventory,
@@ -467,6 +485,7 @@ export async function runAgentLaunch(
               agentPresetId: plan.preset?.id,
               agentPresetColor: plan.preset?.color,
               originalAgentPresetId: plan.preset?.id,
+              agentAccountId: plan.account?.id,
             }
           : {}),
         ...(handbackCode !== undefined ? { handbackCode } : {}),
@@ -644,6 +663,7 @@ export async function spawnHostAssistant(
         agentPresetId: plan.preset?.id,
         agentPresetColor: plan.preset?.color,
         originalAgentPresetId: plan.preset?.id,
+        agentAccountId: plan.account?.id,
         ...(handbackCode !== undefined ? { handbackCode } : {}),
         ...(spec.scheduledRun !== undefined ? { scheduledRun: spec.scheduledRun } : {}),
       },

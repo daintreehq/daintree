@@ -417,6 +417,18 @@ describe("Terminal Entry Validation Schemas", () => {
       expect(result.success).toBe(true);
     });
 
+    it("keeps a launch's account id and drops one that isn't, never the spawn (#18191)", () => {
+      const kept = TerminalSpawnOptionsSchema.safeParse({ ...baseOptions, agentAccountId: "work" });
+      expect(kept.success && kept.data.agentAccountId).toBe("work");
+
+      const dropped = TerminalSpawnOptionsSchema.safeParse({
+        ...baseOptions,
+        agentAccountId: "../work",
+      });
+      expect(dropped.success).toBe(true);
+      expect(dropped.success && dropped.data.agentAccountId).toBeUndefined();
+    });
+
     it("accepts shell metacharacters that are intentional in user-typed commands", () => {
       const validCommands = [
         "echo hi; echo bye",

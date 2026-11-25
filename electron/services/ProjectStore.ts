@@ -588,8 +588,11 @@ export class ProjectStore {
     return this.recipeSynchronizer.deleteInRepoRecipe(projectPath, recipeName);
   }
 
-  async readInRepoPresets(projectPath: string): Promise<Record<string, AgentPreset[]>> {
-    return this.identityFiles.readInRepoPresets(projectPath);
+  async readInRepoPresets(
+    projectPath: string,
+    options?: { onUnreadable?: (agentId: string) => void }
+  ): Promise<Record<string, AgentPreset[]>> {
+    return this.identityFiles.readInRepoPresets(projectPath, options);
   }
 
   // --- DB CRUD ---

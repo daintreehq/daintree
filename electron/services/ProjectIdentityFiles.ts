@@ -786,8 +786,14 @@ export class ProjectIdentityFiles {
   /**
    * Reads per-team shared agent presets committed to `.daintree/presets/{agentId}/*.json`.
    * Returns a map keyed by agent id; malformed or unrecognized files are skipped with a warn.
+   * `onUnreadable` hears each agent a folder or file was skipped for because it
+   * couldn't be read or parsed, so a caller that must not take a lower source's
+   * preset of the same id can tell a partial read from a complete one (#18191).
    */
-  async readInRepoPresets(projectPath: string): Promise<Record<string, AgentPreset[]>> {
+  async readInRepoPresets(
+    projectPath: string,
+    options: { onUnreadable?: (agentId: string) => void } = {}
+  ): Promise<Record<string, AgentPreset[]>> {
     const presetsDir = path.join(projectPath, DAINTREE_PRESETS_DIR);
     let agentDirs: string[];
     try {
@@ -807,6 +813,7 @@ export class ProjectIdentityFiles {
       } catch (error) {
         // A refused read would fail every later one too; give up on the lot.
         if (isProjectIoError(error)) throw error;
+        options.onUnreadable?.(agentId);
         continue;
       }
       if (!SAFE_AGENT_ID.test(agentId)) {
@@ -820,6 +827,7 @@ export class ProjectIdentityFiles {
       } catch (error) {
         // A refused read would fail every later one too; give up on the lot.
         if (isProjectIoError(error)) throw error;
+        options.onUnreadable?.(agentId);
         continue;
       }
 
@@ -856,6 +864,14 @@ export class ProjectIdentityFiles {
               `[ProjectIdentityFiles] Skipping invalid preset: ${agentId}/${fileName}`,
               summary
             );
+            // One that names an id still claims it, so its skip is a partial read.
+            if (
+              parsed !== null &&
+              typeof parsed === "object" &&
+              typeof (parsed as { id?: unknown }).id === "string"
+            ) {
+              options.onUnreadable?.(agentId);
+            }
             continue;
           }
           if (seenIds.has(parsed.id)) {
@@ -872,6 +888,7 @@ export class ProjectIdentityFiles {
           presets.push(parsed as AgentPreset);
         } catch (error) {
           if (isProjectIoError(error)) throw error;
+          options.onUnreadable?.(agentId);
           console.warn(
             `[ProjectIdentityFiles] Skipping malformed preset file: ${agentId}/${fileName}`,
             error

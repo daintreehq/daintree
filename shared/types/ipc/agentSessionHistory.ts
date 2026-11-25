@@ -57,11 +57,18 @@ export interface AgentSessionRecord {
   agentLaunchFlags?: string[];
   agentModelId?: string;
   /**
-   * The preset the session launched on, where the record knows it: a scheduled
-   * run's resume does (#17435). A resume reconciles against it, so a preset's
-   * own permission mode isn't replaced by the agent's.
+   * The preset the session's run was on when it was captured (#18191), or a
+   * scheduled run's (#17435). A resume reads it again from the settings and
+   * reconciles against it, so a preset's own permission mode isn't replaced
+   * by the agent's. Absent is a run on no preset.
    */
   agentPresetId?: string;
+  /**
+   * The account the session's run launched on (#18191), never its folder: a
+   * resume reads the account again from the settings. Absent is the CLI's
+   * default login, as on records journaled before it was kept.
+   */
+  agentAccountId?: string;
   /** Working directory the terminal was running in at capture time. */
   cwd?: string;
   /** Git branch checked out in `cwd` at capture time, for resume sanity checks. */

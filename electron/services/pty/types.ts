@@ -230,6 +230,8 @@ export interface TerminalPublicState {
   agentPresetColor?: string;
   /** User-originally-selected preset ID; immutable across fallback hops. */
   originalAgentPresetId?: string;
+  /** The account the launch runs on (#16040), named by a session the run captures (#18191). */
+  agentAccountId?: string;
   /** Fallback hops taken from the original preset, as the launch said (#17909). */
   fallbackChainIndex?: number;
   /**

@@ -73,6 +73,10 @@ const LAUNCH_REFUSALS: Record<AgentSessionPaneRefusal, ResumeFailure> = {
   "other-worktree": "resume_other_worktree",
   "panel-limit": "resume_panel_limit",
   "missing-cli": "resume_missing_cli",
+  // The refusal's message names what is gone; the owned tool reports it as is.
+  "missing-account": "resume_failed",
+  "missing-preset": "resume_failed",
+  "settings-unavailable": "resume_host_unreadable",
   "spawn-failed": "resume_spawn_failed",
   // Only once delivery stopped, which the adapter throws for first.
   cancelled: "resume_failed",

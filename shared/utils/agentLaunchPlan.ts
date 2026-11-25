@@ -12,6 +12,7 @@ import {
   resolveEffectivePresetId,
   type AgentAccount,
   type AgentSettings,
+  type AgentSettingsEntry,
 } from "../types/agentSettings.js";
 import type { AgentCliDetail } from "../types/ipc/system.js";
 import { appendCallerLaunchFlagsToCommand } from "./callerLaunchFlags.js";
@@ -25,7 +26,11 @@ import {
   type PresetInventoryState,
 } from "./agentPresets.js";
 import { sanitizeTerminalName } from "./agentLaunchValidation.js";
-import { resolveLaunchAccount, withAccountEnv } from "./agentAccounts.js";
+import {
+  resolveLaunchAccount,
+  withAccountEnv,
+  type LaunchAccountResolution,
+} from "./agentAccounts.js";
 import { isAbsolute, isPathInside, pathComparisonKey } from "./path.js";
 import { loadModelTitleCatalog, type AgentModelCatalogReader } from "./agentModelTitle.js";
 
@@ -42,6 +47,30 @@ export function agentPresetTitle(
   const presetName = preset?.name?.trim();
   if (!presetName) return undefined;
   return preset?.displayTitle?.trim() ? preset.displayTitle : `${baseTitle} [${presetName}]`;
+}
+
+/**
+ * The environment an agent launch puts over the terminal's: the agent's global
+ * env, the preset's over it (preset wins on conflicts), the caller's over both
+ * (session-bound secrets like DAINTREE_MCP_TOKEN), and the account's folder
+ * last, so it wins for its own variable whatever a preset sets (#16040). A
+ * resume composes it the same way with no caller env (#18191).
+ */
+export function composeAgentLaunchEnv(
+  entry: AgentSettingsEntry,
+  preset: AgentPreset | undefined,
+  callerEnv: Record<string, string> | undefined,
+  account: LaunchAccountResolution | undefined
+): Record<string, string> | undefined {
+  const sanitizedGlobal = sanitizeAgentEnv(entry.globalEnv as Record<string, unknown>);
+  const sanitizedPreset = preset?.env;
+  const env =
+    sanitizedGlobal || sanitizedPreset || callerEnv
+      ? { ...sanitizedGlobal, ...sanitizedPreset, ...callerEnv }
+      : undefined;
+  return account?.kind === "account"
+    ? withAccountEnv(env, account.envVar, account.account.configDir)
+    : env;
 }
 
 /** What a caller asked of one launch, as the launcher's options carry it. */
@@ -307,20 +336,8 @@ export async function buildAgentLaunchPlan(input: AgentLaunchPlanInput): Promise
       };
     }
 
-    // Merge: global env (base) overridden by preset env (preset wins on
-    // conflicts). Caller-supplied env layers on top of both — used for
-    // session-bound secrets like DAINTREE_MCP_TOKEN. The account's folder goes
-    // last, so it wins for its own variable whatever a preset sets (#16040).
-    const sanitizedGlobal = sanitizeAgentEnv(entry.globalEnv as Record<string, unknown>);
-    const sanitizedPreset = preset?.env;
-    const callerEnv = options?.env;
-    if (sanitizedGlobal || sanitizedPreset || callerEnv) {
-      env = { ...sanitizedGlobal, ...sanitizedPreset, ...callerEnv };
-    }
-    if (accountChoice.kind === "account") {
-      account = accountChoice.account;
-      env = withAccountEnv(env, accountChoice.envVar, account.configDir);
-    }
+    if (accountChoice.kind === "account") account = accountChoice.account;
+    env = composeAgentLaunchEnv(entry, preset, options?.env, accountChoice);
 
     // Per-preset behavioral overrides (incl. tri-state bypass mode) on top of
     // agent-level settings via the shared resolver.

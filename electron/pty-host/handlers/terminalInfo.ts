@@ -113,6 +113,7 @@ export function mapTerminalInfo(
     agentPresetId: t.agentPresetId,
     agentPresetColor: t.agentPresetColor,
     originalAgentPresetId: t.originalAgentPresetId,
+    agentAccountId: t.agentAccountId,
     fallbackChainIndex: t.fallbackChainIndex,
     everDetectedAgent: t.everDetectedAgent,
     agentIncarnation: t.agentIncarnation,

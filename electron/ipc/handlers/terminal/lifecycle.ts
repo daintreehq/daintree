@@ -337,6 +337,7 @@ import {
   relayRemovalEnv,
 } from "./commandLaunch.js";
 import { scheduledRunForRecord } from "../../../../shared/utils/scheduledRunProvenance.js";
+import { launchChoiceForRecord } from "../../../../shared/utils/sessionLaunchChoice.js";
 import { admitScheduledSpawn } from "../../../services/scheduledRuns/scheduledRunAdmission.js";
 import { isHostThrowawayWorkspaceId } from "../../../../shared/config/hostThrowaway.js";
 import {
@@ -1653,6 +1654,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         agentPresetColor: validatedOptions.agentPresetColor,
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
+        agentAccountId: validatedOptions.agentAccountId,
         fallbackChainIndex: validatedOptions.fallbackChainIndex,
         handbackCode: validatedOptions.handbackCode,
         // Only the spawn that registered a scheduled run reports for it
@@ -1818,6 +1820,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           cwd: info.cwd ?? undefined,
           branch,
           ...scheduledRunForRecord(info),
+          ...launchChoiceForRecord(info),
           // A pane in the trash was the user's close, whatever ended it here.
           ...attributeClose(info, cause),
         },
@@ -2092,6 +2095,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           branch,
           bookmark,
           ...scheduledRunForRecord(info),
+          ...launchChoiceForRecord(info),
           ...attributeClose(info, "bookmark"),
         },
         { terminalId, generation }

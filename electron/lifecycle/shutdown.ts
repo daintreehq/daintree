@@ -6,6 +6,7 @@ import { projectStore } from "../services/ProjectStore.js";
 import { journalAgentSession } from "../services/pty/agentSessionJournal.js";
 import { attributeClose } from "../services/pty/closeAttribution.js";
 import { scheduledRunForRecord } from "../../shared/utils/scheduledRunProvenance.js";
+import { launchChoiceForRecord } from "../../shared/utils/sessionLaunchChoice.js";
 import { sealAndDrainCapturedSessionPersistence } from "../services/pty/agentSessionCapturePersistence.js";
 import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import type { AssistantLaneSnapshot } from "../services/HelpSessionService.js";
@@ -790,6 +791,7 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
                 cwd: info.cwd ?? undefined,
                 branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
                 ...scheduledRunForRecord(info),
+                ...launchChoiceForRecord(info),
                 // Quitting ends no pane the user had not closed; one sitting in
                 // the trash was closed by the user before the quit.
                 ...attributeClose(info, "shutdown"),

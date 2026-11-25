@@ -1290,6 +1290,12 @@ export const createRestartActions = (
         agentPresetId: nextAgentPresetId,
         agentPresetColor: nextAgentPresetColor,
         originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
+        // The account whose folder `keepPaneAccount` put back, so a session
+        // the run captures names it (#18191).
+        agentAccountId:
+          isAgent && paneAccountEnv(effectiveAgentId, currentTerminal)
+            ? currentTerminal.agentAccountId
+            : undefined,
         // The hops already taken, so the host can tell whether one is left (#17909).
         fallbackChainIndex:
           nextAgentPresetId === undefined ? undefined : currentTerminal.fallbackChainIndex,
@@ -2538,6 +2544,7 @@ async function respawnAgentOnPreset(
       agentPresetId: nextPreset?.id,
       agentPresetColor: nextPreset?.color,
       originalAgentPresetId: nextOriginalPresetId,
+      agentAccountId: nextAccountId,
       // As the panel records it below (#17909).
       fallbackChainIndex:
         mode.kind === "fallback"

@@ -67,6 +67,39 @@ function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
   return run as Promise<T>;
 }
 
+// Truthiness and `typeof`, not the declared shape: the journal is a JSON file
+// `normalizeRecords` admits loosely, and one hand-edited row mustn't throw.
+function isLaterRunOfSameTerminal(a: AgentSessionRecord, b: AgentSessionRecord): boolean {
+  const later = a.terminal;
+  const earlier = b.terminal;
+  if (!later || !earlier || typeof later.id !== "string" || later.id !== earlier.id) return false;
+  return (
+    typeof later.spawnedAt === "number" &&
+    typeof earlier.spawnedAt === "number" &&
+    later.spawnedAt > earlier.spawnedAt
+  );
+}
+
+/**
+ * Makes `winner`, the newest arrival, the later run's record (#18191): a
+ * capture delayed past its successor's lands last but describes the earlier
+ * launch, whose account, preset and flags a resume must not mix with the later
+ * run's. The arrival keeps its place and what describes the session rather
+ * than a run: its pin, and the title, run and store the later record lacks.
+ */
+function becomeLaterRun(winner: AgentSessionRecord, later: AgentSessionRecord): void {
+  const landed = { ...winner };
+  const fields = winner as unknown as Record<string, unknown>;
+  for (const key of Object.keys(fields)) delete fields[key];
+  Object.assign(winner, later, { savedAt: landed.savedAt });
+  if (landed.bookmark) winner.bookmark = landed.bookmark;
+  if (!winner.title && landed.title) winner.title = landed.title;
+  if (!winner.scheduledRun && landed.scheduledRun) winner.scheduledRun = landed.scheduledRun;
+  if (!winner.conversationStore && landed.conversationStore) {
+    winner.conversationStore = landed.conversationStore;
+  }
+}
+
 function evictRecords(
   records: AgentSessionRecord[],
   now: number,
@@ -95,6 +128,8 @@ function evictRecords(
       const clone = { ...r };
       winners.set(r.sessionId, clone);
       deduped.push(clone);
+    } else if (existing.agentId === r.agentId && isLaterRunOfSameTerminal(r, existing)) {
+      becomeLaterRun(existing, r);
     } else if (existing.agentId === r.agentId) {
       // Carry a pin forward only within the same agent — a cross-agent sessionId
       // collision must never attach one agent's bookmark to another's record.

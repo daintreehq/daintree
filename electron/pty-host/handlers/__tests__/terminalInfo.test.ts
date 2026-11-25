@@ -122,6 +122,15 @@ describe("mapTerminalInfo", () => {
     expect(mapTerminalInfo(makeTerminal(), ctx).scheduledRun).toBeUndefined();
   });
 
+  it("reports the account the launch ran on back to main, which names it on the session record", () => {
+    // #18191: main's kill, shutdown and project-close captures read it only through this mapper.
+    const ctx = createCtx();
+    expect(mapTerminalInfo(makeTerminal({ agentAccountId: "work" }), ctx).agentAccountId).toBe(
+      "work"
+    );
+    expect(mapTerminalInfo(makeTerminal(), ctx).agentAccountId).toBeUndefined();
+  });
+
   it("reports the Claude store the launch env named, and nothing when it named none it could resolve", () => {
     // #16269: the subagent reader trusts only this field for which store a pane
     // writes to; dropped here, every account pane reads as store-unknown.

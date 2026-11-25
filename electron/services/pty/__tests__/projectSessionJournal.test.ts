@@ -43,6 +43,8 @@ interface FakeTerminal {
   agentLaunchFlags?: string[];
   agentModelId?: string;
   scheduledRun?: { scheduleId: string; runId: string };
+  agentAccountId?: string;
+  agentPresetId?: string;
   isTrashed?: boolean;
   trashExpiresAt?: number;
   isAssistantTerminal?: boolean;
@@ -141,6 +143,29 @@ describe("gracefulTeardownAndJournalProject", () => {
 
     const [record] = journalMock.journalAgentSession.mock.calls[0]!;
     expect(record).toMatchObject({ sessionId: "s1", scheduledRun: run });
+  });
+
+  it("names the account and preset the run launched on, never their env (#18191)", async () => {
+    const { client } = makePtyClient({
+      terminals: [
+        {
+          id: "t1",
+          projectId: "proj",
+          launchAgentId: "claude",
+          cwd: "/a",
+          spawnedAt: 1,
+          agentAccountId: "work",
+          agentPresetId: "zai",
+        },
+      ],
+      outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+    });
+
+    await gracefulTeardownAndJournalProject("proj", client);
+
+    const [record] = journalMock.journalAgentSession.mock.calls[0]!;
+    expect(record).toMatchObject({ sessionId: "s1", agentAccountId: "work", agentPresetId: "zai" });
+    expect(record).not.toHaveProperty("env");
   });
 
   it("journals a project close as sleep, and a pane already in the trash as the user's close", async () => {

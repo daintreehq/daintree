@@ -544,6 +544,7 @@ export class TerminalProcess {
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
       originalAgentPresetId: options.originalAgentPresetId ?? options.agentPresetId,
+      agentAccountId: options.agentAccountId,
       fallbackChainIndex: options.fallbackChainIndex,
       launchGeneration: options.launchGeneration,
       spawnArgs,
@@ -1198,6 +1199,7 @@ export class TerminalProcess {
       agentPresetId: t.agentPresetId,
       agentPresetColor: t.agentPresetColor,
       originalAgentPresetId: t.originalAgentPresetId,
+      agentAccountId: t.agentAccountId,
     };
   }
 

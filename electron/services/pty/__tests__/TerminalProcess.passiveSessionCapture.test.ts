@@ -780,6 +780,26 @@ describe("passive agent session capture", () => {
       expect(captured[0].record.scheduledRun).toEqual(run);
     });
 
+    // #18191: the ids a resume reads the run's account and preset back by.
+    it("names the account and preset the run launched on, and neither for a later hand-started run", async () => {
+      const terminal = track(createTerminal({ agentAccountId: "work", agentPresetId: "zai" }));
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+      demote(terminal);
+      await flushCapture();
+      expect(captured[0].record).toMatchObject({ agentAccountId: "work", agentPresetId: "zai" });
+
+      terminal.getInfo().agentIncarnation = 1;
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(OTHER_SESSION_ID)}\n$ `);
+      demote(terminal);
+      await flushCapture();
+      expect(captured[1].record.sessionId).toBe(OTHER_SESSION_ID);
+      // It may have kept the preset's env without its arguments, or changed either.
+      expect(captured[1].record).not.toHaveProperty("agentAccountId");
+      expect(captured[1].record).not.toHaveProperty("agentPresetId");
+    });
+
     it("omits the scheduled run for an agent Daintree did not launch", async () => {
       const terminal = track(
         createTerminal({
