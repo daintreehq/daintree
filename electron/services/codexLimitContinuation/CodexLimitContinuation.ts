@@ -915,14 +915,13 @@ export class CodexLimitContinuation {
     // the pane's claimed it meanwhile.
     const key = claimKey(projectId, terminalId, wait.resetsAt);
     const unclaim = () => {
-      this.unasked.delete(key);
       const now = pane.wait;
-      if (now !== wait && now?.claimed && now.resetsAt === wait.resetsAt) return;
-      // Another pane under the id since: its claims aren't this one's to give back.
-      const other = this.panes.get(terminalId);
-      if (other && other !== pane) return;
-      this.deps.store.removeFired(projectId, terminalId, wait.resetsAt);
       if (now === wait) wait.claimed = false;
+      // Only while the claim is still this unasked one: a fire that asked for
+      // the same reset since owns it now.
+      if (!this.unasked.delete(key)) return;
+      if (now !== wait && now?.claimed && now.resetsAt === wait.resetsAt) return;
+      this.deps.store.removeFired(projectId, terminalId, wait.resetsAt);
     };
     // Counted, and on disk, before the host is asked: a restart after the line
     // went in must never let a restore type it again.
@@ -960,6 +959,8 @@ export class CodexLimitContinuation {
       this.deps.store.removeFired(projectId, terminalId, wait.resetsAt);
       wait.claimed = false;
       wait.asked = false;
+      // A redraw still being read is given a moment before this is asked again.
+      if (wait.stop === stop) wait.continueAt = this.deps.now() + READS_PAUSED_RETRY_MS;
       this.checkDue();
       return;
     }
@@ -1001,6 +1002,7 @@ export class CodexLimitContinuation {
     // Its redraw bound it while this was read, or is being read now.
     if (wait.stop !== null || (wait.reading ?? 0) > 0) {
       wait.claimed = false;
+      if (wait.stop === null) wait.bindBy = this.deps.now() + READS_PAUSED_RETRY_MS;
       this.checkDue();
       return;
     }

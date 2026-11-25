@@ -169,23 +169,25 @@ const PASTE_END = "\x1b[201~";
  * come in writes of its own, and its Enters are text.
  */
 class PromptSendTracker {
-  private pasteOpen = false;
+  /** The agent run a paste opened in and hasn't closed: one whose agent went never closes. */
+  private pasteOpenIn: number | null = null;
 
   /**
    * Whether this write sends something to the agent: an Enter (CR) outside a
    * paste and not a soft newline (an Escape before it). A bare LF is the
    * newline a CLI's Shift+Enter writes.
    */
-  sends(data: string): boolean {
+  sends(data: string, incarnation: number): boolean {
+    if (this.pasteOpenIn !== incarnation) this.pasteOpenIn = null;
     let sends = false;
     for (let i = 0; i < data.length; i++) {
       if (data.startsWith(PASTE_START, i)) {
-        this.pasteOpen = true;
+        this.pasteOpenIn = incarnation;
         i += PASTE_START.length - 1;
       } else if (data.startsWith(PASTE_END, i)) {
-        this.pasteOpen = false;
+        this.pasteOpenIn = null;
         i += PASTE_END.length - 1;
-      } else if (!this.pasteOpen && data[i] === "\r" && data[i - 1] !== "\x1b") {
+      } else if (this.pasteOpenIn === null && data[i] === "\r" && data[i - 1] !== "\x1b") {
         sends = true;
       }
     }
@@ -2684,7 +2686,8 @@ export class TerminalProcess {
     // redraw can no longer be told from a limit the prompt hit.
     const armedClaude = this.codexContinueArmed && getLiveAgentId(this.terminalInfo) === "claude";
     const followsSends = (this.restoredLaunch && this.launchInputDone) || armedClaude;
-    const sends = followsSends && this.promptSends.sends(data);
+    const sends =
+      followsSends && this.promptSends.sends(data, this.terminalInfo.agentIncarnation ?? 0);
     if (this.restoredLaunch && this.launchInputDone && !this.submittedSinceRestore && sends) {
       this.submittedSinceRestore = true;
       this.restoreCandidate = null;

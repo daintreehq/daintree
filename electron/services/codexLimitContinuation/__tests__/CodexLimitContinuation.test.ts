@@ -1009,6 +1009,36 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
     expect(after.continueAt).toHaveBeenCalledTimes(1);
   });
 
+  it("never gives back a claim another fire for the same reset has asked about since", async () => {
+    const backend = await quitWhileWaiting(claudePane(), { uuid: "limit-entry", apiError: true });
+    vi.setSystemTime(RESETS_AT + 60 * 60_000);
+    const after = await restore(backend, claudePane());
+    let reads = 0;
+    let release!: () => void;
+    (after.service as unknown as { deps: CodexLimitContinuationDeps }).deps.readTurn = () => {
+      reads++;
+      // The restored wait's last look at its transcript, before typing, stalls.
+      if (reads === 2) {
+        return new Promise((resolve) => {
+          release = () => resolve({ uuid: "limit-entry", apiError: true });
+        });
+      }
+      return Promise.resolve({ uuid: "limit-entry", apiError: true });
+    };
+    await redraw(after);
+    expect(reads).toBe(2);
+    // A stop of the pane's own for the same reset, continued while that look stalls.
+    const own = { run: "run-own", seq: 9 };
+    after.setStop(known(RESETS_AT, own));
+    await after.service.handleStop("t1", own);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(after.continueAt).toHaveBeenCalledWith("t1", own);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(after.store.fired(PROJECT, "t1")).toContain(RESETS_AT);
+    expect(after.continueAt).toHaveBeenCalledTimes(1);
+  });
+
   it("asks nothing once Daintree began quitting while the claim was being saved", async () => {
     const backend = memoryBackend();
     const before = harness(backend);
