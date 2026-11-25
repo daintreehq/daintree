@@ -969,7 +969,12 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
       hasPty: false,
       restored: { at: 9_000, disposition: "held", heldReason: "resume-deferred" },
     });
-    expect(result.terminals[1]?.restored?.heldReason).toBe("host-ended-uncleanly");
+    expect(result.terminals[1]?.restored).toEqual({
+      at: 5_000,
+      disposition: "held",
+      heldReason: "host-ended-uncleanly",
+      lastSeen: { agentState: "waiting", at: 4_000 },
+    });
   });
 
   it("judges a legacy agent kind as hydration does, and a null marker as no hold", async () => {
@@ -1021,6 +1026,10 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
 
     expect(result.terminals[0]?.agentState).toBe("working");
     expect(d.getProjectState).not.toHaveBeenCalled();
+
+    // One id it can't place is enough to read the layout.
+    await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["a", "held"] });
+    expect(d.getProjectState).toHaveBeenCalledTimes(1);
   });
 
   it("keeps request order and duplicates beside live rows, reading the layout once", async () => {
@@ -1069,9 +1078,12 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
       { inventory: ["held", "gone"], layout: [heldSnapshot(), heldSnapshot({ id: "gone" })] }
     );
 
+    // "missing" is unplaced, so the layout and its stale holds are read.
     const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
-      terminalIds: ["held", "gone"],
+      terminalIds: ["held", "gone", "missing"],
     });
+
+    expect(d.getProjectState).toHaveBeenCalledTimes(1);
 
     expect(result.terminals[0]).toMatchObject({ agentState: "working", hasPty: true });
     expect(result.terminals[1]).toMatchObject({ agentState: "exited", hasPty: false });
@@ -1115,6 +1127,7 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
       terminalIds: ["live", "held"],
     });
 
+    expect(d.getProjectState).toHaveBeenCalledWith(WORKSPACE);
     expect(result.terminals[0]?.agentState).toBe("working");
     expect(result.terminals[0]?.error).toBeUndefined();
     expect(result.terminals[1]?.error).toBe(NOT_FOUND);
@@ -1150,6 +1163,30 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
       agentState: null,
       error: NOT_FOUND,
     });
+  });
+
+  it("reads a live sibling's record and screen without waiting on the layout", async () => {
+    const d = deps([record({ id: "live" })], {
+      owners: { live: WORKSPACE },
+      inventory: [],
+      serialized: { live: { data: "$ ok" } },
+    });
+    let releaseLayout: (state: { terminals: Record_[] }) => void = () => {};
+    d.getProjectState.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      () => new Promise<any>((resolve) => (releaseLayout = resolve))
+    );
+
+    const pending = buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["live", "held"],
+      includeOutput: true,
+    });
+    await vi.waitFor(() => expect(d.ptyClient.getSerializedStateAsync).toHaveBeenCalled());
+    releaseLayout({ terminals: [heldSnapshot()] });
+    const result = await pending;
+
+    expect(result.terminals[0]?.recentOutput).toBe("$ ok");
+    expect(result.terminals[1]).toMatchObject({ terminalId: "held", hasPty: false });
   });
 
   it("answers a foreign id exactly as an unknown one, with the same reads", async () => {

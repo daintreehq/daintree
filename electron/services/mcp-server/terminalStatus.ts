@@ -414,25 +414,10 @@ export async function buildViewlessTerminalStatus(
 
   const records = new Map<string, TerminalRecord>();
   // The token rides the record fetch this path already issues, so correlating a
-  // submission costs no extra RPC here (#12337). Read beside the layout, so
-  // that read adds no time between placing an id and looking it up.
-  const [state, fetched] = await Promise.all([
-    layoutRead,
-    Promise.all(lookupIds.map((id) => deps.ptyClient.getTerminalAsync(id, submissionToken))),
-  ]);
-  const held = new Map<string, PanelSnapshot>();
-  const saved = new Map<string, PanelSnapshot>();
-  for (const snapshot of state?.terminals ?? []) {
-    if (!saved.has(snapshot.id)) saved.set(snapshot.id, snapshot);
-  }
-  for (const id of unplaced) {
-    // Assistants and the global's sessions are never layout panes of this
-    // project; only an ordinary id can be answered from the layout.
-    if (placed.has(id) || isGlobal(id) || admittedAssistants?.has(id) === true) continue;
-    const snapshot = saved.get(id);
-    if (!isHeldPanel(snapshot, workspaceId) || isAssistantTerminalRecord({ id })) continue;
-    held.set(id, snapshot);
-  }
+  // submission costs no extra RPC here (#12337).
+  const fetched = await Promise.all(
+    lookupIds.map((id) => deps.ptyClient.getTerminalAsync(id, submissionToken))
+  );
   lookupIds.forEach((id, index) => {
     const record = fetched[index];
     // `getTerminalAsync` folds an RPC failure into `null`, so this means "not
@@ -479,10 +464,24 @@ export async function buildViewlessTerminalStatus(
     });
   }
 
-  // Checked again after every await: a spawn that took the id meanwhile ends
-  // the hold, and the layout no longer describes what runs under it.
-  for (const id of held.keys()) {
-    if (deps.ptyClient.getTerminalProjectId(id) !== null) held.delete(id);
+  // Awaited only once every live read is done, so the layout adds no time
+  // between placing an id, reading its record and reading its screen.
+  const state = await layoutRead;
+  const saved = new Map<string, PanelSnapshot>();
+  for (const snapshot of state?.terminals ?? []) {
+    if (!saved.has(snapshot.id)) saved.set(snapshot.id, snapshot);
+  }
+  const held = new Map<string, PanelSnapshot>();
+  for (const id of unplaced) {
+    // Assistants and the global's sessions are never layout panes of this
+    // project; only an ordinary id can be answered from the layout.
+    if (placed.has(id) || isGlobal(id) || admittedAssistants?.has(id) === true) continue;
+    const snapshot = saved.get(id);
+    if (!isHeldPanel(snapshot, workspaceId) || isAssistantTerminalRecord({ id })) continue;
+    // Checked after every await: a spawn that took the id meanwhile ends the
+    // hold, and the layout no longer describes what runs under it.
+    if (deps.ptyClient.getTerminalProjectId(id) !== null) continue;
+    held.set(id, snapshot);
   }
 
   const terminals = terminalIds.map((id): TerminalStatusEntry => {

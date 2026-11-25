@@ -32,7 +32,9 @@ export type TerminalStatusSource = "renderer" | "pty";
  * It cuts both ways. `hasPty` and `lastOutputChangeAt` are read in the
  * pty-host, so the reduced `pty` answer reports them and the richer `renderer`
  * answer cannot — a surface listing nothing is not the same as a surface that
- * saw everything. The renderer reads `lastOutputChangeAt` only when the call
+ * saw everything. A pane restore held is the one `hasPty` the renderer can
+ * report (#18171), so it drops `hasPty` from this list when a held row is in
+ * the answer. The renderer reads `lastOutputChangeAt` only when the call
  * asked for output (#12495), so it drops out of this list for those calls.
  * `lastTypedInputAt` rides the same read (#12718) and drops out with it.
  */

@@ -1480,7 +1480,12 @@ describe("terminal.getStatus for a pane restore held (#18171)", () => {
 
     expect(result.terminals[0]).toMatchObject(heldRow);
     expect(result.terminals[0]?.error).toBeUndefined();
-    expect(result.terminals[1]).toMatchObject({ terminalId: "gone", error: "Terminal not found" });
+    expect(result.terminals[1]).toEqual({
+      terminalId: "gone",
+      agentId: null,
+      agentState: null,
+      error: "Terminal not found",
+    });
   });
 
   it("asks the pty-host about none of a held pane's output, activity or submissions", async () => {
@@ -1522,17 +1527,19 @@ describe("terminal.getStatus for a pane restore held (#18171)", () => {
     expect(terminalClientMock.getOutputActivity).not.toHaveBeenCalled();
     expect(terminalClientMock.getSubmissions).not.toHaveBeenCalled();
     expect(result.terminals[0]).toMatchObject({ ...heldRow, recentOutput: null });
+    expect(result.terminals[0]?.submission).toBeUndefined();
     expect(result.unavailableFields).toEqual([]);
   });
 
   it("keeps a held row free of a batch failure its live siblings report", async () => {
     panels(held, live);
     getSerializedStatesMock.mockRejectedValue(new Error("output fetch died"));
+    terminalClientMock.getOutputActivity.mockRejectedValue(new Error("activity died"));
 
     const result = await callGetStatus(setupActions(), { includeOutput: true });
 
     expect(result.terminals[0]).toMatchObject({ ...heldRow, recentOutput: null });
     expect(result.terminals[0]?.error).toBeUndefined();
-    expect(result.terminals[1]?.error).toMatch(/output fetch died/);
+    expect(result.terminals[1]?.error).toMatch(/output fetch died.*activity died/);
   });
 });
