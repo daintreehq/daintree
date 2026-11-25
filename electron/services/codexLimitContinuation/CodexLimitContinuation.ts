@@ -657,7 +657,7 @@ export class CodexLimitContinuation {
     if (this.deps.store.fired(projectId, terminalId).includes(saved.resetsAt)) {
       return this.skipStop(pane, "already-continued");
     }
-    this.endWait(pane);
+    // The spawn's own transition already dropped any wait of the process before.
     pane.epoch++;
     const continueAt = saved.resetsAt + CONTINUE_AFTER_RESET_MS;
     pane.wait = {
