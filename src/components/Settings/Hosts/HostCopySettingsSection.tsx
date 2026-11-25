@@ -51,6 +51,8 @@ interface HostCopySettingsSectionProps {
   connected: boolean;
   /** Just added and connected for the first time: the copy is offered. */
   offered?: boolean;
+  /** The host may have settings of its own (an imported machine): the offer doesn't say it starts from defaults. */
+  mayHaveSettings?: boolean;
 }
 
 type Phase =
@@ -98,6 +100,7 @@ export function HostCopySettingsSection({
   hostName,
   connected,
   offered = false,
+  mayHaveSettings = false,
 }: HostCopySettingsSectionProps) {
   const [selected, setSelected] = useState(defaultSelection);
   const [phase, setPhase] = useState<Phase>({ kind: "choose" });
@@ -216,8 +219,11 @@ export function HostCopySettingsSection({
     );
   };
 
+  const startingPoint = mayHaveSettings
+    ? `${hostName} may already have settings of its own`
+    : `${hostName} starts from defaults`;
   const description = offered
-    ? `${hostName} starts from defaults. Copy ${thisMac}'s settings to it now, or come back here later`
+    ? `${startingPoint}. Copy ${thisMac}'s settings to it now, or come back here later`
     : `Copy ${thisMac}'s settings to ${hostName}, once. Credentials, permissions you granted and plugins stay on each machine`;
 
   if (!connected) {

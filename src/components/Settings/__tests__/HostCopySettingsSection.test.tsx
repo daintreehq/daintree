@@ -288,6 +288,14 @@ describe("Settings → Hosts → host → Copy settings", () => {
     render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected offered />);
     expect(screen.getByText(/Studio starts from defaults/)).not.toBeNull();
   });
+
+  it("offers the copy for a machine that may have settings already, without claiming defaults", () => {
+    render(
+      <HostCopySettingsSection hostId={HOST} hostName="Studio" connected offered mayHaveSettings />
+    );
+    expect(screen.getByText(/Studio may already have settings of its own/)).not.toBeNull();
+    expect(screen.queryByText(/starts from defaults/)).toBeNull();
+  });
 });
 
 describe("Settings → Hosts → host → what a copy would change", () => {
