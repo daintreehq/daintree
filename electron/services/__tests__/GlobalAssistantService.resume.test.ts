@@ -216,6 +216,7 @@ describe("GlobalAssistantService.resumeConversation (#18169)", () => {
       generation: running.generation,
       phase: "running",
     });
+    await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalledTimes(2));
     expect(service.switchingTo()).toEqual(earlier);
     spawned.resolve(true);
     await switched;
@@ -233,6 +234,7 @@ describe("GlobalAssistantService.resumeConversation (#18169)", () => {
       generation: running.generation,
       phase: "running",
     });
+    await vi.waitFor(() => expect(deps.spawn).toHaveBeenCalledTimes(2));
     const started = service.ensureSession();
     spawned.resolve(true);
     const [a, b] = await Promise.all([switched, started]);

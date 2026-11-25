@@ -492,17 +492,14 @@ export class GlobalAssistantService {
 
     let session: GlobalAssistantProvision | null;
     try {
-      session = await this.deps.provision(
-        agentId,
-        switchTo
-          ? {
-              switchingTo: {
-                agentSessionId: switchTo.conversation.agentSessionId,
-                work: switchTo.work,
-              },
-            }
-          : undefined
-      );
+      session = switchTo
+        ? await this.deps.provision(agentId, {
+            switchingTo: {
+              agentSessionId: switchTo.conversation.agentSessionId,
+              work: switchTo.work,
+            },
+          })
+        : await this.deps.provision(agentId);
     } catch (err) {
       await releaseResume();
       throw err;

@@ -624,6 +624,74 @@ describe("listHelpPastSessions", () => {
     }
   });
 
+  describe("narrowed to one assistant (#18169)", () => {
+    const codexPage = (count: number) => ({
+      status: "ok" as const,
+      sessions: Array.from({ length: count }, (_, i) => ({
+        id: `t${i}`,
+        preview: `Question ${i}`,
+        updatedAt: 1_000 + i,
+      })),
+    });
+
+    it("reads only the agent asked for, so the other's rows never take the cap", async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "help-past-narrow-"));
+      try {
+        const sessionPath = path.join(root, "help-sessions", "g");
+        await mkdir(sessionPath, { recursive: true });
+        const dir = path.join(root, "projects", claudeProjectSlug(await realpath(sessionPath)));
+        await mkdir(dir, { recursive: true });
+        await writeFile(path.join(dir, `${A}.jsonl`), transcript(prompt("An old Claude talk")));
+        const listCodexSessions = vi.fn(async () => codexPage(HELP_PAST_SESSIONS_LIMIT));
+        const paths = { claude: sessionPath, codex: ["/sessions/g.codex"] };
+        const deps = { claudeProjectsRoot: path.join(root, "projects"), listCodexSessions };
+
+        const claudeOnly = await listHelpPastSessions(paths, deps, { agentId: "claude" });
+        expect(claudeOnly.sessions.map((row) => [row.agentId, row.sessionId])).toEqual([
+          ["claude", A],
+        ]);
+        expect(listCodexSessions).not.toHaveBeenCalled();
+
+        const codexOnly = await listHelpPastSessions(paths, deps, { agentId: "codex" });
+        expect(codexOnly.sessions.every((row) => row.agentId === "codex")).toBe(true);
+        expect(fsHooks.opened.filter((file) => file.includes(A))).toHaveLength(1);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it("leaves out the conversations an assistant holds before the cap, whatever their case", async () => {
+      const merged = await listHelpPastSessions(
+        NO_PATHS,
+        {
+          claudeProjectsRoot: "/nonexistent/projects",
+          listCodexSessions: async () => codexPage(HELP_PAST_SESSIONS_LIMIT + 1),
+        },
+        { agentId: "codex", exclude: new Set([`T${HELP_PAST_SESSIONS_LIMIT}`, "t3"]) }
+      );
+      const ids = merged.sessions.map((row) => row.sessionId);
+      expect(ids).not.toContain(`t${HELP_PAST_SESSIONS_LIMIT}`);
+      expect(ids).not.toContain("t3");
+      // Two left out of one more than the cap: what remains fits, and is whole.
+      expect(ids).toHaveLength(HELP_PAST_SESSIONS_LIMIT - 1);
+      expect(merged.truncated).toBe(false);
+    });
+
+    it("says only the store it read came up short", async () => {
+      const merged = await listHelpPastSessions(
+        NO_PATHS,
+        {
+          claudeProjectsRoot: "/nonexistent/projects",
+          listCodexSessions: async () => {
+            throw new Error("unreadable");
+          },
+        },
+        { agentId: "claude" }
+      );
+      expect(merged.unreadable).toEqual([]);
+    });
+  });
+
   it("orders equal times by identity so the list is stable", async () => {
     const merged = await listHelpPastSessions(NO_PATHS, {
       claudeProjectsRoot: "/nonexistent/projects",
