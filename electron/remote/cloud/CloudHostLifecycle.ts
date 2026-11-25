@@ -1619,9 +1619,13 @@ export class CloudHostLifecycle {
       throw invalid("This host has no machine yet.");
     }
     // A Bring back's wake under way becomes this Start: it joins it, and it starts the machine
-    // as a Start would, whatever the wake would have decided.
+    // as a Start would, whatever the wake would have decided. One a Stop or removal already
+    // ended is waited out instead, so this Start comes after that, not into it.
     const waking = this.wakeStarts.get(binding.id);
-    if (waking) {
+    const running = this.operations.get(binding.id);
+    if (waking && running?.kind === "starting" && running.controller.signal.aborted) {
+      await running.promise.catch(() => {});
+    } else if (waking) {
       waking.joined = true;
       this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }));
     }
@@ -1744,7 +1748,9 @@ export class CloudHostLifecycle {
     }
     // A Stop or removal that ended the wake while it read sends nothing, a joined Start included.
     if (wake && signal.aborted) return;
-    if (wake && !wake.joined) {
+    // Whether this start is the wake's own decision, rather than a person's Start that joined it.
+    const woken = wake !== undefined && !wake.joined;
+    if (wake && woken) {
       // Only a machine asleep by this read and by the newest one, through the provider still
       // registered, while nothing has ruled a wake out and someone still wants it back.
       const current = this.wakeable(wake.hostId, bindingId, wake.asked);
@@ -1791,7 +1797,7 @@ export class CloudHostLifecycle {
           binding.resourceId!,
           startOptions(lifetimeModelOf(provider), binding.lifetimeSeconds)
         );
-        wake?.sent();
+        if (wake && woken) wake.sent();
         if (started) this.observe(bindingId, started, ticket);
       } catch (error) {
         this.recordError(bindingId, provider.describeError(error));

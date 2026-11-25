@@ -86,9 +86,10 @@ function clip(text: string | null, max = HOST_BRING_BACK_OBSERVED_MAX): string |
 
 /** One observation and then another, as sentences; the first takes half the room at most. */
 function followedBy(first: string, then: string | null): string | null {
-  const lead = clip(first, Math.floor(HOST_BRING_BACK_OBSERVED_MAX / 2));
   const after = clip(then);
-  if (lead === null || after === null || after === lead) return lead ?? after;
+  if (after === null || then!.trim() === first.trim()) return clip(first);
+  const lead = clip(first, Math.floor(HOST_BRING_BACK_OBSERVED_MAX / 2));
+  if (lead === null) return after;
   return `${/[.!?…]$/.test(lead) ? lead : `${lead}.`} ${after}`;
 }
 
