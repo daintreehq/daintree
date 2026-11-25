@@ -8,6 +8,7 @@ import type { CodexLimitCheckpoint } from "../../../../shared/types/codexLimitRe
 import type { CodexLimitStop } from "../../codex/CodexLimitReset.js";
 import {
   CONTINUE_AFTER_RESET_MS,
+  CHECKPOINT_READ_MS,
   LAUNCH_CONFIRMATION_MS,
   READS_PAUSED_RETRY_MS,
   RESTORE_BIND_MS,
@@ -990,6 +991,24 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
     expect(after.state()).toMatchObject({ status: "continued" });
   });
 
+  it("keeps the claim when the host's answer never came, though the stop was rebound meanwhile", async () => {
+    const backend = await quitWhileWaiting(codexPane());
+    vi.setSystemTime(RESETS_AT + 60 * 60_000);
+    const after = await restore(backend, codexPane());
+    let answer!: (result: CodexLimitContinueResult) => void;
+    after.continueAt.mockImplementationOnce(
+      () => new Promise<CodexLimitContinueResult>((resolve) => (answer = resolve))
+    );
+    await redraw(after);
+    await redraw(after, { run: RESTORED.run, seq: 2 });
+    // The line may have gone in: only the host's refusal before typing gives it back.
+    answer({ status: "skipped", reason: "host-unanswered" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(after.state()).toMatchObject({ status: "skipped", reason: "host-unanswered" });
+    expect(after.store.fired(PROJECT, "t1")).toContain(RESETS_AT);
+    expect(after.continueAt).toHaveBeenCalledTimes(1);
+  });
+
   it("asks nothing once Daintree began quitting while the claim was being saved", async () => {
     const backend = memoryBackend();
     const before = harness(backend);
@@ -1216,6 +1235,54 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
       await quitting;
 
       const after = await restore(backend, claudePane());
+      expect(after.state()).toMatchObject({ status: "waiting", resetsAt: RESETS_AT });
+    });
+
+    it("saves nothing from a stop read that finished after the quit judged the pane", async () => {
+      const backend = memoryBackend();
+      const before = harness(backend);
+      before.setTerminal(claudePane());
+      await before.service.set("t1", true, PROJECT);
+      let readTurn!: (turn: ContinuationTurn | undefined) => void;
+      (before.service as unknown as { deps: CodexLimitContinuationDeps }).deps.readTurn = () =>
+        new Promise((resolve) => (readTurn = resolve));
+      const handled = before.service.handleStop("t1", STOP);
+      await vi.advanceTimersByTimeAsync(0);
+      // Input since the stop: its host holds none by the time the quit asks.
+      before.setCheckpoint(null);
+      const quitting = before.service.checkpointForQuit();
+      await vi.advanceTimersByTimeAsync(CHECKPOINT_READ_MS);
+      await quitting;
+      readTurn({ uuid: "limit-entry", apiError: true });
+      await handled;
+
+      const after = await restore(backend, claudePane());
+      expect(after.state()).toEqual({ status: "armed" });
+    });
+
+    it("gives back a claim the host was never asked about as Daintree quits", async () => {
+      const backend = memoryBackend();
+      const before = harness(backend);
+      await before.service.set("t1", true, PROJECT);
+      await before.service.handleStop("t1", STOP);
+      // The claim's write is slow: the quit begins before the host is asked.
+      const write = backend.write;
+      let release!: () => void;
+      let first = true;
+      backend.write = async (next: string) => {
+        if (first) {
+          first = false;
+          await new Promise<void>((resolve) => (release = resolve));
+        }
+        await write(next);
+      };
+      await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS - START);
+      const quitting = before.service.checkpointForQuit();
+      release();
+      await quitting;
+      expect(before.continueAt).not.toHaveBeenCalled();
+
+      const after = await restore(backend, codexPane());
       expect(after.state()).toMatchObject({ status: "waiting", resetsAt: RESETS_AT });
     });
 

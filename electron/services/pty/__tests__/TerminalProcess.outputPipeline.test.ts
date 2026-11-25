@@ -2499,6 +2499,21 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
       terminal.dispose();
     });
 
+    it("keeps a redraw resumed history through a soft newline and a paste sent in pieces", async () => {
+      const { terminal, stops } = restoredPane("codex");
+      terminal.write("first line\n");
+      terminal.write("\x1b[200~");
+      terminal.write("pasted\rbody\r");
+      terminal.write("\x1b[201~");
+      await show(stopScreen());
+      expect(stops).toEqual([]);
+      // An Enter after the paste closed does send.
+      terminal.write("\r");
+      await show(stopScreen().replace("Ran the tests.", "Ran the tests again."));
+      expect(stops).toHaveLength(1);
+      terminal.dispose();
+    });
+
     it("never takes another limit's redraw for the saved one", async () => {
       const { terminal, stops } = restoredPane("codex", "another-stop");
       await show(stopScreen());
@@ -2678,6 +2693,16 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
       terminal.write("\x7f");
       // A frame without the banner (a resize), then the countdown again.
       await show("\x1b[2J\x1b[H");
+      await show(claudeScreen({ footer: COUNTDOWN }));
+      expect(checkpointOf(terminal)).toBeNull();
+      terminal.dispose();
+    });
+
+    it("holds Claude's countdown touched by an Enter while it stayed on screen", async () => {
+      const terminal = createTerminal({ launchAgentId: "claude" });
+      terminal.setCodexLimitContinueArmed(true);
+      await show(claudeScreen({ footer: COUNTDOWN }));
+      terminal.write("\r");
       await show(claudeScreen({ footer: COUNTDOWN }));
       expect(checkpointOf(terminal)).toBeNull();
       terminal.dispose();

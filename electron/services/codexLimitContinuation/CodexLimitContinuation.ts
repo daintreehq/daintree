@@ -169,6 +169,10 @@ interface PendingWait {
   claimed: boolean;
   /** Times the host found the pane's output held unread. */
   pausedRetries: number;
+  /** Claimed, and the host asked to type: from here the line may have gone in. */
+  asked?: boolean;
+  /** Reports of the pane's stop still being read, any of which may rebind a restored wait. */
+  reading?: number;
 }
 
 interface ArmedPane {
@@ -188,6 +192,8 @@ interface ArmedPane {
   launchGeneration: number | undefined;
   /** The quit's own teardown ended its process: what was saved for it stands (#18193). */
   endedByQuit?: boolean;
+  /** The quit's checkpoint has judged the pane: a stop read that finishes later saves nothing. */
+  checkpointed?: boolean;
 }
 
 interface PendingLaunch extends ContinuationLaunch {
@@ -234,6 +240,8 @@ export class CodexLimitContinuation {
   private quitting = false;
   /** Each pane's stop still being read, which a quit lets settle before it decides. */
   private readonly resolving = new Map<string, Promise<void>>();
+  /** Resets claimed whose host hasn't been asked yet: not yet continued. */
+  private readonly unasked = new Set<string>();
 
   constructor(private readonly deps: CodexLimitContinuationDeps) {
     this.nextRevision = deps.now();
@@ -557,6 +565,22 @@ export class CodexLimitContinuation {
       restoring.bindBy = Math.max(restoring.bindBy ?? 0, this.deps.now() + RESTORE_BIND_MS);
       this.reschedule();
     }
+    if (restoring) restoring.reading = (restoring.reading ?? 0) + 1;
+    try {
+      await this.settleStop(pane, terminalId, stop, epoch, wait, restoring);
+    } finally {
+      if (restoring) restoring.reading = Math.max(0, (restoring.reading ?? 1) - 1);
+    }
+  }
+
+  private async settleStop(
+    pane: ArmedPane,
+    terminalId: string,
+    stop: CodexLimitStopRef,
+    epoch: number,
+    wait: PendingWait | null,
+    restoring: PendingWait | null
+  ): Promise<void> {
     // A newer stop replaces a wait for an older one, and the answer to one
     // already being typed: the host refuses it, as its banner has changed.
     if (wait && !restoring) {
@@ -605,7 +629,10 @@ export class CodexLimitContinuation {
     if (reset.status === "unknown") return this.skipStop(pane, reset.reason);
     if (!stamped) return this.skipStop(pane, "banner-changed");
     const { projectId } = pane;
-    if (this.deps.store.fired(projectId, terminalId).includes(reset.resetsAt)) {
+    if (
+      this.deps.store.fired(projectId, terminalId).includes(reset.resetsAt) &&
+      !this.unasked.has(claimKey(projectId, terminalId, reset.resetsAt))
+    ) {
       return this.skipStop(pane, "already-continued");
     }
     const agentId = terminal.detectedAgentId ?? terminal.launchAgentId;
@@ -615,7 +642,8 @@ export class CodexLimitContinuation {
       agentId === "claude"
         ? await this.deps.readTurn(terminalId).catch(() => undefined)
         : undefined;
-    if (this.panes.get(terminalId) !== pane || pane.epoch !== epoch) return;
+    // The quit judged the pane while this was read: what it decided stands.
+    if (this.panes.get(terminalId) !== pane || pane.epoch !== epoch || pane.checkpointed) return;
     const continueAt = reset.resetsAt + CONTINUE_AFTER_RESET_MS;
     pane.wait = {
       stop,
@@ -835,6 +863,13 @@ export class CodexLimitContinuation {
       ]);
       if (timer !== null) this.deps.clearTimer(timer);
     }
+    pane.checkpointed = true;
+    // A claim the host was never asked about is still owed: the fire that
+    // made it asks nothing now Daintree is quitting.
+    const claimed = pane.wait;
+    if (claimed?.claimed && !claimed.asked) {
+      this.deps.store.removeFired(projectId, terminalId, claimed.resetsAt);
+    }
     if (this.panes.get(terminalId) !== pane || pane.endedByQuit) return;
     const held = await this.deps.readCheckpoint(terminalId).catch(() => undefined);
     // An unanswered host leaves what was saved.
@@ -878,14 +913,20 @@ export class CodexLimitContinuation {
       !this.deps.isQuitting();
     // The host is never asked: the reset is still owed, unless another wait of
     // the pane's claimed it meanwhile.
+    const key = claimKey(projectId, terminalId, wait.resetsAt);
     const unclaim = () => {
+      this.unasked.delete(key);
       const now = pane.wait;
       if (now !== wait && now?.claimed && now.resetsAt === wait.resetsAt) return;
+      // Another pane under the id since: its claims aren't this one's to give back.
+      const other = this.panes.get(terminalId);
+      if (other && other !== pane) return;
       this.deps.store.removeFired(projectId, terminalId, wait.resetsAt);
       if (now === wait) wait.claimed = false;
     };
     // Counted, and on disk, before the host is asked: a restart after the line
     // went in must never let a restore type it again.
+    this.unasked.add(key);
     this.deps.store.addFired(projectId, terminalId, wait.resetsAt);
     await this.deps.store.flush();
     if (!current()) return unclaim();
@@ -901,15 +942,24 @@ export class CodexLimitContinuation {
       }
     }
     const stop = wait.stop;
+    this.unasked.delete(key);
+    wait.asked = true;
     const result = await this.deps
       .continueAt(terminalId, stop)
       .catch((): CodexLimitContinueResult => ({ status: "skipped", reason: "host-unanswered" }));
     if (this.panes.get(terminalId) !== pane || pane.wait !== wait) return;
-    // Bound to a newer redraw of the restored stop while this one was asked
-    // about: that one is asked about next.
-    if (result.status === "skipped" && wait.stop !== stop) {
+    // A restored stop's sighting moved on while this one was asked about: the
+    // host refused it before typing, and a redraw bound since, or still being
+    // read, is asked about next.
+    if (
+      result.status === "skipped" &&
+      result.reason === "banner-changed" &&
+      wait.saved !== undefined &&
+      (wait.stop !== stop || (wait.reading ?? 0) > 0)
+    ) {
       this.deps.store.removeFired(projectId, terminalId, wait.resetsAt);
       wait.claimed = false;
+      wait.asked = false;
       this.checkDue();
       return;
     }
@@ -948,8 +998,8 @@ export class CodexLimitContinuation {
   private async giveUpRestored(pane: ArmedPane, wait: PendingWait): Promise<void> {
     const { reset, stamp } = await this.deps.readStop(pane.terminalId);
     if (this.panes.get(pane.terminalId) !== pane || pane.wait !== wait) return;
-    // Its redraw bound it while this was read.
-    if (wait.stop !== null) {
+    // Its redraw bound it while this was read, or is being read now.
+    if (wait.stop !== null || (wait.reading ?? 0) > 0) {
       wait.claimed = false;
       this.checkDue();
       return;
@@ -1022,4 +1072,8 @@ export class CodexLimitContinuation {
  */
 function dueAt(wait: PendingWait): number {
   return wait.stop === null ? (wait.bindBy ?? wait.continueAt) : wait.continueAt;
+}
+
+function claimKey(projectId: string, terminalId: string, resetsAt: number): string {
+  return `${projectId}\u0000${terminalId}\u0000${resetsAt}`;
 }

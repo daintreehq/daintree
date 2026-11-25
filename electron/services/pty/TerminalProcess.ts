@@ -161,13 +161,36 @@ interface HeldLimitStop {
   refusal?: CodexLimitContinueSkipReason;
 }
 
+const PASTE_START = "\x1b[200~";
+const PASTE_END = "\x1b[201~";
+
 /**
- * Whether a write of input sends something to the agent (#18193): an Enter
- * outside a bracketed paste, and not a soft newline (an Escape before it).
+ * Follows a pane's bracketed pastes across writes (#18193): a paste's body can
+ * come in writes of its own, and its Enters are text.
  */
-function sendsPrompt(data: string): boolean {
-  const typed = data.replace(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)/g, "").replace(/\x1b[\r\n]/g, "");
-  return /[\r\n]/.test(typed);
+class PromptSendTracker {
+  private pasteOpen = false;
+
+  /**
+   * Whether this write sends something to the agent: an Enter (CR) outside a
+   * paste and not a soft newline (an Escape before it). A bare LF is the
+   * newline a CLI's Shift+Enter writes.
+   */
+  sends(data: string): boolean {
+    let sends = false;
+    for (let i = 0; i < data.length; i++) {
+      if (data.startsWith(PASTE_START, i)) {
+        this.pasteOpen = true;
+        i += PASTE_START.length - 1;
+      } else if (data.startsWith(PASTE_END, i)) {
+        this.pasteOpen = false;
+        i += PASTE_END.length - 1;
+      } else if (!this.pasteOpen && data[i] === "\r" && data[i - 1] !== "\x1b") {
+        sends = true;
+      }
+    }
+    return sends;
+  }
 }
 
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
@@ -433,6 +456,7 @@ export class TerminalProcess {
    * Keys that edit or leave the composer (an erased draft, an Escape) aren't.
    */
   private submittedSinceRestore = false;
+  private readonly promptSends = new PromptSendTracker();
   /** The stop saved before a cold restart that this restored process may redraw, by identity (#18193). */
   private restoreCandidate: string | null = null;
   /** The sighting reported as that redraw, and the identity it had: a replayed redraw of it later is the same stop. */
@@ -2622,13 +2646,13 @@ export class TerminalProcess {
     if (!canContinueAtLimitReset(agentId)) return null;
     const incarnation = t.agentIncarnation ?? 0;
     const inputSeq = this.inputController.inputSequence;
+    // Output read without a gap up to now: a pane held unread may have moved on.
+    if (observedSince === null) return null;
     // A restore that hasn't drawn the saved stop yet is still owed it while
     // nothing has been written to it.
     if (this.restoreCandidate !== null) {
       return inputSeq === this.launchInputSeq ? { kind: "replaying" } : null;
     }
-    // Output read without a gap up to now: a pane held unread may have moved on.
-    if (observedSince === null) return null;
     const held = this.heldLimitStop();
     if (
       held !== null &&
@@ -2658,17 +2682,21 @@ export class TerminalProcess {
   private noteLimitStopInput(data: string, owner: string | undefined): void {
     // A prompt sent to a restored process ends its replay; the saved stop's
     // redraw can no longer be told from a limit the prompt hit.
-    if (
-      this.restoredLaunch &&
-      this.launchInputDone &&
-      !this.submittedSinceRestore &&
-      sendsPrompt(data)
-    ) {
+    const armedClaude = this.codexContinueArmed && getLiveAgentId(this.terminalInfo) === "claude";
+    const followsSends = (this.restoredLaunch && this.launchInputDone) || armedClaude;
+    const sends = followsSends && this.promptSends.sends(data);
+    if (this.restoredLaunch && this.launchInputDone && !this.submittedSinceRestore && sends) {
       this.submittedSinceRestore = true;
       this.restoreCandidate = null;
+      // A Codex banner held from the resumed history, other than the saved
+      // stop's redraw, is let go: drawn again after the prompt, it is a sighting
+      // of its own that can be reported.
+      if (this.codexLimit?.replay && this.codexLimit.seq !== this.restoredSeq) {
+        this.codexLimit = null;
+      }
     }
     if (this.codexContinueArmed && getLiveAgentId(this.terminalInfo) === "claude") {
-      this.claudeLimitStop.noteInput(data, owner, performance.now(), sendsPrompt(data));
+      this.claudeLimitStop.noteInput(data, owner, performance.now(), sends);
     }
   }
 

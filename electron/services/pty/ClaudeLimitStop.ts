@@ -96,6 +96,8 @@ export interface ClaudeOwnWait {
   inputSeq: number;
   /** The latest look showed it: a frame without the banner (a resize) keeps what it first showed. */
   shown: boolean;
+  /** A prompt was sent while it showed: gone from a look after that, it has ended. */
+  endsIfHidden?: boolean;
 }
 
 interface EscapeNote {
@@ -175,8 +177,9 @@ export class ClaudeLimitStopTracker {
 
   /** A write of input at monotonic `at`, as the pty host took it; `owner` names the assistant it was written for. */
   noteInput(data: string, owner: string | undefined, at: number, sendsPrompt = false): void {
-    // A prompt sent ends Claude's wait as first seen: one drawn after it is another.
-    if (sendsPrompt) this.countdown = null;
+    // A prompt sent while Claude waits: a wait still on screen at the next look
+    // is the one first seen, touched; one drawn after it went away is another.
+    if (sendsPrompt && this.countdown) this.countdown.endsIfHidden = true;
     if (!isEscapeOnly(data)) return;
     this.escapes.push({ at, assistant: owner !== undefined });
     if (this.escapes.length > MAX_ESCAPES) this.escapes.shift();
@@ -195,7 +198,8 @@ export class ClaudeLimitStopTracker {
     // A frame with no banner at all keeps the wait's first sighting; anything
     // printed after the banner, or the banner with no wait of Claude's, ends it.
     if (screen === null) {
-      if (this.countdown) this.countdown.shown = false;
+      if (this.countdown?.endsIfHidden) this.countdown = null;
+      else if (this.countdown) this.countdown.shown = false;
     } else if (!screen.last || !screen.countdown) {
       this.countdown = null;
     }
