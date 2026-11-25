@@ -3992,4 +3992,101 @@ describe("RemoteHostsClient", () => {
       }
     });
   });
+
+  describe("setup turning Host mode on at a host's connection (#18182)", () => {
+    const studio = { kind: "ssh", target: "studio.example" } as const;
+    const parked: HostConnectionState = {
+      status: "unreachable",
+      lastSeenAt: 1_000,
+      detail: "Daintree isn't running in Host mode there (no host.json).",
+      hostModeOff: true,
+      stoppedRetrying: true,
+    };
+    function linkIn(hostId: string, state: HostConnectionState) {
+      const link = manager.connect(hostId);
+      const states = new Map([[hostId, state]]);
+      const earlier = manager.connectionState;
+      manager.connectionState = (id) => states.get(id) ?? earlier(id);
+      return link;
+    }
+
+    it("dials a link parked on Host mode off again, with no window, after marking it used", () => {
+      const link = linkIn("studio-01", parked);
+      client.hostModeStarted(studio);
+      expect(manager.touch).toHaveBeenCalledExactlyOnceWith("studio-01");
+      expect(link.retryNow).toHaveBeenCalledExactlyOnceWith();
+      // Marked used first: a long-parked link's dial isn't let go by the idle sweep.
+      expect(manager.touch.mock.invocationCallOrder[0]).toBeLessThan(
+        link.retryNow.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("leaves a parked link on another machine as it is", () => {
+      const mini = registry.add({
+        name: "mini",
+        connection: { kind: "ssh", target: "mini.example" },
+      });
+      const studioLink = linkIn("studio-01", parked);
+      const miniLink = linkIn(mini.id, parked);
+      client.hostModeStarted({ kind: "ssh", target: "mini.example" });
+      expect(miniLink.retryNow).toHaveBeenCalledTimes(1);
+      expect(studioLink.retryNow).not.toHaveBeenCalled();
+    });
+
+    it.each<[string, HostConnectionState]>([
+      [
+        "stopped because ssh refused the login",
+        {
+          status: "unreachable",
+          lastSeenAt: 1_000,
+          detail: "Permission denied (publickey).",
+          stoppedRetrying: true,
+          blocker: { kind: "ssh-access" },
+        },
+      ],
+      ["still retrying by itself", { ...parked, stoppedRetrying: undefined }],
+      ["dialling", { status: "connecting", attempt: 2 }],
+      ["up", { status: "connected", rttMs: 1, handshake: {} as never }],
+    ])("leaves a link %s as it is", (_label, state) => {
+      const link = linkIn("studio-01", state);
+      client.hostModeStarted(studio);
+      expect(link.retryNow).not.toHaveBeenCalled();
+      expect(manager.touch).not.toHaveBeenCalled();
+    });
+
+    it("dials nothing for a host with no link, one a person disconnected", () => {
+      client.hostModeStarted(studio);
+      expect(manager.connect).not.toHaveBeenCalled();
+      expect(manager.touch).not.toHaveBeenCalled();
+    });
+
+    it("dials nothing on a host being re-pointed, on its old or its new machine", async () => {
+      const newbox = { kind: "ssh", target: "newbox.example" } as const;
+      const links: Array<ReturnType<typeof manager.connect>> = [];
+      const startedThere = (connection: typeof studio | typeof newbox) => {
+        // Something dialled it meanwhile, and that link parked on Host mode off.
+        links.push(linkIn("studio-01", parked));
+        retarget.hostModeStarted(connection);
+      };
+      const retarget: RemoteHostsClient = new RemoteHostsClient({
+        registry,
+        manager: manager as unknown as RemoteHostManager,
+        bindings,
+        router,
+        senders: { projectKeyFor: () => null, windowIdFor: () => null },
+        windows,
+        installRouter,
+        emit: () => {},
+        // Its cleanup runs while the record still names the old machine.
+        onRetarget: vi.fn(async () => startedThere(studio)),
+      });
+      // The rebind: the record names the new machine, and the host still reads as retiring.
+      const off = registry.onChange(() => startedThere(newbox));
+      await retarget.update({ hostId: "studio-01", connection: newbox });
+      off();
+      expect(links).toHaveLength(2);
+      for (const link of links) expect(link.retryNow).not.toHaveBeenCalled();
+      await retarget.dispose();
+    });
+  });
 });

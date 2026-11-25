@@ -641,6 +641,27 @@ export class RemoteHostsClient {
   }
 
   /**
+   * Setup on this machine turned Host mode on at this connection and read it
+   * back (#18182). A link there that stopped because no Daintree listened is
+   * dialled again, window or not; one up, dialling, let go, or stopped for
+   * another reason (ssh refused the login) is left as it is.
+   */
+  hostModeStarted(connection: HostConnection): void {
+    const { manager, registry } = this.options;
+    for (const host of registry.list()) {
+      // Being removed or re-pointed: a link dialled now would be to the old machine.
+      if (!sameHostConnection(host.connection, connection) || this.retiring.has(host.id)) continue;
+      const state = manager.connectionState(host.id);
+      if (state.status !== "unreachable" || !state.stoppedRetrying || !state.hostModeOff) continue;
+      const link = manager.get(host.id);
+      if (!link) continue;
+      // Parked a while with nothing using it: the dial gets the whole idle window.
+      manager.touch(host.id);
+      link.retryNow();
+    }
+  }
+
+  /**
    * Windows on the host come back to this machine, binding and view together,
    * as removing or re-pointing it promises: only rebinding left the host's view
    * on screen with nothing behind it and no host chip to leave by. A window

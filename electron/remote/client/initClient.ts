@@ -1122,6 +1122,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
         }
       }
     },
+    onHostModeStarted: (connection) => client.hostModeStarted(connection),
   });
   // A host whose Daintree answered is checked afresh the next time it isn't serving.
   const stopStartRechecks = manager.onStateChange((hostId, state) => {

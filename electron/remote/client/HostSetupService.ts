@@ -111,6 +111,11 @@ export interface HostSetupDeps {
   forgetCloud?(bindingId: string): Promise<void>;
   /** Every check that reached a host, so what it saw can be kept with the host's record. */
   onProbed?(connection: HostConnection, result: HostProbeResult): void;
+  /**
+   * Setup turned Host mode on there and read it back: a link that stopped
+   * because no Daintree was listening has its reason gone (#18182).
+   */
+  onHostModeStarted?(connection: HostConnection): void;
 }
 
 /** Per-machine cache key: an ssh host keeps the key of its target alone. */
@@ -364,8 +369,9 @@ export class HostSetupService {
       throw new AppError({ code: "INTERNAL", message, userMessage: message });
     }
     this.refuseWhileRetiring(connection);
+    let result: StartHostModeResult;
     try {
-      return await bootstrapHostMode(connection, before, {
+      result = await bootstrapHostMode(connection, before, {
         channel,
         probe: () => this.probeOutcome(connection, channel),
         sleep: this.deps.sleep ?? abortableSleep,
@@ -376,6 +382,9 @@ export class HostSetupService {
       // Host mode may be on there now, whatever a dial that checked meanwhile saw.
       this.recheckStart(connection);
     }
+    // A link dialled now to a host being removed or re-pointed would reach the old machine.
+    if (!this.deps.isRetiring?.(connection)) this.deps.onHostModeStarted?.(connection);
+    return result;
   }
 
   /**
