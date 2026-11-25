@@ -4607,11 +4607,11 @@ describe("terminal spawn handler - a preset arming the pane to continue (#17912)
     expect(mockNoteContinuationLaunch).not.toHaveBeenCalled();
   });
 
-  it("only names any other spawn, for an agent that waits for its own reset, a shell, or the Assistant", async () => {
+  it("only names any other spawn, for an agent Daintree can't continue, a shell, or the Assistant", async () => {
     const noteSpawn = vi.fn();
     setContinuationForgetter({ forgetPane: vi.fn(), forgetProject: vi.fn(), noteSpawn });
     try {
-      await codexSpawn({ id: "claude-pane", launchAgentId: "claude", command: "claude" });
+      await codexSpawn({ id: "gemini-pane", launchAgentId: "gemini", command: "gemini" });
       await codexSpawn({ id: "shell-pane", launchAgentId: undefined, command: undefined });
       mockIsHelpTerminal.mockReturnValue(true);
       await codexSpawn({ id: "assistant-pane" });
@@ -4622,7 +4622,7 @@ describe("terminal spawn handler - a preset arming the pane to continue (#17912)
     expect(ptyClient.spawn).toHaveBeenCalledTimes(3);
     expect(mockNoteContinuationLaunch).not.toHaveBeenCalled();
     expect(noteSpawn.mock.calls.map((call) => call[0])).toEqual([
-      "claude-pane",
+      "gemini-pane",
       "shell-pane",
       "assistant-pane",
     ]);

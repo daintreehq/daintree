@@ -110,7 +110,7 @@ describe("CodexLimitContinuation (#17909)", () => {
     const h = harness();
     h.setTerminal(codexPane({ projectId: "elsewhere" }));
     await expect(h.service.set("t1", true, PROJECT)).rejects.toMatchObject({ code: "NOT_FOUND" });
-    h.setTerminal(codexPane({ launchAgentId: "claude", detectedAgentId: "claude" }));
+    h.setTerminal(codexPane({ launchAgentId: "gemini", detectedAgentId: "gemini" }));
     await expect(h.service.set("t1", true, PROJECT)).rejects.toBeInstanceOf(
       CodexLimitContinuationError
     );
@@ -119,6 +119,44 @@ describe("CodexLimitContinuation (#17909)", () => {
       code: "UNSUPPORTED",
     });
     expect(h.active).toEqual([]);
+  });
+
+  it("arms a Claude Code pane too, ahead of any limit (#18192)", async () => {
+    const h = harness();
+    h.setTerminal(codexPane({ launchAgentId: "claude", detectedAgentId: "claude" }));
+    await h.service.set("t1", true, PROJECT);
+    expect(h.state()).toEqual({ status: "armed" });
+    expect(h.hostArmed).toEqual([["t1", true]]);
+  });
+
+  it("records the stop its user took over at once, with no wait and nothing typed (#18192)", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    h.setStop({ ...known(), skipAtStop: "auto-continue-cancelled" });
+    await h.service.handleStop("t1", STOP);
+    expect(h.state()).toEqual({
+      status: "skipped",
+      at: expect.any(Number),
+      reason: "auto-continue-cancelled",
+    });
+    await vi.advanceTimersByTimeAsync(RESETS_AT - START + 10 * 60_000);
+    expect(h.continueAt).not.toHaveBeenCalled();
+  });
+
+  it("falls back ahead of a stop its user took over, and ignores a verdict on another sighting (#18192)", async () => {
+    const h = harness();
+    await h.service.set("t1", true, PROJECT);
+    h.setStop({ ...known(), skipAtStop: "auto-continue-cancelled" });
+    h.setFallback("fallback");
+    await h.service.handleStop("t1", STOP);
+    expect(h.state()).toMatchObject({ status: "skipped", reason: "falls-back" });
+
+    h.setFallback("none");
+    h.setStop({ ...known(RESETS_AT, { run: "run-a", seq: 1 }), skipAtStop: "input-since" });
+    await h.service.handleStop("t1", { run: "run-a", seq: 2 });
+    // The verdict was about seq 1; seq 2's stamp doesn't match, so the
+    // banner-changed check that follows decides.
+    expect(h.state()).toMatchObject({ status: "skipped", reason: "banner-changed" });
   });
 
   it("waits until just after the reset, then has the host continue the stop once", async () => {

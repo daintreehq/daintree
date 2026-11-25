@@ -1539,6 +1539,8 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
       "Send to agent",
       "---",
       "Watch",
+      // A Claude Code pane can be armed like a Codex one (#18192).
+      "Continue when usage limit resets",
       "Fleet ›",
       "When done ›",
       "---",
@@ -1629,7 +1631,9 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     renderMenu(agentPane);
 
     const root = level(menuTree());
-    expect(root.indexOf("Watch")).toBe(root.indexOf("Fleet ›") - 1);
+    // Beside its sibling agent toggle, ahead of the Fleet submenu.
+    expect(root.indexOf("Watch")).toBe(root.indexOf("Continue when usage limit resets") - 1);
+    expect(root.indexOf("Watch")).toBe(root.indexOf("Fleet ›") - 2);
     expect(root.filter((row) => row === "Watch")).toHaveLength(1);
     expect(
       screen.getByRole("menuitemcheckbox", { name: "Watch" }).getAttribute("aria-checked")
@@ -1712,12 +1716,20 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
   });
 
   it.each([
-    ["an agent whose CLI waits on its own", { launchAgentId: "claude", detectedAgentId: "claude" }],
+    ["an agent Daintree can't continue", { launchAgentId: "gemini", detectedAgentId: "gemini" }],
     ["a plain shell", { launchAgentId: undefined, detectedAgentId: undefined }],
     ["a dialog pane", { launchAgentId: "codex", detectedAgentId: "codex", location: "dialog" }],
   ])("offers no Continue when usage limit resets on %s (#17909)", (_name, overrides) => {
     renderMenu({ ...agentPane, ...overrides });
     expect(screen.queryByText("Continue when usage limit resets")).toBeNull();
+  });
+
+  it("offers Continue when usage limit resets on a Claude Code pane, ahead of any limit (#18192)", () => {
+    renderMenu({ ...agentPane, title: "Claude", launchAgentId: "claude", detectedAgentId: "claude" });
+    fireEvent.click(
+      screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" })
+    );
+    expect(continueClient.set).toHaveBeenLastCalledWith("panel-1", true);
   });
 
   it("keeps the checked item on a pane armed while Codex ran in it, once Codex has left (#17911)", () => {
