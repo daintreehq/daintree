@@ -73,6 +73,7 @@ vi.mock("@/utils/logger", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 import {
   __testing,
   openInstallCommandInTerminal,
+  recheckInstallTarget,
   type InstallCommandRequest,
 } from "../installCommandHandoff";
 import { installLineForCommands } from "../installCommandLine";
@@ -372,6 +373,31 @@ describe("re-checking after the command runs", () => {
     settle(false);
     await vi.advanceTimersByTimeAsync(0);
     expect(recheckPrerequisite).toHaveBeenCalledTimes(2);
+  });
+
+  it("types a command nothing can re-check and watches nothing for it", async () => {
+    const opened = await openAtPrompt({
+      ...REQUEST,
+      line: "agent37 ssh setup",
+      target: { kind: "manual" },
+    });
+    expect(opened).toBe("t1");
+    expect(client.write).toHaveBeenCalledWith(
+      "t1",
+      formatForTerminalPaste("agent37 ssh setup", { bracketedPasteMode: true })
+    );
+    expect(__testing.watchCount()).toBe(0);
+    await runCommand();
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(recheckPrerequisite).not.toHaveBeenCalled();
+    expect(cli.refresh).not.toHaveBeenCalled();
+    expect(client.activity.size).toBe(0);
+  });
+
+  it("never probes anything to re-check a manual command", async () => {
+    await expect(recheckInstallTarget({ kind: "manual" })).resolves.toBe(false);
+    expect(recheckPrerequisite).not.toHaveBeenCalled();
+    expect(cli.refresh).not.toHaveBeenCalled();
   });
 
   it("ignores other terminals' activity", async () => {

@@ -5,9 +5,11 @@ import {
   compareHandshake,
   isValidRemoteHostId,
   parseHostScopedKey,
+  readPendingPlacement,
   toHostScopedKey,
   type HostHandshakeInfo,
 } from "../remoteHosts.js";
+import { HOST_PACKAGES_INSTRUCTION } from "../../config/linuxHostPackages.js";
 
 const base: HostHandshakeInfo = {
   version: "0.38.0",
@@ -53,5 +55,38 @@ describe("compareHandshake", () => {
       kind: "version",
     });
     expect(compareHandshake(base, { ...base, commit: "def" })).toMatchObject({ kind: "commit" });
+  });
+});
+
+describe("readPendingPlacement", () => {
+  const placement = (label: string, message: string) =>
+    readPendingPlacement({
+      projectId: "p",
+      worktreeId: "w",
+      worktreePath: "/repo/w",
+      label,
+      requestedAt: 1,
+      failure: { message, at: 2 },
+    });
+
+  it("keeps a refused start's failure whole, with the command that fixes it", () => {
+    const refusal = `Daintree can't start on box: these libraries it needs aren't installed there: libnspr4.so, libnss3.so. ${HOST_PACKAGES_INSTRUCTION}`;
+    expect(refusal.length).toBeGreaterThan(500);
+    expect(placement("feature", refusal)?.failure?.message).toBe(refusal);
+  });
+
+  it("cuts a failure too long to keep before its command, never the command", () => {
+    const names = Array.from({ length: 80 }, (_, i) => `libmissing-${i}.so.0`).join(", ");
+    const refusal = `Daintree can't start on box: these libraries it needs aren't installed there: ${names}. ${HOST_PACKAGES_INSTRUCTION}`;
+    const kept = placement("feature", refusal)!.failure!.message;
+    expect(kept.length).toBeLessThan(refusal.length);
+    expect(kept.endsWith(`… ${HOST_PACKAGES_INSTRUCTION}`)).toBe(true);
+  });
+
+  it("still cuts a long label, and bounds a failure too, by a longer measure", () => {
+    const read = placement("x".repeat(2000), "y".repeat(2000));
+    expect(read!.label.length).toBeLessThan(2000);
+    expect(read!.failure!.message.length).toBeLessThan(2000);
+    expect(read!.failure!.message.length).toBeGreaterThan(read!.label.length);
   });
 });

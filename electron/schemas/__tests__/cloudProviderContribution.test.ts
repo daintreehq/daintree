@@ -175,6 +175,49 @@ describe("contributes.cloudProviders", () => {
     expect(ssh({ sshTrust: "api-or-confirm" })).toBe(false);
   });
 
+  it("takes a tunnel's install and sign-in lines only as one visible line each", () => {
+    const capabilities = provider().capabilities;
+    const withLines = (lines: Record<string, unknown>) =>
+      parse([
+        provider({
+          capabilities: { ...capabilities, tunnel: { ...capabilities.tunnel, ...lines } },
+        }),
+      ]);
+    const accepted = withLines({
+      installCommand: "brew install awscli",
+      signInCommand: "aws sso login",
+    });
+    expect(accepted.success).toBe(true);
+    expect(
+      accepted.success ? accepted.data.contributes.cloudProviders[0]!.capabilities.tunnel : null
+    ).toEqual(expect.objectContaining({ signInCommand: "aws sso login" }));
+    // Either alone, and neither.
+    expect(withLines({ signInCommand: "aws sso login" }).success).toBe(true);
+    expect(withLines({ installCommand: "brew install awscli" }).success).toBe(true);
+    expect(withLines({}).success).toBe(true);
+    // Each refused for one reason: what would submit it, hide part of it, or isn't a line at all.
+    for (const line of [
+      "",
+      " aws sso login",
+      "aws sso login\n",
+      "aws sso login\nrm -rf ~",
+      "aws\u2028sso login",
+      "aws\u2029sso login",
+      "aws \u202esso login",
+      "aws\tsso",
+      // Drawn as nothing, or as a plain space, while the shell reads something else.
+      "aws sso log\u034Fin",
+      "aws\u00A0sso login",
+      "aws  sso login",
+      "x".repeat(513),
+      42,
+    ]) {
+      expect(withLines({ signInCommand: line }).success, JSON.stringify(line)).toBe(false);
+      expect(withLines({ installCommand: line }).success, JSON.stringify(line)).toBe(false);
+    }
+    expect(withLines({ signInCommand: "x".repeat(512) }).success).toBe(true);
+  });
+
   it("reads a stop that bills nothing for its disk unless the provider says it does", () => {
     const declared = (persistence: Record<string, unknown>) => {
       const capabilities = provider().capabilities;

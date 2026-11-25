@@ -310,6 +310,8 @@ const HOSTS_TAB = {
   importKind: "lazy",
   importer: LazyHostsSettingsTab.preload,
   LazyComponent: LazyHostsSettingsTab,
+  // A setup failure's fix opens in a terminal, which Settings closes for first.
+  needsOnClose: true,
   searchNavDescription:
     "Machines this one opens projects on over SSH, adding one, and this machine as a host",
   searchNavKeywords: [

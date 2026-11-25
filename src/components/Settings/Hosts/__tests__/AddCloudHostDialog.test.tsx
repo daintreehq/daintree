@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   CloudAccountSummary,
   CloudCatalog,
+  CloudHostStatus,
   CloudHostsSnapshot,
   CloudProviderInfo,
   CloudProvisioning,
@@ -35,8 +36,17 @@ vi.mock("@/clients/systemClient", async (importOriginal) => {
   return { ...actual, systemClient: { ...actual.systemClient, openExternal } };
 });
 
+const placement = vi.hoisted(() => ({
+  current: { ready: false } as
+    { ready: true; cwd: string; worktreeId: string | undefined } | { ready: false },
+}));
+vi.mock("@/hooks/terminal/useHomeTerminalPlacement", () => ({
+  useHomeTerminalPlacement: () => placement.current,
+}));
+
 import { AddCloudHostDialog } from "../AddCloudHostDialog";
 import { takeFirstConnect } from "../hostCopySettingsRequests";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 
 const NONE: CloudProvisioning = {
   location: "none",
@@ -938,5 +948,139 @@ describe("AddCloudHostDialog finding the tunnel's command (#18180)", () => {
     expect(client.findTunnel).toHaveBeenCalledTimes(2);
     again.resolve({ command: "agent37", found: true });
     await screen.findByTestId("add-cloud-host-tunnel-found");
+  });
+});
+
+describe("AddCloudHostDialog showing the tunnel's setup lines (#18181)", () => {
+  const declared = () => {
+    const info = tunnelled();
+    info.capabilities.tunnel = {
+      ...info.capabilities.tunnel!,
+      installCommand: "npm install -g agent37",
+      signInCommand: "agent37 ssh setup",
+    };
+    return info;
+  };
+
+  afterEach(() => {
+    placement.current = { ready: false };
+  });
+
+  it("offers both lines where the command is missing, and the sign-in line once it's found", async () => {
+    client.findTunnel.mockResolvedValueOnce({ command: "agent37", found: false });
+    open(declared(), catalog());
+    const missing = await screen.findByTestId("add-cloud-host-tunnel-missing");
+    expect(missing.textContent).toContain("Install agent37 on this device");
+    expect(missing.textContent).toContain("npm install -g agent37");
+    expect(missing.textContent).toContain("Then sign in to agent37 on this device");
+    expect(missing.textContent).toContain("agent37 ssh setup");
+    // The install line stands in for the page; Check again stays.
+    expect(screen.queryByRole("button", { name: "Get agent37" })).toBeNull();
+    // No grid to open a terminal in: copy only.
+    expect(screen.queryByLabelText("Open command in a new terminal")).toBeNull();
+    expect(screen.getAllByLabelText("Copy command to clipboard")).toHaveLength(2);
+
+    client.findTunnel.mockResolvedValueOnce({ command: "agent37", found: true });
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await screen.findByTestId("add-cloud-host-tunnel-found");
+    expect(screen.queryByTestId("tunnel-install-command")).toBeNull();
+    const signIn = screen.getByTestId("tunnel-sign-in-command");
+    expect(signIn.textContent).toContain("Sign in to agent37 on this device");
+    expect(signIn.textContent).toContain("agent37 ssh setup");
+    expect(signIn.textContent).not.toContain("npm install");
+  });
+
+  it("hands a line to a terminal only through Settings closing over the grid", async () => {
+    placement.current = { ready: true, cwd: "/home/u", worktreeId: "wt" };
+    const order: string[] = [];
+    const handoff = vi.fn((_open: () => void) => order.push("handoff"));
+    const onClose = vi.fn(() => order.push("dismissed"));
+    client.findTunnel.mockResolvedValueOnce({ command: "agent37", found: false });
+    cloud.snapshot = { providers: [declared()], accounts: [account("agent37")], hosts: [] };
+    client.getCatalog.mockResolvedValue(catalog());
+    render(
+      <InstallCommandHandoffContext.Provider value={handoff}>
+        <AddCloudHostDialog isOpen onClose={onClose} onReady={() => {}} />
+      </InstallCommandHandoffContext.Provider>
+    );
+    const install = await screen.findByTestId("tunnel-install-command");
+    fireEvent.click(within(install).getByLabelText("Open command in a new terminal"));
+    // Out of the way first, so a close Settings holds shows why, and nothing starts meanwhile.
+    expect(order).toEqual(["dismissed", "handoff"]);
+    expect(handoff.mock.calls[0]![0]).toEqual(expect.any(Function));
+  });
+
+  it("stays copy-only without a Settings close to hand off to", async () => {
+    placement.current = { ready: true, cwd: "/home/u", worktreeId: "wt" };
+    client.findTunnel.mockResolvedValueOnce({ command: "agent37", found: false });
+    open(declared(), catalog());
+    await screen.findByTestId("tunnel-install-command");
+    // A dialog covers the grid, so a terminal opened behind it couldn't be typed into.
+    expect(screen.queryByLabelText("Open command in a new terminal")).toBeNull();
+  });
+
+  it("names the setup lines once the machine's create was refused for the missing command", async () => {
+    client.findTunnel.mockResolvedValue({ command: "agent37", found: true });
+    cloud.snapshot = { providers: [declared()], accounts: [account("agent37")], hosts: [] };
+    client.getCatalog.mockResolvedValue(catalog());
+    // A fresh element each time, so a rerender reads the snapshot again.
+    const dialog = () => <AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />;
+    const view = render(dialog());
+    fireEvent.change(screen.getByTestId("add-cloud-host-name"), { target: { value: "build" } });
+    await create();
+    await screen.findByTestId("add-cloud-host-progress");
+    const message =
+      "Agent 37 machines are reached through its agent37 command, which isn't installed on this device.";
+    const refused: CloudHostStatus = {
+      hostId: "build",
+      providerId: "agent37",
+      providerUnavailable: null,
+      accountId: "ca_0123456789",
+      accountName: "Personal",
+      resourceId: null,
+      machineName: "build",
+      ownership: "created-by-daintree",
+      createdFor: null,
+      worktreeCleanup: null,
+      provisioning: null,
+      machine: "not-created",
+      rawState: null,
+      machineType: "default",
+      vcpu: null,
+      memoryGB: null,
+      hourlyDollars: null,
+      lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+      autoStopAt: null,
+      lifetimeSeconds: null,
+      stoppedAt: null,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      operation: null,
+      lastError: { code: "ssh-tunnel-command-missing", message, at: 1 },
+      observedAt: null,
+      lastEndpoint: null,
+      hostKeyFingerprint: null,
+      hostKeyReview: null,
+      keptRunningAt: null,
+      asleep: false,
+    };
+    cloud.snapshot = { ...cloud.snapshot, hosts: [refused] };
+    view.rerender(dialog());
+    expect(screen.getByText(message)).toBeTruthy();
+    expect(screen.getByTestId("tunnel-install-command").textContent).toContain(
+      "npm install -g agent37"
+    );
+    expect(screen.getByTestId("tunnel-sign-in-command").textContent).toContain("agent37 ssh setup");
+    expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+
+    // Refused for another reason: nothing about the command.
+    cloud.snapshot = {
+      ...cloud.snapshot,
+      hosts: [{ ...refused, lastError: { code: "refused", message: "No capacity.", at: 2 } }],
+    };
+    view.rerender(dialog());
+    expect(screen.getByText("No capacity.")).toBeTruthy();
+    expect(screen.queryByTestId("tunnel-setup-commands")).toBeNull();
   });
 });

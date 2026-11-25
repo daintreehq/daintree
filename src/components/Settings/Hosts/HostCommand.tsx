@@ -14,3 +14,18 @@ export function HostCommand({ label, command }: { label: string; command: string
     </div>
   );
 }
+
+/**
+ * A known fix for a failure on the host, which only root there can make: copy
+ * only, since it runs on the host and never on this device.
+ */
+export function HostRootCommand({ host, command }: { host: string; command: string }) {
+  return (
+    <div data-testid="host-root-command">
+      <HostCommand
+        label={`On Debian or Ubuntu, run this on ${host} as root, then try again`}
+        command={command}
+      />
+    </div>
+  );
+}

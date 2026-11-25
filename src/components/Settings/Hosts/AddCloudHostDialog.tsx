@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import {
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { systemClient } from "@/clients/systemClient";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
   cloudMachineLabel,
@@ -28,11 +29,13 @@ import {
 } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
+import { hasTunnelSetupCommands, TunnelSetupCommands } from "./TunnelSetupCommands";
 import { awaitFirstConnect } from "./hostCopySettingsRequests";
 import { CloudProvisioningSelect, provisioningChoiceDescription } from "./CloudProvisioningSelect";
 import { LIFETIME_VALUES, useCloudMachineForm } from "./useCloudMachineForm";
 import {
   canStartMachine,
+  cloudProviderFor,
   credentialsNoun,
   formatHourly,
   stopKeepsSentence,
@@ -112,6 +115,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   const [resourcesTry, setResourcesTry] = useState(0);
   const [resourceId, setResourceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const inheritedHandoff = useContext(InstallCommandHandoffContext);
   const [error, setError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState<CloudProviderInfo | null>(null);
   // As it is now: a plugin update while the dialog is open asks its consent again, and a
@@ -360,6 +364,11 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     // Unknown is no reason to offer Start: the way forward is asking again.
     const unknown = machine === "unknown" && !operation;
     const stoppedImport = mode === "import" && !startRequested && startable;
+    // The provider the machine is bound to, which a create refused for its tunnel command names.
+    const addedTunnelMissing =
+      failed && status?.lastError?.code === "ssh-tunnel-command-missing"
+        ? (cloudProviderFor(snapshot.providers, status)?.capabilities.tunnel ?? null)
+        : null;
     const parked = status?.asleep ? "asleep" : "stopped";
     body = (
       <div className="space-y-4" data-testid="add-cloud-host-progress">
@@ -395,7 +404,12 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
         )}
         {failed && status?.lastError && (
           <Callout severity="error" title="The machine isn't ready">
-            {status.lastError.message}
+            <p>{status.lastError.message}</p>
+            {addedTunnelMissing && (
+              <div className="mt-3">
+                <TunnelSetupCommands tunnel={addedTunnelMissing} from="install" />
+              </div>
+            )}
           </Callout>
         )}
       </div>
@@ -594,27 +608,38 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                   </p>
                 )}
                 {tunnelState === "found" && (
-                  <p
-                    className="text-xs text-text-secondary"
-                    data-testid="add-cloud-host-tunnel-found"
-                  >
-                    {`Daintree reaches ${provider.name} machines through the ${tunnel.command} command on this device, which has to be signed in.`}
-                  </p>
+                  // Found after an install opened in a terminal: signing in is the step left.
+                  <div className="space-y-2">
+                    <p
+                      className="text-xs text-text-secondary"
+                      data-testid="add-cloud-host-tunnel-found"
+                    >
+                      {`Daintree reaches ${provider.name} machines through the ${tunnel.command} command on this device, which has to be signed in.`}
+                    </p>
+                    <TunnelSetupCommands tunnel={tunnel} from="sign-in" />
+                  </div>
                 )}
                 {tunnelState === "missing" && (
                   <Callout severity="warning" data-testid="add-cloud-host-tunnel-missing">
                     <p>
                       {`${provider.name} machines are reached through its ${tunnel.command} command, which isn't installed on this device or isn't on Daintree's PATH. Install it and sign in to it, then check again.`}
                     </p>
+                    {hasTunnelSetupCommands(tunnel, "install") && (
+                      <div className="mt-3">
+                        <TunnelSetupCommands tunnel={tunnel} from="install" />
+                      </div>
+                    )}
                     <div className="mt-2 flex flex-wrap gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => void systemClient.openExternal(tunnel.installUrl)}
-                      >
-                        <ExternalLink aria-hidden="true" />
-                        Get {tunnel.command}
-                      </Button>
+                      {!tunnel.installCommand && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void systemClient.openExternal(tunnel.installUrl)}
+                        >
+                          <ExternalLink aria-hidden="true" />
+                          Get {tunnel.command}
+                        </Button>
+                      )}
                       <Button
                         variant="outline"
                         size="sm"
@@ -769,7 +794,18 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   }
 
   return (
-    <>
+    <InstallCommandHandoffContext.Provider
+      // A command opens in a terminal once Settings closes; never while a create or import is
+      // sent. Dismissed first, so a close Settings holds shows why, and nothing starts meanwhile.
+      value={
+        busy || !inheritedHandoff
+          ? null
+          : (open) => {
+              onClose();
+              inheritedHandoff(open);
+            }
+      }
+    >
       <AppDialog
         isOpen={isOpen && connecting === null}
         onClose={onClose}
@@ -799,6 +835,6 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
           onConnected={(connected) => setAccountId(connected.id)}
         />
       )}
-    </>
+    </InstallCommandHandoffContext.Provider>
   );
 }

@@ -22,6 +22,7 @@ import {
 } from "@/components/Settings/Hosts/hostSettingsRequests";
 import { cn } from "@/lib/utils";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
+import { splitHostFix } from "@/components/Hosts/hostFixCommands";
 import type { CloudOperationKind } from "@shared/types/cloudHosts";
 import type { HostConnectionState, HostId, PendingHostPlacement } from "@shared/types/remoteHosts";
 import { useCardFocusHandoff } from "./hooks/useCardFocusHandoff";
@@ -193,7 +194,8 @@ export function CloudPlacementNotice({
   };
   const content = (
     <div className="flex min-w-0 flex-1 flex-col gap-2">
-      <span className="break-words text-text-secondary select-text">{body}</span>
+      {/* A refused start's command is offered where setup runs, not on the card. */}
+      <span className="break-words text-text-secondary select-text">{splitHostFix(body).text}</span>
       {actionError && <span className="text-text-primary">{actionError}</span>}
       <div className="flex flex-wrap items-center gap-2">
         {(stage.kind === "create-failed" ||

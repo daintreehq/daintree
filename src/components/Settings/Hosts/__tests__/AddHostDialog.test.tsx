@@ -16,6 +16,7 @@ import { _resetCloudHostsStateForTesting } from "@/components/Hosts/cloud/cloudH
 import { provider as cloudProvider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 import { AddHostDialog } from "../AddHostDialog";
 import { ClientAppError } from "@/utils/clientAppError";
+import { HOST_PACKAGES_COMMAND, HOST_PACKAGES_INSTRUCTION } from "@shared/config/linuxHostPackages";
 
 // Which kind of host this machine adds: ssh, or (a Windows Shell) WSL distros.
 const connectionKind = vi.hoisted(() => ({ value: "ssh" as "ssh" | "wsl" }));
@@ -616,6 +617,34 @@ describe("AddHostDialog", () => {
     expect(remoteHosts.connect).toHaveBeenLastCalledWith({ hostId: "studio" });
   });
 
+  it("ends on a refused start with its package install as a command, apart from its words (#18181)", async () => {
+    remoteHosts.connect!.mockResolvedValueOnce({ status: "connecting", attempt: 1 });
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    await walkToAddHost();
+    await waitFor(() => expect(remoteHosts.connect).toHaveBeenCalledOnce());
+    const words =
+      "Daintree can't start on greg@studio: these libraries it needs aren't installed there: libnspr4.so.";
+    act(() =>
+      listeners.forEach((l) =>
+        l({
+          type: "connection-changed",
+          hostId: "studio",
+          connection: {
+            status: "unreachable",
+            lastSeenAt: null,
+            detail: `${words} ${HOST_PACKAGES_INSTRUCTION}`,
+            stoppedRetrying: true,
+          },
+        })
+      )
+    );
+    expect(await screen.findByText("Couldn't connect to studio")).toBeTruthy();
+    expect(screen.getByRole("alert").textContent).toBe(words);
+    const fix = screen.getByTestId("host-root-command");
+    expect(fix.textContent).toContain("run this on studio as root");
+    expect(fix.querySelector("code")?.textContent).toBe(HOST_PACKAGES_COMMAND);
+  });
+
   it("ends on Host mode being off there, with Set up…", async () => {
     remoteHosts.connect!.mockResolvedValueOnce({
       status: "unreachable",
@@ -739,6 +768,56 @@ describe("AddHostDialog", () => {
     expect(remoteHosts.add).toHaveBeenCalledWith(
       expect.objectContaining({ name: "studio", startsOnConnect: true })
     );
+  });
+
+  it("shows a refused start's package install as a command to copy, apart from its words (#18181)", async () => {
+    remoteHosts.probe!.mockResolvedValue(
+      probeResult({
+        platform: "linux",
+        arch: "x64",
+        install: {
+          path: "/home/node/Applications/Daintree.AppImage",
+          version: "1.4.0",
+          commit: "abcdef0",
+          packaging: "appimage",
+        },
+        hostModeListening: false,
+        hostModeState: null,
+      })
+    );
+    const words =
+      "Daintree can't start on greg@studio: these libraries it needs aren't installed there: libnspr4.so.";
+    const refusal = `${words} ${HOST_PACKAGES_INSTRUCTION}`;
+    remoteHosts.startHostMode!.mockRejectedValueOnce(
+      new ClientAppError("UNSUPPORTED", refusal, refusal)
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.change(screen.getByPlaceholderText("user@devbox.local"), {
+      target: { value: "greg@studio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check host" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
+    const fix = await screen.findByTestId("host-root-command");
+    expect(fix.textContent).toContain(
+      "On Debian or Ubuntu, run this on studio as root, then try again"
+    );
+    expect(fix.querySelector("code")?.textContent).toBe(HOST_PACKAGES_COMMAND);
+    expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
+    // The words are announced without the command, and it runs there, never here.
+    expect(screen.getByText(words).getAttribute("role")).toBe("alert");
+    expect(screen.queryByLabelText("Open command in a new terminal")).toBeNull();
+
+    // Another machine: what failed on studio still says so, but its fix isn't offered for build.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+    const field = await screen.findByPlaceholderText("user@devbox.local");
+    fireEvent.change(field, { target: { value: "greg@build" } });
+    expect(screen.queryByTestId("host-root-command")).toBeNull();
+    expect(screen.getByText(/Daintree can't start on greg@studio/)).toBeTruthy();
+    // Back on the machine it failed on, it is offered again.
+    fireEvent.change(field, { target: { value: "greg@studio" } });
+    expect(screen.getByTestId("host-root-command")).toBeTruthy();
   });
 
   it("saves what turning Host mode on saw there, not the check before it", async () => {
@@ -1459,6 +1538,63 @@ describe("AddHostDialog", () => {
           "signed in here, as https://www.agent37.com/docs/agents-api/ssh describes"
         );
         expect(screen.getByText(/Connection closed by UNKNOWN port 65535/)).toBeTruthy();
+      });
+
+      it("offers the declared sign-in line, to copy or open in a terminal (#18181)", async () => {
+        const declared = {
+          ...TUNNELLED,
+          capabilities: {
+            ...TUNNELLED.capabilities,
+            tunnel: {
+              ...TUNNELLED.capabilities.tunnel,
+              installCommand: "npm install -g agent37",
+              signInCommand: "agent37 ssh setup",
+            },
+          },
+        };
+        cloud = { providers: [declared], accounts: [], hosts: [machine()] };
+        remoteHosts.probe!.mockResolvedValueOnce(closedEarly(CLOSED));
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        const note = screen.getByTestId("add-host-tunnel-closed");
+        expect(note.textContent).toContain("so it has to be signed in here.");
+        expect(note.textContent).not.toContain("describes");
+        const signIn = screen.getByTestId("tunnel-sign-in-command");
+        expect(signIn.textContent).toContain("Sign in to agent37 on this device");
+        expect(signIn.textContent).toContain("agent37 ssh setup");
+        // It was found, so signing in is what's left.
+        expect(screen.queryByTestId("tunnel-install-command")).toBeNull();
+      });
+
+      it("offers the install and sign-in lines where the command is missing here (#18181)", async () => {
+        const declared = {
+          ...TUNNELLED,
+          capabilities: {
+            ...TUNNELLED.capabilities,
+            tunnel: {
+              ...TUNNELLED.capabilities.tunnel,
+              installCommand: "npm install -g agent37",
+              signInCommand: "agent37 ssh setup",
+            },
+          },
+        };
+        const said =
+          "Agent 37 machines are reached through its agent37 command, which isn't installed on this device or isn't on Daintree's PATH.";
+        // An imported machine skips create's check: the dial finds it missing and records it.
+        cloud = {
+          providers: [declared],
+          accounts: [],
+          hosts: [
+            machine({ lastError: { code: "ssh-tunnel-command-missing", message: said, at: 1 } }),
+          ],
+        };
+        remoteHosts.probe!.mockResolvedValueOnce(closedEarly(said));
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        const missing = screen.getByTestId("add-host-tunnel-missing");
+        expect(missing.textContent).toContain("npm install -g agent37");
+        expect(missing.textContent).toContain("agent37 ssh setup");
+        expect(screen.queryByTestId("add-host-tunnel-closed")).toBeNull();
       });
 
       it("says it when ssh, starting a master, kept only its own last line", async () => {
@@ -2248,6 +2384,45 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
     );
     expect(await screen.findByText("Starts")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "Ubuntu-24.04 is up to date" })).toBeTruthy();
+  });
+
+  it("never names another distro in a refused start's fix (#18181)", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce([distro("Debian", 2), distro("Ubuntu", 2)]);
+    remoteHosts.probe!.mockResolvedValue(
+      probeResult({
+        connection: { kind: "wsl", distro: "Debian" },
+        platform: "linux",
+        install: {
+          path: "/home/u/Applications/Daintree.AppImage",
+          version: "1.4.0",
+          commit: "abcdef0",
+          packaging: "appimage",
+        },
+        hostModeListening: false,
+        hostModeState: null,
+      })
+    );
+    const refusal = `Daintree can't start on Debian: these libraries it needs aren't installed there: libnspr4.so. ${HOST_PACKAGES_INSTRUCTION}`;
+    remoteHosts.startHostMode!.mockRejectedValueOnce(
+      new ClientAppError("UNSUPPORTED", refusal, refusal)
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Debian/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Check distribution" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
+    expect((await screen.findByTestId("host-root-command")).textContent).toContain(
+      "run this on Debian as root"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Ubuntu/ }));
+    expect(screen.queryByTestId("host-root-command")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Debian/ }));
+    expect(screen.getByTestId("host-root-command").textContent).toContain(
+      "run this on Debian as root"
+    );
   });
 
   it("lists every distro without a filter, however many there are", async () => {

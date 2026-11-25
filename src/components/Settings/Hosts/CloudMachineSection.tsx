@@ -39,6 +39,7 @@ import { SettingsGroup, SettingsRow, SettingsRowActions } from "../SettingsGroup
 import { SettingsSelect } from "../SettingsSelect";
 import { HostIdleTimeRow } from "./HostIdleTimeRow";
 import { HostKeyReviewDetails } from "./CloudHostKeyReview";
+import { hasTunnelSetupCommands, TunnelSetupCommands } from "./TunnelSetupCommands";
 
 function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
@@ -458,7 +459,8 @@ export function CloudMachineSection({
           }
           error={shownError ? <span role="alert">{shownError}</span> : undefined}
           errorAction={
-            tunnelMissing ? (
+            // The install line, when the provider declares one, is the fix; its docs otherwise.
+            tunnelMissing && !tunnel.installCommand ? (
               <Button
                 variant="outline"
                 size="sm"
@@ -529,6 +531,14 @@ export function CloudMachineSection({
             </div>
           }
         />
+        {tunnelMissing && hasTunnelSetupCommands(tunnel, "install") && (
+          <SettingsRow
+            label={`Set up ${tunnel.command}`}
+            layout="stacked"
+            rootAttributes={{ "data-testid": "cloud-machine-tunnel-setup" }}
+            control={<TunnelSetupCommands tunnel={tunnel} from="install" />}
+          />
+        )}
         {review && (
           <SettingsRow
             label={review.reason === "changed" ? "Host key changed" : "Confirm host key"}

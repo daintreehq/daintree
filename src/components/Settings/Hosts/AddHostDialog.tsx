@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Check, CircleCheck } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { FactSeparator } from "@/components/ui/FactSeparator";
@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 import { isMac } from "@/lib/platform";
 import { appClient } from "@/clients/appClient";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
@@ -67,7 +68,9 @@ import { AddHostDiscovery } from "./AddHostDiscovery";
 import { AddHostNotes } from "./AddHostNotes";
 import { CloudSetupHostKey } from "./CloudHostKeyReview";
 import { WizardFooterActions, WizardStepBar, type WizardStepView } from "./AddHostWizardChrome";
-import { HostCommand } from "./HostCommand";
+import { HostCommand, HostRootCommand } from "./HostCommand";
+import { splitHostFix } from "@/components/Hosts/hostFixCommands";
+import { hasTunnelSetupCommands, TunnelSetupCommands } from "./TunnelSetupCommands";
 import { SshRefusalHelp } from "./SshRefusalHelp";
 import { SshSignInDialog } from "./SshSignInDialog";
 import { useSshSignIn } from "./useSshSignIn";
@@ -421,10 +424,22 @@ function connectFailureText(state: HostConnectionState, hostName: string): strin
     : `Couldn't connect to ${hostName}`;
 }
 
-function ErrorLine({ message }: { message: string }) {
+function ErrorLine({ message, host }: { message: string; host: string | null }) {
+  const fix = splitHostFix(message);
+  if (!fix.rootCommand || host === null) {
+    return (
+      <Callout severity="error" role="alert" className="mt-4 select-text">
+        {message}
+      </Callout>
+    );
+  }
+  // The command sits outside the alert, so it isn't read out with the words.
   return (
-    <Callout severity="error" role="alert" className="mt-4 select-text">
-      {message}
+    <Callout severity="error" className="mt-4 select-text">
+      <p role="alert">{fix.text}</p>
+      <div className="mt-3">
+        <HostRootCommand host={host} command={fix.rootCommand} />
+      </div>
     </Callout>
   );
 }
@@ -508,6 +523,8 @@ export function AddHostDialog({
   connectWhenDone = false,
 }: AddHostDialogProps) {
   const [step, setStep] = useState<Step>(existing ? "check" : "discover");
+  // A command opens in a terminal once Settings closes over the grid.
+  const inheritedHandoff = useContext(InstallCommandHandoffContext);
   const [discovered, setDiscovered] = useState<DiscoveredHost[] | null>(null);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [discoverAttempt, setDiscoverAttempt] = useState(0);
@@ -545,6 +562,10 @@ export function AddHostDialog({
   // The provider's own command that carries ssh to its machines, which the person signs in to.
   const cloudTunnel =
     cloudProviderFor(cloudHosts.snapshot.providers, machine)?.capabilities.tunnel ?? null;
+  // Recorded by the dial that found it missing (an imported machine skips create's check),
+  // and cleared once one gets through.
+  const tunnelMissing =
+    cloudTunnel !== null && machine?.lastError?.code === "ssh-tunnel-command-missing";
   /** A start asked for from here: under way, or done with its fresh check still to run. */
   const [machineStart, setMachineStart] = useState<"starting" | "started" | null>(null);
   /** Why the provider refused that start: said with the offer, and gone with it. */
@@ -556,6 +577,8 @@ export function AddHostDialog({
   const [linuxPackage, setLinuxPackage] = useState<LinuxPackagePreference>("appimage");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The target the last failed step ran on: its fix is offered only while that's still chosen. */
+  const [failedOn, setFailedOn] = useState<string | null>(null);
   const [opId, setOpId] = useState<OperationId | null>(null);
   const [installResult, setInstallResult] = useState<InstallHostResult | null>(null);
   /** How the last install was asked to treat running work; it decides whether waiting is a step. */
@@ -729,7 +752,7 @@ export function AddHostDialog({
   /** Another target: what was checked, installed or switched on spoke for the last one. */
   const retarget = (address: string) => {
     setTarget(address);
-    if (probe && sshTargetOf(probe.connection) !== address.trim()) {
+    if (probe && addressOf(probe.connection) !== address.trim()) {
       setProbe(null);
       setPlan(null);
       setInstallResult(null);
@@ -783,6 +806,7 @@ export function AddHostDialog({
     then: (value: T) => void,
     failed: (message: string, err: unknown) => void = (message) => setError(message)
   ) => {
+    const ranOn = target.trim();
     setBusy(true);
     setError(null);
     // A bridge call that throws before it returns a promise fails like one that rejects.
@@ -799,6 +823,7 @@ export function AddHostDialog({
             : clientErrorText(err, "Something went wrong");
         // A run the person stopped hasn't failed.
         if (!(isClientAppError(err) && err.code === "CANCELLED")) noteFailure(message);
+        setFailedOn(ranOn);
         failed(message, err);
       }
     );
@@ -1348,16 +1373,21 @@ export function AddHostDialog({
       };
       secondary = close;
     } else if (outcome.status === "unreachable") {
+      const detailFix = outcome.detail ? splitHostFix(outcome.detail) : null;
       body = (
         <Outcome severity="error" title={`Couldn't connect to ${savedHost.name}`}>
-          {outcome.detail && (
+          {detailFix && (
             <pre
               role="alert"
               className="whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-border-default bg-surface-input p-2 font-mono text-xs text-text-secondary select-text"
             >
-              {outcome.detail}
+              {detailFix.text}
             </pre>
           )}
+          {detailFix?.rootCommand && (
+            <HostRootCommand host={savedHost.name} command={detailFix.rootCommand} />
+          )}
+          {tunnelMissing && <TunnelSetupCommands tunnel={cloudTunnel} from="install" />}
           <p>
             It stays in your host list, so you can connect now or later from
             Settings&nbsp;→&nbsp;Hosts.
@@ -1443,7 +1473,7 @@ export function AddHostDialog({
                       disabled={host.alreadyAdded || refusal !== null || busy}
                       aria-pressed={target === address}
                       onClick={() => {
-                        setTarget(address);
+                        retarget(address);
                         nameFromTarget(address, host.name);
                       }}
                       className={cn(
@@ -1693,13 +1723,20 @@ export function AddHostDialog({
                 {/* ssh hides what the tunnel said; what it shows is that the tunnel closed first.
                     Said beside a new machine's wait too: a CLI that isn't signed in would
                     otherwise go unnamed for every recheck. Never beside a refusal of ssh's own. */}
+                {tunnelMissing && (
+                  <div className="mt-3" data-testid="add-host-tunnel-missing">
+                    <TunnelSetupCommands tunnel={cloudTunnel} from="install" />
+                  </div>
+                )}
                 {cloudTunnel && refusal === null && isProxyClosedEarly(probe.sshError) && (
-                  <p
-                    className="mt-3 text-xs text-text-secondary"
-                    data-testid="add-host-tunnel-closed"
-                  >
-                    {`The tunnel through ${cloudTunnel.command} on this device closed the connection before SSH logged in. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here, as ${cloudTunnel.installUrl} describes.`}
-                  </p>
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs text-text-secondary" data-testid="add-host-tunnel-closed">
+                      {hasTunnelSetupCommands(cloudTunnel, "sign-in")
+                        ? `The tunnel through ${cloudTunnel.command} on this device closed the connection before SSH logged in. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here.`
+                        : `The tunnel through ${cloudTunnel.command} on this device closed the connection before SSH logged in. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here, as ${cloudTunnel.installUrl} describes.`}
+                    </p>
+                    <TunnelSetupCommands tunnel={cloudTunnel} from="sign-in" />
+                  </div>
                 )}
                 {existingId !== null && (
                   <CloudSetupHostKey
@@ -1929,6 +1966,9 @@ export function AddHostDialog({
           ? installError!.replace(/^Install cancelled\.?\s*/, "") || null
           : null;
       const title = !ended ? runTitle : installStopped ? stoppedTitle : failedTitle;
+      const endedFix = ended ? splitHostFix(stoppedNote ?? installError!) : null;
+      // Offered only while the machine it failed on is still the one chosen.
+      const endedCommand = failedOn === target.trim() ? (endedFix?.rootCommand ?? null) : null;
       // A stage that reports none (waiting for idle) is indeterminate, never the last figure.
       const fraction = progress?.fraction ?? null;
       const detail = progress?.message ? namedProgressMessage(progress.message, hostLabel) : null;
@@ -1938,13 +1978,24 @@ export function AddHostDialog({
           {ended && (failed || stoppedNote) ? (
             <Callout
               severity={failed ? "error" : "neutral"}
-              role={failed ? "alert" : undefined}
+              role={failed && !endedCommand ? "alert" : undefined}
               title={
                 failed ? (installFailureLead(installError!, hostLabel) ?? undefined) : undefined
               }
               className="select-text"
             >
-              {namedProgressMessage(stoppedNote ?? installError!, hostLabel)}
+              {endedCommand ? (
+                <p role={failed ? "alert" : undefined}>
+                  {namedProgressMessage(endedFix!.text, hostLabel)}
+                </p>
+              ) : (
+                namedProgressMessage(stoppedNote ?? installError!, hostLabel)
+              )}
+              {endedCommand && (
+                <div className="mt-3">
+                  <HostRootCommand host={hostLabel} command={endedCommand} />
+                </div>
+              )}
             </Callout>
           ) : ended ? null : (
             <ProgressBar
@@ -2406,7 +2457,18 @@ export function AddHostDialog({
     ) : undefined;
 
   return (
-    <>
+    <InstallCommandHandoffContext.Provider
+      // Never while a step can't stop. Dismissed first, so a close Settings holds shows why,
+      // and nothing here can start while it closes.
+      value={
+        locked || !inheritedHandoff
+          ? null
+          : (open) => {
+              onClose();
+              inheritedHandoff(open);
+            }
+      }
+    >
       <AppDialog
         isOpen={isOpen}
         onClose={onClose}
@@ -2435,7 +2497,9 @@ export function AddHostDialog({
             </Callout>
           )}
           {body}
-          {error && <ErrorLine message={error} />}
+          {error && (
+            <ErrorLine message={error} host={failedOn === target.trim() ? hostLabel : null} />
+          )}
           {/* No role: the discovery list's own status line stays the dialog's one status. */}
           <p aria-live="polite" aria-atomic="true" className="sr-only">
             {announce}
@@ -2462,6 +2526,6 @@ export function AddHostDialog({
           onClose={signIn.close}
         />
       )}
-    </>
+    </InstallCommandHandoffContext.Provider>
   );
 }

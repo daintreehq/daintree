@@ -33,7 +33,14 @@ import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHos
 import { canDeleteMachines, cloudProviderFor } from "@/components/Hosts/cloud/cloudHostLabels";
 import { HostWakeSetup } from "./HostWakeSetup";
 import { HostAgentForwardingRow } from "./HostAgentForwardingRow";
-import { bringBackMessage, canBringBack, useHostBringBacks } from "./hostBringBack";
+import { HostRootCommand } from "./HostCommand";
+import { splitHostFix } from "@/components/Hosts/hostFixCommands";
+import {
+  bringBackMessage,
+  canBringBack,
+  useHostBringBacks,
+  type HostBringBacks,
+} from "./hostBringBack";
 import {
   buildLabel,
   connectionLabel,
@@ -70,6 +77,8 @@ interface HostDetailProps {
   offerCopySettings?: boolean;
   /** Opened from the keyboard: focus the header's way back once it is there. */
   focusBackOnMount?: boolean;
+  /** The host list's presses of Bring back, so one pressed there is followed here. */
+  bringBacks?: HostBringBacks;
 }
 
 /**
@@ -137,6 +146,7 @@ export function HostDetail({
   focusSection,
   offerCopySettings = false,
   focusBackOnMount = false,
+  bringBacks: sharedBringBacks,
 }: HostDetailProps) {
   const { descriptor, connection, summary } = entry;
   const hostName = descriptor.name;
@@ -153,7 +163,13 @@ export function HostDetail({
     openUpdate === "setup" ? "setup" : openUpdate ? "update" : null
   );
   const [connecting, setConnecting] = useState(false);
-  const [connectError, setConnectError] = useState<string | null>(null);
+  // What a press of Connect or Disconnect said, kept with the connection it was pressed for:
+  // a host pointed elsewhere since, or a reply that lands after, says nothing about this one.
+  const connectionNow = JSON.stringify(descriptor.connection);
+  const [connectSaid, setConnectSaid] = useState<{ text: string; connection: string } | null>(null);
+  const connectError = connectSaid?.connection === connectionNow ? connectSaid.text : null;
+  const setConnectError = (text: string | null, connection = connectionNow) =>
+    setConnectSaid(text === null ? null : { text, connection });
   // A worktree waiting for this host's setup to finish before it opens here.
   const placement = descriptor.pendingPlacement ?? null;
   const [placementError, setPlacementError] = useState<string | null>(null);
@@ -180,11 +196,19 @@ export function HostDetail({
     }
     setUpdateOpen("setup");
   };
-  const bringBacks = useHostBringBacks();
+  const ownBringBacks = useHostBringBacks();
+  const bringBacks = sharedBringBacks ?? ownBringBacks;
   const bringing = bringBacks.isPending(descriptor.id);
   const bringBackSaid = bringing
     ? null
-    : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor, connection);
+    : bringBackMessage(bringBacks.outcomeFor(descriptor), descriptor, connection);
+  // A refused start's package install, wherever it shows here, is offered once as its own command.
+  const statusFix = splitHostFix(connectionLabel(connection));
+  const statusError = connectError ?? bringBackSaid;
+  const statusErrorFix = statusError ? splitHostFix(statusError) : null;
+  const placementFix = placement?.failure ? splitHostFix(placement.failure.message) : null;
+  const rootCommand =
+    statusErrorFix?.rootCommand ?? statusFix.rootCommand ?? placementFix?.rootCommand ?? null;
   const name = useCommittedField(descriptor.name, (value) =>
     remoteHostsClient.update({ hostId: descriptor.id, name: value })
   );
@@ -291,6 +315,7 @@ export function HostDetail({
   }, [offered]);
 
   const connect = () => {
+    const pressedFor = connectionNow;
     setConnecting(true);
     setConnectError(null);
     // Settled on what the link reports: dialling alone answers at once, so a
@@ -300,25 +325,32 @@ export function HostDetail({
         setConnecting(false);
         // Host mode off and a mismatched build have their own words and actions above.
         if (state.status === "unreachable" && !state.hostModeOff) {
-          setConnectError(`Couldn't connect: ${state.detail ?? "the host didn't answer"}`);
+          setConnectError(
+            `Couldn't connect: ${state.detail ?? "the host didn't answer"}`,
+            pressedFor
+          );
         }
       },
       (err: unknown) => {
         setConnecting(false);
-        setConnectError(`Couldn't connect: ${clientErrorText(err, "unknown error")}`);
+        setConnectError(`Couldn't connect: ${clientErrorText(err, "unknown error")}`, pressedFor);
       }
     );
   };
 
   // Closes the link; nothing on the host stops, and Connect brings it back.
   const disconnect = () => {
+    const pressedFor = connectionNow;
     setConnecting(true);
     setConnectError(null);
     remoteHostsClient.disconnect(descriptor.id).then(
       () => setConnecting(false),
       (err: unknown) => {
         setConnecting(false);
-        setConnectError(`Couldn't disconnect: ${clientErrorText(err, "unknown error")}`);
+        setConnectError(
+          `Couldn't disconnect: ${clientErrorText(err, "unknown error")}`,
+          pressedFor
+        );
       }
     );
   };
@@ -398,12 +430,10 @@ export function HostDetail({
           )}
           <SettingsRow
             label="Status"
-            description={connectionLabel(connection)}
+            description={statusFix.text}
             error={
               // Announced: it answers one press of Connect, Disconnect or Bring back.
-              connectError || bringBackSaid ? (
-                <span role="alert">{connectError ?? bringBackSaid}</span>
-              ) : undefined
+              statusErrorFix ? <span role="alert">{statusErrorFix.text}</span> : undefined
             }
             control={
               <div className="flex gap-2">
@@ -415,7 +445,7 @@ export function HostDetail({
                     loading={bringing}
                     onClick={() => {
                       setConnectError(null);
-                      bringBacks.bringBack(descriptor.id);
+                      bringBacks.bringBack(descriptor);
                     }}
                   >
                     Bring back
@@ -460,16 +490,23 @@ export function HostDetail({
               </div>
             }
           />
+          {rootCommand && (
+            <SettingsRow
+              label="Install the missing libraries"
+              layout="stacked"
+              control={<HostRootCommand host={hostName} command={rootCommand} />}
+            />
+          )}
           {placement && (
             <SettingsRow
               label="Waiting to open"
               description={`${placement.label} opens here once setup finishes`}
               error={
                 placementError ??
-                (placement.failure
+                (placementFix
                   ? isSwitchFailure(placement)
-                    ? placement.failure.message
-                    : `Setup failed: ${placement.failure.message}`
+                    ? placementFix.text
+                    : `Setup failed: ${placementFix.text}`
                   : undefined)
               }
               control={

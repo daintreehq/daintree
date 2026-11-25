@@ -4,9 +4,13 @@ import type { AgentInstallOS } from "@shared/config/agentRegistry";
 // from the opener, which loads the panel store and the terminal service only
 // once someone clicks.
 
-/** What a staged install command is meant to make available, so it can be re-checked. */
+/**
+ * What a staged install command is meant to make available, so it can be
+ * re-checked. `manual` is a command nothing here can re-check (a tunnel's
+ * sign-in): the surface that offered it checks again when asked.
+ */
 export type InstallTarget =
-  { kind: "prerequisite"; tool: string } | { kind: "agent"; agentId: string };
+  { kind: "prerequisite"; tool: string } | { kind: "agent"; agentId: string } | { kind: "manual" };
 
 /**
  * The one line a block's commands are typed as, or null when they can't be

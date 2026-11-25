@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { HostMetricsSummary } from "@shared/types/remoteHosts";
 import type {
   CloudHostStatus,
@@ -47,6 +47,10 @@ vi.mock("@/clients/remoteHostsClient", () => ({
 }));
 const { openExternal } = vi.hoisted(() => ({ openExternal: vi.fn(async () => {}) }));
 vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal } }));
+const { openInTerminal } = vi.hoisted(() => ({ openInTerminal: vi.fn() }));
+vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
+  useInstallCommandRunner: () => openInTerminal,
+}));
 
 import { CloudMachineSection } from "../CloudMachineSection";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
@@ -128,6 +132,7 @@ afterEach(() => {
   cleanup();
   trustHostKey.mockReset();
   connect.mockReset();
+  openInTerminal.mockReset();
 });
 
 describe("CloudMachineSection created-for row", () => {
@@ -432,6 +437,53 @@ describe("CloudMachineSection SSH identity", () => {
     expect(screen.getByRole("alert").closest("[id]")?.contains(get)).toBe(true);
     fireEvent.click(get);
     expect(openExternal).toHaveBeenCalledWith("https://acme.test/cli");
+  });
+
+  it("shows the declared install and sign-in lines beside the missing command, in place of the page", () => {
+    const message = "Acme machines are reached through its acme command, which isn't installed.";
+    const declared = tunnelProvider("provider-tunnel", true);
+    declared.capabilities.tunnel = {
+      ...declared.capabilities.tunnel!,
+      installCommand: "npm install -g acme",
+      signInCommand: "acme ssh setup",
+    };
+    show(running({ lastError: { code: "ssh-tunnel-command-missing", message, at: 1 } }), [
+      declared,
+    ]);
+    expect(screen.getByRole("alert").textContent).toBe(message);
+    expect(screen.queryByRole("button", { name: "Get acme" })).toBeNull();
+    const install = screen.getByTestId("tunnel-install-command");
+    const signIn = screen.getByTestId("tunnel-sign-in-command");
+    expect(install.textContent).toContain("Install acme on this device");
+    expect(install.textContent).toContain("npm install -g acme");
+    expect(signIn.textContent).toContain("Then sign in to acme on this device");
+    expect(signIn.textContent).toContain("acme ssh setup");
+    // Install first, then sign in.
+    expect(install.compareDocumentPosition(signIn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(signIn).getByLabelText("Copy command to clipboard")).toBeTruthy();
+    // Each opens on its own, typed and not run; nothing re-checks either.
+    fireEvent.click(within(signIn).getByLabelText("Open command in a new terminal"));
+    expect(openInTerminal).toHaveBeenLastCalledWith("acme ssh setup", { kind: "manual" });
+    fireEvent.click(within(install).getByLabelText("Open command in a new terminal"));
+    expect(openInTerminal).toHaveBeenLastCalledWith("npm install -g acme", { kind: "manual" });
+    expect(openInTerminal).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows no setup lines while the tunnel works, or beside another error", () => {
+    const declared = tunnelProvider("provider-tunnel", true);
+    declared.capabilities.tunnel = {
+      ...declared.capabilities.tunnel!,
+      installCommand: "npm install -g acme",
+      signInCommand: "acme ssh setup",
+    };
+    show(running(), [declared]);
+    expect(screen.queryByTestId("tunnel-setup-commands")).toBeNull();
+    cleanup();
+    show(running({ lastError: { code: "refused", message: "Acme turned this down.", at: 1 } }), [
+      declared,
+    ]);
+    expect(screen.getByRole("alert").textContent).toBe("Acme turned this down.");
+    expect(screen.queryByTestId("tunnel-setup-commands")).toBeNull();
   });
 
   it("offers the page beside a Retry refused for the missing command (#18180)", async () => {

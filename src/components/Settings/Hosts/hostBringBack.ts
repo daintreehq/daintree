@@ -74,17 +74,22 @@ export function describeBringBack(
  */
 export function useHostBringBacks() {
   const [pending, setPending] = useState<ReadonlySet<HostId>>(() => new Set());
-  const [outcomes, setOutcomes] = useState<ReadonlyMap<HostId, BringBackOutcome>>(() => new Map());
-  const settle = (hostId: HostId, outcome: BringBackOutcome) => {
+  // Each with the connection it was asked for: a host pointed elsewhere since says nothing of it.
+  const [outcomes, setOutcomes] = useState<
+    ReadonlyMap<HostId, { outcome: BringBackOutcome; connection: string }>
+  >(() => new Map());
+  const settle = (hostId: HostId, connection: string, outcome: BringBackOutcome) => {
     setPending((current) => {
       const next = new Set(current);
       next.delete(hostId);
       return next;
     });
-    setOutcomes((current) => new Map(current).set(hostId, outcome));
+    setOutcomes((current) => new Map(current).set(hostId, { outcome, connection }));
   };
-  const bringBack = (hostId: HostId) => {
+  const bringBack = (host: Pick<HostDescriptor, "id" | "connection">) => {
+    const hostId = host.id;
     if (pending.has(hostId)) return;
+    const connection = JSON.stringify(host.connection);
     setPending((current) => new Set(current).add(hostId));
     setOutcomes((current) => {
       const next = new Map(current);
@@ -92,19 +97,24 @@ export function useHostBringBacks() {
       return next;
     });
     remoteHostsClient.bringBack(hostId).then(
-      (answer) => settle(hostId, { answer }),
+      (answer) => settle(hostId, connection, { answer }),
       (error: unknown) =>
-        settle(hostId, {
+        settle(hostId, connection, {
           error: `Couldn't bring it back: ${clientErrorText(error, "unknown error")}`,
         })
     );
   };
   return {
     isPending: (hostId: HostId) => pending.has(hostId),
-    outcomeFor: (hostId: HostId) => outcomes.get(hostId) ?? null,
+    outcomeFor: (host: Pick<HostDescriptor, "id" | "connection">) => {
+      const entry = outcomes.get(host.id);
+      return entry && entry.connection === JSON.stringify(host.connection) ? entry.outcome : null;
+    },
     bringBack,
   };
 }
+
+export type HostBringBacks = ReturnType<typeof useHostBringBacks>;
 
 /**
  * The sentence a row shows for its last press, or null when there is nothing

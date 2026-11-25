@@ -17,6 +17,7 @@ import {
   CLOUD_CREDENTIAL_FIELD_INPUTS,
   MAX_CLOUD_CREDENTIAL_FIELDS,
   MAX_CLOUD_TUNNEL_ARGS,
+  MAX_CLOUD_TUNNEL_COMMAND_LINE,
   credentialFieldsProblem,
   sshDeclarationProblem,
 } from "../../../shared/utils/cloudProviderDeclaration.js";
@@ -324,6 +325,8 @@ const CloudSshTunnelCommandSchema = z
     command: z.string().min(1).max(64),
     args: z.array(z.string().max(128)).max(MAX_CLOUD_TUNNEL_ARGS),
     installUrl: cloudProviderLink("capabilities.tunnel.installUrl"),
+    installCommand: z.string().min(1).max(MAX_CLOUD_TUNNEL_COMMAND_LINE).optional(),
+    signInCommand: z.string().min(1).max(MAX_CLOUD_TUNNEL_COMMAND_LINE).optional(),
   })
   .strict();
 

@@ -149,6 +149,14 @@ export interface CloudSshTunnelCommand {
   args: string[];
   /** Where the person gets the command; https only. */
   installUrl: string;
+  /**
+   * The line that installs the command, for the person to run on this device
+   * themselves: "npm install -g agent37". One line, typed into a terminal but
+   * never run by Daintree.
+   */
+  installCommand?: string;
+  /** The line that signs the command in on this device, run the same way: "agent37 ssh setup". */
+  signInCommand?: string;
 }
 
 /** Whether a create takes a value: never, when the person chooses to, or always. */

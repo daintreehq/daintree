@@ -35,6 +35,7 @@ vi.mock("../HostSettingsSection", () => ({ HostSettingsSection: () => null }));
 vi.mock("../HostSessionsSection", () => ({ HostSessionsSection: () => null }));
 
 import { HostDetail } from "../HostDetail";
+import { HOST_PACKAGES_COMMAND, HOST_PACKAGES_INSTRUCTION } from "@shared/config/linuxHostPackages";
 
 function entry(connection: HostConnectionState): HostListEntry {
   return {
@@ -261,6 +262,81 @@ describe("HostDetail connection controls", () => {
     expect(screen.getByRole("alert").textContent).toBe(
       "Couldn't connect: Permission denied (publickey)."
     );
+  });
+
+  it("offers a refused start's package install once, whether the status or a Connect says it (#18181)", async () => {
+    const words =
+      "Daintree can't start on greg@studio: these libraries it needs aren't installed there: libnspr4.so.";
+    const refused: HostConnectionState = {
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: `${words} ${HOST_PACKAGES_INSTRUCTION}`,
+      stoppedRetrying: true,
+    };
+    render(<HostDetail entry={entry(refused)} onBack={() => {}} />);
+    // Seen without pressing anything: the status alone carries it.
+    const status = screen.getByText(/^Unreachable · never seen/);
+    expect(status.textContent).toContain(words);
+    expect(status.textContent).not.toContain("apt-get");
+    const fix = screen.getByTestId("host-root-command");
+    expect(fix.textContent).toContain("run this on studio-01 as root");
+    expect(fix.querySelector("code")?.textContent).toBe(HOST_PACKAGES_COMMAND);
+
+    client.connectAndSettle.mockResolvedValueOnce(refused);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    });
+    expect(screen.getByRole("alert").textContent).toBe(`Couldn't connect: ${words}`);
+    expect(screen.getAllByTestId("host-root-command")).toHaveLength(1);
+  });
+
+  it("offers the package install when only a Connect says it", async () => {
+    const words =
+      "Daintree can't start on greg@studio: these libraries it needs aren't installed there: libnspr4.so.";
+    client.connectAndSettle.mockResolvedValueOnce({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: `${words} ${HOST_PACKAGES_INSTRUCTION}`,
+      stoppedRetrying: true,
+    });
+    render(<HostDetail entry={entry({ status: "disconnected" })} onBack={() => {}} />);
+    expect(screen.queryByTestId("host-root-command")).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    });
+    expect(screen.getByRole("alert").textContent).toBe(`Couldn't connect: ${words}`);
+    expect(screen.getByTestId("host-root-command").querySelector("code")?.textContent).toBe(
+      HOST_PACKAGES_COMMAND
+    );
+  });
+
+  it("drops what a Connect said once the host points at another machine", async () => {
+    const words =
+      "Daintree can't start on greg@studio: these libraries it needs aren't installed there: libnspr4.so.";
+    client.connectAndSettle.mockResolvedValueOnce({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: `${words} ${HOST_PACKAGES_INSTRUCTION}`,
+      stoppedRetrying: true,
+    });
+    const before = entry({ status: "disconnected" });
+    const view = render(<HostDetail entry={before} onBack={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    });
+    expect(screen.getByTestId("host-root-command")).toBeTruthy();
+    // Change target… keeps the record and its id; only the machine it reaches changes.
+    view.rerender(
+      <HostDetail
+        entry={{
+          ...before,
+          descriptor: { ...before.descriptor, connection: { kind: "ssh", target: "greg@build" } },
+        }}
+        onBack={() => {}}
+      />
+    );
+    expect(screen.queryByTestId("host-root-command")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("leaves Host mode off to its own row rather than calling it a failed connect", async () => {
