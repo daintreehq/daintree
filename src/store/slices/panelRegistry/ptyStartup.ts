@@ -704,6 +704,8 @@ export function enqueuePtyStartup(
             agentPresetId: options.agentPresetId,
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+            // So a session the run captures names its account (#18191).
+            agentAccountId: launchAgentId ? options.agentAccountId : undefined,
             fallbackChainIndex: options.fallbackChainIndex,
             handbackCode: options.handbackCode,
             ...(options.whenDone !== undefined && { whenDone: options.whenDone }),

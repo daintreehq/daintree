@@ -3,11 +3,25 @@ import { CHANNELS } from "../../ipc/channels.js";
 import type { PanelSnapshot, Project } from "../../../shared/types/project.js";
 import type { AgentSessionPaneRefusal } from "../../../shared/types/agentSessionSchemas.js";
 import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
-import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
-import { buildResumeCommand, dropRetiredAgentModel } from "../../../shared/types/agentSettings.js";
+import { getEffectiveAgentConfig, type AgentPreset } from "../../../shared/config/agentRegistry.js";
+import {
+  buildResumeCommand,
+  dropRetiredAgentModel,
+  type AgentSettings,
+} from "../../../shared/types/agentSettings.js";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability.js";
+import {
+  isAccountId,
+  resolveLaunchAccount,
+  type LaunchAccountResolution,
+} from "../../../shared/utils/agentAccounts.js";
 import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
-import { buildLaunchIdentity } from "../../../shared/utils/agentLaunchPlan.js";
+import {
+  buildLaunchIdentity,
+  composeAgentLaunchEnv,
+  findUnloadedLaunchPreset,
+} from "../../../shared/utils/agentLaunchPlan.js";
+import { getMergedPreset } from "../../../shared/utils/agentPresets.js";
 import { unknownAgentIdMessage } from "../../../shared/utils/agentLaunchValidation.js";
 import { reconcileResumeLaunchFlagsWith } from "../../../shared/utils/agentResumeFlags.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -21,7 +35,7 @@ import { mergeTerminalLaunchEnv } from "../../../shared/utils/terminalLaunchOpti
 import type { ViewlessDeps, ViewlessTerminalRecord } from "./ViewlessActionExecutor.js";
 import { hostStartedTerminals } from "./hostStartedTerminals.js";
 import { recordViewlessTerminal } from "./projectStateAuthoring.js";
-import { paneLaunchContext } from "./viewlessAgents.js";
+import { paneLaunchContext, readPresetSources } from "./viewlessAgents.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
 
@@ -127,7 +141,9 @@ const inFlight = new Map<
  *
  * The resume is built as a view's resume builds it: the journaled launch
  * flags reconciled against the current settings, the agent's name as the
- * title, the ambient environment. It never falls back to "the latest"
+ * title. Its environment is a launch's, composed from the preset and account
+ * the record names, read again from the settings (#18191), and never the
+ * caller env the launch was given. It never falls back to "the latest"
  * conversation: an agent that can't reopen one by id is refused. Nor to a
  * new one: a Claude conversation the CLI never wrote fails the spawn
  * (`exactResume`) rather than starting afresh under its id.
@@ -258,11 +274,23 @@ async function launchResumedPane(
   }
 
   const cliDetail = await deps.agents.getCliDetail(agentId).catch(() => undefined);
-  const settings = await deps.agents.getSettings().catch(() => null);
+  const choice = await readResumeLaunchChoice(
+    project,
+    record,
+    agentId,
+    agentConfig.name,
+    worktreeId,
+    deps
+  );
+  const { settings, preset, account } = choice;
   // A retired model fails the relaunch (#15652); a view's resume drops it too.
   const captured = dropRetiredAgentModel(agentId, { agentLaunchFlags: record?.agentLaunchFlags })
     .launch.agentLaunchFlags;
-  const flags = reconcileResumeLaunchFlagsWith({ agentId, agentLaunchFlags: captured }, settings);
+  const flags = reconcileResumeLaunchFlagsWith(
+    { agentId, agentLaunchFlags: captured },
+    settings,
+    preset
+  );
   // Only a captured launch is kept for restart and restore to replay: flags
   // reconciled into an empty one are no whole configuration.
   const savedFlags = captured?.length ? flags : undefined;
@@ -301,6 +329,8 @@ async function launchResumedPane(
   const held = await findPaneHoldingSession(project.id, sessionId, deps);
   if (held.status === "unavailable") return refused("terminals-unavailable", held.message);
   if (held.status === "found") return existingPane(project.id, held);
+  // After the holder scan, as every refusal that only a new launch earns is.
+  if (choice.refusal) return refused(choice.refusal.reason, choice.refusal.message);
 
   const defaults = computeHardwareDefaults(deps.hostPlatform.totalMemoryBytes);
   const panelLimit = buildPanelLimitSnapshot(panelCount, {
@@ -320,7 +350,14 @@ async function launchResumedPane(
 
   const terminalId = `terminal-${randomUUID()}`;
   const title = agentConfig.name;
-  const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, undefined);
+  const launchEnv = composeAgentLaunchEnv(
+    settings?.agents?.[agentId] ?? {},
+    preset,
+    undefined,
+    account
+  );
+  const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, launchEnv);
+  const accountId = account.kind === "account" ? account.account.id : undefined;
   const actionContext = paneLaunchContext(agentId, project.id, worktreeId, terminalId, title);
   let started: boolean;
   try {
@@ -343,6 +380,15 @@ async function launchResumedPane(
           // A conversation the CLI never wrote is refused, never started afresh under its id.
           exactResume: true,
           ...(conversationStore !== undefined ? { conversationStore } : {}),
+          // So the session this pane captures names them again (#18191).
+          ...(preset !== undefined
+            ? {
+                agentPresetId: preset.id,
+                agentPresetColor: preset.color,
+                originalAgentPresetId: preset.id,
+              }
+            : {}),
+          ...(accountId !== undefined ? { agentAccountId: accountId } : {}),
           ...(actionContext !== undefined ? { actionContext } : {}),
         },
       ]);
@@ -368,6 +414,13 @@ async function launchResumedPane(
       agentSessionId: sessionId,
       agentLaunchFlags: savedFlags,
       conversationStore,
+      // As a launch records them, so a restart keeps the account's folder and
+      // the preset's env: the env is the launch's own layer, never the caller's.
+      agentPresetId: preset?.id,
+      agentPresetColor: preset?.color,
+      originalPresetId: preset?.id,
+      env: launchEnv,
+      agentAccountId: accountId,
     }),
   };
   let savedInLayout = true;
@@ -388,6 +441,119 @@ async function launchResumedPane(
     cwd,
     savedInLayout,
   };
+}
+
+interface ResumeLaunchChoice {
+  settings: AgentSettings | null;
+  preset: AgentPreset | undefined;
+  account: LaunchAccountResolution;
+  /** Set when the session can't be resumed on what it launched on. */
+  refusal?: { reason: AgentSessionPaneRefusal; message: string };
+}
+
+/** An id a refusal can quote: one a record could only have got from Daintree. */
+function quotedId(id: string): string {
+  return /^[\w.:-]{1,128}$/.test(id) ? ` "${id}"` : "";
+}
+
+/**
+ * The preset and account a session's record says it launched on (#18191), read
+ * again from the settings as they are now: the record keeps ids, never env. A
+ * record naming neither resumes on no preset and the default login, as before,
+ * whatever this worktree would launch on today. One naming a preset or account
+ * that is gone, or that the settings couldn't be read to find, is refused
+ * rather than resumed on the default.
+ */
+async function readResumeLaunchChoice(
+  project: Project,
+  record: AgentSessionRecord | undefined,
+  agentId: string,
+  agentName: string,
+  worktreeId: string,
+  deps: ViewlessDeps
+): Promise<ResumeLaunchChoice> {
+  // `unknown`: the journal is a JSON file read loosely, so a row can hold anything.
+  const presetId: unknown = record?.agentPresetId;
+  const accountId: unknown = record?.agentAccountId;
+  let settingsRead = true;
+  let settings: AgentSettings | null;
+  let sources: Awaited<ReturnType<typeof readPresetSources>> | undefined;
+  if (presetId === undefined) {
+    settings = await deps.agents.getSettings().catch(() => {
+      settingsRead = false;
+      return null;
+    });
+  } else {
+    sources = await readPresetSources(agentId, project.path, deps);
+    ({ settings, settingsRead } = sources);
+  }
+  const choice: ResumeLaunchChoice = { settings, preset: undefined, account: { kind: "default" } };
+  const refuse = (reason: AgentSessionPaneRefusal, message: string): ResumeLaunchChoice => ({
+    ...choice,
+    refusal: { reason, message },
+  });
+  if (presetId === undefined && accountId === undefined) return choice;
+  if (!settingsRead) {
+    return refuse(
+      "settings-unavailable",
+      "The agent settings couldn't be read, so what that session launched on can't be confirmed."
+    );
+  }
+
+  if (accountId !== undefined) {
+    const account = isAccountId(accountId)
+      ? resolveLaunchAccount(agentId, settings?.agents?.[agentId], worktreeId, accountId)
+      : undefined;
+    // `default` too: an agent whose accounts were taken away can't put the
+    // session back on the one it ran on, and the default login isn't it.
+    if (account?.kind !== "account") {
+      return refuse(
+        "missing-account",
+        isAccountId(accountId)
+          ? `The account that session launched on${quotedId(accountId)} isn't one of ${agentName}'s saved accounts any more.`
+          : "The account that session launched on can't be read."
+      );
+    }
+    choice.account = account;
+  }
+
+  if (sources !== undefined) {
+    if (typeof presetId !== "string" || presetId === "") {
+      return refuse("missing-preset", "The preset that session launched on can't be read.");
+    }
+    // An id a higher source might hold, unread, isn't the one a lower source has.
+    const unsettled = findUnloadedLaunchPreset({
+      agentId,
+      isAgent: true,
+      worktreeId,
+      settings,
+      ccrPresets: sources.ccrPresets,
+      projectPresets: sources.projectPresets,
+      presetInventory: sources.presetInventory,
+      options: { presetId },
+    });
+    if (unsettled !== undefined) {
+      return refuse(
+        "settings-unavailable",
+        `Not every preset source could be read, so the preset that session launched on${quotedId(presetId)} can't be confirmed.`
+      );
+    }
+    const preset = getMergedPreset(
+      agentId,
+      presetId,
+      settings?.agents?.[agentId]?.customPresets,
+      sources.ccrPresets,
+      sources.projectPresets
+    );
+    if (!preset) {
+      return refuse(
+        "missing-preset",
+        `The preset that session launched on${quotedId(presetId)} isn't one of ${agentName}'s presets any more.`
+      );
+    }
+    choice.preset = preset;
+  }
+  return choice;
 }
 
 type HeldSession =

@@ -136,6 +136,7 @@ import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.j
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
 import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
+import { launchChoiceForRecord } from "../../../shared/utils/sessionLaunchChoice.js";
 import { readGitBranch } from "../../utils/gitUtils.js";
 import { events } from "../../services/events.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -1177,6 +1178,7 @@ function endOnHost(runId: string, info: HostTerminalRecord): void {
         agentModelId: info.agentModelId,
         cwd: info.cwd,
         ...scheduledRunForRecord(info),
+        ...launchChoiceForRecord(info),
         ...attributeClose(info, "kill"),
       },
     });

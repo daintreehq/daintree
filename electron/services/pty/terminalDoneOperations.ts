@@ -6,6 +6,7 @@ import { events } from "../events.js";
 import { attributeClose } from "./closeAttribution.js";
 import { getLifecycleLedger } from "./lifecycleLedger.js";
 import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
+import { launchChoiceForRecord } from "../../../shared/utils/sessionLaunchChoice.js";
 
 /**
  * Sends `payload` to every local view of the project, thawing a cached one
@@ -107,6 +108,7 @@ export async function closeTerminalKeepingSession(
         agentModelId: info.agentModelId,
         cwd: info.cwd,
         ...scheduledRunForRecord(info),
+        ...launchChoiceForRecord(info),
         ...attributeClose(info, "kill"),
       },
     });

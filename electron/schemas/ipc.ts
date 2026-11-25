@@ -8,6 +8,7 @@ import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 import { TERMINAL_SPAWN_SOURCES } from "../../shared/types/panel.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
 import { HANDBACK_CODE_PATTERN } from "../../shared/types/handback.js";
+import { isAccountId } from "../../shared/utils/agentAccountId.js";
 import { normalizeDisplayEmoji } from "../../shared/utils/displayIdentity.js";
 import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../shared/utils/recipeSanitizer.js";
@@ -452,6 +453,9 @@ export const TerminalSpawnOptionsSchema = z.object({
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),
   originalAgentPresetId: z.string().optional(),
+  // Listed or zod strips it, and a session the run captures loses its account
+  // (#18191). One that isn't an account id is dropped, never the spawn.
+  agentAccountId: z.string().refine(isAccountId).optional().catch(undefined),
   fallbackChainIndex: z.number().int().nonnegative().optional(),
   // Handback code for the initial prompt (#12488). Listed or zod strips it, and
   // held to the marker grammar because the pty-host searches for it literally.

@@ -7,6 +7,7 @@ import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { projectStore } from "../ProjectStore.js";
 import { createLogger } from "../../utils/logger.js";
 import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
+import { launchChoiceForRecord } from "../../../shared/utils/sessionLaunchChoice.js";
 import type { SleepRequestWorking } from "../../../shared/types/ipc/project.js";
 import { applyStopObservations, hasStopReading, stopObservationsFor } from "./stopObservation.js";
 
@@ -244,6 +245,7 @@ export async function gracefulTeardownAndJournalProject(
             cwd: info.cwd ?? undefined,
             branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
             ...scheduledRunForRecord(info),
+            ...launchChoiceForRecord(info),
             // The project closing ends its panes; one in the trash the user had closed.
             ...attributeClose(info, "sleep"),
           },

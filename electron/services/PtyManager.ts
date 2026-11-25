@@ -53,6 +53,7 @@ import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { attributeClose } from "./pty/closeAttribution.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
 import { scheduledRunForRecord } from "../../shared/utils/scheduledRunProvenance.js";
+import { launchChoiceForRecord } from "../../shared/utils/sessionLaunchChoice.js";
 import { events } from "./events.js";
 import { keepWindowsTreeKillHelperWarm } from "../utils/windowsTreeKill.js";
 import {
@@ -1087,6 +1088,8 @@ export class PtyManager extends EventEmitter {
         "kill",
         this.registry.getTrashTtlMs()
       );
+      // Read before the kill too: the info object is the live terminal's.
+      const launchChoice = info ? launchChoiceForRecord(info) : {};
 
       // Registered with the quit barrier as a whole: the id isn't known until
       // the graceful kill returns, and a quit must still wait for it (#12433).
@@ -1128,6 +1131,7 @@ export class PtyManager extends EventEmitter {
                 cwd: info.cwd ?? undefined,
                 branch: branch ?? undefined,
                 ...scheduledRunForRecord(info),
+                ...launchChoice,
                 ...close,
               },
             });

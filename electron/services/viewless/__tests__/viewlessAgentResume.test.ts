@@ -898,3 +898,175 @@ describe("resumeAgentSessionAsPane", () => {
     expect(spawns(invoke)).toHaveLength(1);
   });
 });
+
+describe("resumeAgentSessionAsPane on what the session launched on (#18191)", () => {
+  const WORK = { id: "work", name: "Work", configDir: "/Users/me/.claude-work" };
+  const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+  const ZAI = {
+    id: "zai",
+    name: "Z.ai",
+    color: "#7c3aed",
+    env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", SHARED: "preset" },
+    dangerousMode: "on" as const,
+  };
+
+  function claudeSettings(entry: Record<string, unknown>): AgentSettings {
+    return { agents: { claude: entry }, globalSkipPermissions: false } as AgentSettings;
+  }
+
+  it("reopens the conversation on the account it launched on, its folder read from the settings", async () => {
+    const { deps, invoke, store } = resumeDeps({
+      sessions: [record({ agentAccountId: "work" })],
+      // The agent's default is another account now; the session's own wins.
+      settings: claudeSettings({ accounts: [WORK, PERSONAL], accountId: "personal" }),
+    });
+
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    expect(result).toMatchObject({ status: "launched" });
+    const [payload] = spawns(invoke);
+    expect(payload!.command).toContain(`--resume ${SESSION}`);
+    expect(payload!.exactResume).toBe(true);
+    expect((payload!.env as Record<string, string>).CLAUDE_CONFIG_DIR).toBe(WORK.configDir);
+    // Named on the spawn, so the session this pane captures names it again.
+    expect(payload!.agentAccountId).toBe("work");
+    const saved = savedPane(store.read(), payload!.id);
+    expect(saved?.agentAccountId).toBe("work");
+    // The folder a restart puts the pane back on.
+    expect(saved?.env?.CLAUDE_CONFIG_DIR).toBe(WORK.configDir);
+  });
+
+  it("keeps a session that named no account on the default login, whatever the agent's default is now", async () => {
+    const { deps, invoke, store } = resumeDeps({
+      sessions: [record()],
+      settings: claudeSettings({ accounts: [PERSONAL], accountId: "personal" }),
+    });
+
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    expect(result).toMatchObject({ status: "launched" });
+    const [payload] = spawns(invoke);
+    expect((payload!.env as Record<string, string> | undefined)?.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(payload!.agentAccountId).toBeUndefined();
+    expect(savedPane(store.read(), payload!.id)?.agentAccountId).toBeUndefined();
+  });
+
+  it("resumes on the preset it launched on, with the preset's env and permission mode", async () => {
+    const { deps, invoke, store } = resumeDeps({
+      sessions: [
+        record({
+          agentPresetId: "zai",
+          agentLaunchFlags: ["--model", "opus", "--dangerously-skip-permissions"],
+        }),
+      ],
+      // Skip-all is off for the agent; the preset turns it on.
+      settings: claudeSettings({
+        customPresets: [ZAI],
+        globalEnv: { SHARED: "agent", AGENT_ONLY: "1" },
+      }),
+    });
+
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    expect(result).toMatchObject({ status: "launched" });
+    const [payload] = spawns(invoke);
+    const env = payload!.env as Record<string, string>;
+    expect(env.ANTHROPIC_BASE_URL).toBe(ZAI.env.ANTHROPIC_BASE_URL);
+    // The agent's own env under the preset's, as a launch layers them.
+    expect(env.AGENT_ONLY).toBe("1");
+    expect(env.SHARED).toBe("preset");
+    expect(payload!.command).toContain("--dangerously-skip-permissions");
+    expect(payload!.command).toContain(`--resume ${SESSION}`);
+    expect(payload).toMatchObject({
+      agentPresetId: "zai",
+      agentPresetColor: ZAI.color,
+      originalAgentPresetId: "zai",
+    });
+    const saved = savedPane(store.read(), payload!.id);
+    expect(saved).toMatchObject({ agentPresetId: "zai", agentPresetColor: ZAI.color });
+    expect(saved?.env?.ANTHROPIC_BASE_URL).toBe(ZAI.env.ANTHROPIC_BASE_URL);
+  });
+
+  it("puts the account's folder over a preset that sets the same variable", async () => {
+    const { deps, invoke } = resumeDeps({
+      sessions: [record({ agentPresetId: "zai", agentAccountId: "work" })],
+      settings: claudeSettings({
+        accounts: [WORK],
+        customPresets: [{ ...ZAI, env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-preset" } }],
+      }),
+    });
+
+    await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    const [payload] = spawns(invoke);
+    expect((payload!.env as Record<string, string>).CLAUDE_CONFIG_DIR).toBe(WORK.configDir);
+    expect(payload).toMatchObject({ agentPresetId: "zai", agentAccountId: "work" });
+  });
+
+  it("refuses a session whose account is no longer saved, rather than resuming on the default", async () => {
+    const { deps, invoke, store } = resumeDeps({
+      sessions: [record({ agentAccountId: "work" })],
+      settings: claudeSettings({ accounts: [PERSONAL] }),
+    });
+
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    expect(result).toMatchObject({ status: "refused", reason: "missing-account" });
+    expect((result as { message: string }).message).toContain('"work"');
+    expect(spawns(invoke)).toEqual([]);
+    expect(store.read()?.terminals ?? []).toEqual([]);
+  });
+
+  it("refuses a session whose preset is no longer saved, rather than resuming without it", async () => {
+    const { deps, invoke, store } = resumeDeps({
+      sessions: [record({ agentPresetId: "zai" })],
+      settings: claudeSettings({ customPresets: [] }),
+    });
+
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    expect(result).toMatchObject({ status: "refused", reason: "missing-preset" });
+    expect((result as { message: string }).message).toContain('"zai"');
+    expect(spawns(invoke)).toEqual([]);
+    expect(store.read()?.terminals ?? []).toEqual([]);
+  });
+
+  it("refuses when the settings that would name the account can't be read", async () => {
+    const { deps, invoke } = resumeDeps({ sessions: [record({ agentAccountId: "work" })] });
+    deps.agents.getSettings = async () => {
+      throw new Error("store unreadable");
+    };
+
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    expect(result).toMatchObject({ status: "refused", reason: "settings-unavailable" });
+    expect(spawns(invoke)).toEqual([]);
+  });
+
+  it("refuses a preset a repository's unread presets might hold, and resumes one the user's own settings hold", async () => {
+    const unread = resumeDeps({
+      sessions: [record({ agentPresetId: "team" })],
+      settings: claudeSettings({ customPresets: [ZAI] }),
+    });
+    unread.deps.agents.getProjectPresets = async () => {
+      throw new Error("repo unreadable");
+    };
+    await expect(
+      resumeAgentSessionAsPane(REQUEST, unread.deps, makeRuntime())
+    ).resolves.toMatchObject({ status: "refused", reason: "settings-unavailable" });
+    expect(spawns(unread.invoke)).toEqual([]);
+
+    // A user preset outranks every repository preset, so nothing unread can shadow it.
+    const own = resumeDeps({
+      sessions: [record({ agentPresetId: "zai" })],
+      settings: claudeSettings({ customPresets: [ZAI] }),
+    });
+    own.deps.agents.getProjectPresets = async () => {
+      throw new Error("repo unreadable");
+    };
+    await expect(resumeAgentSessionAsPane(REQUEST, own.deps, makeRuntime())).resolves.toMatchObject(
+      { status: "launched" }
+    );
+    expect(spawns(own.invoke)[0]).toMatchObject({ agentPresetId: "zai" });
+  });
+});

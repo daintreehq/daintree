@@ -93,6 +93,8 @@ export interface TerminalSpawnOptions {
   worktreeId?: string;
   /** Preset ID the agent is being launched with (needed for fallback chain lookup on exit). */
   agentPresetId?: string;
+  /** The account the launch runs on (#16040), kept so a session it captures names it (#18191). */
+  agentAccountId?: string;
   /** Preset brand color captured at launch time. */
   agentPresetColor?: string;
   /** Original user-selected preset ID; unchanged across fallback hops. */

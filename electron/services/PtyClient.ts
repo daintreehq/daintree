@@ -235,6 +235,7 @@ interface TerminalInfoResponse {
   agentPresetId?: string;
   agentPresetColor?: string;
   originalAgentPresetId?: string;
+  agentAccountId?: string;
   fallbackChainIndex?: number;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;

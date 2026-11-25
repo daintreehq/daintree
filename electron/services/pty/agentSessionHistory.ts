@@ -67,6 +67,27 @@ function enqueueWrite<T>(fn: () => Promise<T>): Promise<T> {
   return run as Promise<T>;
 }
 
+// Truthiness and `typeof`, not the declared shape: the journal is a JSON file
+// `normalizeRecords` admits loosely, and one hand-edited row mustn't throw.
+function isLaterRunOfSameTerminal(a: AgentSessionRecord, b: AgentSessionRecord): boolean {
+  const later = a.terminal;
+  const earlier = b.terminal;
+  if (!later || !earlier || typeof later.id !== "string" || later.id !== earlier.id) return false;
+  return (
+    typeof later.spawnedAt === "number" &&
+    typeof earlier.spawnedAt === "number" &&
+    later.spawnedAt > earlier.spawnedAt
+  );
+}
+
+/** Both ids from `from`, an absent one included: a switch to the default login or no preset is a choice too. */
+function takeLaunchChoice(into: AgentSessionRecord, from: AgentSessionRecord): void {
+  delete into.agentPresetId;
+  delete into.agentAccountId;
+  if (from.agentPresetId !== undefined) into.agentPresetId = from.agentPresetId;
+  if (from.agentAccountId !== undefined) into.agentAccountId = from.agentAccountId;
+}
+
 function evictRecords(
   records: AgentSessionRecord[],
   now: number,
@@ -112,6 +133,10 @@ function evictRecords(
       if (!existing.conversationStore && r.conversationStore) {
         existing.conversationStore = r.conversationStore;
       }
+      // The account and preset a resume launches on are the latest run's
+      // (#18191). Arrival order says which run that is except for two of one
+      // terminal, where a capture delayed past its successor's lands last.
+      if (isLaterRunOfSameTerminal(r, existing)) takeLaunchChoice(existing, r);
     }
   }
 

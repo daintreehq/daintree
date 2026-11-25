@@ -15,6 +15,7 @@ import {
 } from "./sessionIdCapture.js";
 import type { TerminalInfo } from "./types.js";
 import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
+import { launchChoiceForRecord } from "../../../shared/utils/sessionLaunchChoice.js";
 
 const logger = createLogger("pty:AgentEndCapture");
 
@@ -263,6 +264,7 @@ function emitCapture(
           agentLaunchFlags: terminal.agentLaunchFlags,
           agentModelId: terminal.agentModelId,
           ...scheduledRunForRecord(terminal),
+          ...launchChoiceForRecord(terminal),
         }
       : {}),
     cwd: cwd || undefined,

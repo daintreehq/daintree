@@ -141,12 +141,14 @@ function ownBucket(
  * read makes the read incomplete, and `presetInventory` says which, so a
  * launch never takes an unread preset for a deleted one (#15025).
  */
-async function readPresetSources(
+export async function readPresetSources(
   agentId: string,
   projectPath: string | undefined,
   deps: ViewlessDeps
 ): Promise<{
   settings: AgentSettings | null;
+  /** False when the settings read failed, as against settings that hold nothing yet. */
+  settingsRead: boolean;
   ccrPresets: AgentPreset[] | undefined;
   projectPresets: AgentPreset[] | undefined;
   presetInventory: PresetInventoryState;
@@ -175,6 +177,7 @@ async function readPresetSources(
   ]);
   return {
     settings,
+    settingsRead,
     ccrPresets,
     projectPresets,
     presetInventory,
@@ -467,6 +470,7 @@ export async function runAgentLaunch(
               agentPresetId: plan.preset?.id,
               agentPresetColor: plan.preset?.color,
               originalAgentPresetId: plan.preset?.id,
+              agentAccountId: plan.account?.id,
             }
           : {}),
         ...(handbackCode !== undefined ? { handbackCode } : {}),
