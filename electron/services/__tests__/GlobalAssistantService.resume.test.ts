@@ -43,6 +43,7 @@ function makeDeps() {
     keepsConversation: vi.fn(() => false),
     savePinnedAgent: vi.fn(),
     coordinates: vi.fn(() => true),
+    keptRunning: vi.fn(() => false),
   };
   return { deps, calls };
 }

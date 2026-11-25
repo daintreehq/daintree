@@ -40,6 +40,7 @@ vi.mock("../HelpSessionService.js", () => ({
       return pointer ? { ...pointer, cwd: "/g", claimId: `c-${slot}` } : null;
     },
     restorePendingHibernation: async () => true,
+    isLaneKeptRunning: () => false,
     discardConversation: async (_projectId: string, slot: number) => {
       help.pointers.delete(slot);
     },
