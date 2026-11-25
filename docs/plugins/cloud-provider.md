@@ -163,7 +163,7 @@ Every method except `checkCredentials` takes the account's `credentials` first: 
 | --- | --- | --- |
 | `checkCredentials(values, apiUrl, signal)` | Before anything is kept, for a new set and a replacement alike | `{ identity, scopes }`: who the credentials sign in as (or null), and the billing scopes they may use, each of kind `personal`, `organization`, `workspace`, `project` or `account` |
 | `validate` | When the person checks an account | `{ identity }` |
-| `catalog` | When the person creates a machine | machine types, quotas, and the location, image and network choices your `provisioning` says a create takes |
+| `catalog` | When the person creates a machine | machine types, quotas, and the location, image and network choices your `provisioning` says a create takes; a machine type, image or network that runs only in some locations lists their ids in `locations` (left out or `null` for every location), and a create naming another location is refused before it reaches you |
 | `list` | Importing a machine, and looking for a create that didn't answer (by the `daintree-binding` label, and the `location` the create was sent to when your create takes one) | machines in the scope |
 | `inspect` | Polling a machine's state | the machine, with `asleep: true` when it is stopped because your provider slept it on idle, and `idleSleep: { enabled, idleSeconds }` when you report its idle sleep per machine |
 | `create` | Creating a machine | the machine, which may still be starting |

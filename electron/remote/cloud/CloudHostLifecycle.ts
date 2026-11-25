@@ -3,6 +3,7 @@ import {
   CLOUD_LIFETIME_CHOICES,
   CLOUD_PROVISIONING_DIMENSIONS,
   cloudChoiceFitsLocation,
+  cloudMachineTypeLocationReason,
   cloudLifetimeIsChosen,
   cloudMarkNamesWorktree,
   cloudProviderNamespace,
@@ -1009,6 +1010,13 @@ export class CloudHostLifecycle {
       );
     }
     const { selection, picks } = checkProvisioning(provider, catalog, request.provisioning);
+    // Only a new create: one stored before its size was tied to a location is sent as it was.
+    const unfit = cloudMachineTypeLocationReason(
+      size,
+      catalog.provisioning.location,
+      selection.location
+    );
+    if (unfit) throw invalid(`${size.label} isn't available: ${unfit}.`);
     // Only Settings' create offers it, as with the mark: a worktree's machine is made without asking.
     const mcpMark = mark === null ? mcpServerOnConnectMark(request.mcpServerOnConnect) : {};
     const bindingId = `cb_${crypto.randomBytes(6).toString("hex")}`;

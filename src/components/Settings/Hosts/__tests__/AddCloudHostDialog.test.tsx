@@ -345,6 +345,95 @@ describe("AddCloudHostDialog provisioning", () => {
   });
 });
 
+describe("AddCloudHostDialog sizes tied to a region (#18189)", () => {
+  /** Agent 37's shape: a region when the person picks one, and sizes some regions don't run. */
+  const REGION_ONLY: CloudProvisioning = {
+    location: "optional",
+    image: "none",
+    network: "none",
+    sshKey: "at-create",
+  };
+  const A37 = () => provider("agent37", "Agent 37", REGION_ONLY);
+  const size = (id: string, label: string, locations: string[] | null, extra = {}) => ({
+    id,
+    label,
+    vcpu: 2,
+    memoryGB: 4,
+    hourlyDollars: 0.01,
+    available: true,
+    reason: null,
+    locations,
+    ...extra,
+  });
+  function regionCatalog(overrides: Partial<CloudCatalog> = {}): CloudCatalog {
+    return catalog({
+      machineTypes: [
+        size("2x4", "Small", ["us"]),
+        size("vm-2x4", "VM small", null),
+        size("vm-8x64", "VM huge", null, { available: false, reason: "too big for this wallet" }),
+      ],
+      provisioning: {
+        location: {
+          label: "Region",
+          defaultId: "us",
+          choices: [choice("us", "United States"), choice("eu", "Europe")],
+        },
+        image: null,
+        network: null,
+      },
+      ...overrides,
+    });
+  }
+  const radio = (name: RegExp) => screen.getByRole("radio", { name }) as HTMLInputElement;
+  const reasonOf = (input: HTMLInputElement) =>
+    document.getElementById(input.getAttribute("aria-describedby") ?? "")?.textContent;
+
+  it("starts on the US with its first size, and moves a size nobody picked to one Europe runs", async () => {
+    open(A37(), regionCatalog());
+    await waitFor(() => expect(shown("location")?.textContent).toBe("United States"));
+    expect(radio(/^Small/).checked).toBe(true);
+    await choose(shown("location")!, "Europe");
+    await waitFor(() => expect(radio(/^VM small/).checked).toBe(true));
+    expect(radio(/^Small/).disabled).toBe(true);
+    expect(reasonOf(radio(/^Small/))).toBe("Not offered in Europe");
+    // The account's own reason stands wherever it runs.
+    expect(reasonOf(radio(/^VM huge/))).toBe("Too big for this wallet");
+    const sent = await create();
+    expect(sent).toMatchObject({
+      machineType: "vm-2x4",
+      provisioning: { location: "eu", image: null, network: null },
+    });
+  });
+
+  it("keeps a size the person picked when the region moves under it, and won't create it there", async () => {
+    open(A37(), regionCatalog());
+    await waitFor(() => expect(shown("location")?.textContent).toBe("United States"));
+    fireEvent.click(radio(/^VM small/));
+    fireEvent.click(radio(/^Small/));
+    await choose(shown("location")!, "Europe");
+    await waitFor(() => expect(radio(/^Small/).disabled).toBe(true));
+    expect(radio(/^Small/).checked).toBe(true);
+    expect(screen.queryByTestId("add-cloud-host-review")).toBeNull();
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(createButton());
+    expect(client.createHost).not.toHaveBeenCalled();
+
+    // Left to the provider, a size tied to a region still needs one named.
+    await choose(shown("location")!, "Chosen by Agent 37");
+    await waitFor(() => expect(reasonOf(radio(/^Small/))).toBe("Choose United States to use it"));
+    fireEvent.click(radio(/^VM small/));
+    expect((await create()).provisioning).toEqual({ location: null, image: null, network: null });
+  });
+
+  it("starts an account last used in Europe on the first size Europe runs", async () => {
+    open(A37(), regionCatalog({ lastChoice: { location: "eu", image: null, network: null } }));
+    await waitFor(() => expect(shown("location")?.textContent).toBe("Europe"));
+    expect(radio(/^VM small/).checked).toBe(true);
+    expect(radio(/^Small/).checked).toBe(false);
+    expect((await create()).machineType).toBe("vm-2x4");
+  });
+});
+
 describe("AddCloudHostDialog connecting an account", () => {
   const allowed = (info: CloudProviderInfo, granted: boolean): CloudProviderInfo => ({
     ...info,

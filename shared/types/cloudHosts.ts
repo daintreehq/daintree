@@ -349,6 +349,11 @@ export interface CloudMachineType {
   available: boolean;
   /** Why it isn't available, in the provider's words. */
   reason: string | null;
+  /**
+   * The location ids it can be created in, as an image's are: absent or null
+   * for every location, [] for none. A list needs a location named.
+   */
+  locations?: string[] | null;
 }
 
 /** The three things a create may name beyond its size, in the order a person picks them. */
@@ -415,13 +420,42 @@ export type CloudHostProvisioning = Record<
   CloudProvisioningPick | null
 >;
 
-/** Whether an image or network can be used in a location; a location-bound one needs a location. */
+/** Whether a size, image or network can be used in a location; a location-bound one needs a location. */
 export function cloudChoiceFitsLocation(
-  choice: CloudProvisioningChoice,
+  choice: { readonly locations?: readonly string[] | null },
   location: string | null
 ): boolean {
-  if (choice.locations === null) return true;
+  if (choice.locations === null || choice.locations === undefined) return true;
   return location !== null && choice.locations.includes(location);
+}
+
+/**
+ * A location list as it arrives as data. A constraint that doesn't read
+ * narrows, never widens: anything but a list, null or nothing ties it to none.
+ */
+export function cloudLocationsFrom(value: unknown): string[] | null {
+  if (value === null || value === undefined) return null;
+  if (!Array.isArray(value)) return [];
+  return value.filter((location): location is string => typeof location === "string");
+}
+
+/**
+ * Why a size can't be created in the location chosen, in words for its row
+ * and for a create's refusal; null when it can. `options` is the catalog's
+ * location dimension, for the words.
+ */
+export function cloudMachineTypeLocationReason(
+  type: Pick<CloudMachineType, "locations">,
+  options: CloudProvisioningOptions | null,
+  location: string | null
+): string | null {
+  if (cloudChoiceFitsLocation(type, location)) return null;
+  const noun = cloudProvisioningNoun(options?.label ?? "Location");
+  const labelOf = (id: string) => options?.choices.find((choice) => choice.id === id)?.label ?? id;
+  const offered = type.locations ?? [];
+  if (offered.length === 0) return `not offered in any ${noun}`;
+  if (location !== null) return `not offered in ${labelOf(location)}`;
+  return `choose ${offered.map(labelOf).join(" or ")} to use it`;
 }
 
 /** A dimension's name inside a sentence: "region", "AMI". */

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AppError } from "../../../utils/errorTypes.js";
 import {
   CloudAccountService,
+  normalizeMachineTypes,
   normalizeProvisioning,
   type PluginConsentSubject,
 } from "../CloudAccountService.js";
@@ -1809,5 +1810,44 @@ describe("normalizeProvisioning", () => {
     expect(image("said-false")?.available).toBe(false);
     expect(image("unsaid")?.available).toBe(false);
     expect(result.network?.choices[0]?.locations).toEqual([]);
+  });
+});
+
+describe("normalizeMachineTypes", () => {
+  const size = (id: string, locations?: unknown) => ({
+    id,
+    label: id,
+    vcpu: 2,
+    memoryGB: 4,
+    hourlyDollars: null,
+    available: true,
+    reason: null,
+    ...(locations === undefined ? {} : { locations: locations as string[] | null }),
+  });
+  const region = {
+    label: "Region",
+    choices: [
+      {
+        id: "us",
+        label: "US",
+        description: null,
+        available: true,
+        reason: null,
+        locations: null,
+      },
+    ],
+    defaultId: "us",
+  };
+
+  it("ties a size to locations only when the provider takes one (#18189)", () => {
+    const sizes = [size("unsaid"), size("tied", ["us"]), size("as-text", "us")];
+    const withLocation = normalizeMachineTypes(sizes, {
+      location: region,
+      image: null,
+      network: null,
+    });
+    expect(withLocation.map((type) => type.locations)).toEqual([undefined, ["us"], []]);
+    const without = normalizeMachineTypes(sizes, { location: null, image: null, network: null });
+    expect(without.map((type) => type.locations)).toEqual([undefined, null, null]);
   });
 });

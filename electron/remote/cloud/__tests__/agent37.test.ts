@@ -387,23 +387,222 @@ describe("Agent37Provider", () => {
     expect(provider.describeError(refused).code).toBe("credential-invalid");
   });
 
-  it("prices each shape as what its create asks for, at the published rates", async () => {
+  it("prices each size as what its create asks for, at its type's compute rate", async () => {
     const { api, provider, credentials } = env();
+    // A workspace that can hold the largest awake, so every size can be created.
+    api.billing = { ...api.billing, tier: 2, memory_limit_gb: 200 };
     const catalog = await provider.catalog(credentials);
-    expect(catalog.machineTypes.length).toBeGreaterThan(1);
-    let previous = 0;
+    const rate: Record<string, number> = { default: 1, vm: 2.5, performance: 4 };
+    const previous: Record<string, number> = {};
     for (const type of catalog.machineTypes) {
-      await provider.create(credentials, createRequest({ machineType: type.id }));
-      const { resources } = api.calls("POST", "/instances").at(-1)!.body as {
+      expect(type.available).toBe(true);
+      await provider.create(
+        credentials,
+        createRequest({
+          machineType: type.id,
+          provisioning: { location: "us", image: null, network: null },
+        })
+      );
+      const body = api.calls("POST", "/instances").at(-1)!.body as {
+        type: string;
         resources: { cpu: number; memory: number; disk: number };
       };
+      const { resources } = body;
       expect(resources).toMatchObject({ cpu: type.vcpu, memory: type.memoryGB });
-      // $0.80 a vCPU, $0.70 a GB of memory and $0.09 a GB of disk a month, over 730 hours.
-      const monthly = resources.cpu * 0.8 + resources.memory * 0.7 + resources.disk * 0.09;
+      // $0.80 a vCPU and $0.70 a GB of memory a month at the type's rate, $0.09 a GB of disk on
+      // every type, over 730 hours.
+      const monthly =
+        (resources.cpu * 0.8 + resources.memory * 0.7) * rate[body.type]! + resources.disk * 0.09;
       expect(type.hourlyDollars).toBeCloseTo(monthly / 730, 4);
-      expect(type.hourlyDollars!).toBeGreaterThan(previous);
-      previous = type.hourlyDollars!;
+      // Within a type, each size costs more than the one before it.
+      expect(type.hourlyDollars!).toBeGreaterThan(previous[body.type] ?? 0);
+      previous[body.type] = type.hourlyDollars!;
+      // What it makes reads back as the size it was asked as.
+      const made = [...api.instances.values()].at(-1)!;
+      expect((await provider.inspect(credentials, made.id)).machineType).toBe(type.id);
     }
+    expect(Object.keys(previous).sort()).toEqual(["default", "performance", "vm"]);
+    // Only a VM or Performance machine comes with 8 vCPU.
+    const eightCore = catalog.machineTypes.filter((type) => type.vcpu === 8);
+    expect(eightCore.map((type) => type.id).sort()).toEqual(["performance-8x64", "vm-8x64"]);
+    expect(eightCore.every((type) => type.locations === null)).toBe(true);
+  });
+
+  it("offers a region, starting on the US, and ties the default sizes to it (#18189)", async () => {
+    const { provider, credentials } = env();
+    expect(provider.info("darwin").capabilities.provisioning.location).toBe("optional");
+    const catalog = await provider.catalog(credentials);
+    expect(catalog.provisioning?.location?.choices.map((choice) => choice.id)).toEqual([
+      "us",
+      "eu",
+      "ap-south",
+    ]);
+    expect(catalog.provisioning?.location?.defaultId).toBe("us");
+    // The four sizes that existed before keep their ids and run in the US only.
+    const defaults = catalog.machineTypes.filter((type) => !/^(vm|performance)-/.test(type.id));
+    expect(defaults.map((type) => type.id)).toEqual(["2x4", "4x8", "4x16", "4x32"]);
+    expect(defaults.every((type) => type.locations?.join() === "us")).toBe(true);
+    const anywhere = catalog.machineTypes.filter((type) => type.locations === null);
+    expect(anywhere).toHaveLength(catalog.machineTypes.length - defaults.length);
+    expect(anywhere.every((type) => /^(VM|Performance) /.test(type.label))).toBe(true);
+  });
+
+  it("marks a size the workspace can never have awake unavailable, saying why (#18189)", async () => {
+    const { api, provider, credentials } = env();
+    // The free tier holds 32 GB awake: one 32 GB machine fits, a 64 GB one never does.
+    const free = await provider.catalog(credentials);
+    const unavailable = free.machineTypes.filter((type) => !type.available);
+    expect(unavailable.map((type) => type.memoryGB)).toEqual([64, 64]);
+    expect(unavailable[0]!.reason).toContain("32 GB");
+    expect(free.machineTypes.find((type) => type.id === "4x32")!.available).toBe(true);
+
+    api.billing = { ...api.billing, tier: 1, memory_limit_gb: 40 };
+    expect(
+      (await provider.catalog(credentials)).machineTypes.find((type) => type.id === "vm-8x64")!
+        .reason
+    ).toContain("40 GB");
+    api.billing = { ...api.billing, tier: 2, memory_limit_gb: 200 };
+    expect((await provider.catalog(credentials)).machineTypes.every((type) => type.available)).toBe(
+      true
+    );
+    // A wallet that doesn't say leaves it to Agent 37.
+    const { memory_limit_gb: _limit, ...unsaid } = api.billing;
+    api.billing = unsaid as typeof api.billing;
+    expect((await provider.catalog(credentials)).machineTypes.every((type) => type.available)).toBe(
+      true
+    );
+  });
+
+  it("sends the type and the region chosen, and no region when none was (#18189)", async () => {
+    const { api, provider, credentials } = env();
+    const sent = async (machineType: string, location: string | null) => {
+      await provider.create(
+        credentials,
+        createRequest({ machineType, provisioning: { location, image: null, network: null } })
+      );
+      return api.calls("POST", "/instances").at(-1)!.body as Record<string, unknown>;
+    };
+    expect(await sent("vm-8x64", "eu")).toMatchObject({
+      type: "vm",
+      region: "eu",
+      resources: { cpu: 8, memory: 64, disk: 64 },
+    });
+    expect(await sent("performance-4x16", "ap-south")).toMatchObject({
+      type: "performance",
+      region: "ap-south",
+      resources: { cpu: 4, memory: 16, disk: 24 },
+    });
+    expect(await sent("2x4", "us")).toMatchObject({ type: "default", region: "us" });
+    const unnamed = await sent("vm-2x4", null);
+    expect(unnamed).toMatchObject({ type: "vm" });
+    expect(unnamed).not.toHaveProperty("region");
+    expect([...api.instances.values()].map((entry) => [entry.type, entry.region])).toEqual([
+      ["vm", "eu"],
+      ["performance", "ap-south"],
+      ["default", "us"],
+      ["vm", "us"],
+    ]);
+  });
+
+  it("asks Agent 37 for no default machine outside the US, which it refuses as invalid (#18189)", async () => {
+    const { api, client, ctx, provider, credentials } = env();
+    for (const region of ["eu", "ap-south"]) {
+      const error = await provider
+        .create(
+          credentials,
+          createRequest({ provisioning: { location: region, image: null, network: null } })
+        )
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(Agent37ApiError);
+      const unknownRegion = await provider
+        .create(
+          credentials,
+          createRequest({
+            machineType: "vm-2x4",
+            provisioning: { location: "mars", image: null, network: null },
+          })
+        )
+        .catch((e: unknown) => e);
+      expect(unknownRegion).toBeInstanceOf(Agent37ApiError);
+      // What Agent 37 itself answers that pair, should one reach it.
+      const refused = await client
+        .createInstance(ctx, {
+          template: "agent37-base",
+          type: "default",
+          region,
+          resources: { cpu: 2, memory: 4, disk: 12 },
+          name: "a",
+          metadata: {},
+          auto_sleep: true,
+          idle_timeout_seconds: 900,
+        })
+        .catch((e: unknown) => e);
+      expect(refused).toMatchObject({ status: 400, code: "invalid_request" });
+    }
+    expect(api.instances.size).toBe(0);
+    // Through the provider's own send, the same 400 is a refusal that made nothing.
+    api.fail(
+      "POST",
+      /^\/instances$/,
+      FakeAgent37Api.error(
+        400,
+        "invalid_request",
+        "us is the only region that runs default instances"
+      )
+    );
+    const error = await provider
+      .create(
+        credentials,
+        createRequest({
+          machineType: "vm-2x4",
+          provisioning: { location: "eu", image: null, network: null },
+        })
+      )
+      .catch((e: unknown) => e);
+    expect(provider.describeError(error)).toMatchObject({
+      code: "unsupported",
+      message: expect.stringContaining("only region that runs default"),
+    });
+  });
+
+  it("names a VM's size only on an exact match of its type and shape (#18189)", async () => {
+    const { api, provider, credentials } = env();
+    const vm = api.seed({ type: "vm", resources: { cpu: 8, memory: 64, disk: 64 } });
+    // Agent 37's own disk for the shape isn't the size Daintree prices.
+    const ownDisk = api.seed({ type: "vm", resources: { cpu: 8, memory: 64, disk: 48 } });
+    const asDefault = api.seed({ type: "default", resources: { cpu: 8, memory: 64, disk: 64 } });
+    const performance = api.seed({
+      type: "performance",
+      resources: { cpu: 2, memory: 4, disk: 12 },
+    });
+    const standard = api.seed({ type: "default", resources: { cpu: 2, memory: 4, disk: 12 } });
+    const sizes = Object.fromEntries(
+      (await provider.list(credentials)).map((entry) => [entry.resourceId, entry.machineType])
+    );
+    expect(sizes).toEqual({
+      [vm.id]: "vm-8x64",
+      [ownDisk.id]: null,
+      [asDefault.id]: null,
+      [performance.id]: "performance-2x4",
+      [standard.id]: "2x4",
+    });
+  });
+
+  it("looks for a lost create only in the region it was sent to, keeping one that doesn't say (#18189)", async () => {
+    const { api, provider, credentials } = env();
+    const label = "daintree-binding=cb_0123456789ab";
+    const eu = api.seed({ metadata: LABELS, type: "vm", region: "eu" });
+    api.seed({ metadata: LABELS, type: "vm", region: "ap-south" });
+    const us = api.seed({ metadata: LABELS, region: "us" });
+    const ids = async (location?: string) =>
+      (await provider.list(credentials, { label, ...(location ? { location } : {}) })).map(
+        (entry) => entry.resourceId
+      );
+    expect(await ids("eu")).toEqual([eu.id]);
+    expect(await ids("us")).toEqual([us.id]);
+    expect(await ids()).toHaveLength(3);
+    api.unsayRegion = true;
+    expect(await ids("eu")).toHaveLength(3);
   });
 
   it("says when the wallet is suspended", async () => {

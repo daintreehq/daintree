@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   CLOUD_PROVISIONING_DIMENSIONS,
+  cloudLocationsFrom,
   cloudProviderNamespace,
   isCloudProviderId,
   type CloudAccountAddRequest,
@@ -8,6 +9,7 @@ import {
   type CloudAccountSummary,
   type CloudCatalog,
   type CloudCredentialValues,
+  type CloudMachineType,
   type CloudPluginProviderLabel,
   type CloudProviderId,
   type CloudProviderInfo,
@@ -73,14 +75,7 @@ function normalizeOptions(
       // and locations that aren't a list tie the choice to none.
       available: choice.available === true,
       reason: text(choice.reason),
-      locations:
-        dimension === "location" || choice.locations === null || choice.locations === undefined
-          ? null
-          : Array.isArray(choice.locations)
-            ? choice.locations.filter(
-                (location): location is string => typeof location === "string"
-              )
-            : [],
+      locations: dimension === "location" ? null : cloudLocationsFrom(choice.locations),
     });
   }
   const defaultId =
@@ -114,6 +109,21 @@ export function normalizeProvisioning(
     }
   }
   return result;
+}
+
+/** Each size with the locations it can be created in; with no location to pick, every one. */
+export function normalizeMachineTypes(
+  machineTypes: readonly CloudMachineType[],
+  provisioning: CloudCatalog["provisioning"]
+): CloudMachineType[] {
+  return machineTypes.map((type) =>
+    type.locations === undefined
+      ? type
+      : {
+          ...type,
+          locations: provisioning.location === null ? null : cloudLocationsFrom(type.locations),
+        }
+  );
 }
 
 function normalizeName(value: unknown, fallback: string): string {
@@ -894,17 +904,18 @@ export class CloudAccountService {
     }
     try {
       const offered = await provider.catalog(await this.credentials(account));
+      const provisioning = normalizeProvisioning(
+        provider.info(this.deps.platform ?? process.platform),
+        offered.provisioning
+      );
       const catalog: CloudCatalog = {
         accountId: account.id,
-        machineTypes: offered.machineTypes,
+        machineTypes: normalizeMachineTypes(offered.machineTypes, provisioning),
         canStart: offered.canStart,
         includedHoursRemaining: offered.includedHoursRemaining,
         startsRemaining: offered.startsRemaining,
         savedSnapshotDayDollars: offered.savedSnapshotDayDollars,
-        provisioning: normalizeProvisioning(
-          provider.info(this.deps.platform ?? process.platform),
-          offered.provisioning
-        ),
+        provisioning,
         lastChoice: null,
         fetchedAt: this.now(),
       };

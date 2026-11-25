@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  cloudChoiceFitsLocation,
+  cloudLocationsFrom,
   cloudMachineIsBilling,
+  cloudMachineTypeLocationReason,
   cloudProviderNamespace,
   isCloudProviderId,
   pluginCloudProviderId,
@@ -90,5 +93,65 @@ describe("cloudMachineIsBilling (#17346)", () => {
       expect(cloudMachineIsBilling("deleted", persistence)).toBe(false);
       expect(cloudMachineIsBilling("unknown", persistence)).toBeNull();
     }
+  });
+});
+
+describe("sizes tied to locations (#18189)", () => {
+  const regions = {
+    label: "Region",
+    defaultId: "us",
+    choices: [
+      {
+        id: "us",
+        label: "United States",
+        description: null,
+        available: true,
+        reason: null,
+        locations: null,
+      },
+      {
+        id: "eu",
+        label: "Europe",
+        description: null,
+        available: true,
+        reason: null,
+        locations: null,
+      },
+    ],
+  };
+
+  it("fits a size anywhere unless it names locations, and a named list needs one of them", () => {
+    expect(cloudChoiceFitsLocation({}, null)).toBe(true);
+    expect(cloudChoiceFitsLocation({ locations: null }, "eu")).toBe(true);
+    expect(cloudChoiceFitsLocation({ locations: ["us"] }, "us")).toBe(true);
+    expect(cloudChoiceFitsLocation({ locations: ["us"] }, "eu")).toBe(false);
+    expect(cloudChoiceFitsLocation({ locations: ["us"] }, null)).toBe(false);
+    expect(cloudChoiceFitsLocation({ locations: [] }, "us")).toBe(false);
+  });
+
+  it("says why a size can't go where it was asked, in the location's own words", () => {
+    expect(cloudMachineTypeLocationReason({ locations: ["us"] }, regions, "us")).toBeNull();
+    expect(cloudMachineTypeLocationReason({}, regions, null)).toBeNull();
+    expect(cloudMachineTypeLocationReason({ locations: ["us"] }, regions, "eu")).toBe(
+      "not offered in Europe"
+    );
+    expect(cloudMachineTypeLocationReason({ locations: ["us", "eu"] }, regions, null)).toBe(
+      "choose United States or Europe to use it"
+    );
+    expect(cloudMachineTypeLocationReason({ locations: [] }, regions, "us")).toBe(
+      "not offered in any region"
+    );
+    // A location the catalog doesn't list is named by its id.
+    expect(cloudMachineTypeLocationReason({ locations: ["us"] }, regions, "mars")).toBe(
+      "not offered in mars"
+    );
+  });
+
+  it("reads a location list that arrives as data, narrowing what doesn't read", () => {
+    expect(cloudLocationsFrom(undefined)).toBeNull();
+    expect(cloudLocationsFrom(null)).toBeNull();
+    expect(cloudLocationsFrom(["us", 3, "eu"])).toEqual(["us", "eu"]);
+    expect(cloudLocationsFrom("us")).toEqual([]);
+    expect(cloudLocationsFrom({ us: true })).toEqual([]);
   });
 });

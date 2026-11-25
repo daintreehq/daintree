@@ -3593,6 +3593,60 @@ describe("CloudHostLifecycle provisioning", () => {
     expect(store.account(account.id)?.lastProvisioning).toBeNull();
   });
 
+  it("refuses a size in a region it doesn't run in, or with none named, before anything is sent (#18189)", async () => {
+    const regionOnly = (): CloudProvisioning => ({
+      location: "optional",
+      image: "none",
+      network: "none",
+      sshKey: "at-create",
+    });
+    const { lifecycle, provider, account, store, hosts } = await setup(
+      {},
+      {
+        adapt: (adapted) => {
+          offerRegions(adapted, regionOnly);
+          const catalog = adapted.catalog;
+          adapted.catalog = vi.fn(async (credentials) => {
+            const base = await catalog(credentials);
+            return {
+              ...base,
+              machineTypes: base.machineTypes.map((type) =>
+                type.id === "default" ? { ...type, locations: ["us-east-1"] } : type
+              ),
+            };
+          });
+        },
+      }
+    );
+    const ask = (location: string | null) =>
+      lifecycle.create({
+        accountId: account.id,
+        name: "build",
+        machineType: "default",
+        lifetimeHours: 2,
+        provisioning: { location, image: null, network: null },
+      });
+    await expect(ask("eu-west-1")).rejects.toMatchObject({
+      code: "VALIDATION",
+      userMessage: "Default isn't available: not offered in Europe (Ireland).",
+    });
+    await expect(ask(null)).rejects.toMatchObject({
+      code: "VALIDATION",
+      userMessage: "Default isn't available: choose US East (N. Virginia) to use it.",
+    });
+    expect(provider.create).not.toHaveBeenCalled();
+    expect(store.bindings()).toEqual([]);
+    expect(hosts).toEqual([]);
+    expect(store.account(account.id)?.lastProvisioning).toBeNull();
+
+    await ask("us-east-1");
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.machine).toBe("running"));
+    expect(vi.mocked(provider.create).mock.calls[0]?.[1]).toMatchObject({
+      machineType: "default",
+      provisioning: { location: "us-east-1", image: null, network: null },
+    });
+  });
+
   it("refuses a region for a provider that takes none, and leaves Boat's hosts without any", async () => {
     const { lifecycle, provider, account, store } = await setup();
     await expect(

@@ -2177,6 +2177,11 @@ interface CloudMachineType {
     available: boolean;
     /** Why it isn't available, in the provider's words. */
     reason: string | null;
+    /**
+     * The location ids it can be created in, as an image's are: absent or null
+     * for every location, [] for none. A list needs a location named.
+     */
+    locations?: string[] | null;
 }
 /** The three things a create may name beyond its size, in the order a person picks them. */
 type CloudProvisioningDimension = "location" | "image" | "network";

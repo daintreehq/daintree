@@ -142,9 +142,9 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   const accountKey = account?.id ?? null;
   const form = useCloudMachineForm(account, provider, added === null);
   const {
-    catalog,
     currentCatalog,
     catalogError,
+    machineTypes,
     machineType,
     chosenType,
     lifetime,
@@ -522,7 +522,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
               </Callout>
             ) : (
               <RadioChoiceGroup legend="Size">
-                {(catalog?.machineTypes ?? []).map((type) => (
+                {machineTypes.map((type) => (
                   <RadioChoiceRow
                     key={type.id}
                     name="cloud-machine-size"
@@ -538,7 +538,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                     }
                   />
                 ))}
-                {!catalog && <p className="text-sm text-text-secondary">Reading sizes…</p>}
+                {!currentCatalog && <p className="text-sm text-text-secondary">Reading sizes…</p>}
               </RadioChoiceGroup>
             )}
             {lifetimeChosen ? (
@@ -569,7 +569,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 {providerStopSentence(lifetimeModel, provider.name)}
               </p>
             )}
-            {chosenType && (
+            {chosenType?.available && (
               <p className="text-xs text-text-secondary" data-testid="add-cloud-host-review">
                 Billed to{" "}
                 {account.billingScope.kind === "personal"

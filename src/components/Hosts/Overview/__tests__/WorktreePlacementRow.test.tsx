@@ -450,6 +450,50 @@ describe("WorktreePlacementRow new machine (#17359)", () => {
     });
   });
 
+  it("holds a picked size its region doesn't run, saying why, and never takes one it can't (#18189)", async () => {
+    hostList.hosts = [];
+    cloud.snapshot = { providers: [REGIONS], accounts: [ACCOUNT], hosts: [] };
+    getCatalog.mockResolvedValue({
+      ...CATALOG,
+      machineTypes: [
+        { ...CATALOG.machineTypes[0]!, locations: ["lhr"] },
+        { ...CATALOG.machineTypes[1]!, id: "anywhere", label: "Anywhere", available: true },
+      ],
+    });
+    const onCloudChange = vi.fn<CloudListener>();
+    renderRow({ onCloudChange });
+    await choose(screen.getByTestId("worktree-host-select"), /New machine Personal/);
+    const region = await screen.findByTestId("worktree-machine-location");
+    const size = screen.getByTestId("worktree-machine-size");
+    // Small is shown first; choosing it again picks nothing, so it's chosen after another.
+    await choose(size, /^Anywhere/);
+    await choose(size, /^Small/);
+    await choose(region, "San Francisco");
+
+    expect(screen.getByTestId("worktree-machine-problem").textContent).toBe(
+      "Small isn't available: not offered in San Francisco."
+    );
+    expect(screen.queryByTestId("worktree-machine-review")).toBeNull();
+    const held = onCloudChange.mock.lastCall?.[0];
+    expect(held?.blocked).toBe("Small isn't available: not offered in San Francisco.");
+    expect(held?.machine()).toBeNull();
+    await act(async () => {
+      fireEvent.keyDown(size, { key: "ArrowDown" });
+    });
+    const small = await screen.findByRole("option", { name: /^Small/ });
+    expect(small.textContent).toContain("Not offered in San Francisco");
+    expect(small.getAttribute("aria-disabled")).toBe("true");
+    await act(async () => {
+      fireEvent.keyDown(size, { key: "Escape" });
+    });
+
+    await choose(size, /^Anywhere/);
+    expect(onCloudChange.mock.lastCall?.[0]!.machine()).toMatchObject({
+      machineType: "anywhere",
+      provisioning: { location: "sfo", image: null, network: null },
+    });
+  });
+
   it("names a stopped machine's billing, and leaves Cmd+Enter to the dialog's Create", async () => {
     const billed = providerWith({ stoppedComputeBilled: true });
     hostList.hosts = [];

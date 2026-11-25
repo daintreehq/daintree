@@ -135,7 +135,8 @@ const lifetimeNote = () =>
 const lifetimeChoice = () => screen.queryByTestId("add-cloud-host-lifetime");
 
 beforeEach(() => {
-  client.getCatalog.mockResolvedValue(CATALOG);
+  // Each account's own catalog: one answered for another account isn't shown as this one's.
+  client.getCatalog.mockImplementation(async (accountId: string) => ({ ...CATALOG, accountId }));
   client.listResources.mockResolvedValue([]);
   client.createHost.mockResolvedValue({ hostId: "build" });
 });
