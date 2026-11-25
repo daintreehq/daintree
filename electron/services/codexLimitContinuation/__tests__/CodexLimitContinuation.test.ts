@@ -1107,15 +1107,33 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
     it("leaves a pane its menu disarmed unarmed, whatever its preset says", async () => {
       const backend = memoryBackend();
       const before = harness(backend);
-      before.service.noteLaunch({ terminalId: "t1", projectId: PROJECT, launchGeneration: 1, arms: true });
-      before.service.handleSpawnResult("t1", { success: true, launchGeneration: 1, spawnedAt: 2_000 });
+      before.service.noteLaunch({
+        terminalId: "t1",
+        projectId: PROJECT,
+        launchGeneration: 1,
+        arms: true,
+      });
+      before.service.handleSpawnResult("t1", {
+        success: true,
+        launchGeneration: 1,
+        spawnedAt: 2_000,
+      });
       await before.service.set("t1", false, PROJECT);
       await quit(before);
 
       const after = harness(backend);
       await after.store.ready();
-      after.service.noteLaunch({ terminalId: "t1", projectId: PROJECT, launchGeneration: 1, arms: true });
-      after.service.handleSpawnResult("t1", { success: true, launchGeneration: 1, spawnedAt: 5_000 });
+      after.service.noteLaunch({
+        terminalId: "t1",
+        projectId: PROJECT,
+        launchGeneration: 1,
+        arms: true,
+      });
+      after.service.handleSpawnResult("t1", {
+        success: true,
+        launchGeneration: 1,
+        spawnedAt: 5_000,
+      });
       expect(after.service.isArmed("t1")).toBe(false);
     });
   });

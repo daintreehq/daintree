@@ -351,7 +351,12 @@ export type PtyHostRequest =
    * `restoreIdentity` names the stop saved before a cold restart that this
    * restored process may redraw (#18193); null forgets it.
    */
-  | { type: "set-codex-limit-continue"; id: string; armed: boolean; restoreIdentity?: string | null }
+  | {
+      type: "set-codex-limit-continue";
+      id: string;
+      armed: boolean;
+      restoreIdentity?: string | null;
+    }
   /** Check the pane is still at `stop` and type the line that continues it (#17909). */
   | {
       type: "continue-codex-limit";

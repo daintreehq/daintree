@@ -51,7 +51,9 @@ async function readTerminal(terminalId: string): Promise<ContinuationTerminal | 
 }
 
 /** What an armed pane holds as Daintree quits (#18193); undefined when its host didn't answer. */
-async function readCheckpoint(terminalId: string): Promise<CodexLimitCheckpoint | null | undefined> {
+async function readCheckpoint(
+  terminalId: string
+): Promise<CodexLimitCheckpoint | null | undefined> {
   const pty = getPtyClient();
   if (!pty) return undefined;
   const info = await pty.getTerminalAsync(terminalId, undefined, {

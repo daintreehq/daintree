@@ -2833,7 +2833,11 @@ export class TerminalProcess {
     this.codexStopReportedSeq = held.seq;
     // The redraw of the stop saved before the restart is reported as that
     // stop, once: a later sighting with the same words is a limit of its own.
-    if (!held.restored && this.restoreCandidate !== null && held.identity === this.restoreCandidate) {
+    if (
+      !held.restored &&
+      this.restoreCandidate !== null &&
+      held.identity === this.restoreCandidate
+    ) {
       this.restoredSeq = held.seq;
       this.restoreCandidate = null;
     }

@@ -3933,11 +3933,11 @@ describe("terminal close handlers - resume journaling", () => {
       ptyClient.gracefulKill.mockResolvedValue(null);
       const forgetPane = vi.fn();
       setContinuationForgetter({
-      forgetPane,
-      forgetProject: vi.fn(),
-      noteSpawn: vi.fn(),
-      checkpointForQuit: vi.fn(async () => {}),
-    });
+        forgetPane,
+        forgetProject: vi.fn(),
+        noteSpawn: vi.fn(),
+        checkpointForQuit: vi.fn(async () => {}),
+      });
       try {
         const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
         await handler({}, "term-1", { forRestart: true });

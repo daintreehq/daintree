@@ -2425,8 +2425,12 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
   }
 
   const checkpointOf = (terminal: TerminalProcess) => {
-    const answer = terminal.answerCodexLimit({ checkpoint: true }, terminal.analysisObservedSince());
-    if (!("checkpoint" in answer)) throw new Error(`expected a checkpoint, got ${JSON.stringify(answer)}`);
+    const answer = terminal.answerCodexLimit(
+      { checkpoint: true },
+      terminal.analysisObservedSince()
+    );
+    if (!("checkpoint" in answer))
+      throw new Error(`expected a checkpoint, got ${JSON.stringify(answer)}`);
     return answer.checkpoint;
   };
 
@@ -2623,7 +2627,10 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
       await show(claudeScreen());
       expect(await continueAt(terminal, stops[0]!)).toMatchObject({ status: "continued" });
       await show(
-        claudeScreen().replace("● Refactoring the parser.", "● Refactoring the parser.\r\n> continue\r\n● Back on it.")
+        claudeScreen().replace(
+          "● Refactoring the parser.",
+          "● Refactoring the parser.\r\n> continue\r\n● Back on it."
+        )
       );
       expect(stops).toHaveLength(2);
       const reply = terminal.answerCodexLimit({}, terminal.analysisObservedSince());

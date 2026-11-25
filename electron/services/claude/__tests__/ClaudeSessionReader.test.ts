@@ -1477,7 +1477,11 @@ describe("readClaudeTranscriptLeaf (#18193)", () => {
   });
 
   it("names a turn taken after the limit, which is no limit", async () => {
-    await seed([limit("u-2"), prompt("continue", { uuid: "u-3" }), assistant("msg_3", [text("Done.")], { uuid: "u-4" })]);
+    await seed([
+      limit("u-2"),
+      prompt("continue", { uuid: "u-3" }),
+      assistant("msg_3", [text("Done.")], { uuid: "u-4" }),
+    ]);
     expect(await leaf()).toEqual({ uuid: "u-4", apiError: false });
   });
 

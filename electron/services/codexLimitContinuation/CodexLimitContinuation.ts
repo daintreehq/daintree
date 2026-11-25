@@ -581,7 +581,9 @@ export class CodexLimitContinuation {
     // The conversation's entry the limit was, where it can be read: a cold
     // restore compares it with the conversation it resumes.
     const turn =
-      agentId === "claude" ? await this.deps.readTurn(terminalId).catch(() => undefined) : undefined;
+      agentId === "claude"
+        ? await this.deps.readTurn(terminalId).catch(() => undefined)
+        : undefined;
     if (this.panes.get(terminalId) !== pane || pane.epoch !== epoch) return;
     const continueAt = reset.resetsAt + CONTINUE_AFTER_RESET_MS;
     pane.wait = {
