@@ -98,6 +98,9 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({
 
 const { GlobalAssistantPane } = await import("../GlobalAssistantPane");
 const { useHelpPanelStore } = await import("@/store/helpPanelStore");
+const { usePaletteStore } = await import("@/store/paletteStore");
+const { useGlobalAssistantResumeConfirmStore } =
+  await import("@/store/globalAssistantResumeConfirmStore");
 const { usePluginContextMenuItemsStore, _resetPluginContextMenuItemsStoreForTest } =
   await import("@/store/pluginContextMenuItemsStore");
 
@@ -1270,6 +1273,7 @@ describe("GlobalAssistantPane (#14454)", () => {
       expect(structure(menu)).toEqual([
         "Clear conversation",
         "—",
+        "Resume an earlier conversation…",
         "Open docs",
         "—",
         "Hand this run on…",
@@ -1319,6 +1323,7 @@ describe("GlobalAssistantPane (#14454)", () => {
       await flush();
       expect(rows(await openMenu())).toEqual([
         "Clear conversation",
+        "Resume an earlier conversation…",
         "Open docs",
         "Stop global assistant",
       ]);
@@ -1338,9 +1343,118 @@ describe("GlobalAssistantPane (#14454)", () => {
       await flush();
       expect(rows(await openMenu())).toEqual([
         "Clear conversation",
+        "Resume an earlier conversation…",
         "Open docs",
         "Stop global assistant",
       ]);
+    });
+  });
+
+  describe("an earlier conversation (#18169)", () => {
+    const openMenu = async () => {
+      fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
+      return screen.findByRole("menu");
+    };
+    const earlierItem = () => screen.queryByTestId("help-global-resume-earlier");
+
+    class ResizeObserverStub implements ResizeObserver {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    const originalScrollIntoView = Element.prototype.scrollIntoView;
+
+    beforeEach(() => {
+      vi.stubGlobal("ResizeObserver", ResizeObserverStub);
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }));
+      Element.prototype.scrollIntoView = function scrollIntoView(): void {};
+      useGlobalAssistantResumeConfirmStore.setState({ current: null, requestSeq: 0 });
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+      act(() => usePaletteStore.getState().closePalette("global-assistant-sessions"));
+    });
+
+    it("lists the session's earlier conversations and asks about the one picked, as the run was shown", async () => {
+      installHelp(running({ generation: 7, inputOwner: "a1", inputEpoch: 3 }));
+      const listGlobalAssistantPastSessions = vi.fn(async () => ({
+        slot: 0,
+        agentId: "claude",
+        sessions: [
+          {
+            agentId: "claude" as const,
+            sessionId: "conv-a",
+            title: "Planning the release",
+            updatedAt: 1,
+          },
+        ],
+        unreadable: [],
+        truncated: false,
+      }));
+      const resumeGlobalAssistantConversation = vi.fn();
+      Object.assign(help, { listGlobalAssistantPastSessions, resumeGlobalAssistantConversation });
+      renderPane();
+      await flush();
+
+      await openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Resume an earlier conversation…" }));
+      fireEvent.click(await screen.findByText("Planning the release"));
+
+      expect(listGlobalAssistantPastSessions).toHaveBeenCalledWith(0);
+      expect(useGlobalAssistantResumeConfirmStore.getState().current).toMatchObject({
+        slot: 0,
+        agentId: "claude",
+        agentSessionId: "conv-a",
+        title: "Planning the release",
+        expected: { generation: 7, phase: "running" },
+        pluginName: null,
+        namesSession: false,
+      });
+      // Only the dialog's answer reopens it.
+      expect(resumeGlobalAssistantConversation).not.toHaveBeenCalled();
+    });
+
+    it("is offered while the first session keeps nothing running, but not while one starts", async () => {
+      installHelp(viewOf());
+      renderPane();
+      await flush();
+      await openMenu();
+      expect(earlierItem()).not.toBeNull();
+      fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
+
+      push(viewOf({ phase: "launching", occupied: true, agentId: "claude" }));
+      await openMenu();
+      expect(earlierItem()).toBeNull();
+    });
+
+    it("isn't offered for an agent whose conversations can't be listed", async () => {
+      installHelp(running({ agentId: "antigravity", inputOwner: "a1", inputEpoch: 3 }));
+      renderPane();
+      await flush();
+      await openMenu();
+      await screen.findByText("Open docs");
+      expect(earlierItem()).toBeNull();
+    });
+
+    it("isn't offered in a window bound to another host", async () => {
+      host.id = "studio-02";
+      installHelp(running());
+      renderPane();
+      await flush();
+      await openMenu();
+      await screen.findByText("Open docs");
+      expect(earlierItem()).toBeNull();
     });
   });
 
