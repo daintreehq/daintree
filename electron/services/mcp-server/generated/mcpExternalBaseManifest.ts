@@ -2791,7 +2791,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent panel takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
+      "Send text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent panel takes it as its next prompt. Any other panel is refused. Returns once accepted, not delivered or run; pass the returned `submissionToken` to a status read to check.",
     enabled: true,
     id: "terminal.sendCommandOwned",
     inputSchema: {
@@ -2844,7 +2844,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         whenBusy: {
           description:
-            "Busy assistant, or worker you neither launched nor were handed: `refuse` (default) sends nothing; `queue` holds it for its next prompt.",
+            "Busy agent: `refuse` sends nothing; `queue` holds it for its next prompt. Omitted: `refuse`, but your own worker takes it mid-turn.",
           type: "string",
           enum: ["refuse", "queue"],
         },

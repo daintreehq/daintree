@@ -493,7 +493,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommand",
     title: "Submit text to terminal",
     description:
-      "Send text as one submission to a terminal: a shell runs it, an agent panel takes it as its next prompt. Returns once accepted for writing, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
+      "Send text as one submission to a terminal: a shell runs it, an agent panel takes it as its next prompt. Returns once accepted, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -553,7 +553,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommandOwned",
     title: "Submit text to owned terminal",
     description:
-      "Send text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent panel takes it as its next prompt. Any other panel is refused. Returns once accepted for writing, not delivered or run; pass the returned `submissionToken` to a status read to check.",
+      "Send text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent panel takes it as its next prompt. Any other panel is refused. Returns once accepted, not delivered or run; pass the returned `submissionToken` to a status read to check.",
     category: "terminal",
     kind: "command",
     danger: "safe",

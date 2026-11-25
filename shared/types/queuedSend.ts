@@ -100,7 +100,7 @@ export const WhenBusyArgSchema = z
   .enum(["refuse", "queue"])
   .optional()
   .describe(
-    "Agent not at its prompt: `refuse` sends nothing; `queue` holds it for its next prompt. Absent: `refuse`, but your own worker gets it at once, mid-turn too."
+    "Busy agent: `refuse` sends nothing; `queue` holds it for its next prompt. Omitted: `refuse`, but your own worker takes it mid-turn."
   );
 
 export const QueueTtlSecondsArgSchema = z

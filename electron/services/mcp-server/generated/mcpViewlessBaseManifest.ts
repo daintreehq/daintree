@@ -2898,7 +2898,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal: a shell runs it, an agent panel takes it as its next prompt. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
+      "Send text as one submission to a terminal: a shell runs it, an agent panel takes it as its next prompt. Returns once accepted, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
     enabled: true,
     id: "terminal.sendCommand",
     inputSchema: {

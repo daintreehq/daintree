@@ -805,7 +805,7 @@ export const MCP_SERVER_INSTRUCTIONS = [
 
   "Call only listed tools. `actions.search` finds one by intent and `actions.getSchema` gives its arguments; neither widens access.",
 
-  "Resolve worktree and terminal ids before scoped actions. A send returns once accepted for writing, not when the work is done. From an agent pane or the assistant, pass `notify: true` and end your turn: Daintree types the result into your prompt. Otherwise wait with `terminal.waitUntilIdle`, never a polling loop, and read `idleReason` before an irreversible step.",
+  "Resolve worktree and terminal ids before scoped actions. A send returns once accepted, not when the work is done. From an agent pane or the assistant, pass `notify: true` and end your turn: Daintree types the result into your prompt. Otherwise wait with `terminal.waitUntilIdle`, never a polling loop, and read `idleReason` before an irreversible step.",
 
   "In-app sessions run the `core` or `full` tool set; `external` is its own allowlist. A call outside yours returns `TIER_NOT_PERMITTED`, or from an agent pane asks the user; `USER_REJECTED` means they declined. Retry a `retriable: false` only after something changes.",
 ].join("\n\n");
