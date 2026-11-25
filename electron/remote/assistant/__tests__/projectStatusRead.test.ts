@@ -128,7 +128,12 @@ describe("readProjectStatuses for a pane restore held (#18171)", () => {
           status: "done",
           result: {
             isError: false,
-            structured: { terminals: [held], source: "pty", unavailableFields: [] },
+            // An unnamed key is dropped by the parse; `restored` must not be.
+            structured: {
+              terminals: [{ ...held, notInTheSchema: true }],
+              source: "pty",
+              unavailableFields: [],
+            },
             text: null,
           },
         }),
@@ -138,7 +143,8 @@ describe("readProjectStatuses for a pane restore held (#18171)", () => {
       1_000
     );
 
-    expect(answer).toMatchObject({ status: "done", result: { terminals: [held] } });
+    expect(answer).toMatchObject({ status: "done" });
+    expect(answer?.status === "done" ? answer.result?.terminals : undefined).toEqual([held]);
   });
 });
 

@@ -42,11 +42,14 @@ import {
 } from "@shared/utils/terminalLocationFilter";
 
 /**
- * A pane restore held rather than launched (#18171). `addPanel` commits the hold
- * and returns before any spawn, so the pty-host has nothing for it to answer.
+ * The panel when restore held it rather than launched it (#18171). `addPanel`
+ * commits the hold and returns before any spawn, so the pty-host has nothing to
+ * answer for it. Not a type guard: a PTY panel that isn't held is still one.
  */
-function isHeldPanel(panel: PanelInstance | undefined): panel is PtyPanelData {
-  return panel !== undefined && isPtyPanel(panel) && panel.restoreRecovery !== undefined;
+function heldPanel(panel: PanelInstance | undefined): PtyPanelData | undefined {
+  return panel !== undefined && isPtyPanel(panel) && panel.restoreRecovery !== undefined
+    ? panel
+    : undefined;
 }
 
 export const terminalQueryActionRuns = {
@@ -267,7 +270,9 @@ export const terminalQueryActionRuns = {
     // A held pane has no process to read, so it is left out of every pty-host
     // batch: the reads would only come back unreadable and put an error on a
     // row that resolved.
-    const readable = resolved.filter((r) => r.terminal !== undefined && !isHeldPanel(r.terminal));
+    const readable = resolved.filter(
+      (r) => r.terminal !== undefined && heldPanel(r.terminal) === undefined
+    );
     if (includeOutput) {
       const idsToFetch = readable.map((r) => r.id);
       // Only a PTY panel has a tracker to read.
@@ -324,14 +329,15 @@ export const terminalQueryActionRuns = {
 
       // What the pane itself knows, as `terminal.info.get` reports it: no
       // process, and how restore held it. `agentState` stays the detector's.
-      if (isHeldPanel(terminal)) {
+      const held = heldPanel(terminal);
+      if (held !== undefined) {
         return {
-          terminalId: terminal.id,
-          agentId: terminal.launchAgentId ?? null,
+          terminalId: held.id,
+          agentId: held.launchAgentId ?? null,
           agentState: null,
           hasPty: false,
-          armed: armedIds.has(terminal.id),
-          ...restoredField(terminal),
+          armed: armedIds.has(held.id),
+          ...restoredField(held),
           ...(includeOutput ? { recentOutput: null } : {}),
         };
       }

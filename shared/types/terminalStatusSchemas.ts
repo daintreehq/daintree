@@ -114,7 +114,7 @@ export const TerminalStatusEntrySchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Set once the process exits, so absence means still running unless listed in `unavailableFields`. Null means killed by a signal with no numeric code."
+      "Set once the process exits; absent means running unless listed in `unavailableFields` or the pane is held. Null: killed by a signal with no numeric code."
     ),
   spawnedAt: z.number().optional().describe("Spawn time, epoch ms."),
   agentIncarnation: z
@@ -166,7 +166,7 @@ export const TerminalStatusEntrySchema = z.object({
     .string()
     .optional()
     .describe(
-      "Set when the terminal was not found, and on every resolved entry when a batched fetch fails; then the status fields are still set and only that fetch's field is missing. Never fails the call."
+      "Set when the terminal was not found, and on each entry a failed batched fetch covered; then the status fields are still set and only that fetch's field is missing. Never fails the call."
     ),
 });
 

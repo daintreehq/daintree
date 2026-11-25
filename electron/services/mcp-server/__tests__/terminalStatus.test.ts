@@ -2,10 +2,13 @@ import { describe, it, expect, vi } from "vitest";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 
 // The real helper consults the global agent store for help terminals, which
-// needs a live main process. The flag on the record is the part under test.
+// needs a live main process. The flag on the record is the part under test,
+// and a help terminal the store marks is named here by id.
+const helpTerminalIds = vi.hoisted(() => new Set<string>());
 vi.mock("../../assistantTerminal.js", () => ({
-  isAssistantTerminalRecord: (t: { isAssistantTerminal?: boolean } | null | undefined) =>
-    t?.isAssistantTerminal === true,
+  isAssistantTerminalRecord: (
+    t: { id?: string; isAssistantTerminal?: boolean } | null | undefined
+  ) => t?.isAssistantTerminal === true || (t?.id !== undefined && helpTerminalIds.has(t.id)),
 }));
 
 import {
@@ -60,10 +63,16 @@ function deps(
     }),
     ptyClient: {
       getTerminalProjectId: vi.fn((id: string) => opts.owners?.[id] ?? null),
-      getTerminalsForProjectAsync: vi.fn(async () => {
-        if (opts.inventoryError) throw opts.inventoryError;
-        return opts.inventory ?? records.map((r) => r["id"] as string);
-      }),
+      // Mirrors `PtyClient`: only a strict read rejects; otherwise a failure folds to `[]`.
+      getTerminalsForProjectAsync: vi.fn(
+        async (_projectId: string, options?: { strict?: boolean }) => {
+          if (opts.inventoryError) {
+            if (options?.strict === true) throw opts.inventoryError;
+            return [];
+          }
+          return opts.inventory ?? records.map((r) => r["id"] as string);
+        }
+      ),
       getTerminalAsync: vi.fn(async (id: string, submissionToken?: string) => {
         const found = byId.get(id);
         if (found === undefined) return null;
@@ -899,6 +908,8 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
       id: "held",
       kind: "terminal",
       launchAgentId: "mistral",
+      title: "Mistral",
+      cwd: "/repo",
       location: "grid",
       restoreRecovery: { reason: "host-ended-uncleanly" },
       restoreProvenance: {
@@ -933,6 +944,52 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
     expect(d.getProjectState).toHaveBeenCalledWith(WORKSPACE);
   });
 
+  it("reports each pane's own hold, not one summary for all", async () => {
+    const d = deps([], {
+      inventory: [],
+      layout: [
+        heldSnapshot(),
+        heldSnapshot({
+          id: "other",
+          launchAgentId: "codex",
+          restoreRecovery: { reason: "resume-deferred" },
+          restoreProvenance: { at: 9_000, disposition: "fresh" },
+        }),
+      ],
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["other", "held"],
+    });
+
+    expect(result.terminals[0]).toEqual({
+      terminalId: "other",
+      agentId: "codex",
+      agentState: null,
+      hasPty: false,
+      restored: { at: 9_000, disposition: "held", heldReason: "resume-deferred" },
+    });
+    expect(result.terminals[1]?.restored?.heldReason).toBe("host-ended-uncleanly");
+  });
+
+  it("judges a legacy agent kind as hydration does, and a null marker as no hold", async () => {
+    const d = deps([], {
+      inventory: [],
+      layout: [
+        heldSnapshot({ id: "legacy", kind: "agent" }),
+        heldSnapshot({ id: "nulled", restoreRecovery: null }),
+      ],
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["legacy", "nulled"],
+    });
+
+    expect(result.terminals[0]).toMatchObject({ terminalId: "legacy", hasPty: false });
+    expect(result.terminals[0]?.restored?.disposition).toBe("held");
+    expect(result.terminals[1]?.error).toBe(NOT_FOUND);
+  });
+
   it("reports no process and no restore record for a hold saved before provenance was", async () => {
     const d = deps([], {
       inventory: [],
@@ -957,6 +1014,15 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
     expect(d.getProjectState).not.toHaveBeenCalled();
   });
 
+  it("reads no layout when the inventory places every id the ledger didn't", async () => {
+    const d = deps([record({ id: "a" })], { inventory: ["a"], layout: [heldSnapshot()] });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["a"] });
+
+    expect(result.terminals[0]?.agentState).toBe("working");
+    expect(d.getProjectState).not.toHaveBeenCalled();
+  });
+
   it("keeps request order and duplicates beside live rows, reading the layout once", async () => {
     const d = deps([record({ id: "live" })], {
       owners: { live: WORKSPACE },
@@ -968,21 +1034,21 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
       terminalIds: ["held", "live", "missing", "held"],
     });
 
-    expect(result.terminals.map((t) => [t.terminalId, t.restored?.disposition, t.error])).toEqual([
-      ["held", "held", undefined],
-      ["live", undefined, undefined],
-      ["missing", undefined, NOT_FOUND],
-      ["held", "held", undefined],
+    expect(
+      result.terminals.map((t) => [t.terminalId, t.agentState, t.restored?.disposition, t.error])
+    ).toEqual([
+      ["held", null, "held", undefined],
+      ["live", "working", undefined, undefined],
+      ["missing", null, undefined, NOT_FOUND],
+      ["held", null, "held", undefined],
     ]);
     expect(d.getProjectState).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ["the ledger", { owners: { held: WORKSPACE } }],
-    ["the inventory", { inventory: ["held"] }],
-  ])("prefers a live record %s places over a hold the layout still records", async (_l, opts) => {
+  it("prefers a live record the ledger places, without reading the project at all", async () => {
     const d = deps([record({ id: "held", agentState: "working", hasPty: true })], {
-      ...opts,
+      owners: { held: WORKSPACE },
+      inventory: [],
       layout: [heldSnapshot()],
     });
 
@@ -990,14 +1056,43 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
 
     expect(result.terminals[0]).toMatchObject({ agentState: "working", hasPty: true });
     expect(result.terminals[0]?.restored).toBeUndefined();
+    expect(d.ptyClient.getTerminalsForProjectAsync).not.toHaveBeenCalled();
+    expect(d.getProjectState).not.toHaveBeenCalled();
   });
 
-  it("keeps the generic row for a placed record it could not read, whatever the layout says", async () => {
-    const d = deps([], { owners: { held: WORKSPACE }, layout: [heldSnapshot()] });
+  it("prefers a live or exited record the inventory places over a stale hold", async () => {
+    const d = deps(
+      [
+        record({ id: "held", agentState: "working", hasPty: true }),
+        record({ id: "gone", agentState: "exited", hasPty: false }),
+      ],
+      { inventory: ["held", "gone"], layout: [heldSnapshot(), heldSnapshot({ id: "gone" })] }
+    );
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["held", "gone"],
+    });
+
+    expect(result.terminals[0]).toMatchObject({ agentState: "working", hasPty: true });
+    expect(result.terminals[1]).toMatchObject({ agentState: "exited", hasPty: false });
+    for (const entry of result.terminals) expect(entry.restored).toBeUndefined();
+  });
+
+  it.each([
+    ["the ledger", { owners: { held: WORKSPACE } }],
+    ["the inventory", { inventory: ["held"] }],
+  ])("keeps the generic row for a record %s places but can't read", async (_l, opts) => {
+    const d = deps([], { ...opts, layout: [heldSnapshot()] });
 
     const result = await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["held"] });
 
-    expect(result.terminals[0]?.error).toBe(NOT_FOUND);
+    expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledWith("held", undefined);
+    expect(result.terminals[0]).toEqual({
+      terminalId: "held",
+      agentId: null,
+      agentState: null,
+      error: NOT_FOUND,
+    });
   });
 
   it("reads no layout when the inventory failed, so a silent shard cannot pass for a hold", async () => {
@@ -1020,22 +1115,41 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
       terminalIds: ["live", "held"],
     });
 
+    expect(result.terminals[0]?.agentState).toBe("working");
     expect(result.terminals[0]?.error).toBeUndefined();
     expect(result.terminals[1]?.error).toBe(NOT_FOUND);
   });
 
-  it("drops the hold when a spawn takes the id while the layout is read", async () => {
-    const d = deps([], { inventory: [], layout: [heldSnapshot()] });
-    d.getProjectState.mockImplementation(async () => {
-      d.ptyClient.getTerminalProjectId.mockReturnValue(WORKSPACE);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return { terminals: [heldSnapshot()] as any[] };
+  it.each([
+    ["this project", WORKSPACE],
+    ["another project", "ws-other"],
+  ])("drops the hold when a spawn in %s takes the id mid-read", async (_label, owner) => {
+    const d = deps([record({ id: "live" })], {
+      owners: { live: WORKSPACE },
+      inventory: [],
+      layout: [heldSnapshot()],
+      serialized: { live: { data: "$ ok" } },
+    });
+    // Taken while a live sibling's screen is still being read, after the
+    // layout has already answered with the hold.
+    d.ptyClient.getSerializedStateAsync.mockImplementation(async (id: string) => {
+      d.ptyClient.getTerminalProjectId.mockImplementation((asked: string) =>
+        asked === "held" ? owner : asked === "live" ? WORKSPACE : null
+      );
+      return id === "live" ? { data: "$ ok" } : null;
     });
 
-    const result = await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["held"] });
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["live", "held"],
+      includeOutput: true,
+    });
 
-    expect(result.terminals[0]?.error).toBe(NOT_FOUND);
-    expect(result.terminals[0]?.restored).toBeUndefined();
+    expect(result.terminals[1]).toEqual({
+      terminalId: "held",
+      agentId: null,
+      agentState: null,
+      error: NOT_FOUND,
+    });
   });
 
   it("answers a foreign id exactly as an unknown one, with the same reads", async () => {
@@ -1071,17 +1185,34 @@ describe("buildViewlessTerminalStatus for a pane restore held (#18171)", () => {
     expect(result.terminals[0]?.error).toBe(NOT_FOUND);
   });
 
-  it("never answers an admitted assistant id from the layout", async () => {
+  it.each([
+    ["an admitted assistant", new Set(["held"]), undefined],
+    ["an admitted global session", undefined, new Set(["held"])],
+  ])("never answers %s from the layout", async (_label, assistants, globals) => {
     const d = deps([], { inventory: [], layout: [heldSnapshot()] });
 
     const result = await buildViewlessTerminalStatus(
       d,
       WORKSPACE,
       { terminalIds: ["held"] },
-      new Set(["held"])
+      assistants,
+      globals
     );
 
     expect(result.terminals[0]?.error).toBe(NOT_FOUND);
+  });
+
+  it("never answers a help terminal from the layout", async () => {
+    helpTerminalIds.add("held");
+    try {
+      const d = deps([], { inventory: [], layout: [heldSnapshot()] });
+
+      const result = await buildViewlessTerminalStatus(d, WORKSPACE, { terminalIds: ["held"] });
+
+      expect(result.terminals[0]?.error).toBe(NOT_FOUND);
+    } finally {
+      helpTerminalIds.delete("held");
+    }
   });
 
   it("reads neither screen nor submission for a held pane", async () => {

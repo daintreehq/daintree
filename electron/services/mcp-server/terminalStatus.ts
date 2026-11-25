@@ -4,6 +4,7 @@ import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { readTailSnapshot } from "../../../shared/utils/artifactParser.js";
 import { restoredField } from "../../../shared/utils/restoreProvenance.js";
+import { inferKind } from "../../../shared/utils/inferPanelKind.js";
 import { captureTerminalTail } from "../../../shared/utils/terminalInputLine.js";
 import {
   boundTerminalStatusOutput,
@@ -232,12 +233,17 @@ export async function isAgentPaneInWorkspace(
 
 /**
  * A pane of the bound project that restore held rather than launched (#18171),
- * as the saved layout records it: a PTY kind still carrying its hold, the same
- * test `terminal.list` reports `restored` by when there is no live process.
+ * as the saved layout records it, judged as hydration would: a PTY kind once
+ * legacy kinds are mapped, still carrying a hold marker it would keep.
  */
-function isHeldPanel(snapshot: PanelSnapshot | undefined): snapshot is PanelSnapshot {
-  if (snapshot === undefined || snapshot.restoreRecovery === undefined) return false;
-  return panelKindHasPty(snapshot.kind ?? "terminal");
+function isHeldPanel(
+  snapshot: PanelSnapshot | undefined,
+  workspaceId: string
+): snapshot is PanelSnapshot {
+  if (snapshot === undefined) return false;
+  const marker: unknown = snapshot.restoreRecovery;
+  if (marker === null || typeof marker !== "object" || Array.isArray(marker)) return false;
+  return panelKindHasPty(inferKind(snapshot, workspaceId));
 }
 
 /**
@@ -384,7 +390,7 @@ export async function buildViewlessTerminalStatus(
   // A foreign id pays for the same project-scoped reads an unknown one does,
   // so the layout read below cannot make the two answer at different speeds.
   // Both reads are of the bound project only; neither names the id.
-  const held = new Map<string, PanelSnapshot>();
+  let layoutRead: Promise<Pick<ProjectState, "terminals"> | null> = Promise.resolve(null);
   if (anyUnplaced) {
     let inventory: Set<string> | null = null;
     try {
@@ -399,18 +405,8 @@ export async function buildViewlessTerminalStatus(
     if (inventory !== null) {
       for (const id of unplaced) if (inventory.has(id)) placed.add(id);
       // A rejected read means the saved panels are unknown, not absent.
-      const state = await deps.getProjectState(workspaceId).catch(() => null);
-      const snapshots = new Map<string, PanelSnapshot>();
-      for (const snapshot of state?.terminals ?? []) {
-        if (!snapshots.has(snapshot.id)) snapshots.set(snapshot.id, snapshot);
-      }
-      for (const id of unplaced) {
-        // Assistants and the global's sessions are never layout panes of
-        // this project; only an ordinary id can be answered from the layout.
-        if (placed.has(id) || isGlobal(id) || admittedAssistants?.has(id) === true) continue;
-        const snapshot = snapshots.get(id);
-        if (!isHeldPanel(snapshot) || isAssistantTerminalRecord({ id })) continue;
-        held.set(id, snapshot);
+      if (uniqueIds.some((id) => !placed.has(id))) {
+        layoutRead = deps.getProjectState(workspaceId).catch(() => null);
       }
     }
   }
@@ -418,10 +414,25 @@ export async function buildViewlessTerminalStatus(
 
   const records = new Map<string, TerminalRecord>();
   // The token rides the record fetch this path already issues, so correlating a
-  // submission costs no extra RPC here (#12337).
-  const fetched = await Promise.all(
-    lookupIds.map((id) => deps.ptyClient.getTerminalAsync(id, submissionToken))
-  );
+  // submission costs no extra RPC here (#12337). Read beside the layout, so
+  // that read adds no time between placing an id and looking it up.
+  const [state, fetched] = await Promise.all([
+    layoutRead,
+    Promise.all(lookupIds.map((id) => deps.ptyClient.getTerminalAsync(id, submissionToken))),
+  ]);
+  const held = new Map<string, PanelSnapshot>();
+  const saved = new Map<string, PanelSnapshot>();
+  for (const snapshot of state?.terminals ?? []) {
+    if (!saved.has(snapshot.id)) saved.set(snapshot.id, snapshot);
+  }
+  for (const id of unplaced) {
+    // Assistants and the global's sessions are never layout panes of this
+    // project; only an ordinary id can be answered from the layout.
+    if (placed.has(id) || isGlobal(id) || admittedAssistants?.has(id) === true) continue;
+    const snapshot = saved.get(id);
+    if (!isHeldPanel(snapshot, workspaceId) || isAssistantTerminalRecord({ id })) continue;
+    held.set(id, snapshot);
+  }
   lookupIds.forEach((id, index) => {
     const record = fetched[index];
     // `getTerminalAsync` folds an RPC failure into `null`, so this means "not

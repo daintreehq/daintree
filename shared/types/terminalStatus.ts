@@ -16,7 +16,9 @@ import type { RestoredSummary } from "../utils/restoreProvenance.js";
  *
  * Neither strictly contains the other, so a client must not prefer one wholesale
  * (#12336): `hasPty` is computed in the pty-host and only the `pty` answer
- * reports it. Read `unavailableFields` on each response rather than assuming a
+ * reports it for a pane that spawned; the `renderer` answer reports `false`
+ * only for a pane restore held (#18171). Read `unavailableFields` on each
+ * response rather than assuming a
  * ranking, and treat a field that drops out when a view opens as unknown, not as
  * a value that stayed true.
  */
@@ -123,8 +125,9 @@ export interface TerminalStatusEntry {
    *
    * Zero is a real reading — none observed in this PTY generation. Absent means
    * the surface could not observe it, which is not zero — except on the
-   * `renderer` answer, which reports zero for any pane it holds, including one
-   * it adopted without ever being told the count. One counter exists and the
+   * `renderer` answer, which reports zero for any pane it holds that spawned,
+   * including one it adopted without ever being told the count; a pane restore
+   * held has no PTY generation and leaves it out (#18171). One counter exists and the
    * pty-host owns it; the `renderer` answer is a cache of what the host has
    * told this view, so it can lag a `pty` answer for the same terminal and can
    * read zero before the first reading reaches it. Compare readings from one

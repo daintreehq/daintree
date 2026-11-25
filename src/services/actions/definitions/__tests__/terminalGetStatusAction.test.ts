@@ -1411,6 +1411,18 @@ describe("terminal.getStatus for a pane restore held (#18171)", () => {
     },
   };
   const live = { id: "live", kind: "terminal", location: "grid", agentState: "working" };
+  const heldRow = {
+    terminalId: "held",
+    agentId: "mistral",
+    agentState: null,
+    hasPty: false,
+    restored: {
+      at: 5_000,
+      disposition: "held",
+      heldReason: "host-ended-uncleanly",
+      lastSeen: { agentState: "waiting", at: 4_000 },
+    },
+  };
 
   function panels(...entries: Array<Record<string, unknown>>) {
     panelStoreMock.getState.mockReturnValue({
@@ -1455,6 +1467,7 @@ describe("terminal.getStatus for a pane restore held (#18171)", () => {
     // The held row reports it, so the envelope can't claim every row lacks it;
     // the live row still leaves the key out rather than guessing.
     expect(mixed.terminals.map((t) => t.terminalId)).toEqual(["held", "live"]);
+    expect(mixed.terminals[0]).toMatchObject(heldRow);
     expect(mixed.unavailableFields).not.toContain("hasPty");
     expect(JSON.parse(JSON.stringify(mixed.terminals[1]))).not.toHaveProperty("hasPty");
     expect(liveOnly.unavailableFields).toContain("hasPty");
@@ -1465,6 +1478,7 @@ describe("terminal.getStatus for a pane restore held (#18171)", () => {
 
     const result = await callGetStatus(setupActions(), { terminalIds: ["held", "gone"] });
 
+    expect(result.terminals[0]).toMatchObject(heldRow);
     expect(result.terminals[0]?.error).toBeUndefined();
     expect(result.terminals[1]).toMatchObject({ terminalId: "gone", error: "Terminal not found" });
   });
@@ -1473,6 +1487,9 @@ describe("terminal.getStatus for a pane restore held (#18171)", () => {
     panels(held, live);
     getSerializedStatesMock.mockResolvedValue(snapshotMap({ live: "$ ok" }));
     terminalClientMock.getSubmissions.mockResolvedValue({ live: { status: "absent" } });
+    terminalClientMock.getOutputActivity.mockResolvedValue({
+      live: { status: "read", lastOutputChangeAt: 7_000 },
+    });
 
     const result = await callGetStatus(setupActions(), {
       terminalIds: ["held", "live"],
@@ -1480,13 +1497,32 @@ describe("terminal.getStatus for a pane restore held (#18171)", () => {
       submissionToken: "tok",
     });
 
-    expect(getSerializedStatesMock).toHaveBeenCalledWith(["live"]);
-    expect(terminalClientMock.getOutputActivity).toHaveBeenCalledWith(["live"]);
-    expect(terminalClientMock.getSubmissions).toHaveBeenCalledWith(["live"], "tok");
-    expect(result.terminals[0]).toMatchObject({ hasPty: false, recentOutput: null });
+    expect(getSerializedStatesMock.mock.calls).toEqual([[["live"]]]);
+    expect(terminalClientMock.getOutputActivity.mock.calls).toEqual([[["live"]]]);
+    expect(terminalClientMock.getSubmissions.mock.calls).toEqual([[["live"], "tok"]]);
+    expect(result.terminals[0]).toMatchObject({ ...heldRow, recentOutput: null });
     expect(result.terminals[0]?.error).toBeUndefined();
     expect(result.terminals[0]?.submission).toBeUndefined();
-    expect(result.terminals[1]?.submission).toEqual({ token: "tok", phase: "unknown" });
+    expect(result.terminals[1]).toMatchObject({
+      lastOutputChangeAt: 7_000,
+      submission: { token: "tok", phase: "unknown" },
+    });
+  });
+
+  it("issues no pty-host read at all for a query of held panes alone", async () => {
+    panels(held);
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["held"],
+      includeOutput: true,
+      submissionToken: "tok",
+    });
+
+    expect(getSerializedStatesMock).not.toHaveBeenCalled();
+    expect(terminalClientMock.getOutputActivity).not.toHaveBeenCalled();
+    expect(terminalClientMock.getSubmissions).not.toHaveBeenCalled();
+    expect(result.terminals[0]).toMatchObject({ ...heldRow, recentOutput: null });
+    expect(result.unavailableFields).toEqual([]);
   });
 
   it("keeps a held row free of a batch failure its live siblings report", async () => {
@@ -1495,6 +1531,7 @@ describe("terminal.getStatus for a pane restore held (#18171)", () => {
 
     const result = await callGetStatus(setupActions(), { includeOutput: true });
 
+    expect(result.terminals[0]).toMatchObject({ ...heldRow, recentOutput: null });
     expect(result.terminals[0]?.error).toBeUndefined();
     expect(result.terminals[1]?.error).toMatch(/output fetch died/);
   });

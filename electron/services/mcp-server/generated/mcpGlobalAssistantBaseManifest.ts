@@ -1516,7 +1516,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               },
               exitCode: {
                 description:
-                  "Set once the process exits, so absence means still running unless listed in `unavailableFields`. Null means killed by a signal with no numeric code.",
+                  "Set once the process exits; absent means running unless listed in `unavailableFields` or the pane is held. Null: killed by a signal with no numeric code.",
                 anyOf: [
                   {
                     type: "integer",
@@ -1664,7 +1664,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               },
               error: {
                 description:
-                  "Set when the terminal was not found, and on every resolved entry when a batched fetch fails; then the status fields are still set and only that fetch's field is missing. Never fails the call.",
+                  "Set when the terminal was not found, and on each entry a failed batched fetch covered; then the status fields are still set and only that fetch's field is missing. Never fails the call.",
                 type: "string",
               },
               hostId: {
