@@ -303,7 +303,8 @@ export class GlobalAssistantService {
     if (this.closed) {
       return Promise.reject(refuse("CANCELLED", "The app is shutting down."));
     }
-    if (this.run || (this.launch && this.launchInFlight())) {
+    // Held by a clear or stop under way: that one decides what runs next.
+    if (this.run || (this.launch && this.launchInFlight()) || this.holds > 0) {
       return Promise.reject(refuse("VALIDATION", "This global assistant session is in use."));
     }
     return this.admit(false, null, agentSessionId);

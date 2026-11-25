@@ -37,6 +37,7 @@ function makeDeps(name: string, overrides: Partial<MockedDeps> = {}) {
     kill: vi.fn(() => {}),
     focusedWindows: vi.fn(() => []),
     keepsConversation: vi.fn(() => false),
+    keptRunning: vi.fn(() => false),
     savePinnedAgent: vi.fn(() => {}),
     coordinates: vi.fn(() => true),
     ...overrides,

@@ -166,6 +166,23 @@ describe("GlobalAssistantService", () => {
       expect(deps.spawn.mock.calls[0]![0].exactResume).toBeUndefined();
     });
 
+    it("leaves a session alone while a clear holds it, so the clear's own start runs", async () => {
+      const revoked = deferred<void>();
+      const { deps } = makeDeps({ revoke: vi.fn(() => revoked.promise) });
+      deps.takeResume.mockResolvedValue(kept);
+      const service = new GlobalAssistantService(deps);
+      await service.ensureSession();
+      deps.takeResume.mockResolvedValue(null);
+      const cleared = service.restart();
+
+      await expect(service.resumeAfterRestart("conv")).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      revoked.resolve();
+      await expect(cleared).resolves.toMatchObject({ phase: "running" });
+      expect(deps.spawn.mock.calls.at(-1)![0].exactResume).toBeUndefined();
+    });
+
     it("says whether it is kept running, and keeps that through a clear but not a stop", async () => {
       const keptRunning = vi.fn(() => true);
       const { deps } = makeDeps({ keptRunning });

@@ -39,6 +39,7 @@ import {
   DEFAULT_ASSISTANT_SLOT,
   isValidAssistantSlot,
 } from "../../../shared/config/assistantSlots.js";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 
 /**
  * Resolve a renderer-supplied slot (#12108). Absent means slot 0 — an older
@@ -701,7 +702,8 @@ export async function handleDiscardConversation(
   /** A clear starts the lane over, still kept running across restarts (#18177). */
   options?: { keepRunningChoice?: boolean }
 ): Promise<void> {
-  if (typeof projectId !== "string" || !projectId) return;
+  // A global session's conversation is its own service's to forget (#18177).
+  if (typeof projectId !== "string" || !projectId || isGlobalAssistantId(projectId)) return;
   if (!ctx.projectId || ctx.projectId !== projectId) {
     console.warn(
       "[help] discardConversation: projectId mismatch — refusing cross-project discard",
@@ -726,7 +728,8 @@ function ownLane(
   rawSlot: unknown,
   what: string
 ): { projectId: string; slot: number } | null {
-  if (typeof projectId !== "string" || !projectId) return null;
+  // A global session is set through its own channel, from a window (#18177).
+  if (typeof projectId !== "string" || !projectId || isGlobalAssistantId(projectId)) return null;
   if (!ctx.projectId || ctx.projectId !== projectId) {
     console.warn(`[help] ${what}: projectId mismatch — refusing a cross-project call`, {
       requested: projectId,

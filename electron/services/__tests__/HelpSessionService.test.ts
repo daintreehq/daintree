@@ -4463,13 +4463,15 @@ describe("HelpSessionService", () => {
           expect(marks.get(lane)).toBe(false);
         });
 
-        it("leaves an old run's end alone once the lane has started another", async () => {
+        it("leaves an old run's end alone once the lane has started another, and follows the new one's", async () => {
           await launchSlot(0, "term-old", "conv-0");
           await service.discardConversation("proj-1", 0, { keepRunningChoice: true });
           await launchSlot(0, "term-new", "conv-1");
 
           service.noteStandingRunEnded("term-old");
           expect(marks.get(lane)).toBe(true);
+          service.noteStandingRunEnded("term-new");
+          expect(marks.get(lane)).toBe(false);
         });
 
         it("follows the PTY client's exits, refused spawns and lost runs, and the agent CLI quitting", async () => {
@@ -4519,9 +4521,10 @@ describe("HelpSessionService", () => {
           await launchSlot(0, "term-0", "conv-0");
           await launchSlot(1, "term-1", "conv-1");
 
-          await service.holdStandingRunsForQuit(new Set(["term-0"]));
+          await service.holdStandingRunsForQuit(new Set(["term-1"]));
           service.noteStandingRunEnded("term-0");
           service.noteStandingRunUnsettled("term-0");
+          service.noteStandingRunEnded("term-1");
 
           expect(Object.fromEntries(marks)).toEqual({
             [lane]: true,
@@ -4529,25 +4532,24 @@ describe("HelpSessionService", () => {
           });
         });
 
-        it("holds every marked run as it is when the quit couldn't snapshot the terminals", async () => {
+        it("holds a run the quit's snapshot didn't see, as one on a shard that didn't answer", async () => {
           await launchSlot(0, "term-0", "conv-0");
 
-          await service.holdStandingRunsForQuit(null);
+          await service.holdStandingRunsForQuit(new Set());
           service.noteStandingRunEnded("term-0");
 
           expect(marks.get(lane)).toBe(true);
         });
 
-        it("marks a fork's run at quit only once the capture names its conversation", async () => {
+        it("never marks a fork's run, even when its quit capture hands back an id", async () => {
           await launchSlot(0, "term-0", "parent-conv", { forkedConversation: true });
           const lanes = service.snapshotLaneTerminals();
-          await service.holdStandingRunsForQuit(new Set(["term-0"]));
+          await service.holdStandingRunsForQuit(new Set());
+
+          await service.noteQuitCapture(lanes.get("term-0")!, "parent-or-fork");
+
           expect(marks.get(lane)).toBe(false);
-
-          await service.noteQuitCapture(lanes.get("term-0")!, "forked-conv");
-
-          expect(marks.get(lane)).toBe(true);
-          expect(backing.get(lane)?.agentSessionId).toBe("forked-conv");
+          expect(backing.get(lane)?.agentSessionId).toBe("parent-or-fork");
         });
 
         it("leaves a run the PTY host replayed unmarked until a capture confirms its conversation", async () => {
@@ -4555,7 +4557,7 @@ describe("HelpSessionService", () => {
           service.noteStandingRunUnsettled("term-0");
           expect(marks.get(lane)).toBe(false);
           const lanes = service.snapshotLaneTerminals();
-          await service.holdStandingRunsForQuit(new Set(["term-0"]));
+          await service.holdStandingRunsForQuit(new Set());
           expect(marks.get(lane)).toBe(false);
 
           await service.noteQuitCapture(lanes.get("term-0")!, "conv-0");
@@ -4567,7 +4569,7 @@ describe("HelpSessionService", () => {
           keptLanes.add(slotKey("proj-1", 1));
           await launchSlot(0, "term-0", "conv-0");
           await launchSlot(1, "term-1", "conv-1");
-          await service.holdStandingRunsForQuit(new Set(["term-0", "term-1"]));
+          await service.holdStandingRunsForQuit(new Set());
 
           await service.discardConversation("proj-1", 0);
           await service.discardConversation("proj-1", 1, { keepRunningChoice: true });
@@ -4596,6 +4598,31 @@ describe("HelpSessionService", () => {
           );
           await service.setLaneKeepRunning("proj-1", 0, false);
           expect(service.isLaneKeptRunning("proj-1", 0)).toBe(false);
+        });
+
+        it("marks nothing when turned on over a fork, a replayed run, or one whose agent quit", async () => {
+          keptLanes.clear();
+          await launchSlot(0, "term-0", "parent", { forkedConversation: true });
+          await launchSlot(1, "term-1", "conv-1");
+          await launchSlot(2, "term-2", "conv-2");
+          service.noteStandingRunUnsettled("term-1");
+          service.noteStandingRunEnded("term-2");
+
+          for (const slot of [0, 1, 2]) await service.setLaneKeepRunning("proj-1", slot, true);
+
+          expect(
+            hibernationStore.setKeepRunning.mock.calls.map(([, , running]) => running)
+          ).toEqual([false, false, false]);
+        });
+
+        it("says whether a kept project lane runs, for the last window's close", async () => {
+          expect(service.hasLiveKeptProjectLane()).toBe(false);
+          await launchSlot(1, "term-1", "conv-1");
+          expect(service.hasLiveKeptProjectLane()).toBe(false);
+          await launchSlot(0, "term-0", "conv-0");
+          expect(service.hasLiveKeptProjectLane()).toBe(true);
+          service.noteStandingRunEnded("term-0");
+          expect(service.hasLiveKeptProjectLane()).toBe(false);
         });
       });
 

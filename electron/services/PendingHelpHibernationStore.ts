@@ -115,8 +115,9 @@ export class PendingHelpHibernationStore {
   private resumeAtLaunch: LaunchResume | null = null;
   // What this launch read back, handed out once by `takeResumeAtLaunch`.
   private loadedResumeAtLaunch: LaunchResume | null = null;
-  // The kept lanes the previous run left running (#18177), handed out with it.
-  private loadedStanding: string[] = [];
+  // The kept lanes the previous run left running (#18177), with the conversation
+  // each pointer named as it loaded, handed out with it.
+  private loadedStanding = new Map<string, string>();
   /** The lanes kept running across restarts, and whether a run of each is live (#18177). */
   private readonly keepRunning = new Map<string, { running: boolean }>();
   // The conversations the entries read back could resume (#16845), as read: a
@@ -127,8 +128,8 @@ export class PendingHelpHibernationStore {
   private filePath: string;
   // Serialize writes so a rapid capture-then-clear can't race on disk.
   private writeChain: Promise<void> = Promise.resolve();
-  // Whether the latest queued write landed: a choice already held is saved only if it did.
-  private lastWrite: Promise<boolean> = Promise.resolve(true);
+  // Whether what is held now failed to reach disk, so a later ask writes it again.
+  private dirty = false;
 
   constructor(filePath?: string) {
     this.filePath = filePath ?? path.join(app.getPath("userData"), FILE_NAME);
@@ -193,7 +194,10 @@ export class PendingHelpHibernationStore {
         const resume = legacyUnslotted ? null : this.readResumeAtLaunch(parsed.resumeAtLaunch);
         if (await this.write()) {
           this.loadedResumeAtLaunch = resume;
-          this.loadedStanding = standing;
+          for (const slotKey of standing) {
+            const agentSessionId = this.entries.get(slotKey)?.agentSessionId;
+            if (agentSessionId) this.loadedStanding.set(slotKey, agentSessionId);
+          }
         }
       }
     } catch (err) {
@@ -257,22 +261,21 @@ export class PendingHelpHibernationStore {
 
   /**
    * What the previous run left to resume, once per launch; null after, and
-   * when nothing. A kept lane comes back by the conversation its pointer names
-   * now, and only while it is still kept: none, or one whose id never came
-   * back, stays down.
+   * when nothing. A kept lane comes back by the conversation its pointer named
+   * as it loaded, only while it still names it and the lane is still kept:
+   * one started over since, or whose id never came back, stays down.
    */
   takeResumeAtLaunch(): LaunchResumeBatch | null {
     const lanes: Record<string, string> = { ...this.loadedResumeAtLaunch?.lanes };
     const standing = new Set<string>();
-    for (const slotKey of this.loadedStanding) {
+    for (const [slotKey, agentSessionId] of this.loadedStanding) {
       if (!this.keepRunning.has(slotKey) || lanes[slotKey] !== undefined) continue;
-      const agentSessionId = this.entries.get(slotKey)?.agentSessionId;
-      if (!agentSessionId) continue;
+      if (this.entries.get(slotKey)?.agentSessionId !== agentSessionId) continue;
       lanes[slotKey] = agentSessionId;
       standing.add(slotKey);
     }
     this.loadedResumeAtLaunch = null;
-    this.loadedStanding = [];
+    this.loadedStanding.clear();
     return Object.keys(lanes).length > 0 ? { lanes, standing } : null;
   }
 
@@ -283,14 +286,25 @@ export class PendingHelpHibernationStore {
 
   /**
    * Keep a lane running across restarts, or stop keeping it (#18177), with
-   * whether a run of it is live now. Resolves whether the choice reached disk.
+   * whether a run of it is live now. Resolves whether the choice reached disk;
+   * one that didn't is undone here too, so what is held is what a crash would
+   * find. Asked again for a choice already held, a failed write is retried.
    */
-  setKeepRunning(slotKey: string, keep: boolean, running = false): Promise<boolean> {
+  async setKeepRunning(slotKey: string, keep: boolean, running = false): Promise<boolean> {
     const before = this.keepRunning.get(slotKey);
-    if (keep ? before?.running === running : before === undefined) return this.lastWrite;
-    if (keep) this.keepRunning.set(slotKey, { running });
+    if (keep ? before?.running === running : before === undefined) {
+      return this.dirty ? this.write() : true;
+    }
+    const applied = keep ? { running } : undefined;
+    if (applied) this.keepRunning.set(slotKey, applied);
     else this.keepRunning.delete(slotKey);
-    return this.write();
+    const saved = await this.write();
+    // Undone only while nothing changed it again meanwhile.
+    if (!saved && this.keepRunning.get(slotKey) === applied) {
+      if (before) this.keepRunning.set(slotKey, before);
+      else this.keepRunning.delete(slotKey);
+    }
+    return saved;
   }
 
   /**
@@ -313,12 +327,14 @@ export class PendingHelpHibernationStore {
    * isn't kept is left out, and nothing is written when nothing changed.
    */
   setRunning(running: Record<string, boolean>): Promise<void> {
-    return this.markRunning(running) ? this.persist() : this.writeChain.catch(() => undefined);
+    return this.markRunning(running) || this.dirty
+      ? this.persist()
+      : this.writeChain.catch(() => undefined);
   }
 
-  /** Resolves once every queued write has landed. */
+  /** Resolves once every queued write has landed, writing again what failed to. */
   flush(): Promise<void> {
-    return this.writeChain.catch(() => undefined);
+    return this.dirty ? this.persist() : this.writeChain.catch(() => undefined);
   }
 
   /**
@@ -471,15 +487,18 @@ export class PendingHelpHibernationStore {
         resilientAtomicWriteFile(this.filePath, JSON.stringify(snapshot, null, 2) + "\n", "utf-8", {
           mode: 0o600,
         }).then(
-          () => true,
+          () => {
+            this.dirty = false;
+            return true;
+          },
           (err: unknown) => {
+            this.dirty = true;
             console.warn("[PendingHelpHibernationStore] Failed to persist:", err);
             return false;
           }
         )
       );
     this.writeChain = work.then(() => undefined);
-    this.lastWrite = work;
     return work;
   }
 }

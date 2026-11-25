@@ -279,9 +279,13 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
       start: async (request) => {
         wanted.push(request.stillWanted?.());
         if (request.slot === 0) {
-          // Turned off while it comes back: it stands down before its spawn.
+          // Turned off while it comes back: it stands down before its spawn, as the launcher does.
           stillKept.delete(kept);
           wanted.push(request.stillWanted?.());
+          if (request.stillWanted?.() === false) {
+            await deps.start(request);
+            return { status: "refused", reason: "stood-down" };
+          }
         }
         return deps.start(request);
       },
@@ -297,6 +301,7 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
 
     expect(outcomes).toEqual(
       expect.arrayContaining([
+        { projectId: "p1", slot: 0, status: "refused", reason: "stood-down" },
         { projectId: "p1", slot: 1, status: "skipped", reason: "no-longer-kept" },
         { projectId: "p1", slot: 2, status: "resumed" },
       ])

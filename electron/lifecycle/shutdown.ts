@@ -78,6 +78,7 @@ import {
   isExitConfirmationPending,
   setExitConfirmationPending,
 } from "./attachedShells.js";
+import { loadedHelpSessionService } from "../services/helpSessionRuntime.js";
 import {
   noteChildProcessGone,
   noteRendererGone,
@@ -161,7 +162,10 @@ export function routeLastWindowCloseThroughQuit(): boolean {
   if (getActiveShutdown() || isSignalShutdown()) return false;
   if (isConfirmingQuit || isExitConfirmationPending()) return true;
   const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
-  if (activeCount === 0 && getAttachedShells().length === 0) return false;
+  // A lane kept running across restarts must still be running when the quit
+  // fixes which come back, not ended first by this window's views going (#18177).
+  const keptLaneLive = loadedHelpSessionService()?.hasLiveKeptProjectLane() === true;
+  if (activeCount === 0 && getAttachedShells().length === 0 && !keptLaneLive) return false;
   setImmediate(() => app.quit());
   return true;
 }
@@ -532,11 +536,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         string,
         Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[number]
       >();
-      let terminalsSnapshotted = false;
       try {
         const allTerminals = await ptyClient.getAllTerminalsAsync();
         terminalInfoById = new Map(allTerminals.map((t) => [t.id, t]));
-        terminalsSnapshotted = true;
       } catch {
         // Snapshot is best-effort; journaling below skips when info is absent.
       }
@@ -561,14 +563,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         assistantLanes = helpSessions.snapshotLaneTerminals();
         // The lanes kept running across restarts that come back after this
         // quit, fixed before the kill whose exits would otherwise read as
-        // theirs (#18177): any whose process is alive now. Landed by the
-        // store flush in `revokeAll`.
-        const alive = terminalsSnapshotted
-          ? new Set(
-              [...terminalInfoById.values()].filter((t) => t.isExited !== true).map((t) => t.id)
-            )
-          : null;
-        helpSessions.holdStandingRunsForQuit(alive).catch((err: unknown) => {
+        // theirs (#18177): all but those the snapshot saw exited. One missing
+        // from it may sit on a shard that didn't answer, and a run that really
+        // ended was unmarked as it did. Landed by the store flush in `revokeAll`.
+        const exited = new Set(
+          [...terminalInfoById.values()].filter((t) => t.isExited === true).map((t) => t.id)
+        );
+        helpSessions.holdStandingRunsForQuit(exited).catch((err: unknown) => {
           console.warn("[MAIN] Recording the kept assistant lanes at quit failed:", err);
         });
       } catch (err) {

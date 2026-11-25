@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IpcContext } from "../../types.js";
+import { GLOBAL_ASSISTANT_ID as global } from "../../../../shared/config/globalAssistant.js";
 
 const service = vi.hoisted(() => ({
   kept: new Set<string>(),
@@ -51,6 +52,18 @@ describe("keeping a lane running across restarts over IPC (#18177)", () => {
 
     expect(service.setLaneKeepRunning).not.toHaveBeenCalled();
     expect(service.kept.has("p2:0")).toBe(true);
+  });
+
+  it("refuses a global session through the project channels, whatever the sender's binding says", async () => {
+    service.kept.add(`${global}:0`);
+
+    await expect(handleGetKeepRunning(viewOf(global), global, 0)).resolves.toBe(false);
+    await expect(handleSetKeepRunning(viewOf(global), global, 0, false)).resolves.toBe(false);
+    await handleDiscardConversation(viewOf(global), global, 0);
+
+    expect(service.setLaneKeepRunning).not.toHaveBeenCalled();
+    expect(service.discardConversation).not.toHaveBeenCalled();
+    expect(service.kept.has(`${global}:0`)).toBe(true);
   });
 
   it("keeps the choice through a clear, and leaves the default to a Stop", async () => {

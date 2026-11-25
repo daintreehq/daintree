@@ -729,7 +729,7 @@ describe("HelpSessionController — newSession on a paused lane (#14981)", () =>
 
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
     // Starting the lane over keeps it running across restarts if it was (#18177).
-    expect(window.electron.help.discardConversation).toHaveBeenCalledWith("proj-1", 0, {
+    expect(window.electron.help.discardConversation).toHaveBeenCalledExactlyOnceWith("proj-1", 0, {
       keepRunningChoice: true,
     });
     expect(helpPanelState.setTerminal).toHaveBeenCalledWith(

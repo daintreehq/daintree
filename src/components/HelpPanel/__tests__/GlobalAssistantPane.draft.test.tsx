@@ -81,6 +81,7 @@ const running = (inputOwner: string, inputEpoch: number): GlobalAssistantView =>
   phase: "running",
   pinnedAgentId: null,
   coordinating: false,
+  keepRunning: false,
   occupied: true,
   generation: 1,
   agentId: "claude",

@@ -792,7 +792,7 @@ describe("PendingHelpHibernationStore", () => {
       expect(onDisk.keepRunning).toEqual({ [kept]: { running: true } });
     });
 
-    it("writes nothing for a mark that doesn't change", async () => {
+    it("writes nothing for a mark that doesn't change, and one write for one that does", async () => {
       const store = new PendingHelpHibernationStore(filePath);
       await store.load();
       await store.setKeepRunning(kept, true, true);
@@ -800,14 +800,62 @@ describe("PendingHelpHibernationStore", () => {
       await store.setRunning({ [kept]: true, [sibling]: false });
       expect(await store.setKeepRunning(kept, true, true)).toBe(true);
       expect(writes.count).toBe(before);
+
+      await store.setRunning({ [kept]: false, [sibling]: true });
+      expect(writes.count).toBe(before + 1);
     });
 
-    it("says a choice wasn't saved when its write failed", async () => {
+    it("undoes a choice that wasn't saved, and writes again what failed when asked again", async () => {
       const store = new PendingHelpHibernationStore(filePath);
       await store.load();
+      await store.set(kept, entry("conv-0"));
+      await store.setKeepRunning(kept, true, true);
+
       writes.fail = true;
-      expect(await store.setKeepRunning(kept, true)).toBe(false);
-      expect(await store.setKeepRunning(kept, true)).toBe(false);
+      expect(await store.setKeepRunning(kept, false)).toBe(false);
+      expect(store.isKeptRunning(kept)).toBe(true);
+      expect(await store.setKeepRunning(sibling, true)).toBe(false);
+      expect(store.isKeptRunning(sibling)).toBe(false);
+
+      // A mark changed while the disk failed is written by the next ask that changes nothing.
+      await store.setRunning({ [kept]: false });
+      writes.fail = false;
+      const before = writes.count;
+      expect(await store.setKeepRunning(kept, true, false)).toBe(true);
+      expect(writes.count).toBe(before + 1);
+      const onDisk = JSON.parse(await fs.readFile(filePath, "utf-8")) as {
+        keepRunning?: Record<string, unknown>;
+      };
+      expect(onDisk.keepRunning).toEqual({ [kept]: {} });
+    });
+
+    it("lands what failed to write when flushed", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.setKeepRunning(kept, true, true);
+      writes.fail = true;
+      await store.setRunning({ [kept]: false });
+      writes.fail = false;
+
+      await store.flush();
+
+      const onDisk = JSON.parse(await fs.readFile(filePath, "utf-8")) as {
+        keepRunning?: Record<string, unknown>;
+      };
+      expect(onDisk.keepRunning).toEqual({ [kept]: {} });
+    });
+
+    it("leaves down a kept lane started on another conversation since this launch read it", async () => {
+      const store = new PendingHelpHibernationStore(filePath);
+      await store.load();
+      await store.set(kept, entry("conv-0"));
+      await store.setKeepRunning(kept, true, true);
+
+      const next = new PendingHelpHibernationStore(filePath);
+      await next.load();
+      // A view started the lane on another conversation before the resume took its batch.
+      await next.set(kept, entry("conv-new"));
+      expect(next.takeResumeAtLaunch()).toBeNull();
     });
 
     it("drops the choice with the conversation unless the lane starts over", async () => {
