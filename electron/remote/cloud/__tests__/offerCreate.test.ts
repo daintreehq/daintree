@@ -152,7 +152,12 @@ class FakeOffers {
   /** An order placed outside any request this run saw: a lost one landing late. */
   commitLate(request: Pick<ProviderCreateRequest, "labels" | "idempotencyKey">): string {
     const id = `dseq-${++this.next}`;
-    this.orders.set(id, { ...request, state: "open", offers: [...this.offersOnPlace], machine: null });
+    this.orders.set(id, {
+      ...request,
+      state: "open",
+      offers: [...this.offersOnPlace],
+      machine: null,
+    });
     return id;
   }
 
@@ -272,7 +277,11 @@ function offerProvider(api: FakeOffers): CloudProvider {
       api.deleted.push(resourceId);
       api.machines.delete(resourceId);
     }),
-    authorizeSsh: async () => ({ user: "root", endpoint: { host: "203.0.113.9", port: 30022 }, hostKey: null }),
+    authorizeSsh: async () => ({
+      user: "root",
+      endpoint: { host: "203.0.113.9", port: 30022 },
+      hostKey: null,
+    }),
     offerCreate: {
       placeOrder: api.placeOrder,
       findOrders: api.findOrders,
@@ -763,7 +772,9 @@ describe("offer-based create (#18230)", () => {
       env.removeHost(hostId);
       await vi.waitFor(() => expect(env.api.closeOrder).toHaveBeenCalledTimes(1));
       expect(env.store.bindings()).toEqual([]);
-      expect(env.store.createOrders()).toMatchObject([{ state: "close", orderIds: [choice.order.id] }]);
+      expect(env.store.createOrders()).toMatchObject([
+        { state: "close", orderIds: [choice.order.id] },
+      ]);
       env.clock.at += 61_000;
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(() => expect(env.api.closeOrder).toHaveBeenCalledTimes(2));

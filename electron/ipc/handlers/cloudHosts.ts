@@ -22,7 +22,10 @@ import type {
   CloudWorktreeCleanupRequest,
   CloudWorktreeRef,
 } from "../../../shared/types/cloudHosts.js";
-import type { CloudOfferChoiceRequest, CloudOrderRequest } from "../../../shared/types/ipc/cloudHosts.js";
+import type {
+  CloudOfferChoiceRequest,
+  CloudOrderRequest,
+} from "../../../shared/types/ipc/cloudHosts.js";
 
 const EMPTY_SNAPSHOT: CloudHostsSnapshot = { providers: [], accounts: [], hosts: [] };
 

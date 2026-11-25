@@ -669,10 +669,7 @@ function machineOf(binding: StoredCloudBinding): CloudMachineState {
  * `pending`, unseen but inside its settle window.
  */
 type OrderSettlement =
-  | { kind: "closed" }
-  | { kind: "leased"; bound: boolean }
-  | { kind: "open" }
-  | { kind: "pending" };
+  { kind: "closed" } | { kind: "leased"; bound: boolean } | { kind: "open" } | { kind: "pending" };
 
 const ORDER_GONE = "That order isn't waiting on a choice any more. Check the host and try again.";
 
@@ -1791,9 +1788,9 @@ export class CloudHostLifecycle {
       if (signal.aborted) throw error;
       // The answer was lost, so the order may still have been placed: look for it now, and
       // the keeper looks again until it is found or can't have been placed.
-      const outcome = await this.settleOrder(record.id).catch(
-        (): OrderSettlement => ({ kind: "pending" })
-      );
+      const outcome = await this.settleOrder(record.id).catch((): OrderSettlement => ({
+        kind: "pending",
+      }));
       if (outcome.kind === "open") return;
       this.recordError(binding.id, {
         code: outcome.kind === "pending" ? "outcome-unknown" : "failed",

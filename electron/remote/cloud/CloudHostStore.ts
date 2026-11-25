@@ -779,7 +779,8 @@ function readCreateOrder(raw: unknown): StoredCreateOrder | null {
   const idempotencyKey = nonEmpty(value.idempotencyKey);
   const labels = readLabels(value.labels);
   if (!id || !bindingId || !accountId || !providerId || !idempotencyKey || !labels) return null;
-  if (!isCloudProviderId(providerId) || !CREATE_ORDER_STATES.has(value.state as string)) return null;
+  if (!isCloudProviderId(providerId) || !CREATE_ORDER_STATES.has(value.state as string))
+    return null;
   const state = value.state as StoredCreateOrder["state"];
   const orderIds = value.orderIds === null ? null : readStringList(value.orderIds);
   if (orderIds === null && value.orderIds !== null) return null;
@@ -1017,7 +1018,9 @@ export class CloudHostStore {
 
   putCreateOrder(order: StoredCreateOrder): void {
     this.mutateOrders((orders) => {
-      const index = orders.findIndex((entry) => (entry as { id?: unknown } | null)?.id === order.id);
+      const index = orders.findIndex(
+        (entry) => (entry as { id?: unknown } | null)?.id === order.id
+      );
       if (index < 0) return [...orders, order];
       const next = [...orders];
       next[index] = order;
