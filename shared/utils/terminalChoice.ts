@@ -262,6 +262,35 @@ export function endsOnFooteredChoice(
 }
 
 /**
+ * Whether the last thing drawn on a screen is a numbered selection list with
+ * a note of its CLI's own under it (#18167): the note is the last paragraph,
+ * its rows joined by single spaces so any wrap width reads the same, and the
+ * block right above it, past blank rows only, is the list. A note quoted in
+ * prose, or one with other output between it and a list, never counts.
+ */
+export function endsOnNotedChoice(rawLines: readonly string[], notes: readonly RegExp[]): boolean {
+  if (notes.length === 0) return false;
+  const lines = rawLines.map(unframe);
+  let end = lines.length;
+  while (end > 0 && lines[end - 1]!.trim() === "") end--;
+  let noteTop = end;
+  while (noteTop > 0 && lines[noteTop - 1]!.trim() !== "") noteTop--;
+  if (noteTop === end) return false;
+  const note = lines
+    .slice(noteTop, end)
+    .map((row) => row.trim())
+    .join(" ");
+  if (!notes.some((pattern) => pattern.test(note))) return false;
+  let listEnd = noteTop;
+  while (listEnd > 0 && lines[listEnd - 1]!.trim() === "") listEnd--;
+  if (listEnd === noteTop) return false;
+  const list = readChoiceList(lines.slice(0, listEnd), false);
+  if (list === null) return false;
+  // The list's own block must run down to the gap over the note.
+  return lines.slice(list.rows[list.cursor]!, listEnd).every((row) => row.trim() !== "");
+}
+
+/**
  * Whether the last rows drawn on a screen are a selection dialog, however
  * many blank rows lie under them (#18014). A pane whose content stops short of
  * its bottom, as a freshly started agent's trust prompt does, leaves the
