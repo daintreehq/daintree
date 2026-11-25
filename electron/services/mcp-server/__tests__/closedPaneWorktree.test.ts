@@ -83,34 +83,43 @@ describe("readClosingAgentPaneFrom (#18173)", () => {
     expect(launchOf).not.toHaveBeenCalled();
   });
 
-  it("falls back on the launch facts when the host has no record or doesn't answer", async () => {
-    const pane = { terminalId: "t1", projectId: "p1", worktreeId: "/wt/launch" };
+  it("falls back on the launch facts when the host has no record of the pane", async () => {
+    const launchOf = vi.fn(() => launch);
+    expect(await readClosingAgentPaneFrom("t1", async () => null, launchOf)).toEqual({
+      terminalId: "t1",
+      projectId: "p1",
+      worktreeId: "/wt/launch",
+    });
+    expect(launchOf).toHaveBeenCalledWith("t1");
     expect(
       await readClosingAgentPaneFrom(
         "t1",
         async () => null,
-        () => launch
-      )
-    ).toEqual(pane);
-    expect(
-      await readClosingAgentPaneFrom(
-        "t1",
-        async () => {
-          throw new Error("TIMEOUT");
-        },
-        () => launch
-      )
-    ).toEqual(pane);
-    // Nothing on this host knows the id: not an agent pane it can speak for.
-    expect(
-      await readClosingAgentPaneFrom(
-        "t1",
-        async () => {
-          throw new Error("TIMEOUT");
-        },
         () => undefined
       )
     ).toBeNull();
+  });
+
+  it("says a pane main launched is unreadable when the host doesn't answer, never its launch facts", async () => {
+    const timedOut = async () => {
+      throw new Error("TIMEOUT");
+    };
+    const launchOf = vi.fn(() => launch);
+    // Another run may hold the id by now, so its launch facts aren't read.
+    expect(await readClosingAgentPaneFrom("t1", timedOut, launchOf)).toEqual({
+      terminalId: "t1",
+      unread: true,
+    });
+    expect(launchOf).toHaveBeenCalledWith("t1");
+    // A shell launch may be running an agent started by hand.
+    expect(
+      await readClosingAgentPaneFrom("t1", timedOut, () => ({
+        facts: { projectId: "p1", worktreeId: "/wt/launch" },
+        detectedAgentIds: [],
+      }))
+    ).toEqual({ terminalId: "t1", unread: true });
+    // Nothing main launched, such as a browser panel: no worktree to speak of.
+    expect(await readClosingAgentPaneFrom("t1", timedOut, () => undefined)).toBeNull();
   });
 });
 

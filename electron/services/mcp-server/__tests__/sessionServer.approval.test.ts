@@ -655,6 +655,7 @@ describe("assistant close approval (#12881)", () => {
         worktree: observed,
       });
       expect(result.structuredContent).toEqual({ closedIds: ["t-own"], worktree: observed });
+      expect(deps.readClosedPaneWorktrees).toHaveBeenCalledTimes(1);
       expect(deps.readClosedPaneWorktrees).toHaveBeenCalledWith(
         [{ projectId: undefined, worktreeId: "/wt/t-own" }],
         expect.anything()

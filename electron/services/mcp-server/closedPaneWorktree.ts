@@ -72,9 +72,11 @@ export function closingAgentPaneFromLaunch(
 
 /**
  * The agent pane a close names, from the host's record of it, or from the
- * launch facts main kept when the host has no record or didn't answer in
- * time: a host that is slow says nothing of whether the pane ran an agent,
- * and git can be read without it. Never rejects.
+ * launch facts main kept when the host has no record: the host drops the
+ * record of an agent that exited on an error. A host that didn't answer in
+ * time can't say what runs under the id now, so a pane main launched there
+ * is unreadable, and anything main never launched, such as a browser panel,
+ * has no worktree to speak of. Never rejects.
  */
 export async function readClosingAgentPaneFrom(
   terminalId: string,
@@ -83,7 +85,12 @@ export async function readClosingAgentPaneFrom(
     terminalId: string
   ) => Pick<LedgerEntrySnapshot, "facts" | "detectedAgentIds"> | undefined
 ): Promise<ClosingAgentPane | null> {
-  const record = await readRecord(terminalId).catch(() => null);
+  let record: ClosingPaneRecord | null;
+  try {
+    record = await readRecord(terminalId);
+  } catch {
+    return launchOf(terminalId) !== undefined ? { terminalId, unread: true } : null;
+  }
   return record !== null
     ? closingAgentPane(terminalId, record)
     : closingAgentPaneFromLaunch(terminalId, launchOf(terminalId));
@@ -91,19 +98,20 @@ export async function readClosingAgentPaneFrom(
 
 /**
  * The pane a close reached, as captured, unless the capture is of another
- * project's run: a pane its view keeps after its agent exited frees the id
- * on the host, and a launch in another project may take it. That record
- * says nothing of the pane closed here, so its worktree reads as unreadable.
+ * workspace's run: a panel with no process, or one its view keeps after its
+ * agent exited, leaves the id free on the host, and a launch elsewhere may
+ * take it. That record says nothing of the pane closed here, so its
+ * worktree reads as unreadable.
  */
 export function closedPaneOf(
   pane: ClosingAgentPane | null,
-  closedInProject: string | undefined
+  closedInWorkspace: string | undefined
 ): ClosingAgentPane | null {
   if (pane === null || pane.unread === true) return pane;
   if (
-    closedInProject !== undefined &&
+    closedInWorkspace !== undefined &&
     pane.projectId !== undefined &&
-    pane.projectId !== closedInProject
+    pane.projectId !== closedInWorkspace
   ) {
     return { terminalId: pane.terminalId, unread: true };
   }

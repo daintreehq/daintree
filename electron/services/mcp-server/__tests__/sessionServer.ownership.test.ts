@@ -1020,18 +1020,57 @@ describe("session-scoped resource ownership (#11909)", () => {
         expect(recordFails.deps.readClosedPaneWorktrees).not.toHaveBeenCalled();
       });
 
-      it("reads another project's run under the same id as unreadable, never as the pane closed", async () => {
-        const readClosedPaneWorktrees = worktreeReader(() => [observed(9)]);
+      it.each([
+        ["project", "project-a"],
+        ["scratch", "scratch-a"],
+      ] as const)(
+        "reads another workspace's run under the same id as unreadable, from a %s view",
+        async (kind, workspaceId) => {
+          const readClosedPaneWorktrees = worktreeReader(() => [observed(9)]);
+          const sessionId = `s-facts-other-${kind}`;
+          const { store, server } = harness(
+            sessionId,
+            {},
+            {
+              // The view that ran the close is this workspace's; the host's
+              // record under the id is a run project B launched since.
+              readClosingAgentPane: async (terminalId) => ({
+                terminalId,
+                projectId: "project-b",
+                worktreeId: "/wt/b",
+              }),
+              readClosedPaneWorktrees,
+              dispatchAction: vi.fn(async (id: string, args: unknown) => ({
+                ...(await closeEcho(id, args)),
+                dispatchedWorkspace: { kind, workspaceId, workspacePath: "/repo/a" },
+              })),
+            }
+          );
+          store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+
+          const result = await callTool(server, {
+            name: "terminal.closeOwned",
+            arguments: { terminalId: "terminal-1" },
+          });
+
+          expect(payloadOf(result)).toEqual({
+            closedIds: ["terminal-1"],
+            worktree: { kind: "unreadable" },
+          });
+          expect(readClosedPaneWorktrees).not.toHaveBeenCalled();
+        }
+      );
+
+      it("reads the pane's worktree when the view that closed it is its own", async () => {
+        const readClosedPaneWorktrees = worktreeReader(() => [observed(2)]);
         const { store, server } = harness(
-          "s-facts-other-project",
+          "s-facts-same-project",
           {},
           {
-            // The view that ran the close is project A's; the host's record
-            // under the id is a run another project launched since.
             readClosingAgentPane: async (terminalId) => ({
               terminalId,
-              projectId: "project-b",
-              worktreeId: "/wt/b",
+              projectId: "project-a",
+              worktreeId: "/wt/a",
             }),
             readClosedPaneWorktrees,
             dispatchAction: vi.fn(async (id: string, args: unknown) => ({
@@ -1044,7 +1083,7 @@ describe("session-scoped resource ownership (#11909)", () => {
             })),
           }
         );
-        store.resourceOwnership.record("s-facts-other-project", [
+        store.resourceOwnership.record("s-facts-same-project", [
           { kind: "terminal", id: "terminal-1" },
         ]);
 
@@ -1053,11 +1092,8 @@ describe("session-scoped resource ownership (#11909)", () => {
           arguments: { terminalId: "terminal-1" },
         });
 
-        expect(payloadOf(result)).toEqual({
-          closedIds: ["terminal-1"],
-          worktree: { kind: "unreadable" },
-        });
-        expect(readClosedPaneWorktrees).not.toHaveBeenCalled();
+        expect(payloadOf<{ worktree: unknown }>(result).worktree).toEqual(observed(2));
+        expect(readClosedPaneWorktrees).toHaveBeenCalledTimes(1);
       });
 
       it("reads nothing when the close didn't close the pane it named", async () => {

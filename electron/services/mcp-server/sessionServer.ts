@@ -4357,14 +4357,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             closingId !== undefined &&
             dispatched.result.ok &&
             closedIdsInclude(dispatched.result.result, closingId);
-          const closedInProject =
-            dispatched.dispatchedWorkspace?.kind === "project"
-              ? dispatched.dispatchedWorkspace.workspaceId
-              : undefined;
+          // A scratch workspace's id too: a pane recorded under any other
+          // workspace isn't the one this view closed.
+          const closedInWorkspace = dispatched.dispatchedWorkspace?.workspaceId;
           const readClosedPane = async (
             capture: Promise<ClosingAgentPane | null>
           ): Promise<WorktreeLocalWork | undefined> => {
-            const pane = closedPaneOf(await capture, closedInProject);
+            const pane = closedPaneOf(await capture, closedInWorkspace);
             if (pane === null) return undefined;
             if (closedPanes !== undefined) {
               closedPanes.set(pane.terminalId, pane);
