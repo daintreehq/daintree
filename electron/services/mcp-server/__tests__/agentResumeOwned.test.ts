@@ -162,7 +162,7 @@ describe("agent.resumeOwned in main (#16341)", () => {
       "refused",
       {
         status: "refused",
-        reason: "conversation-not-found",
+        reason: "no-conversation",
         message: "No Claude conversation for this session is in $HOME/.claude/projects.",
       },
     ],

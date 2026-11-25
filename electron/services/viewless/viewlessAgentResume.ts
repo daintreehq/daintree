@@ -151,7 +151,7 @@ const inFlight = new Map<
  * conversation: an agent that can't reopen one by id is refused. Nor to a
  * new one: a Claude conversation the CLI never wrote fails the spawn
  * (`exactResume`) rather than starting afresh under its id, and is refused as
- * `conversation-not-found`, naming the store that lacked it.
+ * `no-conversation`, naming the store that lacked it.
  *
  * A live pane of the project already holding the session is returned instead
  * of a second agent on one transcript, wherever it is filed (#18009), as
@@ -402,7 +402,7 @@ async function launchResumedPane(
   } catch (err) {
     const message = formatErrorMessage(err, "unknown");
     if ((err as { code?: unknown } | null)?.code === "CLAUDE_CONVERSATION_NOT_FOUND") {
-      return refused("conversation-not-found", message);
+      return refused("no-conversation", message);
     }
     console.warn("[Viewless] Resume launch failed:", message);
     return refused("spawn-failed", `${NOT_STARTED}: ${message}`);

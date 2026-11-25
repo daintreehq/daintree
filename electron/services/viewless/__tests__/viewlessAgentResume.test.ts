@@ -758,7 +758,7 @@ describe("resumeAgentSessionAsPane", () => {
       return base(projectId, channel, args);
     });
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
-    expect(result).toEqual({ status: "refused", reason: "conversation-not-found", message });
+    expect(result).toEqual({ status: "refused", reason: "no-conversation", message });
     expect(store.read()?.terminals ?? []).toHaveLength(0);
   });
 
