@@ -110,6 +110,81 @@ function coded(status: number, code: string, message: string): Response {
   });
 }
 
+export type FakeAkashLeaseState = "active" | "insufficient_funds" | "closed";
+
+export interface FakeAkashLease {
+  provider: string;
+  gseq: number;
+  oseq: number;
+  bseq: number;
+  state: FakeAkashLeaseState;
+  /** uact per block, as decimal text. */
+  price: string;
+  createdHeight: number;
+  /** Where the provider forwards the service's port 22 now; null while it reports nothing. */
+  forwarded: { host: string | null; externalPort: number } | null;
+}
+
+export interface FakeAkashBid {
+  provider: string;
+  gseq: number;
+  oseq: number;
+  bseq: number;
+  state: "open" | "active" | "lost" | "closed";
+  /** Per block, as decimal text. */
+  price: string;
+  denom: string;
+}
+
+export interface FakeAkashDeployment {
+  owner: string;
+  dseq: string;
+  organizationId: string;
+  projectId: string;
+  name: string | null;
+  state: "active" | "closed";
+  createdHeight: number;
+  groupState: "open" | "paused" | "insufficient_funds" | "closed";
+  /** The SDL as a JSON object, as it was sent. */
+  definition: unknown;
+  secretEnv: unknown;
+  bids: FakeAkashBid[];
+  leases: FakeAkashLease[];
+}
+
+/** Who an account request comes from, once its key and project are checked. */
+interface FakeAkashCaller {
+  organizationId: string;
+  owner: string;
+  projectIds: string[];
+  canDeploy: (projectId: string) => boolean;
+  scoped: string | null;
+}
+
+/**
+ * Console's own figures, from akash-network/console at
+ * 201f4e89d3d5b97ccf98403008c49e778f4c2161: apps/api/src/utils/constants.ts
+ * L4-L7 (6 s blocks, 30.437-day months) and
+ * apps/api/src/deployment/services/deployment-reader/deployment-reader.service.ts
+ * L661 (each lease's monthly cost, rounded to a whole udenom).
+ */
+const CONSOLE_AVERAGE_BLOCK_TIME = 6;
+const CONSOLE_AVERAGE_DAYS_IN_MONTH = 30.437;
+const CONSOLE_BLOCKS_IN_A_MONTH =
+  (CONSOLE_AVERAGE_DAYS_IN_MONTH * 24 * 60 * 60) / CONSOLE_AVERAGE_BLOCK_TIME;
+
+/** A lease's monthly cost as `GET /v1/deployment/{owner}/{dseq}` reports it. */
+export function consoleMonthlyCostUDenom(pricePerBlock: string): number {
+  return Math.round(parseFloat(pricePerBlock) * CONSOLE_BLOCKS_IN_A_MONTH);
+}
+
+/** The managed wallet an organization's deployments are owned by. */
+export function fakeAkashWallet(organizationId: string): string {
+  return `akash1wallet${organizationId.replace(/-/g, "").slice(0, 24)}`;
+}
+
+const BLOCK_MS = CONSOLE_AVERAGE_BLOCK_TIME * 1000;
+
 export class FakeAkashConsole {
   readonly organizations: FakeAkashOrganization[] = [];
   readonly projects: FakeAkashProject[] = [];
@@ -121,6 +196,18 @@ export class FakeAkashConsole {
   private readonly holds: FakeAkashMatch[] = [];
   /** The regions placement options list; null lists every region with a count. */
   placementRegions: string[] | null = null;
+  readonly deployments: FakeAkashDeployment[] = [];
+  /** The chain's height now; each order and lease is a block later. */
+  height = 21_000_000;
+  /** When block 0 was made, so the height now reads as now. */
+  readonly blockZeroMs = Date.now() - this.height * BLOCK_MS;
+  /** The dseq the next order gets instead of the height, when set. */
+  nextDseq: string | null = null;
+  /** An active search spanning more deployments than this is refused with 422. */
+  searchCap = Number.POSITIVE_INFINITY;
+  /** Each provider's ingress host, as a lease reports it; unnamed ones get one from their address. */
+  readonly ingressHosts = new Map<string, string | null>();
+  private nextExternalPort = 31_022;
 
   constructor(readonly baseUrl = "https://console-api.akash.test/v1") {}
 
@@ -175,12 +262,22 @@ export class FakeAkashConsole {
       if (outcome instanceof Error) throw outcome;
       return outcome;
     }
-    return this.route(method, path, headers, body);
+    return this.route(method, path, headers, body, url.searchParams);
   };
 
-  private route(method: string, path: string, headers: Headers, body: unknown): Response {
+  private route(
+    method: string,
+    path: string,
+    headers: Headers,
+    body: unknown,
+    query: URLSearchParams
+  ): Response {
     if (method === "GET" && path === "/placement-options") return this.placementOptions();
     if (method === "POST" && path === "/bid-screening") return this.screen(body);
+    const details = /^\/deployment\/([^/]+)\/(\d+)$/.exec(path);
+    if (method === "GET" && details) return this.deploymentDetails(details[1]!, details[2]!);
+    const block = /^\/blocks\/(\d+)$/.exec(path);
+    if (method === "GET" && block) return this.block(Number(block[1]));
 
     const key = this.keys.get(headers.get("x-api-key") ?? "");
     if (!key) return unauthorized();
@@ -226,6 +323,16 @@ export class FakeAkashConsole {
       });
     }
     if (method === "GET" && path === "/projects") return json(200, { data: reachable.map(asJson) });
+    const account: FakeAkashCaller = {
+      organizationId: organization.id,
+      owner: this.walletOf(organization.id),
+      projectIds: scoped !== null ? [scoped] : reachable.map((project) => project.id),
+      canDeploy: (projectId) =>
+        key.canDeploy && !(key.readOnlyProjectIds ?? []).includes(projectId),
+      scoped,
+    };
+    const deployments = this.deploymentRoutes(method, path, body, query, account);
+    if (deployments) return deployments;
     if (method === "GET" && path === "/user/me") {
       if (!key.user) return json(403, { statusCode: 403, message: "Forbidden" });
       return json(200, {
@@ -233,6 +340,367 @@ export class FakeAkashConsole {
       });
     }
     return json(404, { statusCode: 404, message: `No route ${method} ${path}` });
+  }
+
+  /** A bid on the deployment's one order, as a provider would place it. */
+  bid(dseq: string, provider: string, price: string, denom = "uact"): FakeAkashBid {
+    const deployment = this.deployments.find((entry) => entry.dseq === dseq);
+    if (!deployment) throw new Error(`no deployment ${dseq}`);
+    const bid: FakeAkashBid = { provider, gseq: 1, oseq: 1, bseq: 1, state: "open", price, denom };
+    deployment.bids.push(bid);
+    return bid;
+  }
+
+  blockTime(height: number): string {
+    return new Date(this.blockZeroMs + height * BLOCK_MS).toISOString();
+  }
+
+  private walletOf(organizationId: string): string {
+    return fakeAkashWallet(organizationId);
+  }
+
+  private block(height: number): Response {
+    if (height < 1 || height > this.height) {
+      return json(404, { statusCode: 404, message: "Block not found" });
+    }
+    return json(200, {
+      height,
+      datetime: this.blockTime(height),
+      proposer: { operatorAddress: "v", moniker: "v", address: "v" },
+      hash: "H",
+      gasUsed: 0,
+      gasWanted: 0,
+      transactions: [],
+    });
+  }
+
+  /** Public, as Console's own deployment page reads it: the monthly cost Console shows. */
+  private deploymentDetails(owner: string, dseq: string): Response {
+    const deployment = this.deployments.find(
+      (entry) => entry.owner === owner && entry.dseq === dseq
+    );
+    if (!deployment) return json(404, { statusCode: 404, message: "Deployment not found" });
+    const leases = deployment.leases.map((lease) => ({
+      gseq: lease.gseq,
+      oseq: lease.oseq,
+      provider: { address: lease.provider, hostUri: "", isDeleted: false, attributes: [] },
+      status: lease.state,
+      monthlyCostUDenom: consoleMonthlyCostUDenom(lease.price),
+      cpuUnits: 0,
+      gpuUnits: 0,
+      memoryQuantity: 0,
+      storageQuantity: 0,
+    }));
+    return json(200, {
+      owner,
+      dseq,
+      balance: 0,
+      denom: "uact",
+      status: deployment.state,
+      totalMonthlyCostUDenom: leases.reduce((sum, lease) => sum + lease.monthlyCostUDenom, 0),
+      leases,
+      events: [],
+      other: {},
+    });
+  }
+
+  /** The service the SDL declares and whether it exposes port 22 to the internet. */
+  private serviceOf(deployment: FakeAkashDeployment): { name: string; sshExposed: boolean } {
+    const services = (deployment.definition as { services?: Record<string, unknown> }).services;
+    const [name, service] = Object.entries(services ?? {})[0] ?? ["app", {}];
+    const expose = (service as { expose?: unknown[] }).expose ?? [];
+    const sshExposed = expose.some((entry) => {
+      const port = entry as { port?: number; to?: Array<{ global?: boolean }> };
+      return port.port === 22 && (port.to ?? []).some((to) => to.global === true);
+    });
+    return { name, sshExposed };
+  }
+
+  private leaseJson(deployment: FakeAkashDeployment, lease: FakeAkashLease, withStatus: boolean) {
+    const { name, sshExposed } = this.serviceOf(deployment);
+    const forwarded =
+      lease.state === "active" && lease.forwarded && sshExposed
+        ? {
+            [name]: [
+              {
+                ...(lease.forwarded.host === null ? {} : { host: lease.forwarded.host }),
+                port: 22,
+                externalPort: lease.forwarded.externalPort,
+                proto: "TCP",
+                name,
+                available: 1,
+              },
+            ],
+          }
+        : {};
+    return {
+      id: {
+        owner: deployment.owner,
+        dseq: deployment.dseq,
+        gseq: lease.gseq,
+        oseq: lease.oseq,
+        provider: lease.provider,
+        bseq: lease.bseq,
+      },
+      state: lease.state,
+      price: { denom: "uact", amount: `${lease.price}` },
+      created_at: String(lease.createdHeight),
+      closed_on: lease.state === "closed" ? String(this.height) : "0",
+      ...(withStatus
+        ? {
+            status:
+              lease.state === "active" && lease.forwarded !== null
+                ? { forwarded_ports: forwarded, ips: {}, services: {} }
+                : null,
+          }
+        : {}),
+    };
+  }
+
+  private deploymentJson(deployment: FakeAkashDeployment, withStatus: boolean) {
+    return {
+      deployment: {
+        id: { owner: deployment.owner, dseq: deployment.dseq },
+        state: deployment.state,
+        hash: "hash",
+        created_at: String(deployment.createdHeight),
+      },
+      leases: deployment.leases.map((lease) => this.leaseJson(deployment, lease, withStatus)),
+      escrow_account: {},
+      name: deployment.name,
+      groups: [
+        {
+          id: { owner: deployment.owner, dseq: deployment.dseq, gseq: 1 },
+          state: deployment.groupState,
+          group_spec: { name: "dcloud", requirements: {}, resources: [] },
+          created_at: String(deployment.createdHeight),
+        },
+      ],
+      settings: null,
+      projectId: deployment.projectId,
+    };
+  }
+
+  private deploymentRoutes(
+    method: string,
+    path: string,
+    body: unknown,
+    query: URLSearchParams,
+    caller: FakeAkashCaller
+  ): Response | null {
+    const visible = (deployment: FakeAkashDeployment) =>
+      deployment.owner === caller.owner && caller.projectIds.includes(deployment.projectId);
+    const notFound = () => json(404, { statusCode: 404, message: "Deployment not found" });
+    if (method === "POST" && path === "/deployments") return this.createDeployment(body, caller);
+    if (method === "GET" && path === "/deployments") {
+      const state = query.get("state") ?? "active";
+      const skip = Number(query.get("skip") ?? "0");
+      const limit = Number(query.get("limit") ?? "100");
+      const search = query.get("search")?.toLowerCase() ?? null;
+      const projectId = query.get("projectId");
+      if (
+        (state !== "active" && state !== "closed") ||
+        !Number.isInteger(skip) ||
+        skip < 0 ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 100 ||
+        (search !== null && search.length > 256)
+      ) {
+        return json(400, { statusCode: 400, message: "Invalid query" });
+      }
+      const inState = this.deployments.filter(
+        (deployment) =>
+          visible(deployment) &&
+          deployment.state === state &&
+          (projectId === null || deployment.projectId === projectId)
+      );
+      if (search !== null && state === "active" && inState.length > this.searchCap) {
+        return json(422, { statusCode: 422, message: "Too many active deployments to search" });
+      }
+      const matched =
+        search === null
+          ? inState
+          : inState.filter(
+              (deployment) =>
+                (deployment.name ?? "").toLowerCase().includes(search) ||
+                deployment.dseq.includes(search)
+            );
+      const page = matched.slice(skip, skip + limit);
+      return json(200, {
+        data: {
+          deployments: page.map((deployment) => this.deploymentJson(deployment, false)),
+          pagination: {
+            total: matched.length,
+            skip,
+            limit,
+            hasMore: skip + limit < matched.length,
+          },
+        },
+      });
+    }
+    const one = /^\/deployments\/(\d+)$/.exec(path);
+    if (one) {
+      const dseq = one[1]!.replace(/^0+/, "");
+      const deployment = this.deployments.find((entry) => entry.dseq === dseq && visible(entry));
+      if (!deployment) return notFound();
+      if (method === "GET") return json(200, { data: this.deploymentJson(deployment, true) });
+      if (!caller.canDeploy(deployment.projectId)) {
+        return coded(
+          403,
+          "project_forbidden",
+          "The deployment is filed in a project you can't change"
+        );
+      }
+      if (method === "DELETE") {
+        if (deployment.state === "active") {
+          deployment.state = "closed";
+          deployment.groupState = "closed";
+          for (const lease of deployment.leases) lease.state = "closed";
+          for (const bid of deployment.bids) if (bid.state === "open") bid.state = "closed";
+        }
+        return json(200, { data: { success: true } });
+      }
+      if (method === "PATCH") {
+        const name = (body as { data?: { name?: unknown } } | undefined)?.data?.name;
+        if (typeof name !== "string" || name.length < 1 || name.length > 256) {
+          return json(400, { statusCode: 400, message: "Invalid name" });
+        }
+        deployment.name = name;
+        return json(200, { data: this.deploymentJson(deployment, true) });
+      }
+    }
+    if (method === "GET" && path === "/bids") {
+      const dseq = (query.get("dseq") ?? "").replace(/^0+/, "");
+      const deployment = this.deployments.find((entry) => entry.dseq === dseq && visible(entry));
+      return json(200, {
+        data: (deployment?.bids ?? []).map((bid) => ({
+          bid: {
+            id: {
+              owner: deployment!.owner,
+              dseq: deployment!.dseq,
+              gseq: bid.gseq,
+              oseq: bid.oseq,
+              provider: bid.provider,
+              bseq: bid.bseq,
+            },
+            state: bid.state,
+            price: { denom: bid.denom, amount: bid.price },
+            created_at: String(deployment!.createdHeight + 1),
+            resources_offer: [],
+          },
+          escrow_account: {},
+        })),
+      });
+    }
+    if (method === "POST" && path === "/leases") return this.createLease(body, caller, visible);
+    return null;
+  }
+
+  private createDeployment(body: unknown, caller: FakeAkashCaller): Response {
+    const data = (body as { data?: Record<string, unknown> } | undefined)?.data;
+    if (!data || typeof data !== "object") {
+      return json(400, { statusCode: 400, message: "Invalid request body" });
+    }
+    const sources = ["sdl", "definition", "service"].filter((field) => data[field] !== undefined);
+    if (sources.length !== 1) {
+      return json(400, {
+        statusCode: 400,
+        message: "Send exactly one of sdl, definition or service",
+      });
+    }
+    const name = data.name;
+    if (name !== undefined && (typeof name !== "string" || name.length < 1 || name.length > 256)) {
+      return json(400, { statusCode: 400, message: "Invalid name" });
+    }
+    const projectId =
+      typeof data.projectId === "string"
+        ? data.projectId
+        : (caller.scoped ??
+          this.projects.find(
+            (project) => project.organizationId === caller.organizationId && project.isDefault
+          )?.id);
+    if (!projectId || !caller.projectIds.includes(projectId)) {
+      return json(404, { statusCode: 404, message: "Unknown project" });
+    }
+    if (!caller.canDeploy(projectId)) {
+      return coded(403, "project_forbidden", "This key can't deploy into the project");
+    }
+    this.height++;
+    const dseq = this.nextDseq ?? String(this.height);
+    this.nextDseq = null;
+    this.deployments.push({
+      owner: caller.owner,
+      dseq,
+      organizationId: caller.organizationId,
+      projectId,
+      name: typeof name === "string" ? name : null,
+      state: "active",
+      createdHeight: this.height,
+      groupState: "open",
+      definition: data.definition ?? null,
+      secretEnv: data.secretEnv,
+      bids: [],
+      leases: [],
+    });
+    return json(201, {
+      data: { dseq, manifest: "[]", signTx: { code: 0, transactionHash: "TX", rawLog: "" } },
+    });
+  }
+
+  private createLease(
+    body: unknown,
+    caller: FakeAkashCaller,
+    visible: (deployment: FakeAkashDeployment) => boolean
+  ): Response {
+    const leases = (body as { leases?: unknown[] } | undefined)?.leases;
+    const asked = leases?.[0] as
+      { dseq?: string; gseq?: number; oseq?: number; provider?: string } | undefined;
+    if (!Array.isArray(leases) || leases.length !== 1 || !asked) {
+      return json(400, { statusCode: 400, message: "Invalid request body" });
+    }
+    const deployment = this.deployments.find(
+      (entry) => entry.dseq === String(asked.dseq).replace(/^0+/, "") && visible(entry)
+    );
+    if (!deployment) return json(404, { statusCode: 404, message: "Deployment not found" });
+    if (!caller.canDeploy(deployment.projectId)) {
+      return coded(
+        403,
+        "project_forbidden",
+        "The deployment is filed in a project you can't change"
+      );
+    }
+    const bid = deployment.bids.find(
+      (entry) =>
+        entry.provider === asked.provider && entry.gseq === asked.gseq && entry.oseq === asked.oseq
+    );
+    if (deployment.state !== "active" || !bid || bid.state !== "open") {
+      return json(400, { statusCode: 400, message: "bid not open" });
+    }
+    bid.state = "active";
+    for (const other of deployment.bids) if (other.state === "open") other.state = "closed";
+    this.height++;
+    const host = this.ingressHosts.has(bid.provider)
+      ? this.ingressHosts.get(bid.provider)!
+      : `${bid.provider}.ingress.test`;
+    const lease: FakeAkashLease = {
+      provider: bid.provider,
+      gseq: bid.gseq,
+      oseq: bid.oseq,
+      bseq: bid.bseq,
+      state: "active",
+      price: bid.price,
+      createdHeight: this.height,
+      forwarded: { host, externalPort: this.nextExternalPort++ },
+    };
+    deployment.leases.push(lease);
+    return json(200, {
+      data: {
+        deployment: this.deploymentJson(deployment, false).deployment,
+        leases: [this.leaseJson(deployment, lease, true)],
+        escrow_account: {},
+      },
+    });
   }
 
   private placementOptions(): Response {
