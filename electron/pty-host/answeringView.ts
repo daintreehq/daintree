@@ -13,7 +13,7 @@ export interface AnsweringViewDeps {
   mayDriveFrom: (terminalId: string, connectionId: number) => boolean;
   /** Whether input from this machine's own views would reach the terminal. */
   mayDriveLocally: (terminalId: string) => boolean;
-  /** Whether the terminal's cached views have been missing chunks since they last repainted. */
+  /** Whether the latest chunk for the terminal's cached views was skipped rather than sent. */
   isHiddenCopySkipped: (terminalId: string) => boolean;
 }
 

@@ -464,4 +464,22 @@ describe("IpcQueueManager hidden-view balance (#16497)", () => {
     expect(mgr.getHiddenQueuedBytes("t1")).toBe(0);
     expect(mgr.noteHiddenSkip("t1")).toBe(true);
   });
+
+  it("reports whether the latest copy was skipped, past the once-per-run notice (#18185)", () => {
+    expect(mgr.isLastHiddenCopySkipped("t1")).toBe(false);
+
+    mgr.noteHiddenSkip("t1");
+    expect(mgr.isLastHiddenCopySkipped("t1")).toBe(true);
+
+    // The cached views take copies again once acks drain the budget.
+    mgr.addHiddenBytes("t1", 100);
+    expect(mgr.isLastHiddenCopySkipped("t1")).toBe(false);
+
+    // A later skip in the same run sends no notice but still counts.
+    expect(mgr.noteHiddenSkip("t1")).toBe(false);
+    expect(mgr.isLastHiddenCopySkipped("t1")).toBe(true);
+
+    mgr.clearQueue("t1");
+    expect(mgr.isLastHiddenCopySkipped("t1")).toBe(false);
+  });
 });

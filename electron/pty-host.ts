@@ -806,7 +806,7 @@ ptyManager.setAnsweringViewProbe(
     frozenViewProjects,
     mayDriveFrom: (id, connectionId) => ptyManager.mayDriveFrom(id, connectionId),
     mayDriveLocally: (id) => ptyManager.mayDriveLocally(id),
-    isHiddenCopySkipped: (id) => ipcQueueManager.isHiddenSkipped(id),
+    isHiddenCopySkipped: (id) => ipcQueueManager.isLastHiddenCopySkipped(id),
   })
 );
 
