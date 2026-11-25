@@ -50,15 +50,11 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
 }));
 
 const { registerHelpHandlers } = await import("../help.js");
-const { getEndpointRegistry, _resetEndpointRegistryForTesting } = await import(
-  "../../endpointRegistry.js"
-);
-const { setMcpDriveTargetResolver } = await import(
-  "../../../services/mcp-server/driveTarget.js"
-);
-const { publishHelpSessionService, resetHelpSessionRuntimeForTests } = await import(
-  "../../../services/helpSessionRuntime.js"
-);
+const { getEndpointRegistry, _resetEndpointRegistryForTesting } =
+  await import("../../endpointRegistry.js");
+const { setMcpDriveTargetResolver } = await import("../../../services/mcp-server/driveTarget.js");
+const { publishHelpSessionService, resetHelpSessionRuntimeForTests } =
+  await import("../../../services/helpSessionRuntime.js");
 
 function localView(handle: number, projectId: string) {
   views.set(handle, { loading: false, crashed: false, destroyed: false });
@@ -186,12 +182,12 @@ describe("a window here taking over its project's assistant left with no view (#
 
     getEndpointRegistry().add(localView(42, "proj").endpoint);
     await vi.waitFor(() => expect(lanes.adopt).toHaveBeenCalledTimes(2));
-    expect(lanes.adopt.mock.calls.map(([projectId, slot, handle]) => [projectId, slot, handle])).toEqual(
-      [
-        ["proj", 0, 42],
-        ["proj", 1, 42],
-      ]
-    );
+    expect(
+      lanes.adopt.mock.calls.map(([projectId, slot, handle]) => [projectId, slot, handle])
+    ).toEqual([
+      ["proj", 0, 42],
+      ["proj", 1, 42],
+    ]);
   });
 
   it("never hands it to another project's window, and stops taking over once unregistered", async () => {
