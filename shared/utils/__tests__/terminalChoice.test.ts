@@ -556,7 +556,10 @@ describe("endsOnFooteredChoice (#16209)", () => {
 });
 
 describe("endsOnNotedChoice (#18167)", () => {
-  const NOTE = [/^No action is required\. Codex will keep waiting\b/i];
+  // The whole note, so a match proves its wrapped rows were joined.
+  const NOTE = [
+    /^No action is required\. Codex will keep waiting, and this menu will close when the response is ready\.$/i,
+  ];
   // Codex's safety-buffering picker at 80 columns, as its own snapshot draws it.
   const PICKER = [
     "  Giving this request a little extra thought",

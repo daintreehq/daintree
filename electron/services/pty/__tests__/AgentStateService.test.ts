@@ -2186,10 +2186,21 @@ describe("AgentStateService and a menu over a running turn (#18167)", () => {
     expect(changes).toEqual([]);
   });
 
+  it("leaves an agent that isn't working as it is on a close", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "waiting", waitingReason: "approval" });
+
+    service.handleActivityState(terminal, "busy", CLOSE);
+
+    expect(terminal.agentState).toBe("waiting");
+    expect(terminal.waitingReason).toBe("approval");
+  });
+
   it("never leaves the mark on an agent that stopped working", () => {
     const service = new AgentStateService();
     for (const event of [
       { type: "prompt" },
+      { type: "completion" },
       { type: "exit", code: 0 },
       { type: "kill" },
     ] as const) {

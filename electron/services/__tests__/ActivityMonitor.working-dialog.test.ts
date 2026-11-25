@@ -60,9 +60,10 @@ function startPane(id: string, agentId = "codex", completionPatterns?: RegExp[])
     visible = lines;
     monitor.onData("\x1b[H redraw");
   };
-  // What the mirror shows, changed without a byte arriving: a chunk it parses late.
+  // What the mirror shows once it parses a chunk that arrived earlier.
   const parse = (lines: string[]) => {
     visible = lines;
+    monitor.noteParsed();
   };
   for (let i = 1; i <= 4; i++) {
     vi.advanceTimersByTime(650);
@@ -108,6 +109,9 @@ describe("ActivityMonitor and a menu over a running turn (#18167)", () => {
     const { monitor, onStateChange, draw } = startPane("picker");
 
     draw(PICKER);
+    // Seen well before the idle settle would have read it as an approval.
+    vi.advanceTimersByTime(2_000);
+    expect(opened(onStateChange)).toHaveLength(1);
     // Past the idle debounce and the working-silence cap alike.
     vi.advanceTimersByTime(200_000);
 
@@ -285,6 +289,7 @@ describe("ActivityMonitor and a menu over a running turn (#18167)", () => {
 
     draw(PICKER);
     vi.advanceTimersByTime(5_000);
+    expect(opened(onStateChange)).toHaveLength(1);
     draw([
       ...TRANSCRIPT,
       "•   Stop this attempt and retry?",
@@ -300,5 +305,79 @@ describe("ActivityMonitor and a menu over a running turn (#18167)", () => {
     expect(closed(onStateChange)).toEqual([]);
     expect(monitor.getState()).toBe("idle");
     expect(settles(onStateChange).at(-1)?.[3]?.waitingReason).toBe("approval");
+  });
+
+  it("sees a picker the mirror parses late on a pane read as idle", () => {
+    const { monitor, onStateChange, draw, parse } = startPane("late-open");
+
+    draw(PROMPT_SCREEN);
+    vi.advanceTimersByTime(10_000);
+    expect(monitor.getState()).toBe("idle");
+    onStateChange.mockClear();
+
+    monitor.onData("\x1b[H picker");
+    vi.advanceTimersByTime(1_400);
+    parse(PICKER);
+    vi.advanceTimersByTime(3_000);
+
+    expect(monitor.getState()).toBe("busy");
+    expect(opened(onStateChange)).toHaveLength(1);
+    expect(calls(onStateChange).filter(([, , , m]) => m?.waitingReason === "approval")).toEqual([]);
+  });
+
+  it("keeps the hold through a frame caught half drawn and finished by a late parse", () => {
+    const { onStateChange, draw, parse } = startPane("half-drawn");
+
+    draw(PICKER);
+    vi.advanceTimersByTime(5_000);
+    draw(TRANSCRIPT);
+    vi.advanceTimersByTime(300);
+    parse(PICKER);
+    vi.advanceTimersByTime(20_000);
+
+    expect(closed(onStateChange)).toEqual([]);
+    expect(settles(onStateChange)).toEqual([]);
+  });
+
+  it("ends a hold it inherited when no picker is on screen", () => {
+    const onStateChange = vi.fn();
+    let elapsed = 40;
+    const monitor = new ActivityMonitor("inherited", 1000, onStateChange, {
+      agentId: "codex",
+      getVisibleLines: () => [...TRANSCRIPT, `• Working (${elapsed}s • esc to interrupt)`],
+      getCursorLine: () => null,
+      initialState: "busy",
+      skipInitialStateEmit: true,
+    });
+    monitors.push(monitor);
+    monitor.startPolling();
+    // Past the boot window a monitor seeded busy starts in, the turn ticking on.
+    for (let i = 0; i < 100; i++) {
+      elapsed++;
+      monitor.onData("\x1b[H tick");
+      vi.advanceTimersByTime(200);
+    }
+
+    expect(monitor.getState()).toBe("busy");
+    expect(closed(onStateChange)).toHaveLength(1);
+    expect(opened(onStateChange)).toEqual([]);
+  });
+
+  it("keeps a hold it inherited while the picker is still up", () => {
+    const onStateChange = vi.fn();
+    const monitor = new ActivityMonitor("kept", 1000, onStateChange, {
+      agentId: "codex",
+      getVisibleLines: () => PICKER,
+      getCursorLine: () => null,
+      initialState: "busy",
+      skipInitialStateEmit: true,
+    });
+    monitors.push(monitor);
+    monitor.startPolling();
+    vi.advanceTimersByTime(60_000);
+
+    expect(monitor.getState()).toBe("busy");
+    expect(closed(onStateChange)).toEqual([]);
+    expect(settles(onStateChange)).toEqual([]);
   });
 });

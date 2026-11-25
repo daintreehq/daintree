@@ -295,6 +295,7 @@ describe("a menu over a running turn (#18167)", () => {
   it("counts only while the agent is working in a live pane", () => {
     expect(isAtChoiceDialog({ ...UNDER_MENU, agentState: "waiting" })).toBe(false);
     expect(isAtChoiceDialog({ ...UNDER_MENU, isExited: true })).toBe(false);
+    expect(isAtChoiceDialog({ ...UNDER_MENU, hasPty: false })).toBe(false);
     expect(isAtChoiceDialog({ ...UNDER_MENU, detectedAgentId: undefined })).toBe(false);
     expect(composerSendHoldCause({ ...UNDER_MENU, isClosing: true })).toBeNull();
   });

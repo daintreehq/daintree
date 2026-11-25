@@ -337,6 +337,9 @@ export class ActivityMonitor {
   private workingDialogGoneSince = 0;
   // The menu's place was taken by a dialog that waits on an answer (#18167).
   private workingDialogGaveWayToDialog = false;
+  // When the mirror last finished parsing a chunk: what is on screen can
+  // change then, well after the bytes arrived (#18167).
+  private lastParsedAt = 0;
   private readonly lineRewriteDetector: LineRewriteDetector;
   private readonly completionTimer: CompletionTimer;
   private readonly bootDetector: BootDetector;
@@ -522,6 +525,10 @@ export class ActivityMonitor {
 
     // State preservation
     this.state = options?.initialState ?? "idle";
+    // Taking over a working agent, this monitor can't know whether the one
+    // before it published a menu open (#18167): it starts as if it had, so its
+    // first reads either keep that hold or end it.
+    this.workingDialogShown = this.state === "busy" && hasWorkingDialog(this.agentId);
     this.skipInitialStateEmit = options?.skipInitialStateEmit ?? false;
     this.simpleOutputState = simpleOutputState;
 
@@ -1196,7 +1203,7 @@ export class ActivityMonitor {
     }
     this.waitingReasonReadAt = now;
     // Drawn over a turn that runs on (#18167): never an approval to publish.
-    if (this.holdForWorkingDialog(now)) return;
+    if (this.holdForWorkingDialog(now, true)) return;
     const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);
     const promptResult = detectPrompt(
       lines,
@@ -1439,6 +1446,11 @@ export class ActivityMonitor {
     // Another agent's run: its input row hasn't been seen, whatever the last one showed (#18018).
     this.idlePromptDrawn = false;
     this.forgetWorkingDialog();
+  }
+
+  /** The mirror finished parsing a chunk: the screen may show it only now. */
+  noteParsed(now: number = Date.now()): void {
+    this.lastParsedAt = now;
   }
 
   notifySubmission(): void {
@@ -1688,8 +1700,8 @@ export class ActivityMonitor {
       }
 
       if (this.state === "idle") {
-        // An approval read off the menu itself (#18167): the turn runs on behind it.
-        if (this.idleWaitingReason === "approval" && this.holdForWorkingDialog(now)) return;
+        // A menu drawn over a turn that runs on (#18167), however the pane settled.
+        if (this.holdForWorkingDialog(now)) return;
         this.recoverFromVisibleWorking(now);
         this.rereadWaitingReason(now);
       } else if (
@@ -2099,8 +2111,8 @@ export class ActivityMonitor {
    * published as an observation on the working agent, which holds sends until
    * it closes; an idle agent is moved back to busy.
    */
-  private holdForWorkingDialog(now: number): boolean {
-    if (this.seesWorkingDialog(now)) {
+  private holdForWorkingDialog(now: number, fresh = false): boolean {
+    if (this.seesWorkingDialog(now, fresh)) {
       this.recordWorkingSignal(now);
       if (this.workingDialogShown) return true;
       this.workingDialogShown = true;
@@ -2126,21 +2138,25 @@ export class ActivityMonitor {
   }
 
   /**
-   * Whether the menu counts as on screen. The screen is read again while it
-   * may still be changing, until a read lands a settle window after its last
-   * change, and again whenever the last read has aged, since the mirror can
-   * parse a chunk well after it arrives. A menu that seemed gone counts as
-   * closed only once reads have found it gone for that window, so a redraw
-   * caught halfway never lets a send through.
+   * Whether the menu counts as on screen. The screen is read again, at most
+   * every SIMPLE_SNAPSHOT_MIN_INTERVAL_MS unless `fresh`, until a read lands a
+   * settle window after the last change, the mirror's parse of a chunk
+   * included; and while a menu seen open seems gone, until reads have kept
+   * finding it gone for that window, so a redraw caught halfway never ends
+   * the hold.
    */
-  private seesWorkingDialog(now: number): boolean {
+  private seesWorkingDialog(now: number, fresh = false): boolean {
     if (!this.getVisibleLines || !hasWorkingDialog(this.agentId)) return false;
-    const changedAt = Math.max(this.lastDataTimestamp, this.simpleSnapshotSettleFrom);
-    const sinceRead = now - this.workingDialogReadAt;
+    const changedAt = Math.max(
+      this.lastDataTimestamp,
+      this.simpleSnapshotSettleFrom,
+      this.lastParsedAt
+    );
+    const closing =
+      this.workingDialogShown && !this.workingDialogSeen && !this.workingDialogGaveWayToDialog;
     if (
-      sinceRead >= SIMPLE_SNAPSHOT_MIN_INTERVAL_MS &&
-      (this.workingDialogReadAt - changedAt < SIMPLE_SNAPSHOT_SETTLE_MS ||
-        sinceRead >= WORKING_HOLD_MS)
+      (fresh || now - this.workingDialogReadAt >= SIMPLE_SNAPSHOT_MIN_INTERVAL_MS) &&
+      (closing || this.workingDialogReadAt - changedAt < SIMPLE_SNAPSHOT_SETTLE_MS)
     ) {
       this.workingDialogReadAt = now;
       const lines = this.getVisibleLines(WHOLE_VIEWPORT_ROWS);
@@ -2155,7 +2171,10 @@ export class ActivityMonitor {
       }
     }
     if (this.workingDialogSeen) return true;
-    return this.workingDialogShown && now - this.workingDialogGoneSince < SIMPLE_SNAPSHOT_SETTLE_MS;
+    return (
+      this.workingDialogShown &&
+      this.workingDialogReadAt - this.workingDialogGoneSince < SIMPLE_SNAPSHOT_SETTLE_MS
+    );
   }
 
   /**
