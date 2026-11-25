@@ -98,6 +98,8 @@ export interface ActionCallbacks {
       scheduledRun?: ScheduledRunRef;
       /** The plugin behind a plugin dispatch, from `ActionContext.callerPluginId` only. */
       launchedByPluginId?: string;
+      /** Hold the new agent pane on restart (#18178). */
+      holdOnRestart?: boolean;
       /** The preset a person approved for this plugin launch, from the context only (#16324). */
       approvedPluginPreset?: import("@shared/utils/agentPresetLaunchConsent").HostApprovedPluginPresetLaunch;
       focusPolicy?: AddPanelFocusPolicy;

@@ -211,6 +211,21 @@ export const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     releasesOwnership: false,
     acceptsAdoption: true,
   },
+  // Keeps a pane this session launched from resuming on restart, or releases
+  // it to the resume setting (#18178): the Assistant's form of a plugin's
+  // `terminal.setHoldOnRestart`. A hand-over isn't enough, since that names a
+  // conversation the user started and will want back. It delegates to itself,
+  // like the placement above, and forwards only `hold`. Holding is not a claim
+  // the panel stopped existing, so the record stays.
+  "terminal.setHoldOnRestartOwned": {
+    resourceKind: "terminal",
+    executor: "renderer",
+    delegateTo: "terminal.setHoldOnRestartOwned",
+    idArg: "terminalId",
+    forwardArgs: ["hold"],
+    releasesOwnership: false,
+    acceptsAdoption: false,
+  },
   // Keeps its record for the same reason the reveal above does: interrupting a
   // turn is not a claim the panel stopped existing, and dropping the record
   // would cost the session the authority to interrupt it again — or to close it

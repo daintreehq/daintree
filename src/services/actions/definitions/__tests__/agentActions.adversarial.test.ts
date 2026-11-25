@@ -2791,3 +2791,53 @@ describe("agent.launch records the plugin that launched it (#14017)", () => {
     expect(callbacks.onLaunchAgent.mock.calls[0]?.[1]?.launchedByPluginId).toBeUndefined();
   });
 });
+
+describe("agent.launch holds the pane it creates on restart (#18178)", () => {
+  it.each([
+    { dispatchSource: "agent" },
+    { dispatchSource: "plugin", callerPluginId: "acme.orchestrator" },
+    { dispatchSource: "user" },
+  ] as Partial<ActionContext>[])("passes the hold through for any caller (%o)", async (ctx) => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude", holdOnRestart: true }, ctx);
+
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ holdOnRestart: true })
+    );
+  });
+
+  it.each([false, undefined])("asks for no hold when holdOnRestart is %s", async (hold) => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude", holdOnRestart: hold });
+
+    expect(callbacks.onLaunchAgent.mock.calls[0]?.[1]?.holdOnRestart).toBeUndefined();
+  });
+
+  it.each(["terminal", "browser", "dev-preview"])(
+    "refuses a hold for %s before launching, since restore never holds one",
+    async (agentId) => {
+      const callbacks = makeCallbacks();
+      const actions = setupActions(callbacks);
+
+      await expect(
+        callAction(actions, "agent.launch", { agentId, holdOnRestart: true })
+      ).rejects.toThrow(/holdOnRestart/);
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+    }
+  );
+
+  it("names a misspelt agent rather than blaming the hold", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "claud", holdOnRestart: true })
+    ).rejects.toThrow(/claud/);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+});

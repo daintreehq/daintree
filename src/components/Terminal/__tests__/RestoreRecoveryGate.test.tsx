@@ -639,6 +639,25 @@ describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
     expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
   });
 
+  it("says no plugin held a pane held with no plugin behind it (#18178)", () => {
+    seed(
+      heldPanel("p-1", {
+        launchAgentId: "claude",
+        cwd: "/repo",
+        conversationCwd: undefined,
+        holdOnRestart: true,
+        restoreRecovery: { reason: "held-on-restart", sessionId: "sess-c" },
+      })
+    );
+
+    render(<RestoreRecoveryGate panelId="p-1" isFocused />);
+
+    expect(screen.getByRole("heading", { name: "Not resumed after restart" })).toBeTruthy();
+    expect(screen.queryByText(/plugin/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Resume session" })).toBeTruthy();
+    expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
+  });
+
   it("doesn't resume on focus a pane the setting held once its plugin asks to hold it", () => {
     seed({ ...deferred("sess-c"), holdOnRestart: true });
 

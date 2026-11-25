@@ -27,6 +27,15 @@ describe("sanitizeRestoreRecovery (#12434)", () => {
     });
   });
 
+  // Read back as itself, not as an unknown reason whose copy would ask the
+  // user to pick a conversation the hold already names (#18178).
+  it("keeps a hold no plugin set, with its conversation", () => {
+    expect(sanitizeRestoreRecovery({ reason: "held-on-restart", sessionId: "sess-c" })).toEqual({
+      reason: "held-on-restart",
+      sessionId: "sess-c",
+    });
+  });
+
   it("drops anything that isn't a marker at all", () => {
     for (const value of [undefined, null, "held", 1, true, ["reason"]]) {
       expect(sanitizeRestoreRecovery(value)).toBeUndefined();

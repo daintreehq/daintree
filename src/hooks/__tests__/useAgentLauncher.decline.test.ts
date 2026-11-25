@@ -330,6 +330,52 @@ describe("useAgentLauncher — the launching plugin (#14017)", () => {
   });
 });
 
+describe("useAgentLauncher — a hold asked for at launch (#18178)", () => {
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  it("holds the agent pane it creates, with no plugin behind the launch", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true, holdOnRestart: true });
+    });
+
+    expect(addPanel).toHaveBeenCalledOnce();
+    const options = addPanel.mock.calls[0]?.[0];
+    expect(options).toMatchObject({ launchAgentId: "claude", holdOnRestart: true });
+    expect(options).not.toHaveProperty("launchedByPluginId");
+  });
+
+  it.each([false, undefined])("leaves the pane to the resume setting for %s", async (hold) => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true, holdOnRestart: hold });
+    });
+
+    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("holdOnRestart");
+  });
+
+  it("never holds a plain shell, which restore brings back as it always does", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("terminal", { holdOnRestart: true });
+    });
+
+    expect(addPanel).toHaveBeenCalledOnce();
+    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("holdOnRestart");
+  });
+});
+
 describe("useAgentLauncher — a scheduled run (#15977)", () => {
   const RUN = { scheduleId: "schedule-1", runId: "run-1" };
 

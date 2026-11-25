@@ -4634,12 +4634,36 @@ describe("restore provenance and the plugin hold (#14017)", () => {
 
   it("names the plugin's hold over the setting's", () => {
     const result = respawn(
-      { ...claudePane, agentSessionId: "sess-c", holdOnRestart: true },
+      {
+        ...claudePane,
+        agentSessionId: "sess-c",
+        launchedByPluginId: "acme.orchestrator",
+        holdOnRestart: true,
+      },
       { resumeOnRestart: "never" }
     );
 
     expect(result.restoreRecovery?.reason).toBe("held-by-plugin");
   });
+
+  // An Assistant's worker, or one launched holding (#18178): no plugin set the
+  // hold, so none is named, and it holds under "always" all the same.
+  it.each(["always", "never"] as const)(
+    "holds a pane no plugin launched under %s, without naming a plugin",
+    (resumeOnRestart) => {
+      const result = respawn(
+        { ...claudePane, agentSessionId: "sess-c", holdOnRestart: true },
+        { resumeOnRestart }
+      );
+
+      expect(result.restoreRecovery).toEqual({ reason: "held-on-restart", sessionId: "sess-c" });
+      expect(result.command).not.toContain("--resume");
+      expect(result.agentSessionId).toBeUndefined();
+      expect(result.restoreProvenance?.disposition).toBe("held");
+      expect(result.launchedByPluginId).toBeUndefined();
+      expect(result.holdOnRestart).toBe(true);
+    }
+  );
 
   it("ignores a malformed plugin hold or owner", () => {
     const result = respawn({

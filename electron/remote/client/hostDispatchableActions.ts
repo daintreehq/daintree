@@ -129,6 +129,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "terminal.new",
   "terminal.notifyWhenIdle",
   "terminal.placeOwned",
+  "terminal.setHoldOnRestartOwned",
   "terminal.readLastMessageOwned",
   "terminal.registerWatch",
   "terminal.rename",

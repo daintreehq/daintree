@@ -150,6 +150,10 @@ const AgentLaunchArgsSchema = z.object({
     .describe(
       "Always pass a short tab title ('Claude: auth refactor') so parallel agents are told apart. Blank uses the default."
     ),
+  holdOnRestart: z
+    .boolean()
+    .optional()
+    .describe("Don't resume it after a restart: it waits to be started. For one-shot work."),
 });
 
 /** Why a preset write asks first, shown in the host's confirm dialog. */

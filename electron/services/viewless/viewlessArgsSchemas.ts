@@ -140,6 +140,7 @@ export const AgentLaunchArgsSchema = z.object({
   requestedId: z.string().optional(),
   force: z.boolean().optional(),
   name: z.string().max(200).optional(),
+  holdOnRestart: z.boolean().optional(),
 });
 
 /**

@@ -12,6 +12,7 @@ const RESTORE_RECOVERY_REASONS: ReadonlySet<string> = new Set<RestoreRecoveryRea
   "destination-unavailable",
   "resume-deferred",
   "held-by-plugin",
+  "held-on-restart",
   "host-ended-uncleanly",
 ]);
 

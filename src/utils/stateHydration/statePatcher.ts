@@ -1078,12 +1078,14 @@ export function buildArgsForRespawn(
 
     // Last, so every hold restore itself decided keeps its own reason. A pane
     // with nothing exact to resume is held too: "never" has to mean nothing
-    // starts, not only that no conversation is reopened. The launching plugin's
-    // hold (#14017) names this pane, so it outranks the setting, and holds
-    // under "always" as well.
+    // starts, not only that no conversation is reopened. A hold (#14017,
+    // #18178) names this pane, so it outranks the setting, and holds under
+    // "always" as well. Only a pane a plugin launched says a plugin held it.
     const policyHold: RestoreRecoveryReason | undefined =
       saved.holdOnRestart === true
-        ? "held-by-plugin"
+        ? readLaunchedByPluginId(saved) !== undefined
+          ? "held-by-plugin"
+          : "held-on-restart"
         : (options?.resumeOnRestart ?? "always") !== "always"
           ? "resume-deferred"
           : undefined;

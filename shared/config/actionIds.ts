@@ -548,6 +548,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.info.get",
   "terminal.sessionFile.get",
   "terminal.setHoldOnRestart",
+  "terminal.setHoldOnRestartOwned",
 
   // -- browserActions --
   "browser.reload",
@@ -678,6 +679,8 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.injectOwned",
   // Main checks ownership before dispatching it; nothing in its `run()` does.
   "terminal.placeOwned",
+  // The same: a plugin holds its own panes through `terminal.setHoldOnRestart`.
+  "terminal.setHoldOnRestartOwned",
   "terminal.setClientMetadata",
   "terminal.paste",
   // Replays a person's own message from their pane (#16746).
