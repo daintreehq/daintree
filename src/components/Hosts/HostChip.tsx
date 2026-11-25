@@ -54,6 +54,7 @@ import {
   cloudChipStatus,
   cloudProviderFor,
   cloudStatusLabel,
+  isDeleteOnly,
   isObservationStale,
   stoppedBillingFact,
   type CloudProviderTerms,
@@ -290,7 +291,11 @@ function HostMenuItem({
     machineDown && cloud.operation === null ? stoppedBillingFact(cloud, provider) : null;
   // A running cloud machine's row says what it costs and when it stops, beside the link.
   const note = machineDown
-    ? [billingFact, staleAge, canStartMachine(cloud) ? "Opening it starts the machine" : null]
+    ? [
+        billingFact,
+        staleAge,
+        canStartMachine(cloud, provider) ? "Opening it starts the machine" : null,
+      ]
         .filter(Boolean)
         .join(" · ") || null
     : cloud !== null
@@ -526,7 +531,11 @@ export function HostChip() {
     const generation = ++pickGeneration.current;
     // A stopped cloud machine starts only on a yes that names what it costs.
     const cloud = cloudFor(row.hostId);
-    if (cloud && canStartMachine(cloud) && row.connection?.status !== "connected") {
+    if (
+      cloud &&
+      canStartMachine(cloud, cloudProviderFor(cloudProviders, cloud)) &&
+      row.connection?.status !== "connected"
+    ) {
       machines.confirmStart({
         hostId: row.hostId,
         name: row.name,
@@ -763,17 +772,32 @@ export function HostChip() {
                   const hostName =
                     rows.find((row) => row.hostId === cloud.hostId)?.name ?? cloud.hostId;
                   const busy = machines.isPending(cloud.hostId) || cloud.operation !== null;
-                  const stoppable = canStopMachine(cloud);
-                  const startable = canStartMachine(cloud);
+                  const provider = cloudProviderFor(cloudProviders, cloud);
+                  // A machine with no stop is listed for its state and cost, with no power verb.
+                  const deleteOnly = isDeleteOnly(provider);
+                  const stoppable = canStopMachine(cloud, provider);
+                  const startable = canStartMachine(cloud, provider);
                   // Unknown is no reason to start or stop it: the way forward is asking again.
                   const checkable = !stoppable && !startable && cloud.machine === "unknown";
                   const stale = isObservationStale(cloud, now);
-                  const Glyph = stoppable ? PowerOff : checkable ? RefreshCw : Power;
-                  const verb = stoppable ? "Stop" : checkable ? "Check" : "Start";
+                  const Glyph = stoppable
+                    ? PowerOff
+                    : checkable
+                      ? RefreshCw
+                      : deleteOnly
+                        ? Cloud
+                        : Power;
+                  const verb = stoppable
+                    ? "Stop"
+                    : checkable
+                      ? "Check"
+                      : deleteOnly
+                        ? null
+                        : "Start";
                   // The price beside both verbs: what it costs now, or what starting it costs.
                   const detail = [
                     cloudStatusLabel(cloud, stale),
-                    ...cloudCostFacts(cloud, cloudProviderFor(cloudProviders, cloud)),
+                    ...cloudCostFacts(cloud, provider),
                     cloud.accountName,
                     stale || checkable
                       ? cloud.observedAt !== null
@@ -795,7 +819,9 @@ export function HostChip() {
                           ? machines.requestStop(cloud.hostId, hostName)
                           : checkable
                             ? machines.check(cloud.hostId)
-                            : machines.start(cloud.hostId)
+                            : startable
+                              ? machines.start(cloud.hostId)
+                              : undefined
                       }
                     >
                       <Glyph
@@ -805,7 +831,7 @@ export function HostChip() {
                       />
                       <span className="flex min-w-0 flex-col gap-0.5">
                         <span className="break-words">
-                          {verb} {hostName}
+                          {verb ? `${verb} ${hostName}` : hostName}
                         </span>
                         <span className="text-2xs text-text-secondary">{detail}</span>
                         {/* The provider's last refusal, from wherever it was asked, until something succeeds. */}

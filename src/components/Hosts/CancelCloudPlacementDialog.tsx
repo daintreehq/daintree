@@ -9,7 +9,7 @@ import { systemClient } from "@/clients/systemClient";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import type { CloudHostStatus, CloudProviderInfo } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
-import { billsWhileStopped, canDeleteMachines } from "./cloud/cloudHostLabels";
+import { billsWhileStopped, canDeleteMachines, isDeleteOnly } from "./cloud/cloudHostLabels";
 import { disarmCloudSetup } from "./cloudWorktreePlacement";
 import { cancelPlacement, holdHostSetup } from "./pendingPlacement";
 
@@ -20,7 +20,7 @@ interface CancelCloudPlacementDialogProps {
   label: string;
   /** Null while the cloud picture hasn't arrived: nothing can be decided yet. */
   status: CloudHostStatus | null;
-  provider: Pick<CloudProviderInfo, "name" | "capabilities" | "dashboardUrl"> | null;
+  provider: Pick<CloudProviderInfo, "name" | "capabilities" | "dashboardUrl" | "stopMode"> | null;
   /** Which way the dialog opens: from Cancel, keeping the machine; from Delete, deleting it. */
   initialChoice: "keep" | "delete";
   /**
@@ -76,16 +76,20 @@ export function CancelCloudPlacementDialog({
   const accountName = status?.accountName ?? "its account";
   const created = openedFor?.resourceId != null;
   const billedStopped = billsWhileStopped(provider);
+  // A machine whose provider has no stop bills until it's deleted, never only while it runs.
+  const deleteOnly = isDeleteOnly(provider);
 
   // While this is open, neither its setup nor its switch carries on underneath.
   useEffect(() => holdHostSetup(hostId), [hostId]);
 
   const marked = madeForIt ? `, marked as made for ${label}` : "";
   const keepSentence = !created
-    ? `It stays in your host list${marked}. A machine its create makes bills ${accountName} ${billedStopped ? "until it's deleted, even once it stops" : "while it runs"}.`
-    : billedStopped
-      ? `It stays in your host list${marked}, and bills ${accountName} until it's deleted, even once it stops.`
-      : `It stays in your host list${marked}, and bills ${accountName} while it runs.`;
+    ? `It stays in your host list${marked}. A machine its create makes bills ${accountName} ${deleteOnly ? "until it's deleted" : billedStopped ? "until it's deleted, even once it stops" : "while it runs"}.`
+    : deleteOnly
+      ? `It stays in your host list${marked}, and bills ${accountName} until it's deleted.`
+      : billedStopped
+        ? `It stays in your host list${marked}, and bills ${accountName} until it's deleted, even once it stops.`
+        : `It stays in your host list${marked}, and bills ${accountName} while it runs.`;
 
   const confirm = () => {
     if (!ready) return;

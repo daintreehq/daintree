@@ -423,7 +423,7 @@ function ConnectCloudAccountForm({
           <p className="text-sm text-text-secondary">
             {replacing
               ? `The new ${noun === "key" ? "key" : "credentials"} must sign in to the same ${provider.name} account and be allowed to bill ${replacing.billingScope.name}. Hosts keep their machines.`
-              : `Daintree uses ${noun === "key" ? "an API key" : "these credentials"} to create, start${provider.capabilities.deletion ? ", stop and delete" : " and stop"} machines in your ${provider.name} account, and to set up SSH to them. Daintree never asks for your password.`}
+              : `Daintree uses ${noun === "key" ? "an API key" : "these credentials"} to ${provider.stopMode === "delete-only" ? "create and delete" : `create, start${provider.capabilities.deletion ? ", stop and delete" : " and stop"}`} machines in your ${provider.name} account, and to set up SSH to them. Daintree never asks for your password.`}
           </p>
           <div>
             <Button

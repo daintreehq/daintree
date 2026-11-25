@@ -12,6 +12,7 @@ import {
   billsWhileStopped,
   canDeleteMachines,
   cloudProviderFor,
+  isDeleteOnly,
   keepMachineDescription,
   stopKeepsSentence,
 } from "@/components/Hosts/cloud/cloudHostLabels";
@@ -69,11 +70,16 @@ export function machinesMarkedFor(
               : `'${name}' wasn't finished being set up, so it's kept. Retry or remove it from Settings → Hosts.`
             : null;
       // Stop is offered even for a machine last seen stopped: that reading may be old,
-      // and a stop finds a stopped machine and leaves it.
+      // and a stop finds a stopped machine and leaves it. By its provider alone, then:
+      // one that has no stop is kept or deleted.
       const choices: CloudWorktreeCleanupChoice[] =
         keptBecause !== null
           ? ["keep"]
-          : ["keep", "stop", ...(canDeleteMachines(provider) ? (["delete"] as const) : [])];
+          : [
+              "keep",
+              ...(isDeleteOnly(provider) ? [] : (["stop"] as const)),
+              ...(canDeleteMachines(provider) ? (["delete"] as const) : []),
+            ];
       return { status, provider, providerName, name, choices, keptBecause };
     });
 }
@@ -93,7 +99,15 @@ export function cleanupChoiceCopy(
         label: `Keep it on ${providerName}`,
         // Without its provider's declaration nothing here can say what keeping it costs.
         description: provider
-          ? keepMachineDescription(status, providerName, billedStopped, storageBilled, now, false)
+          ? keepMachineDescription(
+              status,
+              providerName,
+              billedStopped,
+              storageBilled,
+              now,
+              false,
+              isDeleteOnly(provider)
+            )
           : `It stays in your ${providerName} account as it is. Daintree can't say what it costs while ${providerName} isn't available.`,
       };
     case "stop": {
