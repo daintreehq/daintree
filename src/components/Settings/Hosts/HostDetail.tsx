@@ -275,6 +275,9 @@ export function HostDetail({
   useEffect(() => {
     if (connected && takeFirstConnect(descriptor.id)) setOffered(true);
   }, [connected, descriptor.id]);
+  // An imported machine may have settings of its own. Until its cloud status says
+  // Daintree made it, the offer doesn't claim the host starts from defaults.
+  const mayHaveSettings = isCloud && cloud?.ownership !== "created-by-daintree";
 
   useEffect(() => {
     if (offered) {
@@ -641,6 +644,7 @@ export function HostDetail({
         hostName={hostName}
         connected={connected}
         offered={offered}
+        mayHaveSettings={mayHaveSettings}
       />
       <HostPluginsSection hostId={descriptor.id} hostName={hostName} connected={connected} />
       <HostPluginViewConsents hostId={descriptor.id} hostName={hostName} />

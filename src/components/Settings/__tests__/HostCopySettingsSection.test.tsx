@@ -288,6 +288,20 @@ describe("Settings → Hosts → host → Copy settings", () => {
     render(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected offered />);
     expect(screen.getByText(/Studio starts from defaults/)).not.toBeNull();
   });
+
+  it("offers the copy for a machine that may have settings already, without claiming defaults", () => {
+    const { rerender } = render(
+      <HostCopySettingsSection hostId={HOST} hostName="Studio" connected offered mayHaveSettings />
+    );
+    expect(screen.getByText(/Studio may already have settings of its own/)).not.toBeNull();
+    expect(screen.queryByText(/starts from defaults/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Preview changes on Studio" })).not.toBeNull();
+
+    // Only the offer speaks to where the host starts from.
+    rerender(<HostCopySettingsSection hostId={HOST} hostName="Studio" connected mayHaveSettings />);
+    expect(screen.queryByText(/may already have settings of its own/)).toBeNull();
+    expect(screen.getByText(/Copy .*'s settings to Studio, once/)).not.toBeNull();
+  });
 });
 
 describe("Settings → Hosts → host → what a copy would change", () => {

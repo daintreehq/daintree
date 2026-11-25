@@ -25,6 +25,7 @@ import {
 } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
+import { awaitFirstConnect } from "./hostCopySettingsRequests";
 import { CloudProvisioningSelect, provisioningChoiceDescription } from "./CloudProvisioningSelect";
 import { LIFETIME_VALUES, useCloudMachineForm } from "./useCloudMachineForm";
 import {
@@ -173,6 +174,9 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     cloudHostsClient.createHost(request).then(
       ({ hostId }) => {
         setBusy(false);
+        // Armed as the host is recorded, not on handover: closing this dialog doesn't
+        // stop setup, and the first connection, wherever it happens, takes the offer.
+        awaitFirstConnect(hostId);
         setAdded({ hostId, name: trimmedName });
       },
       (err: unknown) => {
@@ -192,6 +196,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
       .then(
         ({ hostId }) => {
           setBusy(false);
+          awaitFirstConnect(hostId);
           setAdded({ hostId, name: hostName });
         },
         (err: unknown) => {

@@ -8,6 +8,7 @@ import type {
   CloudProviderInfo,
   CloudProvisioning,
   CloudProvisioningChoice,
+  CloudResourceSummary,
 } from "@shared/types/cloudHosts";
 
 const { cloud, client } = vi.hoisted(() => ({
@@ -29,6 +30,7 @@ vi.mock("@/components/Hosts/cloud/cloudHostsState", async (importOriginal) => ({
 vi.mock("@/clients/cloudHostsClient", () => ({ cloudHostsClient: client }));
 
 import { AddCloudHostDialog } from "../AddCloudHostDialog";
+import { takeFirstConnect } from "../hostCopySettingsRequests";
 
 const NONE: CloudProvisioning = {
   location: "none",
@@ -170,10 +172,14 @@ function ec2Catalog(overrides: Partial<CloudCatalog> = {}): CloudCatalog {
 
 const ACME = () => provider("acme.clouds.ec2", "Acme", EC2);
 
-function open(info: CloudProviderInfo, read: CloudCatalog) {
+function open(
+  info: CloudProviderInfo,
+  read: CloudCatalog,
+  onReady: (host: { hostId: string; name: string }) => void = () => {}
+) {
   cloud.snapshot = { providers: [info], accounts: [account(info.id)], hosts: [] };
   client.getCatalog.mockResolvedValue(read);
-  render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+  render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={onReady} />);
   fireEvent.change(screen.getByTestId("add-cloud-host-name"), { target: { value: "build" } });
 }
 
@@ -375,5 +381,60 @@ describe("AddCloudHostDialog connecting an account", () => {
     expect(screen.queryByTestId("add-cloud-host-name")).toBeNull();
     expect(screen.getByRole("button", { name: "Connect Acme account" })).toBeTruthy();
     expect(client.getCatalog).not.toHaveBeenCalled();
+  });
+});
+
+// The Copy settings offer is armed as the host is recorded, not on handover: closing the
+// dialog while the machine boots doesn't stop setup, and the host's first connection,
+// wherever it happens, still finds the offer (#18186).
+describe("AddCloudHostDialog arming the Copy settings offer", () => {
+  it("arms it for a machine it creates, once the create answers, and keeps it after closing", async () => {
+    const answer = deferred<{ hostId: string }>();
+    client.createHost.mockReturnValue(answer.promise);
+    const onReady = vi.fn();
+    open(provider("boat", "Boat", NONE), catalog(), onReady);
+    await create();
+    expect(takeFirstConnect("made")).toBe(false);
+
+    answer.resolve({ hostId: "made" });
+    await screen.findByTestId("add-cloud-host-progress");
+    // Closed while the machine is still coming up: setup never handed over here.
+    cleanup();
+    expect(onReady).not.toHaveBeenCalled();
+    expect(takeFirstConnect("made")).toBe(true);
+    expect(takeFirstConnect("made")).toBe(false);
+  });
+
+  it("arms the host it adds from the account, under the id the add answers with", async () => {
+    const machine: CloudResourceSummary = {
+      resourceId: "vm_1",
+      name: "old",
+      machine: "running",
+      rawState: "running",
+      machineType: null,
+      vcpu: 4,
+      memoryGB: 8,
+      createdAt: null,
+      stoppedAt: null,
+      dataExpired: false,
+      boundHostId: null,
+      restricted: false,
+      asleep: false,
+    };
+    client.listResources.mockResolvedValue([machine]);
+    const answer = deferred<{ hostId: string }>();
+    client.importHost.mockReturnValue(answer.promise);
+    open(provider("boat", "Boat", NONE), catalog());
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /^old/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
+    await waitFor(() => expect(client.importHost).toHaveBeenCalledTimes(1));
+    expect(takeFirstConnect("host-old")).toBe(false);
+
+    answer.resolve({ hostId: "host-old" });
+    await screen.findByTestId("add-cloud-host-progress");
+    expect(takeFirstConnect("old")).toBe(false);
+    expect(takeFirstConnect("vm_1")).toBe(false);
+    expect(takeFirstConnect("host-old")).toBe(true);
   });
 });
