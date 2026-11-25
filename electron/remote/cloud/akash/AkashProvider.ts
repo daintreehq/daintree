@@ -21,6 +21,7 @@ import {
 } from "../provider.js";
 import {
   AkashApiError,
+  redactAkashText,
   type AkashConsoleClient,
   type AkashRequestContext,
 } from "./AkashConsoleClient.js";
@@ -243,30 +244,29 @@ export class AkashProvider implements CloudProvider {
     const client = this.clientFor(credentials.apiUrl);
     const ctx = this.ctx(credentials);
     const projectId = credentials.scopeId.toLowerCase();
-    let project;
-    try {
-      project = await client.project({ ...ctx, projectId }, projectId);
-    } catch (error) {
-      const lost =
-        error instanceof AkashApiError &&
-        (error.kind === "not-found" ||
-          (error.kind === "forbidden" && error.code === "project_forbidden"));
-      if (!lost) throw error;
-      throw new AkashApiError(
+    const lost = (status: number | null, code: string | null) =>
+      new AkashApiError(
         "wrong-scope",
         "This key no longer reaches the Akash Console project this account deploys into. Replace it with a key that does, or connect the other project as its own account.",
-        error.status,
-        error.code
+        status,
+        code
       );
+    // Only the list says what the key may do in a project; one project's own read doesn't.
+    let projects;
+    try {
+      projects = await client.projects({ ...ctx, projectId });
+    } catch (error) {
+      if (
+        error instanceof AkashApiError &&
+        (error.kind === "not-found" ||
+          (error.kind === "forbidden" && error.code === "project_forbidden"))
+      ) {
+        throw lost(error.status, error.code);
+      }
+      throw error;
     }
-    if (project.id.toLowerCase() !== projectId) {
-      throw new AkashApiError(
-        "bad-response",
-        "The Akash Console answered with another project than the one asked for",
-        null,
-        null
-      );
-    }
+    const project = projects.find((entry) => entry.id.toLowerCase() === projectId);
+    if (!project) throw lost(null, null);
     if (!project.access.canDeploy) {
       throw new AkashApiError(
         "forbidden",
@@ -327,8 +327,10 @@ export class AkashProvider implements CloudProvider {
         locations,
       };
     });
+    // The busiest region some size fits, so the form never opens on one with nothing to choose.
+    const fitting = new Set(machineTypes.flatMap((type) => type.locations ?? []));
     const busiest = regionChoices
-      .filter((choice) => choice.available)
+      .filter((choice) => fitting.has(choice.id))
       .sort((a, b) => (regionProviderCounts[b.id] ?? 0) - (regionProviderCounts[a.id] ?? 0))[0];
     return {
       machineTypes,
@@ -392,7 +394,8 @@ export class AkashProvider implements CloudProvider {
         at,
       };
     }
-    const said = error.message;
+    // Names the Console supplied (an organization's, a project's) go into some messages.
+    const said = redactAkashText(error.message);
     switch (error.kind) {
       case "unauthorized":
         return {

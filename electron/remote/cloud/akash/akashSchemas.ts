@@ -49,8 +49,6 @@ export type AkashProject = z.infer<typeof akashProjectSchema>;
 
 export const akashProjectListSchema = z.object({ data: z.array(z.unknown()) }).loose();
 
-export const akashProjectEnvelopeSchema = z.object({ data: akashProjectSchema }).loose();
-
 export const akashUserSchema = z
   .object({
     data: z
@@ -77,7 +75,8 @@ export const akashScreenedProviderSchema = z
   .object({
     owner: z.string(),
     isAudited: z.boolean(),
-    location: nullableString,
+    // Always present: null is the Console saying the region is unknown, never a field left out.
+    location: z.string().nullable(),
   })
   .loose();
 

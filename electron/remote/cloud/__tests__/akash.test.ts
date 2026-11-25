@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  AKASH_CONSOLE_PRODUCTION_API_URL,
   AkashApiError,
   AkashConsoleClient,
+  type AkashConsoleClientOptions,
   redactAkashText,
   resolveAkashConsoleApiUrl,
 } from "../akash/AkashConsoleClient.js";
@@ -10,7 +10,13 @@ import { AkashProvider, akashApiKey } from "../akash/AkashProvider.js";
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import type { CloudProvider, ProviderCredentials } from "../provider.js";
 import { AppError } from "../../../utils/errorTypes.js";
-import { AUDITOR, FAKE_AKASH_KEY, FakeAkashConsole } from "./fakeAkashConsole.js";
+import {
+  AUDITOR,
+  FAKE_AKASH_KEY,
+  FakeAkashConsole,
+  screenedMillicores,
+  type FakeAkashRequest,
+} from "./fakeAkashConsole.js";
 
 const PERSONAL_ORG = "11111111-1111-4111-8111-111111111111";
 const TEAM_ORG = "22222222-2222-4222-8222-222222222222";
@@ -23,84 +29,73 @@ const TEAM_KEY = "ac.sk.fake-akash-unit-team-0001";
 const BOUND_KEY = "ac.sk.fake-akash-unit-bound-0002";
 const VIEWER_KEY = "ac.sk.fake-akash-unit-viewer-0003";
 const ANONYMOUS_KEY = "ac.sk.fake-akash-unit-anon-0004";
+const MIXED_KEY = "ac.sk.fake-akash-unit-mixed-0005";
 
 const GIB = 1073741824;
 
-function setup() {
+function reply(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...headers },
+  });
+}
+
+function setup(clientOptions: Partial<AkashConsoleClientOptions> = {}) {
   const fake = new FakeAkashConsole();
   fake.organizations.push(
     { id: PERSONAL_ORG, name: "person", type: "personal" },
     { id: TEAM_ORG, name: "Web team", type: "team" }
   );
   fake.projects.push(
-    { id: PERSONAL_DEFAULT, organizationId: PERSONAL_ORG, name: "Default", isDefault: true },
+    // The default isn't named "Default", so only its flag can mark it.
+    { id: PERSONAL_DEFAULT, organizationId: PERSONAL_ORG, name: "Main", isDefault: true },
     { id: PERSONAL_SANDBOX, organizationId: PERSONAL_ORG, name: "Sandbox", isDefault: false },
     { id: TEAM_DEFAULT, organizationId: TEAM_ORG, name: "Default", isDefault: true },
     { id: TEAM_AGENTS, organizationId: TEAM_ORG, name: "Agents", isDefault: false }
   );
   const person = { email: "person@example.com", username: "person" };
-  fake.keys.set(FAKE_AKASH_KEY, {
-    organizationId: PERSONAL_ORG,
+  const key = (organizationId: string, extra: object = {}) => ({
+    organizationId,
     projectIds: null,
     canDeploy: true,
     user: person,
+    ...extra,
   });
-  fake.keys.set(TEAM_KEY, {
-    organizationId: TEAM_ORG,
-    projectIds: null,
-    canDeploy: true,
-    user: person,
+  fake.keys.set(FAKE_AKASH_KEY, key(PERSONAL_ORG));
+  fake.keys.set(TEAM_KEY, key(TEAM_ORG));
+  fake.keys.set(BOUND_KEY, key(TEAM_ORG, { projectIds: [TEAM_AGENTS] }));
+  fake.keys.set(VIEWER_KEY, key(TEAM_ORG, { canDeploy: false }));
+  fake.keys.set(ANONYMOUS_KEY, key(PERSONAL_ORG, { user: null }));
+  fake.keys.set(MIXED_KEY, key(TEAM_ORG, { readOnlyProjectIds: [TEAM_DEFAULT] }));
+  // mars-north has a count but isn't a listed region, so a count alone never offers a region.
+  fake.regionProviderCounts = {
+    "na-us-west": 5,
+    "eu-west": 3,
+    "ap-southeast": 1,
+    "eu-north": 0,
+    "mars-north": 2,
+  };
+  fake.placementRegions = ["na-us-west", "eu-west", "ap-southeast", "eu-north"];
+  const room = (millicores: number, memoryGiB: number, storageGiB: number) => ({
+    freeMillicores: millicores,
+    freeMemoryBytes: memoryGiB * GIB,
+    freeStorageBytes: storageGiB * GIB,
   });
-  fake.keys.set(BOUND_KEY, {
-    organizationId: TEAM_ORG,
-    projectIds: [TEAM_AGENTS],
-    canDeploy: true,
-    user: person,
-  });
-  fake.keys.set(VIEWER_KEY, {
-    organizationId: TEAM_ORG,
-    projectIds: null,
-    canDeploy: false,
-    user: person,
-  });
-  fake.keys.set(ANONYMOUS_KEY, {
-    organizationId: PERSONAL_ORG,
-    projectIds: null,
-    canDeploy: true,
-    user: null,
-  });
-  fake.regionProviderCounts = { "na-us-west": 5, "eu-west": 3, "ap-southeast": 1, "eu-north": 0 };
   fake.providers.push(
-    // Room for up to 16 vCPU, 64 GiB and 400 GiB.
-    {
-      owner: "akash1big",
-      location: "eu-west",
-      audited: true,
-      freeMillicores: 20_000,
-      freeMemoryBytes: 80 * GIB,
-      freeStorageBytes: 500 * GIB,
-    },
-    // Room for up to 8 vCPU, 32 GiB and 200 GiB.
-    {
-      owner: "akash1small",
-      location: "na-us-west",
-      audited: true,
-      freeMillicores: 10_000,
-      freeMemoryBytes: 40 * GIB,
-      freeStorageBytes: 300 * GIB,
-    },
+    { owner: "akash1big", location: "eu-west", audited: true, ...room(20_000, 80, 500) },
+    { owner: "akash1small", location: "na-us-west", audited: true, ...room(10_000, 40, 300) },
+    { owner: "akash1tiny", location: "ap-southeast", audited: true, ...room(5_000, 20, 150) },
     // Room for everything, but each is ruled out another way.
-    ...[
-      { owner: "akash1unaudited", location: "ap-southeast", audited: false },
-      { owner: "akash1unplaced", location: null, audited: true },
-      { owner: "akash1unlisted", location: "mars-north", audited: true },
-      { owner: "akash1offline", location: "eu-north", audited: true },
-    ].map((provider) => ({
-      ...provider,
-      freeMillicores: 64_000,
-      freeMemoryBytes: 256 * GIB,
-      freeStorageBytes: 2000 * GIB,
-    }))
+    {
+      owner: "akash1unaudited",
+      location: "ap-southeast",
+      audited: false,
+      ...room(64_000, 256, 2000),
+    },
+    { owner: "akash1unplaced", location: null, audited: true, ...room(64_000, 256, 2000) },
+    { owner: "akash1unlisted", location: "mars-north", audited: true, ...room(64_000, 256, 2000) },
+    // Screening still matches it while placement counts none there: the two snapshots disagree.
+    { owner: "akash1disagreeing", location: "eu-north", audited: true, ...room(64_000, 256, 2000) }
   );
   const sleeps: number[] = [];
   const client = new AkashConsoleClient({
@@ -109,6 +104,7 @@ function setup() {
     sleep: async (ms) => {
       sleeps.push(ms);
     },
+    ...clientOptions,
   });
   const provider = new AkashProvider(() => client);
   const credentials = (apiKey: string, scopeId: string): ProviderCredentials => ({
@@ -116,7 +112,8 @@ function setup() {
     scopeId,
     apiUrl: fake.baseUrl,
   });
-  return { fake, client, provider, credentials, sleeps };
+  const paths = (path: string) => fake.requests.filter((request) => request.path === path);
+  return { fake, client, provider, credentials, sleeps, paths };
 }
 
 async function rejection(promise: Promise<unknown>): Promise<unknown> {
@@ -128,45 +125,47 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
   throw new Error("expected a rejection");
 }
 
+const cpu = (millicores: number) => (body: unknown) => screenedMillicores(body) === millicores;
+
 describe("resolveAkashConsoleApiUrl", () => {
   it("answers production in a packaged build, whatever the environment says", () => {
     expect(
       resolveAkashConsoleApiUrl(true, { DAINTREE_AKASH_CONSOLE_API_URL: "http://localhost:1/v1" })
-    ).toBe(AKASH_CONSOLE_PRODUCTION_API_URL);
+    ).toBe("https://console-api.akash.network/v1");
   });
 
-  it("honours an http(s) override in development, without its query or trailing slash", () => {
-    expect(
-      resolveAkashConsoleApiUrl(false, {
-        DAINTREE_AKASH_CONSOLE_API_URL: "http://localhost:4010/v1/?key=x",
-      })
-    ).toBe("http://localhost:4010/v1");
-    expect(
-      resolveAkashConsoleApiUrl(false, { DAINTREE_AKASH_CONSOLE_API_URL: "file:///etc/passwd" })
-    ).toBe(AKASH_CONSOLE_PRODUCTION_API_URL);
+  it("honours an http(s) override in development, origin and path only", () => {
+    const resolve = (value: string) =>
+      resolveAkashConsoleApiUrl(false, { DAINTREE_AKASH_CONSOLE_API_URL: value });
+    expect(resolve("http://localhost:4010/v1/?key=x")).toBe("http://localhost:4010/v1");
+    expect(resolve("https://user:pass@fake.test/v1#frag")).toBe("https://fake.test/v1");
+    expect(resolve("file:///etc/passwd")).toBe("https://console-api.akash.network/v1");
+    expect(resolve("not a url")).toBe("https://console-api.akash.network/v1");
   });
 });
 
 describe("akashApiKey", () => {
-  it("refuses what can't travel in a header before anything is sent", () => {
-    for (const apiKey of [
-      "",
-      "ac.sk.has space",
-      "-----BEGIN OPENSSH PRIVATE KEY-----",
-      "ac.sk.é",
-    ]) {
-      const error = (() => {
-        try {
-          akashApiKey({ apiKey });
-        } catch (caught) {
-          return caught;
-        }
-        return null;
-      })();
-      expect(error).toBeInstanceOf(AppError);
-      expect((error as AppError).code).toBe("VALIDATION");
+  const refusal = (apiKey: string) => {
+    try {
+      akashApiKey({ apiKey });
+    } catch (error) {
+      return error as AppError;
     }
-    expect(akashApiKey({ apiKey: FAKE_AKASH_KEY })).toBe(FAKE_AKASH_KEY);
+    throw new Error("expected a refusal");
+  };
+
+  it("refuses what can't travel in a header", () => {
+    for (const apiKey of ["", "ac.sk.has space", "ac.sk.é", `ac.sk.${"x".repeat(4091)}`]) {
+      expect(refusal(apiKey)).toMatchObject({ code: "VALIDATION" });
+    }
+    expect(refusal("-----BEGIN OPENSSH PRIVATE KEY-----").userMessage).toMatch(/private key/);
+    expect(akashApiKey({ apiKey: `ac.sk.${"x".repeat(4090)}` })).toHaveLength(4096);
+  });
+
+  it("sends nothing for a key it refuses", async () => {
+    const { provider, fake } = setup();
+    await rejection(provider.checkCredentials({ apiKey: "ac.sk.has space" }, fake.baseUrl));
+    expect(fake.requests).toHaveLength(0);
   });
 });
 
@@ -177,18 +176,27 @@ describe("AkashProvider account connection", () => {
     expect(checked).toEqual({
       identity: "person@example.com",
       scopes: [
-        {
-          scope: { kind: "project", id: PERSONAL_DEFAULT, name: "Personal · Default" },
-          active: true,
-        },
+        { scope: { kind: "project", id: PERSONAL_DEFAULT, name: "Personal · Main" }, active: true },
         {
           scope: { kind: "project", id: PERSONAL_SANDBOX, name: "Personal · Sandbox" },
           active: false,
         },
       ],
     });
-    expect(fake.requests.every((request) => request.apiKey === FAKE_AKASH_KEY)).toBe(true);
-    expect(fake.requests.some((request) => request.organizationId !== null)).toBe(false);
+    expect(fake.requests.map((request) => request.path).sort()).toEqual([
+      "/organizations",
+      "/projects",
+      "/user/me",
+    ]);
+    for (const request of fake.requests) {
+      expect(request).toMatchObject({
+        apiKey: FAKE_AKASH_KEY,
+        organizationId: null,
+        projectId: null,
+        authorization: null,
+        redirect: "error",
+      });
+    }
   });
 
   it("names a team's projects after the team, and only that team's", async () => {
@@ -208,198 +216,384 @@ describe("AkashProvider account connection", () => {
     ]);
   });
 
-  it("refuses a key that can deploy nowhere as a permission problem", async () => {
+  it("leaves out a project the key may only read, the default included", async () => {
     const { provider, fake } = setup();
-    const error = await rejection(provider.checkCredentials({ apiKey: VIEWER_KEY }, fake.baseUrl));
-    expect(provider.describeError(error).code).toBe("permission");
-    expect(provider.describeError(error).message).toContain("Web team");
+    const checked = await provider.checkCredentials({ apiKey: MIXED_KEY }, fake.baseUrl);
+    expect(checked.scopes).toEqual([
+      { scope: { kind: "project", id: TEAM_AGENTS, name: "Web team · Agents" }, active: false },
+    ]);
   });
 
-  it("reads an unknown key as invalid", async () => {
+  it("lists a project once, by its lowercase id, however the Console spells it", async () => {
     const { provider, fake } = setup();
+    const row = (id: string) => ({
+      id,
+      name: "Agents",
+      isDefault: false,
+      access: { canDeploy: true, canManage: false },
+    });
+    fake.fail("GET", /^\/projects$/, () =>
+      reply(200, { data: [row(TEAM_AGENTS.toUpperCase()), row(TEAM_AGENTS)] })
+    );
+    const checked = await provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl);
+    expect(checked.scopes.map((choice) => choice.scope.id)).toEqual([TEAM_AGENTS]);
+  });
+
+  it("refuses a key that can deploy nowhere as a permission problem", async () => {
+    const { provider, fake } = setup();
+    const viewer = await rejection(provider.checkCredentials({ apiKey: VIEWER_KEY }, fake.baseUrl));
+    expect(provider.describeError(viewer).code).toBe("permission");
+    expect(provider.describeError(viewer).message).toContain("Web team");
+
+    fake.fail("GET", /^\/projects$/, () => reply(200, { data: [] }));
+    const none = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
+    expect(provider.describeError(none).code).toBe("permission");
+  });
+
+  it("reads an unknown key as invalid, asking each route once", async () => {
+    const { provider, fake, sleeps } = setup();
     const error = await rejection(
       provider.checkCredentials({ apiKey: "ac.sk.not-a-key-anyone-made" }, fake.baseUrl)
     );
     expect(provider.describeError(error).code).toBe("credential-invalid");
+    expect(fake.requests.map((request) => request.path).sort()).toEqual([
+      "/organizations",
+      "/projects",
+      "/user/me",
+    ]);
+    expect(sleeps).toEqual([]);
   });
 
-  it("connects a key the Console won't name a person for, with no identity", async () => {
+  it("refuses an answer that doesn't name exactly one organization the key acts in", async () => {
+    const organization = (id: string, isActive: boolean) => ({
+      id,
+      name: "x",
+      slug: "x",
+      type: "team",
+      role: "member",
+      isActive,
+      hasPaymentMethod: null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    for (const data of [
+      [organization(TEAM_ORG, false)],
+      [organization(TEAM_ORG, true), organization(PERSONAL_ORG, true)],
+    ]) {
+      const { provider, fake } = setup();
+      fake.fail("GET", /^\/organizations$/, () => reply(200, { data }));
+      const error = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
+      expect(error).toMatchObject({ kind: "bad-response" });
+    }
+    // An inactive one listed first doesn't stand in for the active one.
     const { provider, fake } = setup();
-    const checked = await provider.checkCredentials({ apiKey: ANONYMOUS_KEY }, fake.baseUrl);
-    expect(checked.identity).toBeNull();
-    expect(checked.scopes).toHaveLength(2);
-  });
-
-  it("reads throttling that outlasts the retries as rate-limited", async () => {
-    const { provider, fake, sleeps } = setup();
-    fake.fail(
-      "GET",
-      /^\/organizations$/,
-      () =>
-        new Response(JSON.stringify({ statusCode: 429, message: "Slow down" }), { status: 429 }),
-      3
-    );
-    const error = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
-    expect(provider.describeError(error).code).toBe("rate-limited");
-    expect(fake.requests.filter((request) => request.path === "/organizations")).toHaveLength(3);
-    expect(sleeps.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("doesn't ask again sooner than a long Retry-After allows", async () => {
-    const { provider, fake } = setup();
-    fake.fail(
-      "GET",
-      /^\/organizations$/,
-      () =>
-        new Response(JSON.stringify({ statusCode: 429, message: "Slow down" }), {
-          status: 429,
-          headers: { "retry-after": "120" },
-        }),
-      3
-    );
-    const error = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
-    expect(provider.describeError(error).code).toBe("rate-limited");
-    expect(fake.requests.filter((request) => request.path === "/organizations")).toHaveLength(1);
-  });
-
-  it("rides out one throttled read", async () => {
-    const { provider, fake } = setup();
-    fake.fail(
-      "GET",
-      /^\/projects$/,
-      () => new Response(JSON.stringify({ statusCode: 429, message: "Slow down" }), { status: 429 })
+    fake.fail("GET", /^\/organizations$/, () =>
+      reply(200, {
+        data: [
+          { ...organization(PERSONAL_ORG, false), name: "Other" },
+          { ...organization(TEAM_ORG, true), name: "Web team" },
+        ],
+      })
     );
     const checked = await provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl);
-    expect(checked.scopes).toHaveLength(2);
+    expect(checked.scopes[0]!.scope.name).toBe("Web team · Default");
+  });
+
+  it("connects with no identity only when the Console won't name a person", async () => {
+    const anonymous = setup();
+    const checked = await anonymous.provider.checkCredentials(
+      { apiKey: ANONYMOUS_KEY },
+      anonymous.fake.baseUrl
+    );
+    expect(checked).toMatchObject({ identity: null, scopes: [{}, {}] });
+
+    const missing = setup();
+    missing.fake.fail("GET", /^\/user\/me$/, () => reply(404, { statusCode: 404, message: "No" }));
+    await expect(
+      missing.provider.checkCredentials({ apiKey: TEAM_KEY }, missing.fake.baseUrl)
+    ).resolves.toMatchObject({ identity: null });
+
+    const broken = setup();
+    broken.fake.fail("GET", /^\/user\/me$/, () => reply(500, { statusCode: 500, message: "x" }), 3);
+    const error = await rejection(
+      broken.provider.checkCredentials({ apiKey: TEAM_KEY }, broken.fake.baseUrl)
+    );
+    expect(broken.provider.describeError(error).code).toBe("provider-unreachable");
+
+    const unnamed = setup();
+    unnamed.fake.fail("GET", /^\/user\/me$/, () =>
+      reply(200, { data: { email: "  ", username: "  person  " } })
+    );
+    await expect(
+      unnamed.provider.checkCredentials({ apiKey: TEAM_KEY }, unnamed.fake.baseUrl)
+    ).resolves.toMatchObject({ identity: "person" });
+  });
+
+  it("backs off between throttled reads, and reads throttling that outlasts them as rate-limited", async () => {
+    const { provider, fake, sleeps, paths } = setup();
+    fake.fail(
+      "GET",
+      /^\/organizations$/,
+      () => reply(429, { statusCode: 429, message: "Slow" }),
+      3
+    );
+    const error = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
+    expect(provider.describeError(error).code).toBe("rate-limited");
+    expect(paths("/organizations")).toHaveLength(3);
+    expect(sleeps).toHaveLength(2);
+    expect(sleeps[0]).toBeGreaterThanOrEqual(500);
+    expect(sleeps[0]).toBeLessThan(750);
+    expect(sleeps[1]).toBeGreaterThanOrEqual(1000);
+    expect(sleeps[1]).toBeLessThan(1250);
+  });
+
+  it("waits as long as Retry-After asks, and gives up rather than ask sooner than a long one allows", async () => {
+    const throttled = (retryAfter: string) => () =>
+      reply(429, { statusCode: 429, message: "Slow" }, { "retry-after": retryAfter });
+
+    const recovering = setup();
+    recovering.fake.fail("GET", /^\/projects$/, throttled("2"));
+    await recovering.provider.checkCredentials({ apiKey: TEAM_KEY }, recovering.fake.baseUrl);
+    expect(recovering.sleeps).toEqual([2000]);
+    expect(recovering.paths("/projects")).toHaveLength(2);
+
+    const atCutoff = setup();
+    atCutoff.fake.fail("GET", /^\/projects$/, throttled("10"));
+    await atCutoff.provider.checkCredentials({ apiKey: TEAM_KEY }, atCutoff.fake.baseUrl);
+    expect(atCutoff.sleeps).toEqual([10_000]);
+
+    const dated = setup();
+    dated.fake.fail("GET", /^\/projects$/, throttled(new Date(Date.now() + 6000).toUTCString()));
+    await dated.provider.checkCredentials({ apiKey: TEAM_KEY }, dated.fake.baseUrl);
+    expect(dated.sleeps[0]).toBeGreaterThanOrEqual(4000);
+    expect(dated.sleeps[0]).toBeLessThanOrEqual(6000);
+
+    for (const retryAfter of ["11", "120"]) {
+      const { provider, fake, sleeps, paths } = setup();
+      fake.fail("GET", /^\/organizations$/, throttled(retryAfter), 3);
+      const error = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
+      expect(error).toMatchObject({
+        kind: "rate-limited",
+        retryAfterMs: Number(retryAfter) * 1000,
+      });
+      expect(paths("/organizations")).toHaveLength(1);
+      expect(sleeps).toEqual([]);
+    }
   });
 
   it("refuses a project list it can't read rather than passing it off as no access", async () => {
+    const valid = {
+      id: TEAM_DEFAULT,
+      name: "Default",
+      isDefault: true,
+      access: { canDeploy: true },
+    };
+    const { access: _access, ...noAccess } = { ...valid, id: TEAM_AGENTS };
+    const { isDefault: _isDefault, ...noDefault } = { ...valid, id: TEAM_AGENTS };
+    for (const broken of [noAccess, noDefault]) {
+      const { provider, fake } = setup();
+      fake.fail("GET", /^\/projects$/, () => reply(200, { data: [valid, broken] }));
+      const error = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
+      expect(error).toMatchObject({ kind: "bad-response" });
+      expect(provider.describeError(error).code).toBe("failed");
+    }
+  });
+
+  it("sends nothing once the caller has given up", async () => {
     const { provider, fake } = setup();
-    fake.fail(
-      "GET",
-      /^\/projects$/,
-      () => new Response(JSON.stringify({ data: [{ id: TEAM_DEFAULT, name: "Default" }] }))
+    const controller = new AbortController();
+    controller.abort();
+    const error = await rejection(
+      provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl, controller.signal)
     );
-    const error = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
-    expect(error).toMatchObject({ kind: "bad-response" });
-    expect(provider.describeError(error).code).toBe("failed");
+    expect(error).toMatchObject({ kind: "cancelled" });
+    expect(fake.requests).toHaveLength(0);
   });
 });
 
 describe("AkashProvider.validate", () => {
-  it("checks the account's own project, by path and header alike", async () => {
+  it("checks the account's own project, named in the header, from the list that says what the key may do", async () => {
     const { provider, fake, credentials } = setup();
-    await expect(provider.validate(credentials(TEAM_KEY, TEAM_AGENTS))).resolves.toEqual({
-      identity: "person@example.com",
-    });
-    const read = fake.requests.find((request) => request.path.startsWith("/projects/"));
-    expect(read).toMatchObject({ path: `/projects/${TEAM_AGENTS}`, projectId: TEAM_AGENTS });
+    await expect(
+      provider.validate(credentials(TEAM_KEY, TEAM_AGENTS.toUpperCase()))
+    ).resolves.toEqual({ identity: "person@example.com" });
+    expect(fake.requests.map((request) => [request.path, request.projectId])).toEqual([
+      ["/projects", TEAM_AGENTS],
+      ["/user/me", null],
+    ]);
   });
 
   it("reads a key that no longer reaches the project as invalid for this account", async () => {
-    const { provider, credentials } = setup();
     // A key limited to Agents, asked about the team's default project: refused by its header.
-    const forbidden = await rejection(provider.validate(credentials(BOUND_KEY, TEAM_DEFAULT)));
+    const bound = setup();
+    const forbidden = await rejection(
+      bound.provider.validate(bound.credentials(BOUND_KEY, TEAM_DEFAULT))
+    );
     expect(forbidden).toMatchObject({ kind: "wrong-scope", code: "project_forbidden" });
-    expect(provider.describeError(forbidden).code).toBe("credential-invalid");
-    // A key from another organization never sees the project at all.
-    const missing = await rejection(provider.validate(credentials(FAKE_AKASH_KEY, TEAM_AGENTS)));
-    expect(provider.describeError(missing).code).toBe("credential-invalid");
+    expect(bound.provider.describeError(forbidden).code).toBe("credential-invalid");
+
+    const gone = setup();
+    gone.fake.fail("GET", /^\/projects$/, () => reply(404, { statusCode: 404, message: "No" }));
+    const missing = await rejection(
+      gone.provider.validate(gone.credentials(TEAM_KEY, TEAM_AGENTS))
+    );
+    expect(missing).toMatchObject({ kind: "wrong-scope", status: 404 });
+    expect(gone.provider.describeError(missing).code).toBe("credential-invalid");
+
+    const unlisted = setup();
+    unlisted.fake.fail("GET", /^\/projects$/, () => reply(200, { data: [] }));
+    const absent = await rejection(
+      unlisted.provider.validate(unlisted.credentials(TEAM_KEY, TEAM_AGENTS))
+    );
+    expect(absent).toMatchObject({ kind: "wrong-scope" });
   });
 
-  it("reads a key that may only look as a permission problem", async () => {
-    const { provider, credentials } = setup();
+  it("reads a key that may only look as a permission problem, before asking who holds it", async () => {
+    const { provider, fake, credentials } = setup();
     const error = await rejection(provider.validate(credentials(VIEWER_KEY, TEAM_AGENTS)));
     expect(provider.describeError(error)).toMatchObject({ code: "permission" });
     expect(provider.describeError(error).message).toContain("Agents");
+    expect(fake.requests.map((request) => request.path)).toEqual(["/projects"]);
   });
 
-  it("keeps a generic refusal a permission problem, not a lost project", async () => {
+  it("keeps any other refusal a permission problem, not a lost project", async () => {
     const { provider, fake, credentials } = setup();
-    fake.fail(
-      "GET",
-      /^\/projects\//,
-      () => new Response(JSON.stringify({ statusCode: 403, message: "Forbidden" }), { status: 403 })
+    fake.fail("GET", /^\/projects$/, () =>
+      reply(403, {
+        error: "Forbidden",
+        message: "Not a member",
+        code: "organization_forbidden",
+        type: "client_error",
+      })
     );
     const error = await rejection(provider.validate(credentials(TEAM_KEY, TEAM_AGENTS)));
+    expect(error).toMatchObject({ kind: "forbidden", code: "organization_forbidden" });
     expect(provider.describeError(error).code).toBe("permission");
+  });
+
+  it("asks nothing with no saved key, or a saved scope that isn't a project id", async () => {
+    const { provider, fake, credentials } = setup();
+    const keyless = await rejection(provider.validate(credentials("", TEAM_AGENTS)));
+    expect(provider.describeError(keyless).code).toBe("credential-invalid");
+    const scopeless = await rejection(provider.validate(credentials(TEAM_KEY, "personal")));
+    expect(provider.describeError(scopeless).code).toBe("refused");
+    expect(fake.requests).toHaveLength(0);
   });
 });
 
 describe("AkashProvider.describeError", () => {
-  const provider = new AkashProvider(() => {
-    throw new Error("unused");
-  });
-  const api = (kind: AkashApiError["kind"], code: string | null = null) =>
-    new AkashApiError(kind, `said ${kind}`, null, code);
-
-  it("maps the Console's failures onto Daintree's codes", () => {
-    const cases: Array<[unknown, string]> = [
-      [api("unauthorized"), "credential-invalid"],
-      [api("forbidden"), "permission"],
-      [api("forbidden", "project_budget_exceeded"), "billing"],
-      [api("payment-required"), "billing"],
-      [api("rate-limited"), "rate-limited"],
-      [api("not-found"), "not-found"],
-      [api("invalid-request", "organization_mismatch"), "refused"],
-      [api("conflict"), "refused"],
-      [api("unprocessable"), "refused"],
-      [api("server"), "provider-unreachable"],
-      [api("network"), "provider-unreachable"],
-      [api("timeout"), "provider-unreachable"],
-      [api("unsupported"), "unsupported"],
-      [api("cancelled"), "failed"],
-      [api("bad-response"), "failed"],
-      [new Error("boom"), "failed"],
+  it("maps each status the Console answers with onto Daintree's codes", async () => {
+    const cases: Array<[Response, Partial<AkashApiError>, string]> = [
+      [reply(402, { statusCode: 402, message: "Top up" }), { kind: "payment-required" }, "billing"],
+      [
+        reply(403, {
+          error: "Forbidden",
+          message: "Over budget",
+          code: "project_budget_exceeded",
+          type: "x",
+        }),
+        { kind: "forbidden", code: "project_budget_exceeded" },
+        "billing",
+      ],
+      [reply(404, { statusCode: 404, message: "No" }), { kind: "not-found" }, "not-found"],
+      [
+        reply(400, { error: "Bad", message: "Mismatch", code: "organization_mismatch", type: "x" }),
+        { kind: "invalid-request", code: "organization_mismatch" },
+        "refused",
+      ],
+      [reply(409, { statusCode: 409, message: "Taken" }), { kind: "conflict" }, "refused"],
+      [reply(422, { statusCode: 422, message: "Too many" }), { kind: "unprocessable" }, "refused"],
     ];
-    for (const [error, code] of cases) expect(provider.describeError(error).code).toBe(code);
+    for (const [response, raw, code] of cases) {
+      const { provider, fake } = setup();
+      fake.fail("GET", /^\/organizations$/, () => response.clone());
+      const error = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
+      expect(error).toMatchObject({ ...raw, status: response.status });
+      expect(provider.describeError(error).code).toBe(code);
+    }
   });
 
-  it("shows a validation error's own words", () => {
-    const error = new AppError({
+  it("falls back to the status for an error body that isn't JSON", async () => {
+    const { provider, fake } = setup();
+    fake.fail(
+      "GET",
+      /^\/organizations$/,
+      () => new Response("<html>oops</html>", { status: 503 }),
+      3
+    );
+    const error = await rejection(provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
+    expect(error).toMatchObject({ kind: "server", message: "The Akash Console answered 503" });
+    expect(provider.describeError(error).code).toBe("provider-unreachable");
+  });
+
+  it("maps failures that never reached a status", () => {
+    const provider = new AkashProvider(() => {
+      throw new Error("unused");
+    });
+    const api = (kind: AkashApiError["kind"]) =>
+      new AkashApiError(kind, `said ${kind}`, null, null);
+    expect(provider.describeError(api("network")).code).toBe("provider-unreachable");
+    expect(provider.describeError(api("timeout")).code).toBe("provider-unreachable");
+    expect(provider.describeError(api("unsupported"))).toMatchObject({
+      code: "unsupported",
+      message: "said unsupported",
+    });
+    expect(provider.describeError(api("cancelled"))).toMatchObject({
+      code: "failed",
+      message: "Cancelled.",
+    });
+    expect(provider.describeError(api("bad-response")).code).toBe("failed");
+    expect(provider.describeError(new Error("boom")).code).toBe("failed");
+    const invalid = new AppError({
       code: "VALIDATION",
       message: "x",
       userMessage: "Paste an API key.",
     });
-    expect(provider.describeError(error).message).toBe("Paste an API key.");
+    expect(provider.describeError(invalid)).toMatchObject({
+      code: "failed",
+      message: "Paste an API key.",
+    });
   });
 
-  it("never repeats a key the Console echoed back", async () => {
-    const { provider: live, fake } = setup();
-    fake.fail(
-      "GET",
-      /^\/organizations$/,
-      () =>
-        new Response(
-          JSON.stringify({
-            statusCode: 400,
-            message: `Bad header ${TEAM_KEY} and ac.sk.other-key`,
-          }),
-          { status: 400 }
-        )
+  it("never repeats a key the Console echoed back, prefixed or not", async () => {
+    const plainKey = "plain-unit-key-without-prefix-0042";
+    const { provider, fake } = setup();
+    fake.keys.set(plainKey, fake.keys.get(TEAM_KEY)!);
+    fake.fail("GET", /^\/organizations$/, () =>
+      reply(400, { statusCode: 400, message: `Bad header ${plainKey} and ac.sk.other-key` })
     );
-    const error = await rejection(live.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl));
-    const described = live.describeError(error);
-    expect(described.code).toBe("refused");
-    expect(described.message).not.toContain("ac.sk.");
-    expect(redactAkashText(`key=${TEAM_KEY}`, TEAM_KEY)).toBe("key=[redacted]");
+    const error = await rejection(provider.checkCredentials({ apiKey: plainKey }, fake.baseUrl));
+    expect(error).toMatchObject({ message: "Bad header [redacted] and [redacted]" });
+    expect(provider.describeError(error).message).not.toContain(plainKey);
+    expect(redactAkashText("Authorization: Bearer abc.def-123")).toBe(
+      "Authorization: Bearer [redacted]"
+    );
+    expect(redactAkashText("GET /x?api_key=secret&y=1")).toBe("GET /x?api_key=[redacted]&y=1");
+  });
+
+  it("never shows a key hidden in a name the Console supplied", async () => {
+    const { provider, fake } = setup();
+    fake.organizations[1]!.name = "ac.sk.leaked-into-a-name";
+    const error = await rejection(provider.checkCredentials({ apiKey: VIEWER_KEY }, fake.baseUrl));
+    expect(provider.describeError(error).message).not.toContain("ac.sk.");
   });
 });
 
 describe("AkashProvider.catalog", () => {
   it("offers the four sizes where an audited provider has room, with the regions to choose from", async () => {
-    const { provider, fake, credentials } = setup();
+    const { provider, credentials } = setup();
     const catalog = await provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS));
     expect(catalog.machineTypes.map((type) => [type.id, type.available, type.locations])).toEqual([
-      ["akash-4c-16g", true, ["eu-west", "na-us-west"]],
+      ["akash-4c-16g", true, ["ap-southeast", "eu-west", "na-us-west"]],
       ["akash-8c-32g", true, ["eu-west", "na-us-west"]],
       ["akash-16c-64g", true, ["eu-west"]],
       ["akash-32c-128g", false, []],
     ]);
-    const largest = catalog.machineTypes[3]!;
-    expect(largest.reason).toMatch(/room/);
-    expect(catalog.machineTypes.every((type) => type.hourlyDollars === null)).toBe(true);
-    expect(catalog.machineTypes[0]).toMatchObject({ vcpu: 4, memoryGB: 16, reason: null });
+    for (const type of catalog.machineTypes) {
+      expect(type.hourlyDollars).toBeNull();
+      if (type.available) expect(type.reason).toBeNull();
+      else expect(type.reason).toMatch(/room/);
+    }
+    expect(catalog.machineTypes[0]).toMatchObject({ vcpu: 4, memoryGB: 16 });
     expect(catalog.machineTypes[0]!.label).toContain("100 GB disk");
 
     const location = catalog.provisioning?.location;
@@ -412,33 +606,48 @@ describe("AkashProvider.catalog", () => {
     expect(location?.choices.find((choice) => choice.id === "eu-west")?.description).toBe(
       "3 audited providers online"
     );
-    // The region with the most audited providers online.
     expect(location?.defaultId).toBe("na-us-west");
     expect(catalog.canStart).toBe(false);
-    expect(provider.info("linux").capabilities.provisioning.location).toBe("required");
   });
 
-  it("screens each size in the chain's units, audited only, carrying no key", async () => {
+  it("suggests the busiest region some size fits, not merely the busiest", async () => {
     const { provider, fake, credentials } = setup();
+    fake.regionProviderCounts["ap-southeast"] = 9;
+    fake.providers.splice(
+      fake.providers.findIndex((entry) => entry.owner === "akash1tiny"),
+      1
+    );
+    const catalog = await provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS));
+    expect(catalog.provisioning?.location?.defaultId).toBe("na-us-west");
+  });
+
+  it("screens each size in the chain's units, audited only, carrying no credential", async () => {
+    const { provider, fake, credentials, paths } = setup();
     await provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS));
-    const screens = fake.requests.filter((request) => request.path === "/bid-screening");
-    const units = screens.map((request) => {
-      const body = request.body as {
-        requirements: { signedBy: { anyOf: string[] }; attributes: unknown[] };
-        resources: Array<{
-          resource: {
-            cpu: { units: { val: string } };
-            memory: { quantity: { val: string } };
-            gpu: { units: { val: string } };
-            storage: Array<{ quantity: { val: string } }>;
-          };
-        }>;
-      };
-      expect(body.requirements.signedBy.anyOf).toEqual([AUDITOR]);
-      expect(body.requirements.attributes).toEqual([]);
-      const { cpu, memory, gpu, storage } = body.resources[0]!.resource;
-      return [cpu.units.val, memory.quantity.val, gpu.units.val, storage[0]!.quantity.val];
-    });
+    const units = paths("/bid-screening")
+      .map((request) => {
+        const body = request.body as {
+          requirements: unknown;
+          timezone: string;
+          resources: Array<{
+            resource: {
+              cpu: { units: { val: string } };
+              memory: { quantity: { val: string } };
+              gpu: { units: { val: string } };
+              storage: Array<{ quantity: { val: string } }>;
+            };
+          }>;
+        };
+        expect(body.requirements).toEqual({
+          signedBy: { allOf: [], anyOf: [AUDITOR] },
+          attributes: [],
+        });
+        expect(body.timezone).toBe("UTC");
+        expect(request.contentType).toBe("application/json");
+        const { cpu, memory, gpu, storage } = body.resources[0]!.resource;
+        return [cpu.units.val, memory.quantity.val, gpu.units.val, storage[0]!.quantity.val];
+      })
+      .sort((a, b) => Number(a[0]) - Number(b[0]));
     expect(units).toEqual([
       ["4000", "17179869184", "0", "107374182400"],
       ["8000", "34359738368", "0", "214748364800"],
@@ -447,84 +656,221 @@ describe("AkashProvider.catalog", () => {
     ]);
     expect(fake.requests).toHaveLength(5);
     for (const request of fake.requests) {
-      expect(request.apiKey).toBeNull();
-      expect(request.projectId).toBeNull();
+      expect(request).toMatchObject({
+        apiKey: null,
+        projectId: null,
+        organizationId: null,
+        authorization: null,
+        search: "",
+      });
     }
   });
 
   it("tells an empty screening from a failed one", async () => {
-    const { provider, fake, credentials } = setup();
-    fake.providers.length = 0;
-    const empty = await provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS));
-    expect(empty.machineTypes.every((type) => !type.available)).toBe(true);
+    const empty = setup();
+    empty.fake.providers.length = 0;
+    const catalog = await empty.provider.catalog(empty.credentials(TEAM_KEY, TEAM_AGENTS));
+    expect(catalog.machineTypes).toHaveLength(4);
+    for (const type of catalog.machineTypes) {
+      expect(type).toMatchObject({ available: false, locations: [] });
+      expect(type.reason).toMatch(/room/);
+    }
 
-    fake.fail(
-      "POST",
-      /^\/bid-screening$/,
-      () =>
-        new Response(
-          JSON.stringify({ statusCode: 503, message: "Provider screening is unavailable" }),
-          {
-            status: 503,
-          }
-        ),
-      // Every attempt of every size's screening.
-      12
+    const unavailable = () =>
+      reply(503, { statusCode: 503, message: "Provider screening is unavailable" });
+    const recovering = setup();
+    recovering.fake.fail("POST", /^\/bid-screening$/, unavailable, 1, cpu(8000));
+    await recovering.provider.catalog(recovering.credentials(TEAM_KEY, TEAM_AGENTS));
+    const eights = recovering.paths("/bid-screening").filter((request) => cpu(8000)(request.body));
+    expect(eights).toHaveLength(2);
+
+    const failing = setup();
+    failing.fake.fail("POST", /^\/bid-screening$/, unavailable, 3, cpu(8000));
+    const error = await rejection(
+      failing.provider.catalog(failing.credentials(TEAM_KEY, TEAM_AGENTS))
     );
-    const error = await rejection(provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS)));
-    expect(provider.describeError(error).code).toBe("provider-unreachable");
+    expect(failing.provider.describeError(error).code).toBe("provider-unreachable");
   });
 
-  it("fails on a screening it can't read rather than calling it no room", async () => {
+  it("fails on an answer it can't read rather than calling it no room", async () => {
+    const valid = { owner: "akash1p", isAudited: true, location: "eu-west" };
+    const { location: _location, ...noLocation } = valid;
+    const { isAudited: _isAudited, ...noAudit } = valid;
+    for (const broken of [noLocation, noAudit]) {
+      const { provider, fake, credentials } = setup();
+      fake.fail("POST", /^\/bid-screening$/, () => reply(200, { providers: [valid, broken] }));
+      const error = await rejection(provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS)));
+      expect(error).toMatchObject({ kind: "bad-response" });
+    }
     const { provider, fake, credentials } = setup();
-    fake.fail(
-      "POST",
-      /^\/bid-screening$/,
-      () => new Response(JSON.stringify({ providers: [{ location: "eu-west" }] }))
-    );
+    fake.fail("GET", /^\/placement-options$/, () => reply(200, { regions: ["eu-west"] }));
     const error = await rejection(provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS)));
     expect(error).toMatchObject({ kind: "bad-response" });
   });
 
   it("never reads a public route's refusal as the account's key going bad", async () => {
-    const { provider, fake, credentials } = setup();
-    fake.fail(
-      "GET",
-      /^\/placement-options$/,
-      () =>
-        new Response(JSON.stringify({ statusCode: 401, message: "Unauthorized" }), { status: 401 }),
-      3
-    );
-    const error = await rejection(provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS)));
-    expect(provider.describeError(error).code).toBe("provider-unreachable");
+    for (const status of [401, 403]) {
+      for (const [method, path, body] of [
+        ["GET", /^\/placement-options$/, undefined],
+        ["POST", /^\/bid-screening$/, cpu(4000)],
+      ] as const) {
+        const { provider, fake, credentials } = setup();
+        fake.fail(
+          method,
+          path,
+          () => reply(status, { statusCode: status, message: "No" }),
+          3,
+          body
+        );
+        const error = await rejection(provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS)));
+        expect(error).toMatchObject({ kind: "server", status });
+        expect(provider.describeError(error).code).toBe("provider-unreachable");
+      }
+    }
   });
 
-  it("cancels the other screenings once one fails, and reports the first failure", async () => {
-    const { provider, fake, credentials } = setup();
-    fake.hold("GET", /^\/placement-options$/);
+  it("cancels every other request once one fails, and reports that failure", async () => {
+    const { provider, fake, credentials, paths } = setup();
+    fake.hold({ method: "GET", path: /^\/placement-options$/ });
+    fake.hold({ method: "POST", path: /^\/bid-screening$/, body: cpu(16000) });
     fake.fail(
       "POST",
       /^\/bid-screening$/,
-      () =>
-        new Response(JSON.stringify({ statusCode: 400, message: "Invalid request body" }), {
-          status: 400,
-        })
+      () => reply(400, { statusCode: 400, message: "Invalid request body" }),
+      1,
+      cpu(8000)
     );
     const error = await rejection(provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS)));
-    expect(provider.describeError(error).code).toBe("refused");
-    const held = fake.requests.find((request) => request.path === "/placement-options");
-    expect(held?.signal?.aborted).toBe(true);
+    expect(error).toMatchObject({
+      kind: "invalid-request",
+      status: 400,
+      message: "Invalid request body",
+    });
+    const held: Array<FakeAkashRequest | undefined> = [
+      paths("/placement-options")[0],
+      paths("/bid-screening").find((request) => cpu(16000)(request.body)),
+    ];
+    for (const request of held) expect(request?.signal?.aborted).toBe(true);
   });
 
-  it("sends nothing once the caller has given up", async () => {
-    const { provider, fake, credentials } = setup();
-    const controller = new AbortController();
-    controller.abort();
-    const error = await rejection(
-      provider.catalog({ ...credentials(TEAM_KEY, TEAM_AGENTS), signal: controller.signal })
+  it("sends nothing once the caller has given up, and stops when they give up mid-way", async () => {
+    const before = setup();
+    const gaveUp = new AbortController();
+    gaveUp.abort();
+    const early = await rejection(
+      before.provider.catalog({
+        ...before.credentials(TEAM_KEY, TEAM_AGENTS),
+        signal: gaveUp.signal,
+      })
     );
+    expect(early).toMatchObject({ kind: "cancelled" });
+    expect(before.fake.requests).toHaveLength(0);
+
+    const during = setup();
+    during.fake.hold({ method: "GET", path: /^\/placement-options$/ });
+    const giveUp = new AbortController();
+    const pending = rejection(
+      during.provider.catalog({
+        ...during.credentials(TEAM_KEY, TEAM_AGENTS),
+        signal: giveUp.signal,
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    giveUp.abort();
+    expect(await pending).toMatchObject({ kind: "cancelled" });
+  });
+});
+
+describe("AkashConsoleClient transport", () => {
+  const ctx = { apiKey: TEAM_KEY };
+
+  it("retries a network failure and reads it as unreachable", async () => {
+    const { client, fake, paths, provider } = setup();
+    fake.fail("GET", /^\/organizations$/, () => new TypeError("fetch failed"), 3);
+    const error = await rejection(client.organizations(ctx));
+    expect(error).toMatchObject({ kind: "network" });
+    expect(paths("/organizations")).toHaveLength(3);
+    expect(provider.describeError(error).code).toBe("provider-unreachable");
+  });
+
+  it("gives up on an answer that never comes", async () => {
+    const { client, fake, paths } = setup({ timeoutMs: 10 });
+    fake.hold({ method: "GET", path: /^\/organizations$/ });
+    const error = await rejection(client.organizations(ctx));
+    expect(error).toMatchObject({ kind: "timeout" });
+    expect(paths("/organizations")).toHaveLength(3);
+  });
+
+  it("stops waiting to retry the moment its caller gives up", async () => {
+    const { fake, paths } = setup();
+    const client = new AkashConsoleClient({
+      baseUrl: fake.baseUrl,
+      fetch: fake.fetch as unknown as typeof fetch,
+    });
+    const controller = new AbortController();
+    fake.fail("GET", /^\/organizations$/, () => {
+      setTimeout(() => controller.abort(), 0);
+      return reply(429, { statusCode: 429, message: "Slow" });
+    });
+    const started = Date.now();
+    const error = await rejection(client.organizations({ ...ctx, signal: controller.signal }));
     expect(error).toMatchObject({ kind: "cancelled" });
-    expect(fake.requests).toHaveLength(0);
+    expect(Date.now() - started).toBeLessThan(400);
+    expect(paths("/organizations")).toHaveLength(1);
+  });
+
+  it("refuses an answer too large to read, whether or not it says so up front", async () => {
+    const declared = setup();
+    declared.fake.fail(
+      "GET",
+      /^\/organizations$/,
+      () => new Response("{}", { headers: { "content-length": String(5 * 1024 * 1024) } })
+    );
+    expect(await rejection(declared.client.organizations(ctx))).toMatchObject({
+      kind: "bad-response",
+      message: "The Akash Console's answer was too large",
+    });
+
+    const streamed = setup();
+    streamed.fake.fail("GET", /^\/organizations$/, () => {
+      const chunk = new TextEncoder().encode(" ".repeat(1024 * 1024));
+      let sent = 0;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (sent++ < 5) controller.enqueue(chunk);
+            else controller.close();
+          },
+        })
+      );
+    });
+    expect(await rejection(streamed.client.organizations(ctx))).toMatchObject({
+      kind: "bad-response",
+      message: "The Akash Console's answer was too large",
+    });
+  });
+
+  it("refuses a success it can't parse", async () => {
+    const { client, fake } = setup();
+    fake.fail("GET", /^\/organizations$/, () => new Response("not json", { status: 200 }));
+    expect(await rejection(client.organizations(ctx))).toMatchObject({ kind: "bad-response" });
+  });
+
+  it("keeps a refusal's status and Retry-After when its body stalls", async () => {
+    const { client, fake, paths } = setup({ timeoutMs: 20 });
+    fake.fail("GET", /^\/organizations$/, (request) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          request.signal?.addEventListener("abort", () =>
+            controller.error(new DOMException("aborted", "AbortError"))
+          );
+        },
+      });
+      return new Response(body, { status: 429, headers: { "retry-after": "120" } });
+    });
+    const error = await rejection(client.organizations(ctx));
+    expect(error).toMatchObject({ kind: "rate-limited", status: 429, retryAfterMs: 120_000 });
+    expect(paths("/organizations")).toHaveLength(1);
   });
 });
 
@@ -537,13 +883,19 @@ describe("AkashProvider declarations", () => {
     ).not.toThrow();
     const info = provider.info("linux");
     expect(info).toMatchObject({ stopMode: "delete-only", createMode: "offers" });
+    expect(info.credentialFields).toEqual([
+      expect.objectContaining({ id: "apiKey", secret: true, required: true, input: "single-line" }),
+    ]);
     expect(info.capabilities).toMatchObject({
       deletion: true,
       transport: "direct",
       sshTrust: "confirm-on-first-connect",
       lifetime: { kind: "none" },
     });
-    expect(info.capabilities.provisioning.sshKey).toBe("at-create");
+    expect(info.capabilities.provisioning).toMatchObject({
+      location: "required",
+      sshKey: "at-create",
+    });
     expect(info.unsupportedReason).toBeNull();
     expect(provider.info("win32").unsupportedReason).toMatch(/WSL/);
   });
@@ -561,8 +913,10 @@ describe("AkashProvider declarations", () => {
       publicKey: null,
     };
     const contract: CloudProvider = provider;
-    const calls: Array<Promise<unknown>> = [
-      contract.create(account, request),
+    const create = provider.describeError(await rejection(contract.create(account, request)));
+    expect(create).toMatchObject({ code: "unsupported" });
+    expect(create.message).toMatch(/offer/);
+    const staged: Array<Promise<unknown>> = [
       contract.list(account),
       contract.inspect(account, "1"),
       contract.rename(account, "1", "x"),
@@ -574,7 +928,7 @@ describe("AkashProvider declarations", () => {
       provider.offerCreate.leaseOffer(account, "1", "2"),
       provider.offerCreate.closeOrder(account, "1"),
     ];
-    for (const call of calls) {
+    for (const call of staged) {
       expect(provider.describeError(await rejection(call)).code).toBe("unsupported");
     }
     expect(fake.requests).toHaveLength(0);

@@ -5,7 +5,6 @@ import {
   akashOrganizationListSchema,
   akashOrganizationSchema,
   akashPlacementOptionsSchema,
-  akashProjectEnvelopeSchema,
   akashProjectListSchema,
   akashProjectSchema,
   akashScreenedProviderSchema,
@@ -220,15 +219,6 @@ export class AkashConsoleClient {
     return parseItems(page.data, akashProjectSchema);
   }
 
-  async project(ctx: AkashRequestContext, projectId: string): Promise<AkashProject> {
-    const result = await this.call(
-      ctx,
-      { method: "GET", path: `/projects/${requireUuid(projectId, "project")}`, retry: true },
-      akashProjectEnvelopeSchema
-    );
-    return result.data;
-  }
-
   async me(ctx: AkashRequestContext): Promise<AkashUser> {
     const result = await this.call(
       ctx,
@@ -312,24 +302,34 @@ export class AkashConsoleClient {
     const timer = setTimeout(() => timeout.abort(), this.options.timeoutMs ?? REQUEST_TIMEOUT_MS);
     const onAbort = () => timeout.abort();
     caller.signal?.addEventListener("abort", onAbort, { once: true });
-    let response: Response;
-    let text: string;
-    try {
-      response = await this.fetchFn(url, {
-        method: request.method,
-        headers,
-        body: request.body === undefined ? undefined : JSON.stringify(request.body),
-        signal: timeout.signal,
-        redirect: "error",
-      });
-      text = await readBounded(response);
-    } catch (error) {
-      if (error instanceof AkashApiError) throw error;
-      if (caller.signal?.aborted) throw cancelled();
+    const failed = (error: unknown): AkashApiError => {
+      if (error instanceof AkashApiError) return error;
+      if (caller.signal?.aborted) return cancelled();
       if (timeout.signal.aborted) {
-        throw new AkashApiError("timeout", "The Akash Console didn't answer in time", null, null);
+        return new AkashApiError("timeout", "The Akash Console didn't answer in time", null, null);
       }
-      throw new AkashApiError("network", "Couldn't reach the Akash Console", null, null);
+      return new AkashApiError("network", "Couldn't reach the Akash Console", null, null);
+    };
+    let response: Response;
+    let text = "";
+    try {
+      try {
+        response = await this.fetchFn(url, {
+          method: request.method,
+          headers,
+          body: request.body === undefined ? undefined : JSON.stringify(request.body),
+          signal: timeout.signal,
+          redirect: "error",
+        });
+      } catch (error) {
+        throw failed(error);
+      }
+      try {
+        text = await readBounded(response);
+      } catch (error) {
+        // A refusal's status and Retry-After came with its headers: a body that stalls or overflows takes neither away.
+        if (response.ok || caller.signal?.aborted) throw failed(error);
+      }
     } finally {
       clearTimeout(timer);
       caller.signal?.removeEventListener("abort", onAbort);

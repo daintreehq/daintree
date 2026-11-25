@@ -31,6 +31,8 @@ export interface FakeAkashKey {
   projectIds: string[] | null;
   /** May it deploy, or only read? */
   canDeploy: boolean;
+  /** Projects it may only read, whatever `canDeploy` says. */
+  readOnlyProjectIds?: string[];
   /** Who it signs in as; null when /user/me refuses it. */
   user: { email: string; username: string } | null;
 }
@@ -48,18 +50,44 @@ export interface FakeAkashProvider {
 export interface FakeAkashRequest {
   method: string;
   path: string;
+  /** The query string as sent, "" for none. */
+  search: string;
   apiKey: string | null;
   projectId: string | null;
   organizationId: string | null;
+  authorization: string | null;
+  contentType: string | null;
+  redirect: RequestRedirect | null;
   body: unknown;
   signal: AbortSignal | null;
 }
 
-interface Failure {
+/** Which requests a failure or hold applies to: a method, a path, and optionally what the body says. */
+export interface FakeAkashMatch {
   method: string;
   path: RegExp;
+  body?: (body: unknown) => boolean;
+}
+
+interface Failure extends FakeAkashMatch {
   times: number;
-  respond: () => Response | Error;
+  respond: (request: FakeAkashRequest) => Response | Error;
+}
+
+function matches(match: FakeAkashMatch, request: FakeAkashRequest): boolean {
+  return (
+    match.method === request.method &&
+    match.path.test(request.path) &&
+    (match.body === undefined || match.body(request.body))
+  );
+}
+
+/** A screening request's CPU, in millicores: which size it screens. */
+export function screenedMillicores(body: unknown): number {
+  const request = body as {
+    resources?: Array<{ resource?: { cpu?: { units?: { val?: string } } } }>;
+  };
+  return Number(request.resources?.[0]?.resource?.cpu?.units?.val);
 }
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
@@ -82,8 +110,6 @@ function coded(status: number, code: string, message: string): Response {
   });
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 export class FakeAkashConsole {
   readonly organizations: FakeAkashOrganization[] = [];
   readonly projects: FakeAkashProject[] = [];
@@ -92,18 +118,26 @@ export class FakeAkashConsole {
   regionProviderCounts: Record<string, number> = {};
   readonly requests: FakeAkashRequest[] = [];
   private readonly failures: Failure[] = [];
-  private readonly holds: Array<{ method: string; path: RegExp }> = [];
+  private readonly holds: FakeAkashMatch[] = [];
+  /** The regions placement options list; null lists every region with a count. */
+  placementRegions: string[] | null = null;
 
   constructor(readonly baseUrl = "https://console-api.akash.test/v1") {}
 
   /** The next `times` requests matching `method` and `path` get `respond()` instead of an answer. */
-  fail(method: string, path: RegExp, respond: () => Response | Error, times = 1): void {
-    this.failures.push({ method, path, times, respond });
+  fail(
+    method: string,
+    path: RegExp,
+    respond: (request: FakeAkashRequest) => Response | Error,
+    times = 1,
+    body?: (body: unknown) => boolean
+  ): void {
+    this.failures.push({ method, path, body, times, respond });
   }
 
-  /** Requests matching `method` and `path` never answer; they reject once their caller aborts. */
-  hold(method: string, path: RegExp): void {
-    this.holds.push({ method, path });
+  /** Matching requests never answer; they reject once their caller aborts. */
+  hold(match: FakeAkashMatch): void {
+    this.holds.push(match);
   }
 
   readonly fetch = async (input: URL | string, init: RequestInit = {}): Promise<Response> => {
@@ -113,28 +147,31 @@ export class FakeAkashConsole {
     const method = init.method ?? "GET";
     const headers = new Headers(init.headers);
     const body = typeof init.body === "string" ? (JSON.parse(init.body) as unknown) : undefined;
-    this.requests.push({
+    const request: FakeAkashRequest = {
       method,
       path,
+      search: url.search,
       apiKey: headers.get("x-api-key"),
       projectId: headers.get("x-project-id"),
       organizationId: headers.get("x-organization-id"),
+      authorization: headers.get("authorization"),
+      contentType: headers.get("content-type"),
+      redirect: init.redirect ?? null,
       body,
       signal: init.signal ?? null,
-    });
-    if (this.holds.some((hold) => hold.method === method && hold.path.test(path))) {
+    };
+    this.requests.push(request);
+    if (this.holds.some((hold) => matches(hold, request))) {
       return new Promise<Response>((_resolve, reject) => {
         const abort = () => reject(new DOMException("aborted", "AbortError"));
         if (init.signal?.aborted) abort();
         else init.signal?.addEventListener("abort", abort, { once: true });
       });
     }
-    const failure = this.failures.find(
-      (entry) => entry.times > 0 && entry.method === method && entry.path.test(path)
-    );
+    const failure = this.failures.find((entry) => entry.times > 0 && matches(entry, request));
     if (failure) {
       failure.times--;
-      const outcome = failure.respond();
+      const outcome = failure.respond(request);
       if (outcome instanceof Error) throw outcome;
       return outcome;
     }
@@ -167,7 +204,10 @@ export class FakeAkashConsole {
       createdBy: null,
       lastActivityAt: "2026-11-20T00:00:00.000Z",
       deployments: { activeCount: 0, preview: [] },
-      access: { canDeploy: key.canDeploy, canManage: false },
+      access: {
+        canDeploy: key.canDeploy && !(key.readOnlyProjectIds ?? []).includes(project.id),
+        canManage: false,
+      },
     });
 
     if (method === "GET" && path === "/organizations") {
@@ -186,13 +226,6 @@ export class FakeAkashConsole {
       });
     }
     if (method === "GET" && path === "/projects") return json(200, { data: reachable.map(asJson) });
-    const project = /^\/projects\/([^/]+)$/.exec(path);
-    if (method === "GET" && project) {
-      if (!UUID.test(project[1]!)) return json(400, { statusCode: 400, message: "Not a uuid" });
-      const found = reachable.find((entry) => entry.id === project[1]);
-      if (!found) return json(404, { statusCode: 404, message: "No such project" });
-      return json(200, { data: asJson(found) });
-    }
     if (method === "GET" && path === "/user/me") {
       if (!key.user) return json(403, { statusCode: 403, message: "Forbidden" });
       return json(200, {
@@ -204,7 +237,7 @@ export class FakeAkashConsole {
 
   private placementOptions(): Response {
     return json(200, {
-      regions: Object.keys(this.regionProviderCounts),
+      regions: this.placementRegions ?? Object.keys(this.regionProviderCounts),
       regionProviderCounts: this.regionProviderCounts,
       gpus: [
         {
