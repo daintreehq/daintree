@@ -22,6 +22,7 @@ import {
   isHostThrowawayTerminalId,
   isHostThrowawayWorkspaceId,
 } from "../../../../shared/config/hostThrowaway.js";
+import { isHostSignInTerminalId } from "../../../../shared/config/terminalScreenPersistence.js";
 import type {
   SerializeReadOptions,
   SerializedTerminalSnapshot,
@@ -67,11 +68,16 @@ function vouchForStreamOffsets(
 
 /**
  * Whether a host-wide terminal listing shows this terminal: never a dev
- * preview, and never a host's throwaway run (#14445), which only the Shell
- * session that launched it reads.
+ * preview, never a host's throwaway run (#14445), which only the Shell
+ * session that launched it reads, and never an agent CLI's sign-in (#18196),
+ * which only its dialog reads.
  */
-function isListedTerminal(terminal: { kind?: string; projectId?: string }): boolean {
-  return terminal.kind !== "dev-preview" && !isHostThrowawayWorkspaceId(terminal.projectId);
+function isListedTerminal(terminal: { id: string; kind?: string; projectId?: string }): boolean {
+  return (
+    terminal.kind !== "dev-preview" &&
+    !isHostThrowawayWorkspaceId(terminal.projectId) &&
+    !isHostSignInTerminalId(terminal.id)
+  );
 }
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
@@ -89,6 +95,8 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       if (typeof terminalId !== "string" || !terminalId) {
         throw new Error("Invalid terminal ID: must be a non-empty string");
       }
+      // A sign-in's screen is read only by the dialog that started it (#18196).
+      if (isHostSignInTerminalId(terminalId)) return null;
 
       const tailRows = options?.tailRows;
       const serializedState = await ptyClient.getSerializedStateAsync(
@@ -138,6 +146,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     const remote = ctx.endpoint?.kind === "remote-view";
     const results = await Promise.all(
       normalizedIds.map(async (terminalId) => {
+        if (isHostSignInTerminalId(terminalId)) return [terminalId, null] as const;
         try {
           const serializedState = await ptyClient.getSerializedStateAsync(terminalId);
           return [
@@ -432,6 +441,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     if (remoteProjectId === null) return { matches: [], complete: true };
     const inScope = (id: string) =>
       !isHostThrowawayTerminalId(id) &&
+      !isHostSignInTerminalId(id) &&
       (remoteProjectId === undefined || ptyClient.getTerminalProjectId(id) === remoteProjectId);
     let scope: Set<string> | undefined;
     if (terminalIds !== undefined || remoteProjectId !== undefined) {

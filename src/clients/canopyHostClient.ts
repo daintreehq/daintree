@@ -3,6 +3,8 @@ import type {
   CanopyHostChannel,
   CanopyHostEvent,
   HostAssistantDirectory,
+  HostSignInStep,
+  HostSignInTerminal,
 } from "@shared/types/ipc/canopyHost";
 import type { AssistantOpenDestination, CanopyTerminalView } from "@shared/types/ipc/canopy";
 import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
@@ -72,6 +74,24 @@ export const canopyHostClient = {
   /** The consumer stopped showing its assistant: its viewer and watch end. */
   releaseAssistant: (consumer: string): Promise<void> => {
     return window.electron.canopyHost.releaseAssistant(consumer);
+  },
+
+  /**
+   * Start an agent CLI's own sign-in in a terminal on a connected host, for
+   * `consumer`; it runs until the consumer lets go of it.
+   */
+  startSignIn: (consumer: string, hostId: string, agentId: string): Promise<HostSignInTerminal> => {
+    return window.electron.canopyHost.startSignIn(consumer, hostId, agentId);
+  },
+
+  /** Watch, type into, size or let go of the consumer's sign-in terminal. */
+  signInStep: (consumer: string, step: HostSignInStep): Promise<CanopyTerminalView | null> => {
+    return window.electron.canopyHost.signInStep(consumer, step);
+  },
+
+  /** The consumer closed its sign-in: the host ends its terminal. */
+  releaseSignIn: (consumer: string): Promise<void> => {
+    return window.electron.canopyHost.releaseSignIn(consumer);
   },
 
   /** Every host's pushes, each tagged with the host it came from. */

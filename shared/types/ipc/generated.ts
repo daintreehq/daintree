@@ -294,6 +294,10 @@ export interface GeneratedIpcInvokeMap {
     args: [consumer: string];
     result: void;
   };
+  "canopy-host:release-sign-in": {
+    args: [consumer: string];
+    result: void;
+  };
   "canopy-host:resolve-assistant": {
     args: [
       consumer: string,
@@ -306,6 +310,14 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: import("./canopy.js").AssistantOpenDestination | null;
+  };
+  "canopy-host:sign-in-step": {
+    args: [consumer: string, step: import("./canopyHost.js").HostSignInStep];
+    result: import("./canopy.js").CanopyTerminalView | null;
+  };
+  "canopy-host:start-sign-in": {
+    args: [consumer: string, hostId: string, agentId: string];
+    result: import("./canopyHost.js").HostSignInTerminal;
   };
   "canopy-host:watch-assistant": {
     args: [

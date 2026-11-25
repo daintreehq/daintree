@@ -44,6 +44,7 @@ import {
   STARTS_ON_CONNECT_COVERAGE,
 } from "./hostLabels";
 import { SshSignInDialog } from "./SshSignInDialog";
+import { HostAgentSignInDialog } from "./HostAgentSignInDialog";
 import { useSshSignIn } from "./useSshSignIn";
 import { describeHostForge } from "@/components/Hosts/hostForges";
 import { cancelPlacement, isSwitchFailure, placeAgain } from "@/components/Hosts/pendingPlacement";
@@ -215,6 +216,10 @@ export function HostDetail({
   const agentClis = [...(liveSummary?.agentClis ?? [])]
     .map((cli) => ({ ...cli, name: getAgentConfig(cli.agentId)?.name ?? cli.agentId }))
     .sort((a, b) => nameCollator.compare(a.name, b.name));
+  // The CLI whose own sign-in runs in a terminal on the host (#18196). A
+  // dropped link ends it there, so it is put away rather than reopened later.
+  const [agentSignIn, setAgentSignIn] = useState<{ agentId: string; name: string } | null>(null);
+  if (!connected && agentSignIn !== null) setAgentSignIn(null);
   const forges = liveSummary?.forges
     ? [...liveSummary.forges].sort((a, b) => nameCollator.compare(a.name, b.name))
     : liveSummary?.forges;
@@ -580,9 +585,19 @@ export function HostDetail({
                 key={cli.agentId}
                 label={cli.name}
                 control={
-                  <span className="text-xs tabular-nums text-text-secondary">
-                    {cli.version ?? "Version not reported"}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs tabular-nums text-text-secondary">
+                      {cli.version ?? "Version not reported"}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Sign in to ${cli.name} on ${hostName}`}
+                      onClick={() => setAgentSignIn({ agentId: cli.agentId, name: cli.name })}
+                    >
+                      Sign in
+                    </Button>
+                  </div>
                 }
               />
             ))
@@ -671,6 +686,15 @@ export function HostDetail({
         </SettingsGroup>
       </SettingsSection>
 
+      {agentSignIn && (
+        <HostAgentSignInDialog
+          hostId={descriptor.id}
+          hostName={hostName}
+          agentId={agentSignIn.agentId}
+          agentName={agentSignIn.name}
+          onClose={() => setAgentSignIn(null)}
+        />
+      )}
       {cancellingPlacement && placement && (
         <CancelCloudPlacementDialog
           hostId={descriptor.id}

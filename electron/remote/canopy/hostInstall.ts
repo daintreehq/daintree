@@ -1,5 +1,7 @@
 import { installCanopyHostWith, type CanopySessionSource } from "./host.js";
 import { createLocalCanopyViewers } from "./localViewers.js";
+import { HostSignIns } from "./hostSignIn.js";
+import { liveHostSignInDeps } from "./hostSignInLive.js";
 
 /** Serve this host's Canopy to attached Shells that read it without a bound view. */
 export function installCanopyHost(server: CanopySessionSource): () => void {
@@ -15,5 +17,6 @@ export function installCanopyHost(server: CanopySessionSource): () => void {
         await import("../../services/assistants/localAssistantWork.js");
       return readLocalAssistantWorkForHost();
     },
+    signIns: new HostSignIns(liveHostSignInDeps()),
   });
 }

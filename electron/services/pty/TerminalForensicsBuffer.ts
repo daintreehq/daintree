@@ -1,6 +1,7 @@
 import type { TerminalInfo } from "./types.js";
 import { decideTerminalExitForensics } from "./terminalForensics.js";
 import { logError, logLocalOnly } from "../../utils/logger.js";
+import { isHostSignInTerminalId } from "../../../shared/config/terminalScreenPersistence.js";
 
 const FORENSIC_BUFFER_SIZE = 4000;
 
@@ -55,7 +56,8 @@ export class TerminalForensicsBuffer {
     hadAgent: boolean,
     signal?: number
   ): void {
-    if (!hadAgent) return;
+    // A sign-in's screen holds codes the person pastes or is shown (#18196).
+    if (!hadAgent || isHostSignInTerminalId(terminalId)) return;
 
     const decision = decideTerminalExitForensics({
       exitCode,

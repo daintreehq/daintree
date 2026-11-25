@@ -29,9 +29,10 @@ export interface CanopyViewerParams {
 
 /**
  * What a viewer is for: a Canopy panel, which hears this machine's snapshots,
- * or a person's assistant viewer (#14163), which hears only its one stream.
+ * a person's assistant viewer (#14163), which hears only its one stream, or an
+ * agent CLI's sign-in (#18196), which hears only the terminal it started.
  */
-export type CanopyViewerPurpose = "canopy" | "assistant";
+export type CanopyViewerPurpose = "canopy" | "assistant" | "sign-in";
 
 /** A Canopy panel this machine serves for a view that isn't one of its own. */
 export interface CanopyViewer extends ClientEndpoint {
@@ -68,7 +69,7 @@ export function createCanopyViewer(
     handle,
     send(frame: HostFrame): void {
       if (closed || !isCanopyHostPushChannel(frame.channel)) return;
-      if (purpose === "assistant" && frame.channel !== "canopy:terminal-data") return;
+      if (purpose !== "canopy" && frame.channel !== "canopy:terminal-data") return;
       params.onPush(frame.channel, frame.args[0]);
     },
     request: (method) =>
@@ -140,7 +141,7 @@ function notWatched(): AppError {
 function wrongPurpose(): AppError {
   return new AppError({
     code: "VALIDATION",
-    message: "A viewer serves Canopy or one assistant, not both",
+    message: "A viewer serves Canopy, one assistant or one sign-in, never two of them",
   });
 }
 
@@ -220,6 +221,23 @@ export class CanopyViewers {
       this.offAdmission ??= this.deps.admitAssistantViewers?.() ?? null;
     }
     return this.deps.invoke({ endpoint: viewer, client }, channel, args);
+  }
+
+  /**
+   * The sign-in viewer `key`, made with `params` when `create` and it's new.
+   * It reads no snapshot and goes through no dispatcher: its one terminal is
+   * served by whoever asked for it.
+   */
+  signIn(key: string, params: () => CanopyViewerParams, create: boolean): CanopyViewer | null {
+    const viewer = this.viewers.get(key);
+    if (viewer) {
+      if (viewer.purpose !== "sign-in") throw wrongPurpose();
+      return viewer;
+    }
+    if (!create) return null;
+    const made = createCanopyViewer(params(), "sign-in");
+    this.viewers.set(key, made);
+    return made;
   }
 
   has(key: string): boolean {

@@ -8,6 +8,7 @@
 
 import { events } from "../events.js";
 import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
+import { isHostSignInTerminalId } from "../../../shared/config/terminalScreenPersistence.js";
 import {
   HANDBACK_CODE_PATTERN,
   HANDBACK_MESSAGE_MAX_CHARS,
@@ -172,11 +173,12 @@ function dropForeignGaugeEntries(
 }
 
 export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConfig): boolean {
-  // A host's throwaway run (#14445) is its Shell session's alone: none of its
-  // agent's observations reach the bus, so no renderer, notification, sound or
-  // Shell notice ever hears of it.
-  if (event.type.startsWith("agent-") && isHostThrowawayTerminalId(agentEventTerminalId(event))) {
-    return true;
+  // A host's throwaway run (#14445) is its Shell session's alone, and a CLI's
+  // sign-in (#18196) its dialog's: none of their agent observations reach the
+  // bus, so no renderer, notification, sound or Shell notice ever hears of them.
+  if (event.type.startsWith("agent-")) {
+    const terminalId = agentEventTerminalId(event);
+    if (isHostThrowawayTerminalId(terminalId) || isHostSignInTerminalId(terminalId)) return true;
   }
   switch (event.type) {
     case "agent-state":

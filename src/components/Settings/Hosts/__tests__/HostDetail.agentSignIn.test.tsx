@@ -1,0 +1,250 @@
+// @vitest-environment jsdom
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { HostListEntry, HostMetricsSummary } from "@shared/types/remoteHosts";
+
+const signIns = vi.hoisted(() => ({
+  startSignIn: vi.fn(),
+  releaseSignIn: vi.fn(async () => undefined),
+}));
+
+vi.mock("@/clients/remoteHostsClient", () => ({
+  remoteHostsClient: {
+    update: vi.fn(async (payload: unknown) => payload),
+    connect: vi.fn(async () => undefined),
+    forget: vi.fn(async () => undefined),
+    listClipboardGrants: vi.fn(async () => []),
+    listPluginViewConsents: vi.fn(async () => []),
+    resetClipboardGrants: vi.fn(async () => undefined),
+    pluginParity: vi.fn(async () => []),
+  },
+}));
+vi.mock("@/clients/canopyHostClient", () => ({
+  canopyHostClient: {
+    startSignIn: signIns.startSignIn,
+    releaseSignIn: signIns.releaseSignIn,
+    signInStep: vi.fn(async () => null),
+    onEvent: vi.fn(() => () => {}),
+  },
+}));
+// The live pane is xterm; what it is pointed at is what matters here.
+vi.mock("@/components/Canopy/CanopyTerminal", () => ({
+  CanopyTerminal: ({
+    runId,
+    endedMessage,
+    autoFocus,
+  }: {
+    runId: string;
+    endedMessage?: string;
+    autoFocus?: boolean;
+  }) => (
+    <div
+      data-testid="sign-in-pane"
+      data-run-id={runId}
+      data-ended-message={endedMessage}
+      data-auto-focus={String(autoFocus === true)}
+    />
+  ),
+}));
+vi.mock("../HostPluginsSection", () => ({ HostPluginsSection: () => null }));
+vi.mock("../HostCopySettingsSection", () => ({ HostCopySettingsSection: () => null }));
+vi.mock("../HostSettingsSection", () => ({ HostSettingsSection: () => null }));
+vi.mock("../HostSessionsSection", () => ({ HostSessionsSection: () => null }));
+
+import { ClientAppError } from "@/utils/clientAppError";
+import { HostDetail } from "../HostDetail";
+
+const HANDSHAKE = {
+  version: "0.52.0",
+  commit: "abc",
+  protocolVersion: 1,
+  platform: "linux" as const,
+  arch: "x64" as const,
+};
+
+const SUMMARY: HostMetricsSummary = {
+  hostId: "studio-01",
+  sampledAt: 1,
+  platform: "linux",
+  cpuPercent: null,
+  memoryPressure: null,
+  memoryUsedBytes: null,
+  memoryTotalBytes: null,
+  swapUsedBytes: null,
+  swapTotalBytes: null,
+  thermal: null,
+  cpuPressure: null,
+  agentsObserved: null,
+  projectCount: null,
+  worktreeCount: null,
+  driver: null,
+  agentClis: [
+    { agentId: "claude", version: "2.1.0" },
+    { agentId: "gemini", version: null },
+  ],
+};
+
+function entry(connected = true): HostListEntry {
+  return {
+    descriptor: {
+      id: "studio-01",
+      name: "studio-01",
+      connection: { kind: "ssh", target: "greg@studio" },
+      platform: "linux",
+      arch: "x64",
+      lastHandshake: null,
+      lastSeenAt: null,
+      addedAt: 0,
+      notificationsEnabled: false,
+      assistantControlEnabled: false,
+    },
+    connection: connected
+      ? { status: "connected", rttMs: 3, handshake: HANDSHAKE }
+      : { status: "disconnected" },
+    summary: SUMMARY,
+  } as HostListEntry;
+}
+
+function agentClisText(): string {
+  return screen.getByText("Agent CLIs").closest("section")?.textContent ?? "";
+}
+
+async function settle() {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+beforeEach(() => {
+  signIns.startSignIn.mockReset();
+  signIns.releaseSignIn.mockClear();
+  signIns.startSignIn.mockResolvedValue({ terminalId: "daintree-sign-in-1", spawnedAt: 10 });
+});
+
+describe("HostDetail agent CLI sign-in", () => {
+  it("offers Sign in on every reported agent CLI of a connected host", () => {
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    expect(screen.getByRole("button", { name: "Sign in to Claude on studio-01" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in to Gemini on studio-01" })).toBeTruthy();
+  });
+
+  it("offers none on a host that isn't connected", () => {
+    render(<HostDetail entry={entry(false)} onBack={() => {}} />);
+    expect(screen.queryAllByRole("button", { name: /^Sign in to / })).toHaveLength(0);
+  });
+
+  it("starts that CLI's own sign-in on the named host and shows its terminal", async () => {
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
+    await settle();
+
+    expect(signIns.startSignIn).toHaveBeenCalledTimes(1);
+    const [consumer, hostId, agentId] = signIns.startSignIn.mock.calls[0]!;
+    expect(hostId).toBe("studio-01");
+    expect(agentId).toBe("claude");
+    expect(typeof consumer).toBe("string");
+
+    const dialog = screen.getByTestId("host-agent-sign-in-dialog");
+    expect(dialog.textContent).toContain("Sign in to Claude on studio-01");
+    expect(dialog.textContent).toContain("Runs claude auth login on studio-01.");
+    expect(dialog.textContent).toContain(
+      "If Claude opens without asking you to sign in, type /login in it."
+    );
+    expect(screen.getByTestId("sign-in-pane").getAttribute("data-run-id")).toBe(
+      "daintree-sign-in-1"
+    );
+  });
+
+  it("names the CLI itself for one with no sign-in command of its own", async () => {
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Gemini on studio-01" }));
+    await settle();
+    expect(signIns.startSignIn.mock.calls[0]![2]).toBe("gemini");
+    const text = screen.getByTestId("host-agent-sign-in-dialog").textContent;
+    expect(text).toContain("Runs gemini on studio-01.");
+    expect(text).toContain("If Gemini opens without asking you to sign in, type /auth in it.");
+  });
+
+  it("ends the sign-in on the host when the dialog closes", async () => {
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
+    await settle();
+    const consumer = signIns.startSignIn.mock.calls[0]![0];
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await settle();
+    expect(signIns.releaseSignIn).toHaveBeenCalledWith(consumer);
+    expect(screen.queryByTestId("host-agent-sign-in-dialog")).toBeNull();
+  });
+
+  it("puts the sign-in away when the host disconnects, and doesn't reopen it on reconnect", async () => {
+    const { rerender } = render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
+    await settle();
+    const consumer = signIns.startSignIn.mock.calls[0]![0];
+
+    rerender(<HostDetail entry={entry(false)} onBack={() => {}} />);
+    await settle();
+    expect(screen.queryByTestId("host-agent-sign-in-dialog")).toBeNull();
+    expect(signIns.releaseSignIn).toHaveBeenCalledWith(consumer);
+
+    rerender(<HostDetail entry={entry()} onBack={() => {}} />);
+    await settle();
+    expect(screen.queryByTestId("host-agent-sign-in-dialog")).toBeNull();
+    expect(signIns.startSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("says why a sign-in didn't start, and starts it afresh on Retry", async () => {
+    signIns.startSignIn.mockRejectedValueOnce(
+      new ClientAppError(
+        "HOST_DISCONNECTED",
+        "Host studio-01 is not connected",
+        "Couldn't reach it."
+      )
+    );
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
+    await settle();
+    expect(screen.getByRole("alert").textContent).toContain("Couldn't reach it.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(signIns.startSignIn).toHaveBeenCalledTimes(2);
+    const [first, second] = signIns.startSignIn.mock.calls.map((call) => call[0]);
+    expect(second).not.toBe(first);
+    expect(signIns.releaseSignIn).toHaveBeenCalledWith(first);
+    expect(screen.getByTestId("sign-in-pane")).toBeTruthy();
+  });
+
+  it("offers no Retry to a host too old for sign-ins, only the reason", async () => {
+    signIns.startSignIn.mockRejectedValueOnce(
+      new ClientAppError(
+        "UNSUPPORTED",
+        "Host studio-01 has no agent sign-ins",
+        "This host needs a newer Daintree to sign in its agents from here."
+      )
+    );
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
+    await settle();
+    expect(screen.getByRole("alert").textContent).toContain("needs a newer Daintree");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("hands the pane the keyboard once it opens", async () => {
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
+    await settle();
+    expect(screen.getByTestId("sign-in-pane").getAttribute("data-auto-focus")).toBe("true");
+  });
+
+  it("never shows a signed-in status on the rows, before or after a sign-in", async () => {
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    const before = agentClisText();
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
+    await settle();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await settle();
+    expect(agentClisText()).toBe(before);
+    expect(before.toLowerCase()).not.toMatch(/signed in|not signed|authenticated/);
+  });
+});

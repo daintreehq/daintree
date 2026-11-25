@@ -11,6 +11,7 @@ import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { projectStore } from "./ProjectStore.js";
 import { getPtyClient, getRunAttentionServiceRef } from "../window/serviceRefs.js";
 import { isHostThrowawayTerminalId } from "../../shared/config/hostThrowaway.js";
+import { isHostSignInTerminalId } from "../../shared/config/terminalScreenPersistence.js";
 import { PanelRecordIndex, type PanelRecord } from "./agentNotificationPanels.js";
 import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
@@ -610,7 +611,8 @@ class AgentNotificationService {
         this.activeSeedTouched = null;
         let seeded = false;
         for (const terminal of terminals) {
-          if (isHostThrowawayTerminalId(terminal.id)) continue;
+          if (isHostThrowawayTerminalId(terminal.id) || isHostSignInTerminalId(terminal.id))
+            continue;
           // Read each live terminal's project now, while the host still names
           // it: a natural exit drops that attribution before its last event.
           const projectId = ptyClient.getTerminalProjectId(terminal.id) ?? terminal.projectId;

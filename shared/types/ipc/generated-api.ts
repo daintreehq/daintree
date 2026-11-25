@@ -278,9 +278,18 @@ export interface GeneratedElectronAPI {
     releaseAssistant(
       ...args: IpcInvokeMap["canopy-host:release-assistant"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:release-assistant"]["result"]>;
+    releaseSignIn(
+      ...args: IpcInvokeMap["canopy-host:release-sign-in"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:release-sign-in"]["result"]>;
     resolveAssistant(
       ...args: IpcInvokeMap["canopy-host:resolve-assistant"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:resolve-assistant"]["result"]>;
+    signInStep(
+      ...args: IpcInvokeMap["canopy-host:sign-in-step"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:sign-in-step"]["result"]>;
+    startSignIn(
+      ...args: IpcInvokeMap["canopy-host:start-sign-in"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:start-sign-in"]["result"]>;
     watchAssistant(
       ...args: IpcInvokeMap["canopy-host:watch-assistant"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:watch-assistant"]["result"]>;

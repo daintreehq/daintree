@@ -49,6 +49,7 @@ export const config: AgentConfig = {
     npm: `${NPM_INSTALL}@latest`,
     curl: INSTALL_SCRIPT,
   },
+  signInArgs: ["login"],
   install: {
     docsUrl: "https://moonshotai.github.io/kimi-code/en/guides/getting-started",
     byOs: {

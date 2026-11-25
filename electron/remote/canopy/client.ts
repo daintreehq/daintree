@@ -7,6 +7,8 @@ import {
   type CanopyHostEvent,
   type CanopyHostPushChannel,
   type HostAssistantDirectory,
+  type HostSignInStep,
+  type HostSignInTerminal,
 } from "../../../shared/types/ipc/canopyHost.js";
 import type {
   AssistantOpenDestination,
@@ -33,6 +35,7 @@ import {
   CanopyAssistantsAnswerSchema,
   CanopyAssistantWorkAnswerSchema,
   CanopyLinkMethod,
+  CanopySignInStartAnswerSchema,
   CanopyViewerLostPayloadSchema,
   isCanopyViewerId,
 } from "./linkMethods.js";
@@ -98,12 +101,19 @@ interface Subscription {
   consumer: string | null;
   /** The exact run an assistant viewer shows, for as long as it lives. */
   subjectKey: string | null;
+  /**
+   * A sign-in viewer's terminal once its host started it, and the stream the
+   * view has open on it; absent for every other viewer.
+   */
+  signIn?: { terminalId: string | null; watchId: number | null };
 }
 
 interface ViewRecord {
   hosts: Map<HostId, Subscription>;
   /** Each assistant consumer's one viewer, on the host of the assistant it shows. */
   assistants: Map<string, Subscription>;
+  /** Each sign-in consumer's one viewer, on the host it signs an agent in on. */
+  signIns: Map<string, Subscription>;
   unwatch: () => void;
 }
 
@@ -131,6 +141,24 @@ function assistantsUnsupported(hostId: HostId): AppError {
     message: `Host ${hostId} has no assistant viewer`,
     userMessage: "This host needs a newer Daintree to show its assistants.",
     context: { hostId },
+  });
+}
+
+/** A host from before sign-ins answers the method as unknown. */
+function signInsUnsupported(hostId: HostId): AppError {
+  return new AppError({
+    code: "UNSUPPORTED",
+    message: `Host ${hostId} has no agent sign-ins`,
+    userMessage: "This host needs a newer Daintree to sign in its agents from here.",
+    context: { hostId },
+  });
+}
+
+function signInGone(): AppError {
+  return new AppError({
+    code: "NOT_FOUND",
+    message: "No sign-in is running for this consumer",
+    userMessage: "That sign-in isn't running any more.",
   });
 }
 
@@ -445,6 +473,98 @@ export class CanopyHostsClient {
     }
   }
 
+  /**
+   * Start an agent CLI's own sign-in on a connected host, for the view's
+   * `consumer` (#18196). The host runs it in a terminal of its own, placed in
+   * no project, which lasts as long as this viewer: the consumer letting go,
+   * the view going or the link dropping all end it there. A host that isn't
+   * connected is never dialled for one.
+   */
+  async startSignIn(
+    webContentsId: number,
+    consumer: unknown,
+    hostId: unknown,
+    agentId: unknown
+  ): Promise<HostSignInTerminal> {
+    const name = consumerOf(consumer);
+    // As long as an agent id a host's inventory reports may be.
+    if (typeof agentId !== "string" || agentId.length === 0 || agentId.length > 256) {
+      throw invalid("agentId must be a non-empty string");
+    }
+    const target = this.assistantHostOf(webContentsId, hostId, { allowOwnLocal: true });
+    if (isLocalHostId(target)) throw invalid("Sign-ins run on a connected host");
+    const record = this.recordOf(webContentsId);
+    if (record.signIns.has(name)) {
+      throw invalid("A consumer runs one sign-in; release it before starting another");
+    }
+    const viewerId = this.options.newViewerId?.() ?? randomUUID();
+    const sub: Subscription = {
+      webContentsId,
+      hostId: target,
+      viewerId,
+      consumer: name,
+      subjectKey: null,
+      signIn: { terminalId: null, watchId: null },
+    };
+    record.signIns.set(name, sub);
+    this.byViewer.set(viewerId, sub);
+    try {
+      const answer = CanopySignInStartAnswerSchema.safeParse(
+        await this.callSignIn(sub, { op: "start", agentId })
+      );
+      if (!answer.success) {
+        throw new AppError({ code: "INTERNAL", message: `Host ${target} sent an invalid answer` });
+      }
+      // Let go while it started: the release ended it there.
+      if (this.byViewer.get(viewerId) !== sub) throw signInGone();
+      sub.signIn!.terminalId = answer.data.terminalId;
+      return answer.data;
+    } catch (error) {
+      this.drop(sub);
+      this.forgetIfEmpty(webContentsId, record);
+      throw error;
+    }
+  }
+
+  /** Watch, type into, size or let go of the stream of the consumer's sign-in. */
+  async signInStep(
+    webContentsId: number,
+    consumer: unknown,
+    step: unknown
+  ): Promise<CanopyTerminalView | null> {
+    const name = consumerOf(consumer);
+    const parsed = signInStepOf(step);
+    const sub = this.views.get(webContentsId)?.signIns.get(name);
+    if (!sub?.signIn || sub.signIn.terminalId === null) {
+      if (parsed.op === "unwatch") return null;
+      throw signInGone();
+    }
+    try {
+      const answer = await this.callSignIn(sub, parsed);
+      if (parsed.op !== "watch") return null;
+      const view = answer as CanopyTerminalView;
+      // Released or ended while the host answered: that stream is gone.
+      if (this.byViewer.get(sub.viewerId) !== sub) return { watchId: null, snapshot: null };
+      sub.signIn.watchId = view.watchId;
+      return view;
+    } catch (error) {
+      if (codeOf(error) === "OUTCOME_UNKNOWN" && parsed.op === "input") {
+        throw deliveryUnknown(error);
+      }
+      throw error;
+    }
+  }
+
+  /** The consumer closed its sign-in: the host ends its terminal. */
+  releaseSignIn(webContentsId: number, consumer: unknown): void {
+    if (!isCanopyViewerId(consumer)) return;
+    const record = this.views.get(webContentsId);
+    const sub = record?.signIns.get(consumer);
+    if (!record || !sub) return;
+    this.drop(sub);
+    this.forgetIfEmpty(webContentsId, record);
+  }
+
   /** The consumer stopped showing its assistant: its viewer and watch there end. */
   releaseAssistant(webContentsId: number, consumer: unknown): void {
     if (!isCanopyViewerId(consumer)) return;
@@ -466,7 +586,7 @@ export class CanopyHostsClient {
   }
 
   private forgetIfEmpty(webContentsId: number, record: ViewRecord): void {
-    if (record.hosts.size > 0 || record.assistants.size > 0) return;
+    if (record.hosts.size > 0 || record.assistants.size > 0 || record.signIns.size > 0) return;
     if (this.views.get(webContentsId) !== record) return;
     this.views.delete(webContentsId);
     record.unwatch();
@@ -610,6 +730,31 @@ export class CanopyHostsClient {
     return answer.data;
   }
 
+  private async callSignIn(
+    sub: Subscription,
+    step: HostSignInStep | { op: "start"; agentId: string }
+  ): Promise<unknown> {
+    this.options.manager.touch(sub.hostId);
+    const connection = this.options.manager.get(sub.hostId);
+    if (!connection) {
+      throw new AppError({
+        code: "HOST_DISCONNECTED",
+        message: `Host ${sub.hostId} is not connected`,
+        userMessage: "This host isn't connected. Connect to it and try again.",
+      });
+    }
+    try {
+      return await connection.callHost(CanopyLinkMethod.SIGN_IN, {
+        viewerId: sub.viewerId,
+        ...step,
+      });
+    } catch (error) {
+      // An unknown method: the host predates sign-ins.
+      if (codeOf(error) === "UNSUPPORTED") throw signInsUnsupported(sub.hostId);
+      throw error;
+    }
+  }
+
   private targetOf(webContentsId: number, hostId: unknown): HostId {
     if (typeof hostId !== "string" || hostId.length === 0 || hostId.length > 64) {
       throw invalid("hostId must be a non-empty string");
@@ -632,7 +777,12 @@ export class CanopyHostsClient {
   private recordOf(webContentsId: number): ViewRecord {
     let record = this.views.get(webContentsId);
     if (!record) {
-      const created: ViewRecord = { hosts: new Map(), assistants: new Map(), unwatch: () => {} };
+      const created: ViewRecord = {
+        hosts: new Map(),
+        assistants: new Map(),
+        signIns: new Map(),
+        unwatch: () => {},
+      };
       this.views.set(webContentsId, created);
       created.unwatch = this.options.watchView(webContentsId, () => {
         if (this.views.get(webContentsId) === created) this.releaseView(webContentsId);
@@ -659,7 +809,11 @@ export class CanopyHostsClient {
     this.byViewer.delete(sub.viewerId);
     const record = this.views.get(sub.webContentsId);
     if (sub.consumer === null) record?.hosts.delete(sub.hostId);
-    else if (record?.assistants.get(sub.consumer) === sub) record.assistants.delete(sub.consumer);
+    else if (sub.signIn) {
+      if (record?.signIns.get(sub.consumer) === sub) record.signIns.delete(sub.consumer);
+    } else if (record?.assistants.get(sub.consumer) === sub) {
+      record.assistants.delete(sub.consumer);
+    }
     if (isLocalHostId(sub.hostId)) {
       this.options.local.close(sub.viewerId);
       return;
@@ -697,7 +851,13 @@ export class CanopyHostsClient {
     if (!record) return;
     this.views.delete(webContentsId);
     record.unwatch();
-    for (const sub of [...record.hosts.values(), ...record.assistants.values()]) this.drop(sub);
+    for (const sub of [
+      ...record.hosts.values(),
+      ...record.assistants.values(),
+      ...record.signIns.values(),
+    ]) {
+      this.drop(sub);
+    }
   }
 
   private onViewerEvent(hostId: HostId, event: EventMessage): void {
@@ -706,6 +866,16 @@ export class CanopyHostsClient {
     // Only the host the viewer was opened on speaks for it.
     if (!sub || sub.hostId !== hostId) return;
     const channel = event.channel;
+    if (sub.signIn) {
+      if (channel !== "canopy:terminal-data") return;
+      this.options.send(sub.webContentsId, {
+        kind: "sign-in-terminal-data",
+        hostId,
+        consumer: sub.consumer as string,
+        chunk: event.args[0] as CanopyTerminalData,
+      });
+      return;
+    }
     if (sub.consumer !== null) {
       // An assistant viewer hears its own stream and nothing else the host says.
       if (channel !== "canopy:terminal-data") return;
@@ -734,6 +904,10 @@ export class CanopyHostsClient {
   }
 
   private tellToResync(sub: Subscription): void {
+    if (sub.signIn) {
+      this.endSignIn(sub);
+      return;
+    }
     const event: CanopyHostEvent =
       sub.consumer === null
         ? { kind: "resync", hostId: sub.hostId }
@@ -741,6 +915,26 @@ export class CanopyHostsClient {
     if (!this.options.send(sub.webContentsId, event)) {
       this.releaseView(sub.webContentsId);
     }
+  }
+
+  /**
+   * The sign-in's viewer went on its host, and its terminal with it: a link
+   * that dropped, or a lost push. Its stream says it ended, and nothing of it
+   * is opened again.
+   */
+  private endSignIn(sub: Subscription): void {
+    const signIn = sub.signIn;
+    if (!signIn || this.byViewer.get(sub.viewerId) !== sub) return;
+    this.drop(sub);
+    const record = this.views.get(sub.webContentsId);
+    if (record) this.forgetIfEmpty(sub.webContentsId, record);
+    if (signIn.terminalId === null || signIn.watchId === null) return;
+    this.options.send(sub.webContentsId, {
+      kind: "sign-in-terminal-data",
+      hostId: sub.hostId,
+      consumer: sub.consumer as string,
+      chunk: { kind: "ended", watchId: signIn.watchId, runId: signIn.terminalId },
+    });
   }
 
   private dropRemovedHosts(): void {
@@ -751,6 +945,37 @@ export class CanopyHostsClient {
       if (record) this.forgetIfEmpty(sub.webContentsId, record);
     }
   }
+}
+
+const SIGN_IN_GRID_MAX = 1_000;
+
+function isGridSize(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= SIGN_IN_GRID_MAX;
+}
+
+/** The step as the view asked it, never with anything else riding along to the host. */
+function signInStepOf(step: unknown): HostSignInStep {
+  const raw = (typeof step === "object" && step !== null ? step : {}) as Record<string, unknown>;
+  const watchId = raw.watchId;
+  const hasWatch = Number.isSafeInteger(watchId);
+  switch (raw.op) {
+    case "watch":
+      return { op: "watch" };
+    case "input":
+      if (hasWatch && typeof raw.data === "string" && raw.data.length > 0) {
+        return { op: "input", watchId: watchId as number, data: raw.data };
+      }
+      break;
+    case "resize":
+      if (hasWatch && isGridSize(raw.cols) && isGridSize(raw.rows)) {
+        return { op: "resize", watchId: watchId as number, cols: raw.cols, rows: raw.rows };
+      }
+      break;
+    case "unwatch":
+      if (hasWatch) return { op: "unwatch", watchId: watchId as number };
+      break;
+  }
+  throw invalid("Invalid sign-in step");
 }
 
 function consumerOf(consumer: unknown): string {

@@ -9,6 +9,9 @@ export const CANOPY_HOST_METHOD_CHANNELS = {
   resolveAssistant: "canopy-host:resolve-assistant",
   assistantInvoke: "canopy-host:assistant-invoke",
   releaseAssistant: "canopy-host:release-assistant",
+  startSignIn: "canopy-host:start-sign-in",
+  signInStep: "canopy-host:sign-in-step",
+  releaseSignIn: "canopy-host:release-sign-in",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CANOPY_HOST_METHOD_CHANNELS;

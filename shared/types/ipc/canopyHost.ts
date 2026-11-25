@@ -124,6 +124,10 @@ export interface HostAssistantDirectory {
  *
  * The `assistant-` kinds are one assistant viewer's, named by the consumer the
  * view gave it: its stream's bytes, and that its watch there was lost.
+ *
+ * `sign-in-terminal-data` is one agent CLI sign-in's stream, named by its
+ * consumer. A link that drops ends the sign-in on the host, which reaches the
+ * view as that stream's `ended`.
  */
 export type CanopyHostEvent =
   | { kind: "canopy-snapshot"; hostId: HostId; snapshot: CanopySnapshot }
@@ -131,4 +135,18 @@ export type CanopyHostEvent =
   | { kind: "terminal-data"; hostId: HostId; chunk: CanopyTerminalData }
   | { kind: "resync"; hostId: HostId }
   | { kind: "assistant-terminal-data"; hostId: HostId; consumer: string; chunk: CanopyTerminalData }
-  | { kind: "assistant-resync"; hostId: HostId; consumer: string };
+  | { kind: "assistant-resync"; hostId: HostId; consumer: string }
+  | { kind: "sign-in-terminal-data"; hostId: HostId; consumer: string; chunk: CanopyTerminalData };
+
+/** The terminal an agent CLI's sign-in runs in on its host (#18196), by this incarnation. */
+export interface HostSignInTerminal {
+  terminalId: string;
+  spawnedAt: number;
+}
+
+/** A step of a running sign-in: watching its terminal, typing into it, sizing it, letting it go. */
+export type HostSignInStep =
+  | { op: "watch" }
+  | { op: "input"; watchId: number; data: string }
+  | { op: "resize"; watchId: number; cols: number; rows: number }
+  | { op: "unwatch"; watchId: number };

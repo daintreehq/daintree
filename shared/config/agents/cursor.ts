@@ -21,6 +21,7 @@ export const config: AgentConfig = {
   update: {
     curl: "curl https://cursor.com/install -fsS | bash",
   },
+  signInArgs: ["login"],
   install: {
     docsUrl: "https://cursor.com/features/cursor-agent",
     byOs: {

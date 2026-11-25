@@ -74,6 +74,10 @@ export const config: AgentConfig = {
   // in a root-owned folder. It pipes into a shell, so it stays copy-only. On
   // macOS and Windows the package manager (Homebrew, WinGet), which runs without
   // a shell, comes last.
+  signInArgs: ["auth", "login"],
+  // `claude auth login` arrived in 2.1.41; before it, those words were a prompt.
+  signInMinVersion: "2.1.41",
+  signInPrompt: "/login",
   install: {
     docsUrl: "https://code.claude.com/docs/en/setup",
     byOs: {

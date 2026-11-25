@@ -943,6 +943,24 @@ export interface AgentConfig {
   externalLinks?: AgentExternalLink[];
   help?: AgentHelpConfig;
   install?: AgentInstallHelp;
+  /**
+   * The CLI's own sign-in command, as arguments after {@link command}, run in
+   * a terminal on a host when the person asks to sign it in there (#18196).
+   * Unset, the CLI opens as it is, and signs in from its own first-run screen
+   * or command. Daintree only starts it: it never reads what the CLI saves.
+   */
+  signInArgs?: readonly string[];
+  /**
+   * The oldest CLI version that has {@link signInArgs}: an older copy opens as
+   * it is instead, where {@link signInPrompt} signs it in.
+   */
+  signInMinVersion?: string;
+  /**
+   * What the person types at the CLI's own prompt to sign in, for when the
+   * CLI opens without asking (already signed in, or a build older than its
+   * sign-in command). Shown beside a host's sign-in, never typed for them.
+   */
+  signInPrompt?: string;
   capabilities?: {
     scrollback?: number;
     blockAltScreen?: boolean;

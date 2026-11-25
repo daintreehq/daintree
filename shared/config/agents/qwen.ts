@@ -24,6 +24,7 @@ export const config: AgentConfig = {
   update: {
     npm: "npm install -g @qwen-code/qwen-code@latest",
   },
+  signInPrompt: "/auth",
   install: {
     docsUrl: "https://github.com/QwenLM/qwen-code#readme",
     byOs: {

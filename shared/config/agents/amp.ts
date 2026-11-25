@@ -35,6 +35,7 @@ export const config: AgentConfig = {
     curl: "curl -fsSL https://ampcode.com/install.sh | bash",
     npm: "npm install -g @ampcode/cli@latest",
   },
+  signInArgs: ["login"],
   install: {
     docsUrl: "https://ampcode.com/manual",
     byOs: {

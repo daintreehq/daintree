@@ -37,6 +37,7 @@ export const config: AgentConfig = {
     brew: "brew upgrade anomalyco/tap/opencode",
     curl: "curl -fsSL https://opencode.ai/install | bash",
   },
+  signInArgs: ["auth", "login"],
   install: {
     docsUrl: "https://opencode.ai/docs/",
     byOs: {

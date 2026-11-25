@@ -1,4 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import type { TerminalInfo } from "../types.js";
+
+const logged = vi.hoisted(() => ({ error: vi.fn(), localOnly: vi.fn() }));
+vi.mock("../../../utils/logger.js", () => ({
+  logError: logged.error,
+  logLocalOnly: logged.localOnly,
+}));
+
 import { TerminalForensicsBuffer } from "../TerminalForensicsBuffer.js";
 
 const WINDOW = 4000;
@@ -19,6 +27,28 @@ function makeRandom(seed: number): () => number {
     return state / 0x100000000;
   };
 }
+
+describe("TerminalForensicsBuffer.logForensics", () => {
+  const agentTerminal = { wasKilled: false, cwd: "/home/me", detectedAgentId: "claude" };
+
+  it("logs an agent's abnormal exit with its tail", () => {
+    logged.error.mockClear();
+    const buffer = new TerminalForensicsBuffer();
+    buffer.capture("Error: something broke\n");
+    buffer.logForensics("term-1", 1, agentTerminal as unknown as TerminalInfo, true);
+    expect(logged.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("never logs an agent CLI sign-in's screen (#18196)", () => {
+    logged.error.mockClear();
+    logged.localOnly.mockClear();
+    const buffer = new TerminalForensicsBuffer();
+    buffer.capture("Error: something broke\nPaste code: ABCD-1234\n");
+    buffer.logForensics("daintree-sign-in-1", 1, agentTerminal as unknown as TerminalInfo, true);
+    expect(logged.error).not.toHaveBeenCalled();
+    expect(logged.localOnly).not.toHaveBeenCalled();
+  });
+});
 
 describe("TerminalForensicsBuffer", () => {
   it("is empty before any capture", () => {

@@ -3,6 +3,7 @@
  */
 
 import { CHANNELS } from "../../channels.js";
+import { isHostSignInTerminalId } from "../../../../shared/config/terminalScreenPersistence.js";
 import {
   broadcastToProjectRenderers,
   broadcastToLocalRenderersExcept,
@@ -101,6 +102,10 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     routing?: PtyDataRouting,
     streamEnd?: number
   ) => {
+    // An agent CLI's sign-in (#18196) reaches only its dialog, through the
+    // watch on Main's mirror: no window, here or on a Shell, is sent its codes,
+    // not even once it is killed and has no project to scope it.
+    if (isHostSignInTerminalId(id)) return;
     // Omitted rather than sent as a trailing `undefined` when the host had no
     // offset, so the wire shape of an unfenced chunk is unchanged.
     const offsetArg = streamEnd === undefined ? [] : [streamEnd];

@@ -5,6 +5,7 @@ import {
   HOST_THROWAWAY_TERMINAL_PREFIX,
   HOST_THROWAWAY_WORKSPACE_ID,
 } from "../../../shared/config/hostThrowaway.js";
+import { HOST_SIGN_IN_TERMINAL_PREFIX } from "../../../shared/config/terminalScreenPersistence.js";
 
 const shared = vi.hoisted(() => {
   // vi.hoisted runs before module imports resolve, so use require() to load
@@ -1042,6 +1043,29 @@ describe("PtyClient adversarial", () => {
     expect(replayedIds).toEqual(["t-kept"]);
     expect(client.hasTerminal(throwawayId)).toBe(false);
     expect(lost).toEqual([throwawayId]);
+    client.dispose();
+  });
+
+  it("RESPAWN_AFTER_CRASH_NEVER_RUNS_AN_AGENT_SIGN_IN_AGAIN", () => {
+    const client = createReadyClient();
+    const restartedChild = createMockChild();
+    const lost: string[] = [];
+    client.on("terminal-lost", (id: string) => lost.push(id));
+    const signInId = `${HOST_SIGN_IN_TERMINAL_PREFIX}1`;
+    client.spawn("t-kept", baseSpawnOptions());
+    client.spawn(signInId, { ...baseSpawnOptions(), projectId: null });
+
+    shared.forkMock.mockReturnValue(restartedChild);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(2000);
+    restartedChild.emit("message", { type: "ready" });
+
+    const replayedIds = restartedChild.postMessage.mock.calls
+      .filter((call: unknown[]) => (call[0] as { type?: string })?.type === "spawn")
+      .map((call: unknown[]) => (call[0] as { id: string }).id);
+    expect(replayedIds).toEqual(["t-kept"]);
+    expect(client.hasTerminal(signInId)).toBe(false);
+    expect(lost).toEqual([signInId]);
     client.dispose();
   });
 

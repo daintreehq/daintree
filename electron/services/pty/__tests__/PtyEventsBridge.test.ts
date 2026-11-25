@@ -65,6 +65,42 @@ describe("bridgePtyEvent", () => {
     expect(closing).toEqual([true, undefined]);
   });
 
+  it("keeps an agent CLI sign-in's agent observations off the bus (#18196)", () => {
+    const heard: unknown[] = [];
+    events.on("agent:state-changed", (payload) => heard.push(payload));
+    events.on("agent:detected", (payload) => heard.push(payload));
+    events.on("agent:spawned", (payload) => heard.push(payload));
+
+    const signIn = "daintree-sign-in-1";
+    expect(
+      bridgePtyEvent({
+        type: "agent-state",
+        id: signIn,
+        agentId: "claude",
+        state: "waiting",
+        previousState: "working",
+        timestamp: 1,
+        trigger: "activity",
+        confidence: 1,
+      } as never)
+    ).toBe(true);
+    expect(
+      bridgePtyEvent({
+        type: "agent-detected",
+        terminalId: signIn,
+        agentType: "claude",
+        timestamp: 1,
+      } as never)
+    ).toBe(true);
+    expect(
+      bridgePtyEvent({
+        type: "agent-spawned",
+        payload: { agentId: "claude", terminalId: signIn, type: "claude", timestamp: 1 },
+      } as never)
+    ).toBe(true);
+    expect(heard).toEqual([]);
+  });
+
   it("keeps a host throwaway run's agent observations off the bus (#14445)", () => {
     const heard: unknown[] = [];
     events.on("agent:state-changed", (payload) => heard.push(payload));
