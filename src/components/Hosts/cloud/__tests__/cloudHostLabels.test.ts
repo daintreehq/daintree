@@ -23,6 +23,7 @@ import {
   stoppedBillingSentence,
   machineSpecLabel,
   idleSleepTimerSentence,
+  offerPriceLabel,
 } from "../cloudHostLabels";
 import { BOAT_PROVIDER, provider } from "./cloudProviderFixtures";
 
@@ -83,6 +84,69 @@ describe("cloud host labels", () => {
       )
     ).toBe("Machine stopping, retrying the save");
     expect(cloudStatusLabel(status({ machine: "stopped" }))).toBe("Machine stopped");
+  });
+
+  it("names an order waiting on the person's choice wherever the machine's state shows", () => {
+    const offer = (choosable: boolean) =>
+      choosable
+        ? {
+            id: "a",
+            hourlyDollars: 0.03,
+            bidder: { id: "p", name: "P", region: null },
+            choosable: true as const,
+            reason: null,
+          }
+        : {
+            id: "b",
+            hourlyDollars: 0.02,
+            bidder: { id: "q", name: "Q", region: null },
+            choosable: false as const,
+            reason: "not on your trusted list",
+          };
+    const choosing = (
+      offers: ReturnType<typeof offer>[],
+      overrides: Partial<CloudHostStatus> = {}
+    ) =>
+      status({
+        resourceId: null,
+        machine: "not-created",
+        operation: null,
+        // Whatever went wrong before, the choice is what's wanted now.
+        lastError: { code: "refused", message: "closed", at: 0 },
+        pendingCreate: {
+          kind: "awaiting-offer",
+          order: { id: "dseq-1" },
+          waitingSince: 0,
+          offers,
+          offersReadAt: null,
+        },
+        ...overrides,
+      });
+    expect(cloudStatusLabel(choosing([]))).toBe("Waiting for offers");
+    // Offers nobody can choose are no offer to act on yet.
+    expect(cloudStatusLabel(choosing([offer(false)]))).toBe("Waiting for offers");
+    expect(cloudStatusLabel(choosing([offer(false), offer(true)]))).toBe("Offers ready");
+    expect(cloudChipStatus(choosing([offer(true)]), BOAT_PROVIDER)).toBe("offers ready");
+    expect(cloudChipStatus(choosing([]), BOAT_PROVIDER)).toBe("waiting for offers");
+    // Ahead of an operation, a stale reading, or whatever the provider last said.
+    expect(
+      cloudStatusLabel(
+        choosing([], { operation: { id: "o", kind: "creating", startedAt: 0, stage: "" } })
+      )
+    ).toBe("Waiting for offers");
+    expect(cloudStatusLabel(choosing([], { machine: "running", resourceId: "x" }), true)).toBe(
+      "Waiting for offers"
+    );
+    expect(cloudStatusLabel(choosing([], { machine: "unknown" }))).toBe("Waiting for offers");
+    // Once chosen, the machine's own state is back.
+    expect(cloudStatusLabel(choosing([], { pendingCreate: null }))).toBe("Setup incomplete");
+  });
+
+  it("prices an offer by the hour and by a month of running, from the quote itself", () => {
+    expect(offerPriceLabel(0.036)).toBe("$0.036 an hour · about $26.28 a month");
+    // The month is the quote times 730, not the rounded hourly figure times 730.
+    expect(offerPriceLabel(0.03649)).toBe("$0.036 an hour · about $26.64 a month");
+    expect(offerPriceLabel(1.5)).toBe("$1.500 an hour · about $1,095.00 a month");
   });
 
   it("tells an unfinished create from a host never created", () => {

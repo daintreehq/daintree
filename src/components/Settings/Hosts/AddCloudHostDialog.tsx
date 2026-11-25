@@ -28,6 +28,7 @@ import {
   type CloudResourceSummary,
 } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
+import { CloudOfferChoice } from "./CloudOfferChoice";
 import { ConnectCloudAccountDialog } from "./ConnectCloudAccountDialog";
 import { hasTunnelSetupCommands, TunnelSetupCommands } from "./TunnelSetupCommands";
 import { awaitFirstConnect } from "./hostCopySettingsRequests";
@@ -243,8 +244,12 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   const tunnelReady = tunnelState === "none" || (tunnelState === "found" && !tunnelPending);
   const checkTunnelAgain = () => setTunnelTry((n) => n + 1);
 
-  // Hand over to setup once the machine runs.
-  const ready = added !== null && status?.machine === "running" && status.operation === null;
+  // Hand over to setup once the machine runs; never while an order waits on a choice.
+  const ready =
+    added !== null &&
+    status?.machine === "running" &&
+    status.operation === null &&
+    !status.pendingCreate;
   // A stopped import only gets here once someone starts it; a running one at once.
   const handedOver = useRef(false);
   useEffect(() => {
@@ -252,6 +257,16 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     handedOver.current = true;
     onReady(added);
   }, [ready, added, onReady]);
+
+  // Not yet in the snapshot is the moment after the add answered; gone after being seen is
+  // a host removed meanwhile, which no progress here will ever follow.
+  const [seenHostId, setSeenHostId] = useState<HostId | null>(null);
+  const addedHostId = added?.hostId ?? null;
+  const addedHostShown = status !== null;
+  useEffect(() => {
+    if (addedHostId !== null && addedHostShown) setSeenHostId(addedHostId);
+  }, [addedHostId, addedHostShown]);
+  const hostGone = addedHostId !== null && seenHostId === addedHostId && status === null;
 
   const chosenResource = resources?.find((resource) => resource.resourceId === resourceId) ?? null;
   const trimmedName = name.trim();
@@ -333,7 +348,36 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   let primary: DialogAction | undefined;
   let secondary: DialogAction = { label: "Cancel", onClick: onClose, disabled: busy };
 
-  if (!provider) {
+  if (added && status?.pendingCreate) {
+    // Ahead of every other state, the form's prerequisites too: nothing goes on until the
+    // person chooses, and closing this leaves the order open on the host's details.
+    body = (
+      <div className="space-y-4" data-testid="add-cloud-host-offers">
+        <p className="text-sm text-text-primary">
+          Bidders answer the order with offers. Lease one to create the machine at its price.
+        </p>
+        <CloudOfferChoice
+          key={status.pendingCreate.order.id}
+          hostId={added.hostId}
+          choice={status.pendingCreate}
+          name="add-cloud-host-offer"
+          surface="dialog"
+          problem={status.providerUnavailable ?? status.lastError?.message ?? null}
+        />
+        <p className="text-xs text-text-secondary">
+          {`You can close this and choose an offer later in Settings → Hosts → ${added.name}.`}
+        </p>
+      </div>
+    );
+    secondary = { label: "Close", onClick: onClose };
+  } else if (added && hostGone) {
+    body = (
+      <p className="text-sm text-text-primary" data-testid="add-cloud-host-gone">
+        {`${added.name} is no longer in your host list.`}
+      </p>
+    );
+    secondary = { label: "Close", onClick: onClose };
+  } else if (!provider) {
     body = (
       <Callout severity="info">
         {snapshot.providers[0]?.unsupportedReason ??
@@ -435,6 +479,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     }
   } else {
     const lifetimeModel = provider.capabilities.lifetime;
+    // Priced only by the offers an order draws, so no size carries a list price here.
+    const offerBased = provider.createMode === "offers";
     // Boat's review keeps its own words; every other model says it as the start confirm does.
     const reviewLifetime =
       lifetimeModel.kind === "renewable"
@@ -536,6 +582,14 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
               </Callout>
             ) : (
               <RadioChoiceGroup legend="Size">
+                {offerBased && (
+                  <p
+                    className="text-xs text-text-secondary"
+                    data-testid="add-cloud-host-offer-pricing"
+                  >
+                    {`No list price: once the machine is ordered, ${provider.name}'s bidders quote one in their offers, and you choose between them.`}
+                  </p>
+                )}
                 {machineTypes.map((type) => (
                   <RadioChoiceRow
                     key={type.id}
@@ -546,9 +600,11 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                     onChange={() => form.setMachineType(type.id)}
                     label={`${type.label} · ${machineSpecLabel(type.vcpu, type.memoryGB)}`}
                     description={
-                      type.available
-                        ? formatHourly(type.hourlyDollars)
-                        : sentenceCase(type.reason ?? "Not available on this account")
+                      !type.available
+                        ? sentenceCase(type.reason ?? "Not available on this account")
+                        : offerBased
+                          ? undefined
+                          : formatHourly(type.hourlyDollars)
                     }
                   />
                 ))}
@@ -590,9 +646,10 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                   ? `${account.identity ?? account.displayName}'s personal account`
                   : account.billingScope.name}{" "}
                 on {provider.name}
-                {chosenType.hourlyDollars !== null &&
+                {!offerBased &&
+                  chosenType.hourlyDollars !== null &&
                   `, about $${chosenType.hourlyDollars.toFixed(3)} an hour while it runs`}
-                . {reviewLifetime}{" "}
+                {offerBased && ", at the price of the offer you lease"}. {reviewLifetime}{" "}
                 {`Stopping ends what runs on it.${stoppedBillingSentence(provider) ? ` ${stoppedBillingSentence(provider)}` : ""} ${stopKeepsSentence(provider.capabilities.persistence)}`}
               </p>
             )}
@@ -774,7 +831,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     primary =
       mode === "create"
         ? {
-            label: "Create and connect",
+            // Create only places the order there: the machine comes from the offer leased.
+            label: offerBased ? "Get offers" : "Create and connect",
             onClick: create,
             disabled:
               busy ||
