@@ -315,8 +315,13 @@ export function readStoredHostConnection(entry: {
   return typeof entry.sshTarget === "string" ? sshConnection(entry.sshTarget) : null;
 }
 
-/** Longest a pending placement's label or failure is kept; the rest is cut. Ids and paths never are. */
+/** Longest a pending placement's label is kept; the rest is cut. Ids and paths never are. */
 const MAX_PLACEMENT_TEXT = 500;
+/**
+ * Longest its failure is kept: room for a refused start's library names and
+ * the whole command that installs them, which is offered only when it's whole.
+ */
+const MAX_PLACEMENT_FAILURE = 1500;
 
 /**
  * A worktree waiting for a host's setup (install, Host mode, connect) to
@@ -347,10 +352,10 @@ export interface PendingHostPlacement {
   failure?: { message: string; at: number };
 }
 
-function placementText(value: unknown): string | null {
+function placementText(value: unknown, max = MAX_PLACEMENT_TEXT): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed.slice(0, MAX_PLACEMENT_TEXT) : null;
+  return trimmed.length > 0 ? trimmed.slice(0, max) : null;
 }
 
 /** An id or a path, exactly as given: changing one would name another worktree. */
@@ -379,7 +384,7 @@ export function readPendingPlacement(value: unknown): PendingHostPlacement | nul
   if (raw.askFirst === true) placement.askFirst = true;
   if (raw.createdMachine === true) placement.createdMachine = true;
   const failure = raw.failure as Record<string, unknown> | null | undefined;
-  const message = failure && typeof failure === "object" ? placementText(failure.message) : null;
+  const message = failure && typeof failure === "object" ? placementText(failure.message, MAX_PLACEMENT_FAILURE) : null;
   if (message && typeof failure?.at === "number" && Number.isFinite(failure.at)) {
     placement.failure = { message, at: failure.at };
   }

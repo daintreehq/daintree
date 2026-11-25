@@ -109,6 +109,7 @@ async function waitForShellPrompt(service: TerminalService, id: string): Promise
 
 /** Probes the target afresh; true once it is there. */
 export async function recheckInstallTarget(target: InstallTarget): Promise<boolean> {
+  if (target.kind === "manual") return false;
   if (target.kind === "prerequisite") return recheckPrerequisite(target.tool);
   await useCliAvailabilityStore.getState().refresh(true);
   return isAgentInstalled(useCliAvailabilityStore.getState().availability[target.agentId]);
@@ -236,7 +237,7 @@ export async function openInstallCommandInTerminal(
     });
     if (!id) return null;
     // Watched from the start: if the line can't be typed, the user may still paste it.
-    watchInstallTerminal(id, request.target);
+    if (request.target.kind !== "manual") watchInstallTerminal(id, request.target);
 
     const service = await loadTerminalService();
     const wait = await waitForShellPrompt(service, id);

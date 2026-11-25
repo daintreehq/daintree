@@ -33,6 +33,8 @@ import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHos
 import { canDeleteMachines, cloudProviderFor } from "@/components/Hosts/cloud/cloudHostLabels";
 import { HostWakeSetup } from "./HostWakeSetup";
 import { HostAgentForwardingRow } from "./HostAgentForwardingRow";
+import { HostRootCommand } from "./HostCommand";
+import { splitHostFix } from "./hostFixCommands";
 import { bringBackMessage, canBringBack, useHostBringBacks } from "./hostBringBack";
 import {
   buildLabel,
@@ -185,6 +187,13 @@ export function HostDetail({
   const bringBackSaid = bringing
     ? null
     : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor, connection);
+  // A refused start's package install, wherever it shows here, is offered once as its own command.
+  const statusFix = splitHostFix(connectionLabel(connection));
+  const statusError = connectError ?? bringBackSaid;
+  const statusErrorFix = statusError ? splitHostFix(statusError) : null;
+  const placementFix = placement?.failure ? splitHostFix(placement.failure.message) : null;
+  const rootCommand =
+    statusErrorFix?.rootCommand ?? statusFix.rootCommand ?? placementFix?.rootCommand ?? null;
   const name = useCommittedField(descriptor.name, (value) =>
     remoteHostsClient.update({ hostId: descriptor.id, name: value })
   );
@@ -398,12 +407,10 @@ export function HostDetail({
           )}
           <SettingsRow
             label="Status"
-            description={connectionLabel(connection)}
+            description={statusFix.text}
             error={
               // Announced: it answers one press of Connect, Disconnect or Bring back.
-              connectError || bringBackSaid ? (
-                <span role="alert">{connectError ?? bringBackSaid}</span>
-              ) : undefined
+              statusErrorFix ? <span role="alert">{statusErrorFix.text}</span> : undefined
             }
             control={
               <div className="flex gap-2">
@@ -460,16 +467,23 @@ export function HostDetail({
               </div>
             }
           />
+          {rootCommand && (
+            <SettingsRow
+              label="Install the missing libraries"
+              layout="stacked"
+              control={<HostRootCommand host={hostName} command={rootCommand} />}
+            />
+          )}
           {placement && (
             <SettingsRow
               label="Waiting to open"
               description={`${placement.label} opens here once setup finishes`}
               error={
                 placementError ??
-                (placement.failure
+                (placementFix
                   ? isSwitchFailure(placement)
-                    ? placement.failure.message
-                    : `Setup failed: ${placement.failure.message}`
+                    ? placementFix.text
+                    : `Setup failed: ${placementFix.text}`
                   : undefined)
               }
               control={

@@ -64,6 +64,9 @@ const WORD = /^[A-Za-z0-9._:/=@+,-]{1,128}$/;
 /** HostName, Port, User and the alias: values Daintree validated before writing them. */
 const TOKENS: ReadonlySet<string> = new Set(["%h", "%p", "%r", "%n"]);
 export const MAX_CLOUD_TUNNEL_ARGS = 16;
+export const MAX_CLOUD_TUNNEL_COMMAND_LINE = 512;
+/** Control, line and paragraph separators, and invisible formatting: what would submit or disguise a typed line. */
+const UNTYPEABLE = /[\p{Cc}\p{Cf}\u2028\u2029]/u;
 
 function isHttpsUrl(value: unknown): boolean {
   if (typeof value !== "string") return false;
@@ -92,7 +95,31 @@ function tunnelProblem(tunnel: CloudSshTunnelCommand): string | null {
     if (problem) return problem;
   }
   if (!isHttpsUrl(tunnel.installUrl)) return "The tunnel's install URL must be https";
+  for (const [key, label] of [
+    ["installCommand", "install command"],
+    ["signInCommand", "sign-in command"],
+  ] as const) {
+    const line: unknown = tunnel[key];
+    if (line === undefined) continue;
+    if (!isTunnelCommandLine(line)) {
+      return `The tunnel's ${label} must be one line of at most ${MAX_CLOUD_TUNNEL_COMMAND_LINE} characters`;
+    }
+  }
   return null;
+}
+
+/**
+ * Whether a tunnel's install or sign-in line can be shown and typed at a
+ * prompt as it is: one visible line, nothing around it, nothing hidden in it.
+ */
+export function isTunnelCommandLine(line: unknown): line is string {
+  return (
+    typeof line === "string" &&
+    line.length > 0 &&
+    line.length <= MAX_CLOUD_TUNNEL_COMMAND_LINE &&
+    line.trim() === line &&
+    !UNTYPEABLE.test(line)
+  );
 }
 
 /**

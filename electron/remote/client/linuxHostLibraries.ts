@@ -3,46 +3,14 @@ import { LINUX_RUNTIME_DIR_NAME } from "../host/hostSocketPath.js";
 import type { CommandResult } from "./commandRunner.js";
 import { DEB_EXECUTABLE } from "./hostProbe.js";
 import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
+import {
+  HOST_PACKAGES_COMMAND,
+  HOST_PACKAGES_INSTRUCTION,
+  LINUX_HOST_PACKAGE_RELATIONS,
+  LINUX_HOST_PACKAGES,
+} from "../../../shared/config/linuxHostPackages.js";
 
-/**
- * What a Daintree Host on Linux needs from apt: the release deb's own
- * dependencies (electron-builder.config.cjs, `deb.depends`, which a test holds
- * this to), plus FUSE's mount helper for the AppImage and the tools a host's
- * projects use. Written as `apt-get satisfy` relations, so an alternative
- * keeps the order the deb gives it.
- */
-export const LINUX_HOST_PACKAGES: readonly string[] = [
-  "libc6 (>= 2.34)",
-  "libgtk-3-0",
-  "libnss3",
-  "libasound2t64 | libasound2",
-  "libgbm1",
-  "libxkbcommon0",
-  "libxrandr2",
-  "libxshmfence1",
-  "libxss1",
-  "libxtst6",
-  "libx11-6",
-  "libx11-xcb1",
-  "libxcb1",
-  "libxdamage1",
-  "libxfixes3",
-  "libatk1.0-0",
-  "libatk-bridge2.0-0",
-  "libcups2",
-  "libdbus-1-3",
-  "libdrm2",
-  "libexpat1",
-  "libnotify4",
-  "libnspr4",
-  "libsecret-1-0",
-  "xdg-utils",
-  "fuse3 | fuse",
-  "git",
-  "ca-certificates",
-  "curl",
-  "procps",
-];
+export { HOST_PACKAGES_COMMAND, LINUX_HOST_PACKAGES };
 
 const MARK = "@@dt:";
 const SONAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
@@ -59,11 +27,6 @@ const DETAIL_MAX = 300;
 function sq(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
-
-const RELATIONS = sq(LINUX_HOST_PACKAGES.join(", "));
-
-/** The line a person runs as root on a Debian or Ubuntu host to install every package the Host needs. */
-export const HOST_PACKAGES_COMMAND = `apt-get update && apt-get satisfy -y --no-install-recommends ${RELATIONS}`;
 
 /**
  * The same install, run unattended as root through a provider's tunnel.
@@ -88,7 +51,7 @@ export const HOST_PACKAGES_ROOT_SCRIPT = [
   `t=""; if command -v timeout >/dev/null 2>&1; then t="timeout 60s"; fi`,
   `n=0; until $t apt-get -o DPkg::Lock::Timeout=60 --error-on=any update </dev/null >/dev/null 2>"$e" 9>&-; do n=$((n+1)); [ "$n" -ge 6 ] && fail 41; sleep 10; done`,
   // fd 9 stays with this script: a service a package starts mustn't hold the lock after it.
-  `apt-get -o DPkg::Lock::Timeout=120 satisfy -y --no-install-recommends ${RELATIONS} </dev/null >/dev/null 2>"$e" 9>&- || fail 42`,
+  `apt-get -o DPkg::Lock::Timeout=120 satisfy -y --no-install-recommends ${LINUX_HOST_PACKAGE_RELATIONS} </dev/null >/dev/null 2>"$e" 9>&- || fail 42`,
 ].join("; ");
 
 const INSTALL_FAILURES: Record<number, string> = {
@@ -192,7 +155,7 @@ export class HostLibrariesMissingError extends AppError {
     note?: string
   ) {
     // The libraries come first: a place that shortens the text cuts the command, never the names.
-    const text = `${missingSentence(hostLabel, libraries)}.${note ? ` ${note}.` : ""} On Debian or Ubuntu, run this there as root, then try again: ${HOST_PACKAGES_COMMAND}`;
+    const text = `${missingSentence(hostLabel, libraries)}.${note ? ` ${note}.` : ""} ${HOST_PACKAGES_INSTRUCTION}`;
     super({ code: "UNSUPPORTED", message: text, userMessage: text });
     this.name = "HostLibrariesMissingError";
   }

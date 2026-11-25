@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { Check, CircleCheck } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { FactSeparator } from "@/components/ui/FactSeparator";
@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 import { isMac } from "@/lib/platform";
 import { appClient } from "@/clients/appClient";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
@@ -67,7 +68,9 @@ import { AddHostDiscovery } from "./AddHostDiscovery";
 import { AddHostNotes } from "./AddHostNotes";
 import { CloudSetupHostKey } from "./CloudHostKeyReview";
 import { WizardFooterActions, WizardStepBar, type WizardStepView } from "./AddHostWizardChrome";
-import { HostCommand } from "./HostCommand";
+import { HostCommand, HostRootCommand } from "./HostCommand";
+import { splitHostFix } from "./hostFixCommands";
+import { hasTunnelSetupCommands, TunnelSetupCommands } from "./TunnelSetupCommands";
 import { SshRefusalHelp } from "./SshRefusalHelp";
 import { SshSignInDialog } from "./SshSignInDialog";
 import { useSshSignIn } from "./useSshSignIn";
@@ -421,10 +424,22 @@ function connectFailureText(state: HostConnectionState, hostName: string): strin
     : `Couldn't connect to ${hostName}`;
 }
 
-function ErrorLine({ message }: { message: string }) {
+function ErrorLine({ message, host }: { message: string; host: string }) {
+  const fix = splitHostFix(message);
+  if (!fix.rootCommand) {
+    return (
+      <Callout severity="error" role="alert" className="mt-4 select-text">
+        {message}
+      </Callout>
+    );
+  }
+  // The command sits outside the alert, so it isn't read out with the words.
   return (
-    <Callout severity="error" role="alert" className="mt-4 select-text">
-      {message}
+    <Callout severity="error" className="mt-4 select-text">
+      <p role="alert">{fix.text}</p>
+      <div className="mt-3">
+        <HostRootCommand host={host} command={fix.rootCommand} />
+      </div>
     </Callout>
   );
 }
@@ -508,6 +523,8 @@ export function AddHostDialog({
   connectWhenDone = false,
 }: AddHostDialogProps) {
   const [step, setStep] = useState<Step>(existing ? "check" : "discover");
+  // A command opens in a terminal once Settings closes over the grid; never while a step can't stop.
+  const inheritedHandoff = useContext(InstallCommandHandoffContext);
   const [discovered, setDiscovered] = useState<DiscoveredHost[] | null>(null);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [discoverAttempt, setDiscoverAttempt] = useState(0);
@@ -1694,12 +1711,17 @@ export function AddHostDialog({
                     Said beside a new machine's wait too: a CLI that isn't signed in would
                     otherwise go unnamed for every recheck. Never beside a refusal of ssh's own. */}
                 {cloudTunnel && refusal === null && isProxyClosedEarly(probe.sshError) && (
-                  <p
-                    className="mt-3 text-xs text-text-secondary"
-                    data-testid="add-host-tunnel-closed"
-                  >
-                    {`The tunnel through ${cloudTunnel.command} on this device closed the connection before SSH logged in. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here, as ${cloudTunnel.installUrl} describes.`}
-                  </p>
+                  <div className="mt-3 space-y-2">
+                    <p
+                      className="text-xs text-text-secondary"
+                      data-testid="add-host-tunnel-closed"
+                    >
+                      {hasTunnelSetupCommands(cloudTunnel, "sign-in")
+                        ? `The tunnel through ${cloudTunnel.command} on this device closed the connection before SSH logged in. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here.`
+                        : `The tunnel through ${cloudTunnel.command} on this device closed the connection before SSH logged in. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here, as ${cloudTunnel.installUrl} describes.`}
+                    </p>
+                    <TunnelSetupCommands tunnel={cloudTunnel} from="sign-in" />
+                  </div>
                 )}
                 {existingId !== null && (
                   <CloudSetupHostKey
@@ -1929,6 +1951,7 @@ export function AddHostDialog({
           ? installError!.replace(/^Install cancelled\.?\s*/, "") || null
           : null;
       const title = !ended ? runTitle : installStopped ? stoppedTitle : failedTitle;
+      const endedFix = ended ? splitHostFix(stoppedNote ?? installError!) : null;
       // A stage that reports none (waiting for idle) is indeterminate, never the last figure.
       const fraction = progress?.fraction ?? null;
       const detail = progress?.message ? namedProgressMessage(progress.message, hostLabel) : null;
@@ -1944,7 +1967,12 @@ export function AddHostDialog({
               }
               className="select-text"
             >
-              {namedProgressMessage(stoppedNote ?? installError!, hostLabel)}
+              {namedProgressMessage(endedFix!.text, hostLabel)}
+              {endedFix!.rootCommand && (
+                <div className="mt-3">
+                  <HostRootCommand host={hostLabel} command={endedFix!.rootCommand} />
+                </div>
+              )}
             </Callout>
           ) : ended ? null : (
             <ProgressBar
@@ -2406,7 +2434,7 @@ export function AddHostDialog({
     ) : undefined;
 
   return (
-    <>
+    <InstallCommandHandoffContext.Provider value={locked ? null : (inheritedHandoff ?? null)}>
       <AppDialog
         isOpen={isOpen}
         onClose={onClose}
@@ -2435,7 +2463,7 @@ export function AddHostDialog({
             </Callout>
           )}
           {body}
-          {error && <ErrorLine message={error} />}
+          {error && <ErrorLine message={error} host={hostLabel} />}
           {/* No role: the discovery list's own status line stays the dialog's one status. */}
           <p aria-live="polite" aria-atomic="true" className="sr-only">
             {announce}
@@ -2462,6 +2490,6 @@ export function AddHostDialog({
           onClose={signIn.close}
         />
       )}
-    </>
+    </InstallCommandHandoffContext.Provider>
   );
 }

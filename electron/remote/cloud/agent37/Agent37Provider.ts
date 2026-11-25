@@ -385,6 +385,9 @@ export class Agent37Provider implements CloudProvider {
           command: "agent37",
           args: ["tunnel", "%h"],
           installUrl: "https://www.agent37.com/docs/agents-api/ssh",
+          installCommand: "npm install -g agent37",
+          // Asks for the workspace's API key, and registers this device's SSH key with it.
+          signInCommand: "agent37 ssh setup",
         },
         provisioning: {
           // Optional, so a create stored before regions were offered is sent as it was.

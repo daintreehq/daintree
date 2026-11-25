@@ -6,6 +6,11 @@ import { Button } from "@/components/ui/button";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { useNow } from "@/hooks/useNow";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
+import {
+  InstallCommandHandoffContext,
+  type InstallCommandHandoff,
+} from "@/hooks/terminal/installCommandHandoffContext";
 import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -16,6 +21,7 @@ import { formatHostConnection, type HostConnection, type HostId } from "@shared/
 import HostModeGroup from "../HostModeGroup";
 import DeviceAnswerGroup from "../DeviceAnswerGroup";
 import { SettingsSection } from "../SettingsSection";
+import type { SettingsTabClose } from "../settingsTabClose";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "../SettingsGroup";
 import { AddHostDialog } from "./AddHostDialog";
 import { HostDetail } from "./HostDetail";
@@ -64,7 +70,24 @@ const hostNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivi
  * Settings → Hosts: the machines this one opens projects on, adding one, and
  * this machine's own Host mode. Device-owned: nothing here is per project.
  */
-export default function HostsSettingsTab() {
+export default function HostsSettingsTab({ onClose }: { onClose?: SettingsTabClose }) {
+  // A fix to run on this device opens in a terminal once Settings has closed over the grid.
+  // A remote window's terminals run on its host, so there the commands stay copy-only.
+  const handoff: InstallCommandHandoff | null =
+    onClose && !isRemoteWindow()
+      ? (open) =>
+          void onClose((closed) => {
+            if (closed) open();
+          })
+      : null;
+  return (
+    <InstallCommandHandoffContext.Provider value={handoff}>
+      <HostsSettingsContent />
+    </InstallCommandHandoffContext.Provider>
+  );
+}
+
+function HostsSettingsContent() {
   const { hosts, loaded, loadError, refresh } = useRemoteHosts();
   const [addOpen, setAddOpen] = useState(false);
   const [cloudAddOpen, setCloudAddOpen] = useState(false);

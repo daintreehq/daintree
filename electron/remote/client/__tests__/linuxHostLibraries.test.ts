@@ -12,6 +12,7 @@ import {
   parseLibraryCheck,
 } from "../linuxHostLibraries.js";
 import type { HostCommandChannel } from "../remoteShell.js";
+import { HOST_PACKAGES_INSTRUCTION } from "../../../../shared/config/linuxHostPackages.js";
 
 const IMAGE = "/home/node/Applications/Daintree.AppImage";
 
@@ -165,6 +166,8 @@ describe("checkLinuxStart", () => {
     expect(error.userMessage).toContain("build-box");
     expect(error.userMessage).toContain("libnspr4.so, libnss3.so");
     expect(error.userMessage!.endsWith(HOST_PACKAGES_COMMAND)).toBe(true);
+    // The renderer finds the command to offer by this exact text.
+    expect(error.userMessage!.endsWith(` ${HOST_PACKAGES_INSTRUCTION}`)).toBe(true);
     // The names come before the command, so a shortened copy still names them.
     expect(error.userMessage!.indexOf("libnss3.so")).toBeLessThan(
       error.userMessage!.indexOf("apt-get")
