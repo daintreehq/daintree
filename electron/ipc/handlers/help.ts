@@ -16,11 +16,15 @@ import {
   type RemoteEndpointCloseCause,
 } from "../endpoint.js";
 import { getEndpointRegistry } from "../endpointRegistry.js";
-import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
+import {
+  onMcpDriveTargetChange,
+  resolveMcpDriveTarget,
+} from "../../services/mcp-server/driveTarget.js";
 import * as globalAssistant from "./helpGlobalAssistant.js";
-import { installDetachedAdoption } from "./helpDetachedAdoption.js";
+import { detachedAdoptionDriver, installDetachedAdoption } from "./helpDetachedAdoption.js";
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { isMainAppRoute } from "../../../shared/utils/trustedRenderer.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
 import {
@@ -893,7 +897,13 @@ export const helpNamespace = defineIpcNamespace({
 function localViewIsUp(handle: number): boolean {
   const view = webContents.fromId(handle);
   return (
-    view !== undefined && !view.isDestroyed() && !view.isCrashed() && !view.isLoadingMainFrame()
+    view !== undefined &&
+    !view.isDestroyed() &&
+    !view.isCrashed() &&
+    !view.isLoadingMainFrame() &&
+    // A crash loop leaves the recovery page in the same view, still bound to
+    // its project, and it can answer none of an assistant's calls.
+    isMainAppRoute(view.getURL())
   );
 }
 
@@ -905,25 +915,23 @@ function localViewIsUp(handle: number): boolean {
  * someone drives the project, so an assistant left working, or one other
  * machines' assistants are messaging, would be held back until someone opened
  * its panel. Nothing launches. Only the view that drives the project takes
- * one (see `adoptForReturningViews`), and the service re-checks everything
- * under the lane's lock.
+ * one (see `detachedAdoptionDriver`): with Host mode off, this machine's
+ * window of it (#18165). The service re-checks everything under the lane's
+ * lock.
  */
 function installDetachedAssistantAdoption(): () => void {
-  // The lease service exists only once Host mode is installed, which may be
-  // after this runs; its changes matter too, since a returning Shell gets the
-  // lease back after its view attaches.
-  let offLease: (() => void) | null = null;
+  // A window here whose renderer crashed or is reloading keeps its id, but
+  // has nothing to run the assistant's calls yet; its load finishing runs
+  // this again (`noteViewReady`).
+  const endpointsFor = (projectId: string): ClientEndpoint[] =>
+    getEndpointRegistry()
+      .getForProject(projectId)
+      .filter((endpoint) => endpoint.kind === "remote-view" || localViewIsUp(endpoint.handle));
   return installDetachedAdoption({
     detachedProjects: () => loadedHelpSessionService()?.detachedProjectIds() ?? [],
-    // A window here whose renderer crashed or is reloading keeps its id, but
-    // has nothing to run the assistant's calls yet; its load finishing runs
-    // this again (`noteViewReady`).
-    endpointsFor: (projectId) =>
-      getEndpointRegistry()
-        .getForProject(projectId)
-        .filter((endpoint) => endpoint.kind === "remote-view" || localViewIsUp(endpoint.handle)),
+    endpointsFor,
     drivingEndpointId: (projectId) =>
-      peekDriveLeaseService()?.getHolderEndpoint(projectId)?.endpointId ?? null,
+      detachedAdoptionDriver(resolveMcpDriveTarget(projectId), endpointsFor(projectId)),
     detachedSlots: (projectId) => loadedHelpSessionService()?.detachedSlots(projectId) ?? [],
     adopt: async (projectId, slot, endpoint) => {
       const { helpSessionService } = await getHelpSessionService();
@@ -966,16 +974,11 @@ function installDetachedAssistantAdoption(): () => void {
       });
     },
     onChange: (listener) => {
-      const watchLease = (): void => {
-        if (offLease) return;
-        const lease = peekDriveLeaseService();
-        if (lease) offLease = lease.onChange(listener);
-      };
-      watchLease();
-      const offRegistry = getEndpointRegistry().onChange(() => {
-        watchLease();
-        listener();
-      });
+      // Host-mode routing turning on or off, and in Host mode every change of
+      // who drives: a returning Shell gets the lease back after its view
+      // attaches, and with routing off this machine's window drives instead.
+      const offDriveTarget = onMcpDriveTargetChange(listener);
+      const offRegistry = getEndpointRegistry().onChange(listener);
       // An assistant left with no view while someone already drives its
       // project. Watched from the moment the service loads, which is before it
       // can hold an assistant, so nothing is missed by not loading it here.
@@ -986,8 +989,7 @@ function installDetachedAssistantAdoption(): () => void {
       return () => {
         cancelWatch();
         offRegistry();
-        offLease?.();
-        offLease = null;
+        offDriveTarget();
         offDetached?.();
       };
     },
