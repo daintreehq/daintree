@@ -8,6 +8,7 @@ import type {
   CloudHostError,
   CloudProviderId,
 } from "../../../../shared/types/cloudHosts.js";
+import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import type { CommandResult, CommandRunner } from "../../client/commandRunner.js";
 import { BoatProvider } from "../boat/BoatProvider.js";
 import { CloudAccountService } from "../CloudAccountService.js";
@@ -51,12 +52,16 @@ class Refusal extends Error {
 /** A request whose answer never came back, whether or not the provider acted on it. */
 const lost = () => new Error("socket hang up");
 
-function machine(resourceId: string, labels: Record<string, string>): ProviderResource {
+function machine(
+  resourceId: string,
+  labels: Record<string, string>,
+  state: "running" | "starting" = "running"
+): ProviderResource {
   return {
     resourceId,
     name: "build",
-    machine: "running",
-    rawState: "active",
+    machine: state,
+    rawState: state === "running" ? "active" : "pending",
     machineType: "default",
     vcpu: 4,
     memoryGB: 16,
@@ -88,9 +93,23 @@ function offer(id: string, hourlyDollars = 0.5): CloudCreateOffer {
  * How the next call of a kind goes. `lost`: the provider acts, the answer
  * never comes back. `unsent`: it never reaches the provider. `hang`: no
  * answer until the request is aborted; `hang-commit` acts first. `lost-twice`:
- * the one placement lands as two orders, and its answer is lost.
+ * the one placement lands as two orders, and its answer is lost. `no-id`: the
+ * order is placed, and the answer names none. `gone`: the offer was taken
+ * back, as `not-found`. `requote`: the bidder quotes again just as the lease
+ * arrives, after Daintree's last read.
  */
-type Plan = "ok" | "lost" | "lost-twice" | "unsent" | "refused" | "hang" | "hang-commit" | "fail";
+type Plan =
+  | "ok"
+  | "lost"
+  | "lost-twice"
+  | "no-id"
+  | "unsent"
+  | "refused"
+  | "gone"
+  | "requote"
+  | "hang"
+  | "hang-commit"
+  | "fail";
 
 interface FakeOrder {
   labels: Record<string, string>;
@@ -145,6 +164,7 @@ class FakeOffers {
       if (plan === "lost-twice") this.commitLate(request);
       if (plan === "lost" || plan === "lost-twice") throw lost();
       if (plan === "hang-commit") return this.hang<{ id: string }>(credentials.signal);
+      if (plan === "no-id") return { id: "" };
       return { id };
     }
   );
@@ -183,7 +203,12 @@ class FakeOffers {
   });
 
   readonly leaseOffer = vi.fn(
-    async (credentials: { signal?: AbortSignal }, orderId: string, offerId: string) => {
+    async (
+      credentials: { signal?: AbortSignal },
+      orderId: string,
+      offerId: string,
+      expected?: { hourlyDollars: number }
+    ) => {
       this.storedAtSend.push(structuredClone(this.storedNow()));
       const plan = this.plan("lease");
       const order = this.orders.get(orderId);
@@ -192,14 +217,23 @@ class FakeOffers {
       if (!order || order.state !== "open" || !order.offers.some((o) => o.id === offerId)) {
         throw new Refusal("refused", "That offer has gone.");
       }
-      if (plan === "refused") {
+      if (plan === "refused" || plan === "gone") {
         order.offers = order.offers.filter((o) => o.id !== offerId);
-        throw new Refusal("refused", "That offer has gone.");
+        throw new Refusal(plan === "gone" ? "not-found" : "refused", "That offer has gone.");
       }
-      const leased = machine(`lease-${orderId}`, order.labels);
+      if (plan === "requote") {
+        order.offers = order.offers.map((o) => (o.id === offerId ? offer(o.id, 0.9) : o));
+      }
+      // The provider checks the rate the person saw as it accepts the bid.
+      const quoted = order.offers.find((o) => o.id === offerId)!;
+      if (expected && quoted.hourlyDollars !== expected.hourlyDollars) {
+        throw new Refusal("refused", "That bid now quotes another rate.");
+      }
+      // It answers while the machine is still starting; reading it later finds it running.
+      const leased = machine(`lease-${orderId}`, order.labels, "starting");
       order.state = "leased";
       order.machine = leased;
-      this.machines.set(leased.resourceId, leased);
+      this.machines.set(leased.resourceId, machine(leased.resourceId, order.labels));
       if (plan === "lost") throw lost();
       if (plan === "hang-commit") return this.hang<ProviderResource>(credentials.signal);
       return leased;
@@ -213,6 +247,16 @@ class FakeOffers {
     if (order) order.state = "closed";
     return { kind: "closed" as const };
   });
+
+  /** A lease made where this device never saw it: the person's console, say. */
+  leaseElsewhere(orderId: string): string {
+    const order = this.orders.get(orderId)!;
+    const leased = machine(`lease-${orderId}`, order.labels);
+    order.state = "leased";
+    order.machine = leased;
+    this.machines.set(leased.resourceId, leased);
+    return leased.resourceId;
+  }
 
   openOrders(): string[] {
     return [...this.orders.entries()].filter(([, o]) => o.state === "open").map(([id]) => id);
@@ -236,7 +280,7 @@ function offerProvider(api: FakeOffers): CloudProvider {
     },
     describeError: (error) => ({
       code: error instanceof Refusal ? error.code : "failed",
-      message: error instanceof Error ? error.message : String(error),
+      message: formatErrorMessage(error, "No answer"),
       at: Date.now(),
     }),
     checkCredentials: async () => ({
@@ -297,7 +341,7 @@ function offerProvider(api: FakeOffers): CloudProvider {
  * run on the spot: nothing it would still write reaches the settings file,
  * and the next run starts from what was saved.
  */
-async function offerCloud() {
+async function offerCloud(hooks: { beforeRemoval?: () => Promise<void> } = {}) {
   const api = new FakeOffers();
   const provider = offerProvider(api);
   const saved = new Map<string, unknown>();
@@ -314,16 +358,19 @@ async function offerCloud() {
         if (alive) saved.set(key, JSON.parse(JSON.stringify(value)));
       },
     } as CloudHostsStoreBackend);
-    let lifecycle: CloudHostLifecycle;
     const accounts = new CloudAccountService({
       store,
       vault,
       providers: new Map<CloudProviderId, CloudProvider>([["boat", provider]]),
       apiUrlFor: () => "https://boat.dev/api/v1",
       platform: "darwin",
-      beforeAccountRemoved: (accountId) => lifecycle.settleAccountOrders(accountId),
+      // As initClient wires it: the account's orders are closed before its credentials go.
+      beforeAccountRemoved: async (accountId) => {
+        await hooks.beforeRemoval?.();
+        await lifecycle.settleAccountOrders(accountId);
+      },
     });
-    lifecycle = new CloudHostLifecycle({
+    const lifecycle = new CloudHostLifecycle({
       store,
       accounts,
       files,
@@ -383,6 +430,7 @@ async function offerCloud() {
       return current.lifecycle;
     },
     status: () => current.lifecycle.statuses()[0],
+    saved,
     /** Takes the host out of the list, as Settings → Remove host does, keeping its machine. */
     removeHost: (hostId: string) => {
       const index = hosts.findIndex((host) => host.id === hostId);
@@ -462,9 +510,13 @@ describe("offer-based create (#18230)", () => {
       orderIds: [choice.order.id],
       offerId: "b",
     });
+    expect(env.api.leaseOffer).toHaveBeenCalledWith(expect.anything(), choice.order.id, "b", {
+      hourlyDollars: 0.5,
+    });
     await env.settled();
     const status = env.status()!;
     expect(status.resourceId).toBe(`lease-${choice.order.id}`);
+    // The lease answered while it was starting: it runs because the create waited for it.
     expect(status.machine).toBe("running");
     expect(status.pendingCreate).toBeUndefined();
     expect(status.lastError).toBeNull();
@@ -526,6 +578,87 @@ describe("offer-based create (#18230)", () => {
     expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves the order open when the bidder quotes again after Daintree's last read", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a", 0.5)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    env.api.plans.lease.push("requote");
+    await expect(
+      env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)
+    ).rejects.toMatchObject({ userMessage: expect.stringContaining("the order is still open") });
+    expect(env.api.orders.get(choice.order.id)?.state).toBe("open");
+    expect(env.api.machines.size).toBe(0);
+    await vi.waitFor(() =>
+      expect(env.status()?.pendingCreate?.offers).toMatchObject([{ id: "a", hourlyDollars: 0.9 }])
+    );
+  });
+
+  it("reads an offer the provider no longer has as nothing leased, keeping the order", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a"), offer("b")];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    env.api.plans.lease.push("gone");
+    await expect(
+      env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)
+    ).rejects.toMatchObject({ userMessage: expect.stringContaining("choose another offer") });
+    expect(env.api.closeOrder).not.toHaveBeenCalled();
+    expect(env.api.orders.get(choice.order.id)?.state).toBe("open");
+    await vi.waitFor(() =>
+      expect(env.status()?.pendingCreate?.offers.map((o) => o.id)).toEqual(["b"])
+    );
+  });
+
+  it("looks for an order whose placement answered without naming it", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a")];
+    env.api.plans.place.push("no-id");
+    await env.create();
+    const choice = await env.awaitChoice();
+    expect(env.api.openOrders()).toEqual([choice.order.id]);
+    expect(env.store.createOrders()).toMatchObject([
+      { state: "open", orderIds: [choice.order.id] },
+    ]);
+    expect(env.api.placeOrder).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a Retry once the provider no longer creates through offers, sending nothing", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a")];
+    const hostId = await env.create();
+    await env.awaitChoice();
+    delete (env.provider as { offerCreate?: unknown }).offerCreate;
+    await expect(env.lifecycle.retryCreate(hostId)).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(env.provider.create).not.toHaveBeenCalled();
+    expect(env.store.createOrders()).toHaveLength(1);
+  });
+
+  it("never acts on an order record naming another provider's account", async () => {
+    const env = await offerCloud();
+    env.store.putCreateOrder({
+      id: "co_stray",
+      bindingId: "cb_000000000001",
+      accountId: env.account.id,
+      providerId: "agent37",
+      labels: { daintree: "1" },
+      idempotencyKey: "key",
+      state: "close",
+      orderIds: ["dseq-9"],
+      placedAt: env.clock.at,
+      waitingSince: null,
+      offerId: null,
+    });
+    env.crash();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(env.api.closeOrder).not.toHaveBeenCalled();
+    expect(env.store.createOrders()).toHaveLength(1);
+    await expect(env.accounts.removeAccount(env.account.id)).rejects.toMatchObject({
+      code: "OUTCOME_UNKNOWN",
+    });
+    expect(env.store.account(env.account.id)).not.toBeNull();
+  });
+
   describe("a lost reply to placing the order", () => {
     it("finds the order it placed and brings back the choice, placing nothing again", async () => {
       const env = await offerCloud();
@@ -554,6 +687,7 @@ describe("offer-based create (#18230)", () => {
       await vi.advanceTimersByTimeAsync(60_000);
       const choice = await env.awaitChoice();
       expect(choice.order.id).toBe(id);
+      expect(choice.waitingSince).toBe(env.clock.at);
       expect(env.status()?.lastError).toBeNull();
       expect(env.api.placeOrder).toHaveBeenCalledTimes(1);
     });
@@ -586,10 +720,12 @@ describe("offer-based create (#18230)", () => {
       expect(env.api.openOrders()).toEqual([]);
       expect(env.store.createOrders()).toEqual([]);
       expect(env.status()?.lastError?.message).toContain("more than one");
-      // Retry places a fresh one.
+      // Retry places a fresh one, under a key of its own.
       await env.lifecycle.retryCreate(hostId);
       expect(env.status()?.pendingCreate?.order.id).toBeDefined();
       expect(env.api.placeOrder).toHaveBeenCalledTimes(2);
+      const [first, second] = env.api.placeOrder.mock.calls.map(([, request]) => request);
+      expect(second!.idempotencyKey).not.toBe(first!.idempotencyKey);
     });
   });
 
@@ -615,7 +751,9 @@ describe("offer-based create (#18230)", () => {
       const hostId = await env.create();
       const choice = await env.awaitChoice();
       env.api.plans.lease.push("unsent");
-      await expect(env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)).rejects.toThrow();
+      await expect(
+        env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5)
+      ).rejects.toMatchObject({ userMessage: expect.stringContaining("no machine was leased") });
       expect(env.api.orders.get(choice.order.id)?.state).toBe("closed");
       expect(env.status()?.resourceId).toBeNull();
       expect(env.status()?.pendingCreate).toBeUndefined();
@@ -637,9 +775,10 @@ describe("offer-based create (#18230)", () => {
       chosen.catch(() => {});
       await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
       await env.lifecycle.cancelOrder(hostId, choice.order.id);
-      await env.settled();
       expect(env.status()?.resourceId).toBe(`lease-${choice.order.id}`);
-      expect(env.status()?.machine).toBe("running");
+      // The create carries on: the machine is waited on until it runs.
+      await vi.waitFor(() => expect(env.status()?.machine).toBe("running"));
+      await env.settled();
       expect(env.status()?.lastError).toBeNull();
       expect(env.store.createOrders()).toEqual([]);
       expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
@@ -681,11 +820,29 @@ describe("offer-based create (#18230)", () => {
       });
       expect(env.store.createOrders()).toMatchObject([{ state: "close" }]);
       expect(env.status()?.pendingCreate).toBeUndefined();
+      expect(env.status()?.lastError).toMatchObject({
+        code: "outcome-unknown",
+        message: expect.stringContaining("keeps trying"),
+      });
       env.clock.at += 61_000;
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
       expect(env.api.orders.get(choice.order.id)?.state).toBe("closed");
     });
+  });
+
+  it("clears a cancelled create's error once Retry's order waits on a choice", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a")];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    await env.lifecycle.cancelOrder(hostId, choice.order.id);
+    expect(env.status()?.lastError?.message).toContain("cancelled");
+    env.clock.at += 60_000;
+    await env.lifecycle.retryCreate(hostId);
+    const next = await env.awaitChoice();
+    expect(next.order.id).not.toBe(choice.order.id);
+    expect(env.status()?.lastError).toBeNull();
   });
 
   describe("a restart", () => {
@@ -699,6 +856,7 @@ describe("offer-based create (#18230)", () => {
       const choice = await env.awaitChoice();
       expect(env.api.openOrders()).toEqual([choice.order.id]);
       expect(env.api.placeOrder).toHaveBeenCalledTimes(1);
+      expect(env.status()?.lastError).toBeNull();
     });
 
     it("while waiting on a choice: the choice comes back with the same order and when it began", async () => {
@@ -742,7 +900,10 @@ describe("offer-based create (#18230)", () => {
       await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
       expect(env.api.orders.get(choice.order.id)?.state).toBe("closed");
       expect(env.status()).toMatchObject({ resourceId: null, operation: null });
-      expect(env.status()?.lastError?.message).toContain("Retry places a new order");
+      expect(env.status()?.lastError).toMatchObject({
+        code: "failed",
+        message: expect.stringContaining("Retry places a new order"),
+      });
       expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
       expect(env.api.placeOrder).toHaveBeenCalledTimes(1);
     });
@@ -753,7 +914,7 @@ describe("offer-based create (#18230)", () => {
       const hostId = await env.create();
       const choice = await env.awaitChoice();
       env.api.plans.close.push("fail");
-      await env.lifecycle.deleteMachine(hostId, null);
+      env.removeHost(hostId);
       await vi.waitFor(() => expect(env.api.closeOrder).toHaveBeenCalledTimes(1));
       expect(env.store.createOrders()).toMatchObject([{ state: "close" }]);
       env.crash();
@@ -788,6 +949,35 @@ describe("offer-based create (#18230)", () => {
       expect(env.api.deleted).toEqual([`lease-${choice.order.id}`]);
       expect(env.hosts).toEqual([]);
       expect(env.store.createOrders()).toEqual([]);
+    });
+
+    it("deleting the host deletes a machine leased from its order where this device never saw it", async () => {
+      const env = await offerCloud();
+      env.api.offersOnPlace = [offer("a")];
+      const hostId = await env.create();
+      const choice = await env.awaitChoice();
+      const leased = env.api.leaseElsewhere(choice.order.id);
+      await env.lifecycle.deleteMachine(hostId, null);
+      expect(env.api.deleted).toEqual([leased]);
+      expect(env.hosts).toEqual([]);
+      expect(env.store.createOrders()).toEqual([]);
+    });
+
+    it("keeps the host when its order can't be closed for a delete, and keeps closing it", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const env = await offerCloud();
+      env.api.offersOnPlace = [offer("a")];
+      const hostId = await env.create();
+      const choice = await env.awaitChoice();
+      env.api.plans.close.push("fail");
+      await expect(env.lifecycle.deleteMachine(hostId, null)).rejects.toThrow();
+      expect(env.hosts.map((host) => host.id)).toEqual([hostId]);
+      expect(env.store.createOrders()).toMatchObject([{ state: "close" }]);
+      env.clock.at += 61_000;
+      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
+      expect(env.api.orders.get(choice.order.id)?.state).toBe("closed");
+      expect(env.status()?.lastError?.message).toContain("Retry places a new order");
     });
 
     it("removing the host from the list keeps closing its order until the provider confirms", async () => {
@@ -832,6 +1022,31 @@ describe("offer-based create (#18230)", () => {
       expect(env.store.account(env.account.id)).toBeNull();
       expect(env.store.createOrders()).toEqual([]);
       expect(env.api.orders.get(choice.order.id)?.state).toBe("closed");
+    });
+
+    it("refuses a create on an account while it is being removed", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const env = await offerCloud({ beforeRemoval: () => held });
+      const removal = env.accounts.removeAccount(env.account.id);
+      await expect(env.create()).rejects.toMatchObject({
+        userMessage: expect.stringContaining("is being removed"),
+      });
+      release();
+      await removal;
+      expect(env.store.bindings()).toEqual([]);
+      expect(env.api.placeOrder).not.toHaveBeenCalled();
+    });
+
+    it("keeps an account whose order record this build can't read", async () => {
+      const env = await offerCloud();
+      env.saved.set("cloudCreateOrders", [
+        { id: "co_future", accountId: env.account.id, state: "someday-later" },
+      ]);
+      await expect(env.accounts.removeAccount(env.account.id)).rejects.toMatchObject({
+        userMessage: expect.stringContaining("can't read"),
+      });
+      expect(env.store.account(env.account.id)).not.toBeNull();
     });
   });
 });

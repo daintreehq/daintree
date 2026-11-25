@@ -359,8 +359,11 @@ export type CloudCreateOrdersValue = StoredCreateOrder[];
 
 export interface CloudHostsStoreBackend {
   get(key: "cloudHosts" | "cloudCreateOrders"): unknown;
-  set(key: "cloudHosts", value: CloudHostsValue): void;
-  set(key: "cloudCreateOrders", value: CloudCreateOrdersValue): void;
+  /** `cloudHosts` takes a CloudHostsValue, `cloudCreateOrders` a CloudCreateOrdersValue. */
+  set(
+    key: "cloudHosts" | "cloudCreateOrders",
+    value: CloudHostsValue | CloudCreateOrdersValue
+  ): void;
 }
 
 export { isValidCloudAccountId };
@@ -1014,6 +1017,18 @@ export class CloudHostStore {
 
   createOrder(id: string): StoredCreateOrder | null {
     return this.createOrders().find((order) => order.id === id) ?? null;
+  }
+
+  /**
+   * Order records naming the account that don't read here (a newer build's,
+   * or a damaged one): never acted on, but they still hold the account.
+   */
+  unreadableOrdersFor(accountId: string): number {
+    return this.rawOrders().filter(
+      (entry) =>
+        (entry as { accountId?: unknown } | null)?.accountId === accountId &&
+        readCreateOrder(entry) === null
+    ).length;
   }
 
   putCreateOrder(order: StoredCreateOrder): void {

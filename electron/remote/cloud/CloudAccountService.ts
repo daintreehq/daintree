@@ -239,6 +239,8 @@ export class CloudAccountService {
   private readonly unforgotten = new Set<string>();
   /** Per account, the replace or remove committing now; the next one waits for it. */
   private readonly commits = new Map<string, Promise<unknown>>();
+  /** Removals under way per account, from before their first check until they finish. */
+  private readonly removingAccounts = new Map<string, number>();
 
   constructor(private readonly deps: CloudAccountServiceDeps) {}
 
@@ -782,6 +784,15 @@ export class CloudAccountService {
     provider: CloudProvider,
     values: CloudCredentialValues
   ): Promise<void> {
+    // An order a create placed is closed with the account's key, after its host may be gone (#18230).
+    if (
+      this.deps.store.createOrders().some((order) => order.accountId === account.id) ||
+      this.deps.store.unreadableOrdersFor(account.id) > 0
+    ) {
+      throw invalid(
+        "An order this account placed for a new machine isn't closed yet, and a new key may not see it. Replace the key once it is."
+      );
+    }
     const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
     // A create sent and not yet found is looked for, and deleted, with the account's key; one
     // still being readied (Agent 37 registers its key first) is about to be sent with it (#17928).
@@ -832,24 +843,42 @@ export class CloudAccountService {
    */
   async removeAccount(accountId: unknown): Promise<void> {
     const account = this.requireAccount(accountId);
-    await this.serialize(account.id, async () => {
-      this.requireAccount(account.id);
-      const bound = this.deps.store
-        .bindings()
-        .filter((binding) => binding.accountId === account.id);
-      if (bound.length > 0) {
-        throw invalid(
-          `${account.displayName} still has ${bound.length === 1 ? "a cloud host" : `${bound.length} cloud hosts`}. Remove ${bound.length === 1 ? "it" : "them"} first, so no machine is left running with nothing here able to stop it.`
-        );
-      }
-      // Keys its machines were given are revoked first; one that may still work keeps the account (#17361).
-      await this.deps.beforeAccountRemoved?.(account.id);
-      // The credentials first: if their file can't be written, the account stays listed and removable again.
-      await this.deps.vault.delete(account.id);
-      this.deps.store.removeAccount(account.id);
-      this.catalogs.delete(account.id);
-    });
+    // No create is admitted on it meanwhile: one placed after the checks below would be
+    // left with no credentials here to settle it (#18230).
+    this.removingAccounts.set(account.id, (this.removingAccounts.get(account.id) ?? 0) + 1);
+    try {
+      await this.serialize(account.id, async () => {
+        this.requireAccount(account.id);
+        this.refuseWhileBound(account);
+        // Orders its creates placed are closed, and keys its machines were given revoked, first;
+        // one that may still be open or work keeps the account (#17361).
+        await this.deps.beforeAccountRemoved?.(account.id);
+        // A host added while those were settled holds the account too.
+        this.refuseWhileBound(account);
+        // The credentials first: if their file can't be written, the account stays listed and removable again.
+        await this.deps.vault.delete(account.id);
+        this.deps.store.removeAccount(account.id);
+        this.catalogs.delete(account.id);
+      });
+    } finally {
+      const left = (this.removingAccounts.get(account.id) ?? 1) - 1;
+      if (left > 0) this.removingAccounts.set(account.id, left);
+      else this.removingAccounts.delete(account.id);
+    }
     await this.deps.onAccountRemoved?.(account.id).catch(() => {});
+  }
+
+  /** Whether the account is being removed now, so nothing new may be made with it. */
+  isRemoving(accountId: string): boolean {
+    return this.removingAccounts.has(accountId);
+  }
+
+  private refuseWhileBound(account: StoredCloudAccount): void {
+    const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
+    if (bound.length === 0) return;
+    throw invalid(
+      `${account.displayName} still has ${bound.length === 1 ? "a cloud host" : `${bound.length} cloud hosts`}. Remove ${bound.length === 1 ? "it" : "them"} first, so no machine is left running with nothing here able to stop it.`
+    );
   }
 
   async validate(accountId: unknown): Promise<CloudAccountSummary> {

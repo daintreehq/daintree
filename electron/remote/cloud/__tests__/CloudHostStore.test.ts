@@ -969,6 +969,7 @@ describe("CloudHostStore create orders (#18230)", () => {
 
   it("keeps an order across a restart, apart from the hosts", () => {
     const backend = keyedDisk();
+    new CloudHostStore(backend).putCreateOrder(order());
     new CloudHostStore(backend).putCreateOrder(order({ state: "leasing", offerId: "bid-7" }));
     expect(new CloudHostStore(backend).createOrders()).toEqual([
       order({ state: "leasing", offerId: "bid-7" }),
@@ -990,6 +991,7 @@ describe("CloudHostStore create orders (#18230)", () => {
     store.putBinding(binding());
     store.putCreateOrder(order({ state: "leasing", offerId: "bid-7" }));
     store.putCreateOrder(order({ id: "co_2", bindingId: "cb_other00001" }));
+    store.putCreateOrder(order({ id: "co_3", state: "placing", orderIds: null }));
     const writes: string[] = [];
     const set = backend.set.bind(backend);
     backend.set = ((key: "cloudHosts", value: CloudHostsValue) => {
@@ -1002,6 +1004,7 @@ describe("CloudHostStore create orders (#18230)", () => {
     expect(store.createOrders().map((entry) => [entry.id, entry.state, entry.offerId])).toEqual([
       ["co_1", "close", null],
       ["co_2", "open", null],
+      ["co_3", "close", null],
     ]);
   });
 
@@ -1015,7 +1018,9 @@ describe("CloudHostStore create orders (#18230)", () => {
     ] as StoredCreateOrder[]);
     const store = new CloudHostStore(backend);
     expect(store.createOrders().map((entry) => entry.id)).toEqual(["co_1"]);
+    expect(store.unreadableOrdersFor("ca_0123456789")).toBe(3);
     store.updateCreateOrder("co_1", (current) => ({ ...current, state: "close" }));
+    expect(store.createOrder("co_1")?.state).toBe("close");
     store.removeCreateOrder("co_1");
     expect(backend.saved.get("cloudCreateOrders")).toHaveLength(3);
   });
@@ -1025,10 +1030,12 @@ describe("CloudHostStore create orders (#18230)", () => {
     backend.set("cloudCreateOrders", [
       order({ state: "placing", orderIds: null, waitingSince: null }),
       order({ id: "co_2", state: "close", orderIds: null, offerId: "bid-1" }),
+      order({ id: "co_3", offerId: "bid-2" }),
     ]);
     expect(new CloudHostStore(backend).createOrders()).toEqual([
       order({ state: "placing", orderIds: null, waitingSince: null }),
       order({ id: "co_2", state: "close", orderIds: null, offerId: null }),
+      order({ id: "co_3", offerId: null }),
     ]);
   });
 });

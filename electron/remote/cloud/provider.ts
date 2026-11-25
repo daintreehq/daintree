@@ -124,12 +124,16 @@ export interface OfferCreate {
   /**
    * Leases exactly this offer and answers with the machine. One that has
    * gone is refused with nothing leased, never swapped for another, and the
-   * order stays open for another choice.
+   * order stays open for another choice. `expected` is the rate the person
+   * saw: a bidder can quote again under the same offer id, so one that no
+   * longer quotes it is refused the same way, checked as close to the lease
+   * as the provider can.
    */
   leaseOffer(
     credentials: ProviderCredentials,
     orderId: string,
-    offerId: string
+    offerId: string,
+    expected?: { hourlyDollars: number }
   ): Promise<ProviderResource>;
   /**
    * Closes an order nobody chose from: `closed` once it is, and when it
