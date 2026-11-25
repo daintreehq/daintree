@@ -949,7 +949,10 @@ describe("McpServerService", () => {
     // A panel the person opened: the assistant has no record of launching it.
     const close = async (client: Client) =>
       getTextResult(
-        await client.callTool({ name: "terminal.close", arguments: { terminalId: "terminal-user" } })
+        await client.callTool({
+          name: "terminal.close",
+          arguments: { terminalId: "terminal-user" },
+        })
       );
 
     // Started with no view, nobody can be asked yet, and it is told how a window comes to.
