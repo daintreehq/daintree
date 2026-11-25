@@ -750,6 +750,31 @@ describe("an Assistant reopening one exact conversation with no frontend (#16753
     expect(spawned(other.invoke).agentLaunchFlags).toContain("--fork-session");
   });
 
+  it("refuses a Codex conversation asked for itself on another account's home (#18169)", async () => {
+    const elsewhere = launchDeps({
+      getLaunchEnvLayers: async () => ({
+        global: { CODEX_HOME: "/accounts/work/.codex" },
+        project: {},
+      }),
+    });
+    const codexSpec = {
+      ...spec,
+      agentId: "codex",
+      resumeAgentSessionId: "thread-9",
+      exactResume: true as const,
+      exactConversation: true as const,
+    };
+
+    await expect(spawnHostAssistant(PROJECT, codexSpec, elsewhere.deps)).resolves.toBe(false);
+    expect(
+      elsewhere.invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)
+    ).toBe(false);
+
+    const home = launchDeps();
+    await expect(spawnHostAssistant(PROJECT, codexSpec, home.deps)).resolves.toBe(true);
+    expect(String(spawned(home.invoke).command)).toContain("thread-9");
+  });
+
   it("leaves a resume that didn't ask for it as it was", async () => {
     const { deps, invoke } = launchDeps();
 

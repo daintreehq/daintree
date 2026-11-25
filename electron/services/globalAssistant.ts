@@ -629,6 +629,16 @@ function heldGlobalConversations(
  * nothing can tell which listed conversation is the one it has open.
  */
 function runsUnnamedConversation(slot: GlobalAssistantSlot, agentId: string): boolean {
+  const pointer = loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot) ?? null;
+  // A run still being captured names its conversation only once the capture
+  // lands, whatever the session shows meanwhile (a switch cancelled, say).
+  if (
+    pointer?.agentId === agentId &&
+    pointer.agentSessionId === "" &&
+    loadedHelp?.laneCaptureInFlight(GLOBAL_ASSISTANT_ID, slot) === true
+  ) {
+    return true;
+  }
   const service = instances.get(slot);
   if (!service) return false;
   const { phase, agentId: shown } = service.getState();
@@ -636,8 +646,7 @@ function runsUnnamedConversation(slot: GlobalAssistantSlot, agentId: string): bo
   // successor picks one, but the conversation it captures is still on it.
   const running = shown ?? service.switchingTo()?.agentId ?? null;
   if (phase === "absent" || running !== agentId) return false;
-  const kept = loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot) ?? null;
-  return kept === null || kept.agentId !== agentId || kept.agentSessionId === "";
+  return pointer === null || pointer.agentId !== agentId || pointer.agentSessionId === "";
 }
 
 /**

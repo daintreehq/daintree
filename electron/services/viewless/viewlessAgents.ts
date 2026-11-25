@@ -67,6 +67,7 @@ import { recordViewlessTerminal } from "./projectStateAuthoring.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
 import { isClaudeForkFlag } from "../assistants/forkedConversation.js";
+import { resolveLaunchCodexHome } from "../codex/codexLaunchHome.js";
 import {
   AgentLaunchArgsSchema,
   AgentListAccountsArgsSchema,
@@ -588,8 +589,10 @@ export async function spawnHostAssistant(
      */
     exactResume?: true;
     /**
-     * Reopen that conversation itself (#18169): a fork the person's flags or
-     * preset ask for would run another one, so it is dropped for this launch.
+     * Reopen that conversation itself, as listed from the agent's default
+     * store (#18169): a fork the person's flags or preset ask for would run
+     * another one, so it is dropped for this launch, and a Codex launch on
+     * another account's home is refused.
      */
     exactConversation?: true;
     /**
@@ -641,7 +644,7 @@ export async function spawnHostAssistant(
   const registryCommand = getEffectiveAgentConfig(agentId)?.command;
   const launchFlags =
     spec.resumeAgentSessionId && spec.exactConversation && agentId === "claude"
-      ? plan.launchFlags.filter((flag) => !isClaudeForkFlag(flag))
+      ? plan.launchFlags?.filter((flag) => !isClaudeForkFlag(flag))
       : plan.launchFlags;
   const resumed = spec.resumeAgentSessionId
     ? buildResumeCommand(
@@ -664,6 +667,17 @@ export async function spawnHostAssistant(
     return null;
   });
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, plan.env);
+  // That conversation was listed from Codex's default home (#18169): a launch
+  // whose home is another account's holds no such thread, and its failed
+  // resume would leave a shell running in the conversation's place.
+  if (
+    spec.resumeAgentSessionId &&
+    spec.exactConversation &&
+    agentId === "codex" &&
+    resolveLaunchCodexHome({ ...process.env, ...env }) !== resolveLaunchCodexHome(process.env)
+  ) {
+    return false;
+  }
   try {
     await deps.invoke<string>(project.id, CHANNELS.TERMINAL_SPAWN, [
       {

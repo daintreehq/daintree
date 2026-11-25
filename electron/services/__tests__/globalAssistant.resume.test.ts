@@ -18,6 +18,7 @@ const help = vi.hoisted(() => ({
   confirmOptions: [] as unknown[],
   flags: [] as string[],
   revokeGate: null as Promise<void> | null,
+  capturing: new Set<number>(),
 }));
 const lister = vi.hoisted(() => ({
   listHelpPastSessions: vi.fn(),
@@ -63,6 +64,7 @@ vi.mock("../HelpSessionService.js", () => ({
       help.confirmed.push(sessionId);
     },
     laneWorkOwnershipId: (_projectId: string, slot: number) => help.work.get(slot),
+    laneCaptureInFlight: (_projectId: string, slot: number) => help.capturing.has(slot),
     getLaneCoordinator: () => null,
     setLaneCoordinator: async () => {},
     getSessionPathForProject: (projectPath: string, agentId: string) =>
@@ -124,6 +126,7 @@ beforeEach(async () => {
   help.confirmOptions = [];
   help.flags = [];
   help.revokeGate = null;
+  help.capturing.clear();
   lister.listHelpPastSessions.mockReset();
   lister.listHelpPastSessions.mockResolvedValue(listing("conv-a", "conv-c"));
   vi.resetModules();
@@ -280,6 +283,27 @@ describe("resumeGlobalAssistantConversation (#18169)", () => {
       })
     ).rejects.toMatchObject({ code: "VALIDATION" });
     expect(help.revoked).toEqual([]);
+  });
+
+  it("refuses while the other session's run is still being captured, whatever it shows", async () => {
+    const service = await seatRunning();
+    // Cancelled mid-switch: shown as stopped, its capture not yet landed.
+    help.pointers.set(1, { agentId: "claude", agentSessionId: "" });
+    help.capturing.add(1);
+
+    await expect(
+      registry.resumeGlobalAssistantConversation(0, "conv-a", {
+        generation: service.getState().generation,
+        phase: "running",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+
+    help.capturing.clear();
+    await registry.resumeGlobalAssistantConversation(0, "conv-a", {
+      generation: service.getState().generation,
+      phase: "running",
+    });
+    await vi.waitFor(() => expect(help.confirmed).toHaveLength(1));
   });
 
   it("keeps the conversation one session is switching to out of the other's reach", async () => {

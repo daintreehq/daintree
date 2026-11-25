@@ -2244,6 +2244,11 @@ export class HelpSessionService {
     );
   }
 
+  /** Whether a capture of the lane's run is still on its way to its pointer (#18169). */
+  laneCaptureInFlight(projectId: string, slot: number): boolean {
+    return this.pendingCapturesBySlotKey.has(assistantSlotKey(projectId, slot));
+  }
+
   /**
    * The ownership id the lane's work is held under now (#18169): its live
    * run's, else its pointer's. Read before a switch stops the run, since the
