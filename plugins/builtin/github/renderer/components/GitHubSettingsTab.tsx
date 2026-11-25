@@ -15,6 +15,7 @@ import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitHubTokenValidation } from "../../shared/types.js";
 import { GITHUB_REQUIRED_SCOPES } from "../../shared/credentialScopes.js";
+import { GITHUB_COM_HOST, newFineGrainedTokenUrl, newTokenUrl } from "../../shared/githubHost.js";
 import {
   GitHubCliImportDetails,
   describeImportFailure,
@@ -186,14 +187,8 @@ export function GitHubSettingsTab() {
     }
   };
 
-  const openGitHubTokenPage = () => {
-    void actionService.dispatch(
-      "system.openExternal",
-      {
-        url: `https://github.com/settings/tokens/new?scopes=${GITHUB_REQUIRED_SCOPES.join(",")}&description=Daintree`,
-      },
-      { source: "user" }
-    );
+  const openTokenPage = (url: string) => {
+    void actionService.dispatch("system.openExternal", { url }, { source: "user" });
   };
 
   // Reading gh's token can raise an OS keychain prompt, so the preview runs
@@ -387,9 +382,10 @@ export function GitHubSettingsTab() {
             description={
               <>
                 {isGhAvailable
-                  ? "Import the token the GitHub CLI already holds, or create one on GitHub with the scopes preselected. "
-                  : "Opens GitHub in your browser with the required scopes preselected. "}
-                Needs{" "}
+                  ? "Import the token the GitHub CLI already holds, or create one on GitHub with Daintree's permissions preselected. "
+                  : "Opens GitHub in your browser with Daintree's permissions preselected. "}
+                A fine-grained token is limited to one owner and the repositories you pick; a
+                classic token spans organizations and needs{" "}
                 {GITHUB_REQUIRED_SCOPES.map((scope, index) => (
                   <span key={scope}>
                     {index > 0 && " and "}
@@ -425,12 +421,22 @@ export function GitHubSettingsTab() {
                   </Button>
                 )}
                 <Button
-                  onClick={openGitHubTokenPage}
+                  onClick={() => openTokenPage(newFineGrainedTokenUrl())}
                   variant="outline"
                   size="sm"
                   icon="external-link"
                 >
-                  Create token on GitHub
+                  Create fine-grained token
+                </Button>
+                <Button
+                  onClick={() =>
+                    openTokenPage(newTokenUrl(GITHUB_COM_HOST, GITHUB_REQUIRED_SCOPES))
+                  }
+                  variant="outline"
+                  size="sm"
+                  icon="external-link"
+                >
+                  Create classic token
                 </Button>
               </div>
             }

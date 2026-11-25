@@ -4,6 +4,7 @@ import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { GitHubEnterpriseSection } from "../components/GitHubEnterpriseSection";
 import { ENTERPRISE_CHANNELS } from "../../shared/enterprise.js";
+import { actionService } from "@/services/ActionService";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn(async () => ({ ok: true, result: undefined })) },
@@ -54,6 +55,23 @@ describe("GitHubEnterpriseSection", () => {
 
     await waitFor(() => expect(tokenCalls()).toHaveLength(1));
     expect(tokenCalls()[0]![2]).toEqual({ token: "ghp_draft", host: "ghe.one.example" });
+  });
+
+  it("offers an Enterprise Server host its classic token page alone", async () => {
+    // GHES's token docs don't document the fine-grained pre-fill parameters,
+    // so the server keeps the classic link only.
+    serveStatus(["ghe.one.example"]);
+    render(<GitHubEnterpriseSection isGhAvailable={false} onTokenChanged={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Create token on ghe.one.example" }));
+    expect(screen.queryByRole("button", { name: /fine-grained/i })).toBeNull();
+    expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
+      "system.openExternal",
+      {
+        url: "https://ghe.one.example/settings/tokens/new?scopes=repo,read:org&description=Daintree",
+      },
+      { source: "user" }
+    );
   });
 
   it("drops a draft typed for one server once the account points at another", async () => {

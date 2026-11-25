@@ -29,3 +29,23 @@ export function findMissingGitHubScopes(scopes: readonly string[]): GitHubRequir
     (required) => !SATISFIED_BY[required].some((scope) => held.has(scope))
   );
 }
+
+export type GitHubFineGrainedAccess = "read" | "write";
+
+/**
+ * Repository permissions Daintree pre-fills on GitHub's fine-grained token
+ * page, keyed by GitHub's URL parameter names. Each is read unless a Code forge
+ * action writes with it: merging and auto-merge need `contents` write.
+ * Metadata read is left out because GitHub grants it to every fine-grained
+ * token. A fine-grained token sends no scope header, so nothing here is
+ * checked when the token is saved.
+ */
+export const GITHUB_FINE_GRAINED_PERMISSIONS = {
+  contents: "write",
+  pull_requests: "write",
+  issues: "write",
+  statuses: "read",
+  // Names the workflow behind each check run; the rest of the CI rollup reads without it.
+  actions: "read",
+  deployments: "read",
+} as const satisfies Record<string, GitHubFineGrainedAccess>;
