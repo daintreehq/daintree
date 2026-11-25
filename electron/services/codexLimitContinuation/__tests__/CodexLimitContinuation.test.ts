@@ -826,7 +826,7 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
   async function restore(
     backend: ContinuationStoreBackend,
     terminal: ContinuationTerminal,
-    resume: { sessionId?: string; startsFresh?: boolean } = {}
+    resume: { sessionId?: string; startsFresh?: boolean; agentId?: string } = {}
   ) {
     const after = harness(backend);
     after.setTerminal(terminal);
@@ -837,7 +837,7 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
       launchGeneration: 1,
       arms: false,
       restore: {
-        agentId: terminal.launchAgentId!,
+        agentId: resume.agentId ?? terminal.launchAgentId!,
         sessionId: "sessionId" in resume ? resume.sessionId : "session-1",
         startsFresh: resume.startsFresh ?? false,
       },
@@ -847,13 +847,22 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
   }
 
   /** The restored process redraws the saved stop; what its banner reads as now is no substitute. */
-  async function redraw(after: ReturnType<typeof harness>) {
+  async function redraw(after: ReturnType<typeof harness>, ref = RESTORED) {
     after.setStop({
-      reset: { status: "unknown", reason: "unreadable-time" },
-      stamp: { ...RESTORED, observedAt: Date.now(), identity: IDENTITY },
+      // Read again off the redraw against the restore's clock: a day out.
+      reset: {
+        status: "known",
+        resetsAt: RESETS_AT + 24 * 60 * 60_000,
+        precision: "minute",
+        source: "banner",
+        observedAt: Date.now(),
+      },
+      stamp: { ...ref, observedAt: Date.now(), identity: IDENTITY },
       restored: true,
     });
-    await after.service.handleStop("t1", RESTORED);
+    await after.service.handleStop("t1", ref);
+    // A due wait's claim is on disk before the host is asked.
+    await vi.advanceTimersByTimeAsync(0);
   }
 
   it.each([
@@ -914,8 +923,8 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
   it("skips a restored Claude pane whose conversation took a newer turn, typing nothing", async () => {
     const backend = await quitWhileWaiting(claudePane(), { uuid: "limit-entry", apiError: true });
     const after = await restore(backend, claudePane());
-    // Resumed elsewhere while Daintree was closed, and limited again in the same words.
-    after.setTurn({ uuid: "newer-entry", apiError: true });
+    // Resumed elsewhere while Daintree was closed: any newer entry, a limit or not.
+    after.setTurn({ uuid: "newer-entry", apiError: false });
     await redraw(after);
     expect(after.state()).toMatchObject({ status: "skipped", reason: "banner-not-last" });
     expect(after.hostArmed.at(-1)).toEqual(["t1", true, null]);
@@ -930,6 +939,61 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
     await redraw(after);
     await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS - START);
     expect(after.continueAt).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks a restored Claude conversation again right before typing", async () => {
+    const backend = await quitWhileWaiting(claudePane(), { uuid: "limit-entry", apiError: true });
+    const after = await restore(backend, claudePane());
+    after.setTurn({ uuid: "limit-entry", apiError: true });
+    await redraw(after);
+    // A turn taken in another terminal after the restore bound the wait.
+    after.setTurn({ uuid: "later-entry", apiError: false });
+    await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS - START);
+    expect(after.state()).toMatchObject({ status: "skipped", reason: "banner-not-last" });
+    expect(after.continueAt).not.toHaveBeenCalled();
+  });
+
+  it("names another limit on screen when a restored wait's redraw never comes", async () => {
+    const backend = await quitWhileWaiting(codexPane());
+    const after = await restore(backend, codexPane());
+    after.setStop(known(RESETS_AT, { run: "run-restored", seq: 4 }));
+    await vi.advanceTimersByTimeAsync(RESTORE_BIND_MS);
+    expect(after.state()).toMatchObject({ status: "skipped", reason: "banner-changed" });
+  });
+
+  it("follows a replayed redraw of the bound stop to its new sighting", async () => {
+    const backend = await quitWhileWaiting(codexPane());
+    const after = await restore(backend, codexPane());
+    await redraw(after);
+    const again = { run: RESTORED.run, seq: 2 };
+    await redraw(after, again);
+    await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS - START);
+    expect(after.continueAt).toHaveBeenCalledTimes(1);
+    expect(after.continueAt).toHaveBeenCalledWith("t1", again);
+  });
+
+  it("records process-changed when a restored wait's process ends before its reset", async () => {
+    const backend = await quitWhileWaiting(codexPane());
+    const after = await restore(backend, codexPane());
+    await redraw(after);
+    after.service.handleProcessChange("t1");
+    expect(after.state()).toMatchObject({ status: "skipped", reason: "process-changed" });
+    await vi.runAllTimersAsync();
+    expect(after.continueAt).not.toHaveBeenCalled();
+  });
+
+  it("has the claim on disk before the host is asked to type", async () => {
+    const backend = memoryBackend();
+    const before = harness(backend);
+    await before.service.set("t1", true, PROJECT);
+    await before.service.handleStop("t1", STOP);
+    let claimed: unknown;
+    before.continueAt.mockImplementationOnce(async () => {
+      claimed = JSON.parse(backend.data!).panes[0].fired;
+      return { status: "continued", line: "continue" };
+    });
+    await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS - START);
+    expect(claimed).toEqual([RESETS_AT]);
   });
 
   it("gives up a restored wait whose agent never redraws the stop, saying why", async () => {
@@ -956,6 +1020,7 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
     ["starts a fresh conversation", { startsFresh: true }],
     ["resumes another conversation", { sessionId: "session-2" }],
     ["resumes no named conversation", { sessionId: undefined }],
+    ["runs another agent", { agentId: "claude" }],
   ])("skips a restore that %s, keeping the pane armed", async (_label, resume) => {
     const backend = await quitWhileWaiting(codexPane());
     const after = await restore(backend, codexPane(), resume);
@@ -1023,6 +1088,22 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
     expect(after.state()).toMatchObject({ status: "waiting", resetsAt: RESETS_AT });
   });
 
+  it("lets a saved stop go when the pane's first launch of the run isn't its restore", async () => {
+    const backend = await quitWhileWaiting(codexPane());
+    const after = harness(backend);
+    await after.store.ready();
+    after.service.noteLaunch({
+      terminalId: "t1",
+      projectId: PROJECT,
+      launchGeneration: 1,
+      arms: true,
+    });
+    after.service.handleSpawnResult("t1", { success: true, launchGeneration: 1, spawnedAt: 5_000 });
+    expect(after.store.hasBootStop(PROJECT, "t1")).toBe(false);
+    await after.store.close();
+    expect(JSON.parse(backend.data!).panes[0].stop).toBeUndefined();
+  });
+
   it("revives a saved stop only for the first restore of its pane in a run", async () => {
     const backend = await quitWhileWaiting(codexPane());
     const after = await restore(backend, codexPane());
@@ -1057,6 +1138,81 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
       expect(after.continueAt).toHaveBeenCalledTimes(1);
     });
 
+    it("saves Claude's own wait over an older one main still held", async () => {
+      const backend = memoryBackend();
+      const before = harness(backend);
+      before.setTerminal(claudePane());
+      await before.service.set("t1", true, PROJECT);
+      await before.service.handleStop("t1", STOP);
+      const later = RESETS_AT + 5 * 60 * 60_000;
+      before.setCheckpoint({ kind: "own-wait", identity: "later-digest", resetsAt: later });
+      await quit(before);
+
+      const after = await restore(backend, claudePane());
+      expect(after.state()).toMatchObject({ status: "waiting", resetsAt: later });
+    });
+
+    it("keeps a restored wait not yet bound through another quit only while nothing was typed", async () => {
+      const kept = await quitWhileWaiting(codexPane());
+      const second = await restore(kept, codexPane());
+      second.setCheckpoint({ kind: "replaying" });
+      await quit(second);
+      expect((await restore(kept, codexPane())).state()).toMatchObject({ status: "waiting" });
+
+      const touched = await quitWhileWaiting(codexPane());
+      const typedInto = await restore(touched, codexPane());
+      typedInto.setCheckpoint(null);
+      await quit(typedInto);
+      expect((await restore(touched, codexPane())).state()).toEqual({ status: "armed" });
+    });
+
+    it("lets a stop still being read land before it decides", async () => {
+      const backend = memoryBackend();
+      const before = harness(backend);
+      before.setTerminal(claudePane());
+      await before.service.set("t1", true, PROJECT);
+      let readTurn!: (turn: ContinuationTurn | undefined) => void;
+      (before.service as unknown as { deps: CodexLimitContinuationDeps }).deps.readTurn = () =>
+        new Promise((resolve) => (readTurn = resolve));
+      const handled = before.service.handleStop("t1", STOP);
+      await vi.advanceTimersByTimeAsync(0);
+      const quitting = before.service.checkpointForQuit();
+      readTurn({ uuid: "limit-entry", apiError: true });
+      await handled;
+      await quitting;
+
+      const after = await restore(backend, claudePane());
+      expect(after.state()).toMatchObject({ status: "waiting", resetsAt: RESETS_AT });
+    });
+
+    it("keeps the stop of a process the quit ended, whatever its host says after", async () => {
+      const backend = memoryBackend();
+      const before = harness(backend);
+      await before.service.set("t1", true, PROJECT);
+      await before.service.handleStop("t1", STOP);
+      before.setQuitting(true);
+      before.service.handleProcessChange("t1");
+      before.setCheckpoint(null);
+      await before.service.checkpointForQuit();
+      before.service.dispose();
+
+      const after = await restore(backend, codexPane());
+      expect(after.state()).toMatchObject({ status: "waiting", resetsAt: RESETS_AT });
+    });
+
+    it.each([
+      ["a later sighting", { run: "run-a", seq: 2 }],
+      ["another process's", { run: "run-b", seq: 1 }],
+    ])("drops a saved stop when the pane holds %s instead", async (_label, held) => {
+      const backend = memoryBackend();
+      const before = harness(backend);
+      await before.service.set("t1", true, PROJECT);
+      await before.service.handleStop("t1", STOP);
+      before.setCheckpoint({ kind: "stop", ...held, identity: IDENTITY });
+      await quit(before);
+      expect((await restore(backend, codexPane())).state()).toEqual({ status: "armed" });
+    });
+
     it("drops a saved stop the pane no longer holds untouched", async () => {
       const backend = memoryBackend();
       const before = harness(backend);
@@ -1082,11 +1238,22 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
       expect(after.state()).toMatchObject({ status: "waiting", resetsAt: RESETS_AT });
     });
 
-    it("types nothing once the quit has begun", async () => {
+    it("types nothing once the quit has begun, even while its hosts are still answering", async () => {
       const h = harness(memoryBackend());
       await h.service.set("t1", true, PROJECT);
       await h.service.handleStop("t1", STOP);
-      await h.service.checkpointForQuit();
+      (h.service as unknown as { deps: CodexLimitContinuationDeps }).deps.readCheckpoint = () =>
+        new Promise(() => {});
+      void h.service.checkpointForQuit();
+      await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS - START);
+      expect(h.continueAt).not.toHaveBeenCalled();
+    });
+
+    it("types nothing once Daintree is quitting, before the checkpoint", async () => {
+      const h = harness(memoryBackend());
+      await h.service.set("t1", true, PROJECT);
+      await h.service.handleStop("t1", STOP);
+      h.setQuitting(true);
       await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS - START);
       expect(h.continueAt).not.toHaveBeenCalled();
     });

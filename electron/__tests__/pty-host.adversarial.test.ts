@@ -256,6 +256,7 @@ vi.mock("../services/PtyManager.js", () => {
       return { latestActivityAt, terminalCount: hostState.terminals.size };
     });
     write = vi.fn();
+    markLaunchInputDone = vi.fn();
     resize = vi.fn();
     kill = vi.fn();
     submit = vi.fn();

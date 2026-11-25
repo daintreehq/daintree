@@ -417,10 +417,18 @@ export class TerminalProcess {
   private readonly restoredLaunch: boolean;
   /** The input count once the host's own launch input was written: input since a restore counts from here. */
   private launchInputSeq = 0;
+  private launchInputDone = false;
+  /**
+   * A prompt was sent to the restored process since its launch: a limit after
+   * it can be one it hit, so its screen is no longer only resumed history.
+   * Keys that edit or leave the composer (an erased draft, an Escape) aren't.
+   */
+  private submittedSinceRestore = false;
   /** The stop saved before a cold restart that this restored process may redraw, by identity (#18193). */
   private restoreCandidate: string | null = null;
-  /** The sighting reported as that redraw. */
+  /** The sighting reported as that redraw, and the identity it had: a replayed redraw of it later is the same stop. */
   private restoredSeq: number | null = null;
+  private restoredIdentity: string | null = null;
   private codexStopReportedSeq: number | null = null;
   private codexStopSettleTimer: NodeJS.Timeout | null = null;
   /** True only while the exit path settles the mirror's last frame. */
@@ -2483,7 +2491,10 @@ export class TerminalProcess {
     };
     // The saved stop's redraw: its reset is the one saved, so nothing read now
     // is asked for, and what the banner reads as now is no substitute.
-    if (held.seq === this.restoredSeq) {
+    if (this.isRestoredStop(held)) {
+      if (query.seq !== undefined && (query.seq !== held.seq || query.run !== this.codexLimitRun)) {
+        return unknown("banner-changed");
+      }
       return {
         reset: resolveCodexLimitReset(observation, null, Date.now()),
         stamp,
@@ -2559,11 +2570,20 @@ export class TerminalProcess {
    */
   markLaunchInputDone(): void {
     this.launchInputSeq = this.inputController.inputSequence;
+    this.launchInputDone = true;
   }
 
-  /** A restored process that hasn't taken input since its launch: it shows only history it resumed. */
+  /** A restored process no prompt has been sent to since its launch: it shows only history it resumed. */
   private isReplaying(): boolean {
-    return this.restoredLaunch && this.inputController.inputSequence === this.launchInputSeq;
+    return this.restoredLaunch && !this.submittedSinceRestore;
+  }
+
+  /** Whether `held` is the restored process's redraw of the stop saved before the restart. */
+  private isRestoredStop(held: { seq: number; identity: string; replay: boolean }): boolean {
+    return (
+      held.seq === this.restoredSeq ||
+      (held.replay && this.restoredIdentity !== null && held.identity === this.restoredIdentity)
+    );
   }
 
   /** The input count a stop's guard compares against: a restored stop's counts from the launch. */
@@ -2576,11 +2596,7 @@ export class TerminalProcess {
    * unless it is the redraw of the stop saved before the restart.
    */
   private reportsStop(held: HeldLimitStop): boolean {
-    return (
-      !held.replay ||
-      held.restored ||
-      (this.restoreCandidate !== null && held.identity === this.restoreCandidate)
-    );
+    return !held.replay || held.restored || held.identity === this.restoreCandidate;
   }
 
   /**
@@ -2597,20 +2613,29 @@ export class TerminalProcess {
     if (!canContinueAtLimitReset(agentId)) return null;
     const incarnation = t.agentIncarnation ?? 0;
     const inputSeq = this.inputController.inputSequence;
+    // A restore that hasn't drawn the saved stop yet is still owed it while
+    // nothing has been written to it.
+    if (this.restoreCandidate !== null) {
+      return inputSeq === this.launchInputSeq ? { kind: "replaying" } : null;
+    }
     const held = this.heldLimitStop();
+    const observedSince = this.analysis.observedSince();
     if (
       held !== null &&
       held.shown &&
       held.incarnation === incarnation &&
       (held.restored || held.refusal === undefined) &&
       !held.guard.dialogSeen &&
-      inputSeq === this.guardInputSeq(held)
+      inputSeq === this.guardInputSeq(held) &&
+      observedSince !== null &&
+      observedSince === held.observedSince
     ) {
       return { kind: "stop", seq: held.seq, run: this.codexLimitRun, identity: held.identity };
     }
     const own = agentId === "claude" ? this.claudeLimitStop.ownWait() : null;
     if (
       own !== null &&
+      own.shown &&
       own.incarnation === incarnation &&
       own.inputSeq === inputSeq &&
       "resetsAt" in own.reset
@@ -2622,6 +2647,17 @@ export class TerminalProcess {
 
   /** Input as the pty host takes it, kept only for an armed Claude Code pane (#18192). */
   private noteLimitStopInput(data: string, owner: string | undefined): void {
+    // A prompt sent to a restored process ends its replay; the saved stop's
+    // redraw can no longer be told from a limit the prompt hit.
+    if (
+      this.restoredLaunch &&
+      this.launchInputDone &&
+      !this.submittedSinceRestore &&
+      /[\r\n]/.test(data)
+    ) {
+      this.submittedSinceRestore = true;
+      this.restoreCandidate = null;
+    }
     if (this.codexContinueArmed && getLiveAgentId(this.terminalInfo) === "claude") {
       this.claudeLimitStop.noteInput(data, owner, performance.now());
     }
@@ -2715,7 +2751,7 @@ export class TerminalProcess {
         : { status: "unknown", reason: held.reset.reason, observedAt: held.observedAt };
     // The saved stop's redraw: the reset is the one saved, and a cancel notice
     // redrawn with it was judged before the restart (#18193).
-    if (held.seq === this.restoredSeq) return { reset, stamp, restored: true };
+    if (this.isRestoredStop(held)) return { reset, stamp, restored: true };
     return held.skipAtStop === null
       ? { reset, stamp }
       : { reset, stamp, skipAtStop: held.skipAtStop };
@@ -2730,7 +2766,7 @@ export class TerminalProcess {
         seq: held.seq,
         identity: held.identity,
         replay: held.replay,
-        restored: held.seq === this.restoredSeq,
+        restored: this.isRestoredStop(held),
         incarnation: held.incarnation,
         observedSince: held.observedSince,
         shown: held.shown,
@@ -2756,7 +2792,7 @@ export class TerminalProcess {
       seq: held.seq,
       identity: held.identity,
       replay: held.replay,
-      restored: held.seq === this.restoredSeq,
+      restored: this.isRestoredStop(held),
       incarnation: held.incarnation,
       observedSince: held.observedSince,
       shown: this.codexLimitLook === "banner" && held.hiddenSince === null,
@@ -2833,12 +2869,9 @@ export class TerminalProcess {
     this.codexStopReportedSeq = held.seq;
     // The redraw of the stop saved before the restart is reported as that
     // stop, once: a later sighting with the same words is a limit of its own.
-    if (
-      !held.restored &&
-      this.restoreCandidate !== null &&
-      held.identity === this.restoreCandidate
-    ) {
+    if (!held.restored && held.replay && held.identity === this.restoreCandidate) {
       this.restoredSeq = held.seq;
+      this.restoredIdentity = held.identity;
       this.restoreCandidate = null;
     }
     events.emit("agent:codex-limit-stopped", {

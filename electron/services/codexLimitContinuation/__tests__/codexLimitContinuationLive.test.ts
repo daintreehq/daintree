@@ -132,6 +132,47 @@ describe("codexLimitContinuationLive — launches a preset arms (#17912)", () =>
     expect(state.ptyClient.setCodexLimitContinue).toHaveBeenLastCalledWith("t1", true, "digest");
   });
 
+  const savedWait = JSON.stringify({
+    version: 1,
+    panes: [
+      {
+        projectId: "project-1",
+        terminalId: "t1",
+        stop: { agentId: "codex", sessionId: "s1", resetsAt: 9_000_000, identity: "d", savedAt: 1 },
+      },
+    ],
+  });
+
+  it("restores a pane that was waiting as Daintree quit armed, though its preset no longer arms it (#18193)", async () => {
+    _setContinuationStoreForTest(
+      new ContinuationStore({ read: async () => savedWait, write: async () => {} })
+    );
+    await prepareContinuationLaunch();
+    noteContinuationLaunch({
+      ...launch("off", 1),
+      restore: { agentId: "codex", sessionId: "s1", startsFresh: false },
+    });
+    state.ptyClient.emit("spawn-result", "t1", { success: true, id: "t1", launchGeneration: 1 });
+    expect(peekCodexLimitContinuation()?.list("project-1")[0]?.state).toMatchObject({
+      status: "waiting",
+    });
+  });
+
+  it("lets the saved wait go when the pane's first launch isn't its restore (#18193)", async () => {
+    const writes: string[] = [];
+    const saved = new ContinuationStore({
+      read: async () => savedWait,
+      write: async (data) => void writes.push(data),
+    });
+    _setContinuationStoreForTest(saved);
+    await prepareContinuationLaunch();
+    noteContinuationLaunch(launch("off", 1));
+    state.ptyClient.emit("spawn-result", "t1", { success: true, id: "t1", launchGeneration: 1 });
+    expect(peekCodexLimitContinuation()?.isArmed("t1")).toBe(false);
+    await saved.close();
+    expect(JSON.parse(writes.at(-1)!).panes).toEqual([]);
+  });
+
   it("notes a newer launch its preset doesn't arm while an older one awaits its spawn", () => {
     // Both queued before the shard was ready; only the newer is sent.
     noteContinuationLaunch(launch("on", 1));

@@ -68,6 +68,11 @@ export class ContinuationStore {
   private readonly bootStops = new Map<string, SavedLimitStop>();
   private loading: Promise<void> | null = null;
   private loaded = false;
+  /**
+   * The file was there and couldn't be read: writing it whole now would lose
+   * every other pane's record, so nothing is written this run.
+   */
+  private readFailed = false;
   private writeChain: Promise<void> = Promise.resolve();
   private writeQueued = false;
   private closed = false;
@@ -84,11 +89,17 @@ export class ContinuationStore {
   }
 
   private async load(): Promise<void> {
+    let raw: string | null = null;
     try {
-      const raw = this.backend ? await this.backend.read() : null;
+      raw = this.backend ? await this.backend.read() : null;
+    } catch (error) {
+      this.readFailed = true;
+      console.warn("[LimitContinuation] Couldn't read the saved continuations:", error);
+    }
+    try {
       if (raw !== null) this.parse(raw);
     } catch (error) {
-      console.warn("[LimitContinuation] Couldn't read the saved continuations:", error);
+      console.warn("[LimitContinuation] Couldn't parse the saved continuations:", error);
     }
     this.loaded = true;
   }
@@ -106,8 +117,12 @@ export class ContinuationStore {
       const stop = readStop(e.stop);
       if (stop) pane.stop = stop;
       if (Array.isArray(e.fired)) {
+        // A reset tried for a stop still saved is kept however old it is.
         const fired = e.fired
-          .filter((at): at is number => typeof at === "number" && at >= firedSince)
+          .filter(
+            (at): at is number =>
+              typeof at === "number" && (at >= firedSince || at === pane.stop?.resetsAt)
+          )
           .slice(-MAX_FIRED_PER_PANE);
         if (fired.length > 0) pane.fired = fired;
       }
@@ -170,8 +185,8 @@ export class ContinuationStore {
   }
 
   removeFired(projectId: string, terminalId: string, resetsAt: number): void {
-    if (!this.fired(projectId, terminalId).includes(resetsAt)) return;
     this.mutate(projectId, terminalId, (pane) => {
+      if (!pane.fired?.includes(resetsAt)) return;
       const fired = (pane.fired ?? []).filter((at) => at !== resetsAt);
       if (fired.length > 0) pane.fired = fired;
       else delete pane.fired;
@@ -213,10 +228,14 @@ export class ContinuationStore {
     await this.writeChain;
   }
 
-  /** Daintree is quitting: what is held now is written, and nothing after it. */
+  /**
+   * Daintree is quitting: every change accepted so far is written, those
+   * waiting on the read included, and nothing after it.
+   */
   async close(): Promise<void> {
-    await this.flush();
+    await this.ready();
     this.closed = true;
+    await this.writeChain;
   }
 
   private mutate(projectId: string, terminalId: string, change: (pane: SavedPane) => void): void {
@@ -246,7 +265,7 @@ export class ContinuationStore {
   }
 
   private schedule(): void {
-    if (this.closed || this.writeQueued || !this.backend) return;
+    if (this.closed || this.writeQueued || this.readFailed || !this.backend) return;
     this.writeQueued = true;
     const backend = this.backend;
     this.writeChain = this.writeChain.then(async () => {

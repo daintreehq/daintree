@@ -93,22 +93,36 @@ describe("ContinuationStore (#18193)", () => {
   it("remembers the last eight continued resets of a pane, and none from long ago", async () => {
     const backend = file();
     const store = await reopen(backend);
-    for (let i = 0; i < 10; i++) store.addFired("p", "t1", NOW - i * 60_000);
-    store.addFired("p", "t1", NOW);
-    expect(store.fired("p", "t1")).toHaveLength(8);
+    for (let i = 0; i < 10; i++) store.addFired("p", "t1", NOW - (10 - i) * 60_000);
+    store.addFired("p", "t1", NOW - 60_000);
     store.addFired("p", "t2", NOW - 40 * DAY);
+    // A reset tried for a stop still saved stays, however old.
+    store.saveStop("p", "t3", stop(NOW - 40 * DAY));
+    store.addFired("p", "t3", NOW - 40 * DAY);
     await store.close();
 
     const next = await reopen(backend);
-    expect(next.fired("p", "t1")).toEqual(store.fired("p", "t1"));
+    const lastEight = Array.from({ length: 8 }, (_, i) => NOW - (8 - i) * 60_000);
+    expect(next.fired("p", "t1")).toEqual(lastEight);
     expect(next.fired("p", "t2")).toEqual([]);
+    expect(next.fired("p", "t3")).toEqual([NOW - 40 * DAY]);
   });
 
-  it("gives a reset back when it wasn't spent after all", async () => {
+  it("gives a reset back when it wasn't spent after all, and keeps the others", async () => {
     const store = await reopen(file());
+    store.addFired("p", "t1", NOW - DAY);
     store.addFired("p", "t1", NOW);
     store.removeFired("p", "t1", NOW);
-    expect(store.fired("p", "t1")).toEqual([]);
+    expect(store.fired("p", "t1")).toEqual([NOW - DAY]);
+  });
+
+  it("writes nothing over a file it couldn't read", async () => {
+    const backend = file(JSON.stringify({ version: 1, panes: [] }));
+    backend.read.mockRejectedValueOnce(Object.assign(new Error("EIO"), { code: "EIO" }));
+    const store = await reopen(backend);
+    store.setOverride("p", "t1", true);
+    await store.close();
+    expect(backend.write).not.toHaveBeenCalled();
   });
 
   it("drops what it can't read, and reads nothing from another version", async () => {
@@ -127,8 +141,16 @@ describe("ContinuationStore (#18193)", () => {
     expect(store.override("p", "t3")).toBe(false);
     expect(store.hasBootStop("p", "t3")).toBe(true);
 
-    const other = await reopen(file(JSON.stringify({ version: 2, panes: [{ projectId: "p" }] })));
+    const other = await reopen(
+      file(
+        JSON.stringify({
+          version: 2,
+          panes: [{ projectId: "p", terminalId: "t3", override: true, stop: stop() }],
+        })
+      )
+    );
     expect(other.override("p", "t3")).toBeUndefined();
+    expect(other.hasBootStop("p", "t3")).toBe(false);
     const garbage = await reopen(file("{not json"));
     expect(garbage.override("p", "t3")).toBeUndefined();
   });
@@ -142,10 +164,36 @@ describe("ContinuationStore (#18193)", () => {
     const store = new ContinuationStore(backend, () => NOW);
     store.setOverride("p", "t2", true);
     store.forgetPane("t1");
-    await store.ready();
-    await store.flush();
+    // Quitting before the read came back still writes both.
+    await store.close();
     expect(store.override("p", "t1")).toBeUndefined();
     expect(store.override("p", "t2")).toBe(true);
+    const next = await reopen(backend);
+    expect(next.override("p", "t1")).toBeUndefined();
+    expect(next.override("p", "t2")).toBe(true);
+  });
+
+  it("closes only once what it was asked to write has landed", async () => {
+    let land!: () => void;
+    const backend = file();
+    backend.write.mockImplementationOnce(
+      (next: string) =>
+        new Promise<void>((resolve) => {
+          land = () => {
+            backend.data = next;
+            resolve();
+          };
+        })
+    );
+    const store = await reopen(backend);
+    store.setOverride("p", "t1", true);
+    let closed = false;
+    const closing = store.close().then(() => (closed = true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closed).toBe(false);
+    land();
+    await closing;
+    expect(JSON.parse(backend.data!).panes).toHaveLength(1);
   });
 
   it("writes a burst of changes once, and nothing after it closes", async () => {

@@ -1476,6 +1476,25 @@ describe("readClaudeTranscriptLeaf (#18193)", () => {
     expect(await leaf()).toEqual({ uuid: "u-2", apiError: true });
   });
 
+  it("steps over harness records said to no one: meta notes and compaction summaries", async () => {
+    await seed([
+      limit("u-2"),
+      prompt("Caveat: local command output follows", { uuid: "u-meta", isMeta: true }),
+      prompt("Summary of the conversation so far", { uuid: "u-sum", isCompactSummary: true }),
+    ]);
+    expect(await leaf()).toEqual({ uuid: "u-2", apiError: true });
+  });
+
+  it("answers nothing while the newest record is still being written", async () => {
+    await seed([limit("u-2")], { trailing: '{"type":"user","uuid":"u-3","mess' });
+    expect(await leaf()).toBeNull();
+  });
+
+  it("names a prompt sent after the limit", async () => {
+    await seed([limit("u-2"), prompt("continue", { uuid: "u-3" })]);
+    expect(await leaf()).toEqual({ uuid: "u-3", apiError: false });
+  });
+
   it("names a turn taken after the limit, which is no limit", async () => {
     await seed([
       limit("u-2"),

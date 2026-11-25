@@ -94,6 +94,8 @@ export interface ClaudeOwnWait {
   reset: ClaudeLimitStop["reset"];
   /** The terminal's input count when it first showed. */
   inputSeq: number;
+  /** The latest look showed it: a frame without the banner (a resize) keeps what it first showed. */
+  shown: boolean;
 }
 
 interface EscapeNote {
@@ -188,7 +190,13 @@ export class ClaudeLimitStopTracker {
     // place) says nothing either way.
     if (screen === "no-composer") return;
     const held = this.stop;
-    if (screen === null || !screen.last || !screen.countdown) this.countdown = null;
+    // A frame with no banner at all keeps the wait's first sighting; anything
+    // printed after the banner, or the banner with no wait of Claude's, ends it.
+    if (screen === null) {
+      if (this.countdown) this.countdown.shown = false;
+    } else if (!screen.last || !screen.countdown) {
+      this.countdown = null;
+    }
     if (screen === null || !screen.last) {
       this.bannerSince = null;
       if (held) {
@@ -208,12 +216,15 @@ export class ClaudeLimitStopTracker {
         held.ownWait = true;
       }
       const seen = this.countdown;
-      if (seen === null || seen.identity !== identity || seen.incarnation !== look.incarnation) {
+      if (seen !== null && seen.identity === identity && seen.incarnation === look.incarnation) {
+        seen.shown = true;
+      } else {
         this.countdown = {
           identity,
           incarnation: look.incarnation,
           reset: resetOf(screen.window, screen.resetText, look),
           inputSeq: look.inputSeq,
+          shown: true,
         };
       }
       return;

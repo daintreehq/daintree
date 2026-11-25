@@ -1687,13 +1687,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             originalPresetId:
               validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
             // A restore may pick up the stop saved with the pane (#18193), only
-            // on the conversation it was in. A Windows launch script that may
-            // start afresh can't say which it ran.
+            // on the conversation it was in: not a fork of it, and not under a
+            // Windows launch script that may start afresh and can't say which.
             ...(validatedOptions.restore === true && {
               restore: {
                 agentId: launchAgentId,
                 sessionId: spawnAgentSessionId,
-                startsFresh: startsFreshConversation || windowsClaudeResume !== undefined,
+                startsFresh:
+                  startsFreshConversation ||
+                  windowsClaudeResume !== undefined ||
+                  forksClaudeConversation(validatedOptions.agentLaunchFlags, launchAgentId),
               },
             }),
           });

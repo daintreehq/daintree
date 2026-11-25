@@ -60,7 +60,9 @@ async function readCheckpoint(
     strict: true,
     codexLimit: { checkpoint: true },
   });
-  const answer = info?.codexLimit;
+  // A record already gone says nothing about what the pane held.
+  if (!info) return undefined;
+  const answer = info.codexLimit;
   return answer && "checkpoint" in answer ? answer.checkpoint : null;
 }
 
@@ -193,7 +195,9 @@ export interface AgentLaunchForContinuation {
  * preset doesn't arm it, of a pane nothing has armed or noted, creates nothing.
  */
 export function noteContinuationLaunch(launch: AgentLaunchForContinuation): void {
-  const arms =
+  const saved = getContinuationStore();
+  const savedStop = saved.hasBootStop(launch.projectId, launch.terminalId);
+  const presetArms =
     launch.presetId !== undefined &&
     limitResetOptIn(
       {
@@ -203,14 +207,17 @@ export function noteContinuationLaunch(launch: AgentLaunchForContinuation): void
       },
       readOwnPresets(launch.agentId)
     );
-  const saved = getContinuationStore();
+  // A pane that was waiting at a limit as Daintree quit was armed then, and
+  // its restore is armed as it was unless its menu says otherwise (#18193).
+  const arms = presetArms || (launch.restore !== undefined && savedStop);
   // A launch noted earlier is still awaiting its spawn, so this one, newer,
   // must be noted too, or that one's default would be taken for it. A menu
-  // choice or a stop saved before a cold restart (#18193) is taken up here.
+  // choice or a stop the previous run saved is taken up here, or let go by a
+  // launch that isn't the pane's restore.
   if (
     !arms &&
+    !savedStop &&
     saved.override(launch.projectId, launch.terminalId) !== true &&
-    !(launch.restore && saved.hasBootStop(launch.projectId, launch.terminalId)) &&
     !service?.followsLaunches(launch.terminalId)
   ) {
     return;

@@ -977,8 +977,12 @@ export async function readClaudeTranscriptLeaf(
         continue;
       }
       if (!record || typeof record !== "object") continue;
-      const { type, uuid, isSidechain, isApiErrorMessage } = record as Record<string, unknown>;
+      // A record still being written is newer than any leaf found behind it.
+      if (state.partialTail) return null;
+      const { type, uuid, isSidechain, isMeta, isCompactSummary, isApiErrorMessage } =
+        record as Record<string, unknown>;
       if ((type !== "user" && type !== "assistant") || isSidechain === true) continue;
+      if (isMeta === true || isCompactSummary === true) continue;
       const id = boundedString(uuid);
       if (id === null) return null;
       return { uuid: id, apiError: isApiErrorMessage === true };
