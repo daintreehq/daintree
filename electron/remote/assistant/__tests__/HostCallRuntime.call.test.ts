@@ -536,6 +536,14 @@ describe("HostCallRuntime host.call (#13493)", () => {
     });
   });
 
+  it("points a call the host's MCP server couldn't take at its MCP settings there (#18187)", async () => {
+    relayCall.mockResolvedValueOnce({ status: "refused", reason: "server-off" });
+    const settled = await runtime.call("a", { ...CALL, callId: "off" }, { tier: "core" });
+    if (!settled.ok) throw new Error("refused");
+    expect(settled.value.outcome).toBe("unsupported");
+    expect(settled.value.detail).toContain("Settings → Integrations → MCP server on that host");
+  });
+
   it("believes a host's dialog only while a call to it is out", async () => {
     let release!: (answer: McpCallAnswer) => void;
     relayCall.mockReturnValueOnce(new Promise<McpCallAnswer>((resolve) => (release = resolve)));

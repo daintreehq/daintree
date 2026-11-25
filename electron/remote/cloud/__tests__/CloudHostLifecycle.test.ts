@@ -1277,6 +1277,68 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
     expect(store.bindings()[0]).toMatchObject({ ownership: "imported", lifetimeSeconds: 600 });
   });
 
+  it("keeps the ask to turn on the host's MCP server with the binding's first write (#18187)", async () => {
+    const created = await setup();
+    const put = vi.spyOn(created.store, "putBinding");
+    await created.lifecycle.create({
+      accountId: created.store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+      mcpServerOnConnect: true,
+    });
+    expect(put.mock.calls[0]?.[0]).toMatchObject({ hostId: null, mcpServerOnConnect: true });
+    expect(created.store.bindings()[0]?.mcpServerOnConnect).toBe(true);
+    await vi.waitFor(() => expect(created.lifecycle.statuses()[0]?.operation).toBeNull());
+
+    const imported = await setup({ machine: "stopped" });
+    await imported.lifecycle.importMachine({
+      accountId: imported.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+      mcpServerOnConnect: true,
+    });
+    expect(imported.store.bindings()[0]).toMatchObject({
+      ownership: "imported",
+      mcpServerOnConnect: true,
+    });
+  });
+
+  it("asks nothing of the host's MCP server unless the request says yes, and refuses a muddled answer", async () => {
+    for (const mcpServerOnConnect of [undefined, false]) {
+      const { lifecycle, store } = await setup({ machine: "stopped" });
+      await lifecycle.importMachine({
+        accountId: store.accounts()[0]!.id,
+        resourceId: "bx_23456789",
+        name: "build",
+        ...(mcpServerOnConnect === undefined ? {} : { mcpServerOnConnect }),
+      });
+      expect(store.bindings()[0]).not.toHaveProperty("mcpServerOnConnect");
+    }
+
+    const { lifecycle, provider, store } = await setup();
+    const accountId = store.accounts()[0]!.id;
+    await expect(
+      lifecycle.create({
+        accountId,
+        name: "build",
+        machineType: "default",
+        lifetimeHours: 2,
+        mcpServerOnConnect: "yes",
+      } as unknown as CloudHostCreateRequest)
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      lifecycle.importMachine({
+        accountId,
+        resourceId: "bx_23456789",
+        name: "build",
+        mcpServerOnConnect: 1,
+      } as unknown as CloudHostImportRequest)
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(store.bindings()).toEqual([]);
+    expect(provider.create).not.toHaveBeenCalled();
+  });
+
   it("won't import a machine already bound to a host", async () => {
     const { lifecycle, store } = await setup();
     const accountId = store.accounts()[0]!.id;

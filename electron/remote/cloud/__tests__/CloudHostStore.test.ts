@@ -64,6 +64,36 @@ function binding(overrides: Partial<StoredCloudBinding> = {}): StoredCloudBindin
   };
 }
 
+describe("CloudHostStore MCP server ask (#18187)", () => {
+  it("keeps the ask across a restart until it is taken, and then never reads it again", () => {
+    const backend = disk();
+    new CloudHostStore(backend).putBinding(binding({ mcpServerOnConnect: true }));
+    const store = new CloudHostStore(backend);
+    expect(store.binding("cb_abcdefgh12")?.mcpServerOnConnect).toBe(true);
+
+    store.updateBinding("cb_abcdefgh12", ({ mcpServerOnConnect: _taken, ...rest }) => rest);
+    expect(new CloudHostStore(backend).binding("cb_abcdefgh12")).not.toHaveProperty(
+      "mcpServerOnConnect"
+    );
+  });
+
+  it("reads anything but a plain yes, and a binding from before it, as no ask", () => {
+    const backend = disk();
+    backend.write({
+      version: 1,
+      accounts: [],
+      bindings: [
+        { ...binding({ id: "cb_abcdefgh13" }), mcpServerOnConnect: "true" },
+        { ...binding({ id: "cb_abcdefgh14" }), mcpServerOnConnect: 1 },
+        binding({ id: "cb_abcdefgh15" }),
+      ],
+    });
+    const read = new CloudHostStore(backend).bindings();
+    expect(read).toHaveLength(3);
+    for (const entry of read) expect(entry).not.toHaveProperty("mcpServerOnConnect");
+  });
+});
+
 describe("CloudHostStore worktree marks", () => {
   it("keeps a mark across a restart, before and after the machine exists", () => {
     const backend = disk();
