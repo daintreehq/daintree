@@ -223,8 +223,9 @@ export class ContinuationStore {
     });
   }
 
-  /** Every write asked for so far has landed, or failed. */
+  /** Every write asked for so far has landed, or failed, those waiting on the read included. */
   async flush(): Promise<void> {
+    await this.ready();
     await this.writeChain;
   }
 

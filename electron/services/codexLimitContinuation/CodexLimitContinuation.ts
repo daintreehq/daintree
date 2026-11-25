@@ -26,6 +26,8 @@ const MAX_TIMER_MS = 2_147_483_647;
  * conversation prints for a while before it settles.
  */
 export const RESTORE_BIND_MS = 2 * 60_000;
+/** How long a quit waits on a pane's stop still being read before it judges the pane without it. */
+export const CHECKPOINT_READ_MS = 1_000;
 /**
  * How long after the machine wakes before a wait is judged: the pty host holds
  * its terminals' reads for a moment after a resume and releases them one by
@@ -630,7 +632,7 @@ export class CodexLimitContinuation {
         identity: stamp.identity,
         savedAt: this.deps.now(),
         ...(terminal.agentSessionId !== undefined && { sessionId: terminal.agentSessionId }),
-        ...(turn?.apiError === true && { turn: turn.uuid }),
+        ...(turn !== undefined && { turn: turn.uuid }),
       });
     }
     this.setState(pane, { status: "waiting", resetsAt: reset.resetsAt, continueAt });
@@ -820,8 +822,19 @@ export class CodexLimitContinuation {
 
   private async checkpoint(pane: ArmedPane): Promise<void> {
     const { terminalId, projectId } = pane;
-    // A stop still being read lands first, so what it saves is judged too.
-    await this.resolving.get(terminalId)?.catch(() => {});
+    // A stop still being read lands first, so what it saves is judged too,
+    // for as long as the quit can spare.
+    const resolving = this.resolving.get(terminalId);
+    if (resolving) {
+      let timer: Timer | null = null;
+      await Promise.race([
+        resolving.catch(() => {}),
+        new Promise<void>((resolve) => {
+          timer = this.deps.setTimer(resolve, CHECKPOINT_READ_MS);
+        }),
+      ]);
+      if (timer !== null) this.deps.clearTimer(timer);
+    }
     if (this.panes.get(terminalId) !== pane || pane.endedByQuit) return;
     const held = await this.deps.readCheckpoint(terminalId).catch(() => undefined);
     // An unanswered host leaves what was saved.
@@ -847,7 +860,7 @@ export class CodexLimitContinuation {
           identity: held.identity,
           savedAt: this.deps.now(),
           ...(terminal.agentSessionId !== undefined && { sessionId: terminal.agentSessionId }),
-          ...(turn?.apiError === true && { turn: turn.uuid }),
+          ...(turn !== undefined && { turn: turn.uuid }),
         });
         return;
       }
@@ -859,32 +872,47 @@ export class CodexLimitContinuation {
     const { terminalId, projectId } = pane;
     if (wait.stop === null) return this.giveUpRestored(pane, wait);
     const current = () =>
-      this.panes.get(terminalId) === pane && pane.wait === wait && !this.quitting;
-    // A restored Claude wait is checked against its conversation once more:
-    // a turn taken elsewhere since the restore bound it.
-    const savedTurn = wait.saved?.turn;
-    if (savedTurn !== undefined) {
-      const turn = await this.deps.readTurn(terminalId).catch(() => undefined);
-      if (!current()) return;
-      if (turn?.uuid !== savedTurn) return this.skipStop(pane, "banner-not-last");
-    }
+      this.panes.get(terminalId) === pane &&
+      pane.wait === wait &&
+      !this.quitting &&
+      !this.deps.isQuitting();
+    // The host is never asked: the reset is still owed, unless another wait of
+    // the pane's claimed it meanwhile.
+    const unclaim = () => {
+      const now = pane.wait;
+      if (now !== wait && now?.claimed && now.resetsAt === wait.resetsAt) return;
+      this.deps.store.removeFired(projectId, terminalId, wait.resetsAt);
+      if (now === wait) wait.claimed = false;
+    };
     // Counted, and on disk, before the host is asked: a restart after the line
     // went in must never let a restore type it again.
     this.deps.store.addFired(projectId, terminalId, wait.resetsAt);
     await this.deps.store.flush();
-    if (!current()) {
-      // Never asked: the reset is still owed, and the quit keeps the wait.
-      if (this.panes.get(terminalId) === pane && pane.wait === wait) {
-        this.deps.store.removeFired(projectId, terminalId, wait.resetsAt);
-        wait.claimed = false;
+    if (!current()) return unclaim();
+    // A restored Claude wait is checked against its conversation once more,
+    // last thing before the line: a turn taken elsewhere since it bound.
+    const savedTurn = wait.saved?.turn;
+    if (savedTurn !== undefined) {
+      const turn = await this.deps.readTurn(terminalId).catch(() => undefined);
+      if (!current()) return unclaim();
+      if (turn?.uuid !== savedTurn) {
+        unclaim();
+        return this.skipStop(pane, "banner-not-last");
       }
-      return;
     }
     const stop = wait.stop;
     const result = await this.deps
       .continueAt(terminalId, stop)
       .catch((): CodexLimitContinueResult => ({ status: "skipped", reason: "host-unanswered" }));
     if (this.panes.get(terminalId) !== pane || pane.wait !== wait) return;
+    // Bound to a newer redraw of the restored stop while this one was asked
+    // about: that one is asked about next.
+    if (result.status === "skipped" && wait.stop !== stop) {
+      this.deps.store.removeFired(projectId, terminalId, wait.resetsAt);
+      wait.claimed = false;
+      this.checkDue();
+      return;
+    }
     // Output held unread says nothing yet: the same wait is judged again soon.
     if (
       result.status === "skipped" &&
@@ -920,6 +948,12 @@ export class CodexLimitContinuation {
   private async giveUpRestored(pane: ArmedPane, wait: PendingWait): Promise<void> {
     const { reset, stamp } = await this.deps.readStop(pane.terminalId);
     if (this.panes.get(pane.terminalId) !== pane || pane.wait !== wait) return;
+    // Its redraw bound it while this was read.
+    if (wait.stop !== null) {
+      wait.claimed = false;
+      this.checkDue();
+      return;
+    }
     const reason: CodexLimitContinueSkipReason =
       stamp !== null
         ? "banner-changed"

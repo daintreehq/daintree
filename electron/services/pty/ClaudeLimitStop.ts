@@ -174,7 +174,9 @@ export class ClaudeLimitStopTracker {
   }
 
   /** A write of input at monotonic `at`, as the pty host took it; `owner` names the assistant it was written for. */
-  noteInput(data: string, owner: string | undefined, at: number): void {
+  noteInput(data: string, owner: string | undefined, at: number, sendsPrompt = false): void {
+    // A prompt sent ends Claude's wait as first seen: one drawn after it is another.
+    if (sendsPrompt) this.countdown = null;
     if (!isEscapeOnly(data)) return;
     this.escapes.push({ at, assistant: owner !== undefined });
     if (this.escapes.length > MAX_ESCAPES) this.escapes.shift();

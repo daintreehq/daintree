@@ -161,6 +161,15 @@ interface HeldLimitStop {
   refusal?: CodexLimitContinueSkipReason;
 }
 
+/**
+ * Whether a write of input sends something to the agent (#18193): an Enter
+ * outside a bracketed paste, and not a soft newline (an Escape before it).
+ */
+function sendsPrompt(data: string): boolean {
+  const typed = data.replace(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)/g, "").replace(/\x1b[\r\n]/g, "");
+  return /[\r\n]/.test(typed);
+}
+
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
 const RATE_LIMIT_OBSERVATION_COOLDOWN_MS = 60_000;
 /**
@@ -2459,7 +2468,7 @@ export class TerminalProcess {
    * been replaced unseen.
    */
   answerCodexLimit(query: CodexLimitQuery, observedSince: number | null): CodexLimitAnswer {
-    if (query.checkpoint === true) return { checkpoint: this.limitCheckpoint() };
+    if (query.checkpoint === true) return { checkpoint: this.limitCheckpoint(observedSince) };
     if (getLiveAgentId(this.terminalInfo) === "claude") {
       return this.answerClaudeLimit(query, observedSince);
     }
@@ -2604,7 +2613,7 @@ export class TerminalProcess {
    * the stop it is still at with nothing written or shown since, or Claude
    * Code's own wait, which ends with its process.
    */
-  private limitCheckpoint(): CodexLimitCheckpoint | null {
+  private limitCheckpoint(observedSince: number | null): CodexLimitCheckpoint | null {
     const t = this.terminalInfo;
     if (!this.codexContinueArmed || !this.isAgentLive || !this.lifecycle.isAlive || t.isExited) {
       return null;
@@ -2618,8 +2627,9 @@ export class TerminalProcess {
     if (this.restoreCandidate !== null) {
       return inputSeq === this.launchInputSeq ? { kind: "replaying" } : null;
     }
+    // Output read without a gap up to now: a pane held unread may have moved on.
+    if (observedSince === null) return null;
     const held = this.heldLimitStop();
-    const observedSince = this.analysis.observedSince();
     if (
       held !== null &&
       held.shown &&
@@ -2627,7 +2637,6 @@ export class TerminalProcess {
       (held.restored || held.refusal === undefined) &&
       !held.guard.dialogSeen &&
       inputSeq === this.guardInputSeq(held) &&
-      observedSince !== null &&
       observedSince === held.observedSince
     ) {
       return { kind: "stop", seq: held.seq, run: this.codexLimitRun, identity: held.identity };
@@ -2653,13 +2662,13 @@ export class TerminalProcess {
       this.restoredLaunch &&
       this.launchInputDone &&
       !this.submittedSinceRestore &&
-      /[\r\n]/.test(data)
+      sendsPrompt(data)
     ) {
       this.submittedSinceRestore = true;
       this.restoreCandidate = null;
     }
     if (this.codexContinueArmed && getLiveAgentId(this.terminalInfo) === "claude") {
-      this.claudeLimitStop.noteInput(data, owner, performance.now());
+      this.claudeLimitStop.noteInput(data, owner, performance.now(), sendsPrompt(data));
     }
   }
 

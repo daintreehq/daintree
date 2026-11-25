@@ -972,6 +972,40 @@ describe("CodexLimitContinuation — across a cold restart (#18193)", () => {
     expect(after.continueAt).toHaveBeenCalledWith("t1", again);
   });
 
+  it("asks about a newer redraw when the restored stop's sighting moved on while it was asked about", async () => {
+    const backend = await quitWhileWaiting(codexPane());
+    vi.setSystemTime(RESETS_AT + 60 * 60_000);
+    const after = await restore(backend, codexPane());
+    const again = { run: RESTORED.run, seq: 2 };
+    let answer!: (result: CodexLimitContinueResult) => void;
+    after.continueAt.mockImplementationOnce(
+      () => new Promise<CodexLimitContinueResult>((resolve) => (answer = resolve))
+    );
+    await redraw(after);
+    expect(after.continueAt).toHaveBeenCalledWith("t1", RESTORED);
+    await redraw(after, again);
+    answer({ status: "skipped", reason: "banner-changed" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(after.continueAt).toHaveBeenLastCalledWith("t1", again);
+    expect(after.state()).toMatchObject({ status: "continued" });
+  });
+
+  it("asks nothing once Daintree began quitting while the claim was being saved", async () => {
+    const backend = memoryBackend();
+    const before = harness(backend);
+    await before.service.set("t1", true, PROJECT);
+    await before.service.handleStop("t1", STOP);
+    const write = backend.write;
+    backend.write = async (next: string) => {
+      before.setQuitting(true);
+      await write(next);
+    };
+    await vi.advanceTimersByTimeAsync(RESETS_AT + CONTINUE_AFTER_RESET_MS - START);
+    expect(before.continueAt).not.toHaveBeenCalled();
+    await before.store.flush();
+    expect(JSON.parse(backend.data!).panes[0].fired).toBeUndefined();
+  });
+
   it("records process-changed when a restored wait's process ends before its reset", async () => {
     const backend = await quitWhileWaiting(codexPane());
     const after = await restore(backend, codexPane());

@@ -109,11 +109,13 @@ export type CodexLimitAnswer =
 /**
  * What an armed pane holds as Daintree quits (#18193), for a cold restore to
  * pick up: the stop it is still at, untouched since it showed, or Claude Code's
- * own wait for the reset, which dies with its process. Null when it is at
- * neither.
+ * own wait for the reset, which dies with its process, or a restore still
+ * owed its saved stop. Null when it is at none of these.
  */
 export type CodexLimitCheckpoint =
   | { kind: "stop"; seq: number; run: string; identity: string }
+  /** A restored process still owed the redraw of its saved stop, with nothing written to it since its launch. */
+  | { kind: "replaying" }
   | {
       kind: "own-wait";
       identity: string;

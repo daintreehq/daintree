@@ -2490,6 +2490,15 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
       terminal.dispose();
     });
 
+    it("keeps a redraw resumed history though a multi-line paste was put in the composer", async () => {
+      const { terminal, stops } = restoredPane("codex");
+      terminal.write("\x1b[200~first line\rsecond line\x1b[201~");
+      terminal.write("\x1b\r");
+      await show(stopScreen());
+      expect(stops).toEqual([]);
+      terminal.dispose();
+    });
+
     it("never takes another limit's redraw for the saved one", async () => {
       const { terminal, stops } = restoredPane("codex", "another-stop");
       await show(stopScreen());
@@ -2652,6 +2661,7 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
       expect(stops).toEqual([]);
       const checkpoint = checkpointOf(terminal);
       terminal.dispose();
+      if (checkpoint?.kind !== "own-wait") throw new Error("expected Claude's own wait");
       return checkpoint;
     }
 
@@ -2686,7 +2696,7 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
 
     it("continues the redraw of a saved countdown, its cancel notice judged before the restart", async () => {
       const saved = await savedOwnWait();
-      const { terminal, stops, typed } = restoredPane("claude", saved!.identity);
+      const { terminal, stops, typed } = restoredPane("claude", saved.identity);
       await show(claudeScreen({ notice: [CANCELLED, ""] }));
       expect(stops).toHaveLength(1);
       const reply = terminal.answerCodexLimit({}, terminal.analysisObservedSince());
@@ -2710,7 +2720,7 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
 
     it("types nothing into a restored pane that took input before its redraw", async () => {
       const saved = await savedOwnWait();
-      const { terminal, stops, typed } = restoredPane("claude", saved!.identity);
+      const { terminal, stops, typed } = restoredPane("claude", saved.identity);
       terminal.write("\x1b");
       await show(claudeScreen());
       expect(stops).toHaveLength(1);
@@ -2724,7 +2734,7 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
 
     it("never lets a limit with other words claim the saved countdown", async () => {
       const saved = await savedOwnWait();
-      const { terminal, stops } = restoredPane("claude", saved!.identity);
+      const { terminal, stops } = restoredPane("claude", saved.identity);
       await show(claudeScreen().replace("resets 9pm", "resets 11pm"));
       expect(stops).toEqual([]);
       terminal.dispose();
@@ -2732,7 +2742,7 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
 
     it("types nothing into a restored pane that took input since its restore", async () => {
       const saved = await savedOwnWait();
-      const { terminal, stops, typed } = restoredPane("claude", saved!.identity);
+      const { terminal, stops, typed } = restoredPane("claude", saved.identity);
       await show(claudeScreen());
       terminal.write("\x1b");
       expect(await continueAt(terminal, stops[0]!)).toEqual({
@@ -2745,7 +2755,7 @@ describe("TerminalProcess restored after a cold restart (#18193)", () => {
 
     it("reports a later limit with the same words as a limit of its own, after the restored one", async () => {
       const saved = await savedOwnWait();
-      const { terminal, stops } = restoredPane("claude", saved!.identity);
+      const { terminal, stops } = restoredPane("claude", saved.identity);
       await show(claudeScreen());
       expect(await continueAt(terminal, stops[0]!)).toMatchObject({ status: "continued" });
       await show(
