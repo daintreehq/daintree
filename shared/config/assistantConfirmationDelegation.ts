@@ -6,6 +6,11 @@
  * dialog: `worktree.deleteOwned` is sent on as `worktree.delete`, so a tick on
  * the dialog's id would hand over every delete. An allowlist, so a new
  * confirm-gated action is never delegable until someone adds it here.
+ *
+ * `host.startAgentSignIn` (#18197) is on neither list here on purpose: it has
+ * no confirmation to ask or hand over. It opens the sign-in a CLI's row in
+ * Settings → Hosts opens, in the person's window, and types and reads nothing
+ * there; the approval and any code are the person's own steps in it.
  */
 export interface DelegableAssistantConfirmation {
   /** The tool id the assistant calls, or the tick's own key when `calledActionId` names the tool. */

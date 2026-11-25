@@ -1721,6 +1721,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.watch": { operation: "list" },
       "host.bringBack": { hostId: "h-placeholder" },
       "host.status": { targets: [{ hostId: "h-placeholder", projectId: "p-placeholder" }] },
+      "host.startAgentSignIn": { hostId: "h-placeholder", agentId: "claude" },
       "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
       "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
       "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },

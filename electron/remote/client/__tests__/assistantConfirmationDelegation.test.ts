@@ -9,7 +9,10 @@ import {
   sanitizeDelegatedConfirmations,
 } from "../../../../shared/config/assistantConfirmationDelegation.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
-import { HOST_SETTINGS_TOOL } from "../../../../shared/types/hostControl.js";
+import {
+  HOST_SETTINGS_TOOL,
+  HOST_START_AGENT_SIGN_IN_TOOL,
+} from "../../../../shared/types/hostControl.js";
 import { OWNED_RESOURCE_TOOLS } from "../../../services/mcp-server/sessionCallOwnership.js";
 import { HOST_ALWAYS_ASKS_ACTION_IDS } from "../hostDispatchableActions.js";
 
@@ -22,6 +25,17 @@ describe("assistant confirmation delegation (#16752)", () => {
     for (const id of ["worktree.deleteOwned", "worktree.retireOwned", HOST_SETTINGS_TOOL]) {
       expect(isDelegableAssistantConfirmation(id)).toBe(true);
     }
+  });
+
+  // #18197 — nothing to ask: the person finishes the sign-in in the window it opens.
+  it("lists an assistant's sign-in on a host on neither side", () => {
+    const delegableTools = DELEGABLE_ASSISTANT_CONFIRMATIONS.flatMap((entry) => [
+      entry.id,
+      entry.calledActionId,
+    ]);
+    expect(delegableTools).not.toContain(HOST_START_AGENT_SIGN_IN_TOOL);
+    expect(undelegableIds).not.toContain(HOST_START_AGENT_SIGN_IN_TOOL);
+    expect(isDelegableAssistantConfirmation(HOST_START_AGENT_SIGN_IN_TOOL)).toBe(false);
   });
 
   it("never offers an action that moves this window", () => {

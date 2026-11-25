@@ -615,7 +615,7 @@ export class CanopyHostsClient {
   ): Promise<SignInOfferAnswer> {
     if (options.signal?.aborted === true) return Promise.resolve("cancelled");
     if ((this.views.get(webContentsId)?.signIns.size ?? 0) > 0) return Promise.resolve("busy");
-    const consumer = `offer-${this.options.newViewerId?.() ?? randomUUID()}`.slice(0, 64);
+    const consumer = `offer-${randomUUID()}`;
     const key = offerKey(webContentsId, consumer);
     const expiresAt = Date.now() + SIGN_IN_OFFER_MS;
     return new Promise<SignInOfferAnswer>((resolve) => {
