@@ -17,9 +17,11 @@ export interface TerminalSendCommandReceipt {
 }
 
 /**
- * The receipt `terminal.sendCommand` returns once a submission is queued.
- * Shared so the renderer action and the host's viewless path answer with the
- * same result, since the action's result schema is part of the MCP contract.
+ * The receipt `terminal.sendCommand` returns once a submission is accepted
+ * for writing. Shared so the renderer action and the host's viewless path
+ * answer with the same result, since the action's result schema is part of
+ * the MCP contract. It never says "queued": that is a held send's word
+ * (#18172), and a caller that asked for a hold reads it as one.
  */
 export function buildTerminalSendCommandReceipt(
   terminalId: string,
@@ -31,6 +33,6 @@ export function buildTerminalSendCommandReceipt(
     terminalId,
     command: command.slice(0, MAX_ECHOED_COMMAND_CHARS),
     submissionToken,
-    message: `Submission queued. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
+    message: `Accepted for writing now, not held. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
   };
 }

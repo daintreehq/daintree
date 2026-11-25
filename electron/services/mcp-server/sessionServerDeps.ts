@@ -289,6 +289,7 @@ export interface SessionServerDepsSource {
   /** The Claude Code usage messages this machine's panes showed, as `agent.readQuota` reports them. */
   readClaudeUsage?: import("./sessionServer.js").SessionServerDeps["readClaudeUsage"];
   claudeUpdate?: import("./sessionServer.js").SessionServerDeps["claudeUpdate"];
+  ownedSend?: import("./sessionServer.js").SessionServerDeps["ownedSend"];
   isTerminalIdInUse: (terminalId: string) => boolean;
   readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
   readClosedPanelProcess?: import("./sessionServer.js").SessionServerDeps["readClosedPanelProcess"];
@@ -1250,9 +1251,11 @@ export function createSessionServerDeps(
     isTerminalInPinnedWorkspace,
     ...(deps.replyWaiter !== undefined ? { replyWaiter: deps.replyWaiter } : {}),
     ...(deps.terminalNotify !== undefined ? { terminalNotify: deps.terminalNotify } : {}),
-    // Only a relayed session holds any: a global Assistant's for a worker
-    // (#16187), or any assistant's for another assistant (#16620).
-    ...(deps.workerSteerQueue !== undefined && relay !== undefined
+    // Only a relayed session or an agent pane holds any: a global Assistant's
+    // for a worker (#16187), any assistant's for another assistant (#16620),
+    // or either's for its own worker (#18172). Each answers to a principal
+    // whose end drops what it held; an api-key client has none.
+    ...(deps.workerSteerQueue !== undefined && (relay !== undefined || role === "agent-pane")
       ? { workerSteerQueue: deps.workerSteerQueue }
       : {}),
     // A relayed session is never this machine's assistant: no lane, and no
@@ -1374,6 +1377,7 @@ export function createSessionServerDeps(
     ...(deps.readCodexQuota !== undefined ? { readCodexQuota: deps.readCodexQuota } : {}),
     ...(deps.readClaudeUsage !== undefined ? { readClaudeUsage: deps.readClaudeUsage } : {}),
     ...(deps.claudeUpdate !== undefined ? { claudeUpdate: deps.claudeUpdate } : {}),
+    ...(deps.ownedSend !== undefined ? { ownedSend: deps.ownedSend } : {}),
     // A pane bearer's own terminal is fixed for the bearer's life and was
     // resolved at handshake; a help lane's is read per call, because its
     // binding follows the PTY that currently serves it.

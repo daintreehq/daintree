@@ -493,7 +493,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommand",
     title: "Submit text to terminal",
     description:
-      "Queue text as one submission to a terminal: a shell runs it, an agent panel takes it as its next prompt. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
+      "Send text as one submission to a terminal: a shell runs it, an agent panel takes it as its next prompt. Returns once accepted for writing, not delivered or run; pass the returned `submissionToken` to a status read to check. Runs with the terminal's privileges.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -548,11 +548,12 @@ export function registerTerminalQueryActions(
   // see and must never be told. Main checks ownership, then delegates to
   // `terminal.sendCommand` above with only the id and the text, so the
   // submission path and its receipt are the ones already shipped (#12407).
+  // A send that names `whenBusy` is read and written in main instead (#18172).
   actions.set("terminal.sendCommandOwned", () => ({
     id: "terminal.sendCommandOwned",
     title: "Submit text to owned terminal",
     description:
-      "Queue text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent panel takes it as its next prompt. Any other panel is refused. Returns once queued, not delivered or run; pass the returned `submissionToken` to a status read to check.",
+      "Send text as one submission to a terminal this connection created or was handed (right-click > Hand to orchestrator): a shell runs it, an agent panel takes it as its next prompt. Any other panel is refused. Returns once accepted for writing, not delivered or run; pass the returned `submissionToken` to a status read to check.",
     category: "terminal",
     kind: "command",
     danger: "safe",

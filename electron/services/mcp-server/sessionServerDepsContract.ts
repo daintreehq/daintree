@@ -350,8 +350,9 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    */
   terminalNotify?: TerminalNotifyHandlers;
   /**
-   * The global Assistant's prompts held for busy workers (#16187), for a
-   * status read and a cancel. Absent, neither finds any.
+   * Prompts held for busy workers (#16187), for a status read and a cancel.
+   * Absent, neither finds any, and this session holds none: an owned send's
+   * `whenBusy: "queue"` is refused (#18172).
    */
   workerSteerQueue?: Pick<
     import("../assistants/WorkerSteerQueue.js").WorkerSteerQueue,
@@ -396,6 +397,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     import("../assistants/GlobalWorkerSteer.js").GlobalWorkerSteer,
     "prompt" | "keys" | "interrupt" | "reveal" | "applyUpdate" | "closeTarget"
   >;
+  /**
+   * A send to the caller's own worker that names `whenBusy` (#18172): read,
+   * then written at its prompt, refused, or held. Absent, such a send is
+   * refused with nothing sent.
+   */
+  ownedSend?: Pick<import("../assistants/OwnedWorkerSend.js").OwnedWorkerSend, "prompt">;
   /**
    * A Claude Code update an assistant asked to apply (#17908): the pane's
    * preflight and, once the person approved, the single `/restart`. Absent,

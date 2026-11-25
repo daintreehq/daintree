@@ -41,6 +41,8 @@ export interface HoldSteerRequest {
   promptAsWritten: string;
   handbackCode?: string;
   ttlSeconds: number;
+  /** What it waits on as it is held, as a status read reports it; `working` when absent. */
+  waitingOn?: string;
   /**
    * Asked right before the line is written, long after the call that queued
    * it: everything the call itself was held to but its own MCP session, which
@@ -155,7 +157,7 @@ export class WorkerSteerQueue {
         status: "queued",
         queuedAt: now,
         expiresAt,
-        waitingOn: "working",
+        waitingOn: request.waitingOn ?? "working",
       },
       principal: request.principal,
       projectId: request.projectId,

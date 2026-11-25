@@ -295,9 +295,9 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
  * if it sends one anyway, and `replyLines` only shapes that notice. `generation`
  * names another assistant's run, or a worker the global Assistant steers or
  * shows, which only an assistant may address (#13496, #14551, #16096);
- * `whenBusy`, `queueTtlSeconds` and `queuedSendToken` hold a message for such
- * a worker or another assistant and read it back, which only an assistant can
- * (#16187, #16620).
+ * `whenBusy`, `queueTtlSeconds` and `queuedSendToken` hold a message for a
+ * busy agent and read it back, which only an assistant or an agent pane can
+ * (#16187, #16620, #18172).
  * Left off the listing so every such client does not pay for an argument it can
  * never use on every turn.
  */
