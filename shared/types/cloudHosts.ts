@@ -765,6 +765,11 @@ export interface CloudHostCreateRequest {
    * against the account's catalog as sent, never filled in.
    */
   provisioning?: CloudProvisioningSelection;
+  /**
+   * Turn on the host's MCP server on its first connection, so the person's
+   * assistant can run tools there (#18187). Asked once, never again after.
+   */
+  mcpServerOnConnect?: boolean;
 }
 
 /**
@@ -790,6 +795,8 @@ export interface CloudHostImportRequest {
   accountId: string;
   resourceId: string;
   name: string;
+  /** As {@link CloudHostCreateRequest.mcpServerOnConnect}. */
+  mcpServerOnConnect?: boolean;
 }
 
 export interface CloudAccountAddRequest {

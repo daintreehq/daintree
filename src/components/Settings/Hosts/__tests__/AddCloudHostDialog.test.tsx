@@ -228,6 +228,7 @@ describe("AddCloudHostDialog provisioning", () => {
       name: "build",
       machineType: "default",
       lifetimeHours: 2,
+      mcpServerOnConnect: true,
     });
   });
 
@@ -436,5 +437,100 @@ describe("AddCloudHostDialog arming the Copy settings offer", () => {
     expect(takeFirstConnect("old")).toBe(false);
     expect(takeFirstConnect("vm_1")).toBe(false);
     expect(takeFirstConnect("host-old")).toBe(true);
+  });
+});
+
+describe("AddCloudHostDialog MCP server (#18187)", () => {
+  const machine: CloudResourceSummary = {
+    resourceId: "vm_1",
+    name: "old",
+    machine: "running",
+    rawState: "running",
+    machineType: null,
+    vcpu: 4,
+    memoryGB: 8,
+    createdAt: null,
+    stoppedAt: null,
+    dataExpired: false,
+    boundHostId: null,
+    restricted: false,
+    asleep: false,
+  };
+  const mcpBox = () => screen.getByRole("checkbox", { name: "Turn on its MCP server" });
+  const checked = () => mcpBox().getAttribute("aria-checked");
+
+  it("asks for a new machine's MCP server by default, and sends a no once unticked", async () => {
+    open(provider("boat", "Boat", NONE), catalog());
+    await screen.findByText(/Default ·/);
+    expect(checked()).toBe("true");
+    // What it turns on is said with it.
+    const describedBy = mcpBox().getAttribute("aria-describedby") ?? "";
+    const description = describedBy
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(description).toContain("127.0.0.1");
+    expect(description).toContain("Settings → Integrations → MCP server");
+    fireEvent.click(mcpBox());
+    expect(checked()).toBe("false");
+    expect(await create()).toMatchObject({ mcpServerOnConnect: false });
+  });
+
+  it("can't be changed while the machine is being created", async () => {
+    const answer = deferred<{ hostId: string }>();
+    client.createHost.mockReturnValue(answer.promise);
+    open(provider("boat", "Boat", NONE), catalog());
+    await create();
+    expect(mcpBox().hasAttribute("disabled")).toBe(true);
+    answer.resolve({ hostId: "build" });
+    await screen.findByTestId("add-cloud-host-progress");
+  });
+
+  it("leaves an existing machine's server alone unless ticked, whatever was chosen for a new one", async () => {
+    client.listResources.mockResolvedValue([machine]);
+    client.importHost.mockResolvedValue({ hostId: "host-old" });
+    open(provider("boat", "Boat", NONE), catalog());
+    await screen.findByText(/Default ·/);
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    const old = await screen.findByRole("radio", { name: /^old/ });
+    // Nothing to ask about until a machine is chosen.
+    expect(screen.queryByRole("checkbox", { name: "Turn on its MCP server" })).toBeNull();
+    fireEvent.click(old);
+    expect(checked()).toBe("false");
+
+    // A tick for the existing machine doesn't reach back to the new one, nor the new one's here.
+    fireEvent.click(mcpBox());
+    fireEvent.click(screen.getByRole("radio", { name: "New machine" }));
+    expect(checked()).toBe("true");
+    fireEvent.click(mcpBox());
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    // The list is read again on the way back; the machine chosen stays chosen.
+    await screen.findByRole("radio", { name: /^old/ });
+    expect(checked()).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "New machine" }));
+    expect(checked()).toBe("false");
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    await screen.findByRole("radio", { name: /^old/ });
+    expect(checked()).toBe("true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
+    await waitFor(() => expect(client.importHost).toHaveBeenCalledTimes(1));
+    expect(client.importHost.mock.calls[0]![0]).toEqual({
+      accountId: "ca_0123456789",
+      resourceId: "vm_1",
+      name: "build",
+      mcpServerOnConnect: true,
+    });
+  });
+
+  it("sends an existing machine's default as a no", async () => {
+    client.listResources.mockResolvedValue([machine]);
+    client.importHost.mockResolvedValue({ hostId: "host-old" });
+    open(provider("boat", "Boat", NONE), catalog());
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    fireEvent.click(await screen.findByRole("radio", { name: /^old/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
+    await waitFor(() => expect(client.importHost).toHaveBeenCalledTimes(1));
+    expect(client.importHost.mock.calls[0]![0]).toMatchObject({ mcpServerOnConnect: false });
   });
 });

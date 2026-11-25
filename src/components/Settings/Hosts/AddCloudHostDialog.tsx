@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { Checkbox } from "@/components/ui/checkbox";
 import { FactSeparator } from "@/components/ui/FactSeparator";
 import { Field, FieldDescription, FieldLabel, InlineError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -97,6 +98,11 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     ? (usable.find((entry) => entry.id === account.providerId) ?? null)
     : (usable[0] ?? null);
   const [mode, setMode] = useState<Mode>("create");
+  // Per mode, so a choice made for a new machine never carries over to an existing one.
+  const [mcpServerOnConnect, setMcpServerOnConnect] = useState<Record<Mode, boolean>>({
+    create: true,
+    import: false,
+  });
   const [name, setName] = useState("");
   const [resources, setResources] = useState<CloudResourceSummary[] | null>(null);
   const [resourcesError, setResourcesError] = useState<string | null>(null);
@@ -171,7 +177,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     if (!request) return;
     setBusy(true);
     setError(null);
-    cloudHostsClient.createHost(request).then(
+    cloudHostsClient.createHost({ ...request, mcpServerOnConnect: mcpServerOnConnect.create }).then(
       ({ hostId }) => {
         setBusy(false);
         // Armed as the host is recorded, not on handover: closing this dialog doesn't
@@ -192,7 +198,12 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     setBusy(true);
     setError(null);
     cloudHostsClient
-      .importHost({ accountId: account.id, resourceId: chosenResource.resourceId, name: hostName })
+      .importHost({
+        accountId: account.id,
+        resourceId: chosenResource.resourceId,
+        name: hostName,
+        mcpServerOnConnect: mcpServerOnConnect.import,
+      })
       .then(
         ({ hostId }) => {
           setBusy(false);
@@ -567,6 +578,24 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
               </Field>
             )}
           </>
+        )}
+        {(mode === "create" || chosenResource) && (
+          <Field orientation="horizontal" disabled={busy}>
+            <Checkbox
+              checked={mcpServerOnConnect[mode]}
+              disabled={busy}
+              data-testid="add-cloud-host-mcp-server"
+              onCheckedChange={(checked) =>
+                setMcpServerOnConnect((current) => ({ ...current, [mode]: checked === true }))
+              }
+            />
+            <FieldLabel>Turn on its MCP server</FieldLabel>
+            <FieldDescription>
+              Lets your assistant run tools there through Daintree once it connects. Its HTTP
+              listener binds to 127.0.0.1 only; turn it off on the host in Settings → Integrations →
+              MCP server.
+            </FieldDescription>
+          </Field>
         )}
         {error && <InlineError role="alert">{error}</InlineError>}
       </div>

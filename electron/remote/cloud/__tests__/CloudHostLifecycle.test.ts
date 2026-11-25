@@ -26,7 +26,11 @@ import { CloudAccountService } from "../CloudAccountService.js";
 import { MemoryCloudCredentialVault } from "../CloudCredentialVault.js";
 import { CloudHostLifecycle } from "../CloudHostLifecycle.js";
 import { CloudHosts } from "../CloudHosts.js";
-import { CloudHostStore, type CloudHostsValue } from "../CloudHostStore.js";
+import {
+  CloudHostStore,
+  type CloudHostsValue,
+  type StoredCloudBinding,
+} from "../CloudHostStore.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
 import type {
   CloudProvider,
@@ -1275,6 +1279,99 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
     expect(provider.start).not.toHaveBeenCalled();
     expect(provider.renewLifetime).not.toHaveBeenCalled();
     expect(store.bindings()[0]).toMatchObject({ ownership: "imported", lifetimeSeconds: 600 });
+  });
+
+  describe("the ask to turn on the host's MCP server (#18187)", () => {
+    const createRequest = (accountId: string, extra: Record<string, unknown> = {}) =>
+      ({
+        accountId,
+        name: "build",
+        machineType: "default",
+        lifetimeHours: 2,
+        ...extra,
+      }) as CloudHostCreateRequest;
+    const importRequest = (accountId: string, extra: Record<string, unknown> = {}) =>
+      ({ accountId, resourceId: "bx_23456789", name: "build", ...extra }) as CloudHostImportRequest;
+    /** Each binding as it was written, before any later change to the same object. */
+    const recordWrites = (store: CloudHostStore) => {
+      const writes: StoredCloudBinding[] = [];
+      const put = store.putBinding.bind(store);
+      vi.spyOn(store, "putBinding").mockImplementation((binding) => {
+        writes.push(structuredClone(binding));
+        put(binding);
+      });
+      return writes;
+    };
+
+    it("keeps a yes with the binding's first write, for a new machine and an existing one", async () => {
+      const created = await setup();
+      const createWrites = recordWrites(created.store);
+      await created.lifecycle.create(
+        createRequest(created.store.accounts()[0]!.id, { mcpServerOnConnect: true })
+      );
+      expect(createWrites[0]).toMatchObject({ hostId: null, mcpServerOnConnect: true });
+      expect(created.store.bindings()[0]?.mcpServerOnConnect).toBe(true);
+      await vi.waitFor(() => expect(created.lifecycle.statuses()[0]?.operation).toBeNull());
+
+      const imported = await setup({ machine: "stopped" });
+      const importWrites = recordWrites(imported.store);
+      await imported.lifecycle.importMachine(
+        importRequest(imported.store.accounts()[0]!.id, { mcpServerOnConnect: true })
+      );
+      expect(importWrites[0]).toMatchObject({
+        hostId: null,
+        ownership: "imported",
+        mcpServerOnConnect: true,
+      });
+      expect(imported.store.bindings()[0]?.mcpServerOnConnect).toBe(true);
+    });
+
+    it.each([{}, { mcpServerOnConnect: false }])(
+      "keeps no ask for a request that doesn't say yes (%o)",
+      async (extra) => {
+        const created = await setup();
+        await created.lifecycle.create(createRequest(created.store.accounts()[0]!.id, extra));
+        expect(created.store.bindings()[0]).not.toHaveProperty("mcpServerOnConnect");
+        await vi.waitFor(() => expect(created.lifecycle.statuses()[0]?.operation).toBeNull());
+
+        const imported = await setup({ machine: "stopped" });
+        await imported.lifecycle.importMachine(
+          importRequest(imported.store.accounts()[0]!.id, extra)
+        );
+        expect(imported.store.bindings()[0]).not.toHaveProperty("mcpServerOnConnect");
+      }
+    );
+
+    it.each(["yes", 1, 0, null])(
+      "refuses a muddled answer (%o), writing nothing",
+      async (value) => {
+        const { lifecycle, provider, store } = await setup();
+        const accountId = store.accounts()[0]!.id;
+        await expect(
+          lifecycle.create(createRequest(accountId, { mcpServerOnConnect: value }))
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+        await expect(
+          lifecycle.importMachine(importRequest(accountId, { mcpServerOnConnect: value }))
+        ).rejects.toMatchObject({ code: "VALIDATION" });
+        expect(store.bindings()).toEqual([]);
+        expect(provider.create).not.toHaveBeenCalled();
+      }
+    );
+
+    it("never keeps one for a machine made for a worktree, which offers no such choice", async () => {
+      const { lifecycle, store } = await setup();
+      await lifecycle.create(createRequest(store.accounts()[0]!.id, { mcpServerOnConnect: true }), {
+        hostId: null,
+        projectId: "0f1e2d3c",
+        worktreeId: "/Users/me/code/app-worktrees/feature-login",
+        projectName: "app",
+        worktreeName: "feature/login",
+        hostName: null,
+      });
+      expect(store.bindings()[0]?.createdFor).not.toBeNull();
+      expect(store.bindings()[0]).not.toHaveProperty("mcpServerOnConnect");
+      await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    });
   });
 
   it("won't import a machine already bound to a host", async () => {

@@ -491,6 +491,17 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       ]);
     });
 
+    it("points a call this machine's MCP server couldn't take at its MCP settings here (#18187)", async () => {
+      local.dispose();
+      const settled = await runtime.call("a", LIST, { tier: "full" });
+      if (!settled.ok) throw new Error("refused");
+      expect(settled.value.outcome).toBe("unsupported");
+      expect(settled.value.detail).toContain(
+        "Settings → Integrations → MCP server on this machine"
+      );
+      expect(settled.value.detail).not.toMatch(/\bis off\b/);
+    });
+
     it("stops the call's tool in process when its caller cancels it (#17985)", async () => {
       answer = (session) =>
         new Promise((_resolve, reject) => {

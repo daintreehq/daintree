@@ -15,6 +15,7 @@ import {
 } from "../../../shared/types/remoteHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
+import { broadcastToVisibleRenderersOrAll } from "../../ipc/utils.js";
 import { store } from "../../store.js";
 import { isAgentUsageTrackingEnabled } from "../../services/agentUsage/AgentUsageTracking.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -50,6 +51,10 @@ import {
 import { CloudHostLifecycle } from "../cloud/CloudHostLifecycle.js";
 import { CloudGuestPowerOff } from "../cloud/CloudGuestPowerOff.js";
 import { CloudKeepAwakeLinks } from "../cloud/CloudKeepAwakeLinks.js";
+import {
+  CloudMcpServerOnConnect,
+  mcpServerUnconfirmedToast,
+} from "../cloud/CloudMcpServerOnConnect.js";
 import { CloudMachineKeys } from "../cloud/CloudMachineKeys.js";
 import { CloudSshFiles } from "../cloud/CloudSshFiles.js";
 import { initCloudHosts } from "../cloud/initCloudHosts.js";
@@ -1185,6 +1190,24 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const stopKeepAwake = manager.onSessionOpened((hostId, session) =>
     keepAwake.sessionOpened(hostId, session)
   );
+  const mcpServerOnConnect = new CloudMcpServerOnConnect({
+    store: cloud.store,
+    hosts: { get: (hostId) => registry.get(hostId) },
+    sessionFor: (hostId) => manager.get(hostId)?.currentSession ?? null,
+    unconfirmed: (host, code) => {
+      console.warn("[RemoteHosts] A host didn't confirm its MCP server is on", {
+        hostId: host.id,
+        code,
+      });
+      broadcastToVisibleRenderersOrAll(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        mcpServerUnconfirmedToast(host)
+      );
+    },
+  });
+  const stopMcpServerOnConnect = manager.onSessionOpened((hostId, session) =>
+    mcpServerOnConnect.sessionOpened(hostId, session)
+  );
   cloudLifecycle = new CloudHostLifecycle({
     store: cloud.store,
     accounts: cloud.accounts,
@@ -1286,6 +1309,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       guestPowerOff.dispose();
       stopKeepAwake();
       keepAwake.dispose();
+      stopMcpServerOnConnect();
+      mcpServerOnConnect.dispose();
       cloudLifecycle?.dispose();
       cloud.dispose();
       // Before the links close: an attempt would read their closing as its host going.

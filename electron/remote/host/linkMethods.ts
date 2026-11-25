@@ -33,6 +33,13 @@ export const LinkMethod = {
    */
   CLAIM_IDLE_STAND_IN: "host.claim-idle-stand-in",
   /**
+   * Shell → Host, once, on the first link to a cloud machine whose person
+   * asked for it when adding it (#18187): turn this host's MCP server on. It
+   * only ever turns it on, and answers whether it runs. A Host from before it
+   * answers `UNSUPPORTED`.
+   */
+  ENABLE_MCP_SERVER: "host.enable-mcp-server",
+  /**
    * Shell → Host, on a resumed session: the endpoints this Shell holds. Any
    * other the Host kept for it, and not opened again since, was closed in a
    * frame still queued when the link dropped.
@@ -143,6 +150,10 @@ export const HostInfoSchema = z.object({
 });
 
 export const EmptyPayloadSchema = z.union([z.null(), z.undefined(), z.object({}).strict()]);
+
+/** The Host's answer to {@link LinkMethod.ENABLE_MCP_SERVER}: whether its server runs now. */
+export const McpServerEnabledAnswerSchema = z.object({ running: z.boolean() });
+export type McpServerEnabledAnswer = z.infer<typeof McpServerEnabledAnswerSchema>;
 
 /**
  * The Host's answer to {@link LinkMethod.CLAIM_IDLE}: granted, the idle time

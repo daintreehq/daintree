@@ -827,9 +827,12 @@ const RELAY_REFUSAL_DETAILS: Record<
     detail:
       "The host has no project with that id. Nothing was run. The host list names its projects.",
   },
+  // A relay session that failed to open, or a refusal this build doesn't know, answers the
+  // same, so the server is something to check.
   "server-off": {
     code: "unsupported",
-    detail: "The host's Daintree MCP server is off, so it can't run tools. Nothing was run.",
+    detail:
+      "Nothing was run: the host didn't take the call. Check that its Daintree MCP server is on: Settings → Integrations → MCP server on that host.",
   },
 };
 
@@ -844,7 +847,8 @@ const LOCAL_REFUSAL_DETAILS: Partial<
   },
   "server-off": {
     code: "unsupported",
-    detail: "This machine's Daintree MCP server is off, so it can't run tools. Nothing was run.",
+    detail:
+      "Nothing was run: this machine didn't take the call. Check that its Daintree MCP server is on: Settings → Integrations → MCP server on this machine.",
   },
 };
 

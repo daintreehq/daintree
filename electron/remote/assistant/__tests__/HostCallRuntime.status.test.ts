@@ -240,6 +240,34 @@ describe("HostCallRuntime host.status (#16191)", () => {
     runtime.dispose();
   });
 
+  it("points a project whose MCP server didn't take the read at that machine's MCP settings (#18187)", async () => {
+    const refused = (projectId: string): ProjectStatusAnswer => ({
+      status: "refused",
+      projectId,
+      reason: "server-off",
+    });
+    const { runtime } = setup({
+      status: answering(refused),
+      localStatus: async (payload) => payload.projects.map(({ projectId }) => refused(projectId)),
+    });
+    const result = await read(runtime, {
+      targets: [
+        { hostId: "studio", projectId: "p1" },
+        { hostId: "local", projectId: "p4" },
+      ],
+    });
+    const [remote, local] = result.targets;
+    expect(remote?.outcome).toBe("unsupported");
+    expect(local?.outcome).toBe("unsupported");
+    for (const target of [remote, local]) {
+      expect(target?.detail).toContain("Settings → Integrations → MCP server");
+      expect(target?.detail).not.toMatch(/\bis off\b/);
+    }
+    expect(remote?.detail).toContain("on that host");
+    expect(local?.detail).toContain("on this machine");
+    runtime.dispose();
+  });
+
   it("says in fixed words how each host's read went, never what the host said", async () => {
     const answers: Record<string, () => Promise<StatusAnswer>> = {
       studio: async () => ({ status: "refused", reason: "control-off" }),
