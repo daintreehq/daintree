@@ -1663,6 +1663,40 @@ describe("CloudHostLifecycle start, stop, import and removal", () => {
     expect(lifecycle.statuses()[0]!.machine).toBe("stopped");
   });
 
+  it("refuses a start or a stop through a provider without that method, as nothing it sent", async () => {
+    // Each keeps the other method, so a guard reading the wrong one lets its send through.
+    const stopped = await setup(
+      { machine: "stopped" },
+      { adapt: (provider: CloudProvider) => delete provider.start }
+    );
+    await stopped.lifecycle.importMachine({
+      accountId: stopped.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await expect(stopped.lifecycle.startMachine("build")).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+      message: expect.stringMatching(/don't stop or start/),
+    });
+    expect(stopped.lifecycle.statuses()[0]).toMatchObject({ machine: "stopped", lastError: null });
+
+    const running = await setup(
+      { machine: "running" },
+      { adapt: (provider: CloudProvider) => delete provider.stop }
+    );
+    await running.lifecycle.importMachine({
+      accountId: running.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    await expect(running.lifecycle.stopMachine("build")).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+      message: expect.stringMatching(/don't stop or start/),
+    });
+    expect(running.lifecycle.statuses()[0]).toMatchObject({ machine: "running", lastError: null });
+    expect(running.provider.start).not.toHaveBeenCalled();
+  });
+
   // What was last found about starting Daintree there went with the reboot (#17546).
   it("says once that a machine it started came up, before any view hears it is running", async () => {
     const onMachineStarted = vi.fn();

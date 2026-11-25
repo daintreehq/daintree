@@ -237,6 +237,21 @@ export interface CloudProviderInfo {
   /** What connecting an account asks for, in order. */
   credentialFields: CloudCredentialField[];
   capabilities: CloudProviderCapabilities;
+  /**
+   * `delete-only`: its machines can't stop and start again, so Delete is the
+   * only way one ends (closing an Akash lease destroys the container and its
+   * disk). Absent: a stop keeps what `capabilities.persistence` says, and the
+   * machine starts again. Only a built-in declares it; the field lives here
+   * rather than in `capabilities` because a plugin's manifest declares those.
+   */
+  stopMode?: "delete-only";
+  /**
+   * `offers`: a create places an order, bidders answer it with offers, and
+   * the machine is leased from the one the person chooses, so its price is
+   * known only then. Absent: a create is one request, priced from the
+   * catalog. Only a built-in declares it.
+   */
+  createMode?: "offers";
   /** Null when this platform's Shell can use the provider; otherwise why not. */
   unsupportedReason: string | null;
   /** Present for a plugin's provider: the plugin behind it, and whether the person has agreed to it. */
@@ -525,6 +540,61 @@ export interface CloudResourceSummary {
   asleep: boolean;
 }
 
+/**
+ * An order an offer-based create placed (`createMode: "offers"`), by the
+ * provider's own id for it, opaque to Daintree.
+ */
+export interface CloudCreateOrder {
+  id: string;
+}
+
+/** Who made an offer on an order, as the provider reports them. */
+export interface CloudOfferBidder {
+  /** The provider's own id for the bidder (an Akash provider address), opaque to Daintree; stable across orders. */
+  id: string;
+  name: string;
+  /** Where it runs, in the provider's words; null when it declares none. */
+  region: string | null;
+  /** Its share of recent time online, 0 to 100; absent when the provider doesn't say. */
+  uptimePercent?: number;
+  /** Whether an auditor the provider recognises vouches for it; absent when the provider doesn't say. */
+  audited?: boolean;
+}
+
+/** One offer on an order: a bidder's quote to run the machine, and whether it can be chosen. */
+export type CloudCreateOffer = {
+  /** The provider's own id for it, opaque to Daintree and meaningful only with its order. */
+  id: string;
+  /** The rate it quotes, in dollars per running hour. */
+  hourlyDollars: number;
+  bidder: CloudOfferBidder;
+} & (
+  | { choosable: true; reason: null }
+  | {
+      choosable: false;
+      /** Why not, in words for its row: a bidder outside the account's trusted list, say. */
+      reason: string;
+    }
+);
+
+/**
+ * A create waiting on the person to choose one of its order's offers. Offers
+ * arrive while it waits, so an empty list read early isn't the last word.
+ */
+export interface CloudCreateOfferChoice {
+  kind: "awaiting-offer";
+  order: CloudCreateOrder;
+  /**
+   * When this device began waiting on the choice: it placed the order then,
+   * or found it again after the placement's answer was lost.
+   */
+  waitingSince: number;
+  /** Its offers as last read, those that can't be chosen too; [] before any arrived. */
+  offers: CloudCreateOffer[];
+  /** When the offers were last read; null before the first read. */
+  offersReadAt: number | null;
+}
+
 /** What Daintree is doing to a machine right now, in the user's terms. */
 export type CloudOperationKind = "creating" | "starting" | "stopping" | "deleting";
 
@@ -728,6 +798,12 @@ export interface CloudHostStatus {
   lastSnapshotAt: string | null;
   dataExpired: boolean;
   operation: CloudOperation | null;
+  /**
+   * A create waiting on the person's choice, with or without an operation
+   * under way (a restart mid-choice leaves none). Absent or null when there
+   * is none; optional for snapshots from before it.
+   */
+  pendingCreate?: CloudCreateOfferChoice | null;
   lastError: CloudHostError | null;
   /** When the provider was last asked; null when it never answered. */
   observedAt: number | null;

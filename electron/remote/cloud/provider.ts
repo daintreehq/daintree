@@ -1,5 +1,7 @@
 import type {
   CloudAccountCheckResult,
+  CloudCreateOffer,
+  CloudCreateOrder,
   CloudCredentialValues,
   CloudHostError,
   CloudProviderId,
@@ -88,6 +90,56 @@ export type GuestPowerOffCheck =
       problem: string;
     };
 
+/** How a close left an order: closed, or kept because one of its offers was leased, with that machine. */
+export type CloseOrderOutcome = { kind: "closed" } | { kind: "leased"; resource: ProviderResource };
+
+/**
+ * A create that goes through offers (`createMode: "offers"`): an order is
+ * placed, bidders answer it with offers, and the one the person chose is
+ * leased. Each call asks the provider once; waiting for offers, and for the
+ * person, is the caller's.
+ */
+export interface OfferCreate {
+  /**
+   * Places an order for the machine `request` describes, leasing nothing. The
+   * order carries the request's labels and idempotency key where
+   * `findOrders` reads them, so one whose answer was lost is found again.
+   */
+  placeOrder(
+    credentials: ProviderCredentials,
+    request: ProviderCreateRequest
+  ): Promise<CloudCreateOrder>;
+  /**
+   * The account's open orders (placed, neither leased nor closed) that a
+   * create with these labels and key placed, found from the account alone:
+   * after a lost answer or a restart, with no order id in hand. A lost answer
+   * can leave more than one.
+   */
+  findOrders(
+    credentials: ProviderCredentials,
+    match: Pick<ProviderCreateRequest, "labels" | "idempotencyKey">
+  ): Promise<CloudCreateOrder[]>;
+  /** The order's offers now, those that can't be chosen too; [] while none have arrived. */
+  listOffers(credentials: ProviderCredentials, orderId: string): Promise<CloudCreateOffer[]>;
+  /**
+   * Leases exactly this offer and answers with the machine. One that has
+   * gone is refused with nothing leased, never swapped for another, and the
+   * order stays open for another choice.
+   */
+  leaseOffer(
+    credentials: ProviderCredentials,
+    orderId: string,
+    offerId: string
+  ): Promise<ProviderResource>;
+  /**
+   * Closes an order nobody chose from: `closed` once it is, and when it
+   * already was. Never ends a lease: when one of its offers was leased it
+   * leaves the order and answers `leased` with that machine, which only
+   * `delete` ends, so a lease whose answer was lost is still bound.
+   */
+  closeOrder(credentials: ProviderCredentials, orderId: string): Promise<CloseOrderOutcome>;
+}
+
 /**
  * One cloud provider: authentication, catalog, machine lifecycle and SSH
  * access, translated into Daintree's types. It holds no state and decides
@@ -132,6 +184,11 @@ export interface CloudProvider {
     options?: { label?: string; location?: string }
   ): Promise<ProviderResource[]>;
   inspect(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource>;
+  /**
+   * One request for the machine. A provider whose create goes through offers
+   * still has it, and it rejects with an `unsupported` error before asking
+   * the provider anything: only a person's choice leases a machine there.
+   */
   create(
     credentials: ProviderCredentials,
     request: ProviderCreateRequest
@@ -142,17 +199,21 @@ export interface CloudProvider {
    * the send that does ask. The create is marked sent between the two, so one
    * interrupted while it is readied is known never to have reached the
    * provider. Without it, `create` is the send and is marked before it starts.
+   * Never present on a provider whose create goes through offers.
    */
   prepareCreate?(
     credentials: ProviderCredentials,
     request: ProviderCreateRequest
   ): Promise<() => Promise<ProviderResource>>;
+  /** Present exactly when the provider declares `createMode: "offers"`. */
+  readonly offerCreate?: OfferCreate;
   /**
    * Starts a stopped machine; resolves with what the provider said, which may
    * still be starting. `lifetimeSeconds` is the runtime limit to start it with,
-   * absent when it keeps whatever it has (and null for none).
+   * absent when it keeps whatever it has (and null for none). Absent exactly
+   * when the provider declares `stopMode: "delete-only"`, as is `stop`.
    */
-  start(
+  start?(
     credentials: ProviderCredentials,
     resourceId: string,
     options: { lifetimeSeconds?: number | null }
@@ -162,7 +223,7 @@ export interface CloudProvider {
    * stop whose reason has to be checked again before any second try: an idle
    * stop, whose idle time new work may have ended by the time a resend went.
    */
-  stop(
+  stop?(
     credentials: ProviderCredentials,
     resourceId: string,
     options?: { once?: boolean }
@@ -255,8 +316,12 @@ export function canSleepIdle(provider: CloudProvider): provider is IdleSleepingC
   );
 }
 
-/** A provider that can move a running machine's automatic stop. */
-export type RenewingCloudProvider = CloudProvider & Required<Pick<CloudProvider, "renewLifetime">>;
+/**
+ * A provider that can move a running machine's automatic stop. Its machines
+ * stop, so they start again too: one with no stop declares no lifetime.
+ */
+export type RenewingCloudProvider = CloudProvider &
+  Required<Pick<CloudProvider, "renewLifetime" | "start" | "stop">>;
 
 /**
  * Whether the provider can move a running machine's deadline: it says its
@@ -265,8 +330,90 @@ export type RenewingCloudProvider = CloudProvider & Required<Pick<CloudProvider,
 export function canRenewLifetime(provider: CloudProvider): provider is RenewingCloudProvider {
   return (
     provider.info(process.platform).capabilities.lifetime.kind === "renewable" &&
-    typeof provider.renewLifetime === "function"
+    typeof provider.renewLifetime === "function" &&
+    typeof provider.start === "function" &&
+    typeof provider.stop === "function"
   );
+}
+
+const POWER_METHODS = ["start", "stop"] as const;
+
+/** What only a machine that stops or sleeps by itself has a use for. */
+const STOPPING_ONLY = [
+  "renewLifetime",
+  "machineKeys",
+  "checkGuestPowerOff",
+  "sleepIdle",
+  "setIdleSleep",
+  "keepAwakeUrl",
+] as const satisfies readonly (keyof CloudProvider)[];
+
+/** Why a provider's machines can't stop, or end, the way its info declares; null when they can. */
+export function stopContractProblem(
+  provider: CloudProvider,
+  info: CloudProviderInfo
+): string | null {
+  const { stopMode } = info;
+  if (stopMode === undefined) {
+    const missing = POWER_METHODS.filter((method) => typeof provider[method] !== "function");
+    return missing.length === 0
+      ? null
+      : `stops and starts machines but has no ${missing.join(" or ")}`;
+  }
+  if (stopMode !== "delete-only") {
+    return `declares an unknown stop mode ${JSON.stringify(stopMode)}`;
+  }
+  const present = [...POWER_METHODS, ...STOPPING_ONLY].filter(
+    (member) => provider[member] !== undefined
+  );
+  if (present.length > 0) return `has no stop but has ${present.join(", ")}`;
+  // Delete is then the only way a machine ends, and a deadline or idle sleep would be a stop.
+  if (info.capabilities.deletion !== true || typeof provider.delete !== "function") {
+    return "has no stop and can't delete, so its machines could never end";
+  }
+  const { lifetime } = info.capabilities;
+  if (lifetime.kind !== "none") {
+    return `has no stop but declares a ${JSON.stringify(lifetime.kind)} lifetime`;
+  }
+  return null;
+}
+
+const OFFER_METHODS = [
+  "placeOrder",
+  "findOrders",
+  "listOffers",
+  "leaseOffer",
+  "closeOrder",
+] as const satisfies readonly (keyof OfferCreate)[];
+
+/** Why a provider can't create the way its info declares; null when it can. */
+export function createContractProblem(
+  provider: CloudProvider,
+  info: CloudProviderInfo
+): string | null {
+  if (typeof provider.create !== "function") return "has no create";
+  if (provider.prepareCreate !== undefined && typeof provider.prepareCreate !== "function") {
+    return "has a prepareCreate that can't be called";
+  }
+  const { createMode } = info;
+  const offers: unknown = provider.offerCreate;
+  if (createMode === undefined) {
+    return offers === undefined ? null : "has an offer create but declares no createMode";
+  }
+  if (createMode !== "offers") {
+    return `declares an unknown create mode ${JSON.stringify(createMode)}`;
+  }
+  // Readying a send that asks for nothing has no place where nothing is sent until a person chooses.
+  if (provider.prepareCreate !== undefined) return "creates through offers but has prepareCreate";
+  if (typeof offers !== "object" || offers === null) {
+    return "creates through offers but has no offerCreate";
+  }
+  const missing = OFFER_METHODS.filter(
+    (method) => typeof (offers as Partial<OfferCreate>)[method] !== "function"
+  );
+  return missing.length === 0
+    ? null
+    : `creates through offers but its offerCreate has no ${missing.join(", ")}`;
 }
 
 /** When the provider takes Daintree's SSH key, as it declares. */

@@ -4,7 +4,12 @@ import {
   type CloudProviderNamespace,
 } from "../../../shared/types/cloudHosts.js";
 import { credentialFieldsProblem } from "./cloudCredentials.js";
-import { sshKeyContractProblem, type CloudProvider } from "./provider.js";
+import {
+  createContractProblem,
+  sshKeyContractProblem,
+  stopContractProblem,
+  type CloudProvider,
+} from "./provider.js";
 import { sshDeclarationProblem } from "./sshTunnel.js";
 
 /** Who registers a provider, and so which ids it may take. */
@@ -64,6 +69,15 @@ export class CloudProviderRegistry {
     if (sshKeyProblem) throw new Error(`Cloud provider ${id} ${sshKeyProblem}`);
     const fieldsProblem = credentialFieldsProblem(info.credentialFields);
     if (fieldsProblem) throw new Error(`Cloud provider ${id} ${fieldsProblem}`);
+    // A plugin's manifest can declare neither, and its calls have no time to wait for bids.
+    if (owner.kind === "plugin" && (info.stopMode !== undefined || info.createMode !== undefined)) {
+      throw new Error(`Cloud provider ${id} declares a stop or create mode only a built-in may`);
+    }
+    // The lifecycle sends a start, stop or create only through what the declaration promises.
+    const stopProblem = stopContractProblem(provider, info);
+    if (stopProblem) throw new Error(`Cloud provider ${id} ${stopProblem}`);
+    const createProblem = createContractProblem(provider, info);
+    if (createProblem) throw new Error(`Cloud provider ${id} ${createProblem}`);
     if (this.entries.has(id)) throw new Error(`Cloud provider ${id} is already registered`);
     const registration: Registration = { provider, apiUrl: options.apiUrl, owner };
     this.entries.set(id, registration);

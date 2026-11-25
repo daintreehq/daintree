@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CloudHostsSnapshot,
   CloudProviderCapabilities,
+  CloudProviderInfo,
 } from "../../../../shared/types/cloudHosts.js";
 import type { HostConnection, HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { AppError } from "../../../utils/errorTypes.js";
@@ -20,7 +21,12 @@ import {
 } from "../CloudHostStore.js";
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
-import type { CloudProvider, ProviderResource } from "../provider.js";
+import {
+  canRenewLifetime,
+  type CloudProvider,
+  type OfferCreate,
+  type ProviderResource,
+} from "../provider.js";
 import type { CommandRunner } from "../../client/commandRunner.js";
 
 const PLUGIN_PROVIDER = "acme.clouds.ec2";
@@ -296,6 +302,223 @@ describe("CloudProviderRegistry", () => {
     atCreate.sshAccess = vi.fn();
     registry.register(atCreate, { owner, apiUrl: "" });
     expect(registry.get(PLUGIN_PROVIDER)).toBe(atCreate);
+  });
+
+  describe("stop and create declarations", () => {
+    const builtIn = { kind: "built-in" as const };
+    const declaring = (
+      id: string,
+      declared: Partial<Pick<CloudProviderInfo, "stopMode" | "createMode">>,
+      capabilities: Partial<CloudProviderCapabilities> = {}
+    ) => {
+      const provider = fakeProvider(id, () => resource());
+      const info = provider.info;
+      provider.info = (platform) => {
+        const described = info(platform);
+        return {
+          ...described,
+          ...declared,
+          capabilities: { ...described.capabilities, ...capabilities },
+        };
+      };
+      return provider;
+    };
+    /** Delete-only as a provider whose machines are only ever deleted has to be. */
+    const deleteOnly = (id = "akash") => {
+      const provider = declaring(id, { stopMode: "delete-only" }, { lifetime: { kind: "none" } });
+      delete provider.start;
+      delete provider.stop;
+      delete provider.renewLifetime;
+      return provider;
+    };
+    const offerCreate = (): OfferCreate => ({
+      placeOrder: vi.fn(),
+      findOrders: vi.fn(),
+      listOffers: vi.fn(),
+      leaseOffer: vi.fn(),
+      closeOrder: vi.fn(),
+    });
+    const offerBased = (id = "akash") => {
+      const provider = declaring(id, { createMode: "offers" });
+      (provider as { offerCreate?: OfferCreate }).offerCreate = offerCreate();
+      return provider;
+    };
+    const refuses = (provider: CloudProvider, problem: RegExp) => {
+      const registry = new CloudProviderRegistry();
+      const changes = vi.fn();
+      registry.onChange(changes);
+      expect(() => registry.register(provider, { owner: builtIn, apiUrl: "" })).toThrow(problem);
+      expect([...registry.values()]).toEqual([]);
+      expect(changes).not.toHaveBeenCalled();
+    };
+    const accepts = (provider: CloudProvider) => {
+      const registry = new CloudProviderRegistry();
+      registry.register(provider, { owner: builtIn, apiUrl: "" });
+      expect(registry.get(provider.id)).toBe(provider);
+    };
+
+    it("needs a start and a stop from a provider that declares no stop mode", () => {
+      for (const missing of ["start", "stop"] as const) {
+        const provider = fakeProvider("akash", () => resource());
+        delete provider[missing];
+        refuses(provider, new RegExp(`stops and starts machines but has no ${missing}$`));
+        const notCallable = fakeProvider("akash", () => resource());
+        (notCallable as unknown as Record<string, unknown>)[missing] = {};
+        refuses(notCallable, new RegExp(`has no ${missing}$`));
+      }
+      const neither = fakeProvider("akash", () => resource());
+      delete neither.start;
+      delete neither.stop;
+      refuses(neither, /has no start or stop/);
+      accepts(fakeProvider("akash", () => resource()));
+    });
+
+    it("takes a provider whose machines are only deleted without a start or a stop", () => {
+      accepts(deleteOnly());
+    });
+
+    it("refuses a delete-only provider that keeps a way to stop, sleep or move a deadline", () => {
+      const members = {
+        start: vi.fn(),
+        stop: vi.fn(),
+        renewLifetime: vi.fn(),
+        machineKeys: { issue: vi.fn(), revoke: vi.fn(), findByName: vi.fn() },
+        checkGuestPowerOff: vi.fn(),
+        sleepIdle: vi.fn(),
+        setIdleSleep: vi.fn(),
+        keepAwakeUrl: vi.fn(),
+      };
+      for (const [member, value] of Object.entries(members)) {
+        const provider = deleteOnly();
+        (provider as unknown as Record<string, unknown>)[member] = value;
+        refuses(provider, new RegExp(`has no stop but has ${member}$`));
+      }
+    });
+
+    it("refuses a delete-only provider that can't delete, or whose machines would stop by themselves", () => {
+      for (const deletion of [false, "true"]) {
+        const undeletable = deleteOnly();
+        const info = undeletable.info;
+        undeletable.info = (platform) => {
+          const described = info(platform);
+          const capabilities = { ...described.capabilities, deletion: deletion as boolean };
+          return { ...described, capabilities };
+        };
+        refuses(undeletable, /can't delete, so its machines could never end/);
+      }
+      for (const remove of [undefined, "later"]) {
+        const noDelete = deleteOnly();
+        if (remove === undefined) delete (noDelete as { delete?: unknown }).delete;
+        else (noDelete as unknown as Record<string, unknown>).delete = remove;
+        refuses(noDelete, /can't delete, so its machines could never end/);
+      }
+      for (const lifetime of [
+        { kind: "fixed-at-create", canChangeWhileStopped: false },
+        { kind: "idle-sleep", idleSeconds: 600 },
+      ] as const) {
+        const provider = deleteOnly();
+        const described = provider.info;
+        provider.info = (platform) => {
+          const base = described(platform);
+          return { ...base, capabilities: { ...base.capabilities, lifetime } };
+        };
+        refuses(provider, new RegExp(`has no stop but declares a "${lifetime.kind}" lifetime`));
+      }
+    });
+
+    it("refuses a stop mode it doesn't know", () => {
+      const provider = declaring("akash", { stopMode: "never" as never });
+      refuses(provider, /unknown stop mode "never"/);
+    });
+
+    it("needs a create from a provider that declares no create mode, and no offer create", () => {
+      const noCreate = fakeProvider("akash", () => resource());
+      delete (noCreate as { create?: unknown }).create;
+      refuses(noCreate, /has no create$/);
+      const notCallable = fakeProvider("akash", () => resource());
+      (notCallable as unknown as Record<string, unknown>).create = {};
+      refuses(notCallable, /has no create$/);
+      for (const group of [offerCreate(), null]) {
+        const undeclared = fakeProvider("akash", () => resource());
+        (undeclared as unknown as Record<string, unknown>).offerCreate = group;
+        refuses(undeclared, /has an offer create but declares no createMode/);
+      }
+      const brokenPrepare = fakeProvider("akash", () => resource());
+      (brokenPrepare as unknown as Record<string, unknown>).prepareCreate = "soon";
+      refuses(brokenPrepare, /prepareCreate that can't be called/);
+      const prepared = fakeProvider("akash", () => resource());
+      prepared.prepareCreate = vi.fn();
+      accepts(prepared);
+    });
+
+    it("takes a provider whose create goes through offers with its whole offer create", () => {
+      accepts(offerBased());
+    });
+
+    it("refuses an offer-based provider missing any part of its offer create", () => {
+      const missingGroup = declaring("akash", { createMode: "offers" });
+      refuses(missingGroup, /creates through offers but has no offerCreate/);
+      const nullGroup = declaring("akash", { createMode: "offers" });
+      (nullGroup as unknown as Record<string, unknown>).offerCreate = null;
+      refuses(nullGroup, /creates through offers but has no offerCreate/);
+      for (const method of Object.keys(offerCreate()) as (keyof OfferCreate)[]) {
+        for (const replacement of [undefined, "later"]) {
+          const provider = offerBased();
+          const group = provider.offerCreate as unknown as Record<string, unknown>;
+          if (replacement === undefined) delete group[method];
+          else group[method] = replacement;
+          refuses(provider, new RegExp(`its offerCreate has no ${method}$`));
+        }
+      }
+      const noCreate = offerBased();
+      delete (noCreate as { create?: unknown }).create;
+      refuses(noCreate, /has no create$/);
+    });
+
+    it("refuses an offer-based provider that readies a send, or a create mode it doesn't know", () => {
+      const prepared = offerBased();
+      prepared.prepareCreate = vi.fn();
+      refuses(prepared, /creates through offers but has prepareCreate/);
+      refuses(declaring("akash", { createMode: "auction" as never }), /unknown create mode/);
+    });
+
+    it("takes both declarations together, from a built-in only", () => {
+      const both = () => {
+        const provider = deleteOnly();
+        const info = provider.info;
+        provider.info = (platform) => ({ ...info(platform), createMode: "offers" });
+        (provider as { offerCreate?: OfferCreate }).offerCreate = offerCreate();
+        return provider;
+      };
+      accepts(both());
+
+      const plugin = { kind: "plugin" as const, pluginId: "acme.clouds" };
+      for (const provider of [deleteOnly(PLUGIN_PROVIDER), offerBased(PLUGIN_PROVIDER)]) {
+        const registry = new CloudProviderRegistry();
+        expect(() => registry.register(provider, { owner: plugin, apiUrl: "" })).toThrow(
+          /only a built-in may/
+        );
+        expect(registry.has(PLUGIN_PROVIDER)).toBe(false);
+      }
+    });
+
+    it("leaves a provider that declares neither as it registers today", () => {
+      const provider = fakeProvider("akash", () => resource());
+      expect(provider.info("linux")).not.toHaveProperty("stopMode");
+      expect(provider.info("linux")).not.toHaveProperty("createMode");
+      accepts(provider);
+      const plain = new BoatProvider(() => ({}) as never);
+      accepts(plain);
+    });
+
+    it("renews a lifetime only for a provider that can also stop and start the machine", () => {
+      expect(canRenewLifetime(fakeProvider("akash", () => resource()))).toBe(true);
+      for (const missing of ["start", "stop", "renewLifetime"] as const) {
+        const provider = fakeProvider("akash", () => resource());
+        delete provider[missing];
+        expect(canRenewLifetime(provider)).toBe(false);
+      }
+    });
   });
 
   it("lets an old registration's remover leave a newer one in place", () => {
