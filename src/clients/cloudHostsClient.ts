@@ -81,11 +81,16 @@ export const cloudHostsClient = {
   retryCreate: (hostId: string): Promise<void> =>
     window.electron.cloudHosts.retryCreate({ hostId }),
   /**
-   * Lease one of the order's offers; the create then carries on as any other. Refused,
-   * leaving the order open, when that offer has gone or the order is no longer the one shown.
+   * Lease one of the order's offers at the rate the person saw; the create then carries on
+   * as any other. Refused, leaving the order open, when that offer has gone or been
+   * requoted, or the order is no longer the one shown.
    */
-  chooseOffer: (_hostId: string, _orderId: string, _offerId: string): Promise<void> =>
-    offerOrdersUnavailable(),
+  chooseOffer: (
+    _hostId: string,
+    _orderId: string,
+    _offerId: string,
+    _hourlyDollars: number
+  ): Promise<void> => offerOrdersUnavailable(),
   /** Close the order. One of its offers leased meanwhile is kept: the snapshot says which happened. */
   cancelOrder: (_hostId: string, _orderId: string): Promise<void> => offerOrdersUnavailable(),
   /** Read the order's offers again now, rather than at the next refresh. */

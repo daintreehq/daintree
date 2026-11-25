@@ -394,8 +394,13 @@ export function idleEndSentence(
  * "Machine".
  */
 export function cloudStateWord(status: CloudHostStatus): string {
-  // Ahead of the create under way: nothing more happens until the person chooses.
-  if (status.pendingCreate) return "Choose an offer";
+  // Ahead of the create under way: nothing more happens until the person chooses, and
+  // the first offer they can choose is the change worth hearing.
+  if (status.pendingCreate) {
+    return status.pendingCreate.offers.some((offer) => offer.choosable)
+      ? "Offers ready"
+      : "Waiting for offers";
+  }
   if (status.operation) {
     switch (status.operation.kind) {
       case "creating":

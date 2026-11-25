@@ -1124,15 +1124,22 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     choosable: true as const,
     reason: null,
   });
+  const order = (id = "dseq-1") => ({
+    kind: "awaiting-offer" as const,
+    order: { id },
+    waitingSince: Date.now(),
+    offers: [offerOf("a", "Europlots", 0.036), offerOf("b", "Hurricane", 0.05)],
+    offersReadAt: Date.now(),
+  });
   function hostStatus(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
     return {
-      hostId: "build",
+      hostId: "h-123",
       providerId: "akash",
       providerUnavailable: null,
       accountId: "ca_0123456789",
       accountName: "Personal",
       resourceId: null,
-      machineName: "build",
+      machineName: "build-host",
       ownership: "created-by-daintree",
       createdFor: null,
       worktreeCleanup: null,
@@ -1151,13 +1158,7 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
       lastSnapshotAt: null,
       dataExpired: false,
       operation: null,
-      pendingCreate: {
-        kind: "awaiting-offer",
-        order: { id: "dseq-1" },
-        waitingSince: Date.now(),
-        offers: [offerOf("a", "Europlots", 0.036), offerOf("b", "Hurricane", 0.05)],
-        offersReadAt: Date.now(),
-      },
+      pendingCreate: order(),
       lastError: null,
       observedAt: null,
       lastEndpoint: null,
@@ -1169,19 +1170,25 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     };
   }
   const getOffers = () => screen.getByRole("button", { name: "Get offers" });
+  const describedBy = (input: HTMLElement) =>
+    document.getElementById(input.getAttribute("aria-describedby") ?? "")?.textContent ?? null;
 
+  /** Ordered from the dialog, under an id that differs from the name it was given. */
   async function ordered(onClose = vi.fn(), onReady = vi.fn()) {
+    client.createHost.mockResolvedValue({ hostId: "h-123" });
     cloud.snapshot = { providers: [AKASH()], accounts: [account("akash")], hosts: [] };
     client.getCatalog.mockResolvedValue(sizes());
     // A fresh element each time, so a rerender reads the snapshot again.
     const dialog = () => <AddCloudHostDialog isOpen onClose={onClose} onReady={onReady} />;
     const view = render(dialog());
-    fireEvent.change(screen.getByTestId("add-cloud-host-name"), { target: { value: "build" } });
+    fireEvent.change(screen.getByTestId("add-cloud-host-name"), {
+      target: { value: "build-host" },
+    });
     await waitFor(() => expect(getOffers().getAttribute("aria-disabled")).toBeNull());
     fireEvent.click(getOffers());
     await screen.findByTestId("add-cloud-host-progress");
-    const show = (status: CloudHostStatus) => {
-      cloud.snapshot = { ...cloud.snapshot, hosts: [status] };
+    const show = (statuses: CloudHostStatus[], accounts = cloud.snapshot.accounts) => {
+      cloud.snapshot = { ...cloud.snapshot, accounts, hosts: statuses };
       view.rerender(dialog());
     };
     return { show, onClose, onReady };
@@ -1193,16 +1200,15 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
     fireEvent.change(screen.getByTestId("add-cloud-host-name"), { target: { value: "build" } });
     const small = await screen.findByRole("radio", { name: "Small · 4 vCPU · 16 GB" });
-    const sizeGroup = small.closest("fieldset")!;
-    expect(sizeGroup.textContent).not.toContain("$");
+    expect(describedBy(small)).toBeNull();
+    expect(small.closest("fieldset")!.textContent).not.toContain("$");
     expect(screen.getByTestId("add-cloud-host-offer-pricing").textContent).toContain(
       "Akash's bidders quote one in their offers"
     );
-    // A size that can't be ordered still says why.
-    const huge = screen.getByRole("radio", { name: "Huge · 32 vCPU · 128 GB" });
-    expect(document.getElementById(huge.getAttribute("aria-describedby")!)?.textContent).toBe(
-      "No bidder has run this size lately"
-    );
+    // A size that can't be ordered still says why, and still can't be picked.
+    const huge = screen.getByRole("radio", { name: "Huge · 32 vCPU · 128 GB" }) as HTMLInputElement;
+    expect(huge.disabled).toBe(true);
+    expect(describedBy(huge)).toBe("No bidder has run this size lately");
     const review = screen.getByTestId("add-cloud-host-review").textContent ?? "";
     expect(review).not.toContain("$");
     expect(review).toContain("at the price of the offer you lease");
@@ -1213,12 +1219,28 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     expect(client.createHost.mock.calls[0]![0].machineType).toBe("akash-4c-16g");
   });
 
+  it("keeps a list price and Create and connect for a provider that creates at once", async () => {
+    open(provider("boat", "Boat", NONE), sizes());
+    const small = await screen.findByRole("radio", { name: "Small · 4 vCPU · 16 GB" });
+    expect(describedBy(small)).toBe("$0.050 an hour while running");
+    expect(screen.getByTestId("add-cloud-host-review").textContent).toContain(
+      "about $0.050 an hour while it runs"
+    );
+    expect(screen.queryByTestId("add-cloud-host-offer-pricing")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Get offers" })).toBeNull();
+    expect((await create()).machineType).toBe("akash-4c-16g");
+  });
+
   it("shows the order's offers ahead of progress or a past error, and leases the one picked", async () => {
     client.chooseOffer.mockResolvedValue(undefined);
     const { show } = await ordered();
-    show(
-      hostStatus({ lastError: { code: "refused", message: "The last order was closed.", at: 1 } })
-    );
+    show([
+      hostStatus({
+        // Pending with a create under way, and with an error from before: the choice wins.
+        operation: { id: "op", kind: "creating", startedAt: 1, stage: "Asking Akash" },
+        lastError: { code: "refused", message: "The last order was closed.", at: 1 },
+      }),
+    ]);
     expect(screen.getByTestId("add-cloud-host-offers")).toBeTruthy();
     expect(screen.queryByTestId("add-cloud-host-progress")).toBeNull();
     // A failed create's Retry would place another order beside this one.
@@ -1226,14 +1248,33 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     expect(screen.getByText("The last order was closed.")).toBeTruthy();
     fireEvent.click(screen.getByRole("radio", { name: "Hurricane" }));
     fireEvent.click(screen.getByRole("button", { name: "Lease offer" }));
-    await waitFor(() => expect(client.chooseOffer).toHaveBeenCalledWith("build", "dseq-1", "b"));
+    await waitFor(() =>
+      expect(client.chooseOffer).toHaveBeenCalledWith("h-123", "dseq-1", "b", 0.05)
+    );
   });
 
-  it("leaves the order open, and says where to find it, when closed mid-choice", async () => {
+  it("keeps the order in view when its account drops out of the form's list", async () => {
+    const { show } = await ordered();
+    show([hostStatus()], [{ ...account("akash"), providerUnavailable: "Akash is gone" }]);
+    expect(screen.getByTestId("add-cloud-host-offers")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Connect .* account/ })).toBeNull();
+  });
+
+  it("starts a new order's choice afresh", async () => {
+    const { show } = await ordered();
+    show([hostStatus()]);
+    fireEvent.click(screen.getByRole("radio", { name: "Europlots" }));
+    show([hostStatus({ pendingCreate: order("dseq-2") })]);
+    expect((screen.getByRole("radio", { name: "Europlots" }) as HTMLInputElement).checked).toBe(
+      false
+    );
+  });
+
+  it("leaves the order open, and says where to find it by name, when closed mid-choice", async () => {
     const { show, onClose } = await ordered();
-    show(hostStatus());
+    show([hostStatus()]);
     expect(screen.getByTestId("add-cloud-host-offers").textContent).toContain(
-      "choose an offer later in Settings → Hosts → build"
+      "choose an offer later in Settings → Hosts → build-host"
     );
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -1241,28 +1282,48 @@ describe("AddCloudHostDialog on an offer-based provider (#18231)", () => {
     expect(client.cancelOrder).not.toHaveBeenCalled();
   });
 
-  it("hands over to setup once, only after the leased machine runs", async () => {
+  it("says so when the host it was following is removed, rather than showing progress", async () => {
+    const { show } = await ordered();
+    // Not yet in the snapshot right after the order: that's progress, not a removal.
+    expect(screen.queryByTestId("add-cloud-host-gone")).toBeNull();
+    show([hostStatus()]);
+    show([]);
+    expect(screen.getByTestId("add-cloud-host-gone").textContent).toBe(
+      "build-host is no longer in your host list."
+    );
+    expect(screen.queryByTestId("add-cloud-host-progress")).toBeNull();
+  });
+
+  it("hands over to setup once, only after the leased machine runs with nothing under way", async () => {
+    client.chooseOffer.mockResolvedValue(undefined);
     const { show, onReady } = await ordered();
+    show([hostStatus()]);
+    fireEvent.click(screen.getByRole("radio", { name: "Europlots" }));
+    fireEvent.click(screen.getByRole("button", { name: "Lease offer" }));
+    await waitFor(() => expect(client.chooseOffer).toHaveBeenCalledTimes(1));
     // Whatever else the snapshot says, a choice still waiting holds setup back.
-    show(hostStatus({ machine: "running" }));
+    show([hostStatus({ resourceId: "dseq-1", machine: "running" })]);
     expect(onReady).not.toHaveBeenCalled();
 
-    show(
+    show([
       hostStatus({
         pendingCreate: null,
         resourceId: "dseq-1",
+        machine: "running",
         operation: { id: "op", kind: "creating", startedAt: 1, stage: "Waiting for Akash" },
-      })
-    );
+      }),
+    ]);
     expect(screen.getByTestId("add-cloud-host-progress").textContent).toContain(
       "Waiting for Akash"
     );
     expect(screen.queryByTestId("add-cloud-host-offers")).toBeNull();
     expect(onReady).not.toHaveBeenCalled();
 
-    show(hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "running" }));
-    show(hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "running" }));
+    show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "running" })]);
     expect(onReady).toHaveBeenCalledTimes(1);
-    expect(onReady).toHaveBeenCalledWith({ hostId: "build", name: "build" });
+    expect(onReady).toHaveBeenCalledWith({ hostId: "h-123", name: "build-host" });
+    show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "stopped" })]);
+    show([hostStatus({ pendingCreate: null, resourceId: "dseq-1", machine: "running" })]);
+    expect(onReady).toHaveBeenCalledTimes(1);
   });
 });

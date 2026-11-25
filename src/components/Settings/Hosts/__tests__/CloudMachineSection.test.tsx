@@ -1110,57 +1110,134 @@ describe("CloudMachineSection's Idle after row says what its idle time ending do
 });
 
 describe("CloudMachineSection with an order waiting on a choice (#18231)", () => {
+  const AKASH: CloudProviderInfo = {
+    ...BOAT_PROVIDER,
+    id: "akash",
+    name: "Akash",
+    createMode: "offers",
+  };
+  const europlots = {
+    id: "a",
+    hourlyDollars: 0.036,
+    bidder: { id: "akash1a", name: "Europlots", region: "eu-west" },
+    choosable: true as const,
+    reason: null,
+  };
+  const order = (id = "dseq-7") => ({
+    kind: "awaiting-offer" as const,
+    order: { id },
+    waitingSince: Date.now(),
+    offers: [europlots],
+    offersReadAt: Date.now(),
+  });
+  // Facts that would otherwise offer Start: a choice still waiting outranks them.
   const waiting = (overrides: Partial<CloudHostStatus> = {}) =>
     status({
+      providerId: "akash",
+      resourceId: "dseq-7",
+      machine: "stopped",
       operation: null,
-      // A restart mid-choice leaves no operation, and whatever went wrong before it.
-      lastError: { code: "refused", message: "The last order was closed.", at: 1 },
-      pendingCreate: {
-        kind: "awaiting-offer",
-        order: { id: "dseq-7" },
-        waitingSince: Date.now(),
-        offers: [
-          {
-            id: "a",
-            hourlyDollars: 0.036,
-            bidder: { id: "akash1a", name: "Europlots", region: "eu-west" },
-            choosable: true,
-            reason: null,
-          },
-        ],
-        offersReadAt: Date.now(),
-      },
+      pendingCreate: order(),
       ...overrides,
     });
+  const section = () => (
+    <CloudMachineSection hostId="build" hostName="build" connected={false} liveSummary={null} />
+  );
 
-  it("offers the choice the dialog left open, in place of the machine's controls", () => {
-    show(waiting(), [BOAT_PROVIDER]);
-    expect(screen.getByText("Choose an offer")).toBeTruthy();
+  it("offers the choice in place of the machine's state and controls", () => {
+    show(waiting(), [AKASH]);
     expect(screen.getByRole("radio", { name: "Europlots" })).toBeTruthy();
-    expect(screen.getByText("The last order was closed.")).toBeTruthy();
-    // Retry would place a second order; there is no machine to start or check yet.
-    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Lease offer" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check status" })).toBeNull();
     expect(screen.queryByTestId("cloud-machine-state")).toBeNull();
+    // A settings group's rows, not a card per offer inside the group's card.
+    expect(screen.getByText("Offers").className).toContain("sr-only");
+  });
+
+  it("shows what last went wrong beside the choice, never a Retry that would order again", () => {
+    show(
+      waiting({
+        resourceId: null,
+        machine: "not-created",
+        lastError: { code: "refused", message: "The last order was closed.", at: 1 },
+      }),
+      [AKASH]
+    );
+    expect(screen.getByText("The last order was closed.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("says why the provider can't be reached rather than only the last error", () => {
+    show(
+      waiting({
+        providerUnavailable: "Akash isn't available in this version of Daintree.",
+        lastError: { code: "refused", message: "The last order was closed.", at: 1 },
+      }),
+      [AKASH]
+    );
+    expect(screen.getByText("Akash isn't available in this version of Daintree.")).toBeTruthy();
   });
 
   it("leases or cancels the order from here", async () => {
-    show(waiting(), [BOAT_PROVIDER]);
+    show(waiting(), [AKASH]);
     fireEvent.click(screen.getByRole("radio", { name: "Europlots" }));
     fireEvent.click(screen.getByRole("button", { name: "Lease offer" }));
     await act(async () => {});
-    expect(cloudHostsClient.chooseOffer).toHaveBeenCalledWith("build", "dseq-7", "a");
+    expect(cloudHostsClient.chooseOffer).toHaveBeenCalledWith("build", "dseq-7", "a", 0.036);
 
     cleanup();
-    show(waiting(), [BOAT_PROVIDER]);
+    show(waiting(), [AKASH]);
     fireEvent.click(screen.getByRole("button", { name: "Cancel order" }));
     await act(async () => {});
     expect(cloudHostsClient.cancelOrder).toHaveBeenCalledWith("build", "dseq-7");
   });
 
-  it("goes back to the machine once the choice is made", () => {
-    show(waiting({ pendingCreate: null, lastError: null, operation: null }), [BOAT_PROVIDER]);
-    expect(screen.queryByText("Choose an offer")).toBeNull();
-    expect(screen.getByTestId("cloud-machine-state")).toBeTruthy();
+  it("starts a new order's choice afresh, even for the same bidder at the same price", async () => {
+    const view = show(waiting(), [AKASH]);
+    fireEvent.click(screen.getByRole("radio", { name: "Europlots" }));
+    cloud.snapshot = { ...cloud.snapshot, hosts: [waiting({ pendingCreate: order("dseq-8") })] };
+    view.rerender(section());
+    const radio = screen.getByRole("radio", { name: "Europlots" }) as HTMLInputElement;
+    expect(radio.checked).toBe(false);
+    fireEvent.click(radio);
+    fireEvent.click(screen.getByRole("button", { name: "Lease offer" }));
+    await act(async () => {});
+    expect(cloudHostsClient.chooseOffer).toHaveBeenLastCalledWith("build", "dseq-8", "a", 0.036);
+  });
+
+  it("goes back to the machine on the same page once the choice is made", () => {
+    const view = show(
+      waiting({
+        resourceId: null,
+        machine: "not-created",
+        operation: { id: "op", kind: "creating", startedAt: 0, stage: "Waiting for Akash" },
+      }),
+      [AKASH]
+    );
+    expect(screen.getByRole("radio", { name: "Europlots" })).toBeTruthy();
+    expect(screen.queryByTestId("cloud-machine-state")).toBeNull();
+
+    cloud.snapshot = {
+      ...cloud.snapshot,
+      hosts: [
+        waiting({
+          pendingCreate: null,
+          machine: "not-created",
+          operation: { id: "op", kind: "creating", startedAt: 0, stage: "Waiting for Akash" },
+        }),
+      ],
+    };
+    view.rerender(section());
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel order" })).toBeNull();
+    expect(screen.getByTestId("cloud-machine-state").textContent).toContain("Waiting for Akash");
+
+    cloud.snapshot = {
+      ...cloud.snapshot,
+      hosts: [waiting({ pendingCreate: null, machine: "running", observedAt: Date.now() })],
+    };
+    view.rerender(section());
+    expect(screen.getByTestId("cloud-machine-state").textContent).toContain("Running");
   });
 });

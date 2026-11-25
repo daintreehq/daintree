@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -9,6 +9,7 @@ import { cloudHostsClient } from "@/clients/cloudHostsClient";
 import { offerPriceLabel, sentenceCase } from "@/components/Hosts/cloud/cloudHostLabels";
 import { useDohertyGate, useSkeletonDisplayFloor } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
+import { cn } from "@/lib/utils";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import type { CloudCreateOffer, CloudCreateOfferChoice } from "@shared/types/cloudHosts";
 import type { HostId } from "@shared/types/remoteHosts";
@@ -18,6 +19,10 @@ import type { HostId } from "@shared/types/remoteHosts";
  * Akash's bidders answer in about 5 to 30 seconds; one arriving later still shows.
  */
 export const OFFER_WAIT_MS = 30_000;
+
+/** A settings group's bare radio rows: hairlines between, the ring inside the row. */
+const SETTINGS_ROW =
+  "px-4 py-3 transition-colors has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary";
 
 function errorText(err: unknown, fallback: string): string {
   return isClientAppError(err) && err.userMessage
@@ -53,25 +58,37 @@ export function CloudOfferChoice({
   hostId,
   choice,
   name,
+  surface,
   problem = null,
 }: {
   hostId: HostId;
   choice: CloudCreateOfferChoice;
   /** The radio group's name, distinct per surface. */
   name: string;
-  /** What last went wrong with the host, as recorded; null for nothing. */
+  /** A dialog's cards, or a settings group's rows. */
+  surface: "dialog" | "settings";
+  /** Why the host can't be served now, or what last went wrong with it; null for nothing. */
   problem?: string | null;
 }) {
   const orderId = choice.order.id;
   const offers = inOrder(choice.offers);
+  const settings = surface === "settings";
   // Kept with the price it was chosen at: a different quote is a different decision.
   const [selection, setSelection] = useState<{ id: string; hourlyDollars: number } | null>(null);
   const [selectionLost, setSelectionLost] = useState(false);
   const [busy, setBusy] = useState<"lease" | "cancel" | "retry" | null>(null);
-  // A lease or cancel that went through holds the buttons until the snapshot it changes arrives.
+  // A lease or cancel that went through holds the buttons until a later snapshot arrives:
+  // the one in view when it answered, not the one it was sent from, which a push meanwhile
+  // already replaced.
   const [heldFor, setHeldFor] = useState<CloudCreateOfferChoice | null>(null);
+  const latestChoice = useRef(choice);
+  useEffect(() => {
+    latestChoice.current = choice;
+  }, [choice]);
   const [error, setError] = useState<string | null>(null);
   const [retriedAt, setRetriedAt] = useState<number | null>(null);
+  // Once any offer has shown, an empty list is offers withdrawn, not offers yet to come.
+  const [hadOffers, setHadOffers] = useState(choice.offers.length > 0);
 
   const chosen =
     selection === null
@@ -92,6 +109,9 @@ export function CloudOfferChoice({
 
   // The wait for a first offer, from when this device began waiting or last asked again.
   const waiting = offers.length === 0;
+  useEffect(() => {
+    if (!waiting) setHadOffers(true);
+  }, [waiting]);
   const windowStart = Math.max(choice.waitingSince, retriedAt ?? 0);
   const slowAt = windowStart + UI_STILL_WORKING_MS;
   const doneAt = windowStart + OFFER_WAIT_MS;
@@ -115,10 +135,10 @@ export function CloudOfferChoice({
     setBusy("lease");
     setError(null);
     setSelectionLost(false);
-    cloudHostsClient.chooseOffer(hostId, orderId, chosen.id).then(
+    cloudHostsClient.chooseOffer(hostId, orderId, chosen.id, chosen.hourlyDollars).then(
       () => {
         setBusy(null);
-        setHeldFor(choice);
+        setHeldFor(latestChoice.current);
       },
       (err: unknown) => {
         setBusy(null);
@@ -136,7 +156,7 @@ export function CloudOfferChoice({
     cloudHostsClient.cancelOrder(hostId, orderId).then(
       () => {
         setBusy(null);
-        setHeldFor(choice);
+        setHeldFor(latestChoice.current);
       },
       (err: unknown) => {
         setBusy(null);
@@ -163,10 +183,14 @@ export function CloudOfferChoice({
     );
   };
 
-  let offersView: React.ReactNode = null;
+  let offersView: ReactNode = null;
   if (!waiting && !skeleton) {
     offersView = (
-      <RadioChoiceGroup legend="Offers">
+      <RadioChoiceGroup
+        legend="Offers"
+        legendHidden={settings}
+        className={settings ? "space-y-0 divide-y divide-border-subtle" : undefined}
+      >
         {offers.map((offer) => {
           const price = offerPriceLabel(offer.hourlyDollars);
           const facts = [
@@ -177,12 +201,19 @@ export function CloudOfferChoice({
               : uptimeLabel(offer.bidder.uptimePercent),
           ].filter((fact): fact is string => fact !== null && fact !== "");
           const audited = offer.bidder.audited === true;
+          const checked = chosen?.id === offer.id;
           return (
             <RadioChoiceRow
               key={offer.id}
+              bare={settings}
+              className={
+                settings
+                  ? cn(SETTINGS_ROW, checked ? "bg-overlay-selected" : "hover:bg-overlay-soft")
+                  : undefined
+              }
               name={name}
               value={offer.id}
-              checked={chosen?.id === offer.id}
+              checked={checked}
               disabled={!offer.choosable || locked}
               onChange={() => {
                 setSelection({ id: offer.id, hourlyDollars: offer.hourlyDollars });
@@ -225,9 +256,11 @@ export function CloudOfferChoice({
           </Button>
         }
       >
-        {choice.offersReadAt === null
-          ? "Daintree hasn't heard back about the order yet."
-          : "No offers have arrived yet."}
+        {hadOffers
+          ? "Its offers were withdrawn, and none have come in since."
+          : choice.offersReadAt === null
+            ? "Daintree hasn't heard back about the order yet."
+            : "No offers have arrived yet."}
       </Callout>
     );
   } else if (skeleton) {
@@ -249,18 +282,32 @@ export function CloudOfferChoice({
       </div>
     );
   }
+  const listShown = !waiting && !skeleton;
+  const canPickAgain = offers.some((offer) => offer.choosable);
 
-  return (
-    <div className="space-y-3" data-testid="cloud-offer-choice">
-      {offersView}
+  const notes = (selectionLost || problem || error) && (
+    <div className={settings ? "space-y-1 px-4 py-3" : "space-y-3"}>
       {selectionLost && (
         <p className="text-xs text-text-secondary" data-testid="cloud-offer-choice-lost">
-          The offer you picked changed or was withdrawn. Pick one again.
+          {canPickAgain
+            ? "The offer you picked changed or was withdrawn. Pick one again."
+            : "The offer you picked changed or was withdrawn."}
         </p>
       )}
       {problem && !error && <InlineError>{problem}</InlineError>}
       {error && <InlineError role="alert">{error}</InlineError>}
-      <div className="flex flex-wrap gap-2">
+    </div>
+  );
+
+  return (
+    <div
+      className={settings ? "divide-y divide-border-subtle" : "space-y-3"}
+      data-testid="cloud-offer-choice"
+    >
+      {offersView &&
+        (settings && !listShown ? <div className="px-4 py-3">{offersView}</div> : offersView)}
+      {notes}
+      <div className={cn("flex flex-wrap gap-2", settings && "px-4 py-3")}>
         {!waiting && (
           <Button
             variant="contrast"

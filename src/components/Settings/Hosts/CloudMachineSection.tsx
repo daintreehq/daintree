@@ -94,21 +94,19 @@ export function CloudMachineSection({
   // Until the person chooses there is no machine to show, start or stop: only the order.
   if (status.pendingCreate) {
     return (
-      <SettingsSection title="Cloud machine" id="host-cloud-machine">
-        <SettingsGroup>
-          <SettingsRow
-            label="Choose an offer"
-            layout="stacked"
-            description="Bidders answer the order with offers. Lease one to create the machine at its price."
-            control={
-              <CloudOfferChoice
-                key={status.pendingCreate.order.id}
-                hostId={hostId}
-                choice={status.pendingCreate}
-                name="cloud-machine-offer"
-                problem={status.lastError?.message ?? null}
-              />
-            }
+      <SettingsSection
+        title="Cloud machine"
+        id="host-cloud-machine"
+        description="Choose an offer: bidders answer the order with offers, and leasing one creates the machine at its price"
+      >
+        <SettingsGroup className="overflow-hidden">
+          <CloudOfferChoice
+            key={status.pendingCreate.order.id}
+            hostId={hostId}
+            choice={status.pendingCreate}
+            name="cloud-machine-offer"
+            surface="settings"
+            problem={status.providerUnavailable ?? status.lastError?.message ?? null}
           />
         </SettingsGroup>
       </SettingsSection>

@@ -258,6 +258,16 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     onReady(added);
   }, [ready, added, onReady]);
 
+  // Not yet in the snapshot is the moment after the add answered; gone after being seen is
+  // a host removed meanwhile, which no progress here will ever follow.
+  const [seenHostId, setSeenHostId] = useState<HostId | null>(null);
+  const addedHostId = added?.hostId ?? null;
+  const addedHostShown = status !== null;
+  useEffect(() => {
+    if (addedHostId !== null && addedHostShown) setSeenHostId(addedHostId);
+  }, [addedHostId, addedHostShown]);
+  const hostGone = addedHostId !== null && seenHostId === addedHostId && status === null;
+
   const chosenResource = resources?.find((resource) => resource.resourceId === resourceId) ?? null;
   const trimmedName = name.trim();
 
@@ -338,7 +348,36 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   let primary: DialogAction | undefined;
   let secondary: DialogAction = { label: "Cancel", onClick: onClose, disabled: busy };
 
-  if (!provider) {
+  if (added && status?.pendingCreate) {
+    // Ahead of every other state, the form's prerequisites too: nothing goes on until the
+    // person chooses, and closing this leaves the order open on the host's details.
+    body = (
+      <div className="space-y-4" data-testid="add-cloud-host-offers">
+        <p className="text-sm text-text-primary">
+          Bidders answer the order with offers. Lease one to create the machine at its price.
+        </p>
+        <CloudOfferChoice
+          key={status.pendingCreate.order.id}
+          hostId={added.hostId}
+          choice={status.pendingCreate}
+          name="add-cloud-host-offer"
+          surface="dialog"
+          problem={status.providerUnavailable ?? status.lastError?.message ?? null}
+        />
+        <p className="text-xs text-text-secondary">
+          {`You can close this and choose an offer later in Settings → Hosts → ${added.name}.`}
+        </p>
+      </div>
+    );
+    secondary = { label: "Close", onClick: onClose };
+  } else if (added && hostGone) {
+    body = (
+      <p className="text-sm text-text-primary" data-testid="add-cloud-host-gone">
+        {`${added.name} is no longer in your host list.`}
+      </p>
+    );
+    secondary = { label: "Close", onClick: onClose };
+  } else if (!provider) {
     body = (
       <Callout severity="info">
         {snapshot.providers[0]?.unsupportedReason ??
@@ -361,27 +400,6 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
       </div>
     );
     primary = undefined;
-  } else if (added && status?.pendingCreate) {
-    // Ahead of every other state: nothing goes on until the person chooses, and closing
-    // this leaves the order open on the host's details.
-    body = (
-      <div className="space-y-4" data-testid="add-cloud-host-offers">
-        <p className="text-sm text-text-primary">
-          Bidders answer the order with offers. Lease one to create the machine at its price.
-        </p>
-        <CloudOfferChoice
-          key={status.pendingCreate.order.id}
-          hostId={added.hostId}
-          choice={status.pendingCreate}
-          name="add-cloud-host-offer"
-          problem={status.lastError?.message ?? null}
-        />
-        <p className="text-xs text-text-secondary">
-          {`You can close this and choose an offer later in Settings → Hosts → ${added.name}.`}
-        </p>
-      </div>
-    );
-    secondary = { label: "Close", onClick: onClose };
   } else if (added) {
     const machine = status?.machine ?? "not-created";
     const operation = status?.operation ?? null;
