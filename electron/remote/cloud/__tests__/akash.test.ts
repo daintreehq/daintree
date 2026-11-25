@@ -1407,8 +1407,8 @@ describe("AkashProvider orders and machines", () => {
     expect(listed).toEqual([
       expect.objectContaining({ search: `daintree-create=${CREATE_KEY}`, skip: "0" }),
       expect.objectContaining({ skip: "0", limit: "100", projectId: TEAM_AGENTS }),
-      expect.objectContaining({ skip: "59" }),
-      expect.objectContaining({ skip: "118" }),
+      expect.objectContaining({ skip: "59", limit: "100", projectId: TEAM_AGENTS }),
+      expect.objectContaining({ skip: "118", limit: "100", projectId: TEAM_AGENTS }),
     ]);
     expect(listed.slice(1).every((query) => !("search" in query))).toBe(true);
   });
@@ -1555,6 +1555,7 @@ describe("AkashProvider orders and machines", () => {
     fake.height += 900;
     const copy = seed(fake, `Build host ${MARK}`, { leases: [liveLease(fake)] });
     const found = await provider.list(account, { label: `daintree-binding=${BINDING}` });
+    expect(found).toHaveLength(2);
     const original = found.find((resource) => resource.resourceId === order.id);
     const later = found.find((resource) => resource.resourceId.endsWith(`/${copy.dseq}`));
     expect(original).toMatchObject({ machine: "deleted" });
@@ -1923,24 +1924,219 @@ describe("AkashProvider orders and machines", () => {
     expect(await provider.inspect(team, teams.id)).toMatchObject({ machine: "running" });
   });
 
-  it("keeps one wallet's projects apart", async () => {
-    const { fake, provider, account, order, dseq, deployment } = await leasedOrder();
+  it("keeps one wallet's projects apart, and never takes a machine elsewhere for one gone", async () => {
+    const { fake, provider, account, order, dseq, deployment, credentials } = await leasedOrder();
     expect(await provider.inspect(account, order.id)).toMatchObject({ machine: "running" });
     const sibling = { ...account, scopeId: TEAM_DEFAULT };
     const before = writes(fake);
-    expect(code(provider, await rejection(provider.inspect(sibling, order.id)))).toBe("not-found");
-    expect(code(provider, await rejection(provider.delete(sibling, order.id)))).toBe("not-found");
-    expect(code(provider, await rejection(provider.rename(sibling, order.id, "x")))).toBe(
-      "not-found"
-    );
     expect(await provider.list(sibling)).toEqual([]);
     expect(
       await provider.offerCreate.findOrders(sibling, { labels: LABELS, idempotencyKey: CREATE_KEY })
     ).toEqual([]);
+    // Asked for by id, it is still the wallet's, in another project: the account's problem.
+    for (const call of [
+      provider.inspect(sibling, order.id),
+      provider.delete(sibling, order.id),
+      provider.rename(sibling, order.id, "x"),
+      provider.offerCreate.closeOrder(sibling, order.id),
+    ]) {
+      expect(code(provider, await rejection(call))).toBe("credential-invalid");
+    }
     expect(writes(fake)).toBe(before);
-    expect(sent(fake, "GET", `/deployments/${dseq}`).at(-1)).toMatchObject({
-      projectId: TEAM_DEFAULT,
-    });
+    // Each was asked in the account's project first, and only then the wallet's others.
+    const reads = sent(fake, "GET", `/deployments/${dseq}`).slice(-8);
+    expect(reads.filter((request) => request.projectId === TEAM_DEFAULT)).toHaveLength(4);
+    expect(reads.filter((request) => request.projectId === null)).toHaveLength(4);
     expect(deployment.state).toBe("active");
+
+    // One moved to another project on the Akash Console is neither deleted nor closed.
+    deployment.projectId = TEAM_DEFAULT;
+    expect(code(provider, await rejection(provider.delete(account, order.id)))).toBe(
+      "credential-invalid"
+    );
+    expect(writes(fake)).toBe(before);
+    // A key that can't see beyond its project can't tell, and says not found.
+    const bound = credentials(BOUND_KEY, TEAM_AGENTS);
+    expect(code(provider, await rejection(provider.inspect(bound, order.id)))).toBe("not-found");
+  });
+
+  it("finds a deployment whose archive can't be searched by reading the archive whole", async () => {
+    const { fake, provider, account, order } = await leasedOrder();
+    await provider.delete(account, order.id);
+    fake.archiveSearchDown = true;
+    expect(await provider.list(account, { label: `daintree-binding=${BINDING}` })).toEqual([
+      expect.objectContaining({ resourceId: order.id, machine: "deleted" }),
+    ]);
+    const closed = sent(fake, "GET", "/deployments")
+      .map((request) => new URLSearchParams(request.search))
+      .filter((query) => query.get("state") === "closed");
+    expect(closed.map((query) => query.has("search"))).toEqual([true, false]);
+  });
+
+  it("reads pages of a single row", async () => {
+    const { fake, provider, credentials } = setup();
+    const account = credentials(TEAM_KEY, TEAM_AGENTS);
+    for (let index = 0; index < 4; index++) seed(fake, `Someone's ${index}`);
+    const order = await provider.offerCreate.placeOrder(account, orderRequest());
+    fake.searchCap = 0;
+    fake.pageCap = 1;
+    expect(
+      await provider.offerCreate.findOrders(account, { labels: LABELS, idempotencyKey: CREATE_KEY })
+    ).toEqual([order]);
+  });
+
+  it("verifies an order with no bids yet is the account's own", async () => {
+    const { fake, provider, credentials } = setup();
+    const team = credentials(TEAM_KEY, TEAM_AGENTS);
+    const personal = credentials(FAKE_AKASH_KEY, PERSONAL_DEFAULT);
+    fake.nextDseq = "4242";
+    const teams = await provider.offerCreate.placeOrder(team, orderRequest());
+    fake.nextDseq = "4242";
+    await provider.offerCreate.placeOrder(personal, orderRequest());
+    expect(
+      code(provider, await rejection(provider.offerCreate.listOffers(personal, teams.id)))
+    ).toBe("credential-invalid");
+    expect(await provider.offerCreate.listOffers(team, teams.id)).toEqual([]);
+  });
+
+  it("refuses a create's lookup that can't date a block, rather than taking its time as unknown", async () => {
+    const { fake, account, fresh } = await leasedOrder();
+    const recovering = fresh();
+    fake.fail("GET", /^\/blocks\//, () =>
+      reply(404, { statusCode: 404, message: "Block not found" })
+    );
+    expect(
+      await rejection(recovering.list(account, { label: `daintree-binding=${BINDING}` }))
+    ).toMatchObject({ kind: "bad-response" });
+    fake.fail("GET", /^\/blocks\//, () =>
+      reply(404, { statusCode: 404, message: "Block not found" })
+    );
+    expect(await recovering.list(account)).toEqual([expect.objectContaining({ createdAt: null })]);
+  });
+
+  it("never reads a lease that may stand as refused", async () => {
+    // An answer the Console didn't explain, with nothing leased yet: it may still be.
+    const unexplained = await placed();
+    unexplained.fake.bid(unexplained.dseq, "akash1p", "1000");
+    const [first] = await unexplained.provider.offerCreate.listOffers(
+      unexplained.account,
+      unexplained.order.id
+    );
+    unexplained.fake.fail("POST", /^\/leases$/, () => reply(422, { statusCode: 422 }));
+    expect(
+      code(
+        unexplained.provider,
+        await rejection(
+          unexplained.provider.offerCreate.leaseOffer(
+            unexplained.account,
+            unexplained.order.id,
+            first!.id
+          )
+        )
+      )
+    ).toBe("outcome-unknown");
+    // A plain refusal, with nothing leased, stands.
+    unexplained.fake.fail("POST", /^\/leases$/, () =>
+      reply(400, { statusCode: 400, message: "bad" })
+    );
+    expect(
+      code(
+        unexplained.provider,
+        await rejection(
+          unexplained.provider.offerCreate.leaseOffer(
+            unexplained.account,
+            unexplained.order.id,
+            first!.id
+          )
+        )
+      )
+    ).toBe("refused");
+
+    // A manifest refused as invalid means the lease exists, even when the order can't be read.
+    const invalid = await placed();
+    invalid.fake.bid(invalid.dseq, "akash1strict", "1000");
+    const [strict] = await invalid.provider.offerCreate.listOffers(
+      invalid.account,
+      invalid.order.id
+    );
+    invalid.fake.manifestInvalid = true;
+    invalid.fake.onAnswered = (request) => {
+      if (request.method === "POST" && request.path === "/leases") {
+        invalid.fake.onAnswered = null;
+        invalid.fake.fail(
+          "GET",
+          new RegExp(`^/deployments/${invalid.dseq}$`),
+          () => new TypeError("fetch failed"),
+          3
+        );
+      }
+    };
+    expect(
+      code(
+        invalid.provider,
+        await rejection(
+          invalid.provider.offerCreate.leaseOffer(invalid.account, invalid.order.id, strict!.id)
+        )
+      )
+    ).toBe("outcome-unknown");
+  });
+
+  it("sends the manifest again when the answer saying it failed was lost", async () => {
+    const { fake, provider, account, order, dseq } = await placed();
+    fake.bid(dseq, "akash1slow", "1000");
+    const [offer] = await provider.offerCreate.listOffers(account, order.id);
+    fake.manifestFailures = 1;
+    fake.lose("POST", /^\/leases$/);
+    expect(await provider.offerCreate.leaseOffer(account, order.id, offer!.id)).toMatchObject({
+      machine: "running",
+      error: null,
+    });
+    expect(sent(fake, "POST", "/leases")).toHaveLength(2);
+    expect(fake.manifestSends).toBe(2);
+    await provider.sshAccess!(account, order.id);
+  });
+
+  it("never sends the manifest of a bid swapped in for the one chosen", async () => {
+    const { fake, provider, account, order, dseq, deployment } = await placed();
+    const bid = fake.bid(dseq, "akash1swap", "1000");
+    const [offer] = await provider.offerCreate.listOffers(account, order.id);
+    fake.onAnswered = (request) => {
+      if (request.path === "/bids" && bid.state === "open") {
+        fake.onAnswered = null;
+        bid.state = "closed";
+        fake.bid(dseq, "akash1swap", "3000", "uact", null, 2);
+      }
+    };
+    fake.manifestFailures = 2;
+    const swapped = await provider.offerCreate.leaseOffer(account, order.id, offer!.id);
+    // Both said: the manifest that didn't arrive, and the bid that changed.
+    expect(swapped.error).toMatch(/hasn't taken/);
+    expect(swapped.error).toMatch(/replaced its offer/);
+    expect(deployment.leases[0]).toMatchObject({ bseq: 2, forwarded: null });
+    const posts = sent(fake, "POST", "/leases").length;
+    // Choosing the original again sends nothing for the swapped one.
+    const again = await provider.offerCreate.leaseOffer(account, order.id, offer!.id);
+    expect(again.error).toMatch(/replaced its offer/);
+    expect(sent(fake, "POST", "/leases")).toHaveLength(posts);
+  });
+
+  it("never answers a close it couldn't confirm as closed", async () => {
+    const { fake, provider, account, order, dseq } = await placed();
+    fake.onAnswered = (request) => {
+      if (request.method === "DELETE") {
+        fake.onAnswered = null;
+        fake.fail(
+          "GET",
+          new RegExp(`^/deployments/${dseq}$`),
+          () => new TypeError("fetch failed"),
+          3
+        );
+      }
+    };
+    expect(
+      code(provider, await rejection(provider.offerCreate.closeOrder(account, order.id)))
+    ).toBe("outcome-unknown");
+    // Asked again, it reads what the close left.
+    expect(await provider.offerCreate.closeOrder(account, order.id)).toEqual({ kind: "closed" });
   });
 });

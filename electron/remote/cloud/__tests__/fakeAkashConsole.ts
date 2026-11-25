@@ -110,7 +110,7 @@ function coded(status: number, code: string, message: string): Response {
   });
 }
 
-export type FakeAkashLeaseState = "active" | "insufficient_funds" | "closed";
+export type FakeAkashLeaseState = "active" | "insufficient_funds" | "reclaiming" | "closed";
 
 export interface FakeAkashLease {
   provider: string;

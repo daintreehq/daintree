@@ -214,7 +214,12 @@ export function isOpenSshPublicKey(key: string): boolean {
   const blob = Buffer.from(match[2]!, "base64");
   if (blob.toString("base64") !== match[2] || blob.length < 4) return false;
   const length = blob.readUInt32BE(0);
-  return length === match[1]!.length && blob.toString("latin1", 4, 4 + length) === match[1];
+  return (
+    length === match[1]!.length &&
+    blob.toString("latin1", 4, 4 + length) === match[1] &&
+    // The key itself follows its type.
+    blob.length > 4 + length
+  );
 }
 
 export interface AkashDefinitionInput {
