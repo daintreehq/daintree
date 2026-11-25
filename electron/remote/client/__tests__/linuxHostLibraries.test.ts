@@ -32,9 +32,12 @@ const fail = (code: number, stderr = ""): CommandResult => ({
 });
 
 /** What the check threw, typed for its fields; fails when it didn't throw. */
-async function refusal(
-  pending: Promise<unknown>
-): Promise<{ userMessage?: string; code?: string; libraries?: readonly string[] }> {
+async function refusal(pending: Promise<unknown>): Promise<{
+  message?: string;
+  userMessage?: string;
+  code?: string;
+  libraries?: readonly string[];
+}> {
   try {
     await pending;
   } catch (error) {
@@ -169,7 +172,7 @@ describe("checkLinuxStart", () => {
     // The renderer finds the command to offer by this exact text, in either field: the
     // installer's recovery notes build on the message.
     expect(error.userMessage!.endsWith(` ${HOST_PACKAGES_INSTRUCTION}`)).toBe(true);
-    expect(error.message.endsWith(` ${HOST_PACKAGES_INSTRUCTION}`)).toBe(true);
+    expect(error.message!.endsWith(` ${HOST_PACKAGES_INSTRUCTION}`)).toBe(true);
     // The names come before the command, so a shortened copy still names them.
     expect(error.userMessage!.indexOf("libnss3.so")).toBeLessThan(
       error.userMessage!.indexOf("apt-get")
