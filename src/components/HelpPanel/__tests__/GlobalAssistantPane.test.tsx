@@ -163,8 +163,8 @@ function makeHelp(initial: GlobalAssistantView, attachmentId: string) {
       throw new Error("no new session in this test");
     }),
     setGlobalAssistantCoordinator: vi.fn(async (): Promise<GlobalAssistantView[]> => []),
-    setGlobalAssistantKeepRunning: vi.fn(
-      async (keep: boolean): Promise<GlobalAssistantView> => running({ keepRunning: keep })
+    setGlobalAssistantKeepRunning: vi.fn(async (keep: boolean): Promise<GlobalAssistantView> =>
+      running({ keepRunning: keep })
     ),
     onGlobalAssistantChanged: vi.fn((callback: (state: GlobalAssistantView) => void) => {
       listeners.add(callback);
@@ -1469,7 +1469,9 @@ describe("GlobalAssistantPane (#14454)", () => {
 
       openMenu();
       await screen.findByText("Open docs");
-      expect(screen.queryByRole("menuitemcheckbox", { name: "Keep running across restarts" })).toBeNull();
+      expect(
+        screen.queryByRole("menuitemcheckbox", { name: "Keep running across restarts" })
+      ).toBeNull();
     });
 
     it("marks the session that coordinates and hands coordination over from either menu (#18143)", async () => {

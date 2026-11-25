@@ -303,7 +303,9 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
     );
     expect(wanted).toEqual(expect.arrayContaining([true, false]));
     expect(
-      Object.fromEntries(deps.start.mock.calls.map(([request]) => [request.slot, request.startedBy]))
+      Object.fromEntries(
+        deps.start.mock.calls.map(([request]) => [request.slot, request.startedBy])
+      )
     ).toEqual({ 0: { kind: "standing-restart" }, 2: { kind: "update-restart" } });
   });
 

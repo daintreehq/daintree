@@ -564,7 +564,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         // theirs (#18177): any whose process is alive now. Landed by the
         // store flush in `revokeAll`.
         const alive = terminalsSnapshotted
-          ? new Set([...terminalInfoById.values()].filter((t) => t.isExited !== true).map((t) => t.id))
+          ? new Set(
+              [...terminalInfoById.values()].filter((t) => t.isExited !== true).map((t) => t.id)
+            )
           : null;
         helpSessions.holdStandingRunsForQuit(alive).catch((err: unknown) => {
           console.warn("[MAIN] Recording the kept assistant lanes at quit failed:", err);

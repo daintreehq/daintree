@@ -4393,11 +4393,13 @@ describe("HelpSessionService", () => {
             if (keptLanes.has(key)) marks.set(key, live);
           };
           hibernationStore.isKeptRunning.mockImplementation((key: string) => keptLanes.has(key));
-          hibernationStore.set.mockImplementation((key: string, entry: Entry, running?: boolean) => {
-            backing.set(key, entry);
-            if (running !== undefined) mark(key, running);
-            return Promise.resolve();
-          });
+          hibernationStore.set.mockImplementation(
+            (key: string, entry: Entry, running?: boolean) => {
+              backing.set(key, entry);
+              if (running !== undefined) mark(key, running);
+              return Promise.resolve();
+            }
+          );
           hibernationStore.setRunning.mockImplementation((running: Record<string, boolean>) => {
             for (const [key, live] of Object.entries(running)) mark(key, live);
             return Promise.resolve();
@@ -4487,7 +4489,9 @@ describe("HelpSessionService", () => {
             await ended(() => pty.emit("spawn-result", "term-0", { success: false, id: "term-0" }))
           ).toBe(false);
           expect(
-            await ended(() => pty.emit("incarnation-lost", { terminalId: "term-0", launchGeneration: 1 }))
+            await ended(() =>
+              pty.emit("incarnation-lost", { terminalId: "term-0", launchGeneration: 1 })
+            )
           ).toBe(false);
           expect(
             await ended(() =>

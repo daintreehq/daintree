@@ -115,9 +115,7 @@ async function resumeLane(
         startedBy: { kind: lane.standing ? "standing-restart" : "update-restart" },
         resume: { agentSessionId: claim.agentSessionId, cwd: claim.cwd, claimId: claim.claimId },
         stillWanted: () =>
-          !deps.isShuttingDown() &&
-          stillKept() &&
-          deps.holdsClaim(projectId, slot, claim.claimId),
+          !deps.isShuttingDown() && stillKept() && deps.holdsClaim(projectId, slot, claim.claimId),
       })
       .catch((): AssistantLaunchResult => ({ status: "refused", reason: "launch-failed" }));
     return result.status === "started"
@@ -250,6 +248,8 @@ export async function resumeLanesAfterUpdateLive(batch: LaunchResumeBatch): Prom
         ? []
         : [{ slot: outcome.slot, status: outcome.status, reason: outcome.reason }]
     ),
-    ...(safeMode && batch.standing.size > 0 ? { keptLanesHeldInSafeMode: batch.standing.size } : {}),
+    ...(safeMode && batch.standing.size > 0
+      ? { keptLanesHeldInSafeMode: batch.standing.size }
+      : {}),
   });
 }

@@ -130,7 +130,9 @@ export function liveGlobalAssistantDeps(
             ...(spec.resumeAgentSessionId
               ? { resumeAgentSessionId: spec.resumeAgentSessionId }
               : {}),
-            ...(spec.resumeAgentSessionId && spec.exactResume ? { exactResume: true as const } : {}),
+            ...(spec.resumeAgentSessionId && spec.exactResume
+              ? { exactResume: true as const }
+              : {}),
           }),
         spec.terminalId
       );

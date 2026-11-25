@@ -1912,14 +1912,13 @@ export class HelpSessionService {
           this.confirmQuitRun(slotKey)
             ? this.pendingHibernationStore.set(slotKey, captured, true)
             : this.pendingHibernationStore.set(slotKey, captured)
-        )
-          .catch((err) => {
-            console.warn(
-              "[HelpSessionService] Failed to persist pending hibernation:",
-              record.projectId,
-              err
-            );
-          });
+        ).catch((err) => {
+          console.warn(
+            "[HelpSessionService] Failed to persist pending hibernation:",
+            record.projectId,
+            err
+          );
+        });
       }
       this.pendingCapturesBySlotKey.delete(slotKey);
     }
@@ -2283,7 +2282,9 @@ export class HelpSessionService {
     // The capture names the conversation a kept lane's quit run is on (#18177).
     const running = this.confirmQuitRun(lane.slotKey);
     if (entry.agentSessionId === agentSessionId) {
-      return running ? this.pendingHibernationStore.setRunning({ [lane.slotKey]: true }) : Promise.resolve();
+      return running
+        ? this.pendingHibernationStore.setRunning({ [lane.slotKey]: true })
+        : Promise.resolve();
     }
     const { conversationOwnershipId, ...rest } = entry;
     const captured = {
