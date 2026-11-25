@@ -3487,6 +3487,10 @@ describe("CloudHostLifecycle worktree marks", () => {
     expect(hosts).toEqual([]);
     expect(provider.catalog).not.toHaveBeenCalled();
     expect(provider.create).not.toHaveBeenCalled();
+
+    // Only a worktree's machine is refused here: Settings' create carries no mark.
+    await lifecycle.create(request(account.id));
+    expect(store.bindings()).toHaveLength(1);
   });
 
   it("refuses a mark missing the worktree's identity, and takes 'local' as this device", async () => {

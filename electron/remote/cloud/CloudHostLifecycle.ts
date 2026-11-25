@@ -136,8 +136,8 @@ function noStopOrStart(provider: CloudProvider): AppError {
 }
 
 /** A worktree's machine on a provider whose create waits for the person to choose an offer. */
-function offersOnlyFromAddCloudHost(provider: CloudProvider): AppError {
-  const message = `${nameOf(provider)} machines are leased from an offer you choose, which New Worktree can't show. Create one from Add cloud host. No machine was asked for.`;
+function offersNotForWorktrees(provider: CloudProvider): AppError {
+  const message = `${nameOf(provider)} machines are leased from an offer you choose, which New Worktree can't show.`;
   return new AppError({ code: "UNSUPPORTED", message, userMessage: message });
 }
 
@@ -986,7 +986,7 @@ export class CloudHostLifecycle {
     const provider = this.deps.accounts.requireSupported(account.providerId);
     // A worktree's machine is asked for without Add cloud host, so nobody could choose its offer.
     if (mark !== null && provider.info(process.platform).createMode === "offers") {
-      throw offersOnlyFromAddCloudHost(provider);
+      throw offersNotForWorktrees(provider);
     }
     const name = typeof request.name === "string" ? request.name.trim() : "";
     if (!name || name.length > MAX_NAME_LENGTH) throw invalid("Give the host a name.");
