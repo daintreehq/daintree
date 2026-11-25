@@ -48,4 +48,6 @@ export const GITHUB_FINE_GRAINED_PERMISSIONS = {
   // Names the workflow behind each check run; the rest of the CI rollup reads without it.
   actions: "read",
   deployments: "read",
+  // Pulse's security-alert count reads `vulnerabilityAlerts`.
+  vulnerability_alerts: "read",
 } as const satisfies Record<string, GitHubFineGrainedAccess>;

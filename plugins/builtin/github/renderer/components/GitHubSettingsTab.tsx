@@ -15,7 +15,11 @@ import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitHubTokenValidation } from "../../shared/types.js";
 import { GITHUB_REQUIRED_SCOPES } from "../../shared/credentialScopes.js";
-import { GITHUB_COM_HOST, newFineGrainedTokenUrl, newTokenUrl } from "../../shared/githubHost.js";
+import {
+  GITHUB_COM_HOST,
+  newFineGrainedTokenUrl,
+  newClassicTokenUrl,
+} from "../../shared/githubHost.js";
 import {
   GitHubCliImportDetails,
   describeImportFailure,
@@ -430,7 +434,7 @@ export function GitHubSettingsTab() {
                 </Button>
                 <Button
                   onClick={() =>
-                    openTokenPage(newTokenUrl(GITHUB_COM_HOST, GITHUB_REQUIRED_SCOPES))
+                    openTokenPage(newClassicTokenUrl(GITHUB_COM_HOST, GITHUB_REQUIRED_SCOPES))
                   }
                   variant="outline"
                   size="sm"

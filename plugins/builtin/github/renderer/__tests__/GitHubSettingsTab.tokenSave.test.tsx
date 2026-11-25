@@ -4,6 +4,7 @@ import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
+import { newFineGrainedTokenUrl } from "../../shared/githubHost.js";
 
 vi.mock("../stores/githubConfigStore", () => ({
   useGitHubConfigStore: vi.fn(),
@@ -430,6 +431,7 @@ describe("GitHubSettingsTab accessibility", () => {
     const btn = screen.getByRole("button", { name: "Create classic token" });
     fireEvent.click(btn);
 
+    expect(actionService.dispatch).toHaveBeenCalledTimes(1);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "system.openExternal",
       {
@@ -448,18 +450,10 @@ describe("GitHubSettingsTab accessibility", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create fine-grained token" }));
 
     expect(actionService.dispatch).toHaveBeenCalledTimes(1);
-    const [actionId, args, options] = mockedDispatch.mock.calls[0]!;
-    expect(actionId).toBe("system.openExternal");
-    expect(options).toEqual({ source: "user" });
-    const url = new URL((args as { url: string }).url);
-    expect(`${url.origin}${url.pathname}`).toBe(
-      "https://github.com/settings/personal-access-tokens/new"
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: newFineGrainedTokenUrl() },
+      { source: "user" }
     );
-    expect(url.searchParams.get("name")).toBe("Daintree");
-    expect(url.searchParams.get("contents")).toBe("write");
-    expect(url.searchParams.get("pull_requests")).toBe("write");
-    expect(url.searchParams.get("issues")).toBe("write");
-    // Fine-grained tokens are owner-scoped; the classic scope list isn't a URL parameter here.
-    expect(url.searchParams.has("scopes")).toBe(false);
   });
 });

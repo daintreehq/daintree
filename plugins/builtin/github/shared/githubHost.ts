@@ -19,8 +19,8 @@ export function normalizeEnterpriseHost(raw: unknown): string | null {
   return host;
 }
 
-/** Where a personal access token for `host` is created. */
-export function newTokenUrl(host: string, scopes: readonly string[]): string {
+/** Where a classic personal access token for `host` is created. */
+export function newClassicTokenUrl(host: string, scopes: readonly string[]): string {
   return `https://${host}/settings/tokens/new?scopes=${scopes.join(",")}&description=Daintree`;
 }
 

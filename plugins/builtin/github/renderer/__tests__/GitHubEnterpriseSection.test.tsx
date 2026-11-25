@@ -22,6 +22,7 @@ beforeAll(() => whenPluginUiReady(), 30_000);
 
 beforeEach(() => {
   invokeMock.mockReset();
+  vi.mocked(actionService.dispatch).mockClear();
   window.electron = {
     plugin: { invoke: invokeMock },
   } as unknown as typeof window.electron;
@@ -63,8 +64,14 @@ describe("GitHubEnterpriseSection", () => {
     serveStatus(["ghe.one.example"]);
     render(<GitHubEnterpriseSection isGhAvailable={false} onTokenChanged={vi.fn()} />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Create token on ghe.one.example" }));
-    expect(screen.queryByRole("button", { name: /fine-grained/i })).toBeNull();
+    const classic = await screen.findByRole("button", { name: "Create token on ghe.one.example" });
+    const rowActions = Array.from(classic.parentElement!.querySelectorAll("button"), (button) =>
+      button.textContent?.trim()
+    );
+    expect(rowActions).toEqual(["Create token on ghe.one.example"]);
+
+    fireEvent.click(classic);
+    expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(actionService.dispatch)).toHaveBeenCalledWith(
       "system.openExternal",
       {

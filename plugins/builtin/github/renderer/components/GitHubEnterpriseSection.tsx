@@ -14,7 +14,7 @@ import { logError } from "@/utils/logger";
 import { isEnterToSubmit } from "@/lib/enterToSubmit";
 import type { ForgeCredentialImportFailureReason } from "@shared/types";
 import { GITHUB_REQUIRED_SCOPES } from "../../shared/credentialScopes.js";
-import { newTokenUrl } from "../../shared/githubHost.js";
+import { newClassicTokenUrl } from "../../shared/githubHost.js";
 import {
   ENTERPRISE_CHANNELS,
   GITHUB_PLUGIN_ID,
@@ -445,7 +445,7 @@ export function GitHubEnterpriseSection({
                     onClick={() =>
                       void actionService.dispatch(
                         "system.openExternal",
-                        { url: newTokenUrl(host, GITHUB_REQUIRED_SCOPES) },
+                        { url: newClassicTokenUrl(host, GITHUB_REQUIRED_SCOPES) },
                         { source: "user" }
                       )
                     }

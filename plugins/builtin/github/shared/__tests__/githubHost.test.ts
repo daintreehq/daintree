@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { GITHUB_REQUIRED_SCOPES } from "../credentialScopes.js";
-import { newFineGrainedTokenUrl, newTokenUrl } from "../githubHost.js";
+import { newFineGrainedTokenUrl, newClassicTokenUrl } from "../githubHost.js";
 
-describe("newTokenUrl", () => {
+describe("newClassicTokenUrl", () => {
   it("pre-fills the classic scopes for the host", () => {
-    expect(newTokenUrl("github.com", GITHUB_REQUIRED_SCOPES)).toBe(
+    expect(newClassicTokenUrl("github.com", GITHUB_REQUIRED_SCOPES)).toBe(
       "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Daintree"
     );
-    expect(newTokenUrl("github.example.com", GITHUB_REQUIRED_SCOPES)).toBe(
-      "https://github.example.com/settings/tokens/new?scopes=repo,read:org&description=Daintree"
+    expect(newClassicTokenUrl("github.example.com", ["repo"])).toBe(
+      "https://github.example.com/settings/tokens/new?scopes=repo&description=Daintree"
     );
   });
 });
@@ -24,7 +24,8 @@ describe("newFineGrainedTokenUrl", () => {
         "&issues=write" +
         "&statuses=read" +
         "&actions=read" +
-        "&deployments=read"
+        "&deployments=read" +
+        "&vulnerability_alerts=read"
     );
   });
 
