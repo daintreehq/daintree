@@ -11,10 +11,7 @@ import {
   type OpenRun,
 } from "../HostCallRuntime.js";
 import type { HostWatchListener } from "../HostWatches.js";
-import {
-  HOST_CONTROL_NOT_ELIGIBLE_MESSAGE,
-  HOST_CONTROL_UNAVAILABLE_MESSAGE,
-} from "../../../services/mcp-server/hostControlTools.js";
+import { HOST_CONTROL_UNAVAILABLE_MESSAGE } from "../../../services/mcp-server/hostControlTools.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -124,6 +121,7 @@ describe("HostCallRuntime (#13493, #13496)", () => {
         lacking.delete("a");
         expect(told.callerRefusal("a")).toBeNull();
         lacking.set("a", reason);
+        expect(told.callerRefusal("a")).not.toBeNull();
         const answer = await told.list("a");
         expect(answer).toEqual({
           ok: false,
@@ -134,7 +132,9 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       }
       // Each says what that session lacks, not who may call.
       expect(texts.size).toBe(reasons.length);
-      expect(texts.has(HOST_CONTROL_NOT_ELIGIBLE_MESSAGE)).toBe(false);
+      for (const text of texts) {
+        expect(text).not.toMatch(/Daintree Assistant running on this machine/);
+      }
       expect(lacking.get("a")).toBe("terminal-down");
       expect(told.callerRefusal("a")).toMatch(/no running terminal/);
       lacking.set("a", "no-window");

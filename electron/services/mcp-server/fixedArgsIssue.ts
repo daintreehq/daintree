@@ -142,7 +142,10 @@ function predicateFor(issue: z.core.$ZodIssue, present: boolean, plainSubject: b
         : `should be one of ${listed.join(", ")}${more}`;
     }
     case "invalid_format":
-      return `should be a valid ${issue.format}`;
+      // A pattern's own source is no help to a caller; the field's description says what it takes.
+      return issue.format === "regex"
+        ? "isn't in a form this field takes"
+        : `should be a valid ${issue.format}`;
     case "not_multiple_of":
       return `should be a multiple of ${issue.divisor}`;
     case "invalid_union":

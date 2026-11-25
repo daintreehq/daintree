@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  HostBringBackArgsSchema,
   HostCallArgsSchema,
   HostEnsureProjectArgsSchema,
   HostListArgsSchema,
@@ -132,6 +133,7 @@ describe("runHostControlTool (#13493)", () => {
     const uninstall = setHostControlRuntime(runtime);
     const access = bindHostControl(() => "viewless");
     const parses = [
+      HostBringBackArgsSchema,
       HostCallArgsSchema,
       HostEnsureProjectArgsSchema,
       HostListArgsSchema,
@@ -277,6 +279,16 @@ describe("runHostControlTool (#13493)", () => {
         "host.call",
         { hostId: "h", throwaway: true, tool: "throwaway.close" },
         "'args.runId' is required.",
+      ],
+      [
+        "host.call",
+        {
+          hostId: "h",
+          throwaway: true,
+          tool: "throwaway.sendKeys",
+          args: { runId: "r", keys: ["Bogus"] },
+        },
+        "'args.keys[0]' isn't in a form this field takes.",
       ],
       [
         "host.call",
