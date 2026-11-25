@@ -284,7 +284,7 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
           wanted.push(request.stillWanted?.());
           if (request.stillWanted?.() === false) {
             await deps.start(request);
-            return { status: "refused", reason: "stood-down" };
+            return { status: "refused", reason: "withdrawn" };
           }
         }
         return deps.start(request);
@@ -301,7 +301,7 @@ describe("resumeLanesAfterUpdate (#16753)", () => {
 
     expect(outcomes).toEqual(
       expect.arrayContaining([
-        { projectId: "p1", slot: 0, status: "refused", reason: "stood-down" },
+        { projectId: "p1", slot: 0, status: "refused", reason: "withdrawn" },
         { projectId: "p1", slot: 1, status: "skipped", reason: "no-longer-kept" },
         { projectId: "p1", slot: 2, status: "resumed" },
       ])
