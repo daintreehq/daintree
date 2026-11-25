@@ -29,9 +29,14 @@ vi.mock("../HostSettingsSection", () => ({ HostSettingsSection: () => null }));
 vi.mock("../HostSessionsSection", () => ({ HostSessionsSection: () => null }));
 vi.mock("../CloudMachineSection", () => ({ CloudMachineSection: () => null }));
 vi.mock("../HostCopySettingsSection", () => ({
-  HostCopySettingsSection: (props: { offered?: boolean; mayHaveSettings?: boolean }) => (
+  HostCopySettingsSection: (props: {
+    connected: boolean;
+    offered?: boolean;
+    mayHaveSettings?: boolean;
+  }) => (
     <div
       data-testid="copy-settings"
+      data-connected={String(props.connected)}
       data-offered={String(props.offered === true)}
       data-may-have-settings={String(props.mayHaveSettings === true)}
     />
@@ -39,13 +44,17 @@ vi.mock("../HostCopySettingsSection", () => ({
 }));
 
 import { HostDetail } from "../HostDetail";
-import { awaitFirstConnect } from "../hostCopySettingsRequests";
+import { awaitFirstConnect, takeFirstConnect } from "../hostCopySettingsRequests";
 
-const CONNECTED: HostConnectionState = {
-  status: "connected",
-  rttMs: null,
-  handshake: { version: "1", commit: "c", protocolVersion: 1, platform: "linux", arch: "x64" },
-};
+const HANDSHAKE = {
+  version: "1",
+  commit: "c",
+  protocolVersion: 1,
+  platform: "linux",
+  arch: "x64",
+} as const;
+const CONNECTED: HostConnectionState = { status: "connected", rttMs: null, handshake: HANDSHAKE };
+const CONNECTING: HostConnectionState = { status: "connecting", attempt: 1 };
 const OFFLINE: HostConnectionState = { status: "disconnected" };
 const CLOUD: HostConnection = { kind: "cloud", bindingId: "cb_a37cloud1" };
 
@@ -54,6 +63,7 @@ function entry(
   connection: HostConnectionState,
   kind: HostConnection = CLOUD
 ): HostListEntry {
+  const seen = connection.status === "connected";
   return {
     descriptor: {
       id,
@@ -61,8 +71,8 @@ function entry(
       connection: kind,
       platform: "linux",
       arch: "x64",
-      lastHandshake: null,
-      lastSeenAt: null,
+      lastHandshake: seen ? HANDSHAKE : null,
+      lastSeenAt: seen ? 1 : null,
       addedAt: 0,
       notificationsEnabled: false,
       assistantControlEnabled: false,
@@ -73,22 +83,60 @@ function entry(
 }
 
 function cloudStatus(hostId: string, ownership: CloudHostStatus["ownership"]): CloudHostStatus {
-  return { hostId, providerId: "boat", ownership } as CloudHostStatus;
+  return {
+    hostId,
+    providerId: "boat",
+    providerUnavailable: null,
+    accountId: "ca_0123456789",
+    accountName: "Personal",
+    resourceId: `bx_${hostId}`,
+    machineName: hostId,
+    ownership,
+    createdFor: null,
+    worktreeCleanup: null,
+    provisioning: null,
+    machine: "running",
+    rawState: "running",
+    machineType: "default",
+    vcpu: 4,
+    memoryGB: 8,
+    hourlyDollars: 0.036,
+    lifetime: { kind: "renewable" },
+    autoStopAt: null,
+    lifetimeSeconds: null,
+    stoppedAt: null,
+    stop: null,
+    lastSnapshotAt: null,
+    dataExpired: false,
+    operation: null,
+    lastError: null,
+    observedAt: 1,
+    lastEndpoint: null,
+    hostKeyFingerprint: null,
+    hostKeyReview: null,
+    keptRunningAt: null,
+    asleep: false,
+  };
 }
 
-const copySection = () => screen.getByTestId("copy-settings");
+const copySection = () => screen.getByTestId("copy-settings").dataset;
 
 afterEach(() => {
   cleanup();
   cloud.snapshot = { providers: [], accounts: [], hosts: [] };
+  // A failed test can leave its host armed; the module outlives each test.
+  for (const id of ["late", "other"]) takeFirstConnect(id);
 });
 
 describe("HostDetail's Copy settings offer for a cloud host (#18186)", () => {
   it("doesn't claim an imported machine starts from defaults", () => {
-    cloud.snapshot = { ...cloud.snapshot, hosts: [cloudStatus("old", "imported")] };
+    cloud.snapshot = {
+      ...cloud.snapshot,
+      hosts: [cloudStatus("made", "created-by-daintree"), cloudStatus("old", "imported")],
+    };
     render(<HostDetail entry={entry("old", CONNECTED)} onBack={() => {}} offerCopySettings />);
-    expect(copySection().dataset.offered).toBe("true");
-    expect(copySection().dataset.mayHaveSettings).toBe("true");
+    expect(copySection().offered).toBe("true");
+    expect(copySection().mayHaveSettings).toBe("true");
   });
 
   it("says a machine Daintree created starts from defaults, once its status says so", () => {
@@ -96,12 +144,12 @@ describe("HostDetail's Copy settings offer for a cloud host (#18186)", () => {
     const { rerender } = render(
       <HostDetail entry={entry("made", CONNECTED)} onBack={() => {}} offerCopySettings />
     );
-    expect(copySection().dataset.mayHaveSettings).toBe("true");
+    expect(copySection().mayHaveSettings).toBe("true");
 
     cloud.snapshot = { ...cloud.snapshot, hosts: [cloudStatus("made", "created-by-daintree")] };
     rerender(<HostDetail entry={entry("made", CONNECTED)} onBack={() => {}} offerCopySettings />);
-    expect(copySection().dataset.offered).toBe("true");
-    expect(copySection().dataset.mayHaveSettings).toBe("false");
+    expect(copySection().offered).toBe("true");
+    expect(copySection().mayHaveSettings).toBe("false");
   });
 
   it("keeps the defaults wording for a host added over ssh", () => {
@@ -112,16 +160,37 @@ describe("HostDetail's Copy settings offer for a cloud host (#18186)", () => {
         offerCopySettings
       />
     );
-    expect(copySection().dataset.mayHaveSettings).toBe("false");
+    expect(copySection().offered).toBe("true");
+    expect(copySection().mayHaveSettings).toBe("false");
   });
 
-  it("offers it when an armed cloud host first shows as connected after setup closed", () => {
-    cloud.snapshot = { ...cloud.snapshot, hosts: [cloudStatus("late", "created-by-daintree")] };
+  it("offers it once, when an armed cloud host first shows as connected after setup closed", () => {
+    cloud.snapshot = {
+      ...cloud.snapshot,
+      hosts: [cloudStatus("late", "created-by-daintree"), cloudStatus("other", "imported")],
+    };
     awaitFirstConnect("late");
-    const { rerender } = render(<HostDetail entry={entry("late", OFFLINE)} onBack={() => {}} />);
-    expect(copySection().dataset.offered).toBe("false");
+
+    // Another host connecting takes nothing of this one's.
+    const other = render(<HostDetail entry={entry("other", CONNECTED)} onBack={() => {}} />);
+    expect(copySection().offered).toBe("false");
+    other.unmount();
+
+    const { rerender, unmount } = render(
+      <HostDetail entry={entry("late", OFFLINE)} onBack={() => {}} />
+    );
+    expect(copySection().offered).toBe("false");
+    rerender(<HostDetail entry={entry("late", CONNECTING)} onBack={() => {}} />);
+    expect(copySection().offered).toBe("false");
 
     rerender(<HostDetail entry={entry("late", CONNECTED)} onBack={() => {}} />);
-    expect(copySection().dataset.offered).toBe("true");
+    expect(copySection().connected).toBe("true");
+    expect(copySection().offered).toBe("true");
+    expect(copySection().mayHaveSettings).toBe("false");
+
+    // Opened again later, still connected: the offer was the first connection's.
+    unmount();
+    render(<HostDetail entry={entry("late", CONNECTED)} onBack={() => {}} />);
+    expect(copySection().offered).toBe("false");
   });
 });

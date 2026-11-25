@@ -223,7 +223,7 @@ export function HostCopySettingsSection({
     ? `${hostName} may already have settings of its own`
     : `${hostName} starts from defaults`;
   const description = offered
-    ? `${startingPoint}. Copy ${thisMac}'s settings to it now, or come back here later`
+    ? `${startingPoint}. Copy ${thisMac}'s settings to it now, or come back here later.`
     : `Copy ${thisMac}'s settings to ${hostName}, once. Credentials, permissions you granted and plugins stay on each machine`;
 
   if (!connected) {
