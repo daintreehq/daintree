@@ -86,7 +86,9 @@ describe("useLaneKeepRunning (#18177)", () => {
     );
     expect(result.current.keepRunning).toBe(true);
 
-    act(() => notify.mock.calls[0]![0].action.onClick());
+    act(() => {
+      notify.mock.calls[0]![0].action.onClick();
+    });
     await flush();
     expect(setKeepRunning.mock.calls).toEqual([
       ["proj-1", 0, true],

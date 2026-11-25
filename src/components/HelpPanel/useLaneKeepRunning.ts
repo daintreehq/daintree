@@ -58,6 +58,7 @@ export function useLaneKeepRunning(
               type: "error",
               title: "Couldn't save keep running across restarts",
               message: "Daintree holds the choice and saves it with its next change.",
+              context: { eventKind: "settings" },
               action: { label: "Retry", onClick: save },
             });
           }
