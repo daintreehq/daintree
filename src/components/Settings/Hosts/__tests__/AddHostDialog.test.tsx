@@ -1419,6 +1419,65 @@ describe("AddHostDialog", () => {
       vi.useRealTimers();
     });
 
+    describe("a tunnel that closed before ssh reached the machine (#18180)", () => {
+      const TUNNELLED = {
+        ...AGENT37,
+        capabilities: {
+          ...AGENT37.capabilities,
+          sshTrust: "provider-tunnel" as const,
+          transport: "provider-command" as const,
+          tunnel: {
+            command: "agent37",
+            args: ["tunnel", "%h"],
+            installUrl: "https://www.agent37.com/docs/agents-api/ssh",
+          },
+        },
+      };
+      const closedEarly = (sshError: string) =>
+        probeResult({
+          connection: HOST.connection,
+          reachable: false,
+          sshError,
+          platform: null,
+          install: null,
+          hostModeListening: false,
+          matchesClient: null,
+        });
+      const CLOSED =
+        "kex_exchange_identification: Connection closed by remote host\nConnection closed by UNKNOWN port 65535";
+
+      it("says the command has to be signed in here, beside ssh's own words", async () => {
+        cloud = { providers: [TUNNELLED], accounts: [], hosts: [machine()] };
+        remoteHosts.probe!.mockResolvedValueOnce(closedEarly(CLOSED));
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        const note = screen.getByTestId("add-host-tunnel-closed");
+        expect(note.textContent).toContain("agent37 on this device closed before SSH reached");
+        expect(note.textContent).toContain(
+          "signed in here, as https://www.agent37.com/docs/agents-api/ssh describes"
+        );
+        expect(screen.getByText(/Connection closed by UNKNOWN port 65535/)).toBeTruthy();
+      });
+
+      it("says nothing of a tunnel for another failure, or a provider reached directly", async () => {
+        cloud = { providers: [TUNNELLED], accounts: [], hosts: [machine()] };
+        remoteHosts.probe!.mockResolvedValueOnce(closedEarly("Connection timed out"));
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        expect(screen.getByText("Connection timed out")).toBeTruthy();
+        expect(screen.queryByTestId("add-host-tunnel-closed")).toBeNull();
+        cleanup();
+        _resetCloudHostsStateForTesting();
+
+        cloud = { providers: [AGENT37], accounts: [], hosts: [machine()] };
+        remoteHosts.probe!.mockResolvedValueOnce(closedEarly(CLOSED));
+        render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+        await advance(0);
+        expect(screen.getByText(/Connection closed by UNKNOWN port 65535/)).toBeTruthy();
+        expect(screen.queryByTestId("add-host-tunnel-closed")).toBeNull();
+      });
+    });
+
     it("offers to start a machine found asleep, dropping a recheck already queued", async () => {
       remoteHosts.probe!.mockResolvedValueOnce(refused());
       render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);

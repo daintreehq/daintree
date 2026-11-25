@@ -29,6 +29,7 @@ import {
   cloudProviderFor,
   startBillingSentence,
 } from "@/components/Hosts/cloud/cloudHostLabels";
+import { isProxyClosedEarly } from "@shared/utils/sshRefusal";
 import { remoteConnectionKind } from "@/lib/remoteHosts";
 import { mintOperationId } from "@/clients/operationsClient";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
@@ -541,6 +542,9 @@ export function AddHostDialog({
   const machine = cloudExisting ? cloudStatusFor(cloudHosts.snapshot, existing?.hostId) : null;
   const machineDown =
     machine !== null && machine.providerUnavailable === null && canStartMachine(machine);
+  // The provider's own command that carries ssh to its machines, which the person signs in to.
+  const cloudTunnel =
+    cloudProviderFor(cloudHosts.snapshot.providers, machine)?.capabilities.tunnel ?? null;
   /** A start asked for from here: under way, or done with its fresh check still to run. */
   const [machineStart, setMachineStart] = useState<"starting" | "started" | null>(null);
   /** Why the provider refused that start: said with the offer, and gone with it. */
@@ -1686,6 +1690,15 @@ export function AddHostDialog({
               </p>
             ) : cloudExisting ? (
               <>
+                {/* ssh hides what the tunnel said; what it shows is that the tunnel closed first. */}
+                {cloudTunnel && isProxyClosedEarly(probe.sshError) && (
+                  <p
+                    className="mt-3 text-xs text-text-secondary"
+                    data-testid="add-host-tunnel-closed"
+                  >
+                    {`The tunnel through ${cloudTunnel.command} on this device closed before SSH reached the machine. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here, as ${cloudTunnel.installUrl} describes.`}
+                  </p>
+                )}
                 {existingId !== null && (
                   <CloudSetupHostKey
                     hostId={existingId}
