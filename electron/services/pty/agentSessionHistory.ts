@@ -80,7 +80,7 @@ function isLaterRunOfSameTerminal(a: AgentSessionRecord, b: AgentSessionRecord):
   );
 }
 
-/** Both ids from `from`, an absent one included: a switch to the default login or no preset is a choice too. */
+/** Both ids from `from`, an absent one included: the default login and no preset are choices too. */
 function takeLaunchChoice(into: AgentSessionRecord, from: AgentSessionRecord): void {
   delete into.agentPresetId;
   delete into.agentAccountId;
