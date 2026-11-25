@@ -12,6 +12,7 @@ import { CanopyViewers } from "../viewer.js";
 
 function fakeDeps(options: { spawn?: HostSignInDeps["spawn"] } = {}) {
   let ids = 0;
+  const goneListeners = new Map<string, () => void>();
   const watches = new Map<number, { target: ProjectPushTarget; terminalId: string }>();
   let nextWatch = 0;
   const deps = {
@@ -31,8 +32,12 @@ function fakeDeps(options: { spawn?: HostSignInDeps["spawn"] } = {}) {
     resize: vi.fn(),
     unwatch: vi.fn(),
     release: vi.fn(),
+    onGone: vi.fn((terminalId: string, gone: () => void) => {
+      goneListeners.set(terminalId, gone);
+      return () => goneListeners.delete(terminalId);
+    }),
   } satisfies HostSignInDeps;
-  return { deps, watches };
+  return { deps, watches, goneListeners };
 }
 
 function setup(options: { spawn?: HostSignInDeps["spawn"]; withSignIns?: boolean } = {}) {
@@ -59,7 +64,7 @@ function setup(options: { spawn?: HostSignInDeps["spawn"]; withSignIns?: boolean
     source: { observeCanopy: () => () => {}, observeFleet: () => null },
     invoke: async () => wrapSuccess(null),
   });
-  const { deps, watches } = fakeDeps(options);
+  const { deps, watches, goneListeners } = fakeDeps(options);
   const signIns = new HostSignIns(deps);
   const ctx: CanopySessionContext = {
     session: session as unknown as LinkSession,
@@ -79,6 +84,7 @@ function setup(options: { spawn?: HostSignInDeps["spawn"]; withSignIns?: boolean
   return {
     deps,
     watches,
+    goneListeners,
     signIns,
     posts,
     handlers,
@@ -97,10 +103,9 @@ describe("a host's agent CLI sign-ins", () => {
     };
     expect(started.terminalId.startsWith(HOST_SIGN_IN_TERMINAL_PREFIX)).toBe(true);
     expect(started.spawnedAt).toBe(500);
-    expect(s.deps.spawn).toHaveBeenCalledWith({
-      terminalId: started.terminalId,
-      agentId: "claude",
-    });
+    expect(s.deps.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalId: started.terminalId, agentId: "claude" })
+    );
   });
 
   it("streams the terminal to the Shell's viewer on the interactive lane", async () => {
@@ -177,6 +182,55 @@ describe("a host's agent CLI sign-ins", () => {
     const terminalId = s.deps.spawn.mock.calls[0]![0].terminalId;
     expect(s.deps.kill).toHaveBeenCalledWith(terminalId);
     expect(s.signIns.size).toBe(0);
+  });
+
+  it("tells a spawn still preparing that its viewer went, and keeps its place until it answers", async () => {
+    const finishes: Array<(value: { spawnedAt: number }) => void> = [];
+    const s = setup({
+      spawn: () =>
+        new Promise((resolve) => {
+          finishes.push(resolve);
+        }),
+    });
+    const starts: Array<Promise<unknown>> = [];
+    for (let i = 0; i < MAX_HOST_SIGN_INS; i++) {
+      starts.push(
+        (s.signIn({ viewerId: `v${i}`, op: "start", agentId: "claude" }) as Promise<unknown>).catch(
+          (error: unknown) => error
+        )
+      );
+    }
+    await Promise.resolve();
+    s.release("v0");
+    expect(s.deps.spawn.mock.calls[0]![0].cancelled()).toBe(true);
+    expect(s.deps.spawn.mock.calls[1]![0].cancelled()).toBe(false);
+    // Closed, but its spawn hasn't answered: no fifth sign-in starts meanwhile.
+    await expect(
+      s.signIn({ viewerId: "over", op: "start", agentId: "claude" })
+    ).rejects.toMatchObject({ code: "RATE_LIMITED" });
+    finishes[0]!({ spawnedAt: 1 });
+    await expect(starts[0]).resolves.toMatchObject({ code: "CANCELLED" });
+    expect(s.signIns.size).toBe(MAX_HOST_SIGN_INS - 1);
+  });
+
+  it("ends the stream and lets its place go when its terminal is gone", async () => {
+    const s = setup();
+    const { terminalId } = (await s.signIn({ viewerId: "a", op: "start", agentId: "claude" })) as {
+      terminalId: string;
+    };
+    const { watchId } = (await s.signIn({ viewerId: "a", op: "watch" })) as { watchId: number };
+    const onEnded = s.deps.watch.mock.calls[0]![4];
+    const streamEnded = vi.fn();
+    onEnded(streamEnded);
+    // A pty-host restart drops it, or its shell exits.
+    s.goneListeners.get(terminalId)!();
+    expect(streamEnded).toHaveBeenCalledTimes(1);
+    expect(s.deps.release).toHaveBeenCalledTimes(1);
+    expect(s.signIns.size).toBe(0);
+    expect(s.goneListeners.has(terminalId)).toBe(false);
+    await expect(
+      s.signIn({ viewerId: "a", op: "input", watchId, data: "y" })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
   it("frees its place when the spawn fails", async () => {

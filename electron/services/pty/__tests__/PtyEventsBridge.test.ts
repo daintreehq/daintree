@@ -69,6 +69,7 @@ describe("bridgePtyEvent", () => {
     const heard: unknown[] = [];
     events.on("agent:state-changed", (payload) => heard.push(payload));
     events.on("agent:detected", (payload) => heard.push(payload));
+    events.on("agent:spawned", (payload) => heard.push(payload));
 
     const signIn = "daintree-sign-in-1";
     expect(
@@ -89,6 +90,12 @@ describe("bridgePtyEvent", () => {
         terminalId: signIn,
         agentType: "claude",
         timestamp: 1,
+      } as never)
+    ).toBe(true);
+    expect(
+      bridgePtyEvent({
+        type: "agent-spawned",
+        payload: { agentId: "claude", terminalId: signIn, type: "claude", timestamp: 1 },
       } as never)
     ).toBe(true);
     expect(heard).toEqual([]);

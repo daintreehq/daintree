@@ -4,7 +4,7 @@ import { Callout } from "@/components/ui/Callout";
 import { Spinner } from "@/components/ui/Spinner";
 import { CanopyTerminal } from "@/components/Canopy/CanopyTerminal";
 import { canopyHostClient } from "@/clients/canopyHostClient";
-import { clientErrorText } from "@/utils/clientAppError";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import type { HostSignInTerminal } from "@shared/types/ipc/canopyHost";
 import type { HostId } from "@shared/types/remoteHosts";
 import { agentSignInLabels, hostSignInTerminalApi, newSignInConsumer } from "./hostAgentSignIn";
@@ -12,9 +12,10 @@ import { agentSignInLabels, hostSignInTerminalApi, newSignInConsumer } from "./h
 type Phase =
   | { kind: "starting" }
   | { kind: "running"; consumer: string; terminal: HostSignInTerminal }
-  | { kind: "failed"; message: string };
+  /** `retryable` is false for a host too old to have sign-ins: updating it is the way on. */
+  | { kind: "failed"; message: string; retryable: boolean };
 
-const ENDED_MESSAGE = "The sign-in command has exited. Close this when you're done.";
+const ENDED_MESSAGE = "This terminal has exited. Close this when you're done.";
 
 function SignInTerminal({
   hostId,
@@ -32,6 +33,7 @@ function SignInTerminal({
       spawnedAt={terminal.spawnedAt}
       api={api}
       endedMessage={ENDED_MESSAGE}
+      autoFocus
     />
   );
 }
@@ -67,7 +69,11 @@ export function HostAgentSignInDialog({
       },
       (error: unknown) => {
         if (current) {
-          setPhase({ kind: "failed", message: clientErrorText(error, "It didn't start.") });
+          setPhase({
+            kind: "failed",
+            message: clientErrorText(error, "It didn't start."),
+            retryable: clientErrorCode(error) !== "UNSUPPORTED",
+          });
         }
       }
     );
@@ -150,7 +156,11 @@ export function HostAgentSignInDialog({
         </div>
       </AppDialog.Body>
       <AppDialog.Footer
-        primaryAction={phase.kind === "failed" ? { label: "Try again", onClick: retry } : undefined}
+        primaryAction={
+          phase.kind === "failed" && phase.retryable
+            ? { label: "Retry", onClick: retry }
+            : undefined
+        }
         secondaryAction={{ label: "Close", onClick: onClose }}
       />
     </AppDialog>

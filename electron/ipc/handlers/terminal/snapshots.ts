@@ -22,6 +22,7 @@ import {
   isHostThrowawayTerminalId,
   isHostThrowawayWorkspaceId,
 } from "../../../../shared/config/hostThrowaway.js";
+import { isHostSignInTerminalId } from "../../../../shared/config/terminalScreenPersistence.js";
 import type {
   SerializeReadOptions,
   SerializedTerminalSnapshot,
@@ -67,11 +68,16 @@ function vouchForStreamOffsets(
 
 /**
  * Whether a host-wide terminal listing shows this terminal: never a dev
- * preview, and never a host's throwaway run (#14445), which only the Shell
- * session that launched it reads.
+ * preview, never a host's throwaway run (#14445), which only the Shell
+ * session that launched it reads, and never an agent CLI's sign-in (#18196),
+ * which only its dialog reads.
  */
-function isListedTerminal(terminal: { kind?: string; projectId?: string }): boolean {
-  return terminal.kind !== "dev-preview" && !isHostThrowawayWorkspaceId(terminal.projectId);
+function isListedTerminal(terminal: { id: string; kind?: string; projectId?: string }): boolean {
+  return (
+    terminal.kind !== "dev-preview" &&
+    !isHostThrowawayWorkspaceId(terminal.projectId) &&
+    !isHostSignInTerminalId(terminal.id)
+  );
 }
 
 export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () => void {
@@ -432,6 +438,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
     if (remoteProjectId === null) return { matches: [], complete: true };
     const inScope = (id: string) =>
       !isHostThrowawayTerminalId(id) &&
+      !isHostSignInTerminalId(id) &&
       (remoteProjectId === undefined || ptyClient.getTerminalProjectId(id) === remoteProjectId);
     let scope: Set<string> | undefined;
     if (terminalIds !== undefined || remoteProjectId !== undefined) {

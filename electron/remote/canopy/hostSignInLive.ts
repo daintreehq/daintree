@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { AppError } from "../../utils/errorTypes.js";
-import { getCliAvailabilityServiceRef, getPtyClient } from "../../window/serviceRefs.js";
+import {
+  getAgentVersionService,
+  getCliAvailabilityServiceRef,
+  getPtyClient,
+} from "../../window/serviceRefs.js";
 import {
   beginWatchRequest,
   resizeWatchedTerminal,
@@ -60,13 +64,13 @@ function requirePtyClient() {
 export function liveHostSignInDeps(): HostSignInDeps {
   return {
     newId: randomUUID,
-    spawn: async ({ terminalId, agentId }) => {
+    spawn: async ({ terminalId, agentId, cancelled }) => {
       const [
         { getEffectiveAgentConfig },
         { resolveAgentLaunchBaseCommandFor },
         { quoteLaunchArgOptional },
         { buildCommandLaunchShell },
-        { spawnAndConfirm },
+        { spawnAndConfirm, meetsAssistantVersionFloor },
       ] = await Promise.all([
         import("../../../shared/config/agentRegistry.js"),
         import("../../../shared/utils/agentLaunchCommand.js"),
@@ -85,19 +89,29 @@ export function liveHostSignInDeps(): HostSignInDeps {
       const client = requirePtyClient();
       const dialect: Dialect = process.platform === "win32" ? "windows" : "posix";
       const detail = getCliAvailabilityServiceRef()?.getDetails()?.[agentId];
+      // A copy older than its sign-in command opens as it is, where the
+      // registry's `signInPrompt` signs it in; an unknown version gets the command.
+      const versions = getAgentVersionService();
+      const hasSignInCommand = await meetsAssistantVersionFloor(
+        config.signInMinVersion,
+        async (refresh) =>
+          versions ? versions.getInstalledVersionForLaunch(agentId, refresh) : null
+      );
       const command = agentSignInCommand(
         resolveAgentLaunchBaseCommandFor(config.command, detail, dialect, undefined),
-        config.signInArgs,
+        hasSignInCommand ? config.signInArgs : undefined,
         dialect,
         quoteLaunchArgOptional
       );
-      // `exit`, so the terminal ends with the sign-in rather than leaving a
-      // shell on the host behind it. A login shell the wrapper can't drive
-      // (fish) hands it to `sh`, which reads no rc file but gets main's PATH,
-      // read from the login shell, and the copy launches start.
+      // `keep-open`, as every agent launch is: once the sign-in command ends
+      // the terminal is the host's shell, so what it printed (a failure
+      // included) stays readable, and the person can run a CLI's other sign-in
+      // (`codex login --device-auth`) there. Closing the dialog ends it. A login
+      // shell the wrapper can't drive (fish) hands it to `sh`, which reads no
+      // rc file but gets main's PATH, read from the login shell.
       const launch =
-        buildCommandLaunchShell(command, undefined, "exit") ??
-        (dialect === "posix" ? buildCommandLaunchShell(command, "/bin/sh", "exit") : null);
+        buildCommandLaunchShell(command, undefined, "keep-open") ??
+        (dialect === "posix" ? buildCommandLaunchShell(command, "/bin/sh", "keep-open") : null);
       if (!launch) {
         throw new AppError({
           code: "INTERNAL",
@@ -108,6 +122,13 @@ export function liveHostSignInDeps(): HostSignInDeps {
       const { app } = await import("electron");
       const cwd = path.join(app.getPath("userData"), HOST_SIGN_IN_DIR_NAME);
       await mkdir(cwd, { recursive: true });
+      // Its dialog may have closed while this prepared: nothing is started then.
+      if (cancelled()) {
+        throw new AppError({
+          code: "CANCELLED",
+          message: "The sign-in was closed before it started",
+        });
+      }
       const started = await spawnAndConfirm(
         client,
         async () => {
@@ -141,6 +162,19 @@ export function liveHostSignInDeps(): HostSignInDeps {
     },
     kill: (terminalId) => {
       getPtyClient()?.kill(terminalId, "sign-in-closed");
+    },
+    onGone: (terminalId, gone) => {
+      const client = getPtyClient();
+      if (!client) return () => {};
+      const hear = (id: string) => {
+        if (id === terminalId) gone();
+      };
+      client.on("exit", hear);
+      client.on("terminal-lost", hear);
+      return () => {
+        client.off("exit", hear);
+        client.off("terminal-lost", hear);
+      };
     },
     watch: async (target, terminalId, spawnedAt, ended, onEnded) => {
       const client = requirePtyClient();

@@ -6,6 +6,7 @@ import {
   type TerminalReliabilityMetricPayload,
 } from "../../shared/types/pty-host.js";
 import { isSmokeTestTerminalId } from "../../shared/utils/smokeTestTerminals.js";
+import { isHostSignInTerminalId } from "../../shared/config/terminalScreenPersistence.js";
 import type { PtyManager } from "../services/PtyManager.js";
 import {
   IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES,
@@ -185,7 +186,10 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
       !isSuspended &&
       !isBackgrounded &&
       rendererConnections.size > 0 &&
-      !isSmokeTestTerminalId(id)
+      !isSmokeTestTerminalId(id) &&
+      // An agent CLI's sign-in (#18196) is its dialog's alone, read through
+      // Main's mirror: a window here with no project would take it otherwise.
+      !isHostSignInTerminalId(id)
     ) {
       const targets: Array<{ windowId: number; conn: RendererConnection }> = [];
       for (const [windowId, conn] of rendererConnections) {

@@ -109,7 +109,7 @@ const watchId = z.number().int();
 const gridSize = z.number().int().min(1).max(1_000);
 
 export const CanopySignInPayloadSchema = z.discriminatedUnion("op", [
-  z.object({ viewerId, op: z.literal("start"), agentId: z.string().min(1).max(64) }),
+  z.object({ viewerId, op: z.literal("start"), agentId: z.string().min(1).max(256) }),
   z.object({ viewerId, op: z.literal("watch") }),
   z.object({
     viewerId,

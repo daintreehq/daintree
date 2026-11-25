@@ -951,6 +951,11 @@ export interface AgentConfig {
    */
   signInArgs?: readonly string[];
   /**
+   * The oldest CLI version that has {@link signInArgs}: an older copy opens as
+   * it is instead, where {@link signInPrompt} signs it in.
+   */
+  signInMinVersion?: string;
+  /**
    * What the person types at the CLI's own prompt to sign in, for when the
    * CLI opens without asking (already signed in, or a build older than its
    * sign-in command). Shown beside a host's sign-in, never typed for them.

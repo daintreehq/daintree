@@ -161,6 +161,11 @@ interface CanopyTerminalProps {
   uses?: number;
   /** What the pane says once its terminal has exited; Canopy's own words by default. */
   endedMessage?: string;
+  /**
+   * Take the keyboard when it first opens, unless the person has moved it out
+   * of the dialog around the pane, or into a field there, meanwhile.
+   */
+  autoFocus?: boolean;
 }
 
 /**
@@ -204,6 +209,7 @@ export function CanopyTerminal({
   sizesOnUse = false,
   uses = 0,
   endedMessage = "This terminal has exited. Archive it, or trash it to clear it away.",
+  autoFocus = false,
 }: CanopyTerminalProps) {
   const frameRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -213,6 +219,7 @@ export function CanopyTerminal({
   const cwdRef = useRef(cwd);
   const projectIdRef = useRef(projectId);
   const sizesOnUseRef = useRef(sizesOnUse);
+  const autoFocusPendingRef = useRef(autoFocus);
   useEffect(() => {
     onStreamChangeRef.current = onStreamChange;
     onSubmittedRef.current = onSubmitted;
@@ -320,6 +327,14 @@ export function CanopyTerminal({
       refocusRef.current = false;
       // Unless the user has put the keyboard somewhere else meanwhile.
       if (document.activeElement === null || document.activeElement === document.body) {
+        terminal.focus();
+      }
+    } else if (autoFocusPendingRef.current) {
+      autoFocusPendingRef.current = false;
+      const active = document.activeElement;
+      const around = frame.closest('[role="dialog"]');
+      const typing = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+      if (active === null || active === document.body || (around?.contains(active) && !typing)) {
         terminal.focus();
       }
     }

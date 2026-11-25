@@ -352,6 +352,17 @@ describe("visual routing for a project no window shows (#16497)", () => {
     expect(statusEvents(h).filter((e) => e.reason === HIDDEN_VIEW_SKIP_REASON)).toHaveLength(1);
   });
 
+  it("never hands an agent CLI sign-in's output to a window's port (#18196)", () => {
+    const h = createHarness(["daintree-sign-in-1", "t-plain"], "proj-a");
+    // A window showing no project takes every terminal's output.
+    h.windowProjectMap.set(1, null);
+    h.router.routeOutput("t-plain", "hello", undefined);
+    h.router.routeOutput("daintree-sign-in-1", "code ABCD-1234", undefined);
+    const written = (h.batcherWrite.mock.calls as unknown[][]).map((call) => call[0]);
+    expect(written).toContain("t-plain");
+    expect(written).not.toContain("daintree-sign-in-1");
+  });
+
   it("keeps the fallback primary at startup, before any project is routed", () => {
     const h = createHarness(["a1"], "proj-a");
     h.rendererConnections.clear();

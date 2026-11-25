@@ -145,6 +145,11 @@ describe("CanopyHostsClient sign-ins", () => {
       userMessage: "This host needs a newer Daintree to sign in its agents from here.",
     });
     expect(s.inUse("studio")).toBe(false);
+    // Whatever the host opened for the failed start is let go there too.
+    expect(s.calls.at(-1)).toMatchObject({
+      method: CanopyLinkMethod.RELEASE,
+      payload: { viewerId: "v1" },
+    });
   });
 
   it("watches, types and sizes through the viewer that started it, and routes its bytes by consumer", async () => {

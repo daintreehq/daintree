@@ -336,6 +336,13 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
         // One main can no longer place still reaches them, as before.
         ptyClient.emit("data", "term-untracked", "late output");
         expect(remote.send).toHaveBeenCalledTimes(1);
+
+        // An agent CLI's sign-in reaches no window, here or on a Shell (#18196).
+        ptyClient.emit("data", "daintree-sign-in-1", "code ABCD-1234");
+        expect(remote.send).toHaveBeenCalledTimes(1);
+        for (const wc of [activeA, cachedB, activeB, cachedA]) {
+          expect(dataSends(wc).filter((call) => call[1] === "daintree-sign-in-1")).toEqual([]);
+        }
       } finally {
         getEndpointRegistry().remove(remote.endpointId);
       }

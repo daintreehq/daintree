@@ -1150,6 +1150,22 @@ describe("terminal pool inspection handlers", () => {
       expect(result.map((terminal) => terminal.id)).toEqual(["t-terminal"]);
     });
 
+    it("leaves out an agent CLI's sign-in, which only its dialog reads (#18196)", async () => {
+      const ptyClient = {
+        getAllTerminalsAsync: vi.fn(async () => [
+          { id: "t-terminal", kind: "terminal", projectId: "project-a", cwd: "/tmp" },
+          { id: "daintree-sign-in-1", kind: "terminal", cwd: "/tmp" },
+        ]),
+      };
+
+      registerTerminalSnapshotHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+      const result = (await getHandler(CHANNELS.TERMINAL_GET_ALL)(undefined)) as Array<{
+        id: string;
+      }>;
+      expect(result.map((terminal) => terminal.id)).toEqual(["t-terminal"]);
+    });
+
     it("includes hasPty and activityTier fields", async () => {
       const ptyClient = {
         getAllTerminalsAsync: vi.fn(async () => [

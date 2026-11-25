@@ -13,9 +13,19 @@ export interface HostSignInDeps {
   /**
    * Starts the agent's own sign-in command under `terminalId`, in a terminal
    * placed in no project. Resolves once it runs, with when it started; throws
-   * an `AppError` saying why it didn't.
+   * an `AppError` saying why it didn't. `cancelled` turns true once its viewer
+   * has gone, so a spawn still preparing starts nothing.
    */
-  spawn(spec: { terminalId: string; agentId: string }): Promise<{ spawnedAt: number }>;
+  spawn(spec: {
+    terminalId: string;
+    agentId: string;
+    cancelled(): boolean;
+  }): Promise<{ spawnedAt: number }>;
+  /**
+   * Hear the terminal end: its process exiting, or the pty-host dropping it
+   * in a restart, which replays no sign-in. Answers how to stop listening.
+   */
+  onGone(terminalId: string, gone: () => void): () => void;
   /** Ends the process outright; a terminal already gone is no error. */
   kill(terminalId: string): void;
   /** Stream the terminal to the target, from a snapshot, until `ended` or its exit. */
@@ -43,6 +53,7 @@ interface Run {
   target: ProjectPushTarget;
   ended: boolean;
   endListeners: Set<() => void>;
+  stopHearingGone: (() => void) | null;
 }
 
 function notStarted(): AppError {
@@ -137,6 +148,7 @@ export class HostSignIns {
       },
       ended: false,
       endListeners: new Set(),
+      stopHearingGone: null,
     };
     this.runs.set(viewer, run);
     // Held before the spawn is awaited, so a viewer gone meanwhile ends it.
@@ -147,20 +159,22 @@ export class HostSignIns {
     }
     let started: { spawnedAt: number };
     try {
-      started = await this.deps.spawn({ terminalId: run.terminalId, agentId });
+      started = await this.deps.spawn({
+        terminalId: run.terminalId,
+        agentId,
+        cancelled: () => run.ended,
+      });
     } catch (error) {
-      if (this.runs.get(viewer) === run) this.runs.delete(viewer);
-      run.ended = true;
-      // A spawn that failed after the pty-host took it leaves nothing running.
-      this.deps.kill(run.terminalId);
+      this.settleStart(viewer, run);
       throw error;
     }
     if (run.ended) {
       // Its viewer went while it started: it started for nobody.
-      this.deps.kill(run.terminalId);
+      this.settleStart(viewer, run);
       throw ended();
     }
     run.spawnedAt = started.spawnedAt;
+    run.stopHearingGone = this.deps.onGone(run.terminalId, () => this.end(viewer));
     return { terminalId: run.terminalId, spawnedAt: started.spawnedAt };
   }
 
@@ -190,15 +204,28 @@ export class HostSignIns {
     return run;
   }
 
+  /**
+   * A start that won't run: its place is let go only now, so sign-ins closed
+   * while starting can't let more start than the cap allows, and whatever the
+   * spawn made is ended.
+   */
+  private settleStart(viewer: CanopyViewer, run: Run): void {
+    run.ended = true;
+    if (this.runs.get(viewer) === run) this.runs.delete(viewer);
+    this.deps.kill(run.terminalId);
+  }
+
   private end(viewer: CanopyViewer): void {
     const run = this.runs.get(viewer);
-    if (!run) return;
-    this.runs.delete(viewer);
+    if (!run || run.ended) return;
     run.ended = true;
     for (const listener of [...run.endListeners]) listener();
     run.endListeners.clear();
     this.deps.release(run.target);
-    // Still starting: its start kills what it made once the spawn answers.
-    if (run.spawnedAt !== null) this.deps.kill(run.terminalId);
+    // Still starting: the start keeps its place until the spawn answers.
+    if (run.spawnedAt === null) return;
+    this.runs.delete(viewer);
+    run.stopHearingGone?.();
+    this.deps.kill(run.terminalId);
   }
 }

@@ -29,8 +29,21 @@ vi.mock("@/clients/canopyHostClient", () => ({
 }));
 // The live pane is xterm; what it is pointed at is what matters here.
 vi.mock("@/components/Canopy/CanopyTerminal", () => ({
-  CanopyTerminal: ({ runId, endedMessage }: { runId: string; endedMessage?: string }) => (
-    <div data-testid="sign-in-pane" data-run-id={runId} data-ended-message={endedMessage} />
+  CanopyTerminal: ({
+    runId,
+    endedMessage,
+    autoFocus,
+  }: {
+    runId: string;
+    endedMessage?: string;
+    autoFocus?: boolean;
+  }) => (
+    <div
+      data-testid="sign-in-pane"
+      data-run-id={runId}
+      data-ended-message={endedMessage}
+      data-auto-focus={String(autoFocus === true)}
+    />
   ),
 }));
 vi.mock("../HostPluginsSection", () => ({ HostPluginsSection: () => null }));
@@ -47,6 +60,28 @@ const HANDSHAKE = {
   protocolVersion: 1,
   platform: "linux" as const,
   arch: "x64" as const,
+};
+
+const SUMMARY: HostMetricsSummary = {
+  hostId: "studio-01",
+  sampledAt: 1,
+  platform: "linux",
+  cpuPercent: null,
+  memoryPressure: null,
+  memoryUsedBytes: null,
+  memoryTotalBytes: null,
+  swapUsedBytes: null,
+  swapTotalBytes: null,
+  thermal: null,
+  cpuPressure: null,
+  agentsObserved: null,
+  projectCount: null,
+  worktreeCount: null,
+  driver: null,
+  agentClis: [
+    { agentId: "claude", version: "2.1.0" },
+    { agentId: "gemini", version: null },
+  ],
 };
 
 function entry(connected = true): HostListEntry {
@@ -66,15 +101,7 @@ function entry(connected = true): HostListEntry {
     connection: connected
       ? { status: "connected", rttMs: 3, handshake: HANDSHAKE }
       : { status: "disconnected" },
-    summary: {
-      hostId: "studio-01",
-      sampledAt: 1,
-      platform: "linux",
-      agentClis: [
-        { agentId: "claude", version: "2.1.0" },
-        { agentId: "gemini", version: null },
-      ],
-    } as unknown as HostMetricsSummary,
+    summary: SUMMARY,
   } as HostListEntry;
 }
 
@@ -166,7 +193,29 @@ describe("HostDetail agent CLI sign-in", () => {
     expect(signIns.startSignIn).toHaveBeenCalledTimes(1);
   });
 
-  it("says why a sign-in didn't start, and starts it afresh on Try again", async () => {
+  it("says why a sign-in didn't start, and starts it afresh on Retry", async () => {
+    signIns.startSignIn.mockRejectedValueOnce(
+      new ClientAppError(
+        "HOST_DISCONNECTED",
+        "Host studio-01 is not connected",
+        "Couldn't reach it."
+      )
+    );
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
+    await settle();
+    expect(screen.getByRole("alert").textContent).toContain("Couldn't reach it.");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await settle();
+    expect(signIns.startSignIn).toHaveBeenCalledTimes(2);
+    const [first, second] = signIns.startSignIn.mock.calls.map((call) => call[0]);
+    expect(second).not.toBe(first);
+    expect(signIns.releaseSignIn).toHaveBeenCalledWith(first);
+    expect(screen.getByTestId("sign-in-pane")).toBeTruthy();
+  });
+
+  it("offers no Retry to a host too old for sign-ins, only the reason", async () => {
     signIns.startSignIn.mockRejectedValueOnce(
       new ClientAppError(
         "UNSUPPORTED",
@@ -178,13 +227,14 @@ describe("HostDetail agent CLI sign-in", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
     await settle();
     expect(screen.getByRole("alert").textContent).toContain("needs a newer Daintree");
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
 
-    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  it("hands the pane the keyboard once it opens", async () => {
+    render(<HostDetail entry={entry()} onBack={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
     await settle();
-    expect(signIns.startSignIn).toHaveBeenCalledTimes(2);
-    const [first, second] = signIns.startSignIn.mock.calls.map((call) => call[0]);
-    expect(second).not.toBe(first);
-    expect(screen.getByTestId("sign-in-pane")).toBeTruthy();
+    expect(screen.getByTestId("sign-in-pane").getAttribute("data-auto-focus")).toBe("true");
   });
 
   it("never shows a signed-in status on the rows, before or after a sign-in", async () => {

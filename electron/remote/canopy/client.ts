@@ -487,7 +487,8 @@ export class CanopyHostsClient {
     agentId: unknown
   ): Promise<HostSignInTerminal> {
     const name = consumerOf(consumer);
-    if (typeof agentId !== "string" || agentId.length === 0 || agentId.length > 64) {
+    // As long as an agent id a host's inventory reports may be.
+    if (typeof agentId !== "string" || agentId.length === 0 || agentId.length > 256) {
       throw invalid("agentId must be a non-empty string");
     }
     const target = this.assistantHostOf(webContentsId, hostId, { allowOwnLocal: true });
