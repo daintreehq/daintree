@@ -96,6 +96,37 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({
   },
 }));
 
+/** The palette as the pane mounts it: the session it lists, and a pick of one row. */
+vi.mock("../HelpPastSessionsPalette", () => ({
+  HelpPastSessionsPalette: ({
+    global,
+  }: {
+    global?: {
+      slot: number;
+      onPick: (session: {
+        agentId: "claude";
+        sessionId: string;
+        title: string;
+        updatedAt: number;
+      }) => void;
+    };
+  }) => (
+    <button
+      type="button"
+      data-testid="earlier-palette"
+      data-slot={String(global?.slot)}
+      onClick={() =>
+        global?.onPick({
+          agentId: "claude",
+          sessionId: "conv-a",
+          title: "Planning the release",
+          updatedAt: 1,
+        })
+      }
+    />
+  ),
+}));
+
 const { GlobalAssistantPane } = await import("../GlobalAssistantPane");
 const { useHelpPanelStore } = await import("@/store/helpPanelStore");
 const { usePaletteStore } = await import("@/store/paletteStore");
@@ -1357,61 +1388,28 @@ describe("GlobalAssistantPane (#14454)", () => {
     };
     const earlierItem = () => screen.queryByTestId("help-global-resume-earlier");
 
-    class ResizeObserverStub implements ResizeObserver {
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {}
-    }
-    const originalScrollIntoView = Element.prototype.scrollIntoView;
-
     beforeEach(() => {
-      vi.stubGlobal("ResizeObserver", ResizeObserverStub);
-      vi.stubGlobal("matchMedia", (query: string) => ({
-        matches: false,
-        media: query,
-        onchange: null,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-        addListener: () => {},
-        removeListener: () => {},
-        dispatchEvent: () => false,
-      }));
-      Element.prototype.scrollIntoView = function scrollIntoView(): void {};
       useGlobalAssistantResumeConfirmStore.setState({ current: null, requestSeq: 0 });
     });
 
     afterEach(() => {
-      vi.unstubAllGlobals();
-      Element.prototype.scrollIntoView = originalScrollIntoView;
       act(() => usePaletteStore.getState().closePalette("global-assistant-sessions"));
     });
 
-    it("lists the session's earlier conversations and asks about the one picked, as the run was shown", async () => {
+    it("opens the session's own list and asks about the one picked, as the run was shown", async () => {
       installHelp(running({ generation: 7, inputOwner: "a1", inputEpoch: 3 }));
-      const listGlobalAssistantPastSessions = vi.fn(async () => ({
-        slot: 0,
-        agentId: "claude",
-        sessions: [
-          {
-            agentId: "claude" as const,
-            sessionId: "conv-a",
-            title: "Planning the release",
-            updatedAt: 1,
-          },
-        ],
-        unreadable: [],
-        truncated: false,
-      }));
       const resumeGlobalAssistantConversation = vi.fn();
-      Object.assign(help, { listGlobalAssistantPastSessions, resumeGlobalAssistantConversation });
+      Object.assign(help, { resumeGlobalAssistantConversation });
       renderPane();
       await flush();
 
       await openMenu();
       fireEvent.click(screen.getByRole("menuitem", { name: "Resume an earlier conversation…" }));
-      fireEvent.click(await screen.findByText("Planning the release"));
+      expect(usePaletteStore.getState().activePaletteId).toBe("global-assistant-sessions");
+      const palette = await screen.findByTestId("earlier-palette");
+      expect(palette.getAttribute("data-slot")).toBe("0");
+      fireEvent.click(palette);
 
-      expect(listGlobalAssistantPastSessions).toHaveBeenCalledWith(0);
       expect(useGlobalAssistantResumeConfirmStore.getState().current).toMatchObject({
         slot: 0,
         agentId: "claude",

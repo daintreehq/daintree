@@ -145,11 +145,16 @@ describe("HelpPastSessionsPalette for a global session (#18169)", () => {
     expect(await screen.findByText("No earlier conversations to reopen")).toBeTruthy();
   });
 
-  it("stays shut while the project palette opens", async () => {
-    renderGlobal(0);
+  it("stays shut, reading nothing, while the project palette opens", async () => {
+    listPastSessions.mockResolvedValue(listing());
+    render(<HelpPastSessionsPalette workspace={null} global={{ slot: 0, onPick: vi.fn() }} />, {
+      wrapper: TooltipProvider,
+    });
     act(() => usePaletteStore.getState().openPalette("assistant-sessions"));
     await act(async () => {});
     expect(screen.queryByRole("combobox")).toBeNull();
+    expect(listGlobalAssistantPastSessions).not.toHaveBeenCalled();
+    expect(listPastSessions).not.toHaveBeenCalled();
   });
 });
 
