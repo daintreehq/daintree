@@ -19,7 +19,11 @@ describe("splitHostFix", () => {
     const fix = splitHostFix(
       refused("box", "Daintree couldn't install them as root there: apt-get couldn't install them")
     );
-    expect(fix.text.endsWith("libnss3.so. Daintree couldn't install them as root there: apt-get couldn't install them.")).toBe(true);
+    expect(
+      fix.text.endsWith(
+        "libnss3.so. Daintree couldn't install them as root there: apt-get couldn't install them."
+      )
+    ).toBe(true);
     expect(fix.rootCommand).toBe(HOST_PACKAGES_COMMAND);
   });
 
@@ -36,16 +40,18 @@ describe("splitHostFix", () => {
       `${refused("the host")}. Daintree couldn't be started again on the host. ${refused("the host")}`
     );
     expect(fix.text).not.toContain("apt-get");
-    expect(fix.text).toContain("Daintree couldn't be started again on the host. Daintree can't start");
+    expect(fix.text).toContain(
+      "Daintree couldn't be started again on the host. Daintree can't start"
+    );
     expect(fix.text.endsWith("libnss3.so.")).toBe(true);
     expect(fix.rootCommand).toBe(HOST_PACKAGES_COMMAND);
   });
 
   it("keeps whatever came before it, such as Bring back's own words", () => {
     const fix = splitHostFix(`Daintree on box wasn't started: ${refused("box")}`);
-    expect(fix.text.startsWith("Daintree on box wasn't started: Daintree can't start on box:")).toBe(
-      true
-    );
+    expect(
+      fix.text.startsWith("Daintree on box wasn't started: Daintree can't start on box:")
+    ).toBe(true);
     expect(fix.rootCommand).toBe(HOST_PACKAGES_COMMAND);
   });
 

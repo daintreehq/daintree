@@ -17,9 +17,9 @@ export interface HostErrorFix {
  */
 export function splitHostFix(message: string): HostErrorFix {
   let text = message;
-  let found = false;
-  for (let at = text.indexOf(HOST_PACKAGES_INSTRUCTION); at >= 0; ) {
-    found = true;
+  let at = text.indexOf(HOST_PACKAGES_INSTRUCTION);
+  const found = at >= 0;
+  while (at >= 0) {
     const before = text.slice(0, at).replace(/ $/, "");
     let after = text.slice(at + HOST_PACKAGES_INSTRUCTION.length);
     // An installer's note joins with ". " after the command; the sentence before has its own stop.

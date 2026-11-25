@@ -38,8 +38,7 @@ vi.mock("@/clients/systemClient", async (importOriginal) => {
 
 const placement = vi.hoisted(() => ({
   current: { ready: false } as
-    | { ready: true; cwd: string; worktreeId: string | undefined }
-    | { ready: false },
+    { ready: true; cwd: string; worktreeId: string | undefined } | { ready: false },
 }));
 vi.mock("@/hooks/terminal/useHomeTerminalPlacement", () => ({
   useHomeTerminalPlacement: () => placement.current,

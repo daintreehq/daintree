@@ -771,7 +771,9 @@ describe("AddHostDialog", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
     fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
     const fix = await screen.findByTestId("host-root-command");
-    expect(fix.textContent).toContain("On Debian or Ubuntu, run this on studio as root, then try again");
+    expect(fix.textContent).toContain(
+      "On Debian or Ubuntu, run this on studio as root, then try again"
+    );
     expect(fix.querySelector("code")?.textContent).toBe(HOST_PACKAGES_COMMAND);
     expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
     // The words are announced without the command, and it runs there, never here.

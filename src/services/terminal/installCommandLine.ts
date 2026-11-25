@@ -10,9 +10,7 @@ import type { AgentInstallOS } from "@shared/config/agentRegistry";
  * sign-in): the surface that offered it checks again when asked.
  */
 export type InstallTarget =
-  | { kind: "prerequisite"; tool: string }
-  | { kind: "agent"; agentId: string }
-  | { kind: "manual" };
+  { kind: "prerequisite"; tool: string } | { kind: "agent"; agentId: string } | { kind: "manual" };
 
 /**
  * The one line a block's commands are typed as, or null when they can't be

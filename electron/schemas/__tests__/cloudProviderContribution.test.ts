@@ -178,8 +178,15 @@ describe("contributes.cloudProviders", () => {
   it("takes a tunnel's install and sign-in lines only as one visible line each", () => {
     const capabilities = provider().capabilities;
     const withLines = (lines: Record<string, unknown>) =>
-      parse([provider({ capabilities: { ...capabilities, tunnel: { ...capabilities.tunnel, ...lines } } })]);
-    const accepted = withLines({ installCommand: "brew install awscli", signInCommand: "aws sso login" });
+      parse([
+        provider({
+          capabilities: { ...capabilities, tunnel: { ...capabilities.tunnel, ...lines } },
+        }),
+      ]);
+    const accepted = withLines({
+      installCommand: "brew install awscli",
+      signInCommand: "aws sso login",
+    });
     expect(accepted.success).toBe(true);
     expect(
       accepted.success ? accepted.data.contributes.cloudProviders[0]!.capabilities.tunnel : null

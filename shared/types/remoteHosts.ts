@@ -384,7 +384,10 @@ export function readPendingPlacement(value: unknown): PendingHostPlacement | nul
   if (raw.askFirst === true) placement.askFirst = true;
   if (raw.createdMachine === true) placement.createdMachine = true;
   const failure = raw.failure as Record<string, unknown> | null | undefined;
-  const message = failure && typeof failure === "object" ? placementText(failure.message, MAX_PLACEMENT_FAILURE) : null;
+  const message =
+    failure && typeof failure === "object"
+      ? placementText(failure.message, MAX_PLACEMENT_FAILURE)
+      : null;
   if (message && typeof failure?.at === "number" && Number.isFinite(failure.at)) {
     placement.failure = { message, at: failure.at };
   }

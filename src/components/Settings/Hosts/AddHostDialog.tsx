@@ -1712,10 +1712,7 @@ export function AddHostDialog({
                     otherwise go unnamed for every recheck. Never beside a refusal of ssh's own. */}
                 {cloudTunnel && refusal === null && isProxyClosedEarly(probe.sshError) && (
                   <div className="mt-3 space-y-2">
-                    <p
-                      className="text-xs text-text-secondary"
-                      data-testid="add-host-tunnel-closed"
-                    >
+                    <p className="text-xs text-text-secondary" data-testid="add-host-tunnel-closed">
                       {hasTunnelSetupCommands(cloudTunnel, "sign-in")
                         ? `The tunnel through ${cloudTunnel.command} on this device closed the connection before SSH logged in. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here.`
                         : `The tunnel through ${cloudTunnel.command} on this device closed the connection before SSH logged in. Daintree connects through ${cloudTunnel.command}, so it has to be signed in here, as ${cloudTunnel.installUrl} describes.`}
