@@ -231,7 +231,7 @@ function offerReason(state: string, openFromBidder: number): string | null {
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return formatErrorMessage(error, "it didn't answer");
 }
 
 /**
