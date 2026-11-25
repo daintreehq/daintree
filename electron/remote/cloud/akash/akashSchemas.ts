@@ -137,6 +137,8 @@ export const akashForwardedPortSchema = z
     port: z.number(),
     externalPort: z.number(),
     host: z.string().nullable().optional(),
+    /** How many of the service's replicas answer there; absent when the provider doesn't say. */
+    available: z.number().optional(),
   })
   .loose();
 
@@ -147,6 +149,8 @@ export const akashLeaseSchema = z
     price: akashCoinSchema,
     /** A block height, not a time. */
     created_at: z.string().optional(),
+    /** Present only while the provider is reclaiming the lease. */
+    reclamation: z.object({}).loose().optional(),
     /** The provider's own report, read only by a deployment's own route; null when it couldn't be asked. */
     status: z
       .object({

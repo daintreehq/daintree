@@ -96,13 +96,18 @@ const LABEL_KEY = /^[a-z0-9][a-z0-9._-]{0,62}$/;
 const TOKEN = /^([a-z0-9][a-z0-9._-]{0,62})=([^\s=[\]]*)$/;
 const SUFFIX = /^(?:([\s\S]*) )?\[([^[\]]*)\]$/;
 
-/** One `key=value` of the mark, its value encoded so nothing in it can end the token or the mark. */
-export function akashMarkToken(key: string, value: string): string {
-  return `${key}=${encodeURIComponent(value)}`;
-}
-
 function invalidName(message: string): AkashApiError {
   return new AkashApiError("invalid-request", message, null, null);
+}
+
+/** One `key=value` of the mark, its value encoded so nothing in it can end the token or the mark. */
+export function akashMarkToken(key: string, value: string): string {
+  try {
+    return `${key}=${encodeURIComponent(value)}`;
+  } catch {
+    // A lone surrogate: text no name can carry.
+    throw invalidName(`Daintree can't put the value of ${JSON.stringify(key)} on an Akash name`);
+  }
 }
 
 /**
@@ -152,7 +157,8 @@ export interface AkashParsedName {
 
 /**
  * Reads a name back into what made it. Only a well-formed bracket at the very
- * end is a mark; anything else, a person's own brackets included, is name.
+ * end that carries a create's key is a mark: one Daintree wrote always does,
+ * so a person's own brackets, labels and all, stay name.
  */
 export function parseAkashName(name: string | null | undefined): AkashParsedName {
   const text = name ?? "";
@@ -179,6 +185,7 @@ export function parseAkashName(name: string | null | undefined): AkashParsedName
       labels[key] = value;
     }
   }
+  if (createKey === null) return plain;
   return { display: match[1] ?? "", labels, createKey, suffix: `[${match[2]}]` };
 }
 
@@ -194,6 +201,20 @@ export function akashRenamed(current: string | null | undefined, display: string
     return display;
   }
   return withSuffix(display, suffix);
+}
+
+/**
+ * Whether `key` is one OpenSSH public key on one line: its type, then base64
+ * whose own first field names the same type, as `ssh-keygen` reads it. The
+ * image refuses to start on anything else, after the order is placed.
+ */
+export function isOpenSshPublicKey(key: string): boolean {
+  const match = /^([a-z0-9@.-]{1,64}) ([A-Za-z0-9+/]+={0,2})(?: [^\r\n]*)?$/.exec(key);
+  if (!match) return false;
+  const blob = Buffer.from(match[2]!, "base64");
+  if (blob.toString("base64") !== match[2] || blob.length < 4) return false;
+  const length = blob.readUInt32BE(0);
+  return length === match[1]!.length && blob.toString("latin1", 4, 4 + length) === match[1];
 }
 
 export interface AkashDefinitionInput {
@@ -327,7 +348,8 @@ export function akashDefinitionSize(definition: unknown): AkashSize {
       resources?: { cpu?: { units?: unknown }; memory?: { size?: unknown }; storage?: unknown };
     }
   )?.resources;
-  const cpu = Number(resources?.cpu?.units);
+  const units = resources?.cpu?.units;
+  const cpu = typeof units === "number" || typeof units === "string" ? Number(units) : Number.NaN;
   const storage = Array.isArray(resources?.storage)
     ? resources.storage.reduce(
         (sum: number, volume: { size?: unknown }) => sum + bytesOf(volume?.size),

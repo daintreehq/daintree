@@ -123,6 +123,10 @@ export interface FakeAkashLease {
   createdHeight: number;
   /** Where the provider forwards the service's port 22 now; null while it reports nothing. */
   forwarded: { host: string | null; externalPort: number } | null;
+  /** Ports the provider reports in place of `forwarded`, service by service, as given. */
+  ports?: Record<string, Array<Record<string, unknown>>>;
+  /** Present while the provider reclaims it. */
+  reclamation?: { deadline: string };
 }
 
 export interface FakeAkashBid {
@@ -180,7 +184,7 @@ export function consoleMonthlyCostUDenom(pricePerBlock: string): number {
 
 /** The managed wallet an organization's deployments are owned by. */
 export function fakeAkashWallet(organizationId: string): string {
-  return `akash1wallet${organizationId.replace(/-/g, "").slice(0, 24)}`;
+  return `akash1wallet${organizationId.replace(/-/g, "")}`;
 }
 
 const BLOCK_MS = CONSOLE_AVERAGE_BLOCK_TIME * 1000;
@@ -208,9 +212,25 @@ export class FakeAkashConsole {
   nextDseq: string | null = null;
   /** An active search spanning more deployments than this is refused with 422. */
   searchCap = Number.POSITIVE_INFINITY;
+  /** A searched archive answers 422, as Console's does while its index is down. */
+  archiveSearchDown = false;
+  /** The most rows a page holds, whatever was asked; `hasMore` still says whether more follow. */
+  pageCap = Number.POSITIVE_INFINITY;
+  /** Lists say no total, as Console's do when its index can't count. */
+  totalUnknown = false;
+  /** Manifest sends the providers turn away as undelivered before one arrives. */
+  manifestFailures = 0;
+  /** The next manifest is refused as invalid. */
+  manifestInvalid = false;
+  /** Every manifest sent, delivered or not. */
+  manifestSends = 0;
   /** Each provider's ingress host, as a lease reports it; unnamed ones get one from their address. */
   readonly ingressHosts = new Map<string, string | null>();
   private nextExternalPort = 31_022;
+  /** Called once a request has been carried out, before its answer goes back. */
+  onAnswered: ((request: FakeAkashRequest) => void) | null = null;
+  /** Providers Console can't reach, so a lease of their bid is refused with nothing leased. */
+  readonly unreachableProviders = new Set<string>();
 
   constructor(readonly baseUrl = "https://console-api.akash.test/v1") {}
 
@@ -281,6 +301,7 @@ export class FakeAkashConsole {
       return outcome;
     }
     const answer = this.route(method, path, headers, body, url.searchParams);
+    this.onAnswered?.(request);
     const after = this.afterwards.find((entry) => entry.times > 0 && matches(entry, request));
     if (after) {
       after.times--;
@@ -369,10 +390,19 @@ export class FakeAkashConsole {
   }
 
   /** A bid on the deployment's one order, as a provider would place it. */
-  bid(dseq: string, provider: string, price: string, denom = "uact"): FakeAkashBid {
-    const deployment = this.deployments.find((entry) => entry.dseq === dseq);
+  bid(
+    dseq: string,
+    provider: string,
+    price: string,
+    denom = "uact",
+    owner: string | null = null,
+    bseq = 1
+  ): FakeAkashBid {
+    const deployment = this.deployments.find(
+      (entry) => entry.dseq === dseq && (owner === null || entry.owner === owner)
+    );
     if (!deployment) throw new Error(`no deployment ${dseq}`);
-    const bid: FakeAkashBid = { provider, gseq: 1, oseq: 1, bseq: 1, state: "open", price, denom };
+    const bid: FakeAkashBid = { provider, gseq: 1, oseq: 1, bseq, state: "open", price, denom };
     deployment.bids.push(bid);
     return bid;
   }
@@ -445,8 +475,10 @@ export class FakeAkashConsole {
 
   private leaseJson(deployment: FakeAkashDeployment, lease: FakeAkashLease, withStatus: boolean) {
     const { name, sshExposed } = this.serviceOf(deployment);
-    const forwarded =
-      lease.state === "active" && lease.forwarded && sshExposed
+    const live = lease.state === "active" || lease.state === "reclaiming";
+    const forwarded = lease.ports
+      ? lease.ports
+      : live && lease.forwarded && sshExposed
         ? {
             [name]: [
               {
@@ -473,10 +505,11 @@ export class FakeAkashConsole {
       price: { denom: "uact", amount: `${lease.price}` },
       created_at: String(lease.createdHeight),
       closed_on: lease.state === "closed" ? String(this.height) : "0",
+      ...(lease.reclamation ? { reclamation: lease.reclamation } : {}),
       ...(withStatus
         ? {
             status:
-              lease.state === "active" && lease.forwarded !== null
+              live && (lease.forwarded !== null || lease.ports)
                 ? { forwarded_ports: forwarded, ips: {}, services: {} }
                 : null,
           }
@@ -591,6 +624,9 @@ export class FakeAkashConsole {
       if (search !== null && state === "active" && inState.length > this.searchCap) {
         return json(422, { statusCode: 422, message: "Too many active deployments to search" });
       }
+      if (search !== null && state === "closed" && this.archiveSearchDown) {
+        return json(422, { statusCode: 422, message: "The archive can't be searched right now" });
+      }
       const matched =
         search === null
           ? inState
@@ -599,15 +635,15 @@ export class FakeAkashConsole {
                 (deployment.name ?? "").toLowerCase().includes(search) ||
                 deployment.dseq.includes(search)
             );
-      const page = matched.slice(skip, skip + limit);
+      const page = matched.slice(skip, skip + Math.min(limit, this.pageCap));
       return json(200, {
         data: {
           deployments: page.map((deployment) => this.deploymentJson(deployment, false)),
           pagination: {
-            total: matched.length,
+            total: this.totalUnknown ? null : matched.length,
             skip,
             limit,
-            hasMore: skip + limit < matched.length,
+            hasMore: skip + page.length < matched.length,
           },
         },
       });
@@ -651,7 +687,9 @@ export class FakeAkashConsole {
           deployment.state = "closed";
           deployment.groupState = "closed";
           for (const lease of deployment.leases) lease.state = "closed";
-          for (const bid of deployment.bids) if (bid.state === "open") bid.state = "closed";
+          for (const bid of deployment.bids) {
+            if (bid.state === "open" || bid.state === "active") bid.state = "closed";
+          }
         }
         return json(200, { data: { success: true } });
       }
@@ -772,28 +810,22 @@ export class FakeAkashConsole {
         lease.gseq === asked.gseq &&
         lease.oseq === asked.oseq
     );
-    if (leased) {
-      return json(200, {
-        data: {
-          deployment: this.deploymentJson(deployment, false).deployment,
-          leases: [this.leaseJson(deployment, leased, true)],
-          escrow_account: {},
-        },
-      });
-    }
-    const bid = deployment.bids.find(
+    if (leased) return this.sendManifest(deployment, leased);
+    // A lease names the bidder, not the bid: the chain takes that bidder's open one.
+    const named = deployment.bids.filter(
       (entry) =>
         entry.provider === asked.provider && entry.gseq === asked.gseq && entry.oseq === asked.oseq
     );
+    const bid = named.find((entry) => entry.state === "open") ?? named[0];
     if (deployment.state !== "active" || !bid || bid.state !== "open") {
       return json(400, { statusCode: 400, message: "bid not open" });
     }
+    if (this.unreachableProviders.has(bid.provider)) {
+      return coded(502, "provider_unreachable", "The provider could not be reached");
+    }
     bid.state = "active";
-    for (const other of deployment.bids) if (other.state === "open") other.state = "closed";
+    for (const other of deployment.bids) if (other.state === "open") other.state = "lost";
     this.height++;
-    const host = this.ingressHosts.has(bid.provider)
-      ? this.ingressHosts.get(bid.provider)!
-      : `${bid.provider}.ingress.test`;
     const lease: FakeAkashLease = {
       provider: bid.provider,
       gseq: bid.gseq,
@@ -802,9 +834,29 @@ export class FakeAkashConsole {
       state: "active",
       price: bid.price,
       createdHeight: this.height,
-      forwarded: { host, externalPort: this.nextExternalPort++ },
+      forwarded: null,
     };
     deployment.leases.push(lease);
+    return this.sendManifest(deployment, lease);
+  }
+
+  /** Sends the lease's provider its manifest; until one arrives, the provider reports nothing of it. */
+  private sendManifest(deployment: FakeAkashDeployment, lease: FakeAkashLease): Response {
+    this.manifestSends++;
+    if (this.manifestFailures > 0) {
+      this.manifestFailures--;
+      return coded(502, "manifest_not_delivered", "The provider didn't take the manifest");
+    }
+    if (this.manifestInvalid) {
+      this.manifestInvalid = false;
+      return coded(422, "provider_manifest_invalid", "The provider found the manifest invalid");
+    }
+    if (lease.forwarded === null) {
+      const host = this.ingressHosts.has(lease.provider)
+        ? this.ingressHosts.get(lease.provider)!
+        : `${lease.provider}.ingress.test`;
+      lease.forwarded = { host, externalPort: this.nextExternalPort++ };
+    }
     return json(200, {
       data: {
         deployment: this.deploymentJson(deployment, false).deployment,

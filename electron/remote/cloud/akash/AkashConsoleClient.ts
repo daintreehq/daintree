@@ -84,6 +84,8 @@ export type AkashErrorKind =
   | "unsupported"
   /** The chosen offer can't be leased any more; nothing was leased and the order stays open. */
   | "offer-gone"
+  /** The Console turned a change down before making it, for a reason it named: nothing changed. */
+  | "declined"
   /** A request that changes something was sent and its answer lost: it may or may not have happened. */
   | "outcome-unknown"
   /** The machine is leased but its provider doesn't say yet where its SSH port is. */
@@ -322,11 +324,19 @@ export class AkashConsoleClient {
     return result.data;
   }
 
-  /** Closes a deployment, ending its leases. One already closed closes again as a success. */
-  async closeDeployment(ctx: AkashRequestContext, dseq: string): Promise<void> {
+  /**
+   * Closes a deployment, ending its leases. One already closed closes again as
+   * a success, so a machine's close is sent again after a lost answer; an
+   * order's isn't (`retry: false`), since a lease may land while it waits.
+   */
+  async closeDeployment(
+    ctx: AkashRequestContext,
+    dseq: string,
+    options: { retry: boolean }
+  ): Promise<void> {
     const result = await this.call(
       ctx,
-      { method: "DELETE", path: `/deployments/${requireDseq(dseq)}`, retry: true },
+      { method: "DELETE", path: `/deployments/${requireDseq(dseq)}`, retry: options.retry },
       akashClosedSchema
     );
     if (!result.data.success) {
@@ -339,7 +349,10 @@ export class AkashConsoleClient {
     }
   }
 
-  /** Renames a deployment, touching nothing it runs. */
+  /**
+   * Renames a deployment, touching nothing it runs. Sent once: sent again
+   * after a lost answer, it could undo a rename made since.
+   */
   async renameDeployment(ctx: AkashRequestContext, dseq: string, name: string): Promise<void> {
     await this.call(
       ctx,
@@ -347,7 +360,7 @@ export class AkashConsoleClient {
         method: "PATCH",
         path: `/deployments/${requireDseq(dseq)}`,
         body: { data: { name } },
-        retry: true,
+        retry: false,
       },
       akashAnySchema
     );

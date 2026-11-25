@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { CloudProviderId } from "../../../../shared/types/cloudHosts.js";
 import {
   abortableAkashSleep,
   AkashApiError,
@@ -8,9 +9,9 @@ import {
   resolveAkashConsoleApiUrl,
 } from "../akash/AkashConsoleClient.js";
 import { akashMonthlyDollars } from "../akash/akashBilling.js";
-import { akashMarkedName, parseAkashName } from "../akash/akashDeployments.js";
+import { akashMarkedName, akashRenamed, parseAkashName } from "../akash/akashDeployments.js";
 import { AkashProvider, akashApiKey } from "../akash/AkashProvider.js";
-import { madeInSendWindow } from "../CloudHostStore.js";
+import { cloudMachineClaim, madeInSendWindow, type StoredCloudBinding } from "../CloudHostStore.js";
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import type { CloudProvider, ProviderCreateRequest, ProviderCredentials } from "../provider.js";
 import { AppError } from "../../../utils/errorTypes.js";
@@ -21,6 +22,7 @@ import {
   fakeAkashWallet,
   screenedMillicores,
   type FakeAkashDeployment,
+  type FakeAkashLease,
   type FakeAkashRequest,
 } from "./fakeAkashConsole.js";
 
@@ -975,6 +977,7 @@ describe("AkashProvider declarations", () => {
     };
     for (const hostImage of [
       "ghcr.io/daintreehq/daintree-host:1.0.0",
+      `evil.test/${HOST_IMAGE}`,
       "ghcr.io/someone/daintree-host@sha256:" + "a".repeat(64),
       `${HOST_IMAGE}0`,
     ]) {
@@ -985,8 +988,9 @@ describe("AkashProvider declarations", () => {
 
 const BINDING = "cb_0123456789ab";
 const CREATE_KEY = "550e8400-e29b-41d4-a716-446655440000";
+// A real ed25519 public key, made for these tests; its private half was never kept.
 const PUBLIC_KEY =
-  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIClientKeyForDaintree daintree-cb_0123456789ab";
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILcFNx+78F0OkTxtjczpD3lFD4F7jGgYhUdsFBuikMxd daintree-cb_0123456789ab";
 const LABELS = { daintree: "1", "daintree-binding": BINDING };
 const MARK = `[daintree=1 daintree-binding=${BINDING} daintree-create=${CREATE_KEY}]`;
 
@@ -1014,7 +1018,22 @@ async function placed(extra: Partial<ProviderCreateRequest> = {}) {
   const order = await context.provider.offerCreate.placeOrder(account, orderRequest(extra));
   const dseq = order.id.split("/")[1]!;
   const deployment = context.fake.deployments.find((entry) => entry.dseq === dseq)!;
-  return { ...context, account, order, dseq, deployment };
+  // Another Daintree, or the same one after a restart: nothing carried over but the account.
+  const fresh = () => new AkashProvider(() => context.client, { hostImage: HOST_IMAGE });
+  return { ...context, account, order, dseq, deployment, fresh };
+}
+
+/** A placed order with one bid, leased. */
+async function leasedOrder(price = "1000") {
+  const context = await placed();
+  context.fake.bid(context.dseq, "akash1chosen", price);
+  const [offer] = await context.provider.offerCreate.listOffers(context.account, context.order.id);
+  const machine = await context.provider.offerCreate.leaseOffer(
+    context.account,
+    context.order.id,
+    offer!.id
+  );
+  return { ...context, offer: offer!, machine };
 }
 
 /** A deployment someone else made in the account's project, as the fake files it. */
@@ -1043,27 +1062,76 @@ function seed(
   return deployment;
 }
 
+function liveLease(fake: FakeAkashConsole, provider = "akash1p"): FakeAkashLease {
+  return {
+    provider,
+    gseq: 1,
+    oseq: 1,
+    bseq: 1,
+    state: "active",
+    price: "1",
+    createdHeight: fake.height,
+    forwarded: { host: `${provider}.ingress.test`, externalPort: 30_001 },
+  };
+}
+
 const sent = (fake: FakeAkashConsole, method: string, path: string) =>
   fake.requests.filter((request) => request.method === method && request.path === path);
 
+const writes = (fake: FakeAkashConsole) =>
+  fake.requests.filter((request) => request.method !== "GET").length;
+
+function code(provider: AkashProvider, error: unknown): string {
+  return provider.describeError(error).code;
+}
+
+function claimant(id: string, resourceId: string | null): StoredCloudBinding {
+  return {
+    id,
+    hostId: id,
+    accountId: "ca_0123456789",
+    providerId: "akash" as CloudProviderId,
+    resourceId,
+    ownership: "created-by-daintree",
+    createdFor: null,
+    worktreeCleanup: null,
+    provisioning: null,
+    creation: null,
+    lifetimeSeconds: null,
+    intent: "run",
+    observation: null,
+    access: null,
+    trustedHostKey: null,
+    offeredHostKey: null,
+    lastError: null,
+    createdAt: 1,
+  } as StoredCloudBinding;
+}
+
 describe("Akash deployment names", () => {
-  it("reads back the labels and key it wrote, whatever the values hold", () => {
+  it("writes the labels and key it reads back, encoded so no value can end the mark", () => {
     const labels = { daintree: "1", "daintree-binding": "a b]=[c%" };
-    const name = akashMarkedName("My [box]", labels, "key with space");
+    const name = akashMarkedName("My [box]", labels, "k y");
+    expect(name).toBe(
+      "My [box] [daintree=1 daintree-binding=a%20b%5D%3D%5Bc%25 daintree-create=k%20y]"
+    );
     expect(parseAkashName(name)).toEqual({
       display: "My [box]",
       labels,
-      createKey: "key with space",
-      suffix: name.slice("My [box] ".length),
+      createKey: "k y",
+      suffix: "[daintree=1 daintree-binding=a%20b%5D%3D%5Bc%25 daintree-create=k%20y]",
     });
   });
 
-  it("takes anything that isn't a well-formed mark at the very end as name", () => {
+  it("takes anything but a create's own mark at the very end as name", () => {
     for (const name of [
       "Plain name",
       "Ends [with brackets of its own]",
+      "Labels but no create [daintree=1 daintree-binding=cb_0123456789ab]",
       "Half [daintree=1",
-      "Twice [daintree=1 daintree=2]",
+      `Then text ${MARK} after`,
+      `Twice [daintree-create=a daintree-create=b]`,
+      "Twice [daintree=1 daintree=2 daintree-create=a]",
       "Bad escape [daintree-create=%E0%A4%A]",
       null,
     ]) {
@@ -1076,12 +1144,21 @@ describe("Akash deployment names", () => {
     }
   });
 
-  it("refuses a label it couldn't read back, and a name too long for the Console", () => {
+  it("refuses a label it couldn't read back, and a name past the Console's 256 characters", () => {
     expect(() => akashMarkedName("x", { "Has Space": "1" }, CREATE_KEY)).toThrow(AkashApiError);
     expect(() => akashMarkedName("x", { "daintree-create": "1" }, CREATE_KEY)).toThrow(
       AkashApiError
     );
-    expect(() => akashMarkedName("x".repeat(200), LABELS, CREATE_KEY)).toThrow(/too long/);
+    expect(() => akashMarkedName("x", LABELS, "\uD800")).toThrow(AkashApiError);
+    const room = 256 - MARK.length - 1;
+    expect(akashMarkedName("x".repeat(room), LABELS, CREATE_KEY)).toHaveLength(256);
+    expect(() => akashMarkedName("x".repeat(room + 1), LABELS, CREATE_KEY)).toThrow(/too long/);
+  });
+
+  it("keeps a deployment's mark through a rename, and adds none to one without", () => {
+    expect(akashRenamed(`Old ${MARK}`, "New")).toBe(`New ${MARK}`);
+    expect(akashRenamed("Someone's [notes]", "New")).toBe("New");
+    expect(() => akashRenamed(`Old ${MARK}`, "x".repeat(256))).toThrow(/too long/);
   });
 });
 
@@ -1098,12 +1175,13 @@ describe("AkashProvider orders and machines", () => {
       secretEnv: [],
       name: `Build host ${MARK}`,
     });
-    expect(data.definition).toMatchObject({
+    expect(data.definition).toEqual({
+      version: "2.0",
       services: {
         daintree: {
           image: HOST_IMAGE,
           env: [`DAINTREE_AUTHORIZED_KEYS=${PUBLIC_KEY}`],
-          expose: [{ port: 22, to: [{ global: true }] }],
+          expose: [{ port: 22, proto: "tcp", to: [{ global: true }] }],
         },
       },
       profiles: {
@@ -1120,10 +1198,11 @@ describe("AkashProvider orders and machines", () => {
           region: {
             attributes: { "location-region": "eu-west" },
             signedBy: { anyOf: [AUDITOR] },
-            pricing: { daintree: { denom: "uact" } },
+            pricing: { daintree: { denom: "uact", amount: 100_000 } },
           },
         },
       },
+      deployment: { daintree: { region: { profile: "daintree", count: 1 } } },
     });
 
     // Offers arrive while the person waits; none yet is no answer.
@@ -1159,9 +1238,9 @@ describe("AkashProvider orders and machines", () => {
     // When the order was placed, from its block: the person may take a while to choose.
     expect(machine.createdAt).toBe(fake.blockTime(deployment.createdHeight));
     const after = await provider.offerCreate.listOffers(account, order.id);
-    expect(after.map((offer) => [offer.bidder.id, offer.choosable])).toEqual([
-      ["akash1cheap", false],
-      ["akash1dear", false],
+    expect(after.map((offer) => [offer.bidder.id, offer.choosable, offer.reason])).toEqual([
+      ["akash1cheap", false, "Another offer was leased"],
+      ["akash1dear", false, "Already leased"],
     ]);
 
     expect(await provider.inspect(account, order.id)).toMatchObject({
@@ -1194,77 +1273,131 @@ describe("AkashProvider orders and machines", () => {
     expect(await provider.list(account)).toEqual([]);
   });
 
+  it("asks for each size in the chain's terms and reads it back as that size", async () => {
+    const { fake, provider, account, order, dseq } = await placed({
+      machineType: "akash-4c-16g",
+      provisioning: { location: "NA-US-West", image: null, network: null },
+    });
+    const definition = (
+      sent(fake, "POST", "/deployments")[0]!.body as {
+        data: { definition: { profiles: Record<string, Record<string, unknown>> } };
+      }
+    ).data.definition;
+    expect(definition.profiles.compute).toEqual({
+      daintree: {
+        resources: {
+          cpu: { units: 4, attributes: { arch: "amd64" } },
+          memory: { size: "16Gi" },
+          storage: [{ size: "100Gi" }],
+        },
+      },
+    });
+    expect(definition.profiles.placement).toMatchObject({
+      region: { attributes: { "location-region": "na-us-west" } },
+    });
+    fake.bid(dseq, "akash1p", "1000");
+    const [offer] = await provider.offerCreate.listOffers(account, order.id);
+    await provider.offerCreate.leaseOffer(account, order.id, offer!.id);
+    expect(await provider.list(account)).toEqual([
+      expect.objectContaining({ machineType: "akash-4c-16g", vcpu: 4, memoryGB: 16 }),
+    ]);
+    expect(await provider.inspect(account, order.id)).toMatchObject({
+      machineType: "akash-4c-16g",
+      vcpu: 4,
+      memoryGB: 16,
+    });
+  });
+
   it("checks what it would send before placing anything", async () => {
     const { fake, provider, credentials } = setup();
     const account = credentials(TEAM_KEY, TEAM_AGENTS);
     for (const extra of [
       { machineType: "akash-3c-7g" },
       { provisioning: { location: null, image: null, network: null } },
+      { provisioning: { location: "  ", image: null, network: null } },
       { publicKey: null },
+      { publicKey: "ssh-ed25519 AAAA" },
+      { publicKey: PUBLIC_KEY.replace("ssh-ed25519", "ssh-rsa") },
       { publicKey: `${PUBLIC_KEY}\nssh-ed25519 AAAAsecond` },
       { name: "x".repeat(200) },
     ]) {
-      const refused = provider.describeError(
-        await rejection(provider.offerCreate.placeOrder(account, orderRequest(extra)))
-      );
-      expect(refused.code).toBe("refused");
+      expect(
+        code(
+          provider,
+          await rejection(provider.offerCreate.placeOrder(account, orderRequest(extra)))
+        )
+      ).toBe("refused");
     }
     expect(fake.requests).toHaveLength(0);
   });
 
-  it("finds an order whose answer was lost from its labels and key alone, and only that create's", async () => {
+  it("tells an order Console refused from one that may have been placed", async () => {
     const { fake, provider, credentials } = setup();
     const account = credentials(TEAM_KEY, TEAM_AGENTS);
-    fake.lose("POST", /^\/deployments$/);
-    const lost = provider.describeError(
-      await rejection(provider.offerCreate.placeOrder(account, orderRequest()))
+    const place = () => provider.offerCreate.placeOrder(account, orderRequest());
+    fake.fail("POST", /^\/deployments$/, () =>
+      reply(404, { statusCode: 404, message: "Unknown project" })
     );
-    expect(lost.code).toBe("outcome-unknown");
-    expect(sent(fake, "POST", "/deployments")).toHaveLength(1);
+    expect(code(provider, await rejection(place()))).toBe("credential-invalid");
+    fake.fail("POST", /^\/deployments$/, () => coded(503, "deposit_price_unavailable"));
+    expect(code(provider, await rejection(place()))).toBe("refused");
+    fake.fail("POST", /^\/deployments$/, () => coded(403, "project_budget_exceeded"));
+    expect(code(provider, await rejection(place()))).toBe("billing");
+    // An outage could have placed it: never a refusal, and never sent twice.
+    fake.fail("POST", /^\/deployments$/, () => reply(503, { statusCode: 503, message: "down" }));
+    expect(code(provider, await rejection(place()))).toBe("outcome-unknown");
+    expect(sent(fake, "POST", "/deployments")).toHaveLength(4);
+    expect(fake.deployments).toHaveLength(0);
+  });
+
+  it("finds an order whose answer was lost from its labels and key alone, and only that create's", async () => {
+    const { fake, provider, credentials, client } = setup();
+    const account = credentials(TEAM_KEY, TEAM_AGENTS);
+    fake.lose("POST", /^\/deployments$/);
+    expect(
+      code(provider, await rejection(provider.offerCreate.placeOrder(account, orderRequest())))
+    ).toBe("outcome-unknown");
     const [made] = fake.deployments;
-    // What must not match: another create for the binding, a name that only mentions the key,
-    // an order already leased, one closed, and another project's.
+    // What must not match: another create's key, a longer key holding this one, the key only
+    // as text, the same key for another binding, an order already leased, one whose group
+    // isn't open, one closed, and another project's.
     await provider.offerCreate.placeOrder(account, orderRequest({ idempotencyKey: "another-key" }));
+    seed(fake, `Long [daintree=1 daintree-binding=${BINDING} daintree-create=${CREATE_KEY}-2]`);
     seed(fake, `Notes on daintree-create=${CREATE_KEY}`);
-    seed(fake, `Leased ${MARK}`, {
-      leases: [
-        {
-          provider: "akash1p",
-          gseq: 1,
-          oseq: 1,
-          bseq: 1,
-          state: "closed",
-          price: "1",
-          createdHeight: fake.height,
-          forwarded: null,
-        },
-      ],
-    });
+    seed(fake, `Other [daintree=1 daintree-binding=cb_ffffffffffff daintree-create=${CREATE_KEY}]`);
+    seed(fake, `Leased ${MARK}`, { leases: [{ ...liveLease(fake), state: "closed" }] });
+    seed(fake, `Paused ${MARK}`, { groupState: "paused" });
     seed(fake, `Closed ${MARK}`, { state: "closed", groupState: "closed" });
     seed(fake, `Elsewhere ${MARK}`, { projectId: TEAM_DEFAULT });
 
     const match = { labels: LABELS, idempotencyKey: CREATE_KEY };
     const wallet = fakeAkashWallet(TEAM_ORG);
-    expect(await provider.offerCreate.findOrders(account, match)).toEqual([
+    const fresh = new AkashProvider(() => client, { hostImage: HOST_IMAGE });
+    expect(await fresh.offerCreate.findOrders(account, match)).toEqual([
       { id: `${wallet}/${made!.dseq}` },
     ]);
     // A second order placed for the same create is found beside it.
     const second = seed(fake, `Build host ${MARK}`);
-    expect(await provider.offerCreate.findOrders(account, match)).toEqual([
+    expect(await fresh.offerCreate.findOrders(account, match)).toEqual([
       { id: `${wallet}/${made!.dseq}` },
       { id: `${wallet}/${second.dseq}` },
     ]);
     expect(
-      await provider.offerCreate.findOrders(account, { ...match, labels: { daintree: "1" } })
+      await fresh.offerCreate.findOrders(account, { ...match, labels: { daintree: "1" } })
     ).toEqual([]);
+    // Looking never places anything.
+    expect(sent(fake, "POST", "/deployments")).toHaveLength(2);
   });
 
-  it("reads every page when the Console won't search that many deployments", async () => {
+  it("reads every page, as the Console pages them, when it won't search that many deployments", async () => {
     const { fake, provider, credentials } = setup();
     const account = credentials(TEAM_KEY, TEAM_AGENTS);
     for (let index = 0; index < 150; index++) seed(fake, `Someone's ${index}`);
     const order = await provider.offerCreate.placeOrder(account, orderRequest());
     fake.searchCap = 10;
+    // Pages shorter than asked for, and no total: only `hasMore` says when to stop.
+    fake.pageCap = 60;
+    fake.totalUnknown = true;
     expect(
       await provider.offerCreate.findOrders(account, { labels: LABELS, idempotencyKey: CREATE_KEY })
     ).toEqual([order]);
@@ -1274,183 +1407,430 @@ describe("AkashProvider orders and machines", () => {
     expect(listed).toEqual([
       expect.objectContaining({ search: `daintree-create=${CREATE_KEY}`, skip: "0" }),
       expect.objectContaining({ skip: "0", limit: "100", projectId: TEAM_AGENTS }),
-      expect.objectContaining({ skip: "100", limit: "100", projectId: TEAM_AGENTS }),
+      expect.objectContaining({ skip: "59" }),
+      expect.objectContaining({ skip: "118" }),
     ]);
-    expect(listed[1]).not.toHaveProperty("search");
+    expect(listed.slice(1).every((query) => !("search" in query))).toBe(true);
+  });
+
+  it("starts over when the list moves while it is read, rather than miss a row", async () => {
+    const { fake, provider, credentials } = setup();
+    const account = credentials(TEAM_KEY, TEAM_AGENTS);
+    const first = seed(fake, "Someone's first");
+    for (let index = 0; index < 120; index++) seed(fake, `Someone's ${index}`);
+    const order = await provider.offerCreate.placeOrder(account, orderRequest());
+    fake.searchCap = 0;
+    let moved = false;
+    fake.onAnswered = (request) => {
+      // Right after the first plain page: one row leaves, and every later row moves up.
+      if (!moved && request.path === "/deployments" && !request.search.includes("search")) {
+        moved = true;
+        first.state = "closed";
+      }
+    };
+    expect(
+      await provider.offerCreate.findOrders(account, { labels: LABELS, idempotencyKey: CREATE_KEY })
+    ).toEqual([order]);
+    const skips = sent(fake, "GET", "/deployments")
+      .slice(1)
+      .map((request) => new URLSearchParams(request.search).get("skip"));
+    expect(skips).toEqual(["0", "99", "0", "99"]);
+  });
+
+  it("refuses rather than half-answers when the Console won't list, searched or not", async () => {
+    const { fake, provider, credentials } = setup();
+    const account = credentials(TEAM_KEY, TEAM_AGENTS);
+    fake.fail("GET", /^\/deployments$/, () => coded(403, "project_forbidden"));
+    const error = await rejection(
+      provider.offerCreate.findOrders(account, { labels: LABELS, idempotencyKey: CREATE_KEY })
+    );
+    expect(code(provider, error)).toBe("permission");
+    expect(sent(fake, "GET", "/deployments")).toHaveLength(1);
   });
 
   it("finds a lease whose answer was lost, and never closes it as an unchosen order", async () => {
     const sentAt = Date.now();
+    const { fake, provider, account, order, dseq, deployment, fresh } = await placed();
+    fake.bid(dseq, "akash1chosen", "1500");
+    const [offer] = await provider.offerCreate.listOffers(account, order.id);
+    // The lease is made, its answer lost, and the order can't be read back either.
+    fake.lose("POST", /^\/leases$/);
+    fake.onAnswered = (request) => {
+      if (request.method === "POST" && request.path === "/leases") {
+        fake.onAnswered = null;
+        fake.fail(
+          "GET",
+          new RegExp(`^/deployments/${dseq}$`),
+          () => new TypeError("fetch failed"),
+          3
+        );
+      }
+    };
+    expect(
+      code(provider, await rejection(provider.offerCreate.leaseOffer(account, order.id, offer!.id)))
+    ).toBe("outcome-unknown");
+    // A decoy that only names the binding in its display, and carries another's mark.
+    seed(
+      fake,
+      `daintree-binding=${BINDING} [daintree=1 daintree-binding=cb_ffffffffffff daintree-create=x]`,
+      {
+        leases: [liveLease(fake)],
+      }
+    );
+
+    const recovering = fresh();
+    expect(
+      await recovering.offerCreate.findOrders(account, {
+        labels: LABELS,
+        idempotencyKey: CREATE_KEY,
+      })
+    ).toEqual([]);
+    const label = `daintree-binding=${BINDING}`;
+    const found = await recovering.list(account, { label, location: "eu-west" });
+    expect(found).toEqual([
+      expect.objectContaining({ resourceId: order.id, machine: "running", labels: LABELS }),
+    ]);
+    // Dated by the order's block, as the lifecycle's own lookup checks a create's machine.
+    expect(found[0]!.createdAt).toBe(fake.blockTime(deployment.createdHeight));
+    expect(madeInSendWindow(sentAt, found[0]!.createdAt)).toBe(true);
+    expect(await recovering.list(account, { label, location: "na-us-west" })).toEqual([]);
+
+    expect(await recovering.offerCreate.closeOrder(account, order.id)).toEqual({
+      kind: "leased",
+      resource: expect.objectContaining({ resourceId: order.id, machine: "running" }),
+    });
+    // Choosing it again answers with the machine it leased, sending nothing.
+    expect(await recovering.offerCreate.leaseOffer(account, order.id, offer!.id)).toMatchObject({
+      resourceId: order.id,
+      machine: "running",
+      error: null,
+    });
+    expect(sent(fake, "POST", "/leases")).toHaveLength(1);
+    expect(sent(fake, "DELETE", `/deployments/${dseq}`)).toHaveLength(0);
+  });
+
+  it("reads a lease's answer back from the order when the answer itself was lost", async () => {
     const { fake, provider, account, order, dseq } = await placed();
     fake.bid(dseq, "akash1chosen", "1500");
     const [offer] = await provider.offerCreate.listOffers(account, order.id);
     fake.lose("POST", /^\/leases$/);
-    const lost = provider.describeError(
-      await rejection(provider.offerCreate.leaseOffer(account, order.id, offer!.id))
-    );
-    expect(lost.code).toBe("outcome-unknown");
-    expect(
-      await provider.offerCreate.findOrders(account, { labels: LABELS, idempotencyKey: CREATE_KEY })
-    ).toEqual([]);
-    const label = `daintree-binding=${BINDING}`;
-    const found = await provider.list(account, { label, location: "eu-west" });
-    expect(found).toEqual([
-      expect.objectContaining({ resourceId: order.id, machine: "running", labels: LABELS }),
-    ]);
-    // Dated as the lifecycle's own lookup checks a create's machine.
-    expect(madeInSendWindow(sentAt, found[0]!.createdAt)).toBe(true);
-    expect(await provider.list(account, { label, location: "na-us-west" })).toEqual([]);
-
-    expect(await provider.offerCreate.closeOrder(account, order.id)).toEqual({
-      kind: "leased",
-      resource: expect.objectContaining({ resourceId: order.id, machine: "running" }),
+    expect(await provider.offerCreate.leaseOffer(account, order.id, offer!.id)).toMatchObject({
+      resourceId: order.id,
+      machine: "running",
+      error: null,
     });
-    expect(sent(fake, "DELETE", `/deployments/${dseq}`)).toHaveLength(0);
-    // Choosing it again answers with the machine it leased, sending nothing.
-    const again = await provider.offerCreate.leaseOffer(account, order.id, offer!.id);
-    expect(again).toMatchObject({ resourceId: order.id, machine: "running" });
-    expect(sent(fake, "POST", "/leases")).toHaveLength(1);
+    // An answer it can't read is read back the same way.
+    const other = await placed();
+    other.fake.bid(other.dseq, "akash1chosen", "1500");
+    const [chosen] = await other.provider.offerCreate.listOffers(other.account, other.order.id);
+    other.fake.commitThen("POST", /^\/leases$/, () => reply(200, { data: { leases: [{}] } }));
+    expect(
+      await other.provider.offerCreate.leaseOffer(other.account, other.order.id, chosen!.id)
+    ).toMatchObject({ resourceId: other.order.id, machine: "running" });
   });
 
-  it("finds a machine the create made and deleted since, so a copy is never taken for it", async () => {
-    const { fake, provider, account, order, dseq } = await placed();
-    fake.bid(dseq, "akash1chosen", "1500");
-    const [offer] = await provider.offerCreate.listOffers(account, order.id);
-    await provider.offerCreate.leaseOffer(account, order.id, offer!.id);
+  it("won't let a block it couldn't read pass for a create's machine made at an unknown time", async () => {
+    const { fake, account, fresh } = await leasedOrder();
+    const recovering = fresh();
+    fake.fail("GET", /^\/blocks\//, () => reply(503, { statusCode: 503, message: "down" }), 3);
+    const lookup = await rejection(
+      recovering.list(account, { label: `daintree-binding=${BINDING}` })
+    );
+    expect(code(recovering, lookup)).toBe("provider-unreachable");
+    // The import list shows the machine, its time unknown.
+    fake.fail("GET", /^\/blocks\//, () => reply(503, { statusCode: 503, message: "down" }), 3);
+    expect(await recovering.list(account)).toEqual([expect.objectContaining({ createdAt: null })]);
+    // Public, so no key goes with it.
+    const blocks = fake.requests.filter((request) => request.path.startsWith("/blocks/"));
+    expect(blocks.every((request) => request.apiKey === null && request.projectId === null)).toBe(
+      true
+    );
+  });
+
+  it("finds a machine the create made and deleted since, dated apart from a later copy", async () => {
+    const sentAt = Date.now();
+    const { fake, provider, account, order } = await leasedOrder();
     await provider.delete(account, order.id);
+    // Someone made a copy with the same name an hour and a half on.
+    fake.height += 900;
+    const copy = seed(fake, `Build host ${MARK}`, { leases: [liveLease(fake)] });
     const found = await provider.list(account, { label: `daintree-binding=${BINDING}` });
-    expect(found).toEqual([expect.objectContaining({ resourceId: order.id, machine: "deleted" })]);
+    const original = found.find((resource) => resource.resourceId === order.id);
+    const later = found.find((resource) => resource.resourceId.endsWith(`/${copy.dseq}`));
+    expect(original).toMatchObject({ machine: "deleted" });
+    expect(later).toMatchObject({ machine: "running" });
+    expect(madeInSendWindow(sentAt, original!.createdAt)).toBe(true);
+    expect(madeInSendWindow(sentAt, later!.createdAt)).toBe(false);
     // The import list shows only what runs now.
-    expect(await provider.list(account)).toEqual([]);
+    expect((await provider.list(account)).map((resource) => resource.resourceId)).toEqual([
+      later!.resourceId,
+    ]);
   });
 
   it("refuses an offer that has gone, sending nothing and leaving the order open", async () => {
     const { fake, provider, account, order, dseq, deployment } = await placed();
     const withdrawn = fake.bid(dseq, "akash1gone", "1000");
-    fake.bid(dseq, "akash1other", "1100");
+    fake.bid(dseq, "akash1down", "1100");
+    fake.bid(dseq, "akash1fine", "1200");
     const offers = await provider.offerCreate.listOffers(account, order.id);
     withdrawn.state = "closed";
-    const gone = provider.describeError(
-      await rejection(provider.offerCreate.leaseOffer(account, order.id, offers[0]!.id))
-    );
-    expect(gone.code).toBe("refused");
+    const gone = await rejection(provider.offerCreate.leaseOffer(account, order.id, offers[0]!.id));
+    expect(gone).toMatchObject({ kind: "offer-gone" });
+    expect(code(provider, gone)).toBe("refused");
     expect(sent(fake, "POST", "/leases")).toHaveLength(0);
 
-    // An unreachable provider leases nothing: Console says so, and the order stays open.
-    fake.fail("POST", /^\/leases$/, () => coded(502, "provider_unreachable"));
-    const unreachable = provider.describeError(
-      await rejection(provider.offerCreate.leaseOffer(account, order.id, offers[1]!.id))
+    // Console couldn't reach the provider: it says nothing was leased.
+    fake.unreachableProviders.add("akash1down");
+    const unreachable = await rejection(
+      provider.offerCreate.leaseOffer(account, order.id, offers[1]!.id)
     );
-    expect(unreachable.code).toBe("refused");
+    expect(unreachable).toMatchObject({ kind: "offer-gone", code: "provider_unreachable" });
     expect(deployment.leases).toHaveLength(0);
     expect(
       await provider.offerCreate.findOrders(account, { labels: LABELS, idempotencyKey: CREATE_KEY })
     ).toEqual([order]);
 
-    // Once one offer is leased, no other is.
-    await provider.offerCreate.leaseOffer(account, order.id, offers[1]!.id);
+    // Another offer is still there to choose.
+    expect(await provider.offerCreate.leaseOffer(account, order.id, offers[2]!.id)).toMatchObject({
+      machine: "running",
+    });
+    // Once one is leased, another never is, and a machine stands: not a refusal.
     withdrawn.state = "open";
-    const taken = provider.describeError(
-      await rejection(provider.offerCreate.leaseOffer(account, order.id, offers[0]!.id))
+    const taken = await rejection(
+      provider.offerCreate.leaseOffer(account, order.id, offers[0]!.id)
     );
-    expect(taken.code).toBe("refused");
+    expect(code(provider, taken)).toBe("outcome-unknown");
     expect(sent(fake, "POST", "/leases")).toHaveLength(2);
   });
 
-  it("sends a lease again for a manifest that didn't arrive, and answers a refused one with the machine", async () => {
+  it("won't choose between two open offers from one provider, which a lease can't tell apart", async () => {
+    const { fake, provider, account, order, dseq } = await placed();
+    fake.bid(dseq, "akash1twice", "1000", "uact", null, 1);
+    fake.bid(dseq, "akash1twice", "900", "uact", null, 2);
+    const offers = await provider.offerCreate.listOffers(account, order.id);
+    expect(offers.map((offer) => [offer.choosable, offer.reason])).toEqual([
+      [false, "The provider made more than one offer on this order"],
+      [false, "The provider made more than one offer on this order"],
+    ]);
+    expect(offers[0]!.id).not.toBe(offers[1]!.id);
+    expect(
+      code(
+        provider,
+        await rejection(provider.offerCreate.leaseOffer(account, order.id, offers[1]!.id))
+      )
+    ).toBe("refused");
+    expect(sent(fake, "POST", "/leases")).toHaveLength(0);
+  });
+
+  it("says so when the provider swapped its offer as it was leased", async () => {
+    const { fake, provider, account, order, dseq, deployment } = await placed();
+    const bid = fake.bid(dseq, "akash1swap", "1000");
+    const [offer] = await provider.offerCreate.listOffers(account, order.id);
+    fake.onAnswered = (request) => {
+      // Between the read and the lease, the provider withdraws and bids again, dearer.
+      if (request.path === "/bids" && bid.state === "open") {
+        fake.onAnswered = null;
+        bid.state = "closed";
+        fake.bid(dseq, "akash1swap", "3000", "uact", null, 2);
+      }
+    };
+    const machine = await provider.offerCreate.leaseOffer(account, order.id, offer!.id);
+    expect(deployment.leases[0]).toMatchObject({ bseq: 2, price: "3000" });
+    expect(machine).toMatchObject({
+      machine: "running",
+      error: expect.stringMatching(/replaced its offer.*\$1\.8000 an hour/),
+    });
+  });
+
+  it("sends a lease again while its manifest doesn't arrive, and reports what then stands", async () => {
     const delivered = await placed();
     delivered.fake.bid(delivered.dseq, "akash1slow", "1000");
     const [slow] = await delivered.provider.offerCreate.listOffers(
       delivered.account,
       delivered.order.id
     );
-    delivered.fake.commitThen("POST", /^\/leases$/, () => coded(502, "manifest_not_delivered"));
-    const machine = await delivered.provider.offerCreate.leaseOffer(
-      delivered.account,
-      delivered.order.id,
-      slow!.id
-    );
-    expect(machine).toMatchObject({ machine: "running", error: null });
+    delivered.fake.manifestFailures = 1;
+    expect(
+      await delivered.provider.offerCreate.leaseOffer(
+        delivered.account,
+        delivered.order.id,
+        slow!.id
+      )
+    ).toMatchObject({ machine: "running", error: null });
     const bodies = sent(delivered.fake, "POST", "/leases").map((request) => request.body);
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).toEqual(bodies[0]);
+    expect(delivered.deployment.leases).toHaveLength(1);
+    expect(delivered.fake.manifestSends).toBe(2);
+    await delivered.provider.sshAccess!(delivered.account, delivered.order.id);
 
-    const undelivered = await placed();
-    undelivered.fake.bid(undelivered.dseq, "akash1slow", "1000");
-    const [stuck] = await undelivered.provider.offerCreate.listOffers(
-      undelivered.account,
-      undelivered.order.id
+    const stuck = await placed();
+    stuck.fake.bid(stuck.dseq, "akash1slow", "1000");
+    const [late] = await stuck.provider.offerCreate.listOffers(stuck.account, stuck.order.id);
+    stuck.fake.manifestFailures = 2;
+    const pending = await stuck.provider.offerCreate.leaseOffer(
+      stuck.account,
+      stuck.order.id,
+      late!.id
     );
-    undelivered.fake.commitThen(
-      "POST",
-      /^\/leases$/,
-      () => coded(502, "manifest_not_delivered"),
-      2
-    );
-    const pending = await undelivered.provider.offerCreate.leaseOffer(
-      undelivered.account,
-      undelivered.order.id,
-      stuck!.id
-    );
-    expect(pending.resourceId).toBe(undelivered.order.id);
-    expect(pending.error).toMatch(/hasn't taken the deployment/);
-
-    const invalid = await placed();
-    invalid.fake.bid(invalid.dseq, "akash1strict", "1000");
-    const [strict] = await invalid.provider.offerCreate.listOffers(
-      invalid.account,
-      invalid.order.id
-    );
-    invalid.fake.commitThen("POST", /^\/leases$/, () => coded(422, "provider_manifest_invalid"));
-    const refused = await invalid.provider.offerCreate.leaseOffer(
-      invalid.account,
-      invalid.order.id,
-      strict!.id
-    );
-    expect(refused.error).toMatch(/invalid/);
-    expect(sent(invalid.fake, "POST", "/leases")).toHaveLength(1);
+    expect(pending).toMatchObject({
+      resourceId: stuck.order.id,
+      error: expect.stringMatching(/hasn't taken/),
+    });
+    expect(stuck.fake.manifestSends).toBe(2);
+    expect(stuck.deployment.leases).toHaveLength(1);
+    expect(
+      code(
+        stuck.provider,
+        await rejection(stuck.provider.sshAccess!(stuck.account, stuck.order.id))
+      )
+    ).toBe("provider-unreachable");
+    // Choosing it again sends the manifest again, since the provider still reports nothing.
+    expect(
+      await stuck.provider.offerCreate.leaseOffer(stuck.account, stuck.order.id, late!.id)
+    ).toMatchObject({
+      machine: "running",
+      error: null,
+    });
+    expect(stuck.fake.manifestSends).toBe(3);
+    expect(stuck.deployment.leases).toHaveLength(1);
+    await stuck.provider.sshAccess!(stuck.account, stuck.order.id);
   });
 
-  it("closes an order nobody chose, and answers one already closed as closed", async () => {
+  it("answers a lease the provider refused as invalid with the machine, failed, to delete", async () => {
+    for (const failuresFirst of [0, 1]) {
+      const { fake, provider, account, order, dseq, deployment } = await placed();
+      fake.bid(dseq, "akash1strict", "1000");
+      const [strict] = await provider.offerCreate.listOffers(account, order.id);
+      fake.manifestFailures = failuresFirst;
+      fake.manifestInvalid = true;
+      const refused = await provider.offerCreate.leaseOffer(account, order.id, strict!.id);
+      expect(refused).toMatchObject({
+        resourceId: order.id,
+        machine: "error",
+        error: expect.stringMatching(/invalid/),
+      });
+      expect(fake.manifestSends).toBe(failuresFirst + 1);
+      expect(deployment.leases).toHaveLength(1);
+      expect(deployment.leases[0]!.forwarded).toBeNull();
+    }
+  });
+
+  it("closes an order nobody chose, once, and answers one already closed as closed", async () => {
     const { fake, provider, account, order, dseq, deployment } = await placed();
     expect(await provider.offerCreate.closeOrder(account, order.id)).toEqual({ kind: "closed" });
     expect(deployment.state).toBe("closed");
+    expect(code(provider, await rejection(provider.inspect(account, order.id)))).toBe("not-found");
+    expect(
+      await provider.offerCreate.findOrders(account, { labels: LABELS, idempotencyKey: CREATE_KEY })
+    ).toEqual([]);
     expect(await provider.offerCreate.closeOrder(account, order.id)).toEqual({ kind: "closed" });
     expect(
       await provider.offerCreate.closeOrder(account, `${fakeAkashWallet(TEAM_ORG)}/999`)
-    ).toEqual({ kind: "closed" });
+    ).toEqual({
+      kind: "closed",
+    });
+    expect(fake.requests.filter((request) => request.method === "DELETE")).toHaveLength(1);
     expect(sent(fake, "DELETE", `/deployments/${dseq}`)).toHaveLength(1);
-    // A machine is never an order: it isn't listed, inspected or found again as one.
-    expect(await provider.list(account)).toEqual([]);
+  });
+
+  it("never sends an order's close twice, and says when a lease landed under it", async () => {
+    const lost = await placed();
+    lost.fake.lose("DELETE", /^\/deployments\/\d+$/);
+    expect(
+      code(
+        lost.provider,
+        await rejection(lost.provider.offerCreate.closeOrder(lost.account, lost.order.id))
+      )
+    ).toBe("provider-unreachable");
+    expect(sent(lost.fake, "DELETE", `/deployments/${lost.dseq}`)).toHaveLength(1);
+    expect(await lost.provider.offerCreate.closeOrder(lost.account, lost.order.id)).toEqual({
+      kind: "closed",
+    });
+
+    const raced = await placed();
+    raced.fake.bid(raced.dseq, "akash1quick", "1000");
+    raced.fake.onAnswered = (request) => {
+      // Someone leases the order on the Akash Console between the read and the close.
+      if (request.method === "GET" && request.path === `/deployments/${raced.dseq}`) {
+        raced.fake.onAnswered = null;
+        raced.deployment.bids[0]!.state = "active";
+        raced.deployment.leases.push(liveLease(raced.fake, "akash1quick"));
+      }
+    };
+    expect(await raced.provider.offerCreate.closeOrder(raced.account, raced.order.id)).toEqual({
+      kind: "leased",
+      resource: expect.objectContaining({ resourceId: raced.order.id, machine: "deleted" }),
+    });
+
+    const unclear = await placed();
+    unclear.fake.fail("DELETE", /^\/deployments\/\d+$/, () =>
+      reply(200, { data: { success: false } })
+    );
+    expect(
+      await rejection(unclear.provider.offerCreate.closeOrder(unclear.account, unclear.order.id))
+    ).toMatchObject({ kind: "bad-response" });
+  });
+
+  it("sends a machine's close again after a lost answer, since closing it twice closes nothing more", async () => {
+    const { fake, provider, account, order, dseq, deployment } = await leasedOrder();
+    fake.lose("DELETE", /^\/deployments\/\d+$/);
+    await provider.delete(account, order.id);
+    expect(sent(fake, "DELETE", `/deployments/${dseq}`)).toHaveLength(2);
+    expect(deployment.state).toBe("closed");
   });
 
   it("reaches a running machine at the port its provider forwards now", async () => {
-    const { fake, provider, account, order, dseq, deployment } = await placed();
-    fake.bid(dseq, "akash1moving", "1000");
-    const [offer] = await provider.offerCreate.listOffers(account, order.id);
-    await provider.offerCreate.leaseOffer(account, order.id, offer!.id);
+    const { fake, provider, account, order, dseq, deployment } = await leasedOrder();
     const lease = deployment.leases[0]!;
     const first = await provider.sshAccess!(account, order.id);
     lease.forwarded = { host: lease.forwarded!.host, externalPort: 32_999 };
     const second = await provider.sshAccess!(account, order.id);
-    expect(first.endpoint.port).not.toBe(32_999);
-    expect(second.endpoint).toEqual({ host: "akash1moving.ingress.test", port: 32_999 });
+    expect(first.endpoint).toEqual({ host: "akash1chosen.ingress.test", port: 31_022 });
+    expect(second.endpoint).toEqual({ host: "akash1chosen.ingress.test", port: 32_999 });
+    // Each answer is read afresh from the Console.
+    expect(sent(fake, "GET", `/deployments/${dseq}`).length).toBeGreaterThanOrEqual(2);
 
-    const describe = async () =>
-      provider.describeError(await rejection(provider.sshAccess!(account, order.id)));
+    // Of several, the daintree service's port 22 that answers.
+    lease.ports = {
+      other: [{ port: 22, externalPort: 1, host: "other.test", available: 1 }],
+      daintree: [
+        { port: 80, externalPort: 2, host: "web.test", available: 1 },
+        { port: 22, externalPort: 3, host: "down.test", available: 0 },
+        { port: 22, externalPort: 32_123, host: "up.test", available: 1 },
+      ],
+    };
+    expect((await provider.sshAccess!(account, order.id)).endpoint).toEqual({
+      host: "up.test",
+      port: 32_123,
+    });
+
+    const reason = async () =>
+      code(provider, await rejection(provider.sshAccess!(account, order.id)));
     // Not said yet: worth asking again.
+    lease.ports = { daintree: [{ port: 22, externalPort: 3, host: "down.test", available: 0 }] };
+    expect(await reason()).toBe("provider-unreachable");
+    lease.ports = undefined;
     lease.forwarded = null;
-    expect((await describe()).code).toBe("provider-unreachable");
+    expect(await reason()).toBe("provider-unreachable");
     lease.forwarded = { host: null, externalPort: 32_999 };
-    expect((await describe()).code).toBe("provider-unreachable");
+    expect(await reason()).toBe("provider-unreachable");
     // Said, and unusable.
     lease.forwarded = { host: "not a host!", externalPort: 32_999 };
-    expect((await describe()).code).toBe("failed");
-    lease.forwarded = { host: "akash1moving.ingress.test", externalPort: 70_000 };
-    expect((await describe()).code).toBe("failed");
-    // A lease out of funds has no container to reach.
+    expect(await reason()).toBe("failed");
+    lease.forwarded = { host: "akash1chosen.ingress.test", externalPort: 70_000 };
+    expect(await reason()).toBe("failed");
+    // Reclaimed, it still runs until it ends.
+    lease.forwarded = { host: "akash1chosen.ingress.test", externalPort: 32_999 };
+    lease.state = "reclaiming";
+    expect((await provider.sshAccess!(account, order.id)).endpoint.port).toBe(32_999);
+    expect(await provider.inspect(account, order.id)).toMatchObject({
+      machine: "running",
+      error: expect.stringMatching(/reclaiming/),
+    });
+    // Out of funds, there is no container to reach.
     lease.state = "insufficient_funds";
-    expect((await describe()).code).toBe("refused");
+    expect(await reason()).toBe("refused");
     expect(await provider.inspect(account, order.id)).toMatchObject({
       machine: "error",
       error: expect.stringMatching(/funds/),
@@ -1465,12 +1845,8 @@ describe("AkashProvider orders and machines", () => {
     // apps/deploy-web/src/utils/denomLabel.ts L6-L11 (6 decimals) and
     // apps/deploy-web/src/hooks/usePricing/usePricing.ts L37 (uact at $1 an ACT).
     const price = "1234.567890000000000000";
-    const { fake, provider, account, order, dseq } = await placed();
-    fake.bid(dseq, "akash1priced", price);
-    const [offer] = await provider.offerCreate.listOffers(account, order.id);
-    expect(offer!.hourlyDollars).toBeCloseTo(0.740740734, 9);
-    await provider.offerCreate.leaseOffer(account, order.id, offer!.id);
-
+    const { fake, offer, dseq } = await leasedOrder(price);
+    expect(offer.hourlyDollars).toBeCloseTo(0.740740734, 9);
     const wallet = fakeAkashWallet(TEAM_ORG);
     const shown = (await (
       await fake.fetch(`${fake.baseUrl}/deployment/${wallet}/${dseq}`)
@@ -1480,73 +1856,91 @@ describe("AkashProvider orders and machines", () => {
     expect(shown.totalMonthlyCostUDenom).toBe(541_102_217);
     expect(akashMonthlyDollars(price)).toBe(shown.totalMonthlyCostUDenom / 1_000_000);
     // An hour's rate over Console's month comes to the same, short of its rounding.
-    expect(offer!.hourlyDollars * 24 * 30.437).toBeCloseTo(akashMonthlyDollars(price)!, 5);
-    // Block times are public: no key goes with them.
-    const blocks = fake.requests.filter((request) => request.path.startsWith("/blocks/"));
-    expect(blocks.length).toBeGreaterThan(0);
-    expect(blocks.every((request) => request.apiKey === null && request.projectId === null)).toBe(
-      true
-    );
+    expect(offer.hourlyDollars * 24 * 30.437).toBeCloseTo(akashMonthlyDollars(price)!, 5);
+    // Console rounds each lease's month to a whole uact, up as well as down.
+    expect(akashMonthlyDollars("0.000002")).toBe(0.000001);
   });
 
   it("refuses an offer it can't price rather than quoting it at nothing", async () => {
-    const { fake, provider, account, order, dseq } = await placed();
-    fake.bid(dseq, "akash1odd", "1000", "uakt");
-    const error = await rejection(provider.offerCreate.listOffers(account, order.id));
-    expect(error).toMatchObject({ kind: "bad-response" });
+    for (const [amount, denom] of [
+      ["1000", "uakt"],
+      ["1e5", "uact"],
+      [`1${"0".repeat(400)}`, "uact"],
+    ] as const) {
+      const { fake, provider, account, order, dseq } = await placed();
+      fake.bid(dseq, "akash1odd", amount, denom);
+      expect(await rejection(provider.offerCreate.listOffers(account, order.id))).toMatchObject({
+        kind: "bad-response",
+      });
+    }
   });
 
   it("keeps two wallets' deployments of the same number apart", async () => {
     const { fake, provider, credentials } = setup();
     const team = credentials(TEAM_KEY, TEAM_AGENTS);
     const personal = credentials(FAKE_AKASH_KEY, PERSONAL_DEFAULT);
+    const teamWallet = fakeAkashWallet(TEAM_ORG);
+    const myWallet = fakeAkashWallet(PERSONAL_ORG);
     fake.nextDseq = "4242";
     const teams = await provider.offerCreate.placeOrder(team, orderRequest());
     fake.nextDseq = "4242";
     const mine = await provider.offerCreate.placeOrder(personal, orderRequest());
-    expect(teams.id).toBe(`${fakeAkashWallet(TEAM_ORG)}/4242`);
-    expect(mine.id).toBe(`${fakeAkashWallet(PERSONAL_ORG)}/4242`);
-    fake.bid("4242", "akash1either", "1000");
-    const [offer] = await provider.offerCreate.listOffers(team, teams.id);
-    await provider.offerCreate.leaseOffer(team, teams.id, offer!.id);
-    fake.deployments
-      .find((deployment) => deployment.owner === fakeAkashWallet(PERSONAL_ORG))!
-      .bids.push({
-        provider: "akash1either",
-        gseq: 1,
-        oseq: 1,
-        bseq: 1,
-        state: "open",
-        price: "1000",
-        denom: "uact",
-      });
+    expect(teams.id).toBe(`${teamWallet}/4242`);
+    expect(mine.id).toBe(`${myWallet}/4242`);
+    fake.bid("4242", "akash1either", "1000", "uact", teamWallet);
+    fake.bid("4242", "akash1either", "1000", "uact", myWallet);
+    const [teamOffer] = await provider.offerCreate.listOffers(team, teams.id);
+    const [myOffer] = await provider.offerCreate.listOffers(personal, mine.id);
+    const teamMachine = await provider.offerCreate.leaseOffer(team, teams.id, teamOffer!.id);
+    const myMachine = await provider.offerCreate.leaseOffer(personal, mine.id, myOffer!.id);
+    expect(teamMachine.resourceId).not.toBe(myMachine.resourceId);
+
+    // A binding's claim on one is never a claim on the other.
+    const held = claimant("cb_team0000000", teamMachine.resourceId);
+    expect(cloudMachineClaim([held], "akash" as CloudProviderId, myMachine)).toBeNull();
+    const both = [held, claimant("cb_mine0000000", myMachine.resourceId)];
+    expect(cloudMachineClaim(both, "akash" as CloudProviderId, teamMachine)?.binding.id).toBe(
+      "cb_team0000000"
+    );
+    expect(cloudMachineClaim(both, "akash" as CloudProviderId, myMachine)?.binding.id).toBe(
+      "cb_mine0000000"
+    );
 
     // The personal account, handed the team's id, finds its own 4242 and refuses it.
-    const writes = () => fake.requests.filter((request) => request.method !== "GET").length;
-    const before = writes();
+    const before = writes(fake);
     for (const call of [
       provider.inspect(personal, teams.id),
       provider.sshAccess!(personal, teams.id),
       provider.rename(personal, teams.id, "Mine now"),
       provider.delete(personal, teams.id),
-      provider.offerCreate.leaseOffer(personal, teams.id, offer!.id),
+      provider.offerCreate.leaseOffer(personal, teams.id, teamOffer!.id),
       provider.offerCreate.listOffers(personal, teams.id),
+      provider.offerCreate.closeOrder(personal, teams.id),
     ]) {
-      expect(provider.describeError(await rejection(call)).code).toBe("not-found");
+      expect(code(provider, await rejection(call))).toBe("credential-invalid");
     }
-    expect(await provider.offerCreate.closeOrder(personal, teams.id)).toEqual({ kind: "closed" });
-    expect(writes()).toBe(before);
+    expect(writes(fake)).toBe(before);
     expect(await provider.inspect(team, teams.id)).toMatchObject({ machine: "running" });
   });
 
   it("keeps one wallet's projects apart", async () => {
-    const { fake, provider, account, order } = await placed();
-    const otherProject = { ...account, scopeId: TEAM_DEFAULT };
+    const { fake, provider, account, order, dseq, deployment } = await leasedOrder();
+    expect(await provider.inspect(account, order.id)).toMatchObject({ machine: "running" });
+    const sibling = { ...account, scopeId: TEAM_DEFAULT };
+    const before = writes(fake);
+    expect(code(provider, await rejection(provider.inspect(sibling, order.id)))).toBe("not-found");
+    expect(code(provider, await rejection(provider.delete(sibling, order.id)))).toBe("not-found");
+    expect(code(provider, await rejection(provider.rename(sibling, order.id, "x")))).toBe(
+      "not-found"
+    );
+    expect(await provider.list(sibling)).toEqual([]);
     expect(
-      provider.describeError(await rejection(provider.inspect(otherProject, order.id))).code
-    ).toBe("not-found");
-    expect(sent(fake, "GET", order.id.replace(/^[^/]+/, "/deployments")).at(-1)).toMatchObject({
+      await provider.offerCreate.findOrders(sibling, { labels: LABELS, idempotencyKey: CREATE_KEY })
+    ).toEqual([]);
+    expect(writes(fake)).toBe(before);
+    expect(sent(fake, "GET", `/deployments/${dseq}`).at(-1)).toMatchObject({
       projectId: TEAM_DEFAULT,
     });
+    expect(deployment.state).toBe("active");
   });
 });

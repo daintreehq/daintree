@@ -29,11 +29,15 @@ function perBlock(amount: string): number | null {
 /** Dollars per running hour for a price in uact per block; null when the amount can't be read. */
 export function akashHourlyDollars(uactPerBlock: string): number | null {
   const value = perBlock(uactPerBlock);
-  return value === null ? null : (value * BLOCKS_PER_HOUR) / UACT_PER_DOLLAR;
+  return value === null ? null : finite((value * BLOCKS_PER_HOUR) / UACT_PER_DOLLAR);
 }
 
 /** Dollars per month for a price in uact per block, as Console shows it; null when the amount can't be read. */
 export function akashMonthlyDollars(uactPerBlock: string): number | null {
   const value = perBlock(uactPerBlock);
-  return value === null ? null : Math.round(value * BLOCKS_PER_MONTH) / UACT_PER_DOLLAR;
+  return value === null ? null : finite(Math.round(value * BLOCKS_PER_MONTH) / UACT_PER_DOLLAR);
+}
+
+function finite(dollars: number): number | null {
+  return Number.isFinite(dollars) ? dollars : null;
 }
