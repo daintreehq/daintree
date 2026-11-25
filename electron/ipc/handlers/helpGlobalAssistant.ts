@@ -480,8 +480,7 @@ export async function handleResumeGlobalAssistantConversation(
       throw new AppError({
         code: "INTERNAL",
         message: err.message,
-        userMessage:
-          "That conversation didn't open. Start the global assistant again to go back to the one it had.",
+        userMessage: "That conversation didn't open, and the one it replaced is kept.",
       });
     }
     throw err;

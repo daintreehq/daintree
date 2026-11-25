@@ -66,6 +66,7 @@ import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecut
 import { recordViewlessTerminal } from "./projectStateAuthoring.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
+import { isClaudeForkFlag } from "../assistants/forkedConversation.js";
 import {
   AgentLaunchArgsSchema,
   AgentListAccountsArgsSchema,
@@ -587,6 +588,11 @@ export async function spawnHostAssistant(
      */
     exactResume?: true;
     /**
+     * Reopen that conversation itself (#18169): a fork the person's flags or
+     * preset ask for would run another one, so it is dropped for this launch.
+     */
+    exactConversation?: true;
+    /**
      * A schedule's run (#16169): the prompt gets the run's handback
      * instruction, and the spawn handler registers the run from this spawn.
      */
@@ -633,11 +639,15 @@ export async function spawnHostAssistant(
   if (plan.cliDetail && !isAgentLaunchable(plan.cliDetail.state)) return false;
   // The executable a fresh launch found, so a CLI outside the shell's PATH resumes too.
   const registryCommand = getEffectiveAgentConfig(agentId)?.command;
+  const launchFlags =
+    spec.resumeAgentSessionId && spec.exactConversation && agentId === "claude"
+      ? plan.launchFlags.filter((flag) => !isClaudeForkFlag(flag))
+      : plan.launchFlags;
   const resumed = spec.resumeAgentSessionId
     ? buildResumeCommand(
         agentId,
         spec.resumeAgentSessionId,
-        plan.launchFlags,
+        launchFlags,
         registryCommand !== undefined
           ? resolveAgentLaunchBaseCommandFor(
               registryCommand,
@@ -668,7 +678,7 @@ export async function spawnHostAssistant(
         command: resumed ?? plan.command,
         ...(env !== undefined ? { env } : {}),
         launchAgentId: agentId,
-        agentLaunchFlags: plan.launchFlags,
+        agentLaunchFlags: launchFlags,
         agentSessionId: spec.resumeAgentSessionId ?? plan.assignedSessionId,
         ...(spec.resumeAgentSessionId && spec.exactResume ? { exactResume: true } : {}),
         agentPresetId: plan.preset?.id,

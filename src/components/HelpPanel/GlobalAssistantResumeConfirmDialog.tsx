@@ -53,7 +53,7 @@ export async function approveGlobalAssistantResume(requestId: string): Promise<v
       title: "Couldn't reopen conversation",
       message: clientErrorText(
         err,
-        "That conversation didn't open. Start the global assistant again to go back to the one it had."
+        "That conversation didn't open, and the one it replaced is kept."
       ),
     });
   }
@@ -104,7 +104,7 @@ export function GlobalAssistantResumeConfirmDialog() {
       isOpen={true}
       onClose={() => takeGlobalAssistantResume(requestId)}
       onConfirm={() => void approveGlobalAssistantResume(requestId)}
-      title={`Reopen this conversation${session}?`}
+      title={`Reopen '${current.title}'${session}?`}
       description={resumeConsequence(current)}
       confirmLabel="Reopen conversation"
       cancelLabel="Cancel"
@@ -114,13 +114,6 @@ export function GlobalAssistantResumeConfirmDialog() {
       {...(pluginName !== null
         ? { confirmCooldownMs: CONFIRM_COOLDOWN_MS, cooldownKey: requestId }
         : {})}
-    >
-      <div
-        className="text-sm break-words text-text-primary"
-        data-testid="global-assistant-resume-title"
-      >
-        {current.title}
-      </div>
-    </ConfirmDialog>
+    />
   );
 }

@@ -721,6 +721,35 @@ describe("an Assistant reopening one exact conversation with no frontend (#16753
     expect(String(payload.command)).toContain("conv-7");
   });
 
+  it("reopens a conversation asked for itself without the fork its flags would make (#18169)", async () => {
+    const { deps, invoke } = launchDeps();
+    const flags = ["--fork-session", "--verbose"];
+
+    await spawnHostAssistant(
+      PROJECT,
+      {
+        ...spec,
+        agentLaunchFlags: flags,
+        resumeAgentSessionId: "conv-9",
+        exactResume: true,
+        exactConversation: true,
+      },
+      deps
+    );
+    const itself = spawned(invoke);
+    expect(itself.agentLaunchFlags).toContain("--verbose");
+    expect(itself.agentLaunchFlags).not.toContain("--fork-session");
+    expect(String(itself.command)).not.toContain("--fork-session");
+
+    const other = launchDeps();
+    await spawnHostAssistant(
+      PROJECT,
+      { ...spec, agentLaunchFlags: flags, resumeAgentSessionId: "conv-9", exactResume: true },
+      other.deps
+    );
+    expect(spawned(other.invoke).agentLaunchFlags).toContain("--fork-session");
+  });
+
   it("leaves a resume that didn't ask for it as it was", async () => {
     const { deps, invoke } = launchDeps();
 

@@ -444,7 +444,8 @@ interface HelpSessionRecord {
   switchingTo?: LaneConversationSwitch;
   /**
    * Its spawn reopened that conversation and waits to be confirmed before the
-   * switch is written: until then the lane still points where it did.
+   * switch is written. Until the switch is written, or the spawn turns out to
+   * run something else, the lane still points where it did.
    */
   switchStaged?: true;
   /**
@@ -1808,9 +1809,14 @@ export class HelpSessionService {
     // renderer (project sleep/close) can close the panel deliberately while
     // we wait, so that path keeps reading it afterwards (#10815).
     let panelOpenAtCapture = false;
-    // A switch whose spawn was never confirmed (#18169) left the lane pointing
-    // where it did: capturing it now would write the switch after all.
-    if (opts?.captureHibernation && terminalId && this.ptyClient && record.switchStaged !== true) {
+    // A switch not yet written (#18169) left the lane pointing where it did:
+    // capturing its run now would write over that before the switch was confirmed.
+    if (
+      opts?.captureHibernation &&
+      terminalId &&
+      this.ptyClient &&
+      record.switchingTo === undefined
+    ) {
       // #9639: write a placeholder resume entry SYNCHRONOUSLY (memory-first
       // via `set`) before the gracefulKill round-trip. The eviction path that
       // calls us is fire-and-forget, so a project switch-back can load the new
@@ -2146,6 +2152,9 @@ export class HelpSessionService {
       record.switchStaged = true;
       return Promise.resolve();
     }
+    // A spawn that ran something other than the switch asked for is an
+    // ordinary launch from here on.
+    delete record.switchingTo;
     // A fork runs a conversation its id names nothing of: what it launches is
     // its bearer's alone, and the one it forked from stays the lane's previous.
     const conversationOwnershipId =
@@ -2225,6 +2234,7 @@ export class HelpSessionService {
       return Promise.resolve();
     }
     delete record.switchStaged;
+    delete record.switchingTo;
     const slotKey = assistantSlotKey(record.projectId, record.slot);
     return this.commitLaneLaunch(
       record,
@@ -2387,8 +2397,8 @@ export class HelpSessionService {
     if (!this.pendingHibernationStore) return lanes;
     for (const [sessionId, terminalId] of this.terminalBySessionId.entries()) {
       const record = this.sessionsById.get(sessionId);
-      // A switch never confirmed (#18169) leaves the lane where it pointed.
-      if (!record || record.revoked || record.switchStaged === true) continue;
+      // A switch not yet written (#18169) leaves the lane where it pointed.
+      if (!record || record.revoked || record.switchingTo !== undefined) continue;
       const slotKey = assistantSlotKey(record.projectId, record.slot);
       if (this.activeHelpTerminalBySlotKey.get(slotKey) !== terminalId) continue;
       const entry = this.pendingHibernationStore.get(slotKey);

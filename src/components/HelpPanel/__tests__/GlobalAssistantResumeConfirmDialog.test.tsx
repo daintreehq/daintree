@@ -78,10 +78,7 @@ describe("GlobalAssistantResumeConfirmDialog (#18169)", () => {
     stage();
     render(<GlobalAssistantResumeConfirmDialog />);
 
-    expect(await screen.findByText("Reopen this conversation?")).toBeTruthy();
-    expect(screen.getByTestId("global-assistant-resume-title").textContent).toBe(
-      "Planning the release"
-    );
+    expect(await screen.findByText("Reopen 'Planning the release'?")).toBeTruthy();
     const body = screen.getByRole("alertdialog").textContent ?? "";
     expect(body).toContain("Claude Code stops in every window");
     expect(body).toContain("stays in earlier conversations");
@@ -96,7 +93,7 @@ describe("GlobalAssistantResumeConfirmDialog (#18169)", () => {
     stage("absent", { pluginName: "Chief of staff", namesSession: true, slot: 1 });
     render(<GlobalAssistantResumeConfirmDialog />);
 
-    expect(await screen.findByText("Reopen this conversation in session 2?")).toBeTruthy();
+    expect(await screen.findByText("Reopen 'Planning the release' in session 2?")).toBeTruthy();
     const body = document.body.textContent ?? "";
     expect(body).toContain("Chief of staff asks to reopen this conversation.");
     expect(body).toContain("Session 2 starts on it instead of any conversation it kept");

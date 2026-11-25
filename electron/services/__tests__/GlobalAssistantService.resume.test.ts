@@ -124,6 +124,12 @@ describe("GlobalAssistantService.resumeConversation (#18169)", () => {
 
   it("starts an absent session on the choice without claiming the conversation it kept", async () => {
     const { deps, calls } = makeDeps();
+    deps.keptConversation.mockReturnValue({ agentId: "claude", agentSessionId: "conv-b" });
+    deps.takeResume.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "conv-b",
+      claimId: "c1",
+    });
     const service = new GlobalAssistantService(deps);
     const absent = service.getState();
 
@@ -136,6 +142,48 @@ describe("GlobalAssistantService.resumeConversation (#18169)", () => {
     expect(deps.takeResume).not.toHaveBeenCalled();
     expect(calls.some((call) => call.startsWith("revoke-"))).toBe(false);
     expect(deps.spawn.mock.calls[0]![0].resumeAgentSessionId).toBe("conv-a");
+  });
+
+  it("reads whether the other session holds the conversation after the agent check, not before", async () => {
+    const { deps } = makeDeps();
+    const service = new GlobalAssistantService(deps);
+    const running = await service.ensureSession();
+    const checked = deferred<boolean>();
+    deps.canRun.mockReturnValueOnce(checked.promise);
+    let free = true;
+
+    const switched = service.resumeConversation(
+      earlier,
+      { generation: running.generation, phase: "running" },
+      () => free
+    );
+    free = false;
+    checked.resolve(true);
+
+    await expect(switched).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(deps.revoke).not.toHaveBeenCalled();
+  });
+
+  it("keeps a run started on a chosen agent chosen through the switch, so a change of default leaves it", async () => {
+    const { deps } = makeDeps();
+    const service = new GlobalAssistantService(deps);
+    const first = await service.ensureSession();
+    const handedOff = await service.replace(
+      { agentId: "codex", prompt: "Continue from the hand-off" },
+      { generation: first.generation, phase: "running" }
+    );
+
+    const switched = await service.resumeConversation(
+      { agentId: "codex", agentSessionId: "thread-a" },
+      { generation: handedOff.generation, phase: "running" }
+    );
+    await service.onAgentChanged("claude");
+
+    expect(service.getState()).toMatchObject({
+      phase: "running",
+      agentId: "codex",
+      terminalId: switched.terminalId,
+    });
   });
 
   it("refuses, stopping nothing, once the session changed since the person was asked", async () => {

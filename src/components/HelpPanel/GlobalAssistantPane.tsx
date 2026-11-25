@@ -370,16 +370,39 @@ export function GlobalAssistantPane({
   // Stays mounted once opened so the palette's exit animation can run.
   const [earlierMounted, setEarlierMounted] = useState(false);
   if (isEarlierOpen && !earlierMounted) setEarlierMounted(true);
-  // Asked about as the session is shown at the pick: one changed by the time
-  // the person answers reopens nothing.
+  // The session as it was shown when the list was opened: a pick is asked
+  // about against that, never against a successor the pane hasn't shown.
+  const [earlierFor, setEarlierFor] = useState<{
+    slot: GlobalAssistantSlot;
+    generation: number;
+    phase: GlobalAssistantView["phase"];
+  } | null>(null);
+  const earlierStale =
+    earlierFor !== null &&
+    (earlierFor.slot !== slot ||
+      view?.generation !== earlierFor.generation ||
+      view.phase !== earlierFor.phase ||
+      targetEnded);
+  // Put away once what it was opened for is gone, or the pane is.
+  useEffect(() => {
+    if (!active || earlierStale) {
+      usePaletteStore.getState().closePalette("global-assistant-sessions");
+    }
+  }, [active, earlierStale]);
+  useEffect(() => () => usePaletteStore.getState().closePalette("global-assistant-sessions"), []);
+  const handleOpenEarlier = () => {
+    if (view === null) return;
+    setEarlierFor({ slot, generation: view.generation, phase: view.phase });
+    usePaletteStore.getState().openPalette("global-assistant-sessions");
+  };
   const handlePickEarlier = (session: HelpPastSession) => {
-    if (view === null || view.slot !== slot) return;
+    if (earlierFor === null || earlierStale) return;
     stageGlobalAssistantResume({
-      slot,
+      slot: earlierFor.slot,
       agentId: session.agentId,
       agentSessionId: session.sessionId,
       title: session.title,
-      expected: { generation: view.generation, phase: view.phase },
+      expected: { generation: earlierFor.generation, phase: earlierFor.phase },
       pluginName: null,
       namesSession: several,
     });
@@ -488,9 +511,7 @@ export function GlobalAssistantPane({
                 {offersEarlier && (
                   <DropdownMenuItem
                     focusHandoff
-                    onSelect={() =>
-                      usePaletteStore.getState().openPalette("global-assistant-sessions")
-                    }
+                    onSelect={handleOpenEarlier}
                     data-testid="help-global-resume-earlier"
                   >
                     <History className="mr-2 h-3.5 w-3.5" aria-hidden="true" />

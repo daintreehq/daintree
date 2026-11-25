@@ -15,7 +15,9 @@ const help = vi.hoisted(() => ({
   spawnOk: true,
   spawnGate: null as Promise<void> | null,
   spawned: [] as Array<Record<string, unknown>>,
+  confirmOptions: [] as unknown[],
   flags: [] as string[],
+  revokeGate: null as Promise<void> | null,
 }));
 const lister = vi.hoisted(() => ({
   listHelpPastSessions: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock("../HelpSessionService.js", () => ({
     },
     revokeSession: async (sessionId: string, options?: { captureHibernation?: boolean }) => {
       help.revoked.push({ sessionId, capture: options?.captureHibernation === true });
+      await help.revokeGate;
     },
     confirmLaneSwitch: async (sessionId: string) => {
       help.confirmed.push(sessionId);
@@ -77,7 +80,8 @@ vi.mock("../assistants/assistantLaunch.js", () => ({
     launchFlags: async () => help.flags,
   }),
   firstUsableDefault: async () => "claude",
-  spawnAndConfirm: async (_pty: unknown, spawn: () => Promise<unknown>) => {
+  spawnAndConfirm: async (_pty: unknown, spawn: () => Promise<unknown>, ...rest: unknown[]) => {
+    help.confirmOptions.push(rest[1]);
     await spawn();
     await help.spawnGate;
     return help.spawnOk;
@@ -117,7 +121,9 @@ beforeEach(async () => {
   help.spawnOk = true;
   help.spawnGate = null;
   help.spawned = [];
+  help.confirmOptions = [];
   help.flags = [];
+  help.revokeGate = null;
   lister.listHelpPastSessions.mockReset();
   lister.listHelpPastSessions.mockResolvedValue(listing("conv-a", "conv-c"));
   vi.resetModules();
@@ -159,15 +165,21 @@ describe("listGlobalAssistantPastSessions (#18169)", () => {
   });
 
   it("lists nothing for an agent whose transcripts it can't read", async () => {
+    help.pointers.set(1, { agentId: "antigravity", agentSessionId: "kept" });
     const result = await registry.listGlobalAssistantPastSessions(1);
-    // A second session with no agent of its own has nothing to list either.
     expect(result).toEqual({
       slot: 1,
-      agentId: null,
+      agentId: "antigravity",
       sessions: [],
       unreadable: [],
       truncated: false,
     });
+    expect(lister.listHelpPastSessions).not.toHaveBeenCalled();
+  });
+
+  it("lists nothing for a second session with no agent of its own", async () => {
+    const result = await registry.listGlobalAssistantPastSessions(1);
+    expect(result).toMatchObject({ slot: 1, agentId: null, sessions: [] });
     expect(lister.listHelpPastSessions).not.toHaveBeenCalled();
   });
 });
@@ -208,16 +220,51 @@ describe("resumeGlobalAssistantConversation (#18169)", () => {
     expect(help.revoked).toEqual([]);
   });
 
-  it("refuses launch flags that would fork the conversation, before stopping anything", async () => {
+  it("asks the spawn for that conversation itself, and counts only a start its PTY reported", async () => {
     const service = await seatRunning();
     help.flags = ["--fork-session"];
+    await registry.resumeGlobalAssistantConversation(0, "conv-a", {
+      generation: service.getState().generation,
+      phase: "running",
+    });
+    await vi.waitFor(() => expect(help.confirmed).toEqual(["s-0-2"]));
+
+    expect(help.spawned.at(-1)).toMatchObject({ exactResume: true, exactConversation: true });
+    expect(help.confirmOptions.at(-1)).toEqual({ unreportedStarted: false });
+    // An ordinary start reads a missing report as it always has.
+    expect(help.confirmOptions[0]).toBeUndefined();
+    expect(help.spawned[0]).not.toHaveProperty("exactConversation");
+  });
+
+  it("refuses while the other session tears down a run it can't name yet for a switch of its own", async () => {
+    // The first session, following the default, runs a conversation whose id isn't known yet.
+    help.pointers.set(0, { agentId: "claude", agentSessionId: "" });
+    const first = registry.getGlobalAssistantService(0);
+    const started = await first.ensureSession();
+    help.pointers.set(1, { agentId: "claude", agentSessionId: "conv-other" });
+    const second = registry.getGlobalAssistantService(1);
+    await second.ensureSession();
+    let release!: () => void;
+    help.revokeGate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const switching = registry.resumeGlobalAssistantConversation(0, "conv-c", {
+      generation: started.generation,
+      phase: "running",
+    });
+    await vi.waitFor(() => expect(first.switchingTo()).not.toBeNull());
+    // Torn down, it shows no agent until the successor picks one.
+    expect(first.getState().agentId).toBeNull();
+
     await expect(
-      registry.resumeGlobalAssistantConversation(0, "conv-a", {
-        generation: service.getState().generation,
+      registry.resumeGlobalAssistantConversation(1, "conv-a", {
+        generation: second.getState().generation,
         phase: "running",
       })
-    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
-    expect(help.revoked).toEqual([]);
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+
+    release();
+    await switching;
   });
 
   it("refuses while the other session runs a conversation on the agent it can't name yet", async () => {

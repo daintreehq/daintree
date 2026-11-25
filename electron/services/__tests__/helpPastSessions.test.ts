@@ -653,6 +653,7 @@ describe("listHelpPastSessions", () => {
         expect(listCodexSessions).not.toHaveBeenCalled();
 
         const codexOnly = await listHelpPastSessions(paths, deps, { agentId: "codex" });
+        expect(codexOnly.sessions).toHaveLength(HELP_PAST_SESSIONS_LIMIT);
         expect(codexOnly.sessions.every((row) => row.agentId === "codex")).toBe(true);
         expect(fsHooks.opened.filter((file) => file.includes(A))).toHaveLength(1);
       } finally {

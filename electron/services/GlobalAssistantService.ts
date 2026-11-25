@@ -66,6 +66,11 @@ export interface GlobalAssistantSpawnSpec {
   resumeAgentSessionId?: string;
   /** Refuse rather than start another conversation when that one can't be reopened (#18177, #18169). */
   exactResume?: true;
+  /**
+   * A switch to an earlier conversation (#18169): reopen that conversation
+   * itself, never a fork, and count only a start its PTY reported.
+   */
+  exactConversation?: true;
   /** The first turn of a run that continues from a hand-off (#18140). */
   prompt?: string;
 }
@@ -86,6 +91,15 @@ export interface GlobalAssistantPhaseExpectation {
 export interface GlobalAssistantConversation {
   agentId: string;
   agentSessionId: string;
+}
+
+/** A launch that reopens an earlier conversation in a run's place (#18169). */
+interface GlobalAssistantSwitchTo {
+  conversation: GlobalAssistantConversation;
+  /** The ownership id the seat's work was held under when the person asked. */
+  work: string | undefined;
+  /** The run it replaces was started on an agent chosen for it, so a change of default leaves this one be too. */
+  chosen: boolean;
 }
 
 /** What a run that switches to an earlier conversation is provisioned with (#18169). */
@@ -352,7 +366,7 @@ export class GlobalAssistantService {
     fresh: boolean,
     choice: GlobalAssistantChoice | null,
     exact: string | null = null,
-    switchTo: { conversation: GlobalAssistantConversation; work: string | undefined } | null = null
+    switchTo: GlobalAssistantSwitchTo | null = null
   ): Promise<GlobalAssistantState> {
     if (this.closed) {
       return Promise.reject(refuse("CANCELLED", "The app is shutting down."));
@@ -364,7 +378,7 @@ export class GlobalAssistantService {
     const predecessor = this.launch;
     const generation = this.generation;
     this.launchGeneration = generation;
-    this.launchChosen = choice !== null;
+    this.launchChosen = choice !== null || switchTo?.chosen === true;
     this.launchSwitch = switchTo?.conversation ?? null;
     const launch: Promise<GlobalAssistantState> = this.runLaunch(
       generation,
@@ -403,7 +417,7 @@ export class GlobalAssistantService {
     predecessor: Promise<unknown> | null,
     choice: GlobalAssistantChoice | null,
     exact: string | null,
-    switchTo: { conversation: GlobalAssistantConversation; work: string | undefined } | null
+    switchTo: GlobalAssistantSwitchTo | null
   ): Promise<GlobalAssistantState> {
     const superseded = () => generation !== this.generation || this.closed;
 
@@ -514,7 +528,7 @@ export class GlobalAssistantService {
       sessionId: session.sessionId,
       terminalId,
       agentId,
-      chosen: choice !== null || restoredElsewhere,
+      chosen: choice !== null || switchTo?.chosen === true || restoredElsewhere,
     };
     this.starting = run;
 
@@ -536,6 +550,7 @@ export class GlobalAssistantService {
         },
         ...(resume ? { resumeAgentSessionId: resume.agentSessionId } : {}),
         ...(switchTo || (resume && exact !== null) ? { exactResume: true as const } : {}),
+        ...(switchTo ? { exactConversation: true as const } : {}),
         ...(choice ? { prompt: choice.prompt } : {}),
       });
     } catch (err) {
@@ -779,11 +794,12 @@ export class GlobalAssistantService {
     } catch {
       work = undefined;
     }
+    const chosen = this.run?.chosen === true;
     // Held from teardown to the successor's claim, as a replacement is.
     this.holds += 1;
     try {
       if (this.run) this.teardown("switch").catch(() => {});
-      return this.admit(true, null, null, { conversation, work });
+      return this.admit(true, null, null, { conversation, work, chosen });
     } finally {
       this.holds -= 1;
     }
@@ -806,7 +822,7 @@ export class GlobalAssistantService {
     const live = this.run?.agentId ?? this.starting?.agentId ?? this.launchAgentId;
     if (live) return live;
     const pinned = this.pinnedAgentId;
-    let kept: GlobalAssistantConversation | null = null;
+    let kept: GlobalAssistantConversation | null;
     try {
       kept = this.deps.keptConversation?.() ?? null;
     } catch {

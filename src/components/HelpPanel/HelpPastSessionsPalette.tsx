@@ -39,7 +39,6 @@ export type HelpPastSessionsPaletteItem =
   | { kind: "lane"; id: string; title: string; slot: number };
 
 const FUSE_OPTIONS = { keys: ["title"], threshold: 0.4, ignoreLocation: true };
-const RETRY_HINT_ID = "help-past-sessions-retry-hint";
 const NO_LISTING: HelpPastSessionsListing = { sessions: [], unreadable: [], truncated: false };
 
 interface LoadedListing {
@@ -85,6 +84,9 @@ export function HelpPastSessionsPalette({
   global,
 }: HelpPastSessionsPaletteProps) {
   const paletteId = global ? GLOBAL_PALETTE_ID : PROJECT_PALETTE_ID;
+  // Both palettes can be mounted at once, fading one out as the other opens.
+  const idPrefix = global ? "global-past-session" : "help-past-session";
+  const retryHintId = `${idPrefix}s-retry-hint`;
   const isOpen = usePaletteStore((s) => s.activePaletteId === paletteId);
   const globalSlot = global?.slot ?? null;
   // What the listing is for, so an answer about one never stands in for another.
@@ -260,7 +262,7 @@ export function HelpPastSessionsPalette({
       return (
         <button
           key={item.id}
-          id={`help-past-session-${item.id}`}
+          id={`${idPrefix}-${item.id}`}
           tabIndex={-1}
           role="option"
           aria-selected={isSelected}
@@ -293,7 +295,7 @@ export function HelpPastSessionsPalette({
         </button>
       );
     },
-    [pick, setSelectedIndex]
+    [pick, setSelectedIndex, idPrefix]
   );
 
   const retryButton = (
@@ -341,8 +343,8 @@ export function HelpPastSessionsPalette({
             : "Resume a past session"
       }
       searchPlaceholder={replacing ? "Search tabs" : "Search session titles"}
-      searchAriaDescribedBy={enterRetries ? RETRY_HINT_ID : undefined}
-      itemIdPrefix="help-past-session"
+      searchAriaDescribedBy={enterRetries ? retryHintId : undefined}
+      itemIdPrefix={idPrefix}
       isLoading={!replacing && (sessions === null || pending)}
       emptyMessage={
         failedEmpty
@@ -365,7 +367,7 @@ export function HelpPastSessionsPalette({
             // The field reads this out, since that is where focus rests. Kept out
             // of the empty state, which a crossfade can render twice and a
             // load hides.
-            <span id={RETRY_HINT_ID} className="sr-only">
+            <span id={retryHintId} className="sr-only">
               Press Enter to retry
             </span>
           ) : undefined

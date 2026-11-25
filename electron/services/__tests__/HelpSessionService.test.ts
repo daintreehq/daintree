@@ -4268,10 +4268,53 @@ describe("HelpSessionService", () => {
             const work = service.laneWorkOwnershipId(GLOBAL_ASSISTANT_ID, 0);
             await service.revokeSession(run.sessionId);
 
-            await launchGlobal("g-other", "conv-z", { agentSessionId: "conv-a", work });
+            const other = await launchGlobal("g-other", "conv-z", {
+              agentSessionId: "conv-a",
+              work,
+            });
+            await service.confirmLaneSwitch(other.sessionId);
 
             expect(backing.get(globalKey())?.agentSessionId).toBe("conv-z");
             expect(globalOwnership()).not.toBe(work);
+          });
+
+          it("captures nothing over the lane for a switch not yet written, even before its spawn reports", async () => {
+            const { run, ids } = await seatOn([]);
+            const work = service.laneWorkOwnershipId(GLOBAL_ASSISTANT_ID, 0);
+            await service.revokeSession(run.sessionId);
+
+            const pending = await service.provisionSession(
+              globalInput({ agentSessionId: "conv-a", work })
+            );
+            if (!pending) throw new Error("expected provision");
+            expect(service.markTerminalForToken(pending.token, "g-pending")).toBe(true);
+            expect(service.snapshotLaneTerminals().has("g-pending")).toBe(false);
+
+            await service.revokeSession(pending.sessionId, { captureHibernation: true });
+
+            expect(mockPtyGracefulKill).not.toHaveBeenCalledWith("g-pending");
+            expect(backing.get(globalKey())?.agentSessionId).toBe("conv-b");
+            expect(globalOwnership()).toBe(ids["conv-b"]);
+          });
+
+          it("takes a forked spawn of the switch by the fork's rules, writing no switch", async () => {
+            const { run, ids } = await seatOn([]);
+            const work = service.laneWorkOwnershipId(GLOBAL_ASSISTANT_ID, 0);
+            await service.revokeSession(run.sessionId);
+            const forked = await service.provisionSession(
+              globalInput({ agentSessionId: "conv-a", work })
+            );
+            if (!forked) throw new Error("expected provision");
+            expect(service.markTerminalForToken(forked.token, "g-fork")).toBe(true);
+
+            await service.recordLaneLaunchForToken(forked.token, "conv-a", {
+              forkedConversation: true,
+            });
+            await service.confirmLaneSwitch(forked.sessionId);
+
+            expect(globalOwnership()).toBeUndefined();
+            expect(service.getConversationOwnershipId(forked.sessionId)).toBeNull();
+            expect(listener.forget).not.toHaveBeenCalledWith(ids["conv-b"]);
           });
 
           it("refuses a switch for anything but the global assistant", async () => {

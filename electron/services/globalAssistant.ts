@@ -25,7 +25,6 @@ import {
   type GlobalAssistantState,
   type HelpPastSession,
 } from "../../shared/types/ipc/help.js";
-import { forksClaudeConversation } from "./assistants/forkedConversation.js";
 import { onAgentDefaultsChanged } from "./agentDefaults.js";
 import type { HelpSessionService } from "./HelpSessionService.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -151,25 +150,26 @@ export function liveGlobalAssistantDeps(
         .launchFlags(spec.agentId)
         .catch(() => []);
       const project = { id: GLOBAL_ASSISTANT_ID, path: folder() };
-      return spawnAndConfirm(
-        pty,
-        () =>
-          spawnHostAssistantLive(project, {
-            terminalId: spec.terminalId,
-            agentId: spec.agentId,
-            cwd: spec.cwd,
-            env: spec.env,
-            prompt: spec.prompt ?? "",
-            agentLaunchFlags: flags,
-            ...(spec.resumeAgentSessionId
-              ? { resumeAgentSessionId: spec.resumeAgentSessionId }
-              : {}),
-            ...(spec.resumeAgentSessionId && spec.exactResume
-              ? { exactResume: true as const }
-              : {}),
-          }),
-        spec.terminalId
-      );
+      // A switch to an earlier conversation (#18169) reopens that conversation
+      // itself, and counts only a start its PTY reported: one that never
+      // answered must not take the seat's work.
+      const exact = spec.resumeAgentSessionId !== undefined && spec.exactResume === true;
+      const switching = exact && spec.exactConversation === true;
+      const start = () =>
+        spawnHostAssistantLive(project, {
+          terminalId: spec.terminalId,
+          agentId: spec.agentId,
+          cwd: spec.cwd,
+          env: spec.env,
+          prompt: spec.prompt ?? "",
+          agentLaunchFlags: flags,
+          ...(spec.resumeAgentSessionId ? { resumeAgentSessionId: spec.resumeAgentSessionId } : {}),
+          ...(exact ? { exactResume: true as const } : {}),
+          ...(switching ? { exactConversation: true as const } : {}),
+        });
+      return switching
+        ? spawnAndConfirm(pty, start, spec.terminalId, { unreportedStarted: false })
+        : spawnAndConfirm(pty, start, spec.terminalId);
     },
     revoke: async (sessionId, { capture }) => {
       const service = await help();
@@ -631,7 +631,10 @@ function heldGlobalConversations(
 function runsUnnamedConversation(slot: GlobalAssistantSlot, agentId: string): boolean {
   const service = instances.get(slot);
   if (!service) return false;
-  const { phase, agentId: running } = service.getState();
+  const { phase, agentId: shown } = service.getState();
+  // A session tearing its run down for a switch shows no agent until the
+  // successor picks one, but the conversation it captures is still on it.
+  const running = shown ?? service.switchingTo()?.agentId ?? null;
   if (phase === "absent" || running !== agentId) return false;
   const kept = loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot) ?? null;
   return kept === null || kept.agentId !== agentId || kept.agentSessionId === "";
@@ -698,18 +701,6 @@ export async function resumeGlobalAssistantConversation(
       code: "NOT_FOUND",
       message: "That conversation isn't one this global assistant session can reopen.",
       userMessage: "That conversation can't be reopened here now. Choose it again from the list.",
-    });
-  }
-  const { liveAssistantLaunchDeps } = await import("./assistants/assistantLaunch.js");
-  const flags = await (await liveAssistantLaunchDeps()).launchFlags(agentId).catch(() => []);
-  // A forked resume runs another conversation, which neither is the one chosen
-  // nor takes the seat's work.
-  if (forksClaudeConversation(flags, agentId)) {
-    throw new AppError({
-      code: "UNSUPPORTED",
-      message: "The assistant's launch flags fork every resumed conversation.",
-      userMessage:
-        "The assistant's Claude launch flags include --fork-session, so an earlier conversation can't be reopened in place. Remove it in Assistant settings to switch.",
     });
   }
   if (shuttingDown) throw shuttingDownError();

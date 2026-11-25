@@ -1423,6 +1423,35 @@ describe("GlobalAssistantPane (#14454)", () => {
       expect(resumeGlobalAssistantConversation).not.toHaveBeenCalled();
     });
 
+    it("puts the list away, asking nothing, once the run it was opened on is replaced", async () => {
+      installHelp(running({ generation: 7, inputOwner: "a1", inputEpoch: 3 }));
+      renderPane();
+      await flush();
+      await openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Resume an earlier conversation…" }));
+      const palette = await screen.findByTestId("earlier-palette");
+
+      // Restarted from another window: a successor the pane never showed.
+      push(running({ generation: 8, inputOwner: "a1", inputEpoch: 3 }));
+      await flush();
+      expect(usePaletteStore.getState().activePaletteId).toBeNull();
+      fireEvent.click(palette);
+      expect(useGlobalAssistantResumeConfirmStore.getState().current).toBeNull();
+    });
+
+    it("puts the list away when the pane is hidden", async () => {
+      installHelp(running({ inputOwner: "a1", inputEpoch: 3 }));
+      const { rerenderVisible } = renderPane();
+      await flush();
+      await openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Resume an earlier conversation…" }));
+      expect(usePaletteStore.getState().activePaletteId).toBe("global-assistant-sessions");
+
+      rerenderVisible(false);
+      await flush();
+      expect(usePaletteStore.getState().activePaletteId).toBeNull();
+    });
+
     it("is offered while the first session keeps nothing running, but not while one starts", async () => {
       installHelp(viewOf());
       renderPane();
