@@ -174,6 +174,12 @@ export interface StoredCloudBinding {
    */
   idleTimeChosen?: true;
   /**
+   * The person asked, when adding the machine, for its host's MCP server to
+   * be turned on at its first connection (#18187). Cleared as that is asked
+   * of the host, so it is asked once.
+   */
+  mcpServerOnConnect?: true;
+  /**
    * What the machine's host last told this device it holds to keep the
    * machine awake while it sees work (#17918): when that stops working, and
    * when the host said so. Never the URL itself. Absent while it holds none,
@@ -654,6 +660,7 @@ function readBinding(raw: unknown): StoredCloudBinding | null {
     lastError: readError(value.lastError),
     createdAt: num(value.createdAt) ?? 0,
     ...(value.idleTimeChosen === true ? { idleTimeChosen: true as const } : {}),
+    ...(value.mcpServerOnConnect === true ? { mcpServerOnConnect: true as const } : {}),
     ...readKeepAwake(value.keepAwake, resourceId),
   };
 }

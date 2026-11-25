@@ -408,6 +408,15 @@ function invalid(message: string): AppError {
   return new AppError({ code: "VALIDATION", message, userMessage: message });
 }
 
+/** The binding's mark for a request that asks for its host's MCP server on first connection. */
+function mcpServerOnConnectMark(
+  value: unknown
+): { mcpServerOnConnect: true } | Record<string, never> {
+  if (value === undefined || value === false) return {};
+  if (value !== true) throw invalid("Say whether to turn on the host's MCP server.");
+  return { mcpServerOnConnect: true };
+}
+
 function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -957,6 +966,7 @@ export class CloudHostLifecycle {
       );
     }
     const { selection, picks } = checkProvisioning(provider, catalog, request.provisioning);
+    const mcpMark = mcpServerOnConnectMark(request.mcpServerOnConnect);
     const bindingId = `cb_${crypto.randomBytes(6).toString("hex")}`;
     const binding: StoredCloudBinding = {
       id: bindingId,
@@ -984,6 +994,7 @@ export class CloudHostLifecycle {
       offeredHostKey: null,
       lastError: null,
       createdAt: this.now(),
+      ...mcpMark,
     };
     this.deps.store.putBinding(binding);
     let descriptor: HostDescriptor;
@@ -1508,6 +1519,7 @@ export class CloudHostLifecycle {
     const name = typeof request.name === "string" ? request.name.trim() : "";
     if (!name || name.length > MAX_NAME_LENGTH) throw invalid("Give the host a name.");
     if (typeof request.resourceId !== "string") throw invalid("Choose a machine.");
+    const mcpMark = mcpServerOnConnectMark(request.mcpServerOnConnect);
     const bound = this.deps.store
       .bindings()
       .find(
@@ -1537,6 +1549,7 @@ export class CloudHostLifecycle {
       offeredHostKey: null,
       lastError: null,
       createdAt: this.now(),
+      ...mcpMark,
     };
     const { provider, credentials } = await this.context(binding);
     let resource: ProviderResource;

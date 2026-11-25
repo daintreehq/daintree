@@ -26,6 +26,7 @@ import { attachHostPluginAssets, installPluginHost } from "../plugins/install.js
 import { installPluginParityHost } from "../plugins/parity/install.js";
 import { installSettingsCopyHost } from "../settingsCopy/install.js";
 import { installSettingsControlHost } from "../settingsControl/install.js";
+import { installMcpServerEnableHost } from "./mcpServerEnableHost.js";
 import { installHostPortService } from "../ports/hostPorts.js";
 import { installHostAgentForwarding } from "../agentForwarding/hostForwarder.js";
 import { installProjectsHost } from "../projects/hostInstall.js";
@@ -307,6 +308,8 @@ async function buildHostListener(
   teardowns.push(installSettingsCopyHost(server));
   // This machine's own settings, read and changed by name when a Shell asks (#14167).
   teardowns.push(installSettingsControlHost(server));
+  // The MCP server a Shell turns on once, for a cloud machine added with that asked (#18187).
+  teardowns.push(installMcpServerEnableHost(server));
   // A cloud machine renewing and stopping itself by its idle clock, with the key a Shell hands it
   // (#17361), and the claim a Shell makes before acting on this host's idleness (#17922).
   teardowns.push(installMachineKeeperHost(server));

@@ -141,9 +141,10 @@ function refusalRead(
         detail: `${where} has no project with that id. Nothing was read. The host list names its projects.`,
       };
     case "server-off":
+      // A relay session that failed to open answers the same, so the server is something to check.
       return {
         outcome: "unsupported",
-        detail: `${where}'s Daintree MCP server is off, so nothing was read.`,
+        detail: `${where}'s Daintree MCP server couldn't take the read, so nothing was read. Check that it's on: Settings → Integrations → MCP server on ${local ? "this machine" : "that host"}.`,
       };
   }
 }
