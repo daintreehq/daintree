@@ -27,6 +27,18 @@ export function sshRefusalLine(stderr: string | null | undefined): string | null
   return trimmed.length > SSH_SAID_MAX ? `${trimmed.slice(0, SSH_SAID_MAX - 1)}…` : trimmed;
 }
 
+/**
+ * What ssh says when a ProxyJump or ProxyCommand hop closed the connection
+ * before the host's banner arrived. On a call that may start a master
+ * (ControlPersist), ssh sends that hop's stderr to /dev/null, so a jump host
+ * that refused the login says nothing more than this.
+ */
+const PROXY_CLOSED_EARLY = /Connection closed by UNKNOWN port 65535/;
+
+export function isProxyClosedEarly(stderr: string | null | undefined): boolean {
+  return PROXY_CLOSED_EARLY.test(stderr ?? "");
+}
+
 export type SshRefusalAdvice = "untrusted-host-key" | "changed-host-key" | "login-refused";
 
 /**

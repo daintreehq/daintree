@@ -11,10 +11,12 @@ import type {
   CloudResourceSummary,
 } from "@shared/types/cloudHosts";
 
-const { cloud, client } = vi.hoisted(() => ({
+const { cloud, client, openExternal } = vi.hoisted(() => ({
   cloud: { snapshot: { providers: [], accounts: [], hosts: [] } as CloudHostsSnapshot },
+  openExternal: vi.fn(async (_url: string) => {}),
   client: {
     getCatalog: vi.fn(),
+    findTunnel: vi.fn(),
     createHost: vi.fn(),
     listResources: vi.fn(),
     startHost: vi.fn(),
@@ -28,6 +30,10 @@ vi.mock("@/components/Hosts/cloud/cloudHostsState", async (importOriginal) => ({
   useCloudHosts: () => ({ snapshot: cloud.snapshot, loaded: true, loadError: null }),
 }));
 vi.mock("@/clients/cloudHostsClient", () => ({ cloudHostsClient: client }));
+vi.mock("@/clients/systemClient", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/clients/systemClient")>();
+  return { ...actual, systemClient: { ...actual.systemClient, openExternal } };
+});
 
 import { AddCloudHostDialog } from "../AddCloudHostDialog";
 import { takeFirstConnect } from "../hostCopySettingsRequests";
@@ -186,7 +192,7 @@ function open(
 const shown = (dimension: string) => screen.queryByTestId(`add-cloud-host-${dimension}`);
 const createButton = () => screen.getByRole("button", { name: "Create and connect" });
 
-async function choose(trigger: HTMLElement, option: string) {
+async function choose(trigger: HTMLElement, option: string | RegExp) {
   fireEvent.keyDown(trigger, { key: "ArrowDown" });
   fireEvent.click(await screen.findByRole("option", { name: option }));
 }
@@ -532,5 +538,230 @@ describe("AddCloudHostDialog MCP server (#18187)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Add machine" }));
     await waitFor(() => expect(client.importHost).toHaveBeenCalledTimes(1));
     expect(client.importHost.mock.calls[0]![0]).toMatchObject({ mcpServerOnConnect: false });
+  });
+});
+
+/** Agent 37's shape: reached only through its own command, which the person installs. */
+function tunnelled(id = "agent37", name = "Agent 37", command = "agent37"): CloudProviderInfo {
+  const info = provider(id, name, NONE);
+  return {
+    ...info,
+    capabilities: {
+      ...info.capabilities,
+      sshTrust: "provider-tunnel",
+      transport: "provider-command",
+      tunnel: { command, args: ["tunnel", "%h"], installUrl: `https://${id}.example/cli` },
+    },
+  };
+}
+
+const tunnelNote = (state: string) => screen.queryByTestId(`add-cloud-host-tunnel-${state}`);
+
+describe("AddCloudHostDialog finding the tunnel's command (#18180)", () => {
+  it("won't create until the command is found here, offering Get and Check again", async () => {
+    const first = deferred<{ command: string; found: boolean }>();
+    client.findTunnel.mockReturnValueOnce(first.promise);
+    open(tunnelled(), catalog());
+    await screen.findByText(/Default ·/);
+    expect(client.findTunnel).toHaveBeenCalledWith("agent37");
+    expect(tunnelNote("checking")?.textContent).toBe("Looking for agent37 on this device…");
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+
+    first.resolve({ command: "agent37", found: false });
+    const missing = await screen.findByTestId("add-cloud-host-tunnel-missing");
+    expect(missing.textContent).toContain("isn't installed on this device");
+    expect(missing.textContent).toContain("sign in to it");
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(createButton());
+    expect(client.createHost).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Get agent37" }));
+    expect(openExternal).toHaveBeenCalledWith("https://agent37.example/cli");
+
+    client.findTunnel.mockResolvedValueOnce({ command: "agent37", found: true });
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    expect((await screen.findByTestId("add-cloud-host-tunnel-found")).textContent).toContain(
+      "has to be signed in"
+    );
+    expect(tunnelNote("missing")).toBeNull();
+    expect(client.findTunnel).toHaveBeenCalledTimes(2);
+    expect((await create()).accountId).toBe("ca_0123456789");
+  });
+
+  it("says a lookup that failed, rather than asking for an install, and looks again", async () => {
+    client.findTunnel.mockRejectedValueOnce(
+      Object.assign(new Error("slow"), {
+        name: "AppError",
+        code: "INTERNAL",
+        userMessage: "Daintree couldn't finish looking for agent37 on this device's PATH.",
+      })
+    );
+    open(tunnelled(), catalog());
+    expect((await screen.findByTestId("add-cloud-host-tunnel-failed")).textContent).toContain(
+      "couldn't finish looking for agent37"
+    );
+    expect(screen.queryByRole("button", { name: "Get agent37" })).toBeNull();
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+    client.findTunnel.mockResolvedValueOnce({ command: "agent37", found: true });
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await screen.findByTestId("add-cloud-host-tunnel-found");
+    await create();
+  });
+
+  it("keeps an answer about one provider's command away from another's", async () => {
+    const acme = tunnelled("acme.clouds.tunnel", "Acme", "acme");
+    const slow = deferred<{ command: string; found: boolean }>();
+    client.findTunnel.mockImplementation((id: string) =>
+      id === "agent37" ? slow.promise : Promise.resolve({ command: "acme", found: false })
+    );
+    cloud.snapshot = {
+      providers: [tunnelled(), acme],
+      accounts: [account("agent37"), account(acme.id, "ca_abcdefghij", "Team")],
+      hosts: [],
+    };
+    // Each account's own sizes, so only the tunnel answer can hold Create back.
+    client.getCatalog.mockImplementation(async (id: string) => catalog({ accountId: id }));
+    render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+    fireEvent.change(screen.getByTestId("add-cloud-host-name"), { target: { value: "build" } });
+    await choose(screen.getAllByRole("combobox")[0]!, /^Team/);
+    await screen.findByTestId("add-cloud-host-tunnel-missing");
+    // Agent 37's answer lands after the switch: it says nothing of acme.
+    slow.resolve({ command: "agent37", found: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(tunnelNote("missing")?.textContent).toContain("acme command");
+    expect(tunnelNote("found")).toBeNull();
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("looks again after a create main refused, keeping main's words", async () => {
+    client.findTunnel.mockResolvedValue({ command: "agent37", found: true });
+    client.createHost.mockRejectedValueOnce(
+      Object.assign(new Error("refused"), {
+        name: "AppError",
+        code: "VALIDATION",
+        userMessage:
+          "Agent 37 machines are reached through its agent37 command, which isn't installed.",
+      })
+    );
+    open(tunnelled(), catalog());
+    await screen.findByTestId("add-cloud-host-tunnel-found");
+    client.findTunnel.mockResolvedValue({ command: "agent37", found: false });
+    await create();
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "reached through its agent37 command"
+    );
+    await screen.findByTestId("add-cloud-host-tunnel-missing");
+    expect(client.findTunnel).toHaveBeenCalledTimes(2);
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("asks again, rather than trusting an earlier answer, on coming back to a provider", async () => {
+    const acme = tunnelled("acme.clouds.tunnel", "Acme", "acme");
+    const again = deferred<{ command: string; found: boolean }>();
+    client.findTunnel
+      .mockResolvedValueOnce({ command: "agent37", found: true })
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockReturnValueOnce(again.promise);
+    cloud.snapshot = {
+      providers: [tunnelled(), acme],
+      accounts: [account("agent37"), account(acme.id, "ca_abcdefghij", "Team")],
+      hosts: [],
+    };
+    client.getCatalog.mockImplementation(async (id: string) => catalog({ accountId: id }));
+    render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+    fireEvent.change(screen.getByTestId("add-cloud-host-name"), { target: { value: "build" } });
+    await screen.findByTestId("add-cloud-host-tunnel-found");
+    await choose(screen.getAllByRole("combobox")[0]!, /^Team/);
+    await screen.findByTestId("add-cloud-host-tunnel-checking");
+    await choose(screen.getAllByRole("combobox")[0]!, /^Personal/);
+    await waitFor(() => expect(client.findTunnel).toHaveBeenCalledTimes(3));
+    // Agent 37 was found a moment ago; that says nothing of now.
+    expect(tunnelNote("checking")).toBeTruthy();
+    expect(tunnelNote("found")).toBeNull();
+    await screen.findByText(/Default ·/);
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+    again.resolve({ command: "agent37", found: true });
+    await screen.findByTestId("add-cloud-host-tunnel-found");
+    await waitFor(() => expect(createButton().getAttribute("aria-disabled")).toBeNull());
+  });
+
+  it("asks again for another account on the same provider", async () => {
+    const again = deferred<{ command: string; found: boolean }>();
+    client.findTunnel
+      .mockResolvedValueOnce({ command: "agent37", found: true })
+      .mockReturnValueOnce(again.promise);
+    cloud.snapshot = {
+      providers: [tunnelled()],
+      accounts: [account("agent37"), account("agent37", "ca_abcdefghij", "Team")],
+      hosts: [],
+    };
+    client.getCatalog.mockImplementation(async (id: string) => catalog({ accountId: id }));
+    render(<AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />);
+    fireEvent.change(screen.getByTestId("add-cloud-host-name"), { target: { value: "build" } });
+    await screen.findByTestId("add-cloud-host-tunnel-found");
+    await choose(screen.getAllByRole("combobox")[0]!, "Team");
+    await screen.findByTestId("add-cloud-host-tunnel-checking");
+    expect(client.findTunnel).toHaveBeenCalledTimes(2);
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("says the provider changed when main answers about another declaration", async () => {
+    client.findTunnel.mockResolvedValueOnce({ command: "agent37-next", found: true });
+    open(tunnelled(), catalog());
+    expect((await screen.findByTestId("add-cloud-host-tunnel-failed")).textContent).toContain(
+      "Agent 37 changed while Daintree looked for agent37"
+    );
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+    cleanup();
+    client.findTunnel.mockResolvedValueOnce(null);
+    open(tunnelled(), catalog());
+    await screen.findByTestId("add-cloud-host-tunnel-failed");
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+  });
+
+  it("keeps Check again in place, busy, while it looks", async () => {
+    const again = deferred<{ command: string; found: boolean }>();
+    client.findTunnel
+      .mockResolvedValueOnce({ command: "agent37", found: false })
+      .mockReturnValueOnce(again.promise);
+    open(tunnelled(), catalog());
+    await screen.findByTestId("add-cloud-host-tunnel-missing");
+    expect(screen.getByTestId("add-cloud-host-tunnel").getAttribute("aria-live")).toBe("polite");
+    fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+    await waitFor(() => expect(client.findTunnel).toHaveBeenCalledTimes(2));
+    const button = screen.getByRole("button", { name: "Check again" });
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(createButton().getAttribute("aria-disabled")).toBe("true");
+    again.resolve({ command: "agent37", found: false });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Check again" }).getAttribute("aria-busy")
+      ).toBeNull()
+    );
+    expect(tunnelNote("missing")).toBeTruthy();
+  });
+
+  it("looks for nothing on a provider reached directly", async () => {
+    open(provider("boat", "Boat", NONE), catalog());
+    await create();
+    expect(client.findTunnel).not.toHaveBeenCalled();
+    expect(tunnelNote("checking")).toBeNull();
+  });
+
+  it("looks for nothing while adding an existing machine, and again on coming back", async () => {
+    client.findTunnel.mockResolvedValue({ command: "agent37", found: true });
+    open(tunnelled(), catalog());
+    await screen.findByTestId("add-cloud-host-tunnel-found");
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    await screen.findByText(/has no machines yet/);
+    expect(tunnelNote("found")).toBeNull();
+    expect(client.findTunnel).toHaveBeenCalledTimes(1);
+    const again = deferred<{ command: string; found: boolean }>();
+    client.findTunnel.mockReturnValueOnce(again.promise);
+    fireEvent.click(screen.getByRole("radio", { name: "New machine" }));
+    await screen.findByTestId("add-cloud-host-tunnel-checking");
+    expect(tunnelNote("found")).toBeNull();
+    expect(client.findTunnel).toHaveBeenCalledTimes(2);
+    again.resolve({ command: "agent37", found: true });
+    await screen.findByTestId("add-cloud-host-tunnel-found");
   });
 });

@@ -17,6 +17,7 @@ import { createCommandStreamTransport, type StreamCommandChild } from "./command
 import { sshExecutable } from "./sshExecutable.js";
 import { defaultSshConfigRoots, sshConfigStamp } from "./sshConfig.js";
 import { isValidSshTarget } from "../../../shared/utils/sshTarget.js";
+import { isProxyClosedEarly } from "../../../shared/utils/sshRefusal.js";
 import {
   HostModeOffError,
   SshAccessError,
@@ -356,17 +357,7 @@ export function buildSignInArgs(target: string, controlPath: string, persist = "
   return [...sshMasterArgs(controlPath, persist, true), "--", target, PROBE_COMMAND];
 }
 
-/**
- * What ssh says when a ProxyJump or ProxyCommand hop closed the connection
- * before the host's banner arrived. On a call that may start a master
- * (ControlPersist), ssh sends that hop's stderr to /dev/null, so a jump host
- * that refused the login says nothing more than this.
- */
-const PROXY_CLOSED_EARLY = /Connection closed by UNKNOWN port 65535/;
-
-export function isProxyClosedEarly(stderr: string | null | undefined): boolean {
-  return PROXY_CLOSED_EARLY.test(stderr ?? "");
-}
+export { isProxyClosedEarly };
 
 /** The lines the ssh in front adds once a hop gave up, which would push the hop's own words out of a short tail. */
 const PROXY_CLOSED_LINE =

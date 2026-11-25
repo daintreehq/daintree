@@ -773,6 +773,16 @@ export interface CloudHostCreateRequest {
 }
 
 /**
+ * Whether a provider's tunnel command is on this device's PATH, looked for
+ * before a create. Found says only that it is installed there, never that it
+ * is signed in.
+ */
+export interface CloudTunnelLookup {
+  command: string;
+  found: boolean;
+}
+
+/**
  * A machine created for a worktree on this device, from the New Worktree
  * dialog. Main writes the mark from `worktree` and its own record of the
  * project, and the worktree waits on the new host to open there once it is

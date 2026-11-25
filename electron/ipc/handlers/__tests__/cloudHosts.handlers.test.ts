@@ -4,6 +4,7 @@ import type { IpcContext } from "../../types.js";
 const mocks = vi.hoisted(() => ({
   createHostForWorktree: vi.fn(async () => ({ hostId: "feature-login", requestedAt: 1_000 })),
   createHost: vi.fn(async () => ({ hostId: "build" })),
+  findTunnel: vi.fn(async (_providerId: unknown) => ({ command: "agent37", found: false })),
   getProjectById: vi.fn((id: string) => (id === "proj-1" ? { id, name: "app" } : null)),
   hostForSender: vi.fn((_id: number): string | null => null),
   requireProjectWorktree: vi.fn(async (_projectId: unknown, _path: unknown) => {}),
@@ -14,6 +15,7 @@ vi.mock("../../../remote/runtime.js", () => ({
   requireRemoteService: () => ({
     createHostForWorktree: mocks.createHostForWorktree,
     createHost: mocks.createHost,
+    findTunnel: mocks.findTunnel,
   }),
 }));
 vi.mock("../../../services/ProjectStore.js", () => ({
@@ -129,5 +131,18 @@ describe("cloudHosts createHostForWorktree", () => {
     await create({ ...MACHINE, worktree: WORKTREE });
     expect(mocks.createHost).toHaveBeenCalledWith({ ...MACHINE, worktree: WORKTREE });
     expect(mocks.createHostForWorktree).not.toHaveBeenCalled();
+  });
+});
+
+describe("cloudHosts findTunnel", () => {
+  it("asks about the provider by id alone, and answers what main found", async () => {
+    const find = cloudHostsNamespace.ops.findTunnel.handler as unknown as (
+      payload: unknown
+    ) => Promise<unknown>;
+    expect(await find({ providerId: "acme.clouds.tunnel", command: "/bin/sh" })).toEqual({
+      command: "agent37",
+      found: false,
+    });
+    expect(mocks.findTunnel).toHaveBeenCalledWith("acme.clouds.tunnel");
   });
 });

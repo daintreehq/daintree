@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ExternalLink } from "lucide-react";
 import { AppDialog, type DialogAction } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
@@ -17,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
+import { systemClient } from "@/clients/systemClient";
 import { cloudStatusFor, useCloudHosts } from "@/components/Hosts/cloud/cloudHostsState";
 import { clientErrorText, isClientAppError } from "@/utils/clientAppError";
 import {
@@ -124,6 +126,17 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
   /** The host this dialog added; its machine's progress is followed from the cloud snapshot. */
   const [added, setAdded] = useState<{ hostId: HostId; name: string } | null>(null);
   const [startRequested, setStartRequested] = useState(false);
+  // What this device's PATH said of the provider's tunnel command, for the choice `key` names:
+  // an answer for another account, provider or command counts as none yet. `pending` while
+  // the same choice is asked again (Check again, a refused create).
+  const [tunnelLookup, setTunnelLookup] = useState<{
+    key: string;
+    found: boolean;
+    error: string | null;
+    pending: boolean;
+  } | null>(null);
+  // Bumped by Check again, and by a refused create: the command may have come or gone since.
+  const [tunnelTry, setTunnelTry] = useState(0);
 
   const status = cloudStatusFor(snapshot, added?.hostId);
   const accountKey = account?.id ?? null;
@@ -159,6 +172,73 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
     };
   }, [accountKey, mode, added, resourcesTry]);
 
+  // A machine made on a provider reached through its own command waits on finding that command
+  // here: one this device can't reach would run, and bill, while the person installs it.
+  const tunnel = provider?.capabilities.tunnel ?? null;
+  const tunnelProviderId = provider?.id ?? null;
+  const tunnelProviderName = provider?.name ?? null;
+  const tunnelCommand = tunnel?.command ?? null;
+  const tunnelKey =
+    isOpen && mode === "create" && added === null && accountKey !== null && tunnelCommand !== null
+      ? `${accountKey}\n${tunnelProviderId}\n${tunnelCommand}`
+      : null;
+  useEffect(() => {
+    if (tunnelKey === null || tunnelProviderId === null) {
+      // Nothing carries over: coming back to create looks again.
+      setTunnelLookup(null);
+      return undefined;
+    }
+    // The same choice asked again keeps what was said in view, so its Check again keeps focus;
+    // an answer for any other choice is gone before this one is asked, however it was keyed.
+    setTunnelLookup((previous) =>
+      previous?.key === tunnelKey ? { ...previous, pending: true } : null
+    );
+    let current = true;
+    cloudHostsClient.findTunnel(tunnelProviderId).then(
+      (result) => {
+        if (!current) return;
+        // An answer about a declaration other than the one shown says nothing of it.
+        setTunnelLookup(
+          result !== null && result.command === tunnelCommand
+            ? { key: tunnelKey, found: result.found, error: null, pending: false }
+            : {
+                key: tunnelKey,
+                found: false,
+                error: `${tunnelProviderName} changed while Daintree looked for ${tunnelCommand}. Check again.`,
+                pending: false,
+              }
+        );
+      },
+      (err: unknown) => {
+        if (!current) return;
+        setTunnelLookup({
+          key: tunnelKey,
+          found: false,
+          error: errorText(err, `Couldn't look for ${tunnelCommand} on this device`),
+          pending: false,
+        });
+      }
+    );
+    return () => {
+      current = false;
+    };
+  }, [tunnelKey, tunnelTry, tunnelProviderId, tunnelProviderName, tunnelCommand]);
+  const tunnelAnswer =
+    tunnelLookup !== null && tunnelLookup.key === tunnelKey ? tunnelLookup : null;
+  const tunnelState: "none" | "checking" | "found" | "missing" | "failed" =
+    tunnelKey === null
+      ? "none"
+      : tunnelAnswer === null
+        ? "checking"
+        : tunnelAnswer.error !== null
+          ? "failed"
+          : tunnelAnswer.found
+            ? "found"
+            : "missing";
+  const tunnelPending = tunnelAnswer?.pending ?? false;
+  const tunnelReady = tunnelState === "none" || (tunnelState === "found" && !tunnelPending);
+  const checkTunnelAgain = () => setTunnelTry((n) => n + 1);
+
   // Hand over to setup once the machine runs.
   const ready = added !== null && status?.machine === "running" && status.operation === null;
   // A stopped import only gets here once someone starts it; a running one at once.
@@ -174,7 +254,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
 
   const create = () => {
     const request = form.request(trimmedName);
-    if (!request) return;
+    if (!request || !tunnelReady) return;
     setBusy(true);
     setError(null);
     cloudHostsClient.createHost({ ...request, mcpServerOnConnect: mcpServerOnConnect.create }).then(
@@ -188,6 +268,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
       (err: unknown) => {
         setBusy(false);
         setError(errorText(err, "Couldn't create the machine"));
+        // Main looks again before anything is made; whatever it found, this looks again too.
+        if (tunnel) checkTunnelAgain();
       }
     );
   };
@@ -500,6 +582,70 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
                 {`Stopping ends what runs on it.${stoppedBillingSentence(provider) ? ` ${stoppedBillingSentence(provider)}` : ""} ${stopKeepsSentence(provider.capabilities.persistence)}`}
               </p>
             )}
+            {tunnel && tunnelState !== "none" && (
+              // Mounted with the form, so each change to what was found is announced.
+              <div aria-live="polite" data-testid="add-cloud-host-tunnel">
+                {tunnelState === "checking" && (
+                  <p
+                    className="text-xs text-text-secondary"
+                    data-testid="add-cloud-host-tunnel-checking"
+                  >
+                    {`Looking for ${tunnel.command} on this device…`}
+                  </p>
+                )}
+                {tunnelState === "found" && (
+                  <p
+                    className="text-xs text-text-secondary"
+                    data-testid="add-cloud-host-tunnel-found"
+                  >
+                    {`Daintree reaches ${provider.name} machines through the ${tunnel.command} command on this device, which has to be signed in.`}
+                  </p>
+                )}
+                {tunnelState === "missing" && (
+                  <Callout severity="warning" data-testid="add-cloud-host-tunnel-missing">
+                    <p>
+                      {`${provider.name} machines are reached through its ${tunnel.command} command, which isn't installed on this device or isn't on Daintree's PATH. Install it and sign in to it, then check again.`}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => void systemClient.openExternal(tunnel.installUrl)}
+                      >
+                        <ExternalLink aria-hidden="true" />
+                        Get {tunnel.command}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        loading={tunnelPending}
+                        onClick={checkTunnelAgain}
+                      >
+                        Check again
+                      </Button>
+                    </div>
+                  </Callout>
+                )}
+                {tunnelState === "failed" && (
+                  <Callout
+                    severity="error"
+                    data-testid="add-cloud-host-tunnel-failed"
+                    action={
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        loading={tunnelPending}
+                        onClick={checkTunnelAgain}
+                      >
+                        Check again
+                      </Button>
+                    }
+                  >
+                    {tunnelAnswer?.error}
+                  </Callout>
+                )}
+              </div>
+            )}
           </>
         ) : (
           <>
@@ -610,7 +756,8 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
               !trimmedName ||
               !chosenType?.available ||
               !currentCatalog ||
-              provisioningProblem !== null,
+              provisioningProblem !== null ||
+              !tunnelReady,
             loading: busy,
           }
         : {

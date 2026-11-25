@@ -340,7 +340,266 @@ async function setup(
   };
 }
 
+describe("CloudHostLifecycle.findTunnel", () => {
+  it("says whether the provider's tunnel command is on this device's PATH (#18180)", async () => {
+    const findCommand = vi.fn(async (_command: string): Promise<string | null> => null);
+    const { lifecycle } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    expect(await lifecycle.findTunnel("boat")).toEqual({ command: "acme", found: false });
+    findCommand.mockResolvedValue("/opt/acme/bin/acme");
+    expect(await lifecycle.findTunnel("boat")).toEqual({ command: "acme", found: true });
+    expect(findCommand).toHaveBeenCalledWith("acme");
+  });
+
+  it("answers null for a provider reached directly, without looking", async () => {
+    const findCommand = vi.fn(async (_command: string): Promise<string | null> => null);
+    const { lifecycle } = await setup({}, { findCommand });
+    expect(await lifecycle.findTunnel("boat")).toBeNull();
+    expect(findCommand).not.toHaveBeenCalled();
+  });
+
+  it("fails, rather than answering missing, when the lookup didn't finish", async () => {
+    const findCommand = vi.fn(async (_command: string): Promise<string | null> => {
+      throw new TransportError(
+        "slow",
+        "Daintree couldn't finish looking for acme on this device's PATH."
+      );
+    });
+    const { lifecycle } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    await expect(lifecycle.findTunnel("boat")).rejects.toMatchObject({
+      code: "INTERNAL",
+      userMessage: "Daintree couldn't finish looking for acme on this device's PATH.",
+    });
+  });
+
+  it("refuses a provider that isn't one", async () => {
+    const { lifecycle } = await setup();
+    await expect(lifecycle.findTunnel("../boat")).rejects.toMatchObject({ code: "VALIDATION" });
+  });
+});
+
 describe("CloudHostLifecycle.create", () => {
+  it("refuses before anything is written or sent when the provider's tunnel command isn't on this device (#18180)", async () => {
+    const findCommand = vi.fn(async (_command: string): Promise<string | null> => null);
+    const { lifecycle, provider, store, hosts } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    const catalogReads = vi.mocked(provider.catalog).mock.calls.length;
+    const error = await lifecycle
+      .create({
+        accountId: store.accounts()[0]!.id,
+        name: "build",
+        machineType: "default",
+        lifetimeHours: 2,
+      })
+      .catch((e: unknown) => e);
+    expect(findCommand).toHaveBeenCalledWith("acme");
+    expect(error).toMatchObject({ code: "VALIDATION" });
+    // Refused before the account is even asked for its sizes.
+    expect(vi.mocked(provider.catalog).mock.calls.length).toBe(catalogReads);
+    const said = (error as { userMessage: string }).userMessage;
+    expect(said).toContain("acme command");
+    expect(said).toContain("https://example.com/acme");
+    expect(said).toContain("sign in to it");
+    expect(store.bindings()).toHaveLength(0);
+    expect(hosts).toHaveLength(0);
+    expect(provider.create).not.toHaveBeenCalled();
+
+    // Once it is installed, the same request goes ahead.
+    findCommand.mockResolvedValue("/opt/acme/bin/acme");
+    const { hostId } = await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    expect(hostId).toBe("build");
+    await vi.waitFor(() => expect(provider.create).toHaveBeenCalledTimes(1));
+  });
+
+  it("refuses without asking for an install when looking for the tunnel's command didn't finish (#18180)", async () => {
+    const findCommand = vi.fn(async (_command: string): Promise<string | null> => {
+      throw new TransportError(
+        "Looking for acme on this device took too long",
+        "Daintree couldn't finish looking for acme on this device's PATH."
+      );
+    });
+    const { lifecycle, provider, store, hosts } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    const catalogReads = vi.mocked(provider.catalog).mock.calls.length;
+    const error = await lifecycle
+      .create({
+        accountId: store.accounts()[0]!.id,
+        name: "build",
+        machineType: "default",
+        lifetimeHours: 2,
+      })
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({
+      code: "INTERNAL",
+      userMessage:
+        "Daintree couldn't finish looking for acme on this device's PATH. No machine was asked for.",
+    });
+    expect(vi.mocked(provider.catalog).mock.calls.length).toBe(catalogReads);
+    expect(store.bindings()).toHaveLength(0);
+    expect(hosts).toHaveLength(0);
+    expect(provider.create).not.toHaveBeenCalled();
+  });
+
+  it("looks for no command when the provider's machines are reached directly", async () => {
+    const findCommand = vi.fn(async (_command: string): Promise<string | null> => null);
+    const { lifecycle, provider, store } = await setup({}, { findCommand });
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(provider.create).toHaveBeenCalledTimes(1));
+    expect(findCommand).not.toHaveBeenCalled();
+  });
+
+  it("sends no retry while the tunnel's command is missing, and says how to get it (#18180)", async () => {
+    const findCommand = vi.fn(
+      async (_command: string): Promise<string | null> => "/opt/acme/bin/acme"
+    );
+    const { lifecycle, provider, store } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("payment-required", "pay", 402, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    // Turned down, so nothing was made and a retry would send a fresh create.
+    expect(store.bindings()[0]?.creation?.sentAt).toBeNull();
+    findCommand.mockResolvedValue(null);
+    const error = await lifecycle.retryCreate("build").catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "VALIDATION" });
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "ssh-tunnel-command-missing",
+      message: expect.stringContaining("https://example.com/acme"),
+    });
+    expect(lifecycle.statuses()[0]?.lastError?.message).toMatch(/then retry\.$/);
+
+    findCommand.mockResolvedValue("/opt/acme/bin/acme");
+    await lifecycle.retryCreate("build");
+    expect(provider.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("still finds a lost create's machine on Retry with the tunnel's command missing (#18180)", async () => {
+    const findCommand = vi.fn(
+      async (_command: string): Promise<string | null> => "/opt/acme/bin/acme"
+    );
+    const { lifecycle, provider, store } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("network", "lost", null, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() =>
+      expect(lifecycle.statuses()[0]?.lastError?.code).toBe("outcome-unknown")
+    );
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    const sentAt = store.bindings()[0]!.creation!.sentAt!;
+    vi.mocked(provider.list).mockResolvedValue([
+      resource({
+        resourceId: "bx_orig00001",
+        labels: { "daintree-binding": store.bindings()[0]!.id },
+        createdAt: new Date(sentAt).toISOString(),
+      }),
+    ]);
+    findCommand.mockResolvedValue(null);
+    await lifecycle.retryCreate("build");
+    // The machine the first request made is bound; nothing is asked for again.
+    expect(store.bindings()[0]!.resourceId).toBe("bx_orig00001");
+    expect(provider.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("won't send a lost create again while the tunnel's command is missing (#18180)", async () => {
+    const findCommand = vi.fn(
+      async (_command: string): Promise<string | null> => "/opt/acme/bin/acme"
+    );
+    const { lifecycle, provider, store } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("network", "lost", null, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(store.bindings()[0]?.creation?.sentAt).toEqual(expect.any(Number));
+    // Nothing of its own in the account: a provider that replays the key would send again here.
+    vi.mocked(provider.list).mockResolvedValue([]);
+    findCommand.mockResolvedValue(null);
+    const error = await lifecycle.retryCreate("build").catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "VALIDATION" });
+    expect(provider.list).toHaveBeenCalled();
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(lifecycle.statuses()[0]?.lastError).toMatchObject({
+      code: "outcome-unknown",
+      message: expect.stringContaining("The create wasn't sent again"),
+    });
+  });
+
+  it("names no replaced provider's command when it was replaced while the command was looked for (#18180)", async () => {
+    const findCommand = vi.fn(
+      async (_command: string): Promise<string | null> => "/opt/acme/bin/acme"
+    );
+    const { lifecycle, provider, store, accounts } = await setup(
+      {},
+      { sshTrust: "provider-tunnel", transport: "provider-command", findCommand }
+    );
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("payment-required", "pay", 402, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    const replacement = fakeProvider({ machine: resource() });
+    findCommand.mockImplementationOnce(async () => {
+      vi.spyOn(accounts, "provider").mockReturnValue(replacement);
+      return null;
+    });
+    await expect(lifecycle.retryCreate("build")).rejects.toThrow(/changed while the machine/);
+    expect(lifecycle.statuses()[0]?.lastError?.code).toBe("failed");
+    expect(lifecycle.statuses()[0]?.lastError?.message).not.toContain("acme command");
+    expect(provider.create).toHaveBeenCalledTimes(1);
+    expect(replacement.create).not.toHaveBeenCalled();
+  });
+
   it("saves the binding and idempotency key before asking for a machine", async () => {
     const { lifecycle, provider, store } = await setup();
     let savedBeforeCreate: unknown = null;
@@ -608,6 +867,8 @@ describe("CloudHostLifecycle access through a provider's tunnel", () => {
     for (const said of [message, detail]) {
       expect(said).toContain("acme command");
       expect(said).toContain(INSTALL_URL);
+      expect(said).toContain("sign in to it");
+      expect(said).toMatch(/then connect again\.$/);
     }
     expect(findCommand).toHaveBeenCalledWith("acme");
     expect(provider.authorizeSsh).not.toHaveBeenCalled();

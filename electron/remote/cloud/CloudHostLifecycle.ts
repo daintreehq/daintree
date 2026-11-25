@@ -8,6 +8,7 @@ import {
   cloudProviderNamespace,
   cloudProvisioningArticleNoun,
   cloudProvisioningNoun,
+  isCloudProviderId,
   type CloudCatalog,
   type CloudHostCreatedFor,
   type CloudHostCreateRequest,
@@ -25,6 +26,8 @@ import {
   type CloudProviderId,
   type CloudProvisioningSelection,
   type CloudSshTrust,
+  type CloudSshTunnelCommand,
+  type CloudTunnelLookup,
   type CloudWorktreeCleanupOutcome,
   type CloudWorktreeCleanupRequest,
   type CloudWorktreeRef,
@@ -345,6 +348,15 @@ async function findTunnelCommand(command: string): Promise<string | null> {
     );
   }
   return found;
+}
+
+/** A tunnel's command missing from this device, and what the person does about it before `then`. */
+function tunnelMissingMessage(
+  providerName: string,
+  tunnel: CloudSshTunnelCommand,
+  then: string
+): string {
+  return `${providerName} machines are reached through its ${tunnel.command} command, which isn't installed on this device or isn't on Daintree's PATH. Install it and sign in to it as ${tunnel.installUrl} describes, then ${then}.`;
 }
 
 /** A public key as ssh compares it: its algorithm and blob, never its comment. */
@@ -969,6 +981,18 @@ export class CloudHostLifecycle {
       // Refused, never dropped: a lifetime sent here means the asker thought it would hold.
       throw invalid(`${nameOf(provider)} doesn't take a lifetime for its machines.`);
     }
+    // Before anything is written or asked for: a machine this device can't reach would run,
+    // and bill, while the person installs the provider's command (#18180).
+    const tunnel = await this.tunnelProblem(provider, "create the machine");
+    if (tunnel) {
+      throw tunnel.missing
+        ? invalid(tunnel.said)
+        : new AppError({
+            code: "INTERNAL",
+            message: tunnel.said,
+            userMessage: `${tunnel.said} No machine was asked for.`,
+          });
+    }
     // A size is checked against the account's current catalog, never assumed.
     const catalog = await this.deps.accounts.catalog(account.id, { refresh: true });
     // The lifetime was checked against this provider; one registered in its place meanwhile wasn't asked.
@@ -1090,6 +1114,30 @@ export class CloudHostLifecycle {
         this.recordError(bindingId, { code: "outcome-unknown", message, at: this.now() });
         throw invalid(message);
       }
+    }
+    // Only a send gets this far. A retry asks for nothing this device couldn't reach, as
+    // create() did. What the lookup found is said only of the provider still registered: one
+    // replaced while it looked is refused below, never named with its old command.
+    const tunnel = await this.tunnelProblem(provider, "retry");
+    if (tunnel && this.stillRegistered(binding.providerId, provider)) {
+      const sentBefore = creation.sentAt !== null;
+      const message = sentBefore
+        ? `${tunnel.said} The create wasn't sent again; Retry looks for a machine from the earlier request first.`
+        : tunnel.missing
+          ? tunnel.said
+          : `${tunnel.said} No machine was asked for; Retry looks again.`;
+      this.recordError(bindingId, {
+        code: sentBefore
+          ? "outcome-unknown"
+          : tunnel.missing
+            ? "ssh-tunnel-command-missing"
+            : "failed",
+        message,
+        at: this.now(),
+      });
+      throw tunnel.missing
+        ? invalid(message)
+        : new AppError({ code: "INTERNAL", message, userMessage: message });
     }
     // Asked only of the provider registered now, and only for what it still takes: a limit
     // asked for under a model it has since dropped is refused, never sent as none.
@@ -3047,6 +3095,45 @@ export class CloudHostLifecycle {
   }
 
   /**
+   * Whether the provider's tunnel command is on this device's PATH, for the
+   * create dialog to wait on; null when its machines need no tunnel.
+   */
+  async findTunnel(providerId: unknown): Promise<CloudTunnelLookup | null> {
+    if (!isCloudProviderId(providerId)) throw invalid("Choose a cloud provider.");
+    const provider = this.deps.accounts.requireSupported(providerId);
+    const { tunnel } = provider.info(process.platform).capabilities;
+    if (!tunnel) return null;
+    const problem = await this.tunnelProblem(provider, "check again");
+    if (problem && !problem.missing) {
+      throw new AppError({ code: "INTERNAL", message: problem.said, userMessage: problem.said });
+    }
+    return { command: tunnel.command, found: problem === null };
+  }
+
+  /**
+   * What stands between this device and the provider's machines before one is
+   * made: null when they need no tunnel or its command is on PATH. `missing`
+   * is a lookup that finished without finding it; one that ran out of time
+   * proves nothing, so it says so instead of asking for an install.
+   */
+  private async tunnelProblem(
+    provider: CloudProvider,
+    then: string
+  ): Promise<{ missing: boolean; said: string } | null> {
+    const info = provider.info(process.platform);
+    const { tunnel } = info.capabilities;
+    if (!tunnel) return null;
+    let found: string | null;
+    try {
+      found = await (this.deps.findCommand ?? findTunnelCommand)(tunnel.command);
+    } catch (error) {
+      if (!(error instanceof TransportError)) throw error;
+      return { missing: false, said: error.detail ?? error.message };
+    }
+    return found ? null : { missing: true, said: tunnelMissingMessage(info.name, tunnel, then) };
+  }
+
+  /**
    * How the provider says its machines are reached and trusted, with its
    * tunnel's command found on this device. A missing command is the person's
    * to install, so the host names it and where to get it instead of letting
@@ -3065,12 +3152,12 @@ export class CloudHostLifecycle {
       throw new UnusableConnectionError(said, said);
     }
     if (!capabilities.tunnel) return { trust: capabilities.sshTrust, tunnel: null };
-    const { command, args, installUrl } = capabilities.tunnel;
+    const { command, args } = capabilities.tunnel;
     const missingCode: CloudHostErrorCode = "ssh-tunnel-command-missing";
     const lastError = this.deps.store.binding(bindingId)?.lastError ?? null;
     const commandPath = await (this.deps.findCommand ?? findTunnelCommand)(command);
     if (!commandPath) {
-      const said = `${info.name} machines are reached through its ${command} command, which isn't installed on this device or isn't on Daintree's PATH. Install it from ${installUrl}, then connect again.`;
+      const said = tunnelMissingMessage(info.name, capabilities.tunnel, "connect again");
       if (lastError?.code !== missingCode || lastError.message !== said) {
         this.recordError(bindingId, { code: missingCode, message: said, at: this.now() });
       }

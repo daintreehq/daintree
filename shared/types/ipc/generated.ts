@@ -728,6 +728,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { hostId: string }];
     result: void;
   };
+  "cloud-hosts:find-tunnel": {
+    args: [payload: { providerId: string }];
+    result: import("../cloudHosts.js").CloudTunnelLookup | null;
+  };
   "cloud-hosts:get-catalog": {
     args: [payload: { accountId: string; refresh?: boolean | undefined }];
     result: import("../cloudHosts.js").CloudCatalog;

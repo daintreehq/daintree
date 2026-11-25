@@ -381,6 +381,9 @@ export interface GeneratedElectronAPI {
     dismissWorktreeCleanup(
       ...args: IpcInvokeMap["cloud-hosts:dismiss-worktree-cleanup"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:dismiss-worktree-cleanup"]["result"]>;
+    findTunnel(
+      ...args: IpcInvokeMap["cloud-hosts:find-tunnel"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:find-tunnel"]["result"]>;
     getCatalog(
       ...args: IpcInvokeMap["cloud-hosts:get-catalog"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:get-catalog"]["result"]>;

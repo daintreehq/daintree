@@ -123,10 +123,11 @@ export function CloudMachineSection({
           .join(" ")
       : (actionError ?? lastError);
   const tunnel = provider?.capabilities.tunnel ?? null;
-  // Offered only beside the error that names the command, never beside another one.
+  // Offered only beside the error that names the command, never beside another one: a Retry
+  // refused for the missing command answers with the same words the host recorded.
   const tunnelMissing =
     tunnel !== null &&
-    actionError === null &&
+    (actionError === null || actionError === status.lastError?.message) &&
     status.providerUnavailable === null &&
     status.operation === null &&
     status.lastError?.code === "ssh-tunnel-command-missing";

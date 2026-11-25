@@ -9,6 +9,7 @@ import type {
   CloudCredentialValues,
   CloudHostsSnapshot,
   CloudResourceSummary,
+  CloudTunnelLookup,
   CloudWorktreeCleanupOutcome,
   CloudWorktreeCleanupRequest,
   CloudWorktreeRef,
@@ -53,6 +54,9 @@ export const cloudHostsClient = {
     window.electron.cloudHosts.getCatalog({ accountId, refresh }),
   listResources: (accountId: string): Promise<CloudResourceSummary[]> =>
     window.electron.cloudHosts.listResources({ accountId }),
+  /** Whether the provider's tunnel command is on this device's PATH; null when it needs none. */
+  findTunnel: (providerId: string): Promise<CloudTunnelLookup | null> =>
+    window.electron.cloudHosts.findTunnel({ providerId }),
   createHost: (request: CloudHostCreateRequest): Promise<{ hostId: string }> =>
     window.electron.cloudHosts.createHost(request),
   /** A machine marked as created for a worktree on this device. */

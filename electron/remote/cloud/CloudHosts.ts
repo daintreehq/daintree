@@ -10,6 +10,7 @@ import {
   type CloudHostStatus,
   type CloudHostsSnapshot,
   type CloudResourceSummary,
+  type CloudTunnelLookup,
   type CloudWorktreeCleanupOutcome,
   type PluginCloudAccountInfo,
 } from "../../../shared/types/cloudHosts.js";
@@ -77,6 +78,10 @@ export class CloudHosts {
 
   createHost(request: CloudHostCreateRequest): Promise<{ hostId: HostId }> {
     return this.lifecycle.create(request);
+  }
+
+  findTunnel(providerId: unknown): Promise<CloudTunnelLookup | null> {
+    return this.lifecycle.findTunnel(providerId);
   }
 
   /**
