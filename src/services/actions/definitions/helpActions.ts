@@ -230,6 +230,36 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     run: (args, ctx) => runHelpAction("help.replaceGlobalAssistant", args, ctx, callbacks),
   }));
 
+  actions.set("help.resumeGlobalConversation", () => ({
+    id: "help.resumeGlobalConversation",
+    title: "Resume earlier global assistant conversation",
+    description:
+      "Ask the person to reopen one of the global Daintree Assistant's earlier conversations in place of the one it runs",
+    category: "help",
+    kind: "command",
+    // Safe because it only asks: the switch runs from the dialog, once the
+    // person approves it there (#18169). A plugin can't pass a confirm tier.
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    mcpVisibility: "hidden",
+    palette: { mode: "hidden" },
+    keywords: ["assistant", "global", "conversation", "history", "resume", "earlier"],
+    argsSchema: z.object({
+      agentSessionId: z
+        .string()
+        .min(1)
+        .max(256)
+        .describe("The conversation's id in its agent's own transcript store."),
+      slot: z
+        .union([z.literal(0), z.literal(1)])
+        .optional()
+        .describe("The global session to reopen it in. Omit for the one that coordinates."),
+    }),
+    resultSchema: z.object({ outcome: z.enum(["awaiting-confirmation", "unavailable"]) }),
+    run: (args, ctx) => runHelpAction("help.resumeGlobalConversation", args, ctx, callbacks),
+  }));
+
   actions.set("help.resumePastSession", () => ({
     id: "help.resumePastSession",
     title: "Resume past assistant session",

@@ -125,6 +125,7 @@ import {
 } from "@/lib/helpPanelRuntimeGate";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { useGlobalAssistantReplaceConfirmStore } from "@/store/globalAssistantReplaceConfirmStore";
+import { useGlobalAssistantResumeConfirmStore } from "@/store/globalAssistantResumeConfirmStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 import { ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
@@ -2198,6 +2199,121 @@ describe("help.replaceGlobalAssistant (#18140)", () => {
     expect(canRunGlobalAssistant).toHaveBeenCalledWith("codex");
     expect(listGlobalAssistantSessions).not.toHaveBeenCalled();
     expect(useGlobalAssistantReplaceConfirmStore.getState().current).toBeNull();
+  });
+});
+
+describe("help.resumeGlobalConversation (#18169)", () => {
+  let action: AnyActionDefinition;
+  let listGlobalAssistantSessions: ReturnType<typeof vi.fn>;
+  let listGlobalAssistantPastSessions: ReturnType<typeof vi.fn>;
+  let resumeGlobalAssistantConversation: ReturnType<typeof vi.fn>;
+  const fromPlugin: ActionContext = { dispatchSource: "plugin", callerPluginId: "acme.cos" };
+  const pastOf = (slot: number) => ({
+    slot,
+    agentId: "claude",
+    sessions: [
+      { agentId: "claude", sessionId: `conv-${slot}`, title: `Talk in ${slot}`, updatedAt: 1 },
+    ],
+    unreadable: [],
+    truncated: false,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockViewCached.mockReturnValue(false);
+    listGlobalAssistantSessions = vi.fn(async () => [
+      { slot: 0, coordinating: false, occupied: true, phase: "running", generation: 4 },
+      { slot: 1, coordinating: true, occupied: true, phase: "absent", generation: 9 },
+    ]);
+    listGlobalAssistantPastSessions = vi.fn(async (slot: number) => pastOf(slot));
+    resumeGlobalAssistantConversation = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        electron: {
+          help: {
+            listGlobalAssistantSessions,
+            listGlobalAssistantPastSessions,
+            resumeGlobalAssistantConversation,
+          },
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+    useGlobalAssistantResumeConfirmStore.setState({ current: null, requestSeq: 0 });
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([["acme.cos", { devMode: false, displayName: "Chief of staff" }]]),
+    });
+    action = extractAction("help.resumeGlobalConversation");
+  });
+
+  it("is hidden from agents and the palette, never repeated, and only asks", () => {
+    expect(action.mcpVisibility).toBe("hidden");
+    expect(action.palette).toEqual({ mode: "hidden" });
+    expect(action.nonRepeatable).toBe(true);
+    expect(action.danger).toBe("safe");
+    expect(action.argsSchema!.safeParse({ agentSessionId: "" }).success).toBe(false);
+    expect(action.argsSchema!.safeParse({ agentSessionId: "x", slot: 2 }).success).toBe(false);
+  });
+
+  it("asks about the coordinating session's conversation under main's title, and reopens nothing itself", async () => {
+    expect(await action.run({ agentSessionId: "conv-1" }, fromPlugin)).toEqual({
+      outcome: "awaiting-confirmation",
+    });
+
+    expect(listGlobalAssistantPastSessions).toHaveBeenCalledWith(1);
+    expect(useGlobalAssistantResumeConfirmStore.getState().requestSeq).toBe(1);
+    expect(useGlobalAssistantResumeConfirmStore.getState().current).toMatchObject({
+      slot: 1,
+      agentId: "claude",
+      agentSessionId: "conv-1",
+      title: "Talk in 1",
+      expected: { generation: 9, phase: "absent" },
+      pluginName: "Chief of staff",
+      namesSession: true,
+    });
+    expect(resumeGlobalAssistantConversation).not.toHaveBeenCalled();
+  });
+
+  it("asks about the session it names", async () => {
+    expect(await action.run({ agentSessionId: "conv-0", slot: 0 }, fromPlugin)).toEqual({
+      outcome: "awaiting-confirmation",
+    });
+    expect(useGlobalAssistantResumeConfirmStore.getState().current).toMatchObject({
+      slot: 0,
+      expected: { generation: 4, phase: "running" },
+    });
+  });
+
+  it("asks nothing about a conversation main doesn't list for that session", async () => {
+    expect(await action.run({ agentSessionId: "conv-0" }, fromPlugin)).toEqual({
+      outcome: "unavailable",
+    });
+    expect(useGlobalAssistantResumeConfirmStore.getState().current).toBeNull();
+  });
+
+  it("asks nothing from a view nobody sees, nor while one waits", async () => {
+    mockViewCached.mockReturnValue(true);
+    expect(await action.run({ agentSessionId: "conv-1" }, fromPlugin)).toEqual({
+      outcome: "unavailable",
+    });
+    expect(listGlobalAssistantPastSessions).not.toHaveBeenCalled();
+
+    mockViewCached.mockReturnValue(false);
+    await action.run({ agentSessionId: "conv-1" }, fromPlugin);
+    const first = useGlobalAssistantResumeConfirmStore.getState().current;
+    expect(await action.run({ agentSessionId: "conv-0", slot: 0 }, fromPlugin)).toEqual({
+      outcome: "unavailable",
+    });
+    expect(useGlobalAssistantResumeConfirmStore.getState().current).toBe(first);
+  });
+
+  it("asks nothing when main can't be read", async () => {
+    listGlobalAssistantPastSessions.mockRejectedValueOnce(new Error("gone"));
+    expect(await action.run({ agentSessionId: "conv-1" }, fromPlugin)).toEqual({
+      outcome: "unavailable",
+    });
+    expect(useGlobalAssistantResumeConfirmStore.getState().current).toBeNull();
   });
 });
 

@@ -33,6 +33,8 @@ export const HELP_METHOD_CHANNELS = {
   restartGlobalAssistant: "help:global-assistant-restart",
   canRunGlobalAssistant: "help:global-assistant-can-run",
   replaceGlobalAssistant: "help:global-assistant-replace",
+  listGlobalAssistantPastSessions: "help:global-assistant-list-past",
+  resumeGlobalAssistantConversation: "help:global-assistant-resume",
   discardGlobalAssistant: "help:global-assistant-discard",
   cancelGlobalAssistantLaunch: "help:global-assistant-cancel-launch",
   getWindowGlobalAssistantPanel: "help:window-global-assistant-panel",

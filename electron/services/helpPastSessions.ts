@@ -442,20 +442,39 @@ async function readCodexHelpSessions(
   return { sessions: [], readable: !ranHere, more: false };
 }
 
+/** Narrows a listing to what one assistant may reopen (#18169). */
+export interface ListHelpPastSessionsOptions {
+  /** Only this agent's store is read, so the other's rows never take the cap. */
+  agentId?: HelpPastSession["agentId"];
+  /** Conversations left out before the cap, by id: ones an assistant already holds. */
+  exclude?: ReadonlySet<string>;
+}
+
+const NO_SESSIONS = { sessions: [] as HelpPastSession[] };
+
 /** Newest first, capped. Each store fails on its own without hiding the other. */
 export async function listHelpPastSessions(
   paths: HelpPastSessionPaths,
-  deps: ListHelpPastSessionsDeps
+  deps: ListHelpPastSessionsDeps,
+  options: ListHelpPastSessionsOptions = {}
 ): Promise<HelpPastSessionsListing> {
+  const exclude = new Set([...(options.exclude ?? [])].map((id) => id.toLowerCase()));
+  const kept = (session: HelpPastSession) => !exclude.has(session.sessionId.toLowerCase());
+  const readsClaude = options.agentId === undefined || options.agentId === "claude";
+  const readsCodex = options.agentId === undefined || options.agentId === "codex";
   const [claude, ...codexByPath] = await Promise.all([
-    // One row past the cap: enough to know the merged list is cut without
-    // opening a transcript that can't be shown.
-    listClaudeHelpSessions(
-      paths.claude,
-      deps.claudeProjectsRoot,
-      HELP_PAST_SESSIONS_LIMIT + 1
-    ).catch((): ClaudeHelpSessionsRead => ({ sessions: [], complete: false })),
-    ...paths.codex.map((codexPath) => readCodexHelpSessions(codexPath, paths, deps)),
+    // One row past the cap, and room for the rows left out: enough to know the
+    // merged list is cut without opening a transcript that can't be shown.
+    readsClaude
+      ? listClaudeHelpSessions(
+          paths.claude,
+          deps.claudeProjectsRoot,
+          HELP_PAST_SESSIONS_LIMIT + 1 + exclude.size
+        ).catch((): ClaudeHelpSessionsRead => ({ sessions: [], complete: false }))
+      : { ...NO_SESSIONS, complete: true },
+    ...(readsCodex ? paths.codex : []).map((codexPath) =>
+      readCodexHelpSessions(codexPath, paths, deps)
+    ),
   ]);
   // A conversation resumed into the newer directory can be reported under both.
   const codex = new Map<string, HelpPastSession>();
@@ -463,7 +482,7 @@ export async function listHelpPastSessions(
     const seen = codex.get(session.sessionId);
     if (!seen || session.updatedAt > seen.updatedAt) codex.set(session.sessionId, session);
   }
-  const merged = [...claude.sessions, ...codex.values()];
+  const merged = [...claude.sessions, ...codex.values()].filter(kept);
   const unreadable: HelpPastSessionsListing["unreadable"] = [];
   if (!claude.complete) unreadable.push("claude");
   if (codexByPath.some((read) => !read.readable)) unreadable.push("codex");

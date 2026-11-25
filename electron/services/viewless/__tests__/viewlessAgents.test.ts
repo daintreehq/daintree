@@ -4,6 +4,7 @@ import type { AgentSettings } from "../../../../shared/types/agentSettings.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
 import { runAgentLaunch, spawnHostAssistant } from "../viewlessAgents.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
+import { resolveLaunchCodexHome } from "../../codex/codexLaunchHome.js";
 import {
   makeDeps,
   makeHosts,
@@ -719,6 +720,68 @@ describe("an Assistant reopening one exact conversation with no frontend (#16753
     const payload = spawned(invoke);
     expect(payload).toMatchObject({ agentSessionId: "conv-7", exactResume: true });
     expect(String(payload.command)).toContain("conv-7");
+  });
+
+  it("reopens a conversation asked for itself without the fork its flags would make (#18169)", async () => {
+    const { deps, invoke } = launchDeps();
+    const flags = ["--fork-session", "--verbose"];
+
+    await spawnHostAssistant(
+      PROJECT,
+      {
+        ...spec,
+        agentLaunchFlags: flags,
+        resumeAgentSessionId: "conv-9",
+        exactResume: true,
+        exactConversation: true,
+      },
+      deps
+    );
+    const itself = spawned(invoke);
+    expect(itself.agentLaunchFlags).toContain("--verbose");
+    expect(itself.agentLaunchFlags).not.toContain("--fork-session");
+    expect(String(itself.command)).not.toContain("--fork-session");
+
+    const other = launchDeps();
+    await spawnHostAssistant(
+      PROJECT,
+      { ...spec, agentLaunchFlags: flags, resumeAgentSessionId: "conv-9", exactResume: true },
+      other.deps
+    );
+    expect(spawned(other.invoke).agentLaunchFlags).toContain("--fork-session");
+  });
+
+  it("refuses a Codex conversation asked for itself on another account's home (#18169)", async () => {
+    const elsewhere = launchDeps({
+      getLaunchEnvLayers: async () => ({
+        global: { CODEX_HOME: "/accounts/work/.codex" },
+        project: {},
+      }),
+    });
+    const codexSpec = {
+      ...spec,
+      agentId: "codex",
+      resumeAgentSessionId: "thread-9",
+      exactResume: true as const,
+      exactConversation: true as const,
+    };
+
+    await expect(spawnHostAssistant(PROJECT, codexSpec, elsewhere.deps)).resolves.toBe(false);
+    expect(
+      elsewhere.invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)
+    ).toBe(false);
+
+    const home = launchDeps();
+    await expect(spawnHostAssistant(PROJECT, codexSpec, home.deps)).resolves.toBe(true);
+    expect(String(spawned(home.invoke).command)).toContain("thread-9");
+
+    // A layer naming this process's own home is no other account's.
+    const ownHome = resolveLaunchCodexHome(process.env);
+    if (!ownHome) throw new Error("expected this process's Codex home");
+    const named = launchDeps({
+      getLaunchEnvLayers: async () => ({ global: { CODEX_HOME: ownHome }, project: {} }),
+    });
+    await expect(spawnHostAssistant(PROJECT, codexSpec, named.deps)).resolves.toBe(true);
   });
 
   it("leaves a resume that didn't ask for it as it was", async () => {

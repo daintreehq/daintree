@@ -3,6 +3,8 @@ import { AppError } from "../../utils/errorTypes.js";
 import type { IpcContext } from "../types.js";
 import type {
   GlobalAssistantAttachment,
+  GlobalAssistantConversationResume,
+  GlobalAssistantPastSessions,
   GlobalAssistantReplacement,
   GlobalAssistantView,
   WindowGlobalAssistantPanel,
@@ -21,6 +23,8 @@ import {
   globalAssistantCoordinatorSlot,
   handGlobalAssistantCoordination,
   joinNewGlobalAssistantLaunch,
+  listGlobalAssistantPastSessions,
+  resumeGlobalAssistantConversation,
   setGlobalAssistantKeepRunning,
   startNewGlobalAssistantSession,
   stopGlobalAssistantSession,
@@ -416,6 +420,67 @@ export async function handleReplaceGlobalAssistant(
         message: err.message,
         userMessage:
           "Its new agent didn't start. Start the global assistant again from the Assistant panel.",
+      });
+    }
+    throw err;
+  }
+  return globalAssistantView(instance);
+}
+
+/**
+ * The session's earlier conversations it can reopen (#18169). Titles are
+ * conversation text, so only a window of this machine, which shows the global
+ * assistant itself, may read them.
+ */
+export async function handleListGlobalAssistantPastSessions(
+  ctx: IpcContext,
+  slot?: number
+): Promise<GlobalAssistantPastSessions> {
+  requireWindow(ctx);
+  return listGlobalAssistantPastSessions(requireSlot(slot));
+}
+
+const GlobalAssistantConversationResumeSchema = z.object({
+  slot: z.union([z.literal(0), z.literal(1)]),
+  agentSessionId: z.string().min(1).max(256),
+  expected: z.object({
+    generation: z.number().int().nonnegative(),
+    phase: z.enum(["absent", "launching", "running"]),
+  }),
+});
+
+/**
+ * Reopen an earlier conversation in the session's place (#18169), once the
+ * person approved it in this window. The session they were shown is named,
+ * so an answer given after it changed switches nothing.
+ */
+export async function handleResumeGlobalAssistantConversation(
+  ctx: IpcContext,
+  request: GlobalAssistantConversationResume
+): Promise<GlobalAssistantView> {
+  requireWindow(ctx);
+  const parsed = GlobalAssistantConversationResumeSchema.safeParse(request);
+  if (!parsed.success) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid conversation to reopen." });
+  }
+  const { slot, agentSessionId, expected } = parsed.data;
+  const instance = service(slot);
+  try {
+    await resumeGlobalAssistantConversation(slot, agentSessionId, expected);
+  } catch (err) {
+    if (err instanceof AppError && err.code === "STALE_GENERATION") {
+      throw new AppError({
+        code: "STALE_GENERATION",
+        message: err.message,
+        userMessage:
+          "The global assistant changed since you chose that conversation. Nothing was switched.",
+      });
+    }
+    if (err instanceof AppError && err.code === "INTERNAL") {
+      throw new AppError({
+        code: "INTERNAL",
+        message: err.message,
+        userMessage: "That conversation didn't open, and the one it replaced is kept.",
       });
     }
     throw err;

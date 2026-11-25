@@ -1027,6 +1027,9 @@ export interface GeneratedElectronAPI {
     getWindowGlobalAssistantPanel(
       ...args: IpcInvokeMap["help:window-global-assistant-panel"]["args"]
     ): Promise<IpcInvokeMap["help:window-global-assistant-panel"]["result"]>;
+    listGlobalAssistantPastSessions(
+      ...args: IpcInvokeMap["help:global-assistant-list-past"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-list-past"]["result"]>;
     listGlobalAssistantSessions(
       ...args: IpcInvokeMap["help:global-assistant-list"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-list"]["result"]>;
@@ -1066,6 +1069,9 @@ export interface GeneratedElectronAPI {
     restorePendingHibernation(
       ...args: IpcInvokeMap["help:restore-pending-hibernation"]["args"]
     ): Promise<IpcInvokeMap["help:restore-pending-hibernation"]["result"]>;
+    resumeGlobalAssistantConversation(
+      ...args: IpcInvokeMap["help:global-assistant-resume"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-resume"]["result"]>;
     revokeSession(
       ...args: IpcInvokeMap["help:revoke-session"]["args"]
     ): Promise<IpcInvokeMap["help:revoke-session"]["result"]>;

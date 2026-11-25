@@ -34,7 +34,15 @@ import {
 
 /** Why a run ended; decides whether its conversation is kept for the next one. */
 export type GlobalAssistantEndReason =
-  "restart" | "discard" | "cancel" | "agent-change" | "launch-failed" | "exited" | "shutdown";
+  | "restart"
+  | "discard"
+  | "cancel"
+  | "agent-change"
+  | "launch-failed"
+  | "exited"
+  | "shutdown"
+  /** Stopped for an earlier conversation the person chose (#18169): captured and kept. */
+  | "switch";
 
 export interface GlobalAssistantProvision {
   sessionId: string;
@@ -56,8 +64,13 @@ export interface GlobalAssistantSpawnSpec {
   env: Record<string, string>;
   /** Reopen this exact conversation; absent, start one. */
   resumeAgentSessionId?: string;
-  /** Refuse rather than start another conversation when that one can't be reopened (#18177). */
+  /** Refuse rather than start another conversation when that one can't be reopened (#18177, #18169). */
   exactResume?: true;
+  /**
+   * A switch to an earlier conversation (#18169): reopen that conversation
+   * itself, never a fork, and count only a start its PTY reported.
+   */
+  exactConversation?: true;
   /** The first turn of a run that continues from a hand-off (#18140). */
   prompt?: string;
 }
@@ -68,6 +81,34 @@ export interface GlobalAssistantChoice {
   prompt: string;
 }
 
+/** The session as a person was shown it, which an approved change must still find. */
+export interface GlobalAssistantPhaseExpectation {
+  generation: number;
+  phase: GlobalAssistantPhase;
+}
+
+/** An earlier conversation of the session's, by its agent and exact id (#18169). */
+export interface GlobalAssistantConversation {
+  agentId: string;
+  agentSessionId: string;
+}
+
+/** A launch that reopens an earlier conversation in a run's place (#18169). */
+interface GlobalAssistantSwitchTo {
+  conversation: GlobalAssistantConversation;
+  /** The ownership id the seat's work was held under when the person asked. */
+  work: string | undefined;
+  /** The run it replaces was started on an agent chosen for it, so a change of default leaves this one be too. */
+  chosen: boolean;
+}
+
+/** What a run that switches to an earlier conversation is provisioned with (#18169). */
+export interface GlobalAssistantSwitch {
+  agentSessionId: string;
+  /** The ownership id the seat's work was held under when the person asked. */
+  work: string | undefined;
+}
+
 export interface GlobalAssistantDeps {
   /**
    * The agent the session runs as when no agent was chosen for it, or null
@@ -76,7 +117,16 @@ export interface GlobalAssistantDeps {
   agentId(): Promise<string | null>;
   /** Whether this agent, named for a run, can run the global assistant here. */
   canRun(agentId: string): Promise<boolean>;
-  provision(agentId: string): Promise<GlobalAssistantProvision | null>;
+  provision(
+    agentId: string,
+    options?: { switchingTo?: GlobalAssistantSwitch }
+  ): Promise<GlobalAssistantProvision | null>;
+  /** Write a switch once its spawn is confirmed, so a spawn that never ran changes nothing (#18169). */
+  confirmSwitch?(sessionId: string): void;
+  /** The ownership id the seat's work is held under now; read before a switch stops the run. */
+  laneWork?(): string | undefined;
+  /** The conversation the session's lane keeps for its next start, if any. */
+  keptConversation?(): GlobalAssistantConversation | null;
   /** Claim the exact conversation a previous run left, if any. */
   takeResume(): Promise<GlobalAssistantResume | null>;
   releaseResume(claimId: string): Promise<void>;
@@ -161,6 +211,8 @@ export class GlobalAssistantService {
   private launchAgentId: string | null = null;
   /** The launch in flight was given its agent, so a change of default can't cancel it. */
   private launchChosen = false;
+  /** The earlier conversation the launch in flight reopens, until it settles (#18169). */
+  private launchSwitch: GlobalAssistantConversation | null = null;
   private startingExited = false;
   /** The run being started, known before its PTY is confirmed so teardown can reach it. */
   private starting: Run | null = null;
@@ -313,7 +365,8 @@ export class GlobalAssistantService {
   private admit(
     fresh: boolean,
     choice: GlobalAssistantChoice | null,
-    exact: string | null = null
+    exact: string | null = null,
+    switchTo: GlobalAssistantSwitchTo | null = null
   ): Promise<GlobalAssistantState> {
     if (this.closed) {
       return Promise.reject(refuse("CANCELLED", "The app is shutting down."));
@@ -325,13 +378,15 @@ export class GlobalAssistantService {
     const predecessor = this.launch;
     const generation = this.generation;
     this.launchGeneration = generation;
-    this.launchChosen = choice !== null;
+    this.launchChosen = choice !== null || switchTo?.chosen === true;
+    this.launchSwitch = switchTo?.conversation ?? null;
     const launch: Promise<GlobalAssistantState> = this.runLaunch(
       generation,
       fresh,
       predecessor,
       choice,
-      exact
+      exact,
+      switchTo
     )
       .catch((err: unknown) => {
         // Stopped while starting, whatever it ran into on the way down.
@@ -346,6 +401,7 @@ export class GlobalAssistantService {
           this.launch = null;
           this.launchAgentId = null;
           this.launchChosen = false;
+          this.launchSwitch = null;
         }
         this.emit();
       });
@@ -360,7 +416,8 @@ export class GlobalAssistantService {
     fresh: boolean,
     predecessor: Promise<unknown> | null,
     choice: GlobalAssistantChoice | null,
-    exact: string | null
+    exact: string | null,
+    switchTo: GlobalAssistantSwitchTo | null
   ): Promise<GlobalAssistantState> {
     const superseded = () => generation !== this.generation || this.closed;
 
@@ -372,9 +429,11 @@ export class GlobalAssistantService {
     if (superseded()) throw stoppedWhileStarting();
 
     // Chosen before the await, so a stop meanwhile can't hand it another's agent.
-    // A hand-off names its own agent for the run (#18140).
+    // A hand-off names its own agent for the run (#18140), and an earlier
+    // conversation the agent it ran on (#18169).
     const pinned = this.pinnedAgentId;
-    let agentId: string | null = choice ? choice.agentId : (pinned ?? (await this.deps.agentId()));
+    const named = choice?.agentId ?? switchTo?.conversation.agentId ?? null;
+    let agentId: string | null = named ?? pinned ?? (await this.deps.agentId());
     if (superseded()) throw stoppedWhileStarting();
     const noAgent = () =>
       refuse("UNSUPPORTED", "No agent is available to run the global assistant.");
@@ -404,8 +463,11 @@ export class GlobalAssistantService {
       this.launchAgentId = agentId;
       restoredElsewhere = true;
     }
-    const resume =
-      pending && pending.agentId === agentId && pending.agentSessionId ? pending : null;
+    const resume = switchTo
+      ? switchTo.conversation
+      : pending && pending.agentId === agentId && pending.agentSessionId
+        ? pending
+        : null;
     // Awaited, so a Start right after a Cancel finds the conversation free to take.
     const releaseResume = async () => {
       if (pending) await this.deps.releaseResume(pending.claimId).catch(() => {});
@@ -428,8 +490,8 @@ export class GlobalAssistantService {
     }
     // The agent it will run, when no default chose it, is checked here: the CLI
     // may have gone, or be too old for its wiring. The conversation is kept.
-    // A hand-off's agent was checked as it was asked for.
-    if (!choice && (pinned !== null || !this.followsDefault || restoredElsewhere)) {
+    // A hand-off's agent, or an earlier conversation's, was checked as it was asked for.
+    if (named === null && (pinned !== null || !this.followsDefault || restoredElsewhere)) {
       const usable = await this.canRun(agentId);
       if (!usable || superseded()) {
         await releaseResume();
@@ -444,7 +506,14 @@ export class GlobalAssistantService {
 
     let session: GlobalAssistantProvision | null;
     try {
-      session = await this.deps.provision(agentId);
+      session = switchTo
+        ? await this.deps.provision(agentId, {
+            switchingTo: {
+              agentSessionId: switchTo.conversation.agentSessionId,
+              work: switchTo.work,
+            },
+          })
+        : await this.deps.provision(agentId);
     } catch (err) {
       await releaseResume();
       throw err;
@@ -459,7 +528,7 @@ export class GlobalAssistantService {
       sessionId: session.sessionId,
       terminalId,
       agentId,
-      chosen: choice !== null || restoredElsewhere,
+      chosen: choice !== null || switchTo?.chosen === true || restoredElsewhere,
     };
     this.starting = run;
 
@@ -480,7 +549,8 @@ export class GlobalAssistantService {
           ...(session.mcpUrl ? { [LAUNCH_ENV_KEYS.url]: session.mcpUrl } : {}),
         },
         ...(resume ? { resumeAgentSessionId: resume.agentSessionId } : {}),
-        ...(resume && exact !== null ? { exactResume: true as const } : {}),
+        ...(switchTo || (resume && exact !== null) ? { exactResume: true as const } : {}),
+        ...(switchTo ? { exactConversation: true as const } : {}),
         ...(choice ? { prompt: choice.prompt } : {}),
       });
     } catch (err) {
@@ -497,6 +567,18 @@ export class GlobalAssistantService {
         : refuse("INTERNAL", "The global assistant failed to start.");
     }
 
+    // Only now does the lane point at the conversation it switched to, and
+    // take the seat's work with it: a spawn refused before this changed nothing.
+    if (switchTo) {
+      try {
+        this.deps.confirmSwitch?.(run.sessionId);
+      } catch (err) {
+        console.warn(
+          "[GlobalAssistant] Writing the switch to an earlier conversation failed:",
+          err
+        );
+      }
+    }
     this.starting = null;
     this.run = run;
     // Kept once it runs: a conversation that won over the choice, or the agent
@@ -537,11 +619,12 @@ export class GlobalAssistantService {
     // chooses its own, and an agent change must not stop it for this one's.
     this.launchAgentId = null;
     this.launchChosen = false;
+    this.launchSwitch = null;
     this.releaseInputOwner();
     const work = this.teardownTail.then(async () => {
       if (run) {
         await this.deps
-          .revoke(run.sessionId, { capture: reason === "shutdown" })
+          .revoke(run.sessionId, { capture: reason === "shutdown" || reason === "switch" })
           .catch((err) => console.warn("[GlobalAssistant] Revoke failed:", err));
         this.deps.kill(run.terminalId);
       }
@@ -662,6 +745,92 @@ export class GlobalAssistantService {
     } finally {
       this.holds -= 1;
     }
+  }
+
+  /**
+   * Reopen an earlier conversation of the session's in place of whatever it
+   * runs (#18169), as the person approved it. The run is stopped with its
+   * conversation captured and kept, never forgotten, so it can be chosen back.
+   * The conversation reopened takes the work the seat held once its spawn is
+   * confirmed. Refused, with nothing stopped, when the agent can't run here,
+   * while the session starts or stops, when it is no longer what the person
+   * was shown, or when `stillFree` says the other session holds the
+   * conversation now; that is read after every await, with none between it
+   * and the claim.
+   */
+  async resumeConversation(
+    conversation: GlobalAssistantConversation,
+    expected: GlobalAssistantPhaseExpectation,
+    stillFree: () => boolean = () => true
+  ): Promise<GlobalAssistantState> {
+    if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
+    const usable = await this.canRun(conversation.agentId);
+    if (this.closed) throw refuse("CANCELLED", "The app is shutting down.");
+    if (!usable) {
+      throw refuse("UNSUPPORTED", `${conversation.agentId} can't run the global assistant here.`);
+    }
+    const state = this.getState();
+    if (
+      state.generation !== expected.generation ||
+      state.phase !== expected.phase ||
+      state.phase === "launching" ||
+      this.holds > 0 ||
+      (this.run !== null && this.run.agentId !== conversation.agentId)
+    ) {
+      throw refuse("STALE_GENERATION", "The global assistant changed since this was asked.");
+    }
+    if (!stillFree()) {
+      throw refuse(
+        "VALIDATION",
+        "The other global assistant session holds that conversation.",
+        "The other global assistant session has that conversation open."
+      );
+    }
+    // Read before the run is stopped: its capture may file the work under the
+    // conversation it started on.
+    let work: string | undefined;
+    try {
+      work = this.deps.laneWork?.();
+    } catch {
+      work = undefined;
+    }
+    const chosen = this.run?.chosen === true;
+    // Held from teardown to the successor's claim, as a replacement is.
+    this.holds += 1;
+    try {
+      if (this.run) this.teardown("switch").catch(() => {});
+      return this.admit(true, null, null, { conversation, work, chosen });
+    } finally {
+      this.holds -= 1;
+    }
+  }
+
+  /**
+   * The conversation a launch under way reopens by the person's choice, so
+   * the other session never reopens it too before its spawn has written it.
+   */
+  switchingTo(): GlobalAssistantConversation | null {
+    return this.launchInFlight() ? this.launchSwitch : null;
+  }
+
+  /**
+   * The agent whose earlier conversations the session can reopen (#18169):
+   * its run's, the launch's, or the one its next start would run, kept
+   * conversation included. Null when none is known.
+   */
+  async resumableAgentId(): Promise<string | null> {
+    const live = this.run?.agentId ?? this.starting?.agentId ?? this.launchAgentId;
+    if (live) return live;
+    const pinned = this.pinnedAgentId;
+    let kept: GlobalAssistantConversation | null;
+    try {
+      kept = this.deps.keptConversation?.() ?? null;
+    } catch {
+      kept = null;
+    }
+    // As a start would: a conversation kept on another agent than the chosen one wins.
+    if (pinned !== null && kept?.agentSessionId && kept.agentId !== pinned) return kept.agentId;
+    return pinned ?? (await this.deps.agentId());
   }
 
   /** Whether `agentId`, named for a run, could run it here now; a failed check says no. */

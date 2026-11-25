@@ -1,6 +1,6 @@
 import os from "os";
 import path from "path";
-import { getEnvVar, hasEnvVar } from "../pty/EnvironmentFilter.js";
+import { getEnvVar, hasEnvVar, mergeEnvVars } from "../pty/EnvironmentFilter.js";
 
 const HOME_VAR = "CODEX_HOME";
 
@@ -23,6 +23,29 @@ export function resolveLaunchCodexHome(env: EnvLike): string | undefined {
   const home = getEnvVar(env, HOME_VAR);
   if (!home) return fallback;
   return isFullyQualified(home) ? path.resolve(home) : undefined;
+}
+
+/**
+ * Whether a process started with `overrides` on top of this one's environment
+ * uses this process's own Codex home (#18169), merged and compared the way a
+ * pane's env is applied: case-insensitively on Windows. A home that can't be
+ * told (a relative one) is never taken for this one.
+ */
+export function usesOwnCodexHome(
+  overrides: Readonly<Record<string, string>> | undefined,
+  base: Readonly<Record<string, string | undefined>> = process.env
+): boolean {
+  const inherited = Object.fromEntries(
+    Object.entries(base).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  );
+  const own = resolveLaunchCodexHome(inherited);
+  const launched = resolveLaunchCodexHome(
+    overrides ? mergeEnvVars(inherited, overrides) : inherited
+  );
+  if (own === undefined || launched === undefined) return false;
+  return process.platform === "win32"
+    ? own.toLowerCase() === launched.toLowerCase()
+    : own === launched;
 }
 
 /**

@@ -96,8 +96,42 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({
   },
 }));
 
+/** The palette as the pane mounts it: the session it lists, and a pick of one row. */
+vi.mock("../HelpPastSessionsPalette", () => ({
+  HelpPastSessionsPalette: ({
+    global,
+  }: {
+    global?: {
+      slot: number;
+      onPick: (session: {
+        agentId: "claude";
+        sessionId: string;
+        title: string;
+        updatedAt: number;
+      }) => void;
+    };
+  }) => (
+    <button
+      type="button"
+      data-testid="earlier-palette"
+      data-slot={String(global?.slot)}
+      onClick={() =>
+        global?.onPick({
+          agentId: "claude",
+          sessionId: "conv-a",
+          title: "Planning the release",
+          updatedAt: 1,
+        })
+      }
+    />
+  ),
+}));
+
 const { GlobalAssistantPane } = await import("../GlobalAssistantPane");
 const { useHelpPanelStore } = await import("@/store/helpPanelStore");
+const { usePaletteStore } = await import("@/store/paletteStore");
+const { useGlobalAssistantResumeConfirmStore } =
+  await import("@/store/globalAssistantResumeConfirmStore");
 const { usePluginContextMenuItemsStore, _resetPluginContextMenuItemsStoreForTest } =
   await import("@/store/pluginContextMenuItemsStore");
 
@@ -1270,6 +1304,7 @@ describe("GlobalAssistantPane (#14454)", () => {
       expect(structure(menu)).toEqual([
         "Clear conversation",
         "—",
+        "Resume an earlier conversation…",
         "Open docs",
         "—",
         "Hand this run on…",
@@ -1319,6 +1354,7 @@ describe("GlobalAssistantPane (#14454)", () => {
       await flush();
       expect(rows(await openMenu())).toEqual([
         "Clear conversation",
+        "Resume an earlier conversation…",
         "Open docs",
         "Stop global assistant",
       ]);
@@ -1338,9 +1374,114 @@ describe("GlobalAssistantPane (#14454)", () => {
       await flush();
       expect(rows(await openMenu())).toEqual([
         "Clear conversation",
+        "Resume an earlier conversation…",
         "Open docs",
         "Stop global assistant",
       ]);
+    });
+  });
+
+  describe("an earlier conversation (#18169)", () => {
+    const openMenu = async () => {
+      fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
+      return screen.findByRole("menu");
+    };
+    const earlierItem = () => screen.queryByTestId("help-global-resume-earlier");
+
+    beforeEach(() => {
+      useGlobalAssistantResumeConfirmStore.setState({ current: null, requestSeq: 0 });
+    });
+
+    afterEach(() => {
+      act(() => usePaletteStore.getState().closePalette("global-assistant-sessions"));
+    });
+
+    it("opens the session's own list and asks about the one picked, as the run was shown", async () => {
+      installHelp(running({ generation: 7, inputOwner: "a1", inputEpoch: 3 }));
+      const resumeGlobalAssistantConversation = vi.fn();
+      Object.assign(help, { resumeGlobalAssistantConversation });
+      renderPane();
+      await flush();
+
+      await openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Resume an earlier conversation…" }));
+      expect(usePaletteStore.getState().activePaletteId).toBe("global-assistant-sessions");
+      const palette = await screen.findByTestId("earlier-palette");
+      expect(palette.getAttribute("data-slot")).toBe("0");
+      fireEvent.click(palette);
+
+      expect(useGlobalAssistantResumeConfirmStore.getState().current).toMatchObject({
+        slot: 0,
+        agentId: "claude",
+        agentSessionId: "conv-a",
+        title: "Planning the release",
+        expected: { generation: 7, phase: "running" },
+        pluginName: null,
+        namesSession: false,
+      });
+      // Only the dialog's answer reopens it.
+      expect(resumeGlobalAssistantConversation).not.toHaveBeenCalled();
+    });
+
+    it("puts the list away, asking nothing, once the run it was opened on is replaced", async () => {
+      installHelp(running({ generation: 7, inputOwner: "a1", inputEpoch: 3 }));
+      renderPane();
+      await flush();
+      await openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Resume an earlier conversation…" }));
+      const palette = await screen.findByTestId("earlier-palette");
+
+      // Restarted from another window: a successor the pane never showed.
+      push(running({ generation: 8, inputOwner: "a1", inputEpoch: 3 }));
+      await flush();
+      expect(usePaletteStore.getState().activePaletteId).toBeNull();
+      fireEvent.click(palette);
+      expect(useGlobalAssistantResumeConfirmStore.getState().current).toBeNull();
+    });
+
+    it("puts the list away when the pane is hidden", async () => {
+      installHelp(running({ inputOwner: "a1", inputEpoch: 3 }));
+      const { rerenderVisible } = renderPane();
+      await flush();
+      await openMenu();
+      fireEvent.click(screen.getByRole("menuitem", { name: "Resume an earlier conversation…" }));
+      expect(usePaletteStore.getState().activePaletteId).toBe("global-assistant-sessions");
+
+      rerenderVisible(false);
+      await flush();
+      expect(usePaletteStore.getState().activePaletteId).toBeNull();
+    });
+
+    it("is offered while the first session keeps nothing running, but not while one starts", async () => {
+      installHelp(viewOf());
+      renderPane();
+      await flush();
+      await openMenu();
+      expect(earlierItem()).not.toBeNull();
+      fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
+
+      push(viewOf({ phase: "launching", occupied: true, agentId: "claude" }));
+      await openMenu();
+      expect(earlierItem()).toBeNull();
+    });
+
+    it("isn't offered for an agent whose conversations can't be listed", async () => {
+      installHelp(running({ agentId: "antigravity", inputOwner: "a1", inputEpoch: 3 }));
+      renderPane();
+      await flush();
+      await openMenu();
+      await screen.findByText("Open docs");
+      expect(earlierItem()).toBeNull();
+    });
+
+    it("isn't offered in a window bound to another host", async () => {
+      host.id = "studio-02";
+      installHelp(running());
+      renderPane();
+      await flush();
+      await openMenu();
+      await screen.findByText("Open docs");
+      expect(earlierItem()).toBeNull();
     });
   });
 

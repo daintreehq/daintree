@@ -19,9 +19,12 @@ import type { HelpPastSessionPickOutcome } from "@/services/actions/definitions/
 import type { HelpPastSession, HelpPastSessionsListing } from "@shared/types/ipc/help";
 import { isPtyPanel } from "@shared/types/panel";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
+import type { GlobalAssistantSlot } from "@shared/config/globalAssistantSessions";
 import type { HelpSessionTab } from "./HelpSessionTabs";
 
-const PALETTE_ID: PaletteId = "assistant-sessions";
+const PROJECT_PALETTE_ID: PaletteId = "assistant-sessions";
+const GLOBAL_PALETTE_ID: PaletteId = "global-assistant-sessions";
+const NO_TABS: readonly HelpSessionTab[] = [];
 
 export type HelpPastSessionsPaletteItem =
   | {
@@ -36,7 +39,6 @@ export type HelpPastSessionsPaletteItem =
   | { kind: "lane"; id: string; title: string; slot: number };
 
 const FUSE_OPTIONS = { keys: ["title"], threshold: 0.4, ignoreLocation: true };
-const RETRY_HINT_ID = "help-past-sessions-retry-hint";
 const NO_LISTING: HelpPastSessionsListing = { sessions: [], unreadable: [], truncated: false };
 
 interface LoadedListing {
@@ -59,7 +61,12 @@ interface HelpPastSessionsPaletteProps {
   /** The workspace whose assistant history is listed. */
   workspace: { id: string } | null;
   /** The panel's open tabs, for "already open" and for choosing one to replace. */
-  tabs: readonly HelpSessionTab[];
+  tabs?: readonly HelpSessionTab[];
+  /**
+   * A global session's earlier conversations instead (#18169), as main lists
+   * them for it. A pick is handed back to ask about, never resumed here.
+   */
+  global?: { slot: GlobalAssistantSlot; onPick: (session: HelpPastSession) => void };
 }
 
 /**
@@ -71,9 +78,19 @@ interface HelpPastSessionsPaletteProps {
  * in use the list turns into a choice of which tab to replace — never a silent
  * displacement.
  */
-export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPaletteProps) {
-  const isOpen = usePaletteStore((s) => s.activePaletteId === PALETTE_ID);
-  const workspaceId = workspace?.id ?? null;
+export function HelpPastSessionsPalette({
+  workspace,
+  tabs = NO_TABS,
+  global,
+}: HelpPastSessionsPaletteProps) {
+  const paletteId = global ? GLOBAL_PALETTE_ID : PROJECT_PALETTE_ID;
+  // Both palettes can be mounted at once, fading one out as the other opens.
+  const idPrefix = global ? "global-past-session" : "help-past-session";
+  const retryHintId = `${idPrefix}s-retry-hint`;
+  const isOpen = usePaletteStore((s) => s.activePaletteId === paletteId);
+  const globalSlot = global?.slot ?? null;
+  // What the listing is for, so an answer about one never stands in for another.
+  const workspaceId = globalSlot !== null ? `global:${globalSlot}` : (workspace?.id ?? null);
   const [loaded, setLoaded] = useState<LoadedListing | null>(null);
   const [attempt, setAttempt] = useState(0);
   // Every opening refetches as well as every retry, so "in flight" can't be
@@ -89,7 +106,11 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
     if (!isOpen || !workspaceId) return;
     let cancelled = false;
     setPending(true);
-    window.electron.help.listPastSessions(workspaceId, { listing: true }).then(
+    const request =
+      globalSlot !== null
+        ? window.electron.help.listGlobalAssistantPastSessions(globalSlot)
+        : window.electron.help.listPastSessions(workspaceId, { listing: true });
+    request.then(
       (answer) => {
         if (cancelled) return;
         // A remote host on an older build ignores the option and sends bare rows.
@@ -112,7 +133,7 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
     return () => {
       cancelled = true;
     };
-  }, [isOpen, workspaceId, attempt]);
+  }, [isOpen, workspaceId, globalSlot, attempt]);
 
   const current = loaded && loaded.workspaceId === workspaceId ? loaded : null;
   const sessions = current ? current.listing.sessions : null;
@@ -166,7 +187,7 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
     items,
     fuseOptions: FUSE_OPTIONS,
     maxResults: 100,
-    paletteId: PALETTE_ID,
+    paletteId,
     getItemId: (item) => item.id,
   });
   const { query, results, selectedIndex, setQuery, setSelectedIndex, close } = palette;
@@ -175,10 +196,16 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
     if (isOpen) setQuery("");
   }, [isOpen, replacing, setQuery]);
 
+  const onGlobalPick = global?.onPick;
   const pick = useCallback(
     async (item: HelpPastSessionsPaletteItem) => {
       const session = item.kind === "session" ? item.session : replacing;
       if (!session) return;
+      if (onGlobalPick) {
+        close();
+        onGlobalPick(session);
+        return;
+      }
       const result = await actionService.dispatch<{ outcome: HelpPastSessionPickOutcome }>(
         "help.resumePastSession",
         {
@@ -198,7 +225,7 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
       if (outcome === "focused" || outcome === "resumed") suppressPaletteFocusRestore();
       close();
     },
-    [replacing, close]
+    [replacing, close, onGlobalPick]
   );
 
   const handleConfirm = useCallback(() => {
@@ -235,7 +262,7 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
       return (
         <button
           key={item.id}
-          id={`help-past-session-${item.id}`}
+          id={`${idPrefix}-${item.id}`}
           tabIndex={-1}
           role="option"
           aria-selected={isSelected}
@@ -268,7 +295,7 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
         </button>
       );
     },
-    [pick, setSelectedIndex]
+    [pick, setSelectedIndex, idPrefix]
   );
 
   const retryButton = (
@@ -304,19 +331,29 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
       label={
         replacing
           ? `All ${MAX_ASSISTANT_SLOTS} tabs are in use — choose one to replace`
-          : "Resume a past session"
+          : global
+            ? "Resume an earlier conversation"
+            : "Resume a past session"
       }
-      ariaLabel={replacing ? "Choose an assistant tab to replace" : "Resume a past session"}
+      ariaLabel={
+        replacing
+          ? "Choose an assistant tab to replace"
+          : global
+            ? "Resume an earlier conversation"
+            : "Resume a past session"
+      }
       searchPlaceholder={replacing ? "Search tabs" : "Search session titles"}
-      searchAriaDescribedBy={enterRetries ? RETRY_HINT_ID : undefined}
-      itemIdPrefix="help-past-session"
+      searchAriaDescribedBy={enterRetries ? retryHintId : undefined}
+      itemIdPrefix={idPrefix}
       isLoading={!replacing && (sessions === null || pending)}
       emptyMessage={
         failedEmpty
           ? failure
           : sessions === null
             ? "Loading past sessions…"
-            : "No past sessions yet"
+            : global
+              ? "No earlier conversations to reopen"
+              : "No past sessions yet"
       }
       // A failure typed over is still a failure, not "no matches".
       noMatchMessage={failedEmpty ? failure : undefined}
@@ -330,7 +367,7 @@ export function HelpPastSessionsPalette({ workspace, tabs }: HelpPastSessionsPal
             // The field reads this out, since that is where focus rests. Kept out
             // of the empty state, which a crossfade can render twice and a
             // load hides.
-            <span id={RETRY_HINT_ID} className="sr-only">
+            <span id={retryHintId} className="sr-only">
               Press Enter to retry
             </span>
           ) : undefined

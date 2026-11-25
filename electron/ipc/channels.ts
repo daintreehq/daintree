@@ -709,6 +709,8 @@ export const CHANNELS = {
   HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
   HELP_GLOBAL_ASSISTANT_CAN_RUN: "help:global-assistant-can-run",
   HELP_GLOBAL_ASSISTANT_REPLACE: "help:global-assistant-replace",
+  HELP_GLOBAL_ASSISTANT_LIST_PAST: "help:global-assistant-list-past",
+  HELP_GLOBAL_ASSISTANT_RESUME: "help:global-assistant-resume",
   HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
   HELP_GLOBAL_ASSISTANT_CANCEL_LAUNCH: "help:global-assistant-cancel-launch",
   HELP_GLOBAL_ASSISTANT_CHANGED: "help:global-assistant-changed",

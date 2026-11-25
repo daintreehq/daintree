@@ -2640,6 +2640,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./help.js").GlobalAssistantView[];
   };
+  "help:global-assistant-list-past": {
+    args: [slot?: number | undefined];
+    result: import("./help.js").GlobalAssistantPastSessions;
+  };
   "help:global-assistant-release-input": {
     args: [attachmentId: string, slot?: number | undefined];
     result: import("./help.js").GlobalAssistantView;
@@ -2650,6 +2654,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "help:global-assistant-restart": {
     args: [expectedGeneration?: number | undefined, slot?: number | undefined];
+    result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-resume": {
+    args: [request: import("./help.js").GlobalAssistantConversationResume];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-set-coordinator": {

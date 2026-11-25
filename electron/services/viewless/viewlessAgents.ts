@@ -66,6 +66,8 @@ import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecut
 import { recordViewlessTerminal } from "./projectStateAuthoring.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
+import { isClaudeForkFlag } from "../assistants/forkedConversation.js";
+import { usesOwnCodexHome } from "../codex/codexLaunchHome.js";
 import {
   AgentLaunchArgsSchema,
   AgentListAccountsArgsSchema,
@@ -587,6 +589,13 @@ export async function spawnHostAssistant(
      */
     exactResume?: true;
     /**
+     * Reopen that conversation itself, as listed from the agent's default
+     * store (#18169): a fork the person's flags or preset ask for would run
+     * another one, so it is dropped for this launch, and a Codex launch on
+     * another account's home is refused.
+     */
+    exactConversation?: true;
+    /**
      * A schedule's run (#16169): the prompt gets the run's handback
      * instruction, and the spawn handler registers the run from this spawn.
      */
@@ -633,11 +642,15 @@ export async function spawnHostAssistant(
   if (plan.cliDetail && !isAgentLaunchable(plan.cliDetail.state)) return false;
   // The executable a fresh launch found, so a CLI outside the shell's PATH resumes too.
   const registryCommand = getEffectiveAgentConfig(agentId)?.command;
+  const launchFlags =
+    spec.resumeAgentSessionId && spec.exactConversation && agentId === "claude"
+      ? plan.launchFlags?.filter((flag) => !isClaudeForkFlag(flag))
+      : plan.launchFlags;
   const resumed = spec.resumeAgentSessionId
     ? buildResumeCommand(
         agentId,
         spec.resumeAgentSessionId,
-        plan.launchFlags,
+        launchFlags,
         registryCommand !== undefined
           ? resolveAgentLaunchBaseCommandFor(
               registryCommand,
@@ -654,6 +667,17 @@ export async function spawnHostAssistant(
     return null;
   });
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, plan.env);
+  // That conversation was listed from Codex's default home (#18169): a launch
+  // whose home is another account's holds no such thread, and its failed
+  // resume would leave a shell running in the conversation's place.
+  if (
+    spec.resumeAgentSessionId &&
+    spec.exactConversation &&
+    agentId === "codex" &&
+    !usesOwnCodexHome(env)
+  ) {
+    return false;
+  }
   try {
     await deps.invoke<string>(project.id, CHANNELS.TERMINAL_SPAWN, [
       {
@@ -668,7 +692,7 @@ export async function spawnHostAssistant(
         command: resumed ?? plan.command,
         ...(env !== undefined ? { env } : {}),
         launchAgentId: agentId,
-        agentLaunchFlags: plan.launchFlags,
+        agentLaunchFlags: launchFlags,
         agentSessionId: spec.resumeAgentSessionId ?? plan.assignedSessionId,
         ...(spec.resumeAgentSessionId && spec.exactResume ? { exactResume: true } : {}),
         agentPresetId: plan.preset?.id,

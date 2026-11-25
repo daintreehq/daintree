@@ -14,8 +14,17 @@ import {
 import { getAgentConfig } from "../../shared/config/agentRegistry.js";
 import { AppError } from "../utils/errorTypes.js";
 import { store } from "../store.js";
-import { GlobalAssistantService, type GlobalAssistantDeps } from "./GlobalAssistantService.js";
-import type { GlobalAssistantState } from "../../shared/types/ipc/help.js";
+import {
+  GlobalAssistantService,
+  type GlobalAssistantDeps,
+  type GlobalAssistantPhaseExpectation,
+} from "./GlobalAssistantService.js";
+import {
+  HELP_PAST_SESSIONS_LIMIT,
+  type GlobalAssistantPastSessions,
+  type GlobalAssistantState,
+  type HelpPastSession,
+} from "../../shared/types/ipc/help.js";
 import { onAgentDefaultsChanged } from "./agentDefaults.js";
 import type { HelpSessionService } from "./HelpSessionService.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -54,13 +63,16 @@ export function whenGlobalAssistantSessionsReadable(): Promise<boolean> {
   );
 }
 
+/** The folder whose path stands in for the global assistant's project path. */
+const globalAssistantFolder = () => path.join(app.getPath("userData"), GLOBAL_ASSISTANT_DIR_NAME);
+
 /** The deps a session runs with in the app, each service loaded on first use. */
 export function liveGlobalAssistantDeps(
   slot: GlobalAssistantSlot = GLOBAL_ASSISTANT_SLOT
 ): GlobalAssistantDeps {
   const launch = () => import("./assistants/assistantLaunch.js");
   const ptyClient = () => import("../window/serviceRefs.js").then((m) => m.getPtyClient());
-  const folder = () => path.join(app.getPath("userData"), GLOBAL_ASSISTANT_DIR_NAME);
+  const folder = globalAssistantFolder;
   void help().catch(() => {});
 
   return {
@@ -82,7 +94,7 @@ export function liveGlobalAssistantDeps(
           },
     // As a start with no view takes an agent named for it.
     canRun: (agentId) => liveAgentUsable(agentId),
-    provision: async (agentId) => {
+    provision: async (agentId, options) => {
       const service = await help();
       return service.provisionSession({
         projectId: GLOBAL_ASSISTANT_ID,
@@ -92,7 +104,19 @@ export function liveGlobalAssistantDeps(
         windowId: NO_VIEW_HANDLE,
         projectViewWebContentsId: NO_VIEW_HANDLE,
         global: true,
+        ...(options?.switchingTo ? { switchingTo: options.switchingTo } : {}),
       });
+    },
+    // Loaded by the provision that came first, so the write is in memory at once.
+    confirmSwitch: (sessionId) => {
+      loadedHelp?.confirmLaneSwitch(sessionId).catch((err: unknown) => {
+        console.warn("[GlobalAssistant] Keeping the conversation it switched to failed:", err);
+      });
+    },
+    laneWork: () => loadedHelp?.laneWorkOwnershipId(GLOBAL_ASSISTANT_ID, slot),
+    keptConversation: () => {
+      const kept = loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot) ?? null;
+      return kept ? { agentId: kept.agentId, agentSessionId: kept.agentSessionId } : null;
     },
     takeResume: async () => {
       const service = await help();
@@ -126,25 +150,26 @@ export function liveGlobalAssistantDeps(
         .launchFlags(spec.agentId)
         .catch(() => []);
       const project = { id: GLOBAL_ASSISTANT_ID, path: folder() };
-      return spawnAndConfirm(
-        pty,
-        () =>
-          spawnHostAssistantLive(project, {
-            terminalId: spec.terminalId,
-            agentId: spec.agentId,
-            cwd: spec.cwd,
-            env: spec.env,
-            prompt: spec.prompt ?? "",
-            agentLaunchFlags: flags,
-            ...(spec.resumeAgentSessionId
-              ? { resumeAgentSessionId: spec.resumeAgentSessionId }
-              : {}),
-            ...(spec.resumeAgentSessionId && spec.exactResume
-              ? { exactResume: true as const }
-              : {}),
-          }),
-        spec.terminalId
-      );
+      // A switch to an earlier conversation (#18169) reopens that conversation
+      // itself, and counts only a start its PTY reported: one that never
+      // answered must not take the seat's work.
+      const exact = spec.resumeAgentSessionId !== undefined && spec.exactResume === true;
+      const switching = exact && spec.exactConversation === true;
+      const start = () =>
+        spawnHostAssistantLive(project, {
+          terminalId: spec.terminalId,
+          agentId: spec.agentId,
+          cwd: spec.cwd,
+          env: spec.env,
+          prompt: spec.prompt ?? "",
+          agentLaunchFlags: flags,
+          ...(spec.resumeAgentSessionId ? { resumeAgentSessionId: spec.resumeAgentSessionId } : {}),
+          ...(exact ? { exactResume: true as const } : {}),
+          ...(switching ? { exactConversation: true as const } : {}),
+        });
+      return switching
+        ? spawnAndConfirm(pty, start, spec.terminalId, { unreportedStarted: false })
+        : spawnAndConfirm(pty, start, spec.terminalId);
     },
     revoke: async (sessionId, { capture }) => {
       const service = await help();
@@ -571,6 +596,139 @@ export async function stopGlobalAssistantSession(
   );
   const stopped = service.discard();
   await Promise.all([moved, stopped]);
+}
+
+/** Agents whose transcripts the past-conversation lister reads (#13206). */
+function isListedAgent(agentId: string | null): agentId is HelpPastSession["agentId"] {
+  return agentId === "claude" || agentId === "codex";
+}
+
+/**
+ * The conversations on `agentId` a global session already holds (#18169): the
+ * one each session's pointer names, running or kept, and one a launch under
+ * way reopens by choice. Both sessions file their transcripts in one folder,
+ * so these are what a listing of either must leave out.
+ */
+function heldGlobalConversations(
+  agentId: string,
+  slots: readonly GlobalAssistantSlot[] = GLOBAL_ASSISTANT_SLOTS
+): Set<string> {
+  const held = new Set<string>();
+  for (const at of slots) {
+    const kept = loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, at) ?? null;
+    if (kept?.agentId === agentId && kept.agentSessionId) held.add(kept.agentSessionId);
+    const switching = instances.get(at)?.switchingTo() ?? null;
+    if (switching?.agentId === agentId) held.add(switching.agentSessionId);
+  }
+  return held;
+}
+
+/**
+ * Whether the session at `slot` runs, or starts, a conversation on `agentId`
+ * whose id isn't known yet (a fresh Codex run names it only as it exits), so
+ * nothing can tell which listed conversation is the one it has open.
+ */
+function runsUnnamedConversation(slot: GlobalAssistantSlot, agentId: string): boolean {
+  const pointer = loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot) ?? null;
+  // A run still being captured names its conversation only once the capture
+  // lands, whatever the session shows meanwhile (a switch cancelled, say).
+  if (
+    pointer?.agentId === agentId &&
+    pointer.agentSessionId === "" &&
+    loadedHelp?.laneCaptureInFlight(GLOBAL_ASSISTANT_ID, slot) === true
+  ) {
+    return true;
+  }
+  const service = instances.get(slot);
+  if (!service) return false;
+  const { phase, agentId: shown } = service.getState();
+  // A session tearing its run down for a switch shows no agent until the
+  // successor picks one, but the conversation it captures is still on it.
+  const running = shown ?? service.switchingTo()?.agentId ?? null;
+  if (phase === "absent" || running !== agentId) return false;
+  return pointer === null || pointer.agentId !== agentId || pointer.agentSessionId === "";
+}
+
+/**
+ * The global session's earlier conversations it can reopen (#18169), read from
+ * the agent's own transcript store under the global assistant's folder: only
+ * the agent it runs or would start on, and none either session holds.
+ */
+export async function listGlobalAssistantPastSessions(
+  slot: GlobalAssistantSlot
+): Promise<GlobalAssistantPastSessions> {
+  if (!(await whenGlobalAssistantSessionsReadable())) throw stillStarting();
+  const service = getGlobalAssistantService(slot);
+  const agentId = await service.resumableAgentId().catch(() => null);
+  if (!isListedAgent(agentId)) {
+    return { slot, agentId, sessions: [], unreadable: [], truncated: false };
+  }
+  const exclude = heldGlobalConversations(agentId);
+  const [helpSessions, lister, claudeStore, codex] = await Promise.all([
+    help(),
+    import("./helpPastSessions.js"),
+    import("./claude/ClaudeSessionStore.js"),
+    import("./codex/CodexSubagentService.js"),
+  ]);
+  const projectPath = globalAssistantFolder();
+  const codexPath = helpSessions.getSessionPathForProject(projectPath, "codex");
+  const legacyPath = helpSessions.getLegacySessionPathForProject(projectPath);
+  const listing = await lister.listHelpPastSessions(
+    {
+      claude: helpSessions.getSessionPathForProject(projectPath, "claude"),
+      codex: codexPath === legacyPath ? [codexPath] : [codexPath, legacyPath],
+    },
+    {
+      claudeProjectsRoot:
+        claudeStore.resolvePaneClaudeProjectsRoot() ?? lister.defaultClaudeProjectsRoot(),
+      listCodexSessions: (cwd) =>
+        codex.listCodexSessionsForCwd(cwd, undefined, HELP_PAST_SESSIONS_LIMIT + exclude.size),
+    },
+    { agentId, exclude }
+  );
+  return { slot, agentId, ...listing };
+}
+
+/**
+ * Reopen one of the global session's earlier conversations in its place
+ * (#18169), as the person approved it in a window. Only a conversation main
+ * lists for that session now may be reopened, so a stale or forged id starts
+ * nothing; the run it replaces is stopped with its conversation kept, and the
+ * one reopened takes the seat's work once its spawn is confirmed.
+ */
+export async function resumeGlobalAssistantConversation(
+  slot: GlobalAssistantSlot,
+  agentSessionId: string,
+  expected: GlobalAssistantPhaseExpectation
+): Promise<GlobalAssistantService> {
+  if (shuttingDown) throw shuttingDownError();
+  const service = getGlobalAssistantService(slot);
+  const listing = await listGlobalAssistantPastSessions(slot);
+  const agentId = listing.agentId;
+  if (!agentId || !listing.sessions.some((session) => session.sessionId === agentSessionId)) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "That conversation isn't one this global assistant session can reopen.",
+      userMessage: "That conversation can't be reopened here now. Choose it again from the list.",
+    });
+  }
+  if (shuttingDown) throw shuttingDownError();
+  const other = GLOBAL_ASSISTANT_SLOTS.filter((at) => at !== slot);
+  if (other.some((at) => runsUnnamedConversation(at, agentId))) {
+    throw new AppError({
+      code: "VALIDATION",
+      message: "The other global assistant session runs a conversation whose id isn't known yet.",
+      userMessage: `${sessionName(other[0]!)} has a conversation open that can't be told apart from the others yet. Stop it or try again once it has ended.`,
+    });
+  }
+  await service.resumeConversation(
+    { agentId, agentSessionId },
+    expected,
+    () =>
+      !heldGlobalConversations(agentId, other).has(agentSessionId) &&
+      !other.some((at) => runsUnnamedConversation(at, agentId))
+  );
+  return service;
 }
 
 async function liveAgentUsable(agentId: string): Promise<boolean> {

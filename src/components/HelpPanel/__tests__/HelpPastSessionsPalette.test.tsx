@@ -90,11 +90,14 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+const listGlobalAssistantPastSessions = vi.fn();
+
 beforeEach(() => {
   listPastSessions.mockReset();
+  listGlobalAssistantPastSessions.mockReset();
   dispatch.mockClear();
   Object.defineProperty(window, "electron", {
-    value: { help: { listPastSessions } },
+    value: { help: { listPastSessions, listGlobalAssistantPastSessions } },
     configurable: true,
     writable: true,
   });
@@ -103,6 +106,56 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   act(() => usePaletteStore.getState().closePalette("assistant-sessions"));
+  act(() => usePaletteStore.getState().closePalette("global-assistant-sessions"));
+});
+
+describe("HelpPastSessionsPalette for a global session (#18169)", () => {
+  function renderGlobal(slot: 0 | 1, onPick = vi.fn()) {
+    render(<HelpPastSessionsPalette workspace={{ id: "p1" }} global={{ slot, onPick }} />, {
+      wrapper: TooltipProvider,
+    });
+    act(() => usePaletteStore.getState().openPalette("global-assistant-sessions"));
+    return onPick;
+  }
+
+  it("lists what main lists for the session, and hands a pick back instead of resuming it", async () => {
+    listGlobalAssistantPastSessions.mockResolvedValue({
+      slot: 1,
+      agentId: "claude",
+      ...listing({ sessions: [session("conv-a", "Planning the release")] }),
+    });
+    const onPick = renderGlobal(1);
+
+    fireEvent.click(await screen.findByText("Planning the release"));
+
+    expect(listGlobalAssistantPastSessions).toHaveBeenCalledWith(1);
+    expect(listPastSessions).not.toHaveBeenCalled();
+    expect(onPick).toHaveBeenCalledWith(session("conv-a", "Planning the release"));
+    expect(dispatch).not.toHaveBeenCalled();
+    await waitFor(() => expect(usePaletteStore.getState().activePaletteId).toBeNull());
+  });
+
+  it("says there is nothing to reopen when main lists nothing", async () => {
+    listGlobalAssistantPastSessions.mockResolvedValue({
+      slot: 0,
+      agentId: null,
+      ...listing(),
+    });
+    renderGlobal(0);
+    expect(await screen.findByText("No earlier conversations to reopen")).toBeTruthy();
+  });
+
+  it("stays shut, reading nothing, while the project palette opens", async () => {
+    listPastSessions.mockResolvedValue(listing());
+    render(<HelpPastSessionsPalette workspace={null} global={{ slot: 0, onPick: vi.fn() }} />, {
+      wrapper: TooltipProvider,
+    });
+    act(() => usePaletteStore.getState().openPalette("assistant-sessions"));
+    await act(async () => {});
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(listGlobalAssistantPastSessions).not.toHaveBeenCalled();
+    expect(listPastSessions).not.toHaveBeenCalled();
+  });
 });
 
 describe("HelpPastSessionsPalette", () => {
