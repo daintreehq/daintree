@@ -268,6 +268,7 @@ import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPre
 import { getMruProjects } from "../../../shared/utils/projectMru.js";
 import { FRECENCY_HALF_LIFE_MS } from "../../../shared/utils/frecency.js";
 import { events } from "../events.js";
+import { PendingHelpHibernationStore } from "../PendingHelpHibernationStore.js";
 import {
   prefetchHydrateResult,
   consumePrefetchedHydrateResult,
@@ -2015,6 +2016,19 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
 
     await store.removeProject(beta.id);
     expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops keeping a removed project's assistant lanes running, so adding the folder back inherits none (#18177)", async () => {
+    const forget = vi
+      .spyOn(PendingHelpHibernationStore.prototype, "forgetKeepRunning")
+      .mockResolvedValue(undefined);
+    try {
+      const beta = await store.addProject(betaDir);
+      await store.removeProject(beta.id);
+      expect(forget).toHaveBeenCalledExactlyOnceWith(beta.id);
+    } finally {
+      forget.mockRestore();
+    }
   });
 
   it("drops a removed project's hover prefetch, so adding the folder back can't consume it", async () => {

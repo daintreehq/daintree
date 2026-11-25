@@ -391,6 +391,7 @@ vi.mock("../../services/HelpSessionService.js", () => ({
     setMcpRegistry,
     setPendingHibernationStore: vi.fn(),
     setPtyClient: vi.fn(),
+    watchStandingRuns: vi.fn(),
     setProjectMetadataReader,
     startOrphanSweep: vi.fn(),
     validateToken: vi.fn(),
@@ -1361,6 +1362,23 @@ describe("initGlobalServices task ordering", () => {
     expect(setPendingHibernationStore).toHaveBeenCalledWith(
       expect.objectContaining({ takeResumeAtLaunch: expect.any(Function) })
     );
+  });
+
+  it("follows kept lanes' runs as soon as the help service loads, before any deferred task (#18177)", async () => {
+    const { helpSessionService } = await import("../../services/HelpSessionService.js");
+    const watchStandingRuns = vi.mocked(helpSessionService.watchStandingRuns);
+    watchStandingRuns.mockClear();
+    const ptyClient = { waitForReady: vi.fn(async () => {}) } as unknown as PtyClient;
+    setPtyClientRef(ptyClient);
+    try {
+      publishHelpSessionService(helpSessionService);
+      await initGlobalServices({ all: () => [], size: 0 } as unknown as WindowRegistry);
+
+      // No deferred task has run: a view's first launch is already followed.
+      expect(watchStandingRuns).toHaveBeenCalledExactlyOnceWith(ptyClient);
+    } finally {
+      setPtyClientRef(null);
+    }
   });
 
   it("skips MCP-related tasks when no windowRegistry is supplied", async () => {
