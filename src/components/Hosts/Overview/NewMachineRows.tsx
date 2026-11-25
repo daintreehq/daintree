@@ -55,8 +55,7 @@ export function useNewMachineChoice(
       : (form.catalogError ??
         (form.currentCatalog === null
           ? "Reading the machine sizes…"
-          : (form.provisioningProblem ??
-            (form.chosenType?.available ? null : "Choose a machine size."))));
+          : (form.provisioningProblem ?? form.sizeProblem)));
   const machine = () => {
     const request = form.request("");
     if (!request) return null;
@@ -69,7 +68,7 @@ export function useNewMachineChoice(
 /** What the machine costs and when it stops, in a line: who pays, the hourly price, its lifetime. */
 function reviewLine(choice: CloudMachineAccount, form: CloudMachineForm): string | null {
   const type = form.chosenType;
-  if (!type || !form.currentCatalog) return null;
+  if (!type?.available || !form.currentCatalog) return null;
   const { account, provider } = choice;
   const payer =
     account.billingScope.kind === "personal"
@@ -155,9 +154,9 @@ export function NewMachineRows({
         label="Size"
         htmlFor="worktree-machine-size"
         hint={
-          form.provisioningProblem ? (
+          (form.provisioningProblem ?? form.sizeProblem) ? (
             <p className={hintClass} data-testid="worktree-machine-problem">
-              {form.provisioningProblem}
+              {form.provisioningProblem ?? form.sizeProblem}
             </p>
           ) : (
             review && (
@@ -187,7 +186,7 @@ export function NewMachineRows({
             value={form.machineType ?? ""}
             // Typeahead on the closed trigger can land on an unavailable size; it isn't taken.
             onValueChange={(id) => {
-              if (catalog.machineTypes.some((type) => type.id === id && type.available)) {
+              if (form.machineTypes.some((type) => type.id === id && type.available)) {
                 form.setMachineType(id);
               }
             }}
@@ -202,7 +201,7 @@ export function NewMachineRows({
               <SelectValue placeholder="Choose a size" />
             </SelectTrigger>
             <SelectContent>
-              {catalog.machineTypes.map((type) => (
+              {form.machineTypes.map((type) => (
                 <SelectItem
                   key={type.id}
                   value={type.id}

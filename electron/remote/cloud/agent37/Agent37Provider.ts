@@ -4,6 +4,7 @@ import type {
   CloudHostError,
   CloudMachineType,
   CloudProviderInfo,
+  CloudProvisioningChoice,
 } from "../../../../shared/types/cloudHosts.js";
 import type {
   CloudProvider,
@@ -55,16 +56,61 @@ export const AGENT37_KEY_DELIVERY_MS = 2 * 60_000;
 
 /** The plain Linux sandbox (Node, Python, git, build tools) with no agent of its own. */
 const TEMPLATE = "agent37-base";
-/** The cheapest type, and the only one Agent 37 runs in every region. */
-const INSTANCE_TYPE = "default";
 /** What Daintree's key is called among the workspace's keys. */
 const SSH_KEY_NAME = "Daintree";
 
 /** Agent 37's published monthly rates for a default instance, and the hours they are spread over. */
 const RATES = { vcpu: 0.8, memoryGB: 0.7, diskGB: 0.09, hoursPerMonth: 730 };
 
+type InstanceType = "default" | "vm" | "performance";
+
+/** What Agent 37 assumes for an instance that names no region. */
+const DEFAULT_REGION = "us";
+
+/** Where Agent 37 runs instances; the price is the same in all three. */
+const REGIONS: readonly CloudProvisioningChoice[] = [
+  {
+    id: DEFAULT_REGION,
+    label: "United States",
+    description: "Runs every size",
+    available: true,
+    reason: null,
+    locations: null,
+  },
+  {
+    id: "eu",
+    label: "Europe",
+    description: "France or the UK; VM and Performance sizes only",
+    available: true,
+    reason: null,
+    locations: null,
+  },
+  {
+    id: "ap-south",
+    label: "India",
+    description: "Mumbai; VM and Performance sizes only",
+    available: true,
+    reason: null,
+    locations: null,
+  },
+];
+
+/**
+ * Each type's compute rate against the default's (disk bills the same on
+ * every type), and the regions it runs in: `us` is the only region that runs
+ * a `default` instance, which Agent 37 refuses anywhere else.
+ */
+const INSTANCE_TYPES: Readonly<
+  Record<InstanceType, { computeRate: number; regions: readonly string[] | null }>
+> = {
+  default: { computeRate: 1, regions: [DEFAULT_REGION] },
+  vm: { computeRate: 2.5, regions: null },
+  performance: { computeRate: 4, regions: null },
+};
+
 interface Shape {
   id: string;
+  type: InstanceType;
   label: string;
   vcpu: number;
   memoryGB: number;
@@ -72,25 +118,66 @@ interface Shape {
 }
 
 /**
- * The shapes every template offers, smallest first. Disk is chosen here
- * rather than left at Agent 37's per-shape default (4 GB on the smallest) so a
- * Host install and a few repositories fit; it bills at the disk rate while
- * the machine is stopped or asleep.
+ * Agent 37's shapes, smallest first, with the disk Daintree gives each rather
+ * than Agent 37's per-shape default (4 GB on the smallest), so a Host install
+ * and a few repositories fit; it bills at the disk rate while the machine is
+ * stopped or asleep. Only a VM or Performance instance takes the largest.
+ */
+const SIZES = [
+  { key: "2x4", name: "small", vcpu: 2, memoryGB: 4, diskGB: 12, vmOnly: false },
+  { key: "4x8", name: "medium", vcpu: 4, memoryGB: 8, diskGB: 16, vmOnly: false },
+  { key: "4x16", name: "large", vcpu: 4, memoryGB: 16, diskGB: 24, vmOnly: false },
+  { key: "4x32", name: "extra large", vcpu: 4, memoryGB: 32, diskGB: 32, vmOnly: false },
+  { key: "8x64", name: "huge", vcpu: 8, memoryGB: 64, diskGB: 64, vmOnly: true },
+] as const;
+
+/**
+ * The sizes Daintree offers, a type at a time. The default's ids predate the
+ * other types and keep naming it; each other type's label leads with the type
+ * and says what it buys.
  */
 const SHAPES: readonly Shape[] = [
-  { id: "2x4", label: "Small", vcpu: 2, memoryGB: 4, diskGB: 12 },
-  { id: "4x8", label: "Medium", vcpu: 4, memoryGB: 8, diskGB: 16 },
-  { id: "4x16", label: "Large", vcpu: 4, memoryGB: 16, diskGB: 24 },
-  { id: "4x32", label: "Extra large", vcpu: 4, memoryGB: 32, diskGB: 32 },
+  ...SIZES.filter((size) => !size.vmOnly).map(({ key, name, vcpu, memoryGB, diskGB }) => ({
+    id: key,
+    type: "default" as const,
+    label: `${name[0]!.toUpperCase()}${name.slice(1)}`,
+    vcpu,
+    memoryGB,
+    diskGB,
+  })),
+  ...SIZES.map(({ key, name, vcpu, memoryGB, diskGB }) => ({
+    id: `vm-${key}`,
+    type: "vm" as const,
+    label: `VM ${name} (runs Docker)`,
+    vcpu,
+    memoryGB,
+    diskGB,
+  })),
+  ...SIZES.map(({ key, name, vcpu, memoryGB, diskGB }) => ({
+    id: `performance-${key}`,
+    type: "performance" as const,
+    label: `Performance ${name} (dedicated cores)`,
+    vcpu,
+    memoryGB,
+    diskGB,
+  })),
 ];
 
 /** Agent 37 keeps instance names to 60 characters. */
 const MAX_NAME_LENGTH = 60;
 
 function hourly(shape: Shape): number {
-  const monthly =
-    shape.vcpu * RATES.vcpu + shape.memoryGB * RATES.memoryGB + shape.diskGB * RATES.diskGB;
+  const compute =
+    (shape.vcpu * RATES.vcpu + shape.memoryGB * RATES.memoryGB) *
+    INSTANCE_TYPES[shape.type].computeRate;
+  const monthly = compute + shape.diskGB * RATES.diskGB;
   return Math.round((monthly / RATES.hoursPerMonth) * 10_000) / 10_000;
+}
+
+/** Why the workspace can never have this shape awake; null when it can. */
+function memoryLimitReason(shape: Shape, limitGB: number | undefined): string | null {
+  if (typeof limitGB !== "number" || shape.memoryGB <= limitGB) return null;
+  return `Agent 37 lets this workspace have ${limitGB} GB awake at once, and topping up the wallet raises it`;
 }
 
 function isoFromEpochSeconds(seconds: number | null | undefined): string | null {
@@ -100,16 +187,21 @@ function isoFromEpochSeconds(seconds: number | null | undefined): string | null 
 }
 
 /**
- * The shape Daintree offers for an instance, only on an exact match of type,
+ * The size Daintree offers for an instance, only on an exact match of type,
  * cores, memory and disk: its price is then the catalog's. Any other instance
  * has no size id, and its price reads as unknown rather than as a near one.
  */
 function shapeOf(instance: Agent37Instance): string | null {
-  if ((instance.type ?? INSTANCE_TYPE) !== INSTANCE_TYPE) return null;
+  // An answer without a type is a default instance only where one can run.
+  const region = instance.region ?? DEFAULT_REGION;
+  const type =
+    instance.type ?? (INSTANCE_TYPES.default.regions?.includes(region) ? "default" : null);
+  if (type === null) return null;
   const resources = instance.resources;
   return (
     SHAPES.find(
       (shape) =>
+        shape.type === type &&
         shape.vcpu === resources?.cpu &&
         shape.memoryGB === resources?.memory &&
         shape.diskGB === resources?.disk
@@ -295,7 +387,8 @@ export class Agent37Provider implements CloudProvider {
           installUrl: "https://www.agent37.com/docs/agents-api/ssh",
         },
         provisioning: {
-          location: "none",
+          // Optional, so a create stored before regions were offered is sent as it was.
+          location: "optional",
           image: "none",
           network: "none",
           sshKey: "at-create",
@@ -334,15 +427,20 @@ export class Agent37Provider implements CloudProvider {
 
   async catalog(credentials: ProviderCredentials): Promise<ProviderCatalog> {
     const billing = await this.clientFor(credentials.apiUrl).billing(ctx(credentials));
-    const machineTypes: CloudMachineType[] = SHAPES.map((shape) => ({
-      id: shape.id,
-      label: shape.label,
-      vcpu: shape.vcpu,
-      memoryGB: shape.memoryGB,
-      hourlyDollars: hourly(shape),
-      available: true,
-      reason: null,
-    }));
+    const machineTypes: CloudMachineType[] = SHAPES.map((shape) => {
+      const reason = memoryLimitReason(shape, billing.memory_limit_gb);
+      const regions = INSTANCE_TYPES[shape.type].regions;
+      return {
+        id: shape.id,
+        label: shape.label,
+        vcpu: shape.vcpu,
+        memoryGB: shape.memoryGB,
+        hourlyDollars: hourly(shape),
+        available: reason === null,
+        reason,
+        locations: regions === null ? null : [...regions],
+      };
+    });
     return {
       machineTypes,
       // Advisory: room, the awake-memory limit and the wallet are Agent 37's to refuse.
@@ -350,15 +448,28 @@ export class Agent37Provider implements CloudProvider {
       includedHoursRemaining: null,
       startsRemaining: null,
       savedSnapshotDayDollars: null,
+      provisioning: {
+        // Starts on the region that runs every size: one left blank fits no default size.
+        location: {
+          label: "Region",
+          choices: REGIONS.map((region) => ({ ...region })),
+          defaultId: DEFAULT_REGION,
+        },
+      },
     };
   }
 
   async list(
     credentials: ProviderCredentials,
-    options: { label?: string } = {}
+    options: { label?: string; location?: string } = {}
   ): Promise<ProviderResource[]> {
     const instances = await this.clientFor(credentials.apiUrl).listInstances(ctx(credentials));
-    const resources = instances.map(agent37Resource);
+    // One list holds every region's. An instance that doesn't say where it runs is where
+    // Agent 37 puts one by default: a lost create is never matched to a machine elsewhere.
+    const located = options.location
+      ? instances.filter((instance) => (instance.region ?? DEFAULT_REGION) === options.location)
+      : instances;
+    const resources = located.map(agent37Resource);
     if (!options.label) return resources;
     // Agent 37 has no filter of its own; a label is `key=value` over the metadata.
     const at = options.label.indexOf("=");
@@ -392,6 +503,19 @@ export class Agent37Provider implements CloudProvider {
     if (!shape) {
       throw new Agent37ApiError("invalid-request", "Not an Agent 37 machine size", null, null);
     }
+    const region = request.provisioning.location;
+    if (region !== null && !REGIONS.some((entry) => entry.id === region)) {
+      throw new Agent37ApiError("invalid-request", "Not an Agent 37 region", null, null);
+    }
+    const regions = INSTANCE_TYPES[shape.type].regions;
+    if (regions !== null && !regions.includes(region ?? DEFAULT_REGION)) {
+      throw new Agent37ApiError(
+        "invalid-request",
+        `Agent 37 doesn't run ${shape.label} in that region`,
+        null,
+        null
+      );
+    }
     if (!request.publicKey) {
       throw new Agent37KeyNotRegistered({
         code: "ssh-authorization",
@@ -409,7 +533,9 @@ export class Agent37Provider implements CloudProvider {
       try {
         instance = await client.createInstance(ctx(credentials), {
           template: TEMPLATE,
-          type: INSTANCE_TYPE,
+          type: shape.type,
+          // Named only when chosen: left out, Agent 37 runs it in the US, as before regions.
+          ...(region !== null ? { region } : {}),
           resources: { cpu: shape.vcpu, memory: shape.memoryGB, disk: shape.diskGB },
           name: request.name.slice(0, MAX_NAME_LENGTH),
           metadata: request.labels,

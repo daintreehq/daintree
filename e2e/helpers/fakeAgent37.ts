@@ -32,6 +32,8 @@ export interface FakeAgent37Instance {
   status: string;
   name: string | null;
   metadata: Record<string, unknown> | null;
+  type: string;
+  region: string;
   resources: { cpu: number; memory: number; disk: number };
   auto_sleep: boolean;
   idle_timeout_seconds: number;
@@ -74,6 +76,8 @@ export async function startFakeAgent37(params: { sshdRoot: string }): Promise<Fa
     status: "running",
     name: null,
     metadata: null,
+    type: "default",
+    region: "us",
     resources: { cpu: 2, memory: 4, disk: 4 },
     auto_sleep: false,
     idle_timeout_seconds: 900,
@@ -120,8 +124,6 @@ export async function startFakeAgent37(params: { sshdRoot: string }): Promise<Fa
     template_revision: null,
     image_ref: "ghcr.io/agent37-platform/base:2026.11.01",
     image_digest: `sha256:${"0".repeat(64)}`,
-    type: "default",
-    region: "us",
     mount_path: "/home/node",
     url: `https://${instance.id}.agent37.app`,
     domain_urls: [],
@@ -193,6 +195,8 @@ export async function startFakeAgent37(params: { sshdRoot: string }): Promise<Fa
           status: "provisioning",
           name: request.name ?? null,
           metadata: request.metadata ?? null,
+          type: request.type ?? "default",
+          region: request.region ?? "us",
           resources: request.resources ?? { cpu: 2, memory: 4, disk: 4 },
           auto_sleep: request.auto_sleep === true,
           idle_timeout_seconds: request.idle_timeout_seconds ?? 900,

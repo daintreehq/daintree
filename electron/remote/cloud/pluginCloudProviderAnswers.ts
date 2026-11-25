@@ -1,9 +1,10 @@
-import type {
-  CloudAccountCheckResult,
-  CloudAccountScopeChoice,
-  CloudBillingScope,
-  CloudMachineState,
-  CloudMachineType,
+import {
+  cloudLocationsFrom,
+  type CloudAccountCheckResult,
+  type CloudAccountScopeChoice,
+  type CloudBillingScope,
+  type CloudMachineState,
+  type CloudMachineType,
 } from "../../../shared/types/cloudHosts.js";
 import type { ProviderCatalog, ProviderResource, ProviderSshAccess } from "./provider.js";
 
@@ -264,6 +265,7 @@ function readMachineType(value: unknown): CloudMachineType | null {
     hourlyDollars,
     available: raw.available === true,
     reason: text(raw.reason),
+    ...(raw.locations === undefined ? {} : { locations: cloudLocationsFrom(raw.locations) }),
   };
 }
 

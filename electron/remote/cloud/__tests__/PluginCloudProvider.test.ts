@@ -303,6 +303,37 @@ describe("PluginCloudProvider", () => {
     });
   });
 
+  it("keeps the regions a plugin ties a size to, narrowing a list it can't read (#18189)", async () => {
+    const { provider, call } = harness();
+    const size = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      label: id,
+      vcpu: 2,
+      memoryGB: 4,
+      hourlyDollars: 0.01,
+      available: true,
+      reason: null,
+      ...extra,
+    });
+    call.mockResolvedValueOnce({
+      machineTypes: [
+        size("unsaid"),
+        size("anywhere", { locations: null }),
+        size("tied", { locations: ["us-east-1", 7, "eu-west-1"] }),
+        size("as-text", { locations: "us-east-1" }),
+      ],
+      canStart: true,
+    });
+    const { machineTypes } = await provider.catalog(CREDENTIALS);
+    expect(machineTypes[0]).not.toHaveProperty("locations");
+    expect(Object.fromEntries(machineTypes.map((type) => [type.id, type.locations]))).toEqual({
+      unsaid: undefined,
+      anywhere: null,
+      tied: ["us-east-1", "eu-west-1"],
+      "as-text": [],
+    });
+  });
+
   it("refuses an answer it can't use, and a machine that isn't the one asked about", async () => {
     const { provider, call } = harness();
     call.mockResolvedValueOnce({ machineTypes: "lots" });

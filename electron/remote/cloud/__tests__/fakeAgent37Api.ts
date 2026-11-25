@@ -15,6 +15,7 @@ export interface FakeAgent37Instance {
   name: string | null;
   metadata: Record<string, unknown> | null;
   type: string;
+  region: string;
   template: string;
   resources: { cpu: number; memory: number; disk: number };
   auto_sleep: boolean;
@@ -64,11 +65,50 @@ function apiError(status: number, code: string, message: string): Response {
   return json(status, { error: { code, message } });
 }
 
+const REGIONS = ["us", "eu", "ap-south"];
+const TYPES = ["default", "vm", "performance"];
+/** cpu x memory, and the largest disk each takes on a VM or Performance instance; a default's is smaller. */
+const SHAPES: Record<string, { vmDisk: number; defaultDisk: number | null }> = {
+  "2x4": { vmDisk: 60, defaultDisk: 12 },
+  "4x8": { vmDisk: 100, defaultDisk: 20 },
+  "4x16": { vmDisk: 100, defaultDisk: 40 },
+  "4x32": { vmDisk: 100, defaultDisk: 80 },
+  "8x64": { vmDisk: 100, defaultDisk: null },
+};
+
+/** Agent 37's 400s for a create's region, type and shape, as its create page documents them. */
+function createProblem(body: Record<string, unknown>): string | null {
+  const type = body.type ?? "default";
+  const region = body.region ?? "us";
+  if (typeof type !== "string" || !TYPES.includes(type))
+    return "type must be default, vm or performance.";
+  if (typeof region !== "string" || !REGIONS.includes(region))
+    return "region must be us, eu or ap-south.";
+  if (type === "default" && region !== "us") {
+    return "us is the only region that runs default instances; send type vm or performance.";
+  }
+  const resources = body.resources as { cpu?: number; memory?: number; disk?: number } | undefined;
+  if (!resources) return null;
+  const shape = SHAPES[`${resources.cpu}x${resources.memory}`];
+  const maxDisk = shape ? (type === "default" ? shape.defaultDisk : shape.vmDisk) : null;
+  if (
+    maxDisk === null ||
+    typeof resources.disk !== "number" ||
+    resources.disk < 2 ||
+    resources.disk > maxDisk
+  ) {
+    return "Unsupported shape for this type; see Instance sizing for the valid shapes.";
+  }
+  return null;
+}
+
 export class FakeAgent37Api {
   readonly instances = new Map<string, FakeAgent37Instance>();
   readonly sshKeys: Array<{ id: string; name: string | null; key: string; created: number }> = [];
   readonly requests: FakeAgent37Request[] = [];
   billing = { balance_usd: 4.2, tier: 0, memory_limit_gb: 32, past_due: false };
+  /** Leave `region` out of every instance it answers, as an older Agent 37 did. */
+  unsayRegion = false;
   readonly signedUrls: FakeAgent37SignedUrl[] = [];
   /** Requests that reached an instance's port through the edge, by `{id}:{port}`. */
   readonly edgeHits = new Map<string, number>();
@@ -219,6 +259,7 @@ export class FakeAgent37Api {
       name: typeof body.name === "string" ? body.name : null,
       metadata: (body.metadata as Record<string, unknown> | undefined) ?? null,
       type: typeof body.type === "string" ? body.type : "default",
+      region: typeof body.region === "string" ? body.region : "us",
       template: typeof body.template === "string" ? body.template : "agent37-base",
       resources,
       auto_sleep: body.auto_sleep === true,
@@ -239,7 +280,7 @@ export class FakeAgent37Api {
       template_revision: null,
       image_ref: "ghcr.io/agent37-platform/base:2026.11.01",
       image_digest: `sha256:${"0".repeat(64)}`,
-      region: "us",
+      region: this.unsayRegion ? undefined : instance.region,
       mount_path: "/home/node",
       url: `https://${instance.id}.agent37.app`,
       domain_urls: [],
@@ -264,6 +305,8 @@ export class FakeAgent37Api {
       });
     }
     if (method === "POST" && path === "/instances") {
+      const refused = createProblem((body ?? {}) as Record<string, unknown>);
+      if (refused) return apiError(400, "invalid_request", refused);
       const created = this.make((body ?? {}) as Record<string, unknown>);
       this.instances.set(created.id, created);
       return json(201, this.view(created));

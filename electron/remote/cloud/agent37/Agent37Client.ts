@@ -137,6 +137,8 @@ export interface Agent37RequestContext {
 export interface Agent37CreateInstanceBody {
   template: string;
   type: string;
+  /** Left out, Agent 37 runs the instance in `us`. */
+  region?: string;
   resources: { cpu: number; memory: number; disk: number };
   name: string;
   metadata: Record<string, string>;

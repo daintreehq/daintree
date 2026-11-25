@@ -151,12 +151,13 @@ async function agent37() {
     credentials: { apiKey: FAKE_AGENT37_KEY },
     scopeId: "workspace",
   });
-  const create = () =>
+  const create = (location = "us") =>
     first.lifecycle.create({
       accountId: account.id,
       name: "build",
-      machineType: "2x4",
+      machineType: location === "us" ? "2x4" : "vm-2x4",
       lifetimeHours: null,
+      provisioning: { location, image: null, network: null },
     });
   const until = (check: () => boolean) =>
     vi.waitFor(() => expect(check()).toBe(true), { timeout: 5_000 });
@@ -192,6 +193,11 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
     expect(count("POST /ssh-keys")).toBe(2);
     expect(api.sshKeys).toHaveLength(1);
     expect(count("POST /instances")).toBe(1);
+    // The region it was asked for before the crash, named as it was.
+    expect(api.calls("POST", "/instances")[0]!.body).toMatchObject({
+      type: "default",
+      region: "us",
+    });
     const [instance] = [...api.instances.values()];
     expect(next.lifecycle.statuses()[0]).toMatchObject({
       resourceId: instance!.id,
@@ -199,6 +205,46 @@ describe("an Agent 37 create interrupted before setup finished (#17928)", () => 
       lastError: null,
     });
     expect(next.store.bindings()[0]!.creation).toBeNull();
+    next.lifecycle.dispose();
+  });
+
+  it("sends a create stored before regions as it was on Retry: a default machine, no region named (#18189)", async () => {
+    const { api, unanswered, sent, first, create, until, count } = await agent37();
+    unanswered.set("POST /ssh-keys", "lost");
+    await create();
+    await until(() => sent.includes("POST /ssh-keys"));
+    const next = first.crash();
+    await until(() => (next.lifecycle.statuses()[0]?.lastError ?? null) !== null);
+    // What an earlier Daintree saved: Agent 37 took no region then.
+    const [binding] = next.store.bindings();
+    next.store.updateBinding(binding!.id, (current) => ({ ...current, provisioning: null }));
+
+    unanswered.clear();
+    await next.lifecycle.retryCreate("build");
+    expect(count("POST /instances")).toBe(1);
+    const body = api.calls("POST", "/instances")[0]!.body as Record<string, unknown>;
+    expect(body).toMatchObject({ type: "default", resources: { cpu: 2, memory: 4, disk: 12 } });
+    expect(body).not.toHaveProperty("region");
+    expect([...api.instances.values()][0]).toMatchObject({ type: "default", region: "us" });
+    next.lifecycle.dispose();
+  });
+
+  it("finds a VM sent to Europe by its label there after a lost answer, asking only once (#18189)", async () => {
+    const { api, unanswered, sent, first, create, until, count } = await agent37();
+    unanswered.set("POST /instances", "lost");
+    await create("eu");
+    await until(() => sent.includes("POST /instances"));
+    await until(() => api.instances.size === 1);
+    // A machine in the US carrying the same label, made in the same window, isn't the one sent.
+    const [binding] = first.store.bindings();
+    api.seed({ metadata: { daintree: "1", "daintree-binding": binding!.id }, region: "us" });
+
+    const next = first.crash();
+    await until(() => next.lifecycle.statuses()[0]?.resourceId != null);
+    const [instance] = [...api.instances.values()].filter((entry) => entry.region === "eu");
+    expect(instance).toMatchObject({ type: "vm", region: "eu" });
+    expect(next.lifecycle.statuses()[0]!.resourceId).toBe(instance!.id);
+    expect(count("POST /instances")).toBe(1);
     next.lifecycle.dispose();
   });
 

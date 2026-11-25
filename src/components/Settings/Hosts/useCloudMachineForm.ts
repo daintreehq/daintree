@@ -5,6 +5,7 @@ import {
   CLOUD_LIFETIME_CHOICES,
   DEFAULT_CLOUD_LIFETIME_HOURS,
   cloudLifetimeIsChosen,
+  cloudMachineTypeLocationReason,
   type CloudAccountSummary,
   type CloudCatalog,
   type CloudHostCreateRequest,
@@ -47,9 +48,16 @@ export interface CloudMachineForm {
   currentCatalog: CloudCatalog | null;
   catalogError: string | null;
   retryCatalog: () => void;
+  /**
+   * The current catalog's sizes, each unavailable with the reason when it
+   * can't be created in the location chosen; empty while no current catalog.
+   */
+  machineTypes: CloudMachineType[];
   machineType: string | null;
   setMachineType: (id: string) => void;
   chosenType: CloudMachineType | null;
+  /** Why the size can't be created as it stands; null when it can or the catalog is still loading. */
+  sizeProblem: string | null;
   /** The lifetime selector's value: hours as a string, or "never". */
   lifetime: string;
   setLifetime: (value: string) => void;
@@ -77,17 +85,18 @@ export function useCloudMachineForm(
   provider: CloudProviderInfo | null,
   enabled = true
 ): CloudMachineForm {
-  const [machineType, setMachineType] = useState<string | null>(null);
+  /**
+   * The size each account has, once the person picked one or changed what it
+   * runs on: until then it follows where the account starts.
+   */
+  const [pickedTypes, setPickedTypes] = useState<Readonly<Record<string, string>>>({});
   /** What the person picked, for the provider they picked it for: another provider starts at its own default. */
   const [pickedLifetime, setPickedLifetime] = useState<{
     providerId: string;
     value: string;
   } | null>(null);
-  /** What the person picked here, for the account they picked it for. */
-  const [picked, setPicked] = useState<{
-    accountId: string;
-    selection: CloudProvisioningSelection;
-  } | null>(null);
+  /** What the person picked here, for each account they picked it for. */
+  const [picked, setPicked] = useState<Readonly<Record<string, CloudProvisioningSelection>>>({});
   const [catalog, setCatalog] = useState<CloudCatalog | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   // Bumped by Retry: reads again without touching what's been filled in.
@@ -101,17 +110,7 @@ export function useCloudMachineForm(
     setCatalogError(null);
     cloudHostsClient.getCatalog(accountKey).then(
       (next) => {
-        if (!current) return;
-        setCatalog(next);
-        const preferred =
-          next.machineTypes.find((type) => type.id === "default" && type.available) ??
-          next.machineTypes.find((type) => type.available) ??
-          null;
-        setMachineType((chosen) =>
-          chosen && next.machineTypes.some((type) => type.id === chosen && type.available)
-            ? chosen
-            : (preferred?.id ?? null)
-        );
+        if (current) setCatalog(next);
       },
       (err: unknown) => {
         if (current) setCatalogError(errorText(err, "Couldn't read the machine sizes"));
@@ -122,19 +121,48 @@ export function useCloudMachineForm(
     };
   }, [accountKey, enabled, catalogTry]);
 
-  const chosenType = catalog?.machineTypes.find((type) => type.id === machineType) ?? null;
   // A catalog still on screen from the account picked before isn't this account's.
   const currentCatalog = catalog && account && catalog.accountId === account.id ? catalog : null;
   const dimensions = currentCatalog && provider ? shownDimensions(provider, currentCatalog) : [];
   const provisioning =
     currentCatalog && provider
       ? startingSelection(provider, currentCatalog, [
-          picked?.accountId === currentCatalog.accountId ? picked.selection : null,
+          picked[currentCatalog.accountId] ?? null,
           currentCatalog.lastChoice,
         ])
       : NO_PROVISIONING;
   const provisioningProblem =
     currentCatalog && provider ? selectionProblem(provider, currentCatalog, provisioning) : null;
+  const locationOptions = currentCatalog?.provisioning.location ?? null;
+  const machineTypes = (currentCatalog?.machineTypes ?? []).map((type) => {
+    // The account's own reason comes first: it holds wherever the machine runs.
+    if (!type.available) return type;
+    const reason = cloudMachineTypeLocationReason(type, locationOptions, provisioning.location);
+    return reason === null ? type : { ...type, available: false, reason };
+  });
+  // A size is kept when the location changes under it, shown unavailable rather than swapped
+  // for another at another price; until then, the first size the starting location can take.
+  const pickedId = currentCatalog ? pickedTypes[currentCatalog.accountId] : undefined;
+  const pickedSize =
+    pickedId === undefined ? undefined : machineTypes.find((type) => type.id === pickedId);
+  const chosenType =
+    pickedSize ??
+    machineTypes.find((type) => type.id === "default" && type.available) ??
+    machineTypes.find((type) => type.available) ??
+    null;
+  const machineType = chosenType?.id ?? null;
+  const sizeProblem = !currentCatalog
+    ? null
+    : chosenType === null
+      ? "Choose a machine size."
+      : chosenType.available
+        ? null
+        : `${chosenType.label} isn't available: ${chosenType.reason ?? "not on this account"}.`;
+  const setMachineType = (id: string) => {
+    if (!currentCatalog) return;
+    const accountId = currentCatalog.accountId;
+    setPickedTypes((current) => ({ ...current, [accountId]: id }));
+  };
   // Only a provider that holds a machine to a deadline takes one; the rest are sent none,
   // whatever the selector held for the last account.
   const lifetime =
@@ -149,10 +177,13 @@ export function useCloudMachineForm(
 
   const pick = (dimension: CloudProvisioningDimension, id: string | null) => {
     if (!currentCatalog) return;
-    setPicked({
-      accountId: currentCatalog.accountId,
-      selection: { ...provisioning, [dimension]: id },
-    });
+    const accountId = currentCatalog.accountId;
+    setPicked((current) => ({ ...current, [accountId]: { ...provisioning, [dimension]: id } }));
+    // The size on screen stays put: choosing it again picked nothing a control could see.
+    if (pickedSize === undefined && machineType !== null) {
+      const shown = machineType;
+      setPickedTypes((current) => ({ ...current, [accountId]: shown }));
+    }
   };
 
   const request = (name: string): CloudHostCreateRequest | null => {
@@ -173,9 +204,11 @@ export function useCloudMachineForm(
     currentCatalog,
     catalogError,
     retryCatalog: () => setCatalogTry((n) => n + 1),
+    machineTypes,
     machineType,
     setMachineType,
     chosenType,
+    sizeProblem,
     lifetime,
     setLifetime,
     lifetimeChosen,
