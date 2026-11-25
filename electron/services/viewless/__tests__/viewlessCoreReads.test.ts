@@ -530,6 +530,8 @@ describe("core reads with no frontend", () => {
         expect(spawned?.env?.CLAUDE_CONFIG_DIR).toBe(
           launched === undefined ? undefined : `/Users/me/.claude-${launched}`
         );
+        // Named to the host, so the session the run captures names it (#18191).
+        expect((spawned as { agentAccountId?: string } | undefined)?.agentAccountId).toBe(launched);
       }
     );
 

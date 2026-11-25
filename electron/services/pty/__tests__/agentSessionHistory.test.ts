@@ -315,6 +315,81 @@ describe("agentSessionHistory", () => {
     });
   });
 
+  // #18191: the account and preset a resume reads back from the settings.
+  describe("launch choice", () => {
+    const base = { agentId: "claude", worktreeId: "wt-1", title: null, projectId: null };
+    const run = (spawnedAt: number) => ({ terminal: { id: "terminal-1", spawnedAt } });
+
+    it("keeps the ids a record was captured with", async () => {
+      await persistAgentSession(
+        { ...base, sessionId: "s1", agentAccountId: "work", agentPresetId: "zai" },
+        userDataDir
+      );
+
+      expect((await readSessionHistory(userDataDir))[0]).toMatchObject({
+        agentAccountId: "work",
+        agentPresetId: "zai",
+      });
+    });
+
+    it("never carries an older record's ids onto a run that moved off them", async () => {
+      await persistAgentSession(
+        { ...base, sessionId: "s1", agentAccountId: "work", agentPresetId: "zai", ...run(1) },
+        userDataDir
+      );
+      // The same conversation, moved to the default login and no preset.
+      await persistAgentSession({ ...base, sessionId: "s1", ...run(2) }, userDataDir);
+
+      const [record] = await readSessionHistory(userDataDir);
+      expect(record).not.toHaveProperty("agentAccountId");
+      expect(record).not.toHaveProperty("agentPresetId");
+    });
+
+    it("takes them from the later run of a terminal, whichever capture lands last", async () => {
+      // The later run's capture lands first: on the default login, on a preset.
+      await persistAgentSession(
+        { ...base, sessionId: "s1", title: "Later", agentPresetId: "backup", ...run(2) },
+        userDataDir
+      );
+      // The earlier run's capture, delayed past it, lands last.
+      await persistAgentSession(
+        {
+          ...base,
+          sessionId: "s1",
+          title: "Earlier",
+          agentAccountId: "work",
+          agentPresetId: "zai",
+          ...run(1),
+        },
+        userDataDir
+      );
+
+      const [record] = await readSessionHistory(userDataDir);
+      // Everything else still follows arrival order.
+      expect(record.title).toBe("Earlier");
+      expect(record.agentPresetId).toBe("backup");
+      expect(record).not.toHaveProperty("agentAccountId");
+    });
+
+    it("follows arrival order for captures of different terminals", async () => {
+      await persistAgentSession(
+        { ...base, sessionId: "s1", agentAccountId: "personal", ...run(2) },
+        userDataDir
+      );
+      await persistAgentSession(
+        {
+          ...base,
+          sessionId: "s1",
+          agentAccountId: "work",
+          terminal: { id: "terminal-2", spawnedAt: 1 },
+        },
+        userDataDir
+      );
+
+      expect((await readSessionHistory(userDataDir))[0].agentAccountId).toBe("work");
+    });
+  });
+
   // #17087: the account folder a conversation is stored in, for a resume.
   describe("conversation store", () => {
     const base = { agentId: "claude", worktreeId: "wt-1", title: null, projectId: null };

@@ -558,6 +558,9 @@ describe("DaintreeResume", () => {
     ["other-worktree", "resume_other_worktree"],
     ["panel-limit", "resume_panel_limit"],
     ["missing-cli", "resume_missing_cli"],
+    ["missing-account", "resume_failed"],
+    ["missing-preset", "resume_failed"],
+    ["settings-unavailable", "resume_host_unreadable"],
     ["spawn-failed", "resume_spawn_failed"],
   ] as const)("names the launch's refusal %s", async (refusal, reason) => {
     const h = setup();

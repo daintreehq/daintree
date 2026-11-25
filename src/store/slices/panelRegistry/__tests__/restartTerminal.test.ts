@@ -3180,6 +3180,8 @@ describe("accounts on restart and switch (#16040)", () => {
     await usePanelStore.getState().restartTerminal("test-1");
 
     expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+    // Named to the host too, so the session the run captures names it (#18191).
+    expect(mockSpawn.mock.calls[0]![0].agentAccountId).toBe("company");
     expect(pane().agentAccountId).toBe("company");
   });
 
@@ -3189,6 +3191,7 @@ describe("accounts on restart and switch (#16040)", () => {
     await usePanelStore.getState().restartTerminalOnPreset("test-1", "legacy");
 
     expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+    expect(mockSpawn.mock.calls[0]![0].agentAccountId).toBe("company");
     expect(pane().env).toEqual({ CLAUDE_CONFIG_DIR: COMPANY });
     expect(pane().agentAccountId).toBe("company");
   });
@@ -3212,6 +3215,7 @@ describe("accounts on restart and switch (#16040)", () => {
     expect(payload.env.CLAUDE_CONFIG_DIR).toBe(PERSONAL);
     expect(payload.env.ANTHROPIC_BASE_URL).toBe("https://api.z.ai");
     expect(payload.agentPresetId).toBe("zai");
+    expect(payload.agentAccountId).toBe("personal");
     expect(payload.agentSessionId).toBeUndefined();
     expect(pane()).toMatchObject({
       agentAccountId: "personal",
@@ -3232,6 +3236,7 @@ describe("accounts on restart and switch (#16040)", () => {
     await usePanelStore.getState().restartTerminalOnAccount("test-1", null);
 
     expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe("/home/me/.claude-legacy");
+    expect(mockSpawn.mock.calls[0]![0].agentAccountId).toBeUndefined();
     expect(pane().agentAccountId).toBeUndefined();
     expect(pane().env).toEqual({ CLAUDE_CONFIG_DIR: "/home/me/.claude-legacy" });
   });

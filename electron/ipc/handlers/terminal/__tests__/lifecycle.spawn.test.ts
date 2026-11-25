@@ -4519,6 +4519,20 @@ describe("terminal spawn handler - a preset arming the pane to continue (#17912)
     });
   });
 
+  it("records the launch's account on the terminal, and drops one that isn't an account id", async () => {
+    // #18191: what every close path reads when it journals the session.
+    await codexSpawn({ agentAccountId: "work" });
+    expect(ptyClient.spawn.mock.calls[0][1]).toMatchObject({
+      agentPresetId: "spare",
+      agentAccountId: "work",
+    });
+
+    ptyClient.spawn.mockClear();
+    await codexSpawn({ id: "terminal-codex-2", agentAccountId: "not an id" });
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+    expect(ptyClient.spawn.mock.calls[0][1].agentAccountId).toBeUndefined();
+  });
+
   it("names the launch's own preset as the original when the launch names none", async () => {
     await codexSpawn({ originalAgentPresetId: undefined });
 

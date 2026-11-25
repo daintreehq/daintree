@@ -206,6 +206,29 @@ describe("addPanel launch context (#12486)", () => {
     expect(spawnMock.mock.calls[0]![0]!.actionContext).toBeUndefined();
   });
 
+  // #18191: the host's record names the account, so the session it captures does.
+  it("hands an agent's account to the host, and none for a plain terminal", async () => {
+    await usePanelStore.getState().addPanel({
+      requestedId: "claude-acct",
+      launchAgentId: "claude",
+      command: "claude",
+      bypassLimits: true,
+      agentAccountId: "work",
+      env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-work" },
+    });
+    await usePanelStore.getState().addPanel({
+      requestedId: "term-acct",
+      bypassLimits: true,
+      agentAccountId: "work",
+    });
+    await drainMicrotasks();
+
+    expect(spawnMock).toHaveBeenCalledTimes(2);
+    const byId = new Map(spawnMock.mock.calls.map(([options]) => [options.id, options]));
+    expect(byId.get("claude-acct")?.agentAccountId).toBe("work");
+    expect(byId.get("term-acct")?.agentAccountId).toBeUndefined();
+  });
+
   // #15977: the pane and the host's record both name a scheduled run, and a
   // run reference never rides another source.
   it("keeps a scheduled run's ids on the pane and hands them to the host", async () => {

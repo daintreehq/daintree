@@ -76,6 +76,27 @@ describe("restartTerminalWithoutView", () => {
     expect(spawn.actionContext).toMatchObject({ projectId: PROJECT.id, focusedTerminalId: "t1" });
   });
 
+  it("relaunches on the pane's own account and preset, named to the host (#18191)", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "claude",
+        command: "claude",
+        agentPresetId: "zai",
+        agentAccountId: "work",
+        env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-work" },
+      },
+      { agentState: "working", launchAgentId: "claude" },
+      "sess-123"
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+
+    const spawn = spawned(invoke);
+    expect(spawn).toMatchObject({ agentPresetId: "zai", agentAccountId: "work" });
+    expect((spawn.env as Record<string, string>).CLAUDE_CONFIG_DIR).toBe("/Users/me/.claude-work");
+  });
+
   it("records the resumed session for the pane's next restore", async () => {
     const { deps, store } = setup(
       { id: "t1", launchAgentId: "claude", command: "claude", agentSessionId: "old" },
