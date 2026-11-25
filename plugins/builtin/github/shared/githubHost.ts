@@ -1,4 +1,5 @@
 import { normalizeConfiguredForgeHost } from "../../../../shared/utils/forgeHostnames.js";
+import { GITHUB_FINE_GRAINED_PERMISSIONS } from "./credentialScopes.js";
 
 export const GITHUB_COM_HOST = "github.com";
 
@@ -18,7 +19,21 @@ export function normalizeEnterpriseHost(raw: unknown): string | null {
   return host;
 }
 
-/** Where a personal access token for `host` is created. */
-export function newTokenUrl(host: string, scopes: readonly string[]): string {
+/** Where a classic personal access token for `host` is created. */
+export function newClassicTokenUrl(host: string, scopes: readonly string[]): string {
   return `https://${host}/settings/tokens/new?scopes=${scopes.join(",")}&description=Daintree`;
+}
+
+/**
+ * github.com's fine-grained token page, pre-filled with Daintree's name and
+ * permissions through GitHub's URL parameters. The owner is left for the
+ * person to pick, since repository permissions apply to either kind.
+ */
+export function newFineGrainedTokenUrl(): string {
+  const params = new URLSearchParams({
+    name: "Daintree",
+    description: "Pull requests, issues and CI for Daintree",
+    ...GITHUB_FINE_GRAINED_PERMISSIONS,
+  });
+  return `https://${GITHUB_COM_HOST}/settings/personal-access-tokens/new?${params.toString()}`;
 }

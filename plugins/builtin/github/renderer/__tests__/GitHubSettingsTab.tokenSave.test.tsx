@@ -4,6 +4,7 @@ import { whenPluginUiReady } from "@daintreehq/plugin-ui";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
+import { newFineGrainedTokenUrl } from "../../shared/githubHost.js";
 
 vi.mock("../stores/githubConfigStore", () => ({
   useGitHubConfigStore: vi.fn(),
@@ -421,20 +422,37 @@ describe("GitHubSettingsTab accessibility", () => {
     }
   });
 
-  it("Create Token button opens GitHub with correct description", () => {
+  it("Create classic token opens GitHub with the classic scopes", () => {
     render(
       <SettingsValidationProvider>
         <GitHubSettingsTab />
       </SettingsValidationProvider>
     );
-    const btn = screen.getByRole("button", { name: /create token on github/i });
+    const btn = screen.getByRole("button", { name: "Create classic token" });
     fireEvent.click(btn);
 
+    expect(actionService.dispatch).toHaveBeenCalledTimes(1);
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "system.openExternal",
       {
         url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Daintree",
       },
+      { source: "user" }
+    );
+  });
+
+  it("Create fine-grained token opens GitHub's fine-grained page with Daintree's permissions", () => {
+    render(
+      <SettingsValidationProvider>
+        <GitHubSettingsTab />
+      </SettingsValidationProvider>
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Create fine-grained token" }));
+
+    expect(actionService.dispatch).toHaveBeenCalledTimes(1);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: newFineGrainedTokenUrl() },
       { source: "user" }
     );
   });
