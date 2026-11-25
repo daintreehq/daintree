@@ -3477,9 +3477,11 @@ describe("CloudHostLifecycle worktree marks", () => {
       requestedAt: 1_000,
       createdMachine: true,
     };
-    const refused = lifecycle.create(request(account.id), MARK, placement);
-    await expect(refused).rejects.toMatchObject({ code: "UNSUPPORTED" });
-    await expect(refused).rejects.toThrow(/offer/);
+    for (const waiting of [placement, undefined]) {
+      const refused = lifecycle.create(request(account.id), MARK, waiting);
+      await expect(refused).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      await expect(refused).rejects.toThrow(/offer/);
+    }
     expect(put).not.toHaveBeenCalled();
     expect(store.bindings()).toEqual([]);
     expect(hosts).toEqual([]);

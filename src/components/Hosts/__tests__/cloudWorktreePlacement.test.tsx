@@ -270,7 +270,11 @@ describe("naming and choosing a new machine", () => {
   });
 
   it("offers no account whose provider's create goes through offers", () => {
-    const offers = { ...providerWith({ name: "Akash" }), id: "akash", createMode: "offers" as const };
+    const offers = {
+      ...providerWith({ name: "Akash" }),
+      id: "akash",
+      createMode: "offers" as const,
+    };
     const accounts = cloudMachineAccounts({
       providers: [BOAT_PROVIDER, offers],
       accounts: [{ ...ACCOUNT, id: "ca_offers", providerId: "akash" }, ACCOUNT],
