@@ -169,7 +169,12 @@ describe("a scheduled run's done policy, applied (#15982)", () => {
 
   it("forgets the continuation choice of a run's pane it closes (#17912)", async () => {
     const forgetPane = vi.fn();
-    setContinuationForgetter({ forgetPane, forgetProject: vi.fn(), noteSpawn: vi.fn() });
+    setContinuationForgetter({
+      forgetPane,
+      forgetProject: vi.fn(),
+      noteSpawn: vi.fn(),
+      checkpointForQuit: vi.fn(async () => {}),
+    });
     try {
       state.runs.set("run-1", settledRun());
       arm("close");

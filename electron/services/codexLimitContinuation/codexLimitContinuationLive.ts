@@ -86,13 +86,13 @@ async function readTurn(terminalId: string): Promise<ContinuationTurn | undefine
 }
 
 const STORE_FILE = "limit-continuation.json";
-let store: ContinuationStore | null = null;
+let continuationStore: ContinuationStore | null = null;
 
 /** The saved continuations (#18193), read only once a pane Daintree can continue launches. */
 function getContinuationStore(): ContinuationStore {
-  if (store) return store;
+  if (continuationStore) return continuationStore;
   const file = path.join(app.getPath("userData"), STORE_FILE);
-  store = new ContinuationStore({
+  continuationStore = new ContinuationStore({
     read: () =>
       fs.readFile(file, "utf-8").catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null;
@@ -100,7 +100,7 @@ function getContinuationStore(): ContinuationStore {
       }),
     write: (data) => resilientAtomicWriteFile(file, data, "utf-8", { mode: 0o600 }),
   });
-  return store;
+  return continuationStore;
 }
 
 /**
@@ -318,10 +318,10 @@ export function _resetCodexLimitContinuationForTest(): void {
   stopForgetting?.();
   stopForgetting = null;
   setContinuationForgetter(null);
-  store = null;
+  continuationStore = null;
 }
 
 /** @internal Tests only: the store a later service is built on. */
 export function _setContinuationStoreForTest(next: ContinuationStore | null): void {
-  store = next;
+  continuationStore = next;
 }

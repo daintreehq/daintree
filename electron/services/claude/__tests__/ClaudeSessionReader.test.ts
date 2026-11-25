@@ -34,6 +34,7 @@ import {
   readClaudeContextUsage,
   readClaudeLastMessage,
   readClaudeRecentReplies,
+  readClaudeTranscriptLeaf,
   tailWithinJsonBytes,
 } from "../ClaudeSessionReader.js";
 import { deriveProjectSlug } from "../ClaudeSubagentReader.js";
@@ -1452,5 +1453,40 @@ describe("readClaudeContextUsage (#16371)", () => {
     await readUsage();
 
     expect(fsHook.opened.map((handle) => handle.fd)).toEqual([-1]);
+  });
+});
+
+describe("readClaudeTranscriptLeaf (#18193)", () => {
+  const leaf = () => readClaudeTranscriptLeaf({ projectsRoot, cwd: CWD, sessionId: SESSION });
+  const limit = (uuid: string) =>
+    assistant(null, [text("You've hit your limit · resets 9pm (UTC)")], {
+      uuid,
+      isApiErrorMessage: true,
+      error: "rate_limit",
+    });
+
+  it("names the usage-limit entry a conversation ends on, past Claude Code's bookkeeping", async () => {
+    await seed([
+      prompt("fix the parser", { uuid: "u-1" }),
+      limit("u-2"),
+      system("local_command"),
+      JSON.stringify({ type: "summary", summary: "Parser work", leafUuid: "u-2" }),
+      assistant("msg_9", [text("A subagent's reply.")], { uuid: "u-side", isSidechain: true }),
+    ]);
+    expect(await leaf()).toEqual({ uuid: "u-2", apiError: true });
+  });
+
+  it("names a turn taken after the limit, which is no limit", async () => {
+    await seed([limit("u-2"), prompt("continue", { uuid: "u-3" }), assistant("msg_3", [text("Done.")], { uuid: "u-4" })]);
+    expect(await leaf()).toEqual({ uuid: "u-4", apiError: false });
+  });
+
+  it("answers nothing for a missing transcript, an unsafe id, or a leaf with no id", async () => {
+    expect(await leaf()).toBeNull();
+    expect(
+      await readClaudeTranscriptLeaf({ projectsRoot, cwd: CWD, sessionId: "../escape" })
+    ).toBeNull();
+    await seed([prompt("hello")]);
+    expect(await leaf()).toBeNull();
   });
 });

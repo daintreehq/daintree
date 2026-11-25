@@ -561,6 +561,47 @@ describe("registerShutdownHandler", () => {
     expect(order).toContain("pty-dispose");
   });
 
+  it("saves armed panes' limit continuations while their processes still run (#18193)", async () => {
+    const order: string[] = [];
+    const ptyClient = {
+      gracefulKillByProject: vi.fn(async () => {
+        order.push("pty-kill");
+        return [];
+      }),
+      getPartialGracefulKillResults: vi.fn(() => []),
+      getAllTerminalsAsync: vi.fn(async () => {
+        order.push("pty-enumerate");
+        return [];
+      }),
+      finishAgentSessionCaptures: vi.fn(async () => ({ complete: true, pending: 0 })),
+      dispose: vi.fn(() => {
+        order.push("pty-dispose");
+      }),
+    };
+    const { setContinuationForgetter } =
+      await import("../../services/codexLimitContinuation/forgetPane.js");
+    setContinuationForgetter({
+      forgetPane: vi.fn(),
+      forgetProject: vi.fn(),
+      noteSpawn: vi.fn(),
+      checkpointForQuit: vi.fn(async () => {
+        order.push("continuation-checkpoint");
+      }),
+    });
+    try {
+      const { beforeQuitCb } = await setup({ getPtyClient: vi.fn(() => ptyClient as never) });
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+      await beforeQuitCb(makeEvent());
+      await exited;
+    } finally {
+      setContinuationForgetter(null);
+    }
+    expect(order[0]).toBe("continuation-checkpoint");
+    expect(order).toContain("pty-dispose");
+  });
+
   it("keeps the Assistant's pane records before the remote hosts' teardown lets anything go (#16845)", async () => {
     const order: string[] = [];
     paneCreationsMock.beginAssistantPaneCreationQuit.mockImplementationOnce(() => {

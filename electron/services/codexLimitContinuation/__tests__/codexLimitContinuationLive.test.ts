@@ -21,10 +21,13 @@ vi.mock("../../codex/CodexLimitReset.js", () => ({ readCodexLimitStop: vi.fn() }
 
 import {
   _resetCodexLimitContinuationForTest,
+  _setContinuationStoreForTest,
   decideFallback,
   noteContinuationLaunch,
   peekCodexLimitContinuation,
+  prepareContinuationLaunch,
 } from "../codexLimitContinuationLive.js";
+import { ContinuationStore } from "../ContinuationStore.js";
 import { forgetContinuationPane } from "../forgetPane.js";
 import { events } from "../../events.js";
 
@@ -39,6 +42,7 @@ const launch = (presetId: string, launchGeneration: number) => ({
 
 describe("codexLimitContinuationLive — launches a preset arms (#17912)", () => {
   beforeEach(() => {
+    _setContinuationStoreForTest(new ContinuationStore(null));
     state.ptyClient = Object.assign(new EventEmitter(), {
       setCodexLimitContinue: vi.fn(),
       getTerminalAsync: vi.fn(async () => null),
@@ -73,7 +77,59 @@ describe("codexLimitContinuationLive — launches a preset arms (#17912)", () =>
       spawnedAt: 5,
     });
     expect(peekCodexLimitContinuation()?.isArmed("t1")).toBe(true);
-    expect(state.ptyClient.setCodexLimitContinue).toHaveBeenCalledWith("t1", true);
+    expect(state.ptyClient.setCodexLimitContinue).toHaveBeenCalledWith("t1", true, undefined);
+  });
+
+  it("arms a pane its menu armed before a cold restart, whatever its preset says (#18193)", async () => {
+    const saved = JSON.stringify({
+      version: 1,
+      panes: [{ projectId: "project-1", terminalId: "t1", override: true }],
+    });
+    _setContinuationStoreForTest(
+      new ContinuationStore({ read: async () => saved, write: async () => {} })
+    );
+    await prepareContinuationLaunch();
+    noteContinuationLaunch(launch("off", 1));
+    state.ptyClient.emit("spawn-result", "t1", {
+      success: true,
+      id: "t1",
+      launchGeneration: 1,
+      spawnedAt: 5,
+    });
+    expect(peekCodexLimitContinuation()?.isArmed("t1")).toBe(true);
+  });
+
+  it("takes up a stop saved before a cold restart on the restore's launch (#18193)", async () => {
+    const saved = JSON.stringify({
+      version: 1,
+      panes: [
+        {
+          projectId: "project-1",
+          terminalId: "t1",
+          stop: { agentId: "codex", resetsAt: 9_000_000, identity: "digest", savedAt: 1 },
+        },
+      ],
+    });
+    _setContinuationStoreForTest(
+      new ContinuationStore({ read: async () => saved, write: async () => {} })
+    );
+    await prepareContinuationLaunch();
+    // The preset arms the pane; the restore resumes the conversation the stop was in.
+    noteContinuationLaunch({
+      ...launch("on", 1),
+      restore: { agentId: "codex", sessionId: "s1", startsFresh: false },
+    });
+    state.ptyClient.emit("spawn-result", "t1", {
+      success: true,
+      id: "t1",
+      launchGeneration: 1,
+      spawnedAt: 5,
+    });
+    expect(peekCodexLimitContinuation()?.list("project-1")[0]?.state).toMatchObject({
+      status: "waiting",
+      resetsAt: 9_000_000,
+    });
+    expect(state.ptyClient.setCodexLimitContinue).toHaveBeenLastCalledWith("t1", true, "digest");
   });
 
   it("notes a newer launch its preset doesn't arm while an older one awaits its spawn", () => {
@@ -114,6 +170,7 @@ describe("codexLimitContinuationLive — whose preset decides a fallback (#18192
     isAssistantTerminal: false,
     spawnedAt: 1_000,
     launchGeneration: undefined,
+    agentSessionId: undefined,
   });
 
   beforeEach(() => {
