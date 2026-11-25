@@ -89,6 +89,11 @@ const REASON_COPY: Record<RestoreRecoveryReason, RecoveryCopy> = {
     description:
       "The plugin that started this agent asked for it to wait after a restart. Resume its conversation or start a new one.",
   },
+  "held-on-restart": {
+    title: "Not resumed after restart",
+    description:
+      "This agent was set to wait after a restart instead of resuming. Resume its conversation or start a new one.",
+  },
   "host-ended-uncleanly": {
     title: "Not resumed after Daintree was stopped",
     description: `Daintree was stopped while this agent was running. ${HOST_END_HOLD_SENTENCE}`,
@@ -173,13 +178,13 @@ export function RestoreRecoveryGate({
   isFocused = false,
   containerRef,
 }: RestoreRecoveryGateProps) {
-  const { recovery, heldByPlugin, agentId, cwd, originCwd, filedWorktreeId } = usePanelStore(
+  const { recovery, heldOnRestart, agentId, cwd, originCwd, filedWorktreeId } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[panelId];
       const pty = panel && isPtyPanel(panel) ? panel : undefined;
       return {
         recovery: pty?.restoreRecovery,
-        heldByPlugin: pty?.holdOnRestart === true,
+        heldOnRestart: pty?.holdOnRestart === true,
         agentId: pty?.launchAgentId,
         cwd: pty?.cwd ?? "",
         originCwd: pty ? resolveConversationSearchCwd(pty) : "",
@@ -213,11 +218,11 @@ export function RestoreRecoveryGate({
   const resumePolicy = useAgentSettingsStore((state) =>
     state.isInitialized ? resolveResumeOnRestart(state.settings) : undefined
   );
-  // A pane its plugin asked to hold waits for an explicit choice, even one the
-  // setting held before the plugin asked (#14017).
+  // A held pane waits for an explicit choice, even one the setting held before
+  // the hold was asked for (#14017, #18178).
   const resumesOnFocusId =
     recovery?.reason === "resume-deferred" &&
-    !heldByPlugin &&
+    !heldOnRestart &&
     !recovery.awaitingDestination &&
     resumePolicy !== undefined &&
     resumePolicy !== "never"

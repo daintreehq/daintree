@@ -1097,6 +1097,11 @@ describe("McpServerService", () => {
         description: "Move a terminal this MCP session created without focusing it",
       }),
       createManifestEntry({
+        id: "terminal.setHoldOnRestartOwned" as ActionId,
+        title: "Hold Owned Agent on Restart",
+        description: "Keep an agent this MCP session launched from resuming on restart",
+      }),
+      createManifestEntry({
         id: "terminal.interruptOwned" as ActionId,
         title: "Interrupt Owned Agent",
         description: "Stop the turn an agent this MCP session created is running",

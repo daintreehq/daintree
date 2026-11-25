@@ -624,7 +624,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // Claude Code update. It has to say the user approves, that `/restart` goes in
   // once and only at an empty prompt, and that the answer never claims the
   // conversation came back. In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 27_750;
+  // 27_750 → 27_950 for #18178, measured at 27_937 B (+188 over develop's
+  // 27_749): `terminal.setHoldOnRestartOwned`, so an Assistant can keep a
+  // finished worker it launched from resuming on restart. It has to say a
+  // handed pane is refused, that a held pane waits whatever the resume setting
+  // says, and that starting it clears the hold. In-app only, off the external
+  // surface.
+  const MAX_COHORT_TOTAL_BYTES = 27_950;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1663,7 +1669,8 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // plugin.backupDatabases a pluginId; plugin.setNotificationsSilenced a
     // pluginId and a flag; agentSettings.set an agentId and settings;
     // worktree.retireOwned a worktreeId; schedules.runNow a scheduleId;
-    // terminal.cancelQueuedSend a queuedSendToken). Schemas are non-strict, so
+    // terminal.cancelQueuedSend a queuedSendToken;
+    // terminal.setHoldOnRestartOwned a hold). Schemas are non-strict, so
     // the union satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
@@ -1678,6 +1685,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       agentId: "claude",
       settings: {},
       silenced: true,
+      hold: true,
       worktreeId: "/wt/placeholder",
       scheduleId: "s-placeholder",
       queuedSendToken: "q-placeholder",

@@ -33,7 +33,9 @@ const write = (danger: ActionDanger = "safe"): ViewlessActionEntry => ({ danger,
  * running here unattended.
  *
  * The owned twins and the batches need no entries: main checks ownership or
- * expands the batch, then dispatches the plain action this lists.
+ * expands the batch, then dispatches the plain action this lists. The restart
+ * hold is the exception (#18178): main dispatches its own id once it checked
+ * the session launched the pane, so it is listed under that id.
  */
 export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   "terminal.new": write(),
@@ -44,6 +46,7 @@ export const VIEWLESS_ACTIONS: Readonly<Record<string, ViewlessActionEntry>> = {
   "terminal.close": write(),
   "terminal.interrupt": write(),
   "terminal.sendKeys": write(),
+  "terminal.setHoldOnRestartOwned": write(),
   "agent.launch": write(),
   "agent.listAvailable": read(),
   "slashCommands.list": read(),

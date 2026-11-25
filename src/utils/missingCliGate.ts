@@ -81,6 +81,7 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     spawnedBy: panel.spawnedBy,
     scheduledRun: panel.scheduledRun,
     focusPolicy: panel.focusPolicy,
+    ...(panel.holdOnRestart === true && { holdOnRestart: true as const }),
   };
 }
 
@@ -105,6 +106,8 @@ export interface MissingCliContinueArgs {
    * verbatim flags — never the gate's full set.
    */
   agentLaunchFlags?: string[];
+  /** The launch asked restore to hold the agent (#18178). */
+  holdOnRestart?: true;
 }
 
 /**
@@ -157,6 +160,7 @@ export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliCont
     focusPolicy: panel.focusPolicy,
     spawnedBy: panel.spawnedBy === "schedule" ? undefined : panel.spawnedBy,
     ...(callerChosenFlags.length > 0 ? { agentLaunchFlags: callerChosenFlags } : {}),
+    ...(panel.holdOnRestart === true && { holdOnRestart: true as const }),
   };
 }
 

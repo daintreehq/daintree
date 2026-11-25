@@ -9,10 +9,24 @@ import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 
 const addPanel = vi.fn();
 
+// The panels the missing-CLI gate writes directly, rather than through addPanel.
+const panelState = vi.hoisted(() => {
+  const panels: {
+    panelsById: Record<string, Record<string, unknown>>;
+    panelIds: string[];
+    panelIdsByWorktreeId: Record<string, string[]>;
+  } = { panelsById: {}, panelIds: [], panelIdsByWorktreeId: {} };
+  return panels;
+});
+
 vi.mock("@/store/panelStore", () => {
-  const state = { addPanel: (...args: unknown[]) => addPanel(...args), panelsById: {} };
+  const state = Object.assign(panelState, {
+    addPanel: (...args: unknown[]) => addPanel(...args),
+  });
   const usePanelStore = Object.assign((selector: (s: typeof state) => unknown) => selector(state), {
     getState: () => state,
+    setState: (update: (s: typeof state) => Partial<typeof state>) =>
+      Object.assign(state, update(state)),
   });
   return { usePanelStore };
 });
@@ -327,6 +341,83 @@ describe("useAgentLauncher — the launching plugin (#14017)", () => {
 
     expect(addPanel).toHaveBeenCalledOnce();
     expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("launchedByPluginId");
+  });
+});
+
+describe("useAgentLauncher — a hold asked for at launch (#18178)", () => {
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  it("holds the agent pane it creates, with no plugin behind the launch", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true, holdOnRestart: true });
+    });
+
+    expect(addPanel).toHaveBeenCalledOnce();
+    const options = addPanel.mock.calls[0]?.[0];
+    expect(options).toMatchObject({ launchAgentId: "claude", holdOnRestart: true });
+    expect(options?.launchedByPluginId).toBeUndefined();
+  });
+
+  it.each([false, undefined])("leaves the pane to the resume setting for %s", async (hold) => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true, holdOnRestart: hold });
+    });
+
+    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("holdOnRestart");
+  });
+
+  // The gate stands in for the launch until "Run anyway" or a re-check
+  // relaunches it from the gate's own fields, so the hold has to be on it.
+  it("keeps the hold on the setup panel a missing CLI opens instead", async () => {
+    getCurrentLaunchCliDetail.mockResolvedValue({ state: "missing" });
+    const state = panelState;
+    const { result } = renderHook(() => useAgentLauncher());
+
+    try {
+      await act(async () => {
+        await result.current.launchAgent("claude", {
+          holdOnRestart: true,
+          focusPolicy: "preserve",
+        });
+      });
+
+      expect(addPanel).not.toHaveBeenCalled();
+      const gates = Object.values(state.panelsById);
+      expect(gates).toHaveLength(1);
+      expect(gates[0]).toMatchObject({
+        spawnStatus: "missing-cli",
+        launchAgentId: "claude",
+        holdOnRestart: true,
+      });
+    } finally {
+      state.panelsById = {};
+      state.panelIds = [];
+      state.panelIdsByWorktreeId = {};
+      getCurrentLaunchCliDetail.mockReset();
+    }
+  });
+
+  it("never holds a plain shell, which restore brings back as it always does", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("terminal", { holdOnRestart: true });
+    });
+
+    expect(addPanel).toHaveBeenCalledOnce();
+    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("holdOnRestart");
   });
 });
 

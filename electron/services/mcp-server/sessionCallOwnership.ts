@@ -76,6 +76,13 @@ export type OwnedResourceTool = {
        * through the active view and raises that view's window.
        */
       reveals?: boolean;
+      /**
+       * Checked again by identity just before dispatch: the creation record the
+       * call was admitted on must still be this session's (#18178). MCP panel
+       * ids are short (`claude-7f3a`), so one freed while the call waited can
+       * name another session's new pane by the time it is sent.
+       */
+      recheckCreation?: true;
     }
   | {
       executor: "main";
@@ -210,6 +217,22 @@ export const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     forwardArgs: ["location"],
     releasesOwnership: false,
     acceptsAdoption: true,
+  },
+  // Keeps a pane this session launched from resuming on restart, or releases
+  // it to the resume setting (#18178): the Assistant's form of a plugin's
+  // `terminal.setHoldOnRestart`. A hand-over isn't enough, since that names a
+  // conversation the user started and will want back. It delegates to itself,
+  // like the placement above, and forwards only `hold`. Holding is not a claim
+  // the panel stopped existing, so the record stays.
+  "terminal.setHoldOnRestartOwned": {
+    resourceKind: "terminal",
+    executor: "renderer",
+    delegateTo: "terminal.setHoldOnRestartOwned",
+    idArg: "terminalId",
+    forwardArgs: ["hold"],
+    releasesOwnership: false,
+    acceptsAdoption: false,
+    recheckCreation: true,
   },
   // Keeps its record for the same reason the reveal above does: interrupting a
   // turn is not a claim the panel stopped existing, and dropping the record
@@ -521,6 +544,8 @@ export interface OwnedDispatchCall {
   readonly ownershipOwner: string;
   readonly adoptedRecordFor: OwnershipAccess["adoptedRecordFor"];
   readonly admittedAdoption: TerminalAdoptionRecord | undefined;
+  /** The creation record the gate admitted the call on, for {@link RendererOwnedResourceTool.recheckCreation}. */
+  readonly admittedCreation: OwnedResourceRecord | undefined;
   readonly dispatchToRenderer: (id: string, dispatchArgs: unknown) => Promise<DispatchEnvelope>;
   readonly dispatchConfirmed: boolean;
   readonly revealOwnedRun: SessionServerDeps["revealOwnedRun"];
@@ -559,10 +584,32 @@ export async function dispatchOwnedResource(
     ownershipOwner,
     adoptedRecordFor,
     admittedAdoption,
+    admittedCreation,
     dispatchToRenderer,
     dispatchConfirmed,
     revealOwnedRun,
   } = call;
+  if (
+    entry.recheckCreation === true &&
+    (admittedCreation === undefined ||
+      sessionStore.resourceOwnership.get(ownershipOwner, entry.resourceKind, resourceId) !==
+        admittedCreation)
+  ) {
+    return {
+      envelope: {
+        result: {
+          ok: false,
+          error: {
+            code: RESOURCE_NOT_OWNED_CODE,
+            message:
+              `${entry.resourceKind} '${resourceId}' stopped being this session's before ` +
+              `'${actionId}' reached it, so nothing was sent.`,
+          },
+        },
+      },
+      raised: true,
+    };
+  }
   if (
     admittedAdoption !== undefined &&
     sessionStore.terminalAdoption.get(ownershipOwner, resourceId) !== admittedAdoption

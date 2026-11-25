@@ -15,7 +15,7 @@ import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelClo
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
 import { useRateLimitObservationStore } from "@/store/rateLimitObservationStore";
-import { isPtyPanel } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { resolveAccountSwitchTarget } from "@/services/terminal/accountSwitchTarget";
 import {
   useTerminalPendingDestructiveActionStore,
@@ -51,9 +51,15 @@ import {
   RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
+  SetHoldOnRestartOwnedArgsSchema,
   StartHeldArgsSchema,
   TerminalKillBatchArgsSchema,
 } from "./terminalLifecycleActionArgs";
+
+/** Restore holds only an agent's pane: a plain shell has no run to keep from resuming. */
+function isHoldableAgentPanel(panel: PanelInstance | undefined): panel is PtyPanelData {
+  return panel !== undefined && isPtyPanel(panel) && Boolean(panel.launchAgentId);
+}
 
 function parseConfirmed(args: unknown): boolean {
   if (!args || typeof args !== "object") return false;
@@ -635,14 +641,22 @@ export const terminalLifecycleActionRuns = {
       );
     }
     const panel = usePanelStore.getState().panelsById[terminalId];
-    if (
-      !panel ||
-      !isPtyPanel(panel) ||
-      !panel.launchAgentId ||
-      panel.launchedByPluginId !== caller
-    ) {
+    if (!isHoldableAgentPanel(panel) || panel.launchedByPluginId !== caller) {
       throw new UnactionableTargetError(
         `No agent terminal '${terminalId}' launched by this plugin in this project.`
+      );
+    }
+    usePanelStore.getState().setHoldOnRestart(terminalId, hold);
+    return { terminalId, holdOnRestart: hold };
+  },
+  "terminal.setHoldOnRestartOwned": async (args: unknown) => {
+    // Main's ownership gate is the only way here (#18178): it checked this
+    // session launched the pane before dispatching, so the pane itself is
+    // all that is left to check.
+    const { terminalId, hold } = SetHoldOnRestartOwnedArgsSchema.parse(args);
+    if (!isHoldableAgentPanel(usePanelStore.getState().panelsById[terminalId])) {
+      throw new UnactionableTargetError(
+        `'${terminalId}' is not an agent terminal in this project, so there is nothing to hold.`
       );
     }
     usePanelStore.getState().setHoldOnRestart(terminalId, hold);

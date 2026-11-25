@@ -185,6 +185,9 @@ export const CORE_TIER_TOOLS = [
   // Parks or brings back a panel this session created, without moving the
   // user (#13662). Owned for every origin, so it has no unscoped twin.
   "terminal.placeOwned",
+  // Keeps a finished worker this session launched from resuming on restart
+  // (#18178). Owned for every origin: the plugin form is on no tier.
+  "terminal.setHoldOnRestartOwned",
   "terminal.rename",
   // Read-only. How much usage is left lives only in each CLI's own view, and
   // the command that opens it is only typed after this confirms it exists.

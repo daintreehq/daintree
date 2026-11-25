@@ -403,6 +403,7 @@ export const agentActionRuns = {
       requestedId,
       force,
       name,
+      holdOnRestart,
     } = args as {
       agentId: string;
       location?: "grid" | "dock" | "overlay" | "background";
@@ -426,6 +427,7 @@ export const agentActionRuns = {
       requestedId?: string;
       force?: boolean;
       name?: string;
+      holdOnRestart?: boolean;
     };
     // A requested id asks for a NEW panel. One this view already holds is
     // refused here rather than handed to the launcher, whose in-place update
@@ -470,7 +472,7 @@ export const agentActionRuns = {
     // for `antigravity`): say that, rather than blaming the handback or the
     // notice that came with it.
     if (
-      (handback === true || notify === true) &&
+      (handback === true || notify === true || holdOnRestart === true) &&
       agentId !== "terminal" &&
       !HANDBACK_PANEL_LAUNCH_IDS.has(agentId) &&
       !isRegisteredAgent(agentId)
@@ -496,6 +498,16 @@ export const agentActionRuns = {
     ) {
       throw new UnactionableTargetError(
         "notify waits for an agent to stop working, and this id is not a registered agent: a plain shell or panel never reports working or idle. Launch a registered agent, or launch without notify."
+      );
+    }
+    // Restore holds only an agent: a plain shell or a panel comes back as it
+    // always does, so the hold would be reported and never kept (#18178).
+    if (
+      holdOnRestart === true &&
+      (HANDBACK_PANEL_LAUNCH_IDS.has(agentId) || !isRegisteredAgent(agentId))
+    ) {
+      throw new UnactionableTargetError(
+        "holdOnRestart keeps an agent from resuming on restart, and this id is not a registered agent: a plain shell or panel has nothing to resume. Launch a registered agent, or launch without holdOnRestart."
       );
     }
     // The background list only shows terminal panes, so a parked browser or
@@ -533,6 +545,9 @@ export const agentActionRuns = {
       // Host-stamped, never an argument: it is what lets the plugin hold this
       // pane on restart later, and only this plugin (#14017).
       launchedByPluginId: ctx?.dispatchSource === "plugin" ? ctx.callerPluginId : undefined,
+      // An argument: it holds only the pane this launch creates, whoever asks
+      // (#18178). A plugin's own later hold or release still needs the stamp.
+      holdOnRestart: holdOnRestart === true ? true : undefined,
       // Host-stamped, never an argument: the preset main asked the person
       // about, which the launcher holds the launch to (#16324).
       approvedPluginPreset:

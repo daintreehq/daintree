@@ -296,7 +296,11 @@ export async function runAgentLaunch(
     );
   }
   const registered = isEffectivelyRegisteredAgent(agentId);
-  if ((args.handback === true || args.notify === true) && agentId !== "terminal" && !registered) {
+  if (
+    (args.handback === true || args.notify === true || args.holdOnRestart === true) &&
+    agentId !== "terminal" &&
+    !registered
+  ) {
     return failure("VALIDATION_ERROR", unknownAgentIdMessage(agentId));
   }
   if (args.handback === true && !registered) {
@@ -309,6 +313,12 @@ export async function runAgentLaunch(
     return failure(
       "VALIDATION_ERROR",
       "notify waits for an agent to stop working, and this id is not a registered agent: a plain shell or panel never reports working or idle. Launch a registered agent, or launch without notify."
+    );
+  }
+  if (args.holdOnRestart === true && !registered) {
+    return failure(
+      "VALIDATION_ERROR",
+      "holdOnRestart keeps an agent from resuming on restart, and this id is not a registered agent: a plain shell or panel has nothing to resume. Launch a registered agent, or launch without holdOnRestart."
     );
   }
 
@@ -518,6 +528,7 @@ export async function runAgentLaunch(
     agentAccountId: plan.account?.id,
     ...provenance,
     ...(firstPrompt && { firstPrompt }),
+    ...(args.holdOnRestart === true && { holdOnRestart: true as const }),
   };
   const snapshot: PanelSnapshot = {
     id,

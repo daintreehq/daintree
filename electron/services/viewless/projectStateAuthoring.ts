@@ -140,6 +140,43 @@ export async function backgroundViewlessTerminal(
 }
 
 /**
+ * Set or clear a saved agent panel's restart hold (#18178), the way a view's
+ * own `setHoldOnRestart` saves it, so the view that next opens the project
+ * restores it held. Queued like the writes above. Resolves whether the layout
+ * held an agent panel under the id: anything else is left alone and reported,
+ * so a hold is never claimed for a panel restore wouldn't keep it on.
+ */
+export async function setViewlessTerminalHold(
+  writer: ProjectStateWriter,
+  projectId: string,
+  terminalId: string,
+  hold: boolean
+): Promise<boolean> {
+  let found = false;
+  await writer.enqueueProjectStateUpdate(projectId, (existing) => {
+    if (!existing || !Array.isArray(existing.terminals)) return null;
+    const target = existing.terminals.find((terminal) => terminal.id === terminalId);
+    if (!target || (target.kind ?? "terminal") !== "terminal" || !target.launchAgentId) {
+      return null;
+    }
+    found = true;
+    // Unchanged, but returned rather than null, so this call shares the
+    // batch's save result: a save that fails fails it too.
+    if ((target.holdOnRestart === true) === hold) return existing;
+    return {
+      ...existing,
+      terminals: existing.terminals.map((terminal): PanelSnapshot => {
+        if (terminal.id !== terminalId) return terminal;
+        if (hold) return { ...terminal, holdOnRestart: true };
+        const { holdOnRestart: _released, ...rest } = terminal;
+        return rest;
+      }),
+    };
+  });
+  return found;
+}
+
+/**
  * Take a panel a viewless action closed out of the saved layout, the way a
  * view's own save drops a trashed panel: the next frontend to attach should
  * not hydrate a panel the agent already closed. The process keeps its trash

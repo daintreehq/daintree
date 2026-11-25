@@ -552,6 +552,59 @@ describe("agent.launch with no frontend", () => {
     expect(spawned(invoke)).not.toHaveProperty("launchAgentId");
     expect(spawned(invoke).title).toBe("Terminal");
   });
+
+  // The view that later opens the project restores from this record, so the
+  // hold has to be in it from the first write (#18178).
+  it("records a hold asked for at launch, as a view's panel would carry it", async () => {
+    const { deps, store } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", {
+        agentId: "claude",
+        worktreeId: "/repo-wt/feature",
+        holdOnRestart: true,
+      }),
+      deps
+    );
+
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
+    expect(snapshot).toMatchObject({ launchAgentId: "claude", holdOnRestart: true });
+    expect(snapshot).not.toHaveProperty("launchedByPluginId");
+  });
+
+  it.each([false, undefined])("records no hold for holdOnRestart %s", async (hold) => {
+    const { deps, store } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", {
+        agentId: "claude",
+        worktreeId: "/repo-wt/feature",
+        holdOnRestart: hold,
+      }),
+      deps
+    );
+
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
+    expect(snapshot).toBeDefined();
+    expect(snapshot).not.toHaveProperty("holdOnRestart");
+  });
+
+  it("refuses a hold for a plain shell before spawning anything", async () => {
+    const { deps, invoke } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "terminal", holdOnRestart: true }),
+      deps
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    expect(JSON.stringify(result)).toContain("holdOnRestart");
+    expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(
+      false
+    );
+  });
 });
 
 describe("a scheduled run's agent launched with no frontend (#15977)", () => {

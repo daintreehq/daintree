@@ -56,6 +56,7 @@ import {
   runTerminalInterrupt,
   runTerminalList,
   runTerminalSendKeys,
+  runTerminalSetHoldOnRestartOwned,
 } from "./viewlessTerminals.js";
 import {
   runAgentLaunch,
@@ -855,6 +856,8 @@ async function runAction(
       return runTerminalInterrupt(request, project, deps);
     case "terminal.sendKeys":
       return runTerminalSendKeys(request, project, deps);
+    case "terminal.setHoldOnRestartOwned":
+      return runTerminalSetHoldOnRestartOwned(request, project, deps);
     case "agent.launch":
       return runAgentLaunch(request, project, deps);
     case "agent.listAvailable":

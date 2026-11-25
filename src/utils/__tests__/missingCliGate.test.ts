@@ -88,6 +88,12 @@ describe("buildMissingCliRelaunchOptions", () => {
     ).toMatchObject({ spawnedBy: "schedule", scheduledRun: run });
   });
 
+  // #18178: the launch asked for a hold, so the agent "Run anyway" starts is held.
+  it("carries a hold the launch asked for, and none it didn't", () => {
+    expect(buildMissingCliRelaunchOptions(gate({ holdOnRestart: true }))?.holdOnRestart).toBe(true);
+    expect(buildMissingCliRelaunchOptions(gate())).not.toHaveProperty("holdOnRestart");
+  });
+
   it("normalises any non-dock location to the grid", () => {
     expect(buildMissingCliRelaunchOptions(gate({ location: "trash" }))?.location).toBe("grid");
     expect(buildMissingCliRelaunchOptions(gate({ location: "dock" }))?.location).toBe("dock");
@@ -222,6 +228,11 @@ describe("buildMissingCliContinueArgs", () => {
     expect(args?.agentLaunchFlags).toEqual(["--append-system-prompt", "Be terse"]);
   });
 
+  it("continues a held launch held, and an unheld one without a hold", () => {
+    expect(buildMissingCliContinueArgs(gate({ holdOnRestart: true }))?.holdOnRestart).toBe(true);
+    expect(buildMissingCliContinueArgs(gate())).not.toHaveProperty("holdOnRestart");
+  });
+
   it("keeps a deliberately preset-free launch preset-free", () => {
     // undefined would let the agent-level default reappear on recovery.
     expect(buildMissingCliContinueArgs(gate({ agentPresetId: undefined }))?.presetId).toBeNull();
@@ -260,6 +271,8 @@ describe("findEquivalentMissingCliGate", () => {
     ["command", { command: "claude --resume" }],
     ["launch flags", { agentLaunchFlags: ["--verbose"] }],
     ["agent", { launchAgentId: "gemini" }],
+    // #18178: a held launch's gate isn't the gate of an unheld one.
+    ["restart hold", { holdOnRestart: true as const }],
   ])("keeps a gate whose %s differs separate", (_label, difference) => {
     const existing = gate({ id: "gate-existing" });
     const candidate = gate({ id: "gate-new", ...difference });

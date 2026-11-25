@@ -146,6 +146,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "agent.addAccount",
   "terminal.revealOwned",
   "terminal.placeOwned",
+  "terminal.setHoldOnRestartOwned",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.notifyWhenIdle",

@@ -527,6 +527,11 @@ export type RestoreRecoveryReason =
   | "resume-deferred"
   /** The plugin that launched the pane asked for it to be held (#14017). */
   | "held-by-plugin"
+  /**
+   * Held by a hold no plugin set (#18178): its launch asked for one, or the
+   * Assistant session that launched it did later.
+   */
+  | "held-on-restart"
   /** The app was killed with this pane's agent running (#14382); see {@link PanelRestoreRecovery.hostEnd}. */
   | "host-ended-uncleanly";
 
@@ -959,8 +964,9 @@ export interface PtyPanelData extends BasePanelData {
    */
   launchedByPluginId?: string;
   /**
-   * The launching plugin asked restore to hold this pane rather than start it,
-   * whatever "Resume agents after restart" says (#14017). Cleared when the user
+   * Restore holds this pane rather than start it, whatever "Resume agents
+   * after restart" says: the launching plugin asked (#14017), or the launch or
+   * the Assistant session that launched it did (#18178). Cleared when the user
    * starts the pane from a hold. Persisted.
    */
   holdOnRestart?: true;

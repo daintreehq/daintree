@@ -25,10 +25,13 @@ import {
   RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
+  SetHoldOnRestartOwnedArgsSchema,
   StartHeldArgsSchema,
   TerminalKillBatchArgsSchema,
 } from "./terminalLifecycleActionArgs";
 import type { TerminalLifecycleActionRunId } from "./terminalLifecycleActions.impl";
+
+const HoldOnRestartResultSchema = z.object({ terminalId: z.string(), holdOnRestart: z.boolean() });
 
 const RestartOnAccountResultSchema = z.object({
   terminalId: z.string().describe("The panel, respawned in place."),
@@ -842,9 +845,32 @@ export function registerTerminalLifecycleActions(
     palette: { mode: "hidden" },
     mcpVisibility: "hidden",
     argsSchema: SetHoldOnRestartArgsSchema,
-    resultSchema: z.object({ terminalId: z.string(), holdOnRestart: z.boolean() }),
+    resultSchema: HoldOnRestartResultSchema,
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.setHoldOnRestart", args, ctx),
+  }));
+
+  // The Assistant's half of the same hold (#18178). Main checks the session
+  // launched the pane, a hand-over not being enough, then dispatches this same
+  // id with only the id and `hold`, like `terminal.placeOwned`: `run()` is the
+  // hold itself, and plugins are denied it since nothing in it asks who
+  // launched the pane.
+  actions.set("terminal.setHoldOnRestartOwned", () => ({
+    id: "terminal.setHoldOnRestartOwned",
+    title: "Keep owned agent from resuming",
+    description:
+      "Keep an agent panel this session launched (not a handed one) from resuming on restart, or release it. Held, it waits to be started whatever the resume setting; starting it clears the hold.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["resume", "hold", "finished", "owned"],
+    palette: { mode: "hidden" },
+    denyPluginDispatch: true,
+    argsSchema: SetHoldOnRestartOwnedArgsSchema,
+    resultSchema: HoldOnRestartResultSchema,
+    run: (args: unknown, ctx: ActionContext) =>
+      runTerminalLifecycleAction("terminal.setHoldOnRestartOwned", args, ctx),
   }));
 
   actions.set("terminal.toggleInputLock", () => ({

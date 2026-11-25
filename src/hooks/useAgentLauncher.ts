@@ -243,6 +243,12 @@ export interface LaunchAgentOptions {
    */
   launchedByPluginId?: string;
   /**
+   * Restore holds this agent's pane rather than resume it (#18178), as a later
+   * hold would. An argument, unlike the stamp above: it covers only the pane
+   * this launch creates. Ignored for a plain shell or a non-terminal panel.
+   */
+  holdOnRestart?: boolean;
+  /**
    * The preset a person approved this plugin launch on (#16324). Only ever
    * `ActionContext.hostApprovedPluginPresetLaunch`. The launch refuses unless
    * the preset it resolves has exactly the approved content.
@@ -732,6 +738,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               removeOnExit: launchOptions?.removeOnExit,
               ...provenance,
               launchedByPluginId: launchOptions?.launchedByPluginId,
+              ...(launchOptions?.holdOnRestart === true && { holdOnRestart: true as const }),
               focusPolicy,
               requestedId: launchOptions?.requestedId,
             }
@@ -801,6 +808,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
               ...provenance,
+              // Kept for either exit's relaunch, so the agent that finally
+              // starts is held as the launch asked (#18178).
+              ...(launchOptions?.holdOnRestart === true && { holdOnRestart: true as const }),
               focusPolicy,
             };
             // Resolved inside the updater, read after it: the gate may reuse a

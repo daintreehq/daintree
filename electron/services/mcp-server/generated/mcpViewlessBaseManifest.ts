@@ -185,6 +185,10 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           maxLength: 200,
         },
+        holdOnRestart: {
+          description: "Don't resume after a restart; wait to be started. For one-shot work.",
+          type: "boolean",
+        },
         source: {
           oneOf: [
             {
@@ -3076,6 +3080,36 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     name: "terminal.sendKeys",
     requiresArgs: true,
     title: "Press keys in terminal",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      "Keep an agent panel this session launched (not a handed one) from resuming on restart, or release it. Held, it waits to be started whatever the resume setting; starting it clears the hold.",
+    enabled: true,
+    id: "terminal.setHoldOnRestartOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description: "Panel `id` this session launched.",
+        },
+        hold: {
+          type: "boolean",
+          description: "False hands it back to the resume setting.",
+        },
+      },
+      required: ["terminalId", "hold"],
+    },
+    keywords: ["resume", "hold", "finished", "owned"],
+    kind: "command",
+    name: "terminal.setHoldOnRestartOwned",
+    requiresArgs: true,
+    title: "Keep owned agent from resuming",
   },
   {
     band: "reversible",

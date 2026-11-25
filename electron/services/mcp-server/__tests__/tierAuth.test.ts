@@ -944,6 +944,21 @@ describe("external tool surface budget (#11585)", () => {
     expect(shouldExposeTool(makeEntry({ id: "fleet.interrupt" }), "external")).toBe(false);
   });
 
+  // An Assistant's lever on its own workers (#18178), never the plugin form,
+  // which only a plugin dispatch may run. The api-key surface launches with
+  // `holdOnRestart` instead.
+  it("carries the owned restart hold in-app only, and the plugin hold nowhere", () => {
+    for (const id of ["terminal.setHoldOnRestartOwned", "terminal.setHoldOnRestart"]) {
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    }
+    expect(isTierPermitted("core", "terminal.setHoldOnRestartOwned")).toBe(true);
+    expect(isTierPermitted("full", "terminal.setHoldOnRestartOwned")).toBe(true);
+    expect(isTierPermitted("external", "terminal.setHoldOnRestartOwned")).toBe(false);
+    for (const tier of ["core", "full", "external"] as const) {
+      expect(isTierPermitted(tier, "terminal.setHoldOnRestart")).toBe(false);
+    }
+  });
+
   // Terminal input for an external client is the owned form only (#12407): the
   // unscoped pair takes any panel id a listing returns, the user's own shells
   // included, and neither is on the surface.

@@ -53,7 +53,8 @@ import type {
   ViewlessPtyReader,
   ViewlessTerminalRecord,
 } from "./ViewlessActionExecutor.js";
-import { forgetViewlessTerminal } from "./projectStateAuthoring.js";
+import { forgetViewlessTerminal, setViewlessTerminalHold } from "./projectStateAuthoring.js";
+import { SetHoldOnRestartOwnedArgsSchema } from "./viewlessArgsSchemas.js";
 import {
   viewlessFailure as failure,
   viewlessSuccess as success,
@@ -556,6 +557,34 @@ export async function runTerminalClose(
     return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to close terminal"));
   }
   return success({ closedIds: [terminalId] });
+}
+
+/**
+ * Hold or release an agent panel on restart with no view (#18178). Main's
+ * ownership gate already checked the session launched it; what is left is the
+ * saved layout, which is all a restore reads, so the hold lands there.
+ */
+export async function runTerminalSetHoldOnRestartOwned(
+  request: ViewlessActionRequest,
+  project: Project,
+  deps: ViewlessDeps
+): Promise<ActionDispatchResult> {
+  const parsed = SetHoldOnRestartOwnedArgsSchema.safeParse(request.args);
+  if (!parsed.success) return validationFailure(request.actionId, parsed.error);
+  const { terminalId, hold } = parsed.data;
+  let found: boolean;
+  try {
+    found = await setViewlessTerminalHold(deps.stateWriter, project.id, terminalId, hold);
+  } catch (err) {
+    return failure("EXECUTION_ERROR", formatErrorMessage(err, "Could not save the hold"));
+  }
+  if (!found) {
+    return failure(
+      "EXECUTION_ERROR",
+      `'${terminalId}' is not an agent terminal in this project, so there is nothing to hold.`
+    );
+  }
+  return success({ terminalId, holdOnRestart: hold });
 }
 
 export async function runTerminalInterrupt(

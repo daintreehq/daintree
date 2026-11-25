@@ -2872,6 +2872,78 @@ describe("restored panes and the plugin hold (#14017)", () => {
       expect(def.mcpVisibility).toBe("hidden");
     });
   });
+
+  // Main's ownership gate is what decides who may hold the pane (#18178); the
+  // renderer only checks the pane is an agent's, whoever launched it.
+  describe("terminal.setHoldOnRestartOwned", () => {
+    beforeEach(() => {
+      setHoldOnRestart.mockReset();
+      setPanels({
+        worker: { id: "worker", kind: "terminal", location: "grid", launchAgentId: "claude" },
+        shell: { id: "shell", kind: "terminal", location: "grid" },
+        browser: { id: "browser", kind: "browser", location: "grid", launchAgentId: "claude" },
+      });
+    });
+
+    it("holds and releases an agent pane, with no plugin behind the dispatch", async () => {
+      const def = definition("terminal.setHoldOnRestartOwned");
+      const ctx = { dispatchSource: "agent" };
+
+      await expect(def.run({ terminalId: "worker", hold: true }, ctx as never)).resolves.toEqual({
+        terminalId: "worker",
+        holdOnRestart: true,
+      });
+      await expect(def.run({ terminalId: "worker", hold: false }, ctx as never)).resolves.toEqual({
+        terminalId: "worker",
+        holdOnRestart: false,
+      });
+
+      expect(setHoldOnRestart.mock.calls).toEqual([
+        ["worker", true],
+        ["worker", false],
+      ]);
+    });
+
+    it.each([
+      ["shell", true],
+      ["shell", false],
+      ["browser", true],
+      ["browser", false],
+      ["missing", true],
+      ["missing", false],
+    ])("refuses the %s pane (hold=%s), which restore never holds", async (terminalId, hold) => {
+      await expect(
+        definition("terminal.setHoldOnRestartOwned").run({ terminalId, hold }, {
+          dispatchSource: "agent",
+        } as never)
+      ).rejects.toThrow(/not an agent terminal/);
+      expect(setHoldOnRestart).not.toHaveBeenCalled();
+    });
+
+    it.each([{}, { hold: "true" }])("refuses a call without a boolean hold (%o)", async (extra) => {
+      await expect(
+        definition("terminal.setHoldOnRestartOwned").run({ terminalId: "worker", ...extra }, {
+          dispatchSource: "agent",
+        } as never)
+      ).rejects.toThrow();
+      expect(setHoldOnRestart).not.toHaveBeenCalled();
+    });
+
+    it("is denied to a plugin, whose own panes go through terminal.setHoldOnRestart", async () => {
+      const { ActionService } = await import("../../../ActionService");
+      const service = new ActionService();
+      service.register(definition("terminal.setHoldOnRestartOwned"));
+
+      const result = await service.dispatch(
+        "terminal.setHoldOnRestartOwned" as ActionId,
+        { terminalId: "worker", hold: true },
+        { source: "plugin", callerPluginId: "acme.orchestrator" }
+      );
+
+      expect(result.ok).toBe(false);
+      expect(setHoldOnRestart).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("terminal.sessionFile.get (#16097)", () => {

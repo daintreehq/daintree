@@ -33,6 +33,7 @@ import {
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
   RecipeListArgsSchema,
+  SetHoldOnRestartOwnedArgsSchema,
   VIEWLESS_FORGE_ARGS_SCHEMAS,
   WorktreeCreateWithRecipeArgsSchema,
   WorktreeWaitForPullRequestArgsSchema,
@@ -113,6 +114,7 @@ describe("viewless argument schemas", () => {
     // Parsed in main before its create runs (#15738), so a key the renderer's
     // advertised schema gained would otherwise be refused there.
     "agent.launchInNewWorktree": AgentLaunchInNewWorktreeArgsSchema,
+    "terminal.setHoldOnRestartOwned": SetHoldOnRestartOwnedArgsSchema,
   };
 
   it.each(Object.entries(schemas))(
