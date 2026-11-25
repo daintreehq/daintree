@@ -2188,7 +2188,11 @@ describe("AgentStateService and a menu over a running turn (#18167)", () => {
 
   it("never leaves the mark on an agent that stopped working", () => {
     const service = new AgentStateService();
-    for (const event of [{ type: "prompt" }, { type: "exit", code: 0 }, { type: "kill" }] as const) {
+    for (const event of [
+      { type: "prompt" },
+      { type: "exit", code: 0 },
+      { type: "kill" },
+    ] as const) {
       const terminal = createTerminal({ agentState: "working" });
       service.handleActivityState(terminal, "busy", OPEN);
       service.updateAgentState(terminal, event);

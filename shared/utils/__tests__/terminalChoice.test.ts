@@ -595,7 +595,11 @@ describe("endsOnNotedChoice (#18167)", () => {
 
   it("reads it wherever the highlight is", () => {
     const moved = PICKER.map((row) =>
-      row.startsWith("›") ? row.replace("›", " ") : row.startsWith("  2.") ? `›${row.slice(1)}` : row
+      row.startsWith("›")
+        ? row.replace("›", " ")
+        : row.startsWith("  2.")
+          ? `›${row.slice(1)}`
+          : row
     );
     expect(endsOnNotedChoice(moved, NOTE)).toBe(true);
   });

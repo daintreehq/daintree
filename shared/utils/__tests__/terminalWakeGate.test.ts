@@ -301,7 +301,10 @@ describe("a menu over a running turn (#18167)", () => {
 
   it("never asks for an answer the menu doesn't need", () => {
     const menu = choiceDialogRefusalMessage("codex-1", UNDER_MENU);
-    const dialog = choiceDialogRefusalMessage("codex-1", { ...AT_PROMPT, waitingReason: "approval" });
+    const dialog = choiceDialogRefusalMessage("codex-1", {
+      ...AT_PROMPT,
+      waitingReason: "approval",
+    });
     expect(menu).not.toBe(dialog);
     expect(menu).not.toMatch(/answer it/i);
     expect(dialog).toBe(choiceDialogRefusalMessage("codex-1"));

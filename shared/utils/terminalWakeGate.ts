@@ -151,7 +151,10 @@ export function composerSendHoldCause(snapshot: WakeGateSnapshot): ComposerSendH
  * What a refused send says, wherever it was refused. A menu over a running
  * turn needs no answer, so the message never asks for one.
  */
-export function choiceDialogRefusalMessage(terminalId: string, snapshot?: WakeGateSnapshot): string {
+export function choiceDialogRefusalMessage(
+  terminalId: string,
+  snapshot?: WakeGateSnapshot
+): string {
   if (snapshot !== undefined && isUnderWorkingDialog(snapshot)) {
     return `Terminal '${terminalId}' is working with a menu open over its turn, which would take the text. Nothing was sent. The menu needs no answer and closes by itself; send again once it has.`;
   }

@@ -187,12 +187,7 @@ describe("ActivityMonitor and a menu over a running turn (#18167)", () => {
     const { monitor, onStateChange, draw } = startPane("misread");
 
     // A real choice first, so the pane settles as an approval wait.
-    draw([
-      "  Stop this attempt and retry?",
-      "",
-      "  › 1. Keep waiting",
-      "    2. Stop and retry",
-    ]);
+    draw(["  Stop this attempt and retry?", "", "  › 1. Keep waiting", "    2. Stop and retry"]);
     vi.advanceTimersByTime(10_000);
     expect(monitor.getState()).toBe("idle");
     expect(settles(onStateChange).at(-1)?.[3]?.waitingReason).toBe("approval");
