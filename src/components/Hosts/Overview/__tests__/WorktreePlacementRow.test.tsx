@@ -50,6 +50,7 @@ import {
 import {
   BOAT_PROVIDER,
   provider as providerWith,
+  DELETE_ONLY_PROVIDER,
 } from "../../cloud/__tests__/cloudProviderFixtures";
 
 const ROOT = "/Users/greg/Projects/daintree";
@@ -492,6 +493,26 @@ describe("WorktreePlacementRow new machine (#17359)", () => {
       machineType: "anywhere",
       provisioning: { location: "sfo", image: null, network: null },
     });
+  });
+
+  it("says a machine whose provider has no stop runs, and bills, until it's deleted (#18229)", async () => {
+    hostList.hosts = [];
+    cloud.snapshot = {
+      providers: [DELETE_ONLY_PROVIDER],
+      accounts: [{ ...ACCOUNT, providerId: DELETE_ONLY_PROVIDER.id }],
+      hosts: [],
+    };
+    getCatalog.mockResolvedValue({
+      ...CATALOG,
+      provisioning: { location: null, image: null, network: null },
+    });
+    renderRow();
+    await choose(screen.getByTestId("worktree-host-select"), /New machine Personal/);
+    const review = (await screen.findByTestId("worktree-machine-review")).textContent ?? "";
+    expect(review).toContain(
+      "Leasy has no stop: a machine runs, and bills, until it's deleted. Deleting it loses everything on it, its disk included."
+    );
+    expect(review).not.toMatch(/until you stop it|kept for/);
   });
 
   it("names a stopped machine's billing, and leaves Cmd+Enter to the dialog's Create", async () => {

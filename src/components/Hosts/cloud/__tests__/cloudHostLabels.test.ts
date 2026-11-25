@@ -9,12 +9,16 @@ import {
   cloudCostFacts,
   cloudStatusLabel,
   clockTime,
+  DELETE_ONLY_LOSS,
+  DELETE_ONLY_RUNS,
   dayTime,
   idleClockSentence,
   idleEndSentence,
   IDLE_STOP_UNKNOWN,
   IDLE_TIME_COUNTED,
+  isDeleteOnly,
   isObservationStale,
+  keepMachineDescription,
   formatHourly,
   lifetimeSentence,
   providerStopSentence,
@@ -25,7 +29,7 @@ import {
   idleSleepTimerSentence,
   offerPriceLabel,
 } from "../cloudHostLabels";
-import { BOAT_PROVIDER, provider } from "./cloudProviderFixtures";
+import { BOAT_PROVIDER, DELETE_ONLY_PROVIDER, provider } from "./cloudProviderFixtures";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   return {
@@ -720,6 +724,109 @@ describe("startBillingSentence", () => {
     );
     expect(startBillingSentence(status({ machine: "stopped", hourlyDollars: null }), null)).toBe(
       "Starting it bills Personal for the time it runs while it runs."
+    );
+  });
+});
+
+describe("a provider that has no stop (#18229)", () => {
+  const leasy = (overrides: Partial<CloudHostStatus> = {}) =>
+    status({
+      providerId: "leasy",
+      lifetime: { kind: "none" },
+      lifetimeSeconds: null,
+      ...overrides,
+    });
+
+  it("offers neither Start nor Stop for its machine, whatever the machine reports", () => {
+    for (const machine of ["running", "starting", "stopped", "error"] as const) {
+      expect(canStartMachine(leasy({ machine }), DELETE_ONLY_PROVIDER)).toBe(false);
+      expect(canStopMachine(leasy({ machine }), DELETE_ONLY_PROVIDER)).toBe(false);
+    }
+    expect(
+      canStopMachine(
+        leasy({
+          machine: "starting",
+          operation: { id: "o", kind: "starting", stage: "Starting", startedAt: 1 },
+        }),
+        DELETE_ONLY_PROVIDER
+      )
+    ).toBe(false);
+    // The same readings on a provider that stops, and on one not registered, still offer both.
+    expect(canStartMachine(leasy({ machine: "stopped" }), BOAT_PROVIDER)).toBe(true);
+    expect(canStartMachine(leasy({ machine: "error" }), BOAT_PROVIDER)).toBe(true);
+    expect(canStopMachine(leasy({ machine: "running" }), BOAT_PROVIDER)).toBe(true);
+    expect(canStartMachine(leasy({ machine: "stopped" }), null)).toBe(true);
+    expect(canStopMachine(leasy({ machine: "running" }), null)).toBe(true);
+  });
+
+  it("reads delete-only from the declaration alone", () => {
+    expect(isDeleteOnly(DELETE_ONLY_PROVIDER)).toBe(true);
+    expect(isDeleteOnly({ stopMode: "delete-only" })).toBe(true);
+    expect(isDeleteOnly(BOAT_PROVIDER)).toBe(false);
+    expect(isDeleteOnly(null)).toBe(false);
+    expect(isDeleteOnly(undefined)).toBe(false);
+  });
+
+  it("says it runs until deleted, never a start price or a stopped bill", () => {
+    expect(cloudCostFacts(leasy(), DELETE_ONLY_PROVIDER)).toEqual([
+      "$0.036/h",
+      "runs until deleted",
+    ]);
+    expect(cloudCostFacts(leasy({ machine: "stopped" }), DELETE_ONLY_PROVIDER)).toEqual([]);
+    expect(stoppedBillingSentence(DELETE_ONLY_PROVIDER)).toBeNull();
+    // Whatever its persistence says of a stopped machine, one that never stops has none.
+    const billed = {
+      ...DELETE_ONLY_PROVIDER,
+      capabilities: {
+        ...DELETE_ONLY_PROVIDER.capabilities,
+        persistence: {
+          ...DELETE_ONLY_PROVIDER.capabilities.persistence,
+          stoppedComputeBilled: true,
+          stoppedStorageBilled: true,
+        },
+      },
+    };
+    expect(stoppedBillingSentence(billed)).toBeNull();
+  });
+
+  it("says it runs, and bills, until it's deleted where a lifetime or a stop would be", () => {
+    expect(lifetimeSentence({ kind: "none" }, null, DELETE_ONLY_PROVIDER)).toBe(DELETE_ONLY_RUNS);
+    expect(lifetimeSentence(null, null, DELETE_ONLY_PROVIDER)).toBe(DELETE_ONLY_RUNS);
+    expect(providerStopSentence({ kind: "none" }, "Leasy", "delete-only")).toBe(
+      "Leasy has no stop: a machine runs, and bills, until it's deleted."
+    );
+    expect(providerStopSentence({ kind: "none" }, "Akash", "delete-only")).toBe(
+      "Akash has no stop: a machine runs, and bills, until it's deleted."
+    );
+    expect(DELETE_ONLY_RUNS).toBe("It runs, and bills, until it's deleted.");
+    expect(DELETE_ONLY_LOSS).toBe("Deleting it loses everything on it, its disk included.");
+    // Every other provider reads as it did.
+    expect(lifetimeSentence({ kind: "none" }, null, BOAT_PROVIDER)).toBe(
+      "It runs until you stop it."
+    );
+    expect(providerStopSentence({ kind: "none" }, "Acme")).toBe(
+      "Acme has no lifetime for its machines: it runs until you stop it."
+    );
+  });
+
+  it("says keeping it bills until it's deleted, never until it stops", () => {
+    expect(keepMachineDescription(leasy(), "Leasy", false, false, 0, true, true)).toBe(
+      "It keeps running, and billing Personal, until it's deleted. You can add it back from Add host."
+    );
+    expect(
+      keepMachineDescription(leasy({ machine: "unknown" }), "Leasy", false, false, 0, false, true)
+    ).toBe(
+      "Daintree can't tell whether it's running; check on Leasy, where it keeps billing until it's deleted."
+    );
+    expect(
+      keepMachineDescription(leasy({ machine: "starting" }), "Leasy", false, false, 0, false, true)
+    ).toBe("It keeps running, and billing Personal, until it's deleted.");
+    // A machine its provider reported deleted isn't said to bill on.
+    expect(
+      keepMachineDescription(leasy({ machine: "deleted" }), "Leasy", false, false, 0, true, true)
+    ).toBe("Leasy last reported it deleted.");
+    expect(keepMachineDescription(leasy(), "Leasy", false, false, 0, false)).toBe(
+      "It's running and keeps billing Personal until it stops on Leasy."
     );
   });
 });

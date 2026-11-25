@@ -23,6 +23,7 @@ import {
   canStartMachine,
   clockTime,
   cloudProviderFor,
+  isDeleteOnly,
   isObservationStale,
   stoppedBillingSentence,
 } from "@/components/Hosts/cloud/cloudHostLabels";
@@ -125,13 +126,14 @@ export function HostConnectionBanner() {
   // A cloud host whose machine isn't running: the way back is starting it, on
   // a press that says what it costs, never on its own.
   const cloud = cloudStatusFor(cloudSnapshot, hostId);
+  const cloudProvider = cloudProviderFor(cloudSnapshot.providers, cloud);
   const machineStarting = cloud?.operation?.kind === "starting" || startingMachine;
   const machineUnknown = cloud?.machine === "unknown" && cloud.operation === null;
   if (
     cloud &&
     hostId !== null &&
     variant !== null &&
-    (machineStarting || canStartMachine(cloud) || machineUnknown)
+    (machineStarting || canStartMachine(cloud, cloudProvider) || machineUnknown)
   ) {
     const failed = (err: unknown, fallback: string, read: boolean) =>
       setMachineError({
@@ -144,6 +146,7 @@ export function HostConnectionBanner() {
         read,
       });
     const startAndReconnect = () => {
+      if (isDeleteOnly(cloudProvider)) return;
       setStartingMachine(true);
       setMachineError(null);
       cloudHostsClient.startHost(hostId).then(
@@ -188,9 +191,7 @@ export function HostConnectionBanner() {
     const unknownReason = cloud.lastError?.message.replace(/\.$/, "") ?? null;
     // A provider that bills a stopped machine says so where its stop is shown.
     const stoppedBilling =
-      cloud.machine === "stopped"
-        ? stoppedBillingSentence(cloudProviderFor(cloudSnapshot.providers, cloud))
-        : null;
+      cloud.machine === "stopped" ? stoppedBillingSentence(cloudProvider) : null;
     const checkAction = {
       id: "check-machine",
       label: "Check status",

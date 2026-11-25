@@ -17,8 +17,10 @@ import {
   cloudCostFacts,
   cloudProviderFor,
   cloudProviderName,
+  DELETE_ONLY_LOSS,
   cloudStateWord,
   diskSentence,
+  isDeleteOnly,
   durationLabel,
   formatHourly,
   isObservationStale,
@@ -131,7 +133,7 @@ export function CloudMachineSection({
   const consoleUrl = provider?.dashboardUrl ?? status.pluginProvider?.dashboardUrl ?? null;
   // Beside Stop, and beside a stopped machine: a provider that bills it stopped says so.
   const stoppedBilling =
-    status.machine === "stopped" || canStopMachine(status)
+    status.machine === "stopped" || canStopMachine(status, provider)
       ? stoppedBillingSentence(provider)
       : null;
   const actionError = machines.errorFor(hostId) ?? error;
@@ -243,7 +245,7 @@ export function CloudMachineSection({
             {lifetime.kind === "none" && provider?.capabilities.lifetime.kind === "idle-sleep"
               ? // The provider sleeps idle machines, but this one has it turned off.
                 "Sleeping when idle is off for this machine: it runs until you stop it."
-              : providerStopSentence(lifetime, providerName)}
+              : providerStopSentence(lifetime, providerName, provider?.stopMode)}
           </span>
         }
       />
@@ -353,7 +355,23 @@ export function CloudMachineSection({
     </Button>
   );
   let cleanupNotice: ReactNode = null;
-  if (cleanup) {
+  if (cleanup?.choice === "stop" && isDeleteOnly(provider)) {
+    // A stop recorded before its provider said it has none: nothing here can carry it out.
+    cleanupNotice = (
+      <Callout
+        severity="warning"
+        className="mb-3"
+        data-testid="cloud-machine-cleanup"
+        title={`Can't stop it with ${worktreeLabel}`}
+      >
+        <p>
+          {cleanupError ??
+            `${providerName} has no stop: the machine runs, and bills, until it's deleted. Keep it, or remove the host to delete it.`}
+        </p>
+        <div className="mt-2 flex flex-wrap gap-1.5">{keepButton}</div>
+      </Callout>
+    );
+  } else if (cleanup) {
     const verb = cleanup.choice === "delete" ? "delete" : "stop";
     const done = cleanup.choice === "delete" ? "deleted" : "stopped";
     const retryButton = (label: string) => (
@@ -518,7 +536,7 @@ export function CloudMachineSection({
                     Retry
                   </Button>
                 )}
-              {canStartMachine(status) && (
+              {canStartMachine(status, provider) && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -539,7 +557,7 @@ export function CloudMachineSection({
                   Check status
                 </Button>
               )}
-              {canStopMachine(status) && (
+              {canStopMachine(status, provider) && (
                 // Ends what runs there: destructive, and last.
                 <Button
                   variant="ghost-danger"
@@ -651,9 +669,12 @@ export function CloudMachineSection({
         <SettingsRow
           label="Disk"
           description={
-            status.dataExpired
-              ? `${providerName} deleted its saved disk after its retention period, so it can't start again`
-              : `${status.lastSnapshotAt ? `Last saved ${clockTime(status.lastSnapshotAt)}` : "No completed save reported yet"}.${provider ? ` ${diskSentence(provider.capabilities.persistence)}` : ""}`
+            // Nothing is saved for a machine that never stops: what's on it lasts until it's deleted.
+            isDeleteOnly(provider)
+              ? `Kept only while the machine exists. ${DELETE_ONLY_LOSS}`
+              : status.dataExpired
+                ? `${providerName} deleted its saved disk after its retention period, so it can't start again`
+                : `${status.lastSnapshotAt ? `Last saved ${clockTime(status.lastSnapshotAt)}` : "No completed save reported yet"}.${provider ? ` ${diskSentence(provider.capabilities.persistence)}` : ""}`
           }
         />
         <SettingsRow

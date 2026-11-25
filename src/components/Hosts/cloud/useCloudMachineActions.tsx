@@ -11,6 +11,7 @@ import { cloudStatusFor, useCloudHosts } from "./cloudHostsState";
 import {
   clockTime,
   cloudProviderFor,
+  isDeleteOnly,
   isObservationStale,
   lifetimeSentence,
   startBillingSentence,
@@ -89,7 +90,9 @@ interface StartRequest {
  * status as it is now. Stop always confirms, since whatever runs on the machine
  * ends with it. Once confirmed, each dialog follows the work and can be closed
  * at any time without stopping it; a refusal shows in the dialog when it is
- * still open, and on the host's row and menu entry either way.
+ * still open, and on the host's row and menu entry either way. A machine whose
+ * provider has no stop is offered neither, even by a caller that asked before
+ * its provider's declaration arrived.
  */
 export function useCloudMachineActions(): {
   start(hostId: HostId): void;
@@ -152,8 +155,13 @@ export function useCloudMachineActions(): {
     );
   };
 
-  const start = (hostId: HostId) =>
+  const deleteOnly = (hostId: HostId) =>
+    isDeleteOnly(cloudProviderFor(snapshot.providers, cloudStatusFor(snapshot, hostId)));
+
+  const start = (hostId: HostId) => {
+    if (deleteOnly(hostId)) return;
     run(hostId, () => cloudHostsClient.startHost(hostId), "Couldn't start the machine");
+  };
 
   const check = (hostId: HostId) =>
     run(
@@ -172,6 +180,10 @@ export function useCloudMachineActions(): {
   const startProvider = cloudProviderFor(snapshot.providers, startStatus);
   const stopBusy = stopAsk !== null && pending.has(stopAsk.hostId);
   const startBusy = startAsk !== null && pending.has(startAsk.hostId);
+  // An ask the provider's declaration has since taken away is dropped, unless it was already
+  // sent: hiding it alone would bring it back if that host's status later went missing.
+  if (stopAsk !== null && !stopBusy && isDeleteOnly(stopProvider)) setStopAsk(null);
+  if (startAsk !== null && !startBusy && isDeleteOnly(startProvider)) setStartAsk(null);
 
   const dialogs = (
     <>
@@ -198,7 +210,7 @@ export function useCloudMachineActions(): {
         focusResetKey={stopBusy ? "progress" : "ask"}
         onConfirm={() => {
           const ask = stopAsk;
-          if (!ask) return;
+          if (!ask || deleteOnly(ask.hostId)) return;
           run(
             ask.hostId,
             () => cloudHostsClient.stopHost(ask.hostId),
@@ -244,7 +256,7 @@ export function useCloudMachineActions(): {
         initialFocus={startBusy ? "cancel" : undefined}
         onConfirm={() => {
           const ask = startAsk;
-          if (!ask) return;
+          if (!ask || deleteOnly(ask.hostId)) return;
           run(
             ask.hostId,
             () => cloudHostsClient.startHost(ask.hostId),
@@ -270,10 +282,12 @@ export function useCloudMachineActions(): {
     start,
     check,
     confirmStart: (request) => {
+      if (deleteOnly(request.hostId)) return;
       setError(request.hostId, null);
       setStartAsk({ ...request, askedAt: Date.now() });
     },
     requestStop: (hostId, name) => {
+      if (deleteOnly(hostId)) return;
       setError(hostId, null);
       setStopAsk({ hostId, name });
     },

@@ -19,6 +19,7 @@ vi.mock("@/clients/cloudHostsClient", () => ({ cloudHostsClient: cloudClient }))
 vi.mock("@/clients/systemClient", () => ({ systemClient: { openExternal: vi.fn() } }));
 
 import { ConnectCloudAccountDialog } from "../ConnectCloudAccountDialog";
+import { DELETE_ONLY_PROVIDER } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 
 function field(
   id: string,
@@ -501,5 +502,34 @@ describe("ConnectCloudAccountDialog", () => {
       credentials: { apiKey: "boat_live_0123456789abcd" },
       scopeId: "personal",
     });
+  });
+});
+
+describe("ConnectCloudAccountDialog for a provider that has no stop (#18229)", () => {
+  it("says the key creates and deletes machines, never that it starts or stops them", () => {
+    render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={DELETE_ONLY_PROVIDER} />);
+    const said = screen.getByText(/^Daintree uses/).textContent ?? "";
+    expect(said).toContain(
+      "Daintree uses an API key to create and delete machines in your Leasy account"
+    );
+    expect(said).not.toMatch(/start|stop/);
+  });
+
+  it("keeps every other provider's words", () => {
+    render(<ConnectCloudAccountDialog isOpen onClose={() => {}} provider={EC2} />);
+    expect(screen.getByText(/^Daintree uses/).textContent).toContain(
+      "to create, start, stop and delete machines in your"
+    );
+    cleanup();
+    render(
+      <ConnectCloudAccountDialog
+        isOpen
+        onClose={() => {}}
+        provider={{ ...EC2, capabilities: { ...EC2.capabilities, deletion: false } }}
+      />
+    );
+    expect(screen.getByText(/^Daintree uses/).textContent).toContain(
+      "to create, start and stop machines in your"
+    );
   });
 });

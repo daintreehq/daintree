@@ -6,7 +6,11 @@ import type {
   CloudHostStatus,
   CloudHostsSnapshot,
 } from "@shared/types/cloudHosts";
-import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
+import {
+  BOAT_PROVIDER,
+  DELETE_ONLY_PROVIDER,
+  provider,
+} from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 
 const { cloud } = vi.hoisted(() => ({
   cloud: { snapshot: { providers: [], accounts: [], hosts: [] } as CloudHostsSnapshot },
@@ -349,5 +353,33 @@ describe("CloudProvidersSection", () => {
     expect(screen.queryByRole("list", { name: "Machines on Team droplets" })).toBeNull();
     expect(screen.queryByRole("button", { name: /console/ })).toBeNull();
     expect(screen.getByRole("button", { name: "Check Team droplets" })).toBeTruthy();
+  });
+});
+
+describe("CloudProvidersSection with a provider that has no stop (#18229)", () => {
+  it("promises start and stop only where a listed provider has them", () => {
+    cloud.snapshot = { providers: [DELETE_ONLY_PROVIDER], accounts: [], hosts: [] };
+    render(<CloudProvidersSection />);
+    expect(document.body.textContent).toContain(
+      "Accounts Daintree uses to create cloud machines as hosts and delete them when you're done"
+    );
+    expect(document.body.textContent).toContain(
+      "create machines that run projects and agents, then delete them when you're done"
+    );
+    cleanup();
+
+    cloud.snapshot = { providers: [DELETE_ONLY_PROVIDER, BOAT_PROVIDER], accounts: [], hosts: [] };
+    render(<CloudProvidersSection />);
+    expect(document.body.textContent).toContain(
+      "start and stop them when you ask where their provider can, and delete them when you're done"
+    );
+    cleanup();
+
+    cloud.snapshot = { providers: [BOAT_PROVIDER], accounts: [], hosts: [] };
+    render(<CloudProvidersSection />);
+    expect(document.body.textContent).toContain(
+      "Accounts Daintree uses to create cloud machines as hosts, start and stop them when you ask, and delete them when you're done"
+    );
+    expect(document.body.textContent).toContain("then stop or delete them when you're done");
   });
 });

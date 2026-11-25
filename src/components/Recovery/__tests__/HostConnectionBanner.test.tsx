@@ -49,6 +49,8 @@ import { HostConnectionBanner } from "../HostConnectionBanner";
 import { getHostConnectionBannerCopy } from "../recoveryCopy";
 import { useHostConnectionStore, type HostBannerVariant } from "@/store/hostConnectionStore";
 import { takePendingHostSettings } from "@/components/Settings/Hosts/hostSettingsRequests";
+import { DELETE_ONLY_PROVIDER } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
+import { cloudHostsClient } from "@/clients/cloudHostsClient";
 
 const HANDSHAKE = {
   version: "1.0.0",
@@ -699,5 +701,41 @@ describe("getHostConnectionBannerCopy", () => {
     expect(getHostConnectionBannerCopy("unreachable", "studio-01", null).title).toBe(
       "studio-01 is unreachable"
     );
+  });
+});
+
+describe("HostConnectionBanner on a machine whose provider has no stop (#18229)", () => {
+  const leasy = (overrides: Partial<CloudHostStatus> = {}): CloudHostsSnapshot => {
+    const snapshot = machine({
+      providerId: DELETE_ONLY_PROVIDER.id,
+      lifetime: { kind: "none" },
+      lifetimeSeconds: null,
+      ...overrides,
+    });
+    return { ...snapshot, providers: [DELETE_ONLY_PROVIDER] };
+  };
+
+  beforeEach(() => seed({ status: "disconnected" }, { everConnected: false }));
+
+  it("offers no start-and-reconnect, nor what a start would cost, for one reported stopped or in error", () => {
+    for (const state of ["stopped", "error"] as const) {
+      cloud.snapshot = leasy({ machine: state });
+      const { container } = render(<HostConnectionBanner />);
+      // The link's own banner stands in, so the absences below aren't an empty render's.
+      expect(container.textContent).toContain("studio-01");
+      expect(screen.queryByRole("button", { name: "Start and reconnect" })).toBeNull();
+      expect(document.body.textContent).not.toMatch(/Start it to work here again|while it runs/);
+      cleanup();
+    }
+    expect(startHost).not.toHaveBeenCalled();
+  });
+
+  it("still offers to check one whose state is unknown", () => {
+    cloud.snapshot = leasy({ machine: "unknown" });
+    render(<HostConnectionBanner />);
+    expect(screen.queryByRole("button", { name: "Start and reconnect" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check status" }));
+    expect(cloudHostsClient.refreshHost).toHaveBeenCalledWith("studio-01");
+    expect(startHost).not.toHaveBeenCalled();
   });
 });

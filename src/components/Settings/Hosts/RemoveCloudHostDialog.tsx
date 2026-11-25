@@ -9,6 +9,7 @@ import { systemClient } from "@/clients/systemClient";
 import {
   billsWhileStopped,
   canDeleteMachines,
+  isDeleteOnly,
   isObservationStale,
   keepMachineDescription,
 } from "@/components/Hosts/cloud/cloudHostLabels";
@@ -26,7 +27,7 @@ interface RemoveCloudHostDialogProps {
   status: CloudHostStatus | null;
   providerName: string;
   /** What its provider declares; null while that provider isn't registered. */
-  provider: Pick<CloudProviderInfo, "name" | "capabilities" | "dashboardUrl"> | null;
+  provider: Pick<CloudProviderInfo, "name" | "capabilities" | "dashboardUrl" | "stopMode"> | null;
   /**
    * Daintree on the machine was last seen started on connect: removing the
    * host stops it there, unless the machine goes with it.
@@ -90,6 +91,8 @@ export function RemoveCloudHostDialog({
   const deleting = deletable && ((created && choice === "delete") || mayHaveMachine);
   const billedStopped = billsWhileStopped(provider);
   const storageBilled = provider?.capabilities.persistence.stoppedStorageBilled === true;
+  // Its provider has no stop: keeping it bills until it's deleted, and deleting it is its only end.
+  const deleteOnly = isDeleteOnly(provider);
   const ready = status !== null && openedFor !== null;
   // Only a provider without deletion: its machine is deleted, if at all, in its
   // own console, and is claimed to exist only from a fresh reading.
@@ -151,7 +154,9 @@ export function RemoveCloudHostDialog({
       title={deleting && created ? `Delete '${name}'?` : `Remove '${name}'?`}
       description={`${
         deleting && created
-          ? `Its machine and everything on its disk are deleted from ${providerName}, and the host leaves your list.`
+          ? deleteOnly && status
+            ? `Its machine and everything on it, its disk included, are deleted from ${providerName} for good, and ${status.accountName} stops paying for it. The host leaves your list.`
+            : `Its machine and everything on its disk are deleted from ${providerName}, and the host leaves your list.`
           : keptMachine !== null && status
             ? keptMachine.seen
               ? `The host leaves your list, but its machine '${keptMachine.name}' still exists in your ${providerName} account (${status.accountName}).`
@@ -181,7 +186,15 @@ export function RemoveCloudHostDialog({
         {!ready && <p className="text-sm text-text-secondary">Reading the machine&apos;s state…</p>}
         {ready && created && status && !deletable && !machineGone && (
           <p className="text-sm text-text-secondary">
-            {keepMachineDescription(status, providerName, billedStopped, storageBilled, now, true)}
+            {keepMachineDescription(
+              status,
+              providerName,
+              billedStopped,
+              storageBilled,
+              now,
+              true,
+              deleteOnly
+            )}
           </p>
         )}
         {ready && created && status && deletable && (
@@ -199,7 +212,8 @@ export function RemoveCloudHostDialog({
                 billedStopped,
                 storageBilled,
                 now,
-                true
+                true,
+                deleteOnly
               )}
             />
             <RadioChoiceRow
@@ -209,7 +223,11 @@ export function RemoveCloudHostDialog({
               disabled={busy}
               onChange={() => setChoice("delete")}
               label="Delete the machine too"
-              description="Its disk goes for good"
+              description={
+                deleteOnly
+                  ? "Everything on it goes for good, its disk included"
+                  : "Its disk goes for good"
+              }
             />
           </RadioChoiceGroup>
         )}

@@ -2810,4 +2810,47 @@ describe("WorktreeDeleteDialog — its cloud machine (#17360)", () => {
     fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
     expect(startDeleteMock).toHaveBeenCalledWith("wt-1", { force: false, deleteBranch: false });
   });
+
+  it("offers keep or delete, never stop, for a machine whose provider has no stop (#18229)", async () => {
+    const LEASY = {
+      ...BOAT,
+      id: "leasy",
+      name: "Leasy",
+      capabilities: {
+        ...BOAT.capabilities,
+        persistence: { ...BOAT.capabilities.persistence, kept: "Nothing", retentionDays: 0 },
+        lifetime: { kind: "none" as const },
+      },
+      stopMode: "delete-only" as const,
+    };
+    cloudSnapshotMock.value = {
+      providers: [LEASY],
+      accounts: [],
+      hosts: [machine({ providerId: "leasy", lifetime: { kind: "none" }, lifetimeSeconds: null })],
+    };
+    await open();
+    const section = screen.getByTestId("delete-worktree-cloud-machines");
+    expect(choice("keep").checked).toBe(true);
+    expect(screen.queryByTestId("delete-worktree-machine-stop")).toBeNull();
+    expect(section.textContent).toContain(
+      "It keeps running, and billing Personal, until it's deleted."
+    );
+    expect(section.textContent).not.toMatch(/Stop it|until it stops|kept for at least/);
+
+    fireEvent.click(choice("delete"));
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    expect(startDeleteMock).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId("delete-worktree-confirm-input"), {
+      target: { value: "feature/test" },
+    });
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+    expect(startDeleteMock).toHaveBeenCalledWith("wt-1", {
+      force: false,
+      deleteBranch: false,
+      cloudCleanup: {
+        worktree: REF,
+        machines: [{ hostId: "login-host", resourceId: "bx_23456789", choice: "delete" }],
+      },
+    });
+  });
 });

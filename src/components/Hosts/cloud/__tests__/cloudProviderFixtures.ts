@@ -74,3 +74,42 @@ export function provider(
     hostIdleStop: overrides.hostIdleStop ?? false,
   };
 }
+
+/**
+ * A provider whose machines have no stop (#18227): Delete is the only way one
+ * ends. A retention of zero days would read "kept for at least 0 days" if any
+ * kept-disk copy reached it.
+ */
+export const DELETE_ONLY_PROVIDER: CloudProviderInfo = {
+  ...BOAT_PROVIDER,
+  id: "leasy",
+  name: "Leasy",
+  description: "Leased containers with no stop.",
+  dashboardUrl: "https://leasy.example.com/leases",
+  credentialFields: [
+    {
+      id: "apiKey",
+      label: "API key",
+      secret: true,
+      input: "single-line",
+      required: true,
+      help: null,
+    },
+  ],
+  capabilities: {
+    ...BOAT_PROVIDER.capabilities,
+    persistence: {
+      kept: "Nothing",
+      lost: "the container, its disk and memory",
+      retentionDays: 0,
+      saveRetryBilled: false,
+      stoppedComputeBilled: false,
+      stoppedStorageBilled: false,
+    },
+    typicalStartSeconds: null,
+    lifetime: { kind: "none" },
+    deletion: true,
+  },
+  stopMode: "delete-only",
+  hostIdleStop: false,
+};

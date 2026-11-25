@@ -11,7 +11,27 @@ import {
 import type { HostIdleObservation } from "@shared/types/hostIdle";
 
 /** The parts of a provider's declaration that decide what stopping and deleting mean. */
-export type CloudProviderTerms = Pick<CloudProviderInfo, "name" | "capabilities" | "hostIdleStop">;
+export type CloudProviderTerms = Pick<
+  CloudProviderInfo,
+  "name" | "capabilities" | "hostIdleStop" | "stopMode"
+>;
+
+/**
+ * Its machines can't stop and start again, so Delete is the only way one
+ * ends (#18227). Unknown while the provider isn't registered: nothing is
+ * taken away on a guess.
+ */
+export function isDeleteOnly(
+  provider: Pick<CloudProviderInfo, "stopMode"> | null | undefined
+): boolean {
+  return provider?.stopMode === "delete-only";
+}
+
+/** Said of a machine that has no stop, where a stop or a kept disk would otherwise be. */
+export const DELETE_ONLY_RUNS = "It runs, and bills, until it's deleted.";
+
+/** What deleting a machine that has no stop costs, said wherever its end is described. */
+export const DELETE_ONLY_LOSS = "Deleting it loses everything on it, its disk included.";
 
 /** The provider a host's machine runs on, or null while it isn't registered. */
 export function cloudProviderFor<P extends { id: string }>(
@@ -54,7 +74,8 @@ export function canDeleteMachines(provider: CloudProviderTerms | null): boolean 
  * too where its machines sleep. Null for one where stopping ends billing.
  */
 export function stoppedBillingSentence(provider: CloudProviderTerms | null): string | null {
-  if (!provider) return null;
+  // A machine that never stops has no stopped rate to describe.
+  if (!provider || isDeleteOnly(provider)) return null;
   if (billsWhileStopped(provider)) {
     const stopPaying = provider.capabilities.deletion
       ? "remove the host and delete its machine"
@@ -500,20 +521,28 @@ export function cloudCostFacts(
       const unreportedLimit =
         status.lifetime?.kind === "fixed-at-create" && status.lifetimeSeconds !== null;
       if (stop) facts.push(`stops by itself ${stop}`);
+      else if (isDeleteOnly(provider)) facts.push("runs until deleted");
       else if (status.lifetime?.kind === "idle-sleep") facts.push("sleeps when idle");
       else if (status.lifetime !== null && !unreportedLimit) facts.push("no auto-stop");
     }
   } else if (stoppedBilling) {
     facts.push(stoppedBilling);
-  } else if (rate && canStartMachine(status)) {
+  } else if (rate && canStartMachine(status, provider)) {
     facts.push(`${rate} when started`);
   }
   return facts;
 }
 
-/** The machine can be started by a person now. */
-export function canStartMachine(status: CloudHostStatus): boolean {
+/**
+ * The machine can be started by a person now. Never on a provider that has no
+ * stop; on one that isn't registered, as its status says.
+ */
+export function canStartMachine(
+  status: CloudHostStatus,
+  provider: Pick<CloudProviderInfo, "stopMode"> | null = null
+): boolean {
   return (
+    !isDeleteOnly(provider) &&
     status.operation === null &&
     status.resourceId !== null &&
     !status.dataExpired &&
@@ -521,9 +550,13 @@ export function canStartMachine(status: CloudHostStatus): boolean {
   );
 }
 
-/** The machine can be stopped by a person now. */
-export function canStopMachine(status: CloudHostStatus): boolean {
+/** The machine can be stopped by a person now: never on a provider that has no stop. */
+export function canStopMachine(
+  status: CloudHostStatus,
+  provider: Pick<CloudProviderInfo, "stopMode"> | null = null
+): boolean {
   return (
+    !isDeleteOnly(provider) &&
     status.resourceId !== null &&
     (status.operation === null || status.operation.kind === "starting") &&
     (status.machine === "running" || status.machine === "starting")
@@ -543,11 +576,14 @@ export function idleSleepSentence(idleSeconds: number | null): string {
  * provider Daintree pushes the stop back while the host is in use from this
  * device, so the lifetime is a guard, not a budget; a fixed limit holds even
  * then. Nothing while the provider isn't registered: its model isn't known.
+ * A provider that has no stop runs its machines until they're deleted.
  */
 export function lifetimeSentence(
   lifetime: CloudLifetimeModel | null,
-  lifetimeSeconds: number | null
+  lifetimeSeconds: number | null,
+  provider: Pick<CloudProviderInfo, "stopMode"> | null = null
 ): string {
+  if (isDeleteOnly(provider)) return DELETE_ONLY_RUNS;
   if (lifetime === null) return "";
   switch (lifetime.kind) {
     case "idle-sleep":
@@ -569,12 +605,16 @@ export function lifetimeSentence(
 /**
  * How a provider whose lifetime a create doesn't choose stops a machine, in
  * its own name: never, or by sleeping it once it's idle. Null for a provider
- * whose create does choose one.
+ * whose create does choose one. One that has no stop runs them until they're deleted.
  */
 export function providerStopSentence(
   lifetime: CloudLifetimeModel,
-  providerName: string
+  providerName: string,
+  stopMode?: CloudProviderInfo["stopMode"]
 ): string | null {
+  if (stopMode === "delete-only") {
+    return `${providerName} has no stop: a machine runs, and bills, until it's deleted.`;
+  }
   switch (lifetime.kind) {
     case "none":
       return `${providerName} has no lifetime for its machines: it runs until you stop it.`;
@@ -592,7 +632,8 @@ export function providerStopSentence(
  * was if it's old. `billedStopped`: its provider keeps billing a stopped
  * machine for compute until it's deleted. `storageBilled`: it bills a stopped
  * machine's disk alone until then. `addBack` for a host that leaves the list,
- * which can be added back.
+ * which can be added back. `deleteOnly`: its provider has no stop, so it bills
+ * until it's deleted.
  */
 export function keepMachineDescription(
   status: CloudHostStatus,
@@ -600,13 +641,34 @@ export function keepMachineDescription(
   billedStopped: boolean,
   storageBilled: boolean,
   now: number,
-  addBack: boolean
+  addBack: boolean,
+  deleteOnly = false
 ): string {
-  const said = keepMachineState(status, providerName, billedStopped, storageBilled, addBack);
+  const said = deleteOnly
+    ? keepDeleteOnlyState(status, providerName, addBack)
+    : keepMachineState(status, providerName, billedStopped, storageBilled, addBack);
   if (status.machine === "unknown" || !isObservationStale(status, now)) return said;
   const at =
     status.observedAt !== null ? clockTime(new Date(status.observedAt).toISOString()) : null;
   return `${said} That's as of ${at ?? "the last check"}; it may have changed since.`;
+}
+
+function keepDeleteOnlyState(
+  status: CloudHostStatus,
+  providerName: string,
+  addBack: boolean
+): string {
+  const back = addBack ? " You can add it back from Add host." : "";
+  switch (status.machine) {
+    case "running":
+    case "starting":
+    case "stopping":
+      return `It keeps running, and billing ${status.accountName}, until it's deleted.${back}`;
+    case "deleted":
+      return `${providerName} last reported it deleted.`;
+    default:
+      return `Daintree can't tell whether it's running; check on ${providerName}, where it keeps billing until it's deleted.`;
+  }
 }
 
 function keepMachineState(

@@ -324,6 +324,7 @@ function HostsSettingsContent() {
               .map(({ descriptor, connection }) => {
                 const wake = wakeLabel(descriptor);
                 const cloud = cloudStatusFor(cloudSnapshot, descriptor.id);
+                const cloudProvider = cloudProviderFor(cloudSnapshot.providers, cloud);
                 // While its machine isn't running, that is the news, not the link.
                 const machineDown =
                   cloud !== null && (cloud.machine !== "running" || cloud.operation !== null);
@@ -380,10 +381,7 @@ function HostsSettingsContent() {
                                   machineDown
                                     ? null
                                     : splitHostFix(connectionLabel(connection)).text,
-                                  ...cloudCostFacts(
-                                    cloud,
-                                    cloudProviderFor(cloudSnapshot.providers, cloud)
-                                  ),
+                                  ...cloudCostFacts(cloud, cloudProvider),
                                 ]
                                   .filter((fact): fact is string => fact !== null)
                                   .map((fact, index) => (
@@ -440,7 +438,7 @@ function HostsSettingsContent() {
                             Check status
                           </Button>
                         )}
-                        {cloud && canStartMachine(cloud) && (
+                        {cloud && canStartMachine(cloud, cloudProvider) && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -477,7 +475,7 @@ function HostsSettingsContent() {
                         >
                           Details
                         </Button>
-                        {cloud && canStopMachine(cloud) && (
+                        {cloud && canStopMachine(cloud, cloudProvider) && (
                           // Ends what runs there: the row's destructive action, before Remove.
                           <Button
                             variant="ghost-danger"

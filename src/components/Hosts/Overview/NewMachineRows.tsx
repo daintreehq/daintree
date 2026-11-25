@@ -21,7 +21,9 @@ import {
 import { FormRow } from "@/components/Worktree/views/WorktreeFormLayout";
 import type { CloudHostCreateRequest } from "@shared/types/cloudHosts";
 import {
+  DELETE_ONLY_LOSS,
   formatHourly,
+  isDeleteOnly,
   lifetimeLabel,
   lifetimeSentence,
   machineSpecLabel,
@@ -86,13 +88,14 @@ function reviewLine(choice: CloudMachineAccount, form: CloudMachineForm): string
         : `It stops by itself ${lifetimeLabel(form.lifetimeHours).toLowerCase()} after starting unless it's in use here.`
       : lifetimeSentence(
           lifetimeModel,
-          form.lifetimeHours === null ? null : form.lifetimeHours * 3600
+          form.lifetimeHours === null ? null : form.lifetimeHours * 3600,
+          provider
         )
-    : providerStopSentence(lifetimeModel, provider.name);
+    : providerStopSentence(lifetimeModel, provider.name, provider.stopMode);
   return [
     `Billed to ${payer} on ${provider.name}${price}.`,
     lifetime,
-    stoppedBillingSentence(provider),
+    isDeleteOnly(provider) ? DELETE_ONLY_LOSS : stoppedBillingSentence(provider),
   ]
     .filter(Boolean)
     .join(" ");

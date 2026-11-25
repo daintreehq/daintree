@@ -13,7 +13,10 @@ import type { CloudHostStatus, CloudHostsSnapshot } from "@shared/types/cloudHos
 import type { HostListEntry } from "@shared/types/remoteHosts";
 import { useRemoteHostsStore } from "@/store/remoteHostsStore";
 import { _resetCloudHostsStateForTesting } from "@/components/Hosts/cloud/cloudHostsState";
-import { provider as cloudProvider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
+import {
+  DELETE_ONLY_PROVIDER,
+  provider as cloudProvider,
+} from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 import { AddHostDialog } from "../AddHostDialog";
 import { ClientAppError } from "@/utils/clientAppError";
 import { HOST_PACKAGES_COMMAND, HOST_PACKAGES_INSTRUCTION } from "@shared/config/linuxHostPackages";
@@ -1684,6 +1687,46 @@ describe("AddHostDialog", () => {
       await advance(0);
       await push(asleep());
       expect(screen.getByTestId("add-host-machine-down")).toBeTruthy();
+    });
+
+    it("offers no start for a machine whose provider has no stop (#18229)", async () => {
+      remoteHosts.probe!.mockResolvedValue(
+        probeResult({
+          connection: HOST.connection,
+          reachable: false,
+          sshError: "Connection refused",
+          platform: null,
+          install: null,
+          hostModeListening: false,
+          matchesClient: null,
+        })
+      );
+      render(<AddHostDialog isOpen onClose={() => {}} existing={HOST} />);
+      await advance(0);
+      // The same page offers it for Agent 37, so its absence below is the provider's.
+      await push(asleep());
+      expect(screen.getByRole("button", { name: "Start machine" })).toBeTruthy();
+      for (const state of ["stopped", "error"] as const) {
+        cloud = {
+          providers: [DELETE_ONLY_PROVIDER],
+          accounts: [],
+          hosts: [
+            machine({
+              providerId: DELETE_ONLY_PROVIDER.id,
+              machine: state,
+              rawState: state,
+              lifetime: { kind: "none" },
+            }),
+          ],
+        };
+        await act(async () => {
+          for (const listener of [...listeners])
+            listener({ type: "cloud-changed", snapshot: cloud });
+        });
+        expect(screen.queryByTestId("add-host-machine-down")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Start machine" })).toBeNull();
+      }
+      expect(cloudHosts.startHost).not.toHaveBeenCalled();
     });
 
     it("starts it when asked, and carries on from one fresh check once it runs", async () => {

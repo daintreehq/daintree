@@ -28,6 +28,7 @@ import { cloudStatusFor, useCloudHostsWhile } from "@/components/Hosts/cloud/clo
 import {
   canStartMachine,
   cloudProviderFor,
+  isDeleteOnly,
   startBillingSentence,
 } from "@/components/Hosts/cloud/cloudHostLabels";
 import { isProxyClosedEarly } from "@shared/utils/sshRefusal";
@@ -557,11 +558,14 @@ export function AddHostDialog({
   // cloud host, so setup can offer the start itself rather than send them elsewhere.
   const cloudHosts = useCloudHostsWhile(isOpen && cloudExisting !== null);
   const machine = cloudExisting ? cloudStatusFor(cloudHosts.snapshot, existing?.hostId) : null;
+  const machineProvider = cloudProviderFor(cloudHosts.snapshot.providers, machine);
+  // A machine whose provider has no stop is never offered a start: setup goes on as for any host.
   const machineDown =
-    machine !== null && machine.providerUnavailable === null && canStartMachine(machine);
+    machine !== null &&
+    machine.providerUnavailable === null &&
+    canStartMachine(machine, machineProvider);
   // The provider's own command that carries ssh to its machines, which the person signs in to.
-  const cloudTunnel =
-    cloudProviderFor(cloudHosts.snapshot.providers, machine)?.capabilities.tunnel ?? null;
+  const cloudTunnel = machineProvider?.capabilities.tunnel ?? null;
   // Recorded by the dial that found it missing (an imported machine skips create's check),
   // and cleared once one gets through.
   const tunnelMissing =
@@ -940,7 +944,7 @@ export function AddHostDialog({
 
   /** Start the machine from here; setup carries on from a fresh check once it runs. */
   const startMachine = () => {
-    if (!existing) return;
+    if (!existing || isDeleteOnly(machineProvider)) return;
     setMachineStart("starting");
     setMachineStartError(null);
     cloudHostsClient.startHost(existing.hostId).then(
@@ -2418,10 +2422,7 @@ export function AddHostDialog({
               ? `${machine.lastError.message} `
               : ""}
             Setup can&apos;t reach it until it&apos;s running.{" "}
-            {startBillingSentence(
-              machine,
-              cloudProviderFor(cloudHosts.snapshot.providers, machine)
-            )}
+            {startBillingSentence(machine, machineProvider)}
           </Callout>
           {startError}
         </div>
