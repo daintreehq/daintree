@@ -214,12 +214,28 @@ describe("telling a relayed assistant which tier an action needs (#16764)", () =
     const called = await relay.client.callTool({
       name: "agentSessionHistory.resume",
       arguments: {},
+      _meta: { [RELAY_CALL_ID_META_KEY]: "call-miss" },
     });
 
     expect(errorCode(called as { content: unknown })).toBe("NOT_FOUND");
     expect(recordDenial).not.toHaveBeenCalled();
     expect(notifyTierMismatch).not.toHaveBeenCalled();
     expect(relay.deps.dispatchAction).not.toHaveBeenCalled();
+    // One record, a lookup miss rather than a refusal, still naming the Shell's call.
+    expect(relay.deps.appendAuditRecord).toHaveBeenCalledTimes(1);
+    expect(relay.deps.appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "agentSessionHistory.resume",
+        relayCallId: "call-miss",
+        outcome: {
+          kind: "result",
+          value: expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({ code: "NOT_FOUND" }),
+          }),
+        },
+      })
+    );
   });
 
   it("refuses the same call to a project assistant's core relay as a tier gap", async () => {

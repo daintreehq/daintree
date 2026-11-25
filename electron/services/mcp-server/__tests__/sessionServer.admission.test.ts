@@ -1738,6 +1738,7 @@ describe("a tool id no higher tier would admit (#18163)", () => {
     expect(result.isError).toBe(true);
     const payload = toolErrorPayload(result);
     expect(payload.code).toBe("NOT_FOUND");
+    expect(payload.retriable).toBe(false);
     expect(payload.message).toContain("no.such.tool");
     expect(payload.message).toContain("actions.search");
     expect(payload.message).not.toContain("tier");
@@ -1745,6 +1746,7 @@ describe("a tool id no higher tier would admit (#18163)", () => {
     expect(recordDenial).not.toHaveBeenCalled();
     expect(incrementDenial).not.toHaveBeenCalled();
     expect(deps.dispatchAction).not.toHaveBeenCalled();
+    expect(deps.appendAuditRecord).toHaveBeenCalledTimes(1);
     expect(deps.appendAuditRecord).toHaveBeenCalledWith(
       expect.objectContaining({
         toolId: "no.such.tool",
@@ -1792,6 +1794,7 @@ describe("a tool id no higher tier would admit (#18163)", () => {
     expect(notifyTierMismatch).toHaveBeenCalledWith(
       expect.objectContaining({ toolId: "project.runCheck", targetTier: "full" })
     );
+    expect(recordDenial).toHaveBeenCalledTimes(1);
     expect(recordDenial).toHaveBeenCalledWith("s-miss", "tierMismatch");
   });
 
@@ -1804,10 +1807,12 @@ describe("a tool id no higher tier would admit (#18163)", () => {
     "keeps one answer for a %s session at %s and counts the miss",
     async (caller, tier) => {
       const { deps, recordDenial } = missDeps(caller, tier);
+      const incrementDenial = vi.spyOn(deps.sessionStore.grantCache, "incrementDenial");
 
       const payload = toolErrorPayload(await call(deps, "no.such.tool"));
 
       expect(payload.code).toBe(TIER_NOT_PERMITTED_CODE);
+      expect(incrementDenial).toHaveBeenCalledWith("s-miss", "no.such.tool");
       expect(recordDenial).toHaveBeenCalledWith("s-miss", "tierMismatch");
       expect(deps.dispatchAction).not.toHaveBeenCalled();
     }
