@@ -34,7 +34,9 @@ import {
   detachedStartScript,
   linuxLaunchTarget,
   linuxTargetFor,
+  serviceLaunchTarget,
   stopLaunchShell,
+  type LinuxLaunchTarget,
 } from "./hostModeBootstrap.js";
 import { type ClientBuild, debInstallCommand, planInstall } from "./installPlan.js";
 import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -81,6 +83,17 @@ export interface InstallerDeps {
   lockPollMs?: number;
   /** Names this install's lock and backups; random unless a test fixes it. */
   installToken?: () => string;
+  /**
+   * Refuses a Linux start whose binary the loader can't run, naming every
+   * library it can't find, after installing them where Daintree may (see
+   * linuxHostLibraries.ts). `repeatInstall: false` skips an install when one
+   * there just ended without its start going ahead.
+   */
+  checkLinuxStart?(
+    target: LinuxLaunchTarget,
+    signal?: AbortSignal,
+    options?: { repeatInstall?: boolean }
+  ): Promise<void>;
 }
 
 /** Nothing would end: the host said so in full. A count alone can't say that (shells go unseen). */
@@ -1091,6 +1104,15 @@ export async function runHostInstall(
           : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
     }
     const start = wasRunning ? startScript(platform, parsed, restart, target) : null;
+    // What a Linux start runs, the image replaced in place: checked before each start.
+    let startTarget: LinuxLaunchTarget | null = null;
+    if (start !== null && platform === "linux") {
+      try {
+        startTarget = linuxTargetFor(target, target !== DEB_EXECUTABLE, probe.advice.fuse);
+      } catch {
+        startTarget = null;
+      }
+    }
     if (wasRunning && start === null) {
       await dropStaged();
       throw new AppError({
@@ -1152,6 +1174,9 @@ export async function runHostInstall(
       | "unconfirmed"
       | "lock-lost";
 
+    /** Why recovery didn't start the build it put back, when a library check said so. */
+    let recoveryRefusal: string | null = null;
+
     /** Stop whatever the swap started, put the previous build back, start it, and check it. */
     const recover = async (): Promise<Recovery> => {
       if (!lock.held()) {
@@ -1185,6 +1210,16 @@ export async function runHostInstall(
       if (!wasRunning && !previous && !probe.install) return "no-previous";
       if (wasRunning) {
         if (!lock.held()) return "lock-lost";
+        if (startTarget && deps.checkLinuxStart) {
+          try {
+            // Never a second install as root after one the new build's check just ran.
+            await deps.checkLinuxStart(startTarget, settle, { repeatInstall: false });
+          } catch (error) {
+            recoveryRefusal = formatErrorMessage(error, "a library check failed");
+            return "not-restored";
+          }
+          if (!lock.held()) return "lock-lost";
+        }
         const started = await run(start!, 30_000);
         if (started.code !== 0) return "not-restored";
       }
@@ -1233,7 +1268,10 @@ export async function runHostInstall(
           ? err
           : failed("The install failed", formatErrorMessage(err, "unknown error"));
       if (outcome === "unchanged") throw base;
-      const note = RECOVERY_NOTE[outcome];
+      const note =
+        outcome === "not-restored" && recoveryRefusal !== null
+          ? `The previous build wasn't started again. ${recoveryRefusal}`
+          : RECOVERY_NOTE[outcome];
       throw new AppError({
         code: base.code,
         message: `${base.message}. ${note}`,
@@ -1273,6 +1311,12 @@ export async function runHostInstall(
       if (start) {
         report({ stage: "restarting", fraction: 0.9, message: "Starting Daintree on the host" });
         ensureHeld();
+        if (startTarget && deps.checkLinuxStart) {
+          await deps.checkLinuxStart(startTarget, settle);
+          ensureHeld();
+          // A cancel during the check still lands before the new build runs.
+          if (signal.aborted) throw cancelled();
+        }
         await exec(deps, start, settle, "Couldn't start Daintree on the host");
       }
 
@@ -1416,22 +1460,49 @@ async function applyStagedUpdate(
     const launchStop = restart === "on-connect" ? ("wait" as const) : null;
     const start = stagedStart(platform, { ...current, parsed });
     if (start === null) throw refusal(NO_SERVICE_TO_RESTART);
+    // What `start` runs, checked whenever it stands in for a start read after the quit.
+    let startTarget: LinuxLaunchTarget | null = null;
+    if (platform === "linux") {
+      if (restart !== "on-connect") startTarget = serviceLaunchTarget(parsed, current.result);
+      else {
+        try {
+          startTarget = linuxLaunchTarget(current.result);
+        } catch {
+          startTarget = null;
+        }
+      }
+    }
     /**
-     * The start to run now. A host started on connect is started from the
-     * image there once it has quit: its updater may have given the new build
-     * a name of its own as it installed it. What it ran before stands in
+     * The start to run now, and on Linux what it runs, to check first. A host
+     * started on connect is started from the image there once it has quit:
+     * its updater may have given the new build a name of its own as it
+     * installed it, and pointed a service at it. What it ran before stands in
      * while the image there can't be told.
      */
-    const currentStart = async (): Promise<string> => {
-      if (restart !== "on-connect") return start;
+    const currentStart = async (): Promise<{
+      script: string;
+      target: LinuxLaunchTarget | null;
+    }> => {
+      // A service's start is the same line whatever it runs: looked at only to check it.
+      if (platform !== "linux" || (restart !== "on-connect" && !deps.checkLinuxStart)) {
+        return { script: start, target: startTarget };
+      }
       const seen = await deps.probe(settle).catch(() => null);
-      if (!seen?.parsed || seen.parsed.appImageConflict || !seen.result.install) return start;
+      if (!seen?.parsed || seen.parsed.appImageConflict || !seen.result.install) {
+        return { script: start, target: startTarget };
+      }
+      if (restart !== "on-connect") {
+        return { script: start, target: serviceLaunchTarget(seen.parsed, seen.result) };
+      }
       try {
-        return detachedStartScript(linuxLaunchTarget(seen.result));
+        const target = linuxLaunchTarget(seen.result);
+        return { script: detachedStartScript(target), target };
       } catch {
-        return start;
+        return { script: start, target: startTarget };
       }
     };
+    /** A start a library check refused: the retry after a failure isn't checked, or installed for, again. */
+    let refusedStart: unknown = null;
 
     // From the stop on, every step runs to completion whatever the cancel does,
     // and any failure starts Daintree there again, so the host isn't left stopped.
@@ -1439,17 +1510,26 @@ async function applyStagedUpdate(
     const now = deps.now ?? Date.now;
     let started = false;
 
+    const lostTurn = (): CommandResult => ({
+      code: null,
+      stdout: "",
+      stderr: "This device lost its turn to update the host",
+      spawnError: null,
+      timedOut: false,
+    });
     const runStart = async (): Promise<CommandResult> => {
-      const script = await currentStart();
+      if (refusedStart !== null) throw refusedStart;
+      const { script, target } = await currentStart();
       // Without the lock another device may be updating the host: it starts Daintree there itself.
-      if (!lock.held()) {
-        return {
-          code: null,
-          stdout: "",
-          stderr: "This device lost its turn to update the host",
-          spawnError: null,
-          timedOut: false,
-        };
+      if (!lock.held()) return lostTurn();
+      if (target && deps.checkLinuxStart) {
+        try {
+          await deps.checkLinuxStart(target, settle);
+        } catch (error) {
+          refusedStart = error;
+          throw error;
+        }
+        if (!lock.held()) return lostTurn();
       }
       const result = await deps.shell
         .exec(script, { signal: settle, timeoutMs: 30_000 })
@@ -1559,9 +1639,16 @@ async function applyStagedUpdate(
         err instanceof AppError
           ? err
           : failed("The update failed", formatErrorMessage(err, "unknown error"));
+      // A library check that refused only this restart says why, as the failure itself would.
+      const refusedHere =
+        refusedStart !== null && refusedStart !== err
+          ? formatErrorMessage(refusedStart, "a library check refused it")
+          : null;
       const note = back
         ? "Daintree is running on the host again."
-        : "Daintree couldn't be started again on the host; start it at the machine.";
+        : refusedHere
+          ? `Daintree couldn't be started again on the host. ${refusedHere}`
+          : "Daintree couldn't be started again on the host; start it at the machine.";
       throw new AppError({
         code: base.code,
         message: `${base.message}. ${note}`,

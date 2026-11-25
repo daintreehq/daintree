@@ -10,7 +10,9 @@ import {
   noteSshMaster,
   shellQuote,
   sshCommonArgs,
+  sshOneShotArgs,
 } from "./sshTransport.js";
+import { isSafeSshUser } from "../cloud/sshEndpoint.js";
 import { sshExecutable } from "./sshExecutable.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 
@@ -121,6 +123,53 @@ export function createSshCommandChannel(params: {
   };
 }
 
+/** The arguments for {@link execAsLogin}: the route's alias with another login, for one command. */
+export function loginShellArgs(login: string, target: string, script: string): string[] {
+  if (script.includes("\n")) throw new Error("Remote scripts must be a single line");
+  if (!isSafeSshUser(login)) throw new Error("Not a login name");
+  return [...sshOneShotArgs(), "--", `${login}@${target}`, `sh -c ${shellQuote(script)}`];
+}
+
+/**
+ * One command on a cloud machine as another login than its route's (root,
+ * where the provider's tunnel takes one), through the same wrapper and so
+ * the same key, tunnel and trust. A machine that can't be reached answers as
+ * ssh would, as {@link createCloudCommandChannel} does.
+ */
+export async function execAsLogin(
+  params: {
+    resolve: (signal?: AbortSignal) => Promise<{ target: string; sshPath: string }>;
+    login: string;
+    run: CommandRunner;
+  },
+  script: string,
+  options?: CommandOptions
+): Promise<CommandResult> {
+  let route: { target: string; sshPath: string };
+  try {
+    route = await params.resolve(options?.signal);
+  } catch (error) {
+    return unreachable(error);
+  }
+  return params.run(route.sshPath, loginShellArgs(params.login, route.target, script), {
+    ...options,
+    env: { ...options?.env, ...BATCH_SSH_ENV },
+  });
+}
+
+function unreachable(error: unknown): CommandResult {
+  const detail =
+    (error as { detail?: unknown })?.detail ??
+    formatErrorMessage(error, "The cloud machine couldn't be reached");
+  return {
+    code: 255,
+    stdout: "",
+    stderr: typeof detail === "string" && detail ? detail : "The cloud machine couldn't be reached",
+    spawnError: null,
+    timedOut: false,
+  };
+}
+
 /** ssh's own words when a command failed, else a generic line. Never the command's stdout. */
 export function failureDetail(result: CommandResult, fallback: string): string {
   if (result.spawnError) return result.spawnError;
@@ -152,17 +201,7 @@ export function createCloudCommandChannel(params: {
         sshPath: route.sshPath,
       });
     } catch (error) {
-      const detail =
-        (error as { detail?: unknown })?.detail ??
-        formatErrorMessage(error, "The cloud machine couldn't be reached");
-      return {
-        code: 255,
-        stdout: "",
-        stderr:
-          typeof detail === "string" && detail ? detail : "The cloud machine couldn't be reached",
-        spawnError: null,
-        timedOut: false,
-      };
+      return unreachable(error);
     }
   };
   const isResult = (value: HostCommandChannel | CommandResult): value is CommandResult =>

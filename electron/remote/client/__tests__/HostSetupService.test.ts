@@ -219,8 +219,10 @@ describe("HostSetupService", () => {
     });
     const result = await setup.startHostMode({ connection: { kind: "ssh", target: "bigbox" } });
     expect(result.probe.hostModeState).toMatchObject({ enabled: true, startAtLogin: true });
-    expect(scripts[1]!.input).toMatchObject({ text: expect.stringContaining("[Service]") });
+    expect(scripts[2]!.input).toMatchObject({ text: expect.stringContaining("[Service]") });
     expect(scripts.map((s) => s.script)).toEqual([
+      // The binary's libraries, before anything there is changed.
+      expect.stringContaining("@@dt:libs"),
       expect.stringContaining("daintree-setup-backup"),
       expect.stringMatching(/^sh -c '.*systemctl --user enable daintree-host\.service'$/),
       "sh -c 'systemctl --user start daintree-host.service'",
@@ -484,6 +486,7 @@ describe("HostSetupService", () => {
       await expect(service("", { run }).setup.ensureHostRunning(studio)).resolves.toBe("started");
       const actions = scripts.filter((c) => !c.includes("@@dt:uname"));
       expect(actions).toEqual([
+        expect.stringContaining("@@dt:libs"),
         expect.stringContaining("systemctl --user start daintree-host.service"),
       ]);
 
@@ -492,6 +495,24 @@ describe("HostSetupService", () => {
         "not-startable"
       );
       expect(started(noUnit.scripts)).toBe(false);
+    });
+
+    it("checks the AppImage a Linux host's service runs, even with a deb installed beside it", async () => {
+      const linux = (listening: boolean) =>
+        [
+          "@@dt:uname Linux x86_64",
+          "@@dt:install deb /opt/Daintree",
+          "@@dt:version 1.4.0",
+          "@@dt:unit yes",
+          "@@dt:unitexec /home/greg/Applications/Daintree.AppImage",
+          ...(listening ? ["@@dt:running yes", "@@dt:listening yes"] : []),
+          "@@dt:end",
+        ].join("\n");
+      const { run, scripts } = recording([linux(false), linux(false), linux(true)]);
+      await expect(service("", { run }).setup.ensureHostRunning(studio)).resolves.toBe("started");
+      const check = scripts.find((c) => c.includes("@@dt:libs"))!;
+      expect(check).toContain("/home/greg/Applications/Daintree.AppImage");
+      expect(check).toContain("--appimage-extract");
     });
 
     describe("on a Linux machine with no init system", () => {
@@ -541,6 +562,135 @@ describe("HostSetupService", () => {
         expect(
           scripts.filter((c) => !c.includes("@@dt:uname")).some((c) => c.includes("systemctl"))
         ).toBe(false);
+      });
+
+      it("names every library it can't load and starts nothing, installing nothing on an ssh host", async () => {
+        const scripts: string[] = [];
+        const run: CommandRunner = async (_command, args) => {
+          const script = args.at(-1) ?? "";
+          scripts.push(script);
+          if (script.includes("@@dt:uname")) return ok(box({ image: true }));
+          if (script.includes("@@dt:libs")) return ok("@@dt:libs missing libnspr4.so libnss3.so\n");
+          return ok();
+        };
+        const cloudPackageInstaller = vi.fn(() => async () => ok());
+        const onStart = vi.fn();
+        const error = (await service("", { run, cloudPackageInstaller })
+          .setup.ensureHostRunning(studio, undefined, onStart)
+          .then(
+            () => ({}),
+            (e: unknown) => e
+          )) as { userMessage?: string };
+        expect(error.userMessage).toContain("studio");
+        expect(error.userMessage).toContain("libnspr4.so, libnss3.so");
+        expect(error.userMessage).toContain("apt-get update && apt-get satisfy");
+        expect(launches(scripts)).toEqual([]);
+        expect(onStart).not.toHaveBeenCalled();
+        expect(cloudPackageInstaller).not.toHaveBeenCalled();
+      });
+
+      /** A cloud machine whose libraries stay missing however often they are installed. */
+      const stillMissing = () => {
+        const channel = {
+          exec: async (script: string) =>
+            script.includes("@@dt:uname")
+              ? ok(box({ image: true }))
+              : script.includes("@@dt:libs")
+                ? ok("@@dt:libs missing libnspr4.so\n")
+                : ok(),
+          execWithInput: async () => ok(),
+          sendFile: async () => ok(),
+        };
+        let release: () => void = () => {};
+        const installs = { count: 0, hold: false };
+        const install = vi.fn(async () => {
+          installs.count++;
+          if (installs.hold) await new Promise<void>((resolve) => (release = resolve));
+          return ok();
+        });
+        const { setup } = service("", {
+          channelFor: () => channel,
+          cloudPackageInstaller: () => install,
+        });
+        return { setup, installs, release: () => release() };
+      };
+      const machine = { kind: "cloud", bindingId: "b-1" } as const;
+
+      it("doesn't install as root on every dial after an install that didn't let it start", async () => {
+        const { setup, installs } = stillMissing();
+        await expect(setup.ensureHostRunning(machine)).rejects.toMatchObject({
+          userMessage: expect.stringContaining("still missing after Daintree installed"),
+        });
+        expect(installs.count).toBe(1);
+        // A dial nobody asked for still says what is missing, and how to install it again.
+        await expect(setup.ensureHostRunning(machine)).rejects.toMatchObject({
+          userMessage: expect.stringMatching(/libnspr4\.so.*Retry to have it install them again/s),
+        });
+        expect(installs.count).toBe(1);
+        // Someone asking for the host back installs again, as does a Retry.
+        await expect(
+          setup.ensureHostRunning(machine, undefined, undefined, { explicit: true })
+        ).rejects.toThrow();
+        expect(installs.count).toBe(2);
+        setup.recheckStart(machine);
+        await expect(setup.ensureHostRunning(machine)).rejects.toThrow();
+        expect(installs.count).toBe(3);
+      });
+
+      it("doesn't install as root from a dial nobody asked for while one it started still runs", async () => {
+        const { setup, installs, release } = stillMissing();
+        installs.hold = true;
+        const first = setup.ensureHostRunning(machine).catch((e: unknown) => e);
+        await vi.waitFor(() => expect(installs.count).toBe(1));
+        await expect(setup.ensureHostRunning(machine)).rejects.toMatchObject({
+          userMessage: expect.stringContaining(
+            "installed its packages there as root a few minutes ago"
+          ),
+        });
+        expect(installs.count).toBe(1);
+        release();
+        await first;
+      });
+
+      it("installs the packages as root on a cloud machine that allows it, checks again, then starts", async () => {
+        const order: string[] = [];
+        const probes = [
+          box({ image: true }),
+          box({ image: true }),
+          box({ image: true, listening: true }),
+        ];
+        const checks = ["@@dt:libs missing libnspr4.so\n", "@@dt:libs ok\n"];
+        const channel = {
+          exec: async (script: string) => {
+            if (script.includes("@@dt:uname"))
+              return ok(probes.length > 1 ? probes.shift()! : probes[0]!);
+            if (script.includes("@@dt:libs")) {
+              order.push("check");
+              return ok(checks.shift()!);
+            }
+            if (script.includes("nohup")) {
+              order.push("start");
+              return ok("@@dt:launched 777 123456 new\n");
+            }
+            if (script.includes("alive yes")) return ok("@@dt:alive yes\n");
+            return ok();
+          },
+          execWithInput: async () => ok(),
+          sendFile: async () => ok(),
+        };
+        const install = vi.fn(async () => {
+          order.push("install");
+          return ok();
+        });
+        const cloudPackageInstaller = vi.fn(() => install);
+        const machine = { kind: "cloud", bindingId: "b-1" } as const;
+        await expect(
+          service("", { channelFor: () => channel, cloudPackageInstaller }).setup.ensureHostRunning(
+            machine
+          )
+        ).resolves.toBe("started");
+        expect(cloudPackageInstaller).toHaveBeenCalledWith("b-1");
+        expect(order).toEqual(["check", "install", "check", "start"]);
       });
 
       it("starts nothing where Daintree there never recorded starting on connect", async () => {

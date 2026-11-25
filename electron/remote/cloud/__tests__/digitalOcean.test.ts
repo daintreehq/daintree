@@ -19,12 +19,12 @@ import {
 } from "../digitalocean/DigitalOceanProvider.js";
 import { digitalOceanMachineState } from "../digitalocean/digitalOceanState.js";
 import {
-  DROPLET_HOST_PACKAGES,
   dropletUserData,
   md5Fingerprint,
   parsePublicKey,
 } from "../digitalocean/digitalOceanUserData.js";
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
+import { LINUX_HOST_PACKAGES } from "../../client/linuxHostLibraries.js";
 import type { ProviderCredentials } from "../provider.js";
 
 /** A real key and the fingerprint `ssh-keygen -E md5 -lf` printed for it. */
@@ -986,7 +986,7 @@ describe("Droplet first-boot script", () => {
     expect(at("satisfy -y")).toBeLessThan(at('loginctl enable-linger "$U"'));
     const commands = script.trim().split("\n");
     expect(commands.at(-1)).toBe('mv -f "$K" "$H/.ssh/authorized_keys"');
-    expect(script).toContain(`'${DROPLET_HOST_PACKAGES.join(", ")}'`);
+    expect(script).toContain(`'${LINUX_HOST_PACKAGES.join(", ")}'`);
     expect(script).not.toContain("daintree-acct");
     expect(script).not.toMatch(/sudo/);
   });
@@ -1030,6 +1030,6 @@ describe("Droplet first-boot script", () => {
     const block = /depends:\s*\[([\s\S]*?)\]/.exec(config)?.[1] ?? "";
     const depends = [...block.matchAll(/^\s*"([^"]+)"/gm)].map((match) => match[1]);
     expect(depends.length).toBeGreaterThan(10);
-    for (const dependency of depends) expect(DROPLET_HOST_PACKAGES).toContain(dependency);
+    for (const dependency of depends) expect(LINUX_HOST_PACKAGES).toContain(dependency);
   });
 });

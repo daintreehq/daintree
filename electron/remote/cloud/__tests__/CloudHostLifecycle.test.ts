@@ -1223,6 +1223,44 @@ describe("CloudHostLifecycle host keys confirmed on first connect", () => {
   });
 });
 
+describe("CloudHostLifecycle.hostPackagesLogin", () => {
+  const withLogin = (provider: CloudProvider) =>
+    Object.assign(provider, { hostPackagesLogin: "root" });
+
+  it("names the provider's login only for a machine Daintree created there", async () => {
+    const { lifecycle, store } = await setup({}, { adapt: withLogin });
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(store.bindings()[0]?.resourceId).toBeTruthy());
+    expect(lifecycle.hostPackagesLogin(store.bindings()[0]!.id)).toBe("root");
+    expect(lifecycle.hostPackagesLogin("nothing-bound")).toBeNull();
+  });
+
+  it("names none for an imported machine, or on a provider that declares none", async () => {
+    const imported = await setup({ machine: "running" }, { adapt: withLogin });
+    await imported.lifecycle.importMachine({
+      accountId: imported.store.accounts()[0]!.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    expect(imported.lifecycle.hostPackagesLogin(imported.store.bindings()[0]!.id)).toBeNull();
+
+    const plain = await setup();
+    await plain.lifecycle.create({
+      accountId: plain.store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: 2,
+    });
+    await vi.waitFor(() => expect(plain.store.bindings()[0]?.resourceId).toBeTruthy());
+    expect(plain.lifecycle.hostPackagesLogin(plain.store.bindings()[0]!.id)).toBeNull();
+  });
+});
+
 describe("CloudHostLifecycle start, stop, import and removal", () => {
   it("imports without starting or changing the machine's lifetime", async () => {
     const { lifecycle, provider, store } = await setup({

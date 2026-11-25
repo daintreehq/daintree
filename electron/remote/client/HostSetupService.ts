@@ -27,7 +27,7 @@ import {
   normalizeOperationId,
 } from "../../services/operations/OperationRegistry.js";
 import { AppError } from "../../utils/errorTypes.js";
-import type { CommandRunner } from "./commandRunner.js";
+import type { CommandResult, CommandRunner } from "./commandRunner.js";
 import {
   connectionKey,
   requireHostConnection,
@@ -52,10 +52,12 @@ import {
   macStartScript,
   parseDetachedAlive,
   parseDetachedLaunch,
+  serviceLaunchTarget,
   UNPACKED_LISTEN_TIMEOUT_MS,
   type LinuxLaunchTarget,
 } from "./hostModeBootstrap.js";
 import { liveHostRecord, probeHost, type ProbeOutcome } from "./hostProbe.js";
+import { checkLinuxStart, type LibraryCheckTarget } from "./linuxHostLibraries.js";
 import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -109,6 +111,13 @@ export interface HostSetupDeps {
   cloudChannel?(bindingId: string): HostCommandChannel;
   /** Drops what reaching a cloud machine left here: its master and ssh files. */
   forgetCloud?(bindingId: string): Promise<void>;
+  /**
+   * Installs a Linux Host's system packages on a cloud machine, as the login
+   * its provider allows for that; null where Daintree installs none there.
+   */
+  cloudPackageInstaller?(
+    bindingId: string
+  ): ((signal?: AbortSignal) => Promise<CommandResult>) | null;
   /** Every check that reached a host, so what it saw can be kept with the host's record. */
   onProbed?(connection: HostConnection, result: HostProbeResult): void;
   /**
@@ -181,6 +190,8 @@ export class HostSetupService {
   private readonly unstartable = new Map<string, number>();
   /** Rechecks so far, by connection: a probe under way through one doesn't record what it saw before it. */
   private readonly rechecks = new Map<string, number>();
+  /** When an install as root last started, by connection. */
+  private readonly packageInstallStarts = new Map<string, number>();
 
   constructor(private readonly deps: HostSetupDeps) {
     this.operations = new OperationRegistry({
@@ -327,6 +338,7 @@ export class HostSetupService {
             sleep: this.deps.sleep ?? abortableSleep,
             now: this.deps.now,
             idlePollMs: this.deps.idlePollMs,
+            checkLinuxStart: this.linuxStartCheck(connection, shell),
           },
           controller.signal,
           (progress) => handle.progress(progress)
@@ -377,6 +389,15 @@ export class HostSetupService {
         sleep: this.deps.sleep ?? abortableSleep,
         now: this.deps.now,
         updateChannel: this.deps.clientBuild().channel,
+        checkLinuxStart: async (target) => {
+          await this.linuxStartCheck(
+            connection,
+            channel,
+            () => !this.deps.isRetiring?.(connection)
+          )(target);
+          // The check can take minutes: nothing is changed there for a host removed meanwhile.
+          this.refuseWhileRetiring(connection);
+        },
       });
     } finally {
       // Host mode may be on there now, whatever a dial that checked meanwhile saw.
@@ -466,13 +487,28 @@ export class HostSetupService {
       script = LINUX_START_SCRIPT;
     }
     if (!script) return unstartable("host-mode-off");
+    const busy = () =>
+      signal?.aborted || this.isInstallRunning(connection) || this.deps.isRetiring?.(connection);
     // Last look before changing anything on the host.
-    if (
-      signal?.aborted ||
-      this.isInstallRunning(connection) ||
-      this.deps.isRetiring?.(connection)
-    ) {
-      return refused("busy");
+    if (busy()) return refused("busy");
+    const checkTarget =
+      probe.platform === "linux" ? (detached ?? serviceLaunchTarget(outcome.parsed, probe)) : null;
+    if (checkTarget) {
+      try {
+        // A dial nobody asked for doesn't install again so soon after an install that didn't help.
+        await this.linuxStartCheck(connection, channel, () => !busy())(checkTarget, signal, {
+          repeatInstall: options.explicit === true,
+        });
+      } catch (error) {
+        if (signal?.aborted) return "not-startable";
+        // Its install as root gave way to an install or removal here; anything else is said as it is.
+        if (error instanceof AppError && error.code === "CANCELLED" && busy()) {
+          return refused("busy");
+        }
+        throw error;
+      }
+      // The check can take minutes (an install as root among them): looked at again.
+      if (busy()) return refused("busy");
     }
     const label = formatHostConnection(connection);
     onStart?.();
@@ -565,6 +601,59 @@ export class HostSetupService {
     const key = connectionKey(connection);
     this.rechecks.set(key, (this.rechecks.get(key) ?? 0) + 1);
     this.unstartable.delete(key);
+    // Someone asked again: the next start may install as root again too.
+    this.packageInstallStarts.delete(key);
+  }
+
+  /**
+   * The check a Linux start on this connection runs first: see
+   * linuxHostLibraries.ts. `repeatInstall: false` installs as root only when
+   * no install there started in the last while; the machine itself runs one
+   * at a time.
+   */
+  private linuxStartCheck(
+    connection: HostConnection,
+    channel: HostCommandChannel,
+    mayInstall?: () => boolean
+  ): (
+    target: LibraryCheckTarget,
+    signal?: AbortSignal,
+    options?: { repeatInstall?: boolean }
+  ) => Promise<void> {
+    return (target, signal, options) => {
+      const key = connectionKey(connection);
+      const now = this.deps.now ?? Date.now;
+      const install =
+        connection.kind === "cloud"
+          ? (this.deps.cloudPackageInstaller?.(connection.bindingId) ?? null)
+          : null;
+      return checkLinuxStart(
+        {
+          channel,
+          hostLabel: formatHostConnection(connection),
+          installPackages: install
+            ? (installSignal) => {
+                this.packageInstallStarts.set(key, now());
+                return install(installSignal);
+              }
+            : null,
+          mayInstall,
+          installHeld:
+            options?.repeatInstall === false
+              ? () => {
+                  const at = this.packageInstallStarts.get(key);
+                  const since = at === undefined ? Number.NaN : now() - at;
+                  // A time ahead of the clock (it moved back) says nothing about how long ago.
+                  return since >= 0 && since < UNSTARTABLE_HOLD_MS
+                    ? "Daintree installed its packages there as root a few minutes ago. Retry to have it install them again"
+                    : null;
+                }
+              : undefined,
+        },
+        target,
+        signal
+      );
+    };
   }
 
   /** The payload's connection, if this platform's Shell can reach hosts that way. */

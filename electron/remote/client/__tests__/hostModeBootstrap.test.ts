@@ -681,6 +681,48 @@ describe("bootstrapHostMode on a headless Linux host", () => {
     );
     expect(hostModeConfirmed(stale)).toBe(false);
   });
+
+  it("checks the binary's libraries before lingering or touching the unit, changing nothing when it can't run", async () => {
+    const { channel, calls } = scripted();
+    const checked: unknown[] = [];
+    const refusal = new Error("libnspr4.so is missing");
+    await expect(
+      bootstrapHostMode({ kind: "ssh", target: "bigbox" }, await outcomeOf(linux({})), {
+        channel,
+        probe: probes([linux({})]).probe,
+        sleep: async () => {},
+        now: clock(),
+        checkLinuxStart: async (target) => {
+          checked.push(target);
+          throw refusal;
+        },
+      })
+    ).rejects.toBe(refusal);
+    expect(checked).toEqual([
+      { executable: "/opt/Daintree/daintree", appPath: null, appImageExtractAndRun: false },
+    ]);
+    expect(calls).toEqual([]);
+  });
+
+  it("checks nothing where Daintree is already running and only takes the request", async () => {
+    const { channel } = scripted();
+    let checks = 0;
+    await bootstrapHostMode(
+      { kind: "ssh", target: "bigbox" },
+      await outcomeOf(linux({ running: true, unit: "enabled", linger: "yes" })),
+      {
+        channel,
+        probe: probes([linux({ unit: "enabled", listening: true, linger: "yes", state: state() })])
+          .probe,
+        sleep: async () => {},
+        now: clock(),
+        checkLinuxStart: async () => {
+          checks++;
+        },
+      }
+    );
+    expect(checks).toBe(0);
+  });
 });
 
 describe("lastRunError", () => {
@@ -859,6 +901,40 @@ describe("bootstrapHostMode on a Linux machine with no init system", () => {
         await outcomeOf(onConnect({ listening: true, state: onConnectState({ pid: 1 }) }))
       )
     ).toBe(false);
+  });
+});
+
+describe("bootstrapHostMode's library check where nothing can start a service", () => {
+  const onConnect = (opts: Parameters<typeof linux>[0]) =>
+    linux(opts).replace("@@dt:end", "@@dt:init docker-init\n@@dt:end");
+
+  it("starts nothing the loader can't run", async () => {
+    const { channel, calls } = scripted();
+    const checked: unknown[] = [];
+    await expect(
+      bootstrapHostMode(
+        { kind: "cloud", bindingId: "b1" },
+        await outcomeOf(onConnect({ install: "appimage", fuse: false })),
+        {
+          channel,
+          probe: probes([onConnect({ install: "appimage", fuse: false })]).probe,
+          sleep: async () => {},
+          now: clock(),
+          checkLinuxStart: async (target) => {
+            checked.push(target);
+            throw new Error("libnspr4.so is missing");
+          },
+        }
+      )
+    ).rejects.toThrow("libnspr4.so is missing");
+    expect(checked).toEqual([
+      {
+        executable: "/home/greg/Applications/Daintree.AppImage",
+        appPath: null,
+        appImageExtractAndRun: true,
+      },
+    ]);
+    expect(calls).toEqual([]);
   });
 });
 

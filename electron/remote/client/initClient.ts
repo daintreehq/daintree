@@ -97,7 +97,11 @@ import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { requireSupportedConnection, sshTargetOf } from "./connection.js";
 import { SshTransport, controlPathFor } from "./sshTransport.js";
-import { createCloudCommandChannel } from "./remoteShell.js";
+import { createCloudCommandChannel, execAsLogin } from "./remoteShell.js";
+import {
+  HOST_PACKAGES_INSTALL_TIMEOUT_MS,
+  HOST_PACKAGES_ROOT_SCRIPT,
+} from "./linuxHostLibraries.js";
 import { HostStarts } from "./hostStarts.js";
 import { WslKeepalive } from "./wslKeepalive.js";
 import { WslTransport } from "./wslTransport.js";
@@ -1036,6 +1040,21 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     forgetCloud: async (bindingId) => {
       cloudTransports.forget(bindingId);
       await cloudFiles.forget(clientDir, bindingId);
+    },
+    cloudPackageInstaller: (bindingId) => {
+      const login = cloudLifecycle?.hostPackagesLogin(bindingId) ?? null;
+      if (!login) return null;
+      return (signal) =>
+        execAsLogin(
+          {
+            resolve: (resolveSignal) =>
+              requireCloudLifecycle().ensureAccess(bindingId, resolveSignal),
+            login,
+            run: defaultCommandRunner,
+          },
+          HOST_PACKAGES_ROOT_SCRIPT,
+          { timeoutMs: HOST_PACKAGES_INSTALL_TIMEOUT_MS, signal }
+        );
     },
     platform: process.platform,
     knownConnections: () => registry.list().map((host) => host.connection),

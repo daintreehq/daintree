@@ -233,6 +233,12 @@ export class Agent37Provider implements CloudProvider {
   readonly id = "agent37" as const;
   /** Agent 37 takes no idempotency key: a create sent again would be another instance. */
   readonly createReplay = "lookup-only" as const;
+  /**
+   * Its templates ship none of the libraries a Host needs, `node` has no sudo,
+   * and an Agent 37 update resets everything outside `/home/node`, so they are
+   * installed as root whenever a start finds them missing (#18179).
+   */
+  readonly hostPackagesLogin = "root";
   private readonly now: () => number;
   /**
    * Keys this process registered, per API origin: when, by this device's

@@ -26,6 +26,7 @@ import {
   liveProcessShell,
   MAC_APP_PATH,
   processStartShell,
+  type ParsedProbe,
   type ProbeOutcome,
 } from "./hostProbe.js";
 import type { UpdateChannel } from "./installPlan.js";
@@ -74,6 +75,12 @@ export interface HostModeBootstrapDeps {
    * request; any other keeps its own.
    */
   updateChannel?: UpdateChannel;
+  /**
+   * Refuses a Linux start whose binary the loader can't run, naming every
+   * library it can't find, after installing them where Daintree may (see
+   * linuxHostLibraries.ts). Runs before anything there is changed.
+   */
+  checkLinuxStart?(target: LinuxLaunchTarget): Promise<void>;
 }
 
 function sq(value: string): string {
@@ -131,6 +138,23 @@ export function linuxLaunchTarget(
   if (install?.packaging === "deb") executable = DEB_EXECUTABLE;
   else if (install?.packaging === "appimage") executable = install.path;
   return linuxTargetFor(executable, install?.packaging === "appimage", probe.advice.fuse);
+}
+
+/**
+ * What the Host mode service runs: the AppImage it names, else what the probe
+ * found installed. Null when neither is a start setup knows.
+ */
+export function serviceLaunchTarget(
+  parsed: Pick<ParsedProbe, "unitAppImage">,
+  probe: Pick<HostProbeResult, "install" | "advice">
+): LinuxLaunchTarget | null {
+  try {
+    return parsed.unitAppImage
+      ? linuxTargetFor(parsed.unitAppImage, true, probe.advice.fuse)
+      : linuxLaunchTarget(probe);
+  } catch {
+    return null;
+  }
 }
 
 /** The script that writes the unit from stdin and enables it; one line of sh. */
@@ -541,6 +565,7 @@ export async function bootstrapHostMode(
       // A fresh launch carries the request itself; anything already running is handed it.
       let handOff = probe.hostModeListening || probe.appRunning;
       if (!handOff) {
+        await deps.checkLinuxStart?.(target);
         const started = await run(
           deps.channel,
           detachedStartScript(target, [
@@ -586,13 +611,15 @@ export async function bootstrapHostMode(
       if (handOff) await handOver(target);
     } else {
       const target = linuxLaunchTarget(probe);
+      const running = probe.hostModeListening || probe.appRunning;
+      // Before lingering or the unit: a start refused here leaves nothing to undo.
+      if (!running) await deps.checkLinuxStart?.(target);
       // Without lingering the user's services stop with their last login. A WSL
       // distro keeps that login for as long as it runs, so it isn't asked.
       if (connection.kind !== "wsl" && probe.advice.linger !== true) {
         const linger = await deps.channel.exec(ENABLE_LINGER_SCRIPT, { timeoutMs: 30_000, signal });
         if (linger.code !== 0) lingerRefused = failureDetail(linger, "loginctl failed");
       }
-      const running = probe.hostModeListening || probe.appRunning;
       if (!running) {
         const saved = await run(
           deps.channel,

@@ -229,6 +229,23 @@ describe("parseHostProbe", () => {
     expect(probe.install?.path).toBe("/home/greg/Applications/Daintree-1.9.0-x86_64.AppImage");
   });
 
+  it("keeps the AppImage the unit starts even where a deb is what's installed", () => {
+    const probe = parseHostProbe(
+      [
+        "@@dt:uname Linux x86_64",
+        "@@dt:install deb /opt/Daintree",
+        "@@dt:unitexec /home/greg/100%% Apps/Daintree.AppImage",
+        "@@dt:end",
+      ].join("\n")
+    );
+    expect(probe.install?.packaging).toBe("deb");
+    expect(probe.unitAppImage).toBe("/home/greg/100% Apps/Daintree.AppImage");
+    const debUnit = parseHostProbe(
+      ["@@dt:uname Linux x86_64", "@@dt:unitexec /opt/Daintree/daintree", "@@dt:end"].join("\n")
+    );
+    expect(debUnit.unitAppImage).toBeUndefined();
+  });
+
   it("takes the AppImage the running process came from when there is no unit", () => {
     const probe = parseHostProbe(
       [
