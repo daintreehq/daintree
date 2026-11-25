@@ -8,6 +8,8 @@ const {
   updateForgeCredentialsMock,
   registerEnterpriseMock,
   disposeEnterpriseMock,
+  registerGhSignInMock,
+  disposeGhSignInMock,
 } = vi.hoisted(() => ({
   gitHubAuthMock: {
     initializeStorage: vi.fn(),
@@ -22,11 +24,14 @@ const {
   updateForgeCredentialsMock: vi.fn(),
   registerEnterpriseMock: vi.fn(),
   disposeEnterpriseMock: vi.fn(),
+  registerGhSignInMock: vi.fn(),
+  disposeGhSignInMock: vi.fn(),
 }));
 
 vi.mock("../GitHubAuth.js", () => ({ GitHubAuth: gitHubAuthMock }));
 vi.mock("../forgeProvider.js", () => ({ githubForgeProvider: {} }));
 vi.mock("../GitHubEnterprise.js", () => ({ registerGitHubEnterprise: registerEnterpriseMock }));
+vi.mock("../GitHubCliSignIn.js", () => ({ registerGhSignIn: registerGhSignInMock }));
 vi.mock("../reviewDecorationProvider.js", () => ({
   registerReviewDecorationProvider: vi.fn(() => vi.fn()),
   createReviewDecorationProvider: vi.fn(),
@@ -60,6 +65,7 @@ describe("github plugin activate", () => {
     gitHubAuthMock.getToken.mockReturnValue(undefined);
     gitHubAuthMock.getTokenVersion.mockReturnValue(0);
     registerEnterpriseMock.mockResolvedValue(disposeEnterpriseMock);
+    registerGhSignInMock.mockResolvedValue(disposeGhSignInMock);
   });
 
   it("loads token storage and the Enterprise Server host before registering the forge provider", async () => {
@@ -96,6 +102,50 @@ describe("github plugin activate", () => {
     dispose();
 
     expect(disposeEnterpriseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the gh sign-in channels when the provider can't register", async () => {
+    const host = makeHost();
+    const order: string[] = [];
+    registerGhSignInMock.mockImplementation(async () => {
+      order.push("register gh sign-in");
+      return () => order.push("dispose gh sign-in");
+    });
+    vi.mocked(host.registerForgeProvider).mockImplementation(async () => {
+      order.push("register provider");
+      throw new Error("registry refused");
+    });
+
+    await expect(activate(host)).rejects.toThrow("registry refused");
+
+    expect(registerGhSignInMock).toHaveBeenCalledWith(host);
+    expect(order).toEqual(["register gh sign-in", "register provider", "dispose gh sign-in"]);
+  });
+
+  it("still registers the forge provider when the gh sign-in channels can't register", async () => {
+    registerGhSignInMock.mockRejectedValue(new Error("channel taken"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const host = makeHost();
+
+    try {
+      const dispose = await activate(host);
+
+      expect(host.registerForgeProvider).toHaveBeenCalledTimes(1);
+      expect(disposeEnterpriseMock).not.toHaveBeenCalled();
+      dispose();
+      expect(disposeEnterpriseMock).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("stops the gh sign-in channels on deactivation", async () => {
+    const dispose = await activate(makeHost());
+    expect(disposeGhSignInMock).not.toHaveBeenCalled();
+
+    dispose();
+
+    expect(disposeGhSignInMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns synchronously even while a stored-token validate hangs (#10325)", async () => {

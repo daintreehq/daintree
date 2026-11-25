@@ -25,6 +25,8 @@ import {
   type EnterpriseTokenResult,
 } from "../../shared/enterprise.js";
 import { GitHubCliImportDetails, describeImportFailure } from "./GitHubCliImport";
+import { GhCliSignInConfirm, GhCliSignInRow, useGhCliSignIn } from "./GitHubCliSignIn";
+import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 
 function invoke<T>(channel: string, args?: unknown): Promise<T> {
   try {
@@ -73,6 +75,7 @@ export function GitHubEnterpriseSection({
   const [confirmingClear, setConfirmingClear] = useState(false);
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const machine = useRemoteHostName() ?? "this machine";
 
   const refreshStatus = async (): Promise<EnterpriseStatus | null> => {
     try {
@@ -116,6 +119,7 @@ export function GitHubEnterpriseSection({
   const token = draft.host === host ? draft.token : "";
   const setToken = (next: string) => setDraft({ host, token: next });
   const working = busy !== null || isSavingHost;
+  const ghSignIn = useGhCliSignIn(host, machine);
 
   const afterTokenChange = () => {
     onTokenChanged();
@@ -153,6 +157,7 @@ export function GitHubEnterpriseSection({
     setBusy(save ? "save" : "test");
     setTokenFeedback(null);
     try {
+      const ghTicket = save ? await ghSignIn.capture(token.trim()) : null;
       // The host shown on the field travels with the token: main refuses it if
       // another window has pointed the account at a different server since.
       const result = await invoke<EnterpriseTokenResult>(
@@ -168,6 +173,8 @@ export function GitHubEnterpriseSection({
       if (save) {
         setToken("");
         setTokenFeedback({ kind: "saved", message: "Checked and saved" });
+        // After the save's own feedback: gh's result never holds or undoes it.
+        void ghSignIn.afterSave(ghTicket, result.account);
         await refreshStatus();
         afterTokenChange();
       } else {
@@ -199,6 +206,7 @@ export function GitHubEnterpriseSection({
         return;
       }
       setTokenFeedback(null);
+      ghSignIn.supersede();
       await refreshStatus();
       afterTokenChange();
     } catch (error) {
@@ -250,6 +258,7 @@ export function GitHubEnterpriseSection({
         );
         return;
       }
+      ghSignIn.supersede();
       setToken("");
       setTokenFeedback({ kind: "saved", message: "Checked and saved" });
       await refreshStatus();
@@ -365,6 +374,7 @@ export function GitHubEnterpriseSection({
                   onValueChange={(next) => {
                     setToken(next);
                     if (tokenFeedback) setTokenFeedback(null);
+                    ghSignIn.clearOutcome();
                   }}
                   onKeyDown={(e) => {
                     if (!isEnterToSubmit(e)) return;
@@ -386,7 +396,17 @@ export function GitHubEnterpriseSection({
                 />
               )}
             />
-            <SettingsActions status={tokenStatus}>
+            <GhCliSignInRow signIn={ghSignIn} machine={machine} disabled={working} />
+            <SettingsActions
+              status={
+                tokenStatus || ghSignIn.status ? (
+                  <div>
+                    {tokenStatus}
+                    {ghSignIn.status}
+                  </div>
+                ) : null
+              }
+            >
               <Button
                 onClick={() => void runTokenCheck(false)}
                 disabled={working || !token.trim()}
@@ -493,6 +513,8 @@ export function GitHubEnterpriseSection({
         confirmLabel="Clear token"
         layer="nested"
       />
+
+      <GhCliSignInConfirm signIn={ghSignIn} machine={machine} />
 
       <ConfirmDialog
         open={importPreview !== null}

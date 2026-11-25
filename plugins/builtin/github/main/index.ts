@@ -8,6 +8,7 @@ import { GitHubAuth } from "./GitHubAuth.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../shared/utils/forgeProviderIds.js";
 import { store } from "../../../../electron/store.js";
 import { registerGitHubEnterprise } from "./GitHubEnterprise.js";
+import { registerGhSignIn } from "./GitHubCliSignIn.js";
 
 // Token STORAGE is plugin-owned (formerly eager in globalServicesInit) and
 // wires up at the top of activate(): persisted tokens live in electron-store
@@ -137,12 +138,24 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   const disposeEnterprise = await registerGitHubEnterprise(host, () => {
     void syncCredentialPresenceToWorkspaceHosts();
   });
+  // Optional: a token save works without it, so its failure can't hold up
+  // the provider. A checked save then reports that gh couldn't be signed in.
+  let disposeGhSignIn: () => void = () => {};
+  try {
+    disposeGhSignIn = await registerGhSignIn(host);
+  } catch (error) {
+    console.warn(
+      "[github-plugin] gh sign-in unavailable:",
+      error instanceof Error ? error.name : typeof error
+    );
+  }
   let disposeForge: () => void;
   try {
     disposeForge = await host.registerForgeProvider({ id: "github" }, githubForgeProvider);
   } catch (error) {
     // A failed activation returns no disposer, so the Enterprise Server
     // session it hydrated would otherwise outlive it.
+    disposeGhSignIn();
     disposeEnterprise();
     throw error;
   }
@@ -166,6 +179,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   return () => {
     disposeForge();
     disposeDecorations();
+    disposeGhSignIn();
     disposeEnterprise();
     stopCacheSweep();
     // stop(), not dispose(): listeners belong to host transports (the forge

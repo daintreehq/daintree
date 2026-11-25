@@ -96,7 +96,7 @@ function classifyExecError(
   return "cli-failed";
 }
 
-async function refreshShellPath(): Promise<void> {
+export async function refreshShellPath(): Promise<void> {
   try {
     // A Finder-launched app starts with a bare PATH that usually misses gh.
     const { refreshPath } = await import("../../../../electron/setup/environment.js");

@@ -26,6 +26,7 @@ import {
   useGitHubCliAvailable,
 } from "./GitHubCliImport";
 import { GitHubEnterpriseSection } from "./GitHubEnterpriseSection";
+import { GhCliSignInConfirm, GhCliSignInRow, useGhCliSignIn } from "./GitHubCliSignIn";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
@@ -76,6 +77,8 @@ export function GitHubSettingsTab() {
   // fix (e.g. "Run gh auth login"), which a user may still be reading.
   const [cliImportError, setCliImportError] = useState<string | null>(null);
   const isImporting = cliImportPhase !== "idle";
+  const machine = remoteHostName ?? "this machine";
+  const ghSignIn = useGhCliSignIn(GITHUB_COM_HOST, machine);
 
   // initialize() is singleflight via the store's `initPromise` — calling it
   // again on retry returns the hung promise. refresh() always issues a fresh
@@ -98,6 +101,7 @@ export function GitHubSettingsTab() {
 
   const handleTokenChange = (next: string) => {
     setGithubToken(next);
+    ghSignIn.clearOutcome();
     // A result belongs to the token it was produced for.
     if (validationResult !== null) {
       setValidationResult(null);
@@ -113,10 +117,12 @@ export function GitHubSettingsTab() {
     setErrorMessage(null);
 
     try {
+      const token = githubToken.trim();
+      const ghTicket = await ghSignIn.capture(token);
       // The host's forge credential surface validates against GitHub before
       // persisting and delivers the token to the live provider impl.
       const validation = await window.electron.forge.setCredential(BUILTIN_GITHUB_PROVIDER_ID, {
-        token: githubToken.trim(),
+        token,
       });
       if (validation.valid) {
         setGithubToken("");
@@ -128,6 +134,8 @@ export function GitHubSettingsTab() {
         void actionService.dispatch("worktree.refresh", undefined, {
           source: "user",
         });
+        // After the save's own feedback: gh's result never holds or undoes it.
+        void ghSignIn.afterSave(ghTicket, validation.account);
       } else {
         setValidationResult("error");
         setErrorMessage(validation.error || "Invalid token");
@@ -147,6 +155,7 @@ export function GitHubSettingsTab() {
     try {
       await window.electron.forge.clearCredential(BUILTIN_GITHUB_PROVIDER_ID);
       updateConfig({ hasToken: false });
+      ghSignIn.supersede();
       setValidationResult(null);
       setErrorMessage(null);
     } catch (error) {
@@ -242,6 +251,7 @@ export function GitHubSettingsTab() {
       }
       // An imported token is a saved token: same confirmation, and the
       // connected line above names the account it belongs to.
+      ghSignIn.supersede();
       setGithubToken("");
       setErrorMessage(null);
       setValidationResult("success");
@@ -355,7 +365,21 @@ export function GitHubSettingsTab() {
               </div>
             )}
           />
-          <SettingsActions status={tokenStatus}>
+          <GhCliSignInRow
+            signIn={ghSignIn}
+            machine={machine}
+            disabled={isValidating || isTesting || isImporting}
+          />
+          <SettingsActions
+            status={
+              tokenStatus || ghSignIn.status ? (
+                <div>
+                  {tokenStatus}
+                  {ghSignIn.status}
+                </div>
+              ) : null
+            }
+          >
             <Button
               onClick={handleTestToken}
               disabled={isValidating || isClearing || isImporting || !githubToken.trim()}
@@ -485,6 +509,8 @@ export function GitHubSettingsTab() {
         confirmLabel="Clear token"
         layer="nested"
       />
+
+      <GhCliSignInConfirm signIn={ghSignIn} machine={machine} />
 
       <ConfirmDialog
         open={cliImportPhase === "confirming" || cliImportPhase === "committing"}
