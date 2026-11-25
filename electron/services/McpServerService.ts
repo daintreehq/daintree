@@ -665,7 +665,9 @@ export class McpServerService {
         return readWorktreesLocalWork(
           panes.map(({ projectId, worktreeId }) => ({
             projectPath:
-              projectId === undefined ? null : (projectStore.getProjectById(projectId)?.path ?? null),
+              projectId === undefined
+                ? null
+                : (projectStore.getProjectById(projectId)?.path ?? null),
             worktreeId,
           })),
           { signal, deadlineMs: CLOSE_RESULT_WORKTREE_READ_DEADLINE_MS }

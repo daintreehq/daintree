@@ -2845,7 +2845,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               panes,
               extra.signal
             );
-            const worktreeOf = new Map(panes.map((pane, index) => [pane.terminalId, worktrees[index]]));
+            const worktreeOf = new Map(
+              panes.map((pane, index) => [pane.terminalId, worktrees[index]])
+            );
             results.forEach((entry, index) => {
               const worktree = entry.ok ? worktreeOf.get(entry.target) : undefined;
               const answer = entry.result;
@@ -4343,9 +4345,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 )
               : dispatched,
             closedPane !== undefined && closedPanes === undefined
-              ? readClosedPaneWorktrees(deps.readClosedPaneWorktrees, [closedPane], extra.signal).then(
-                  ([worktree]) => worktree
-                )
+              ? readClosedPaneWorktrees(
+                  deps.readClosedPaneWorktrees,
+                  [closedPane],
+                  extra.signal
+                ).then(([worktree]) => worktree)
               : undefined,
           ]);
           // A global close says what its question said of the worktree (#18151).

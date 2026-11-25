@@ -109,11 +109,10 @@ export async function readClosedPaneWorktrees(
   panes: readonly ClosingAgentPane[],
   signal: AbortSignal
 ): Promise<WorktreeLocalWork[]> {
-  const answers = panes.map(
-    (pane): WorktreeLocalWork =>
-      pane.unread !== true && pane.worktreeId === undefined
-        ? { kind: "not-applicable" }
-        : { kind: "unreadable" }
+  const answers = panes.map((pane): WorktreeLocalWork =>
+    pane.unread !== true && pane.worktreeId === undefined
+      ? { kind: "not-applicable" }
+      : { kind: "unreadable" }
   );
   const asked = panes.flatMap((pane, index) =>
     pane.unread !== true && pane.worktreeId !== undefined

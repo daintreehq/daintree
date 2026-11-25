@@ -1092,7 +1092,9 @@ describe("session-scoped resource ownership (#11909)", () => {
         const { results } = payloadOf<{
           results: Array<{ target: string; ok: boolean; result?: { worktree?: unknown } }>;
         }>(result);
-        expect(results.map(({ target, ok, result: answer }) => [target, ok, answer?.worktree])).toEqual([
+        expect(
+          results.map(({ target, ok, result: answer }) => [target, ok, answer?.worktree])
+        ).toEqual([
           ["terminal-1", true, observed(4)],
           ["terminal-2", true, observed(4)],
           ["terminal-3", true, observed(0)],
