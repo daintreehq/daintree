@@ -800,11 +800,13 @@ ptyManager.setAnsweringViewProbe(
   createAnsweringViewProbe({
     getTerminal: (id) => ptyManager.getTerminal(id),
     rendererConnections,
+    terminalWorkerConnections,
     windowProjectMap,
     fallbackEligibleProjects,
     frozenViewProjects,
     mayDriveFrom: (id, connectionId) => ptyManager.mayDriveFrom(id, connectionId),
     mayDriveLocally: (id) => ptyManager.mayDriveLocally(id),
+    isHiddenCopySkipped: (id) => ipcQueueManager.isHiddenSkipped(id),
   })
 );
 

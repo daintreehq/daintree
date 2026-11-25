@@ -7,6 +7,8 @@ vi.mock("node-pty", () => ({ spawn: vi.fn() }));
 
 const CPR_QUERY = "\x1b[6n";
 const CPR_REPLY = "\x1b[1;1R";
+const DSR_QUERY = "\x1b[5n";
+const DSR_REPLY = "\x1b[0n";
 
 let ptyWrite: ReturnType<typeof vi.fn<(data: string) => void>>;
 let feedPty: ((data: string) => void) | null;
@@ -52,11 +54,8 @@ function createPlainTerminal(withProbe = true): TerminalProcess {
   return proc;
 }
 
-// eslint-disable-next-line no-control-regex
-const CPR_REPLY_RE = /^\x1b\[\d+;\d+R$/;
-
-function cprWrites(): string[] {
-  return ptyWrite.mock.calls.map(([data]) => data).filter((data) => CPR_REPLY_RE.test(data));
+function ptyWrites(): string[] {
+  return ptyWrite.mock.calls.map(([data]) => data);
 }
 
 // Replies are decided as the mirror parses, on its own schedule. A marker
@@ -84,43 +83,43 @@ describe("TerminalProcess headless replies (#18185)", () => {
     vi.restoreAllMocks();
   });
 
-  it("answers a plain terminal's cursor query when no view is parsing it", async () => {
-    createPlainTerminal();
+  it("answers a plain terminal's queries when no view is parsing it", async () => {
+    const proc = createPlainTerminal();
 
-    feedPty!(CPR_QUERY);
+    await feedAndParse(proc, CPR_QUERY + DSR_QUERY, "a");
 
-    await vi.waitFor(() => expect(cprWrites()).toEqual([CPR_REPLY]));
+    expect(ptyWrites()).toEqual([CPR_REPLY, DSR_REPLY]);
   });
 
-  it("leaves the reply to the view while one parses the terminal's output", async () => {
+  it("leaves the replies to the view while one parses the terminal's output", async () => {
     const proc = createPlainTerminal();
     viewAnswers = true;
 
-    await feedAndParse(proc, CPR_QUERY, "a");
+    await feedAndParse(proc, CPR_QUERY + DSR_QUERY, "a");
 
-    expect(cprWrites()).toEqual([]);
+    expect(ptyWrites()).toEqual([]);
   });
 
   it("decides per reply, after the responder is already installed", async () => {
     const proc = createPlainTerminal();
 
     await feedAndParse(proc, CPR_QUERY, "a");
-    expect(cprWrites()).toHaveLength(1);
+    expect(ptyWrites()).toEqual([CPR_REPLY]);
 
     viewAnswers = true;
-    await feedAndParse(proc, "\x1b]11;?\x1b\\" + CPR_QUERY, "b");
-    expect(cprWrites()).toHaveLength(1);
+    await feedAndParse(proc, DSR_QUERY + CPR_QUERY, "b");
+    expect(ptyWrites()).toEqual([CPR_REPLY]);
 
     viewAnswers = false;
-    await feedAndParse(proc, CPR_QUERY, "c");
-    expect(cprWrites()).toHaveLength(2);
+    await feedAndParse(proc, DSR_QUERY, "c");
+    expect(ptyWrites()).toEqual([CPR_REPLY, DSR_REPLY]);
   });
 
   it("keeps answering when nothing reports on views", async () => {
-    createPlainTerminal(false);
+    const proc = createPlainTerminal(false);
 
-    feedPty!(CPR_QUERY);
+    await feedAndParse(proc, CPR_QUERY, "a");
 
-    await vi.waitFor(() => expect(cprWrites()).toEqual([CPR_REPLY]));
+    expect(ptyWrites()).toEqual([CPR_REPLY]);
   });
 });

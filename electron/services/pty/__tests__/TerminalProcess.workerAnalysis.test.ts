@@ -39,12 +39,12 @@ class FakeWorker implements WorkerLike {
   }
 }
 
-function createMockPty(): IPty {
+function createMockPty(write: (data: string) => void = () => {}): IPty {
   const pty: Partial<IPty> = {
     pid: 123,
     cols: 80,
     rows: 24,
-    write: () => {},
+    write,
     resize: () => {},
     kill: () => {},
     pause: () => {},
@@ -55,7 +55,9 @@ function createMockPty(): IPty {
   return pty as IPty;
 }
 
-function createWorkerModeTerminal() {
+function createWorkerModeTerminal(
+  options: { write?: (data: string) => void; hasAnsweringView?: (id: string) => boolean } = {}
+) {
   const workers: FakeWorker[] = [];
   const pool = new AnalysisWorkerPool(1, () => {
     const worker = new FakeWorker();
@@ -77,9 +79,10 @@ function createWorkerModeTerminal() {
       ptyPool: null,
       processTreeCache: null,
       analysisWorkerPool: pool,
+      hasAnsweringView: options.hasAnsweringView,
     },
     ctx,
-    createMockPty()
+    createMockPty(options.write)
   );
   return { terminal, worker: workers[0], agentStateService, pool };
 }
@@ -99,6 +102,23 @@ describe("TerminalProcess worker-mode analysis events", () => {
     expect(terminal.getInfo().serializeAddon).toBeUndefined();
     expect(terminal.getVisibleActivityLines(10)).toEqual([]);
     expect(terminal.getVisibleActivitySnapshot(10)).toMatchObject({ length: 0 });
+    terminal.dispose();
+  });
+
+  it("writes the worker mirror's reply only while no view answers the terminal (#18185)", () => {
+    let viewAnswers = true;
+    const write = vi.fn<(data: string) => void>();
+    const { terminal, worker } = createWorkerModeTerminal({
+      write,
+      hasAnsweringView: () => viewAnswers,
+    });
+
+    worker.emit("message", { type: "pty-response", terminalId: "t1", data: "\x1b[1;1R" });
+    expect(write).not.toHaveBeenCalled();
+
+    viewAnswers = false;
+    worker.emit("message", { type: "pty-response", terminalId: "t1", data: "\x1b[2;1R" });
+    expect(write.mock.calls).toEqual([["\x1b[2;1R"]]);
     terminal.dispose();
   });
 

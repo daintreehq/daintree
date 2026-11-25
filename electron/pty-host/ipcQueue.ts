@@ -178,6 +178,11 @@ export class IpcQueueManager {
     return true;
   }
 
+  /** Whether a chunk for `id` was skipped for its cached views since they last repainted. */
+  isHiddenSkipped(id: string): boolean {
+    return this.hiddenSkipNotified.has(id);
+  }
+
   /**
    * A snapshot of `id` is being taken, and a view repainting from it has
    * everything skipped so far. Any later skip is news to that view again.
