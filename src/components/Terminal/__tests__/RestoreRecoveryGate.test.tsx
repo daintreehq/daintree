@@ -653,6 +653,7 @@ describe("RestoreRecoveryGate — held by the resume setting (#13509)", () => {
     render(<RestoreRecoveryGate panelId="p-1" isFocused />);
 
     expect(screen.getByRole("heading", { name: "Not resumed after restart" })).toBeTruthy();
+    expect(screen.getByText(/set to wait after a restart instead of resuming/)).toBeTruthy();
     expect(screen.queryByText(/plugin/i)).toBeNull();
     expect(screen.getByRole("button", { name: "Resume session" })).toBeTruthy();
     expect(launchFromRestoreRecovery).not.toHaveBeenCalled();

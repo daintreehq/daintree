@@ -808,6 +808,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
               ...provenance,
+              // Kept for either exit's relaunch, so the agent that finally
+              // starts is held as the launch asked (#18178).
+              ...(launchOptions?.holdOnRestart === true && { holdOnRestart: true as const }),
               focusPolicy,
             };
             // Resolved inside the updater, read after it: the gate may reuse a

@@ -2904,21 +2904,25 @@ describe("restored panes and the plugin hold (#14017)", () => {
       ]);
     });
 
-    it.each(["shell", "browser", "missing"])(
-      "refuses the %s pane, which restore never holds",
-      async (terminalId) => {
-        await expect(
-          definition("terminal.setHoldOnRestartOwned").run({ terminalId, hold: true }, {
-            dispatchSource: "agent",
-          } as never)
-        ).rejects.toThrow(/not an agent terminal/);
-        expect(setHoldOnRestart).not.toHaveBeenCalled();
-      }
-    );
-
-    it("refuses a call without a boolean hold", async () => {
+    it.each([
+      ["shell", true],
+      ["shell", false],
+      ["browser", true],
+      ["browser", false],
+      ["missing", true],
+      ["missing", false],
+    ])("refuses the %s pane (hold=%s), which restore never holds", async (terminalId, hold) => {
       await expect(
-        definition("terminal.setHoldOnRestartOwned").run({ terminalId: "worker" }, {
+        definition("terminal.setHoldOnRestartOwned").run({ terminalId, hold }, {
+          dispatchSource: "agent",
+        } as never)
+      ).rejects.toThrow(/not an agent terminal/);
+      expect(setHoldOnRestart).not.toHaveBeenCalled();
+    });
+
+    it.each([{}, { hold: "true" }])("refuses a call without a boolean hold (%o)", async (extra) => {
+      await expect(
+        definition("terminal.setHoldOnRestartOwned").run({ terminalId: "worker", ...extra }, {
           dispatchSource: "agent",
         } as never)
       ).rejects.toThrow();

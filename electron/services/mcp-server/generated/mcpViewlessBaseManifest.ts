@@ -3102,11 +3102,11 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       },
       required: ["terminalId", "hold"],
     },
-    keywords: ["resume", "restart", "finished", "owned"],
+    keywords: ["resume", "hold", "finished", "owned"],
     kind: "command",
     name: "terminal.setHoldOnRestartOwned",
     requiresArgs: true,
-    title: "Hold owned agent on restart",
+    title: "Keep owned agent from resuming",
   },
   {
     band: "reversible",

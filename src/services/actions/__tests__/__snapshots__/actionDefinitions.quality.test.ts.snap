@@ -6597,13 +6597,13 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "id": "terminal.setHoldOnRestartOwned",
     "keywords": [
       "resume",
-      "restart",
+      "hold",
       "finished",
       "owned",
     ],
     "kind": "command",
     "requiresArgs": true,
-    "title": "Hold owned agent on restart",
+    "title": "Keep owned agent from resuming",
   },
   {
     "category": "terminal",

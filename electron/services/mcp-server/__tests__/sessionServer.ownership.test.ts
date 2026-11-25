@@ -1741,23 +1741,25 @@ describe("session-scoped resource ownership (#11909)", () => {
   });
 
   describe("terminal.setHoldOnRestartOwned (#18178)", () => {
-    const HOLD_RESULT = { terminalId: "terminal-1", holdOnRestart: true };
-
     // An Assistant's tool set: the hold is on core, and off the api-key list.
-    function holdHarness(sessionId: string) {
+    // The stub echoes what it was sent, so a dropped or flipped `hold` shows.
+    function holdHarness(sessionId: string, overrides: Partial<SessionServerDeps> = {}) {
       const store = makeStore();
       seedLiveSession(store, sessionId, "core");
       store.sessionOriginMap.set(sessionId, "external");
-      const dispatchAction = vi.fn(async (actionId: string) =>
-        actionId === "terminal.setHoldOnRestartOwned"
-          ? { result: { ok: true as const, result: HOLD_RESULT } }
-          : { result: { ok: true as const, result: null } }
-      );
+      const dispatchAction = vi.fn(async (actionId: string, args: unknown) => {
+        if (actionId !== "terminal.setHoldOnRestartOwned") {
+          return { result: { ok: true as const, result: null } };
+        }
+        const { terminalId, hold } = args as { terminalId: string; hold: boolean };
+        return { result: { ok: true as const, result: { terminalId, holdOnRestart: hold } } };
+      });
       const deps = fakeDeps({
         sessionStore: store,
         dispatchAction,
         requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
         getCachedManifest: vi.fn(() => ownedManifest()),
+        ...overrides,
       });
       store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
       return { store, dispatchAction, server: createSessionServer(sessionId, deps) };
@@ -1775,12 +1777,43 @@ describe("session-scoped resource ownership (#11909)", () => {
       });
 
       expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledOnce();
       expect(dispatchAction).toHaveBeenCalledWith(
         "terminal.setHoldOnRestartOwned",
         { hold: true, terminalId: "terminal-1" },
         expect.anything()
       );
       expect(payloadOf<{ holdOnRestart: boolean }>(result).holdOnRestart).toBe(true);
+    });
+
+    // Short MCP ids (`claude-7f3a`) can be freed and minted again: a pane
+    // another session launched under the id while the call waited is never
+    // held on the first session's say.
+    it("sends nothing when another session's launch takes the id while the call waits", async () => {
+      const requestManifest = vi.fn();
+      const { store, server, dispatchAction } = holdHarness("s-hold-race", {
+        getCachedManifest: vi.fn(() => null),
+        requestManifest,
+      });
+      requestManifest.mockImplementation(async () => {
+        store.resourceOwnership.record("other-session", [{ kind: "terminal", id: "terminal-1" }]);
+        return ownedManifest();
+      });
+
+      const result = await callTool(server, {
+        name: "terminal.setHoldOnRestartOwned",
+        arguments: { terminalId: "terminal-1", hold: true },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      // The recheck's refusal, not the gate's: the call was admitted first.
+      expect(errorText(result)).toContain("stopped being this session's");
+      expect(dispatchAction).not.toHaveBeenCalledWith(
+        "terminal.setHoldOnRestartOwned",
+        expect.anything(),
+        expect.anything()
+      );
     });
 
     it.each([true, false])(
@@ -4213,7 +4246,7 @@ describe("session-scoped resource ownership (#11909)", () => {
 
     // A hand-over names a conversation the user started and will want back
     // after a restart, so it never buys the right to hold it (#18178).
-    it("never holds a handed-over terminal on restart", async () => {
+    it.each([true, false])("never sets hold=%s on a handed-over terminal", async (hold) => {
       const store = makeStore();
       const dispatchAction = listingDispatch();
       const server = orchestratorSession(store, "s-orch", dispatchAction);
@@ -4221,7 +4254,7 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       const result = await callTool(server, {
         name: "terminal.setHoldOnRestartOwned",
-        arguments: { terminalId: "terminal-handed", hold: true },
+        arguments: { terminalId: "terminal-handed", hold },
       });
 
       expect(result.isError).toBe(true);

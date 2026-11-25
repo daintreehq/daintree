@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildHandbackInstruction } from "@shared/utils/handback";
+import { unknownAgentIdMessage } from "@shared/utils/agentLaunchValidation";
 import { isRegisteredAgent } from "@/config/agents";
 import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
@@ -2815,6 +2816,7 @@ describe("agent.launch holds the pane it creates on restart (#18178)", () => {
 
     await callAction(actions, "agent.launch", { agentId: "claude", holdOnRestart: hold });
 
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledOnce();
     expect(callbacks.onLaunchAgent.mock.calls[0]?.[1]?.holdOnRestart).toBeUndefined();
   });
 
@@ -2837,7 +2839,7 @@ describe("agent.launch holds the pane it creates on restart (#18178)", () => {
 
     await expect(
       callAction(actions, "agent.launch", { agentId: "claud", holdOnRestart: true })
-    ).rejects.toThrow(/claud/);
+    ).rejects.toThrow(unknownAgentIdMessage("claud"));
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
   });
 });

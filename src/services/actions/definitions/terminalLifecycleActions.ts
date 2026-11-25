@@ -857,14 +857,14 @@ export function registerTerminalLifecycleActions(
   // launched the pane.
   actions.set("terminal.setHoldOnRestartOwned", () => ({
     id: "terminal.setHoldOnRestartOwned",
-    title: "Hold owned agent on restart",
+    title: "Keep owned agent from resuming",
     description:
       "Keep an agent panel this session launched (not a handed one) from resuming on restart, or release it. Held, it waits to be started whatever the resume setting; starting it clears the hold.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    keywords: ["resume", "restart", "finished", "owned"],
+    keywords: ["resume", "hold", "finished", "owned"],
     palette: { mode: "hidden" },
     denyPluginDispatch: true,
     argsSchema: SetHoldOnRestartOwnedArgsSchema,

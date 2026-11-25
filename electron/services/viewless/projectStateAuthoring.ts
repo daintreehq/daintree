@@ -160,7 +160,9 @@ export async function setViewlessTerminalHold(
       return null;
     }
     found = true;
-    if ((target.holdOnRestart === true) === hold) return null;
+    // Unchanged, but returned rather than null, so this call shares the
+    // batch's save result: a save that fails fails it too.
+    if ((target.holdOnRestart === true) === hold) return existing;
     return {
       ...existing,
       terminals: existing.terminals.map((terminal): PanelSnapshot => {

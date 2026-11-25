@@ -9,10 +9,24 @@ import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 
 const addPanel = vi.fn();
 
+// The panels the missing-CLI gate writes directly, rather than through addPanel.
+const panelState = vi.hoisted(() => {
+  const panels: {
+    panelsById: Record<string, Record<string, unknown>>;
+    panelIds: string[];
+    panelIdsByWorktreeId: Record<string, string[]>;
+  } = { panelsById: {}, panelIds: [], panelIdsByWorktreeId: {} };
+  return panels;
+});
+
 vi.mock("@/store/panelStore", () => {
-  const state = { addPanel: (...args: unknown[]) => addPanel(...args), panelsById: {} };
+  const state = Object.assign(panelState, {
+    addPanel: (...args: unknown[]) => addPanel(...args),
+  });
   const usePanelStore = Object.assign((selector: (s: typeof state) => unknown) => selector(state), {
     getState: () => state,
+    setState: (update: (s: typeof state) => Partial<typeof state>) =>
+      Object.assign(state, update(state)),
   });
   return { usePanelStore };
 });
@@ -362,6 +376,37 @@ describe("useAgentLauncher — a hold asked for at launch (#18178)", () => {
     });
 
     expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("holdOnRestart");
+  });
+
+  // The gate stands in for the launch until "Run anyway" or a re-check
+  // relaunches it from the gate's own fields, so the hold has to be on it.
+  it("keeps the hold on the setup panel a missing CLI opens instead", async () => {
+    getCurrentLaunchCliDetail.mockResolvedValue({ state: "missing" });
+    const state = panelState;
+    const { result } = renderHook(() => useAgentLauncher());
+
+    try {
+      await act(async () => {
+        await result.current.launchAgent("claude", {
+          holdOnRestart: true,
+          focusPolicy: "preserve",
+        });
+      });
+
+      expect(addPanel).not.toHaveBeenCalled();
+      const gates = Object.values(state.panelsById);
+      expect(gates).toHaveLength(1);
+      expect(gates[0]).toMatchObject({
+        spawnStatus: "missing-cli",
+        launchAgentId: "claude",
+        holdOnRestart: true,
+      });
+    } finally {
+      state.panelsById = {};
+      state.panelIds = [];
+      state.panelIdsByWorktreeId = {};
+      getCurrentLaunchCliDetail.mockReset();
+    }
   });
 
   it("never holds a plain shell, which restore brings back as it always does", async () => {

@@ -5,7 +5,11 @@ import {
   _resetHostStartedTerminalsForTesting,
   hostStartedTerminals,
 } from "../hostStartedTerminals.js";
-import { backgroundViewlessTerminal, forgetViewlessTerminal } from "../projectStateAuthoring.js";
+import {
+  backgroundViewlessTerminal,
+  forgetViewlessTerminal,
+  setViewlessTerminalHold,
+} from "../projectStateAuthoring.js";
 
 const startedIds = (projectId: string) => hostStartedTerminals(projectId).map((t) => t.id);
 
@@ -202,5 +206,47 @@ describe("backgroundViewlessTerminal (#15982)", () => {
     expect(state).toBe(saved);
     expect(hostStartedTerminals("proj-1")).toEqual(recorded);
     expect(startedIds("proj-1")).toEqual(["t-1"]);
+  });
+});
+
+// #18178: a hold already in the state asked for still joins the batch's save,
+// so a save that fails is reported to every caller that asked for it.
+describe("setViewlessTerminalHold", () => {
+  const WORKER: PanelSnapshot = {
+    id: "t-worker",
+    kind: "terminal",
+    title: "Claude",
+    location: "grid",
+    launchAgentId: "claude",
+  };
+
+  function failingWriter(initial: ProjectState) {
+    const writer: ProjectStateWriter = {
+      enqueueProjectStateUpdate: async (_projectId, updater) => {
+        const next = await updater(initial);
+        if (next !== null) throw new Error("disk full");
+      },
+    };
+    return writer;
+  }
+
+  it("fails a hold the layout already has when the save it joins fails", async () => {
+    const state: ProjectState = {
+      projectId: "p-1",
+      sidebarWidth: 350,
+      terminals: [{ ...WORKER, holdOnRestart: true }],
+    };
+
+    await expect(
+      setViewlessTerminalHold(failingWriter(state), "p-1", "t-worker", true)
+    ).rejects.toThrow("disk full");
+  });
+
+  it("reports a panel the layout doesn't hold without joining any save", async () => {
+    const state: ProjectState = { projectId: "p-1", sidebarWidth: 350, terminals: [WORKER] };
+
+    await expect(
+      setViewlessTerminalHold(failingWriter(state), "p-1", "t-missing", true)
+    ).resolves.toBe(false);
   });
 });
