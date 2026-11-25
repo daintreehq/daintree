@@ -95,7 +95,7 @@ const ANSWERS: Record<SignInOfferAnswer, { outcome: HostControlOutcomeCode; deta
   rate_limited: {
     outcome: "rate_limited",
     detail:
-      "The host refused another sign-in for now; it may already run as many as it allows. Try again shortly, or ask the person to close one.",
+      "The sign-in was refused for now, by the host or the link to it; the host may already run as many as it allows. Try again shortly, or ask the person to close one.",
   },
   failed: {
     outcome: "conflict",

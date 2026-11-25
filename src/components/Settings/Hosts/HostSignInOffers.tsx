@@ -21,11 +21,14 @@ const NO_FALLBACK = () => null;
  * over whatever the person has open: nothing is navigated away from. Only Main
  * sends these, to the view it chose. One that already ended is let be; one met
  * by a sign-in dialog already open here is refused, which ends it on its host,
- * since that dialog is the person's. This owns an offer until its dialog does.
+ * since that dialog is the person's. This owns an offer until its dialog does,
+ * and puts the dialog away once Main says nothing waits on it, or at its
+ * deadline unless Main took it as shown: Main has ended it on its host by then.
  */
 export function HostSignInOffers() {
   const [offer, setOffer] = useState<HostSignInOffer | null>(null);
   const showing = useRef<string | null>(null);
+  const taken = useRef(false);
 
   useEffect(() => {
     const onEvent = window.electron?.canopyHost?.onEvent;
@@ -39,6 +42,7 @@ export function HostSignInOffers() {
         return;
       }
       showing.current = event.consumer;
+      taken.current = false;
       setOffer({
         hostId: event.hostId,
         hostName: event.hostName,
@@ -49,6 +53,19 @@ export function HostSignInOffers() {
       });
     });
   }, []);
+
+  useEffect(() => {
+    if (offer === null) return undefined;
+    const timer = setTimeout(
+      () => {
+        if (taken.current || showing.current !== offer.consumer) return;
+        showing.current = null;
+        setOffer(null);
+      },
+      Math.max(0, offer.expiresAt - Date.now())
+    );
+    return () => clearTimeout(timer);
+  }, [offer]);
 
   if (offer === null) return null;
   const close = () => {
@@ -69,7 +86,14 @@ export function HostSignInOffers() {
       }}
     >
       <Suspense fallback={null}>
-        <HostSignInOfferDialog offer={offer} onClose={close} />
+        <HostSignInOfferDialog
+          offer={offer}
+          onSettled={(settled) => {
+            if (settled === "shown") taken.current = true;
+            else close();
+          }}
+          onClose={close}
+        />
       </Suspense>
     </ErrorBoundary>
   );

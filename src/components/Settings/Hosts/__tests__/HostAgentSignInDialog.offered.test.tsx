@@ -60,6 +60,8 @@ const OFFERED = {
 
 let visibility: DocumentVisibilityState = "visible";
 
+const settledWith = vi.fn();
+
 function dialog(offered: typeof OFFERED | null = OFFERED, onClose = () => {}) {
   return (
     <HostAgentSignInDialog
@@ -67,7 +69,7 @@ function dialog(offered: typeof OFFERED | null = OFFERED, onClose = () => {}) {
       hostName="Studio"
       agentId="claude"
       agentName="Claude"
-      {...(offered ? { offered } : {})}
+      {...(offered ? { offered, onOfferSettled: settledWith } : {})}
       onClose={onClose}
     />
   );
@@ -95,6 +97,7 @@ describe("HostAgentSignInDialog on a sign-in an assistant started (#18197)", () 
     client.releaseSignIn.mockClear();
     client.signInShown.mockReset();
     client.signInShown.mockResolvedValue("shown");
+    settledWith.mockClear();
     visibility = "visible";
     Object.defineProperty(document, "visibilityState", {
       configurable: true,
@@ -126,6 +129,56 @@ describe("HostAgentSignInDialog on a sign-in an assistant started (#18197)", () 
     fireEvent.click(screen.getByTestId("pane-live"));
     await becomeVisible();
     expect(client.signInShown.mock.calls).toEqual([["offer-1"]]);
+    expect(settledWith.mock.calls).toEqual([["shown"]]);
+  });
+
+  it("asks again after an answer it was waiting on when the view came back meanwhile", async () => {
+    let answer: (value: SignInShownAnswer) => void = () => {};
+    client.signInShown.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    render(dialog());
+    await settle();
+    fireEvent.click(screen.getByTestId("pane-live"));
+    await becomeVisible();
+    expect(client.signInShown).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      answer("not_shown");
+      await Promise.resolve();
+    });
+    await settle();
+    expect(client.signInShown).toHaveBeenCalledTimes(2);
+    expect(settledWith.mock.calls).toEqual([["shown"]]);
+  });
+
+  it("asks again shortly while Main can't take it, until it does", async () => {
+    vi.useFakeTimers();
+    try {
+      client.signInShown.mockResolvedValueOnce("not_shown");
+      render(dialog());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      fireEvent.click(screen.getByTestId("pane-live"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(client.signInShown).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(client.signInShown).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(client.signInShown).toHaveBeenCalledTimes(2);
+      expect(settledWith.mock.calls).toEqual([["shown"]]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says so again once shown when Main couldn't take it, and stops once nothing waits", async () => {
@@ -139,6 +192,20 @@ describe("HostAgentSignInDialog on a sign-in an assistant started (#18197)", () 
     await becomeVisible();
     expect(client.signInShown).toHaveBeenCalledTimes(2);
     await becomeVisible();
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+      await Promise.resolve();
+    });
+    expect(client.signInShown).toHaveBeenCalledTimes(2);
+    expect(settledWith.mock.calls).toEqual([["gone"]]);
+  });
+
+  it("asks again when the window takes focus", async () => {
+    client.signInShown.mockResolvedValueOnce("not_shown");
+    render(dialog());
+    await settle();
+    fireEvent.click(screen.getByTestId("pane-live"));
+    await settle();
     await act(async () => {
       window.dispatchEvent(new Event("focus"));
       await Promise.resolve();

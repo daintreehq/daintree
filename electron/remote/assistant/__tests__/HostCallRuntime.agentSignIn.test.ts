@@ -114,12 +114,28 @@ describe("HostCallRuntime host.startAgentSignIn (#18197)", () => {
           request.signal?.addEventListener("abort", () => resolve("cancelled"));
         })
     );
-    const outcome = runtime.startAgentSignIn("g", { hostId: "studio", agentId: "claude" });
+    const caller = new AbortController();
+    const outcome = runtime.startAgentSignIn(
+      "g",
+      { hostId: "studio", agentId: "claude" },
+      caller.signal
+    );
     await Promise.resolve();
     await Promise.resolve();
     expect(withdrawn?.aborted).toBe(false);
     runtime.standDown("g");
     await expect(outcome).resolves.toMatchObject({ ok: true, value: { outcome: "expired" } });
+
+    // The call's own cancel still reaches it too.
+    let cancelled: AbortSignal | undefined;
+    start.mockImplementationOnce(async (request) => {
+      cancelled = request.signal;
+      return "shown";
+    });
+    const again = new AbortController();
+    await runtime.startAgentSignIn("g", { hostId: "studio", agentId: "claude" }, again.signal);
+    again.abort();
+    expect(cancelled?.aborted).toBe(true);
   });
 
   it("reaches the global Assistant that is coordinating, and refuses one standing by", async () => {

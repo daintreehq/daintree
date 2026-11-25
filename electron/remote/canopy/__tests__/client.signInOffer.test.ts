@@ -3,7 +3,8 @@ import type { CanopyHostEvent } from "../../../../shared/types/ipc/canopyHost.js
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { CanopyHostsClient, SIGN_IN_OFFER_MS } from "../client.js";
-import { CanopyLinkMethod } from "../linkMethods.js";
+import { CANOPY_VIEWER_ENDPOINT_PREFIX, CanopyLinkMethod } from "../linkMethods.js";
+import type { EventMessage } from "../../link/messages.js";
 import { CanopyViewers } from "../viewer.js";
 
 const VIEW = 7;
@@ -29,6 +30,7 @@ function setup(options: { answer?: HostAnswer; send?: () => boolean } = {}) {
     }),
   });
   const sessionListeners: Array<(hostId: string, session: unknown) => void> = [];
+  const viewerListeners: Array<(hostId: string, event: EventMessage) => void> = [];
   const viewGone = new Map<number, () => void>();
   const sent: Array<{ webContentsId: number; event: CanopyHostEvent }> = [];
   let viewerCount = 0;
@@ -42,7 +44,10 @@ function setup(options: { answer?: HostAnswer; send?: () => boolean } = {}) {
         sessionListeners.push(listener as (typeof sessionListeners)[number]);
         return () => {};
       },
-      onViewerEvent: () => () => {},
+      onViewerEvent: (listener) => {
+        viewerListeners.push(listener);
+        return () => {};
+      },
     },
     registry: {
       get: (hostId) => (hostId === "studio" ? { id: hostId } : null),
@@ -82,6 +87,15 @@ function setup(options: { answer?: HostAnswer; send?: () => boolean } = {}) {
       sessionListeners.forEach((listener) =>
         listener("studio", { registerCallHandler: () => () => {} })
       ),
+    /** The host saying the viewer's stream ended. */
+    streamEnded: (viewerId: string, watchId: number) =>
+      viewerListeners.forEach((listener) =>
+        listener("studio", {
+          endpointId: `${CANOPY_VIEWER_ENDPOINT_PREFIX}${viewerId}`,
+          channel: "canopy:terminal-data",
+          args: [{ kind: "ended", watchId, runId: "daintree-sign-in-1" }],
+        } as unknown as EventMessage)
+      ),
   };
 }
 
@@ -90,14 +104,16 @@ async function settleStart(): Promise<void> {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 }
 
-const PENDING = Symbol("pending");
+const PENDING = "still pending";
 /** What a promise has settled to by now, or PENDING. */
 async function peek<T>(promise: Promise<T>): Promise<T | typeof PENDING> {
-  return Promise.race([promise, settleStart().then(() => PENDING)]);
+  return Promise.race<T | typeof PENDING>([promise, settleStart().then(() => PENDING)]);
 }
 
-function opts(extra: { stillShown?: () => boolean; signal?: AbortSignal } = {}) {
-  return { hostName: "Studio", stillShown: () => true, ...extra };
+function opts(
+  extra: { canDeliver?: () => boolean; stillShown?: () => boolean; signal?: AbortSignal } = {}
+) {
+  return { hostName: "Studio", canDeliver: () => true, stillShown: () => true, ...extra };
 }
 
 afterEach(() => {
@@ -149,6 +165,73 @@ describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
     await expect(s.client.signInStep(VIEW, consumer, { op: "watch" })).resolves.toMatchObject({
       watchId: 9,
     });
+  });
+
+  it("takes no word of a stream that ended, or opened with no screen, or after its deadline", async () => {
+    const watches: unknown[] = [
+      { watchId: 9, snapshot: { data: "", cols: 80, rows: 24 } },
+      { watchId: 10, snapshot: null },
+    ];
+    const s = setup({
+      answer: (method, payload) => {
+        if (method !== CanopyLinkMethod.SIGN_IN) return null;
+        if (payload.op === "start") return { terminalId: "daintree-sign-in-1", spawnedAt: 100 };
+        if (payload.op === "watch") return watches.shift() ?? null;
+        return null;
+      },
+    });
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts());
+    await settleStart();
+    const consumer = (s.offers()[0]?.event as { consumer: string }).consumer;
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    s.streamEnded("v1", 9);
+    expect(s.client.signInShown(VIEW, consumer)).toBe("not_shown");
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    expect(s.client.signInShown(VIEW, consumer)).toBe("not_shown");
+    expect(await peek(answer)).toBe(PENDING);
+
+    // Past its deadline, before the timer has run, it is no longer taken.
+    const later = setup();
+    const lateAnswer = later.client.offerSignIn(VIEW, "studio", "codex", opts());
+    await settleStart();
+    const lateConsumer = (later.offers()[0]?.event as { consumer: string }).consumer;
+    await later.client.signInStep(VIEW, lateConsumer, { op: "watch" });
+    const now = vi.spyOn(Date, "now").mockReturnValue(Date.now() + SIGN_IN_OFFER_MS);
+    expect(later.client.signInShown(VIEW, lateConsumer)).toBe("gone");
+    now.mockRestore();
+    expect(await peek(lateAnswer)).toBe(PENDING);
+  });
+
+  it("counts a stream still open when an older overlapping one is let go", async () => {
+    let next = 20;
+    const s = setup({
+      answer: (method, payload) => {
+        if (method !== CanopyLinkMethod.SIGN_IN) return null;
+        if (payload.op === "start") return { terminalId: "daintree-sign-in-1", spawnedAt: 100 };
+        if (payload.op === "watch") {
+          return { watchId: next++, snapshot: { data: "", cols: 80, rows: 24 } };
+        }
+        return null;
+      },
+    });
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts());
+    await settleStart();
+    const consumer = (s.offers()[0]?.event as { consumer: string }).consumer;
+    // StrictMode's replay: two watches overlap, and the first is let go last.
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    await s.client.signInStep(VIEW, consumer, { op: "unwatch", watchId: 20 });
+    expect(s.client.signInShown(VIEW, consumer)).toBe("shown");
+    await expect(answer).resolves.toBe("shown");
+  });
+
+  it("isn't told to a view that no longer shows the assistant when it starts", async () => {
+    const s = setup();
+    await expect(
+      s.client.offerSignIn(VIEW, "studio", "codex", opts({ canDeliver: () => false }))
+    ).resolves.toBe("undelivered");
+    expect(s.offers()).toEqual([]);
+    expect(s.releases()).toHaveLength(1);
   });
 
   it("takes no word of a stream the view has let go", async () => {

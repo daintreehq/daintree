@@ -139,7 +139,12 @@ interface Subscription {
    * A sign-in viewer's terminal once its host started it, and the stream the
    * view has open on it; absent for every other viewer.
    */
-  signIn?: { terminalId: string | null; watchId: number | null };
+  signIn?: {
+    terminalId: string | null;
+    watchId: number | null;
+    /** Every stream the view has open on it now, for an assistant's sign-in's ack (#18197). */
+    openWatches: Set<number>;
+  };
 }
 
 interface ViewRecord {
@@ -541,7 +546,7 @@ export class CanopyHostsClient {
       viewerId,
       consumer: name,
       subjectKey: null,
-      signIn: { terminalId: null, watchId: null },
+      signIn: { terminalId: null, watchId: null, openWatches: new Set() },
     };
     record.signIns.set(name, sub);
     this.byViewer.set(viewerId, sub);
@@ -578,14 +583,18 @@ export class CanopyHostsClient {
     }
     try {
       const answer = await this.callSignIn(sub, parsed);
-      if (parsed.op === "unwatch" && sub.signIn.watchId === parsed.watchId) {
-        sub.signIn.watchId = null;
+      if (parsed.op === "unwatch") {
+        sub.signIn.openWatches.delete(parsed.watchId);
+        if (sub.signIn.watchId === parsed.watchId) sub.signIn.watchId = null;
       }
       if (parsed.op !== "watch") return null;
       const view = answer as CanopyTerminalView;
       // Released or ended while the host answered: that stream is gone.
       if (this.byViewer.get(sub.viewerId) !== sub) return { watchId: null, snapshot: null };
-      sub.signIn.watchId = view.watchId;
+      if (view.watchId !== null) {
+        sub.signIn.watchId = view.watchId;
+        if (view.snapshot !== null) sub.signIn.openWatches.add(view.watchId);
+      }
       return view;
     } catch (error) {
       if (codeOf(error) === "OUTCOME_UNKNOWN" && parsed.op === "input") {
@@ -618,7 +627,14 @@ export class CanopyHostsClient {
     webContentsId: number,
     hostId: HostId,
     agentId: string,
-    options: { hostName: string; stillShown: () => boolean; signal?: AbortSignal }
+    options: {
+      hostName: string;
+      /** Whether that view still shows the assistant, on screen: checked before it is told. */
+      canDeliver: () => boolean;
+      /** Whether that view is on screen: checked when it says it shows the sign-in. */
+      stillShown: () => boolean;
+      signal?: AbortSignal;
+    }
   ): Promise<SignInOfferAnswer> {
     if (options.signal?.aborted === true) return Promise.resolve("cancelled");
     if ((this.views.get(webContentsId)?.signIns.size ?? 0) > 0) return Promise.resolve("busy");
@@ -646,6 +662,11 @@ export class CanopyHostsClient {
       this.startSignIn(webContentsId, consumer, hostId, agentId).then(
         (terminal) => {
           if (settled) return;
+          // The assistant moved to another window while it started: not this one's to show.
+          if (!options.canDeliver()) {
+            finish("undelivered", true);
+            return;
+          }
           const sent = this.options.send(webContentsId, {
             kind: "sign-in-offer",
             hostId,
@@ -674,7 +695,7 @@ export class CanopyHostsClient {
     const sub = this.views.get(webContentsId)?.signIns.get(consumer);
     if (!offer || !sub?.signIn || sub.signIn.terminalId === null) return "gone";
     if (Date.now() >= offer.expiresAt) return "gone";
-    if (sub.signIn.watchId === null || !offer.stillShown()) return "not_shown";
+    if (sub.signIn.openWatches.size === 0 || !offer.stillShown()) return "not_shown";
     offer.finish("shown", false);
     return "shown";
   }
@@ -986,11 +1007,14 @@ export class CanopyHostsClient {
     const channel = event.channel;
     if (sub.signIn) {
       if (channel !== "canopy:terminal-data") return;
+      const chunk = event.args[0] as CanopyTerminalData;
+      // A stream that ended shows nothing live any more.
+      if (chunk?.kind === "ended") sub.signIn.openWatches.delete(chunk.watchId);
       this.options.send(sub.webContentsId, {
         kind: "sign-in-terminal-data",
         hostId,
         consumer: sub.consumer as string,
-        chunk: event.args[0] as CanopyTerminalData,
+        chunk,
       });
       return;
     }

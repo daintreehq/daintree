@@ -10,9 +10,17 @@ const dialogFails = vi.hoisted(() => ({ value: false }));
 vi.mock("../HostSignInOfferDialog", () => ({
   default: ({
     offer,
+    onSettled,
     onClose,
   }: {
-    offer: { hostId: string; hostName: string; agentId: string; consumer: string };
+    offer: {
+      hostId: string;
+      hostName: string;
+      agentId: string;
+      consumer: string;
+      terminal: { terminalId: string; spawnedAt: number };
+    };
+    onSettled: (settled: "shown" | "gone") => void;
     onClose: () => void;
   }) => {
     if (dialogFails.value) throw new Error("chunk gone");
@@ -22,7 +30,14 @@ vi.mock("../HostSignInOfferDialog", () => ({
         data-consumer={offer.consumer}
         data-host={`${offer.hostId}/${offer.hostName}`}
         data-agent={offer.agentId}
+        data-terminal={`${offer.terminal.terminalId}@${offer.terminal.spawnedAt}`}
       >
+        <button type="button" onClick={() => onSettled("shown")}>
+          Taken
+        </button>
+        <button type="button" onClick={() => onSettled("gone")}>
+          Gone
+        </button>
         <button type="button" onClick={onClose}>
           Close
         </button>
@@ -87,6 +102,7 @@ describe("HostSignInOffers (#18197)", () => {
     expect(dialog.getAttribute("data-consumer")).toBe("offer-1");
     expect(dialog.getAttribute("data-host")).toBe("studio/Studio");
     expect(dialog.getAttribute("data-agent")).toBe("codex");
+    expect(dialog.getAttribute("data-terminal")).toBe("daintree-sign-in-1@1");
     expect(releaseSignIn).not.toHaveBeenCalled();
     unmount();
     expect(subscribed).toBe(0);
@@ -135,5 +151,36 @@ describe("HostSignInOffers (#18197)", () => {
     dialogFails.value = false;
     await push(offer("next"));
     expect((await screen.findByTestId("offer-dialog")).getAttribute("data-consumer")).toBe("next");
+  });
+
+  it("puts the dialog away once Main says nothing waits on it", async () => {
+    render(<HostSignInOffers />);
+    await push(offer("ended"));
+    await screen.findByTestId("offer-dialog");
+    fireEvent.click(screen.getByRole("button", { name: "Gone" }));
+    expect(screen.queryByTestId("offer-dialog")).toBeNull();
+  });
+
+  it("puts it away at its deadline unless Main took it as shown", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<HostSignInOffers />);
+      await push(offer("untaken", Date.now() + 30_000));
+      await screen.findByTestId("offer-dialog");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(screen.queryByTestId("offer-dialog")).toBeNull();
+
+      await push(offer("taken", Date.now() + 30_000));
+      await screen.findByTestId("offer-dialog");
+      fireEvent.click(screen.getByRole("button", { name: "Taken" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(screen.getByTestId("offer-dialog").getAttribute("data-consumer")).toBe("taken");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

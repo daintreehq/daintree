@@ -543,7 +543,12 @@ describe("installHostControl (#13493)", () => {
         webContentsId: number,
         hostId: string,
         agentId: string,
-        options: { hostName: string; stillShown: () => boolean; signal?: AbortSignal }
+        options: {
+          hostName: string;
+          canDeliver: () => boolean;
+          stillShown: () => boolean;
+          signal?: AbortSignal;
+        }
       ) => Promise<string>;
       const offerSignIn = vi.fn<Offer>(async () => "shown");
       let unregister: (() => void) | null = null;
@@ -591,22 +596,45 @@ describe("installHostControl (#13493)", () => {
         await expect(start("global", signal)).resolves.toBe("shown");
         expect(offerSignIn).toHaveBeenCalledWith(41, "studio", "codex", {
           hostName: "Studio",
+          canDeliver: expect.any(Function),
           stillShown: expect.any(Function),
           signal,
         });
-        // Read when the view says so, not when it started.
-        const { stillShown } = offerSignIn.mock.calls[0]![3];
+        // Each is read when it is asked, not when it started.
+        const { canDeliver, stillShown } = offerSignIn.mock.calls[0]![3];
+        expect(canDeliver()).toBe(true);
         expect(stillShown()).toBe(true);
         onScreen.set(41, { visible: true, minimized: true });
+        expect(canDeliver()).toBe(false);
         expect(stillShown()).toBe(false);
         onScreen.set(41, { visible: true, minimized: false });
         // Another view on screen showing it too doesn't take it from 41.
         onScreen.set(42, { visible: true, minimized: false });
         globalAssistant.views = [42, 41];
-        expect(stillShown()).toBe(true);
-        // Moved off 41 to another window: 41, still on screen, no longer shows it.
+        expect(canDeliver()).toBe(true);
+        // Moved off 41 to another window: it isn't told to 41, but a dialog
+        // already open there, on screen, still counts as shown.
         globalAssistant.views = [42];
-        expect(stillShown()).toBe(false);
+        expect(canDeliver()).toBe(false);
+        expect(stillShown()).toBe(true);
+        off();
+      });
+
+      it("starts it in a project assistant's own view only while that view is on screen", async () => {
+        views.set(50, "proj-1");
+        running.set("proj-1:0", {
+          sessionId: "own",
+          terminalId: "t-own",
+          projectViewWebContentsId: 50,
+        });
+        const off = installHostControl({
+          observeHosts: () => [],
+          isHostControlEnabled: () => true,
+        });
+        await expect(start("own")).resolves.toBe("no_window");
+        onScreen.set(50, { visible: true, minimized: false });
+        await expect(start("own")).resolves.toBe("shown");
+        expect(offerSignIn.mock.calls.map((call) => call[0])).toEqual([50]);
         off();
       });
 

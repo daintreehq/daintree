@@ -464,11 +464,14 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       if (!canopyHosts) return "unsupported";
       return canopyHosts.offerSignIn(webContentsId, hostId, agentId, {
         hostName,
-        // That view, on screen and still showing the assistant: a global one
-        // moved to another window meanwhile is no longer shown there.
-        stillShown: () =>
+        // Told only while that view still shows the assistant on screen: a global
+        // one moved to another window during the start isn't there any more.
+        canDeliver: () =>
           askingWindow(helpSessionId, (id) => id === webContentsId && isOnScreen(id)) ===
           webContentsId,
+        // Once its dialog is open there, being on screen is enough: the person
+        // may be using it, wherever the assistant has gone since.
+        stillShown: () => isOnScreen(webContentsId),
         ...(signal ? { signal } : {}),
       });
     },

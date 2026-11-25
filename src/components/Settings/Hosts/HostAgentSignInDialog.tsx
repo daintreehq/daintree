@@ -18,11 +18,18 @@ type Phase =
 
 const ENDED_MESSAGE = "This terminal has exited. Close this when you're done.";
 
+/** How soon a view says again that it shows an assistant's sign-in, while Main can't take it yet. */
+const ACK_RETRY_MS = 1_000;
+
+/** What Main made of an assistant's sign-in shown here: taken, or nothing waits on it any more. */
+export type OfferSettled = "shown" | "gone";
+
 function SignInTerminal({
   hostId,
   consumer,
   terminal,
   acknowledge,
+  onSettled,
 }: {
   hostId: HostId;
   consumer: string;
@@ -33,26 +40,63 @@ function SignInTerminal({
    * since the person didn't open it: stray typing never reaches the login.
    */
   acknowledge: boolean;
+  onSettled?: (settled: OfferSettled) => void;
 }) {
   const [api] = useState(() => hostSignInTerminalApi(hostId, consumer));
   const live = useRef(false);
   const tryAcknowledge = useRef<() => void>(() => {});
+  const settledRef = useRef(onSettled);
+  useEffect(() => {
+    settledRef.current = onSettled;
+  });
 
   useEffect(() => {
     if (!acknowledge) return undefined;
     let disposed = false;
-    let sent = false;
-    // Main takes it only while this view is on screen showing the assistant;
-    // a hidden window or cached view says so again once it is shown.
+    let done = false;
+    let inFlight = false;
+    let again = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    // Main takes it only while this view is on screen with the stream live; a
+    // hidden window or cached view says so again once it is shown, and asks
+    // again shortly meanwhile, until Main takes it or lets it go.
     const attempt = () => {
-      if (disposed || sent || !live.current || document.visibilityState !== "visible") return;
-      sent = true;
+      if (disposed || done) return;
+      if (inFlight) {
+        again = true;
+        return;
+      }
+      if (!live.current || document.visibilityState !== "visible") return;
+      if (retry !== null) {
+        clearTimeout(retry);
+        retry = null;
+      }
+      inFlight = true;
+      const later = () => {
+        retry = setTimeout(() => {
+          retry = null;
+          attempt();
+        }, ACK_RETRY_MS);
+      };
       canopyHostClient.signInShown(consumer).then(
         (answer) => {
-          if (answer === "not_shown") sent = false;
+          inFlight = false;
+          if (disposed) return;
+          if (answer === "not_shown") {
+            if (again) {
+              again = false;
+              attempt();
+            } else {
+              later();
+            }
+            return;
+          }
+          done = true;
+          settledRef.current?.(answer);
         },
         () => {
-          sent = false;
+          inFlight = false;
+          if (!disposed) later();
         }
       );
     };
@@ -66,6 +110,7 @@ function SignInTerminal({
     attempt();
     return () => {
       disposed = true;
+      if (retry !== null) clearTimeout(retry);
       tryAcknowledge.current = () => {};
       document.removeEventListener("visibilitychange", attempt);
       window.removeEventListener("focus", attempt);
@@ -97,7 +142,7 @@ function SignInTerminal({
  *
  * `offered` is a sign-in Main already started here for an assistant (#18197):
  * the first attempt shows it rather than starting one, and Retry starts the
- * person's own.
+ * person's own. `onOfferSettled` hears what Main made of it.
  */
 export function HostAgentSignInDialog({
   hostId,
@@ -105,6 +150,7 @@ export function HostAgentSignInDialog({
   agentId,
   agentName,
   offered,
+  onOfferSettled,
   onClose,
 }: {
   hostId: HostId;
@@ -112,6 +158,7 @@ export function HostAgentSignInDialog({
   agentId: string;
   agentName: string;
   offered?: { consumer: string; terminal: HostSignInTerminal };
+  onOfferSettled?: (settled: OfferSettled) => void;
   onClose: () => void;
 }) {
   const [attempt, setAttempt] = useState(0);
@@ -222,6 +269,7 @@ export function HostAgentSignInDialog({
                   consumer={phase.consumer}
                   terminal={phase.terminal}
                   acknowledge={phase.consumer === offered?.consumer}
+                  {...(onOfferSettled ? { onSettled: onOfferSettled } : {})}
                 />
               ) : (
                 <p
