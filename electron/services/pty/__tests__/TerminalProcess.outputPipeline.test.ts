@@ -2204,12 +2204,27 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
     assistant.terminal.dispose();
   });
 
-  it("counts a person's key beside an assistant's Escape as the person's", async () => {
+  it("counts a person's Escape beside an assistant's as the person's", async () => {
     const { terminal } = await armedClaudePane(countdownScreen());
     terminal.write("\x1b", undefined, "assistant-1");
-    terminal.write("x");
+    terminal.write("\x1b");
     await show(cancelledScreen());
     expect(answer(terminal)).toMatchObject({ skipAtStop: "auto-continue-cancelled" });
+    terminal.dispose();
+  });
+
+  it("continues after an assistant's Escape though a person's prompt ran into the limit", async () => {
+    const stops = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    terminal.setCodexLimitContinueArmed(true);
+    ptyOnDataCallback!(claudeScreen({ after: [] }).replace(BANNER, "● Done."));
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    terminal.write("fix the parser\r");
+    await show(countdownScreen());
+    terminal.write("\x1b", undefined, "assistant-1");
+    await show(cancelledScreen());
+    expect(stops).toHaveLength(1);
+    expect(answer(terminal)).not.toHaveProperty("skipAtStop");
     terminal.dispose();
   });
 

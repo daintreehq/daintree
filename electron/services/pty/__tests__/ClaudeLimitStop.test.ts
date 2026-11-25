@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { ClaudeLimitStopTracker, type ClaudeLimitLook } from "../ClaudeLimitStop.js";
+import {
+  ClaudeLimitStopTracker,
+  ESCAPE_GRACE_MS,
+  type ClaudeLimitLook,
+} from "../ClaudeLimitStop.js";
 
 const RULE = "─".repeat(60);
 const BANNER = "  ⎿  You've hit your session limit · resets 3pm (UTC)";
@@ -25,16 +29,24 @@ const NOW = Date.UTC(2026, 10, 19, 14, 59);
 function harness() {
   let seq = 0;
   let inputSeq = 0;
+  let clock = NOW;
   const tracker = new ClaudeLimitStopTracker(() => ++seq);
   return {
     tracker,
+    /** Move the clock on; every key and look happens at the clock's time. */
+    wait(ms: number) {
+      clock += ms;
+    },
     type(data: string, owner?: string) {
       inputSeq++;
-      tracker.noteInput(data, owner);
+      tracker.noteInput(data, owner, clock);
+    },
+    arm() {
+      tracker.arm(clock);
     },
     observe(lines: string[], extra: Partial<ClaudeLimitLook> = {}) {
       tracker.observe(lines, {
-        now: NOW,
+        now: clock,
         cols: 80,
         inputSeq,
         incarnation: 0,
@@ -57,96 +69,111 @@ describe("ClaudeLimitStopTracker (#18192)", () => {
     for (const keys of [["\x1b"], ["\x1b", "\x1b"], ["\x1b\x1b"]]) {
       const h = harness();
       h.observe(COUNTING);
+      h.wait(1_000);
       for (const key of keys) h.type(key, "assistant-1");
+      h.wait(100);
       expect(h.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: null, shown: true });
     }
   });
 
-  it("records a person's Escape, and a person's key beside an assistant's Escape, as the person's", () => {
-    const person = harness();
-    person.observe(COUNTING);
-    person.type("\x1b");
-    expect(person.observe(CANCELLED_SCREEN)).toMatchObject({
-      skipAtStop: "auto-continue-cancelled",
-    });
-
-    const mixed = harness();
-    mixed.observe(COUNTING);
-    mixed.type("\x1b", "assistant-1");
-    mixed.type("q");
-    expect(mixed.observe(CANCELLED_SCREEN)).toMatchObject({
-      skipAtStop: "auto-continue-cancelled",
-    });
+  it("records a person's Escape, also beside an assistant's", () => {
+    for (const owners of [[undefined], ["assistant-1", undefined], [undefined, "assistant-1"]]) {
+      const h = harness();
+      h.observe(COUNTING);
+      h.wait(1_000);
+      for (const owner of owners) h.type("\x1b", owner);
+      expect(h.observe(CANCELLED_SCREEN)).toMatchObject({
+        skipAtStop: "auto-continue-cancelled",
+      });
+    }
   });
 
   it.each([
-    ["more keys after the Escape", ["\x1b", "continue"]],
-    ["an Escape and text in one write", ["\x1bq"]],
-    ["an arrow key", ["\x1b[A"]],
-  ])("records an assistant's %s as input, not a cancel", (_label, writes) => {
+    ["an Escape and text in one write", "\x1bq"],
+    ["an arrow key", "\x1b[A"],
+    ["text", "continue"],
+  ])("counts only an Escape as an assistant's cancel, not %s", (_label, data) => {
     const h = harness();
     h.observe(COUNTING);
-    for (const data of writes) h.type(data, "assistant-1");
-    expect(h.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: "input-since" });
-  });
-
-  it("keeps a person's Escape through a look that still showed the countdown", () => {
-    // A sample drawn before the key arrives after it: the person's Escape
-    // must not be swallowed and leave only an assistant's after it.
-    const h = harness();
-    h.observe(COUNTING);
-    h.type("\x1b");
-    h.observe(COUNTING);
-    h.type("\x1b", "assistant-1");
+    h.type(data, "assistant-1");
     expect(h.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: "auto-continue-cancelled" });
   });
 
-  it("keeps an assistant's Escape through a look that still showed the countdown", () => {
+  it("leaves a person's keys that aren't an Escape to the checks after the stop", () => {
+    // The prompt that ran into the limit, sent just before the banner showed.
     const h = harness();
+    h.type("fix the parser\r");
+    h.wait(300);
     h.observe(COUNTING);
     h.type("\x1b", "assistant-1");
+    expect(h.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: null });
+  });
+
+  it("keeps a person's Escape through a stale look drawn before it", () => {
+    for (const stale of [COUNTING, IDLE]) {
+      const h = harness();
+      h.observe(COUNTING);
+      h.type("\x1b");
+      // A sample of a frame drawn before the key, arriving after it.
+      h.wait(200);
+      h.observe(stale);
+      h.wait(200);
+      h.observe(COUNTING);
+      h.type("\x1b", "assistant-1");
+      expect(h.observe(CANCELLED_SCREEN)).toMatchObject({
+        skipAtStop: "auto-continue-cancelled",
+      });
+    }
+  });
+
+  it("forgets an Escape from well before the banner showed", () => {
+    const h = harness();
+    h.type("\x1b");
+    h.wait(ESCAPE_GRACE_MS + 1);
     h.observe(COUNTING);
+    h.type("\x1b", "assistant-1");
     expect(h.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: null });
   });
 
   it("counts a cancellation nothing explains as a person's", () => {
     const h = harness();
     h.observe(COUNTING);
+    h.wait(1_000);
     expect(h.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: "auto-continue-cancelled" });
   });
 
-  it("lets an arming explain a cancellation, through a stale countdown look but not past input", () => {
-    const armed = harness();
-    armed.tracker.arm();
-    armed.observe(COUNTING);
-    expect(armed.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: null });
-
-    const typedSince = harness();
-    typedSince.tracker.arm();
-    typedSince.type("\x1b");
-    expect(typedSince.observe(CANCELLED_SCREEN)).toMatchObject({
-      skipAtStop: "auto-continue-cancelled",
-    });
-
-    // An arming at launch, before the agent drew anything, explains nothing later.
-    const atLaunch = harness();
-    atLaunch.tracker.arm();
-    atLaunch.observe(IDLE);
-    expect(atLaunch.observe(CANCELLED_SCREEN)).toMatchObject({
-      skipAtStop: "auto-continue-cancelled",
-    });
-  });
-
-  it("forgets input from before a look with no banner", () => {
+  it("lets an arming made while the banner showed explain a cancellation, past a stale countdown look", () => {
+    // Armed once the person had already cancelled: the first look still drew the countdown.
     const h = harness();
-    h.observe(COUNTING);
-    h.type("fix the parser\r");
     h.observe(IDLE);
-    h.type("\x1b", "assistant-1");
+    h.type("\x1b");
+    h.wait(500);
+    h.arm();
+    h.observe(COUNTING);
+    h.wait(200);
     expect(h.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: null });
+
+    // A person's Escape after the arming still means leave it.
+    const after = harness();
+    after.arm();
+    after.observe(COUNTING);
+    after.type("\x1b");
+    expect(after.observe(CANCELLED_SCREEN)).toMatchObject({
+      skipAtStop: "auto-continue-cancelled",
+    });
   });
 
-  it("keeps input across a frame with no composer drawn", () => {
+  it("never lets an arming from before the banner explain a cancellation", () => {
+    // A launch's preset arms the pane; later the agent draws an old,
+    // cancelled banner again (a resumed conversation).
+    const h = harness();
+    h.arm();
+    h.observe(IDLE);
+    h.wait(60_000);
+    expect(h.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: "auto-continue-cancelled" });
+  });
+
+  it("keeps an Escape across a frame with no composer drawn", () => {
     const h = harness();
     h.observe(COUNTING);
     h.type("\x1b", "assistant-1");
@@ -176,37 +203,59 @@ describe("ClaudeLimitStopTracker (#18192)", () => {
     h.observe(IDLE);
     expect(first.shown).toBe(false);
     h.type("q");
-    const later = NOW + 10 * 60_000;
-    const again = h.observe(CANCELLED_SCREEN, { observedSince: 2, now: later })!;
+    h.wait(10 * 60_000);
+    const again = h.observe(CANCELLED_SCREEN, { observedSince: 2 })!;
     expect(again.seq).toBe(first.seq + 1);
     expect(again).toMatchObject({ skipAtStop: null, observedAt: NOW, reset: first.reset });
     expect(again.guard).toBe(first.guard);
     expect(again.guard).toEqual({ key: expect.any(String), inputSeq: 1, dialogSeen: true });
   });
 
-  it("ends a stop once a new turn is printed after it", () => {
+  it("keeps the guard through a row drawn for a moment under the banner", () => {
+    const h = harness();
+    const first = h.observe(screen())!;
+    h.type("\x7f");
+    h.observe(screen(["limit."]));
+    const back = h.observe(screen())!;
+    expect(back.seq).not.toBe(first.seq);
+    expect(back.guard).toBe(first.guard);
+    expect(back.guard.inputSeq).toBe(0);
+  });
+
+  it("starts the sighting afresh, keeping the guard, once a turn ran past the stop", () => {
     const h = harness();
     const first = h.observe(screen())!;
     h.observe(screen(["● Picking the parser back up."]));
-    expect(h.tracker.held()).toBeNull();
-    // The same words again later are a new stop, guarded afresh.
-    h.type("next\r");
-    const next = h.observe(screen())!;
+    expect(first).toMatchObject({ shown: false, ended: true });
+    h.wait(5 * 60 * 60_000);
+    const next = h.observe(screen(), { shownAt: () => NOW + 5 * 60 * 60_000 })!;
     expect(next.seq).not.toBe(first.seq);
+    expect(next.observedAt).toBe(NOW + 5 * 60 * 60_000);
+    // 3pm has passed by 7:59pm, so it's tomorrow's.
+    expect(next.reset).toEqual({ resetsAt: Date.UTC(2026, 10, 20, 15, 1) });
+    expect(next.guard).toBe(first.guard);
+  });
+
+  it("guards a stop afresh under another run of the agent", () => {
+    const h = harness();
+    const first = h.observe(screen())!;
+    h.type("/restart\r");
+    const next = h.observe(screen(), { incarnation: 1 })!;
+    expect(next.guard).not.toBe(first.guard);
     expect(next.guard.inputSeq).toBe(1);
   });
 
   it("keeps the stop and its guard across an arming again, lifting only a person's verdict", () => {
     const h = harness();
-    h.tracker.arm();
+    h.arm();
     h.observe(COUNTING);
     h.type("\x1b");
     const left = h.observe(CANCELLED_SCREEN)!;
     expect(left.skipAtStop).toBe("auto-continue-cancelled");
     h.type("x");
-    h.tracker.arm();
+    h.arm();
     expect(h.observe(CANCELLED_SCREEN)).toBe(left);
-    expect(left).toMatchObject({ skipAtStop: null, guard: { inputSeq: 1 } });
+    expect(left).toMatchObject({ skipAtStop: null, guard: { inputSeq: 1, dialogSeen: false } });
   });
 
   it("makes a new stop when the wait is cancelled under a banner first seen without it", () => {
@@ -224,14 +273,13 @@ describe("ClaudeLimitStopTracker (#18192)", () => {
   it("reads the reset against when the pane first showed it, as minute precision", () => {
     const h = harness();
     // Looked at after 3pm, but first shown at 2:59pm: still today's.
-    const later = Date.UTC(2026, 10, 19, 15, 5);
-    expect(h.observe(screen(), { now: later, shownAt: () => NOW })?.reset).toEqual({
+    h.wait(6 * 60_000);
+    expect(h.observe(screen(), { shownAt: () => NOW })?.reset).toEqual({
       resetsAt: Date.UTC(2026, 10, 19, 15, 1),
     });
     const unseen = harness();
-    expect(unseen.observe(screen(), { now: later })?.reset).toEqual({
-      resetsAt: Date.UTC(2026, 10, 20, 15, 1),
-    });
+    unseen.wait(6 * 60_000);
+    expect(unseen.observe(screen())?.reset).toEqual({ resetsAt: Date.UTC(2026, 10, 20, 15, 1) });
   });
 
   it.each([

@@ -91,13 +91,10 @@ export type CodexLimitAnswer =
 
 /**
  * Why the stamped stop isn't Daintree's to continue, whatever its reset says
- * (#18192): Claude Code's own wait was cancelled by a person, or an
- * assistant typed more than the Escape that cancelled it.
+ * (#18192): Claude Code's own wait was cancelled, and not by an assistant's
+ * Escape alone.
  */
-export type CodexLimitStopSkip = Extract<
-  CodexLimitContinueSkipReason,
-  "auto-continue-cancelled" | "input-since"
->;
+export type CodexLimitStopSkip = Extract<CodexLimitContinueSkipReason, "auto-continue-cancelled">;
 
 /** The question: a first read, or a resolve of a stamped banner against a reading. */
 export type CodexLimitQuery =

@@ -221,6 +221,14 @@ describe("scanClaudeUsageMessages", () => {
       );
     });
 
+    it("reads a reset wrapped onto the next row with its separator (#18192)", () => {
+      expect(wrapped("  ⎿  You've hit your weekly limit", "     · resets 9pm (UTC)")).toBe(
+        "9pm (UTC)"
+      );
+      // A row under a message that names no reset, and isn't one, adds nothing.
+      expect(wrapped("  ⎿  You've hit your weekly limit", "     · /upgrade for more")).toBeNull();
+    });
+
     it("leaves a row that only looks like a zone out of it", () => {
       expect(wrapped("  ⎿  You've hit your weekly limit · resets 3pm", "  (main)")).toBe("3pm");
     });

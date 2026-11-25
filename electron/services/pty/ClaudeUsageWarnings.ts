@@ -46,6 +46,8 @@ const YOUVE = String.raw`you(?:[${APOSTROPHES}]ve|\s+have)`;
 // anything else after the limit is a sentence about one.
 const TAIL = String.raw`(?:${TRAILING_BORDER}$|\s*[${SEPARATORS}]\s*(.*)$)`;
 const SEGMENT_SEPARATOR = /[·∙•]/;
+// A reset a narrow pane wrapped onto the next row with its separator (#18192).
+const WRAPPED_RESET = new RegExp(String.raw`^\s*[${SEPARATORS}]\s*(resets(?:\s.*)?)$`, "i");
 const BORDER_GLYPHS = new Set(BORDERS);
 // Claude's own segments never quote; code holding a message as a string does.
 const CODE_DELIMITER = /["`]/;
@@ -205,7 +207,9 @@ function matchRow(
       if (match === null) continue;
       const percentForm = PERCENT_FORMS.has(form.statement);
       const named = percentForm ? match[2]! : match[1]!;
-      const segments = segmentsOf(percentForm ? match[3] : match[2]);
+      const own = segmentsOf(percentForm ? match[3] : match[2]);
+      const wrapped = own.length === 0 && next !== undefined ? WRAPPED_RESET.exec(next) : null;
+      const segments = wrapped === null ? own : segmentsOf(wrapped[1]);
       if (segments.some((segment) => CODE_DELIMITER.test(segment))) continue;
       const resetIndex = segments.findIndex((segment) => /^resets(?:\s|$)/i.test(segment));
       if (form.needsReset && resetIndex < 0) continue;
@@ -214,7 +218,7 @@ function matchRow(
       let resetText: string | null = null;
       if (resetIndex >= 0) {
         resetText = segments[resetIndex]!.slice("resets".length).trim();
-        if (resetIndex === segments.length - 1 && next !== undefined) {
+        if (resetIndex === segments.length - 1 && next !== undefined && wrapped === null) {
           resetText = carriedReset(resetText, next) ?? resetText;
         }
         // Claude truncates a footer warning that doesn't fit with "…"; any

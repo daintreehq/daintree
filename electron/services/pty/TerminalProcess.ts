@@ -2494,10 +2494,11 @@ export class TerminalProcess {
     // showed; arming asks for it to be continued, and one already on screen is
     // looked at now rather than when the pane next prints.
     if (armed) {
-      this.claudeLimitStop.arm();
+      const now = Date.now();
+      this.claudeLimitStop.arm(now);
       if (getLiveAgentId(this.terminalInfo) === "claude") {
         const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
-        this.observeClaudeLimitStop(this.analysis.getViewportLines(rows), Date.now());
+        this.observeClaudeLimitStop(this.analysis.getViewportLines(rows), now);
       }
     }
     this.trackCodexStop();
@@ -2506,7 +2507,7 @@ export class TerminalProcess {
   /** Input as the pty host takes it, kept only for an armed Claude Code pane (#18192). */
   private noteLimitStopInput(data: string, owner: string | undefined): void {
     if (this.codexContinueArmed && getLiveAgentId(this.terminalInfo) === "claude") {
-      this.claudeLimitStop.noteInput(data, owner);
+      this.claudeLimitStop.noteInput(data, owner, Date.now());
     }
   }
 
@@ -2516,20 +2517,21 @@ export class TerminalProcess {
    */
   private observeClaudeLimitStop(lines: readonly string[], now: number): void {
     const t = this.terminalInfo;
-    // Disarmed, the stop is held as it was for an arming again to pick up.
-    if (!this.codexContinueArmed) return;
+    const held = this.claudeLimitStop.held();
     if (
       this.samplingFinalFrame ||
       getLiveAgentId(t) !== "claude" ||
       !this.isAgentLive ||
       !this.lifecycle.isAlive
     ) {
-      if (this.claudeLimitStop.held() !== null) {
+      if (held !== null || this.codexContinueArmed) {
         this.claudeLimitStop.clear();
-        this.trackCodexStop();
+        if (held !== null) this.trackCodexStop();
       }
       return;
     }
+    // Disarmed, the stop is held as it was for an arming again to pick up.
+    if (!this.codexContinueArmed) return;
     const seen = this.claudeUsageSeen;
     this.claudeLimitStop.observe(lines, {
       now,
@@ -2635,7 +2637,7 @@ export class TerminalProcess {
    * prompt is a new stop.
    */
   private trackCodexStop(): void {
-    const held = this.heldLimitStop();
+    const held = this.codexContinueArmed ? this.heldLimitStop() : null;
     if (
       !this.codexContinueArmed ||
       this.samplingFinalFrame ||

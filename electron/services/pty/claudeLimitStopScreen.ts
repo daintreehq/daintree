@@ -108,7 +108,8 @@ export function readClaudeLimitScreen(
     resetText: banner.resetText,
     key: JSON.stringify([banner.window, banner.resetText, cancelled, context]),
     bannerKey: JSON.stringify([banner.window, banner.resetText, cancelled]),
-    countdown: COUNTDOWN.test(footer) || after.some((row) => COUNTDOWN.test(row)),
+    // Joined, so a wait a narrow pane wrapped mid-phrase still reads.
+    countdown: COUNTDOWN.test(footer) || COUNTDOWN.test(after.join(" ")),
     cancelled,
     last: after.every((row) => CANCELLED.test(row) || CARRIED.test(row) || TURN_TIMING.test(row)),
   };

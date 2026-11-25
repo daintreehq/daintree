@@ -139,7 +139,7 @@ describe("CodexLimitContinuation (#17909)", () => {
       observedAt: START,
     }) as const;
 
-  it.each(["auto-continue-cancelled", "input-since"] as const)(
+  it.each(["auto-continue-cancelled"] as const)(
     "records a Claude stop its user took over (%s) at once, with no wait and nothing typed (#18192)",
     async (skipAtStop) => {
       const h = harness();

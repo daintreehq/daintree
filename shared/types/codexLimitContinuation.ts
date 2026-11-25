@@ -33,8 +33,8 @@ export type CodexLimitContinueSkipReason =
   /** Something was typed or sent to the pane after the limit. */
   | "input-since"
   /**
-   * Claude Code's own wait for the reset was cancelled by a key a person
-   * typed, or by nothing Daintree could attribute to an assistant (#18192).
+   * Claude Code's own wait for the reset was cancelled by a person's Escape,
+   * or by nothing Daintree saw an assistant send (#18192).
    */
   | "auto-continue-cancelled"
   /** Claude Code's own wait for the reset was on screen: it continues by itself (#18192). */
