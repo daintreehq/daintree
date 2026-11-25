@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type {
   CloudAccountSummary,
   CloudCatalog,
@@ -1004,9 +1004,7 @@ describe("AddCloudHostDialog showing the tunnel's setup lines (#18181)", () => {
       </InstallCommandHandoffContext.Provider>
     );
     const install = await screen.findByTestId("tunnel-install-command");
-    fireEvent.click(
-      install.querySelector('[aria-label="Open command in a new terminal"]') as HTMLElement
-    );
+    fireEvent.click(within(install).getByLabelText("Open command in a new terminal"));
     // Out of the way first, so a close Settings holds shows why, and nothing starts meanwhile.
     expect(order).toEqual(["dismissed", "handoff"]);
     expect(handoff.mock.calls[0]![0]).toEqual(expect.any(Function));
@@ -1033,19 +1031,40 @@ describe("AddCloudHostDialog showing the tunnel's setup lines (#18181)", () => {
     await screen.findByTestId("add-cloud-host-progress");
     const message =
       "Agent 37 machines are reached through its agent37 command, which isn't installed on this device.";
-    const refused = {
+    const refused: CloudHostStatus = {
       hostId: "build",
       providerId: "agent37",
+      providerUnavailable: null,
       accountId: "ca_0123456789",
       accountName: "Personal",
-      machine: "not-created",
-      operation: null,
       resourceId: null,
-      asleep: false,
-      dataExpired: false,
+      machineName: "build",
+      ownership: "created-by-daintree",
+      createdFor: null,
+      worktreeCleanup: null,
+      provisioning: null,
+      machine: "not-created",
+      rawState: null,
+      machineType: "default",
+      vcpu: null,
+      memoryGB: null,
       hourlyDollars: null,
+      lifetime: { kind: "idle-sleep", idleSeconds: 900 },
+      autoStopAt: null,
+      lifetimeSeconds: null,
+      stoppedAt: null,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      operation: null,
       lastError: { code: "ssh-tunnel-command-missing", message, at: 1 },
-    } as unknown as CloudHostStatus;
+      observedAt: null,
+      lastEndpoint: null,
+      hostKeyFingerprint: null,
+      hostKeyReview: null,
+      keptRunningAt: null,
+      asleep: false,
+    };
     cloud.snapshot = { ...cloud.snapshot, hosts: [refused] };
     view.rerender(dialog());
     expect(screen.getByText(message)).toBeTruthy();
