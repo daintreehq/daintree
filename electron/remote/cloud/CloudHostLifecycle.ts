@@ -740,6 +740,9 @@ export class CloudHostLifecycle {
    * stop; whether it may is its keepers' word, read as the pass goes.
    */
   private idleCandidates = false;
+  /** Some order waits on a choice, or is still to settle: the timers' passes over orders read them. */
+  private ordersChoosing = false;
+  private ordersSettling = false;
   /** An idle stop being prepared or carried out, per binding. */
   private readonly idleAttempts = new Map<string, Promise<void>>();
   /** The stopping operation each idle stop runs as, so a person's Stop can tell it from their own. */
@@ -845,10 +848,12 @@ export class CloudHostLifecycle {
       settling ||
       (this.deps.machineKeys !== undefined && this.deps.store.machineKeys().some(awaitsRevoke));
     const polling = machines || choosing;
+    this.ordersChoosing = choosing;
+    this.ordersSettling = settling;
     if (polling && !this.pollTimer) {
       this.pollTimer = setInterval(() => {
         void this.pollDue();
-        this.pollOffersDue();
+        if (this.ordersChoosing) this.pollOffersDue();
       }, 5_000);
       this.pollTimer.unref?.();
     } else if (!polling && this.pollTimer) {
@@ -858,7 +863,7 @@ export class CloudHostLifecycle {
     this.idleCandidates = machines;
     if (keeper && !this.keeperTimer) {
       this.keeperTimer = setInterval(() => {
-        this.settleOrdersDue();
+        if (this.ordersSettling) this.settleOrdersDue();
         void this.renewDue();
         if (this.idleCandidates) void this.stopIdleDue();
         void this.deps.machineKeys?.tick();
