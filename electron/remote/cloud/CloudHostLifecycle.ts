@@ -862,7 +862,10 @@ export class CloudHostLifecycle {
     const orders = this.deps.store.createOrders();
     // An order waiting on a choice has its offers read; any other is still to settle.
     const choosing = orders.some((order) => order.state === "open");
-    const settling = orders.some((order) => order.state !== "open");
+    const withMachine = new Set(bindings.filter((b) => b.resourceId).map((b) => b.id));
+    const settling = orders.some(
+      (order) => order.state !== "open" || withMachine.has(order.bindingId)
+    );
     const keeper =
       machines ||
       settling ||
@@ -2424,7 +2427,10 @@ export class CloudHostLifecycle {
           described.code === "refused" ||
           described.code === "not-found" ||
           described.code === "capacity";
-        const message = `${asSentence(described.message)} Nothing was leased, and the order is still open${offerAtFault ? ": choose another offer." : "."}`;
+        const message =
+          reopened?.state === "close"
+            ? `${asSentence(described.message)} Nothing was leased, and this host has its machine already.`
+            : `${asSentence(described.message)} Nothing was leased, and the order is still open${offerAtFault ? ": choose another offer." : "."}`;
         throw new AppError({ code: "VALIDATION", message, userMessage: message });
       }
       // Stopped by a cancel or removal, which closes the order and keeps a lease that landed.
@@ -2950,7 +2956,8 @@ export class CloudHostLifecycle {
     // once the host is forgotten. A provider that no longer takes orders can't close them here:
     // the host goes, its orders keep trying, unless one may hold a lease nobody could delete.
     const closesOrders = !!this.registeredProvider(confirmed.providerId)?.offerCreate;
-    if (!closesOrders) {
+    // A host with its machine has it deleted below whatever its leftover orders hold.
+    if (!closesOrders && !this.deps.store.binding(confirmed.id)?.resourceId) {
       const mayHoldLease = this.ordersFor(confirmed.id).some(
         (order) => order.state === "leasing" || order.state === "close"
       );

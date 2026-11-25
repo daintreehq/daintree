@@ -824,9 +824,12 @@ export class CloudAccountService {
     // still being readied (Agent 37 registers its key first) is about to be sent with it (#17928).
     // One whose host was never added (a crash between the two writes) is never sent. One waiting
     // on an offer the new key was just seen to reach is that key's to finish.
-    const ordered = new Set(
-      orders.filter((order) => order.orderIds !== null).map((order) => order.bindingId)
-    );
+    // Only a host whose every order still waits on a choice: one with a lease out may hold a
+    // machine the new key can't reach.
+    const ordered = new Set(orders.map((order) => order.bindingId));
+    for (const order of orders) {
+      if (order.state !== "open") ordered.delete(order.bindingId);
+    }
     if (
       bound.some(
         (binding) =>

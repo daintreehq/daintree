@@ -703,6 +703,33 @@ describe("offer-based create (#18230)", () => {
     expect(env.store.createOrders()).toMatchObject([{ state: "close" }]);
   });
 
+  it("deletes the machine of a bound host whose provider no longer takes orders", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a")];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    await env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.5);
+    await env.settled();
+    const binding = env.store.bindings()[0]!;
+    env.store.putCreateOrder({
+      id: "co_left",
+      bindingId: binding.id,
+      accountId: env.account.id,
+      providerId: "boat",
+      labels: { daintree: "1" },
+      idempotencyKey: "left",
+      state: "close",
+      orderIds: ["dseq-left"],
+      placedAt: env.clock.at,
+      waitingSince: null,
+      offerId: null,
+    });
+    delete (env.provider as { offerCreate?: unknown }).offerCreate;
+    await env.lifecycle.deleteMachine(hostId, binding.resourceId);
+    expect(env.api.deleted).toEqual([`lease-${choice.order.id}`]);
+    expect(env.hosts).toEqual([]);
+  });
+
   it("deletes a host whose provider no longer takes orders, leaving its order to be closed", async () => {
     const env = await offerCloud();
     env.api.offersOnPlace = [offer("a")];
