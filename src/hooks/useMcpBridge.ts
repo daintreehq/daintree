@@ -69,6 +69,7 @@ import { TerminalKillBatchIdsSchema } from "@shared/types/terminalKillBatch";
 import { TerminalCloseManyArgsSchema } from "@shared/types/mcpBatch";
 import { TRASH_TTL_MS } from "@shared/config/trash";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { formatNoPanelMessage } from "@shared/utils/terminalInOtherProject";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { isGenericNativeGrantEligible } from "@shared/config/nativeGrantUsePolicies";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
@@ -563,6 +564,18 @@ function closeApprovalPreviewTarget(args: unknown): McpConfirmPreviewTarget | un
   if (args === null || typeof args !== "object" || !("terminalIds" in args)) return undefined;
   const parsed = TerminalCloseManyArgsSchema.shape.terminalIds.safeParse(args.terminalIds);
   return parsed.success ? { kind: "terminalClose", terminalIds: parsed.data } : undefined;
+}
+
+/**
+ * The panel a protected single close names that this view doesn't have
+ * (#18176), or undefined. Read exactly as `terminal.close` reads it, so the
+ * question is never put about a panel the close would then report missing.
+ */
+function missingProtectedCloseTarget(args: unknown): string | undefined {
+  const target = closeApprovalPreviewTarget(args);
+  if (target?.kind !== "terminalClose" || target.terminalIds.length !== 1) return undefined;
+  const terminalId = target.terminalIds[0]!;
+  return Object.hasOwn(usePanelStore.getState().panelsById, terminalId) ? undefined : terminalId;
 }
 
 /**
@@ -1633,6 +1646,31 @@ export function useMcpBridge(): void {
                 },
               });
               return;
+            }
+            // A single close of a panel this view doesn't have answers what the
+            // close itself would (#18176), with no question put to anyone. A
+            // panel in another project reads as the same miss, as a pinned
+            // session's close does once main masks it. A batch keeps its one
+            // checklist over every id it named.
+            if (
+              approvalOnly === true &&
+              approvalReason === "protected-close" &&
+              actionId === "terminal.close"
+            ) {
+              const missingId = missingProtectedCloseTarget(args);
+              if (missingId !== undefined) {
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: {
+                    ok: false,
+                    error: {
+                      code: "EXECUTION_ERROR",
+                      message: formatNoPanelMessage(actionId, missingId),
+                    },
+                  },
+                });
+                return;
+              }
             }
             if (
               definition &&
