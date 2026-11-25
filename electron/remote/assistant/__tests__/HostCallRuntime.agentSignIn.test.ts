@@ -63,6 +63,7 @@ describe("HostCallRuntime host.startAgentSignIn (#18197)", () => {
       host("asleep", { connection: { status: "disconnected" } as ObservedHost["connection"] }),
       host("rejoined", { summaryFromCurrentLink: false }),
       host("fresh", { summary: null }),
+      host("detecting", { summary: summary([]) }),
     ];
     start = vi.fn<Start>(async () => "shown");
     runtime = new HostCallRuntime({
@@ -130,6 +131,7 @@ describe("HostCallRuntime host.startAgentSignIn (#18197)", () => {
       // Kept from an earlier link: Settings shows no rows for it either.
       ["rejoined", "codex", "not_found"],
       ["fresh", "codex", "not_found"],
+      ["detecting", "codex", "not_found"],
       ["studio", "gemini", "not_found"],
       // An exact id, never a name or a prefix of one.
       ["studio", "Codex", "not_found"],

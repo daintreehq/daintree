@@ -253,6 +253,9 @@ export default function HostsSettingsTab() {
           focusSection={focusPlugins ? pluginsRequest.sectionId : undefined}
           offerCopySettings={offerCopySettings}
           signInOffer={signInOffer?.hostId === detail.descriptor.id ? signInOffer : undefined}
+          onSignInOfferTaken={(seq) =>
+            setSignInOffer((prev) => (prev?.seq === seq ? null : prev))
+          }
           onBack={(viaKeyboard) => {
             returnFocusTo.current = { hostId: detail.descriptor.id, visible: viaKeyboard === true };
             setFocusBackFor(null);
@@ -260,6 +263,7 @@ export default function HostsSettingsTab() {
             setUpdateRequest(null);
             setPluginsRequest(null);
             setCopyRequest(null);
+            setSignInOffer(null);
           }}
         />
       </>

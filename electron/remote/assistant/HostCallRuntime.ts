@@ -2695,8 +2695,13 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             if (!host) return null;
             const connected = host.connection.status === "connected";
             // As Settings → Hosts lists them: only what the link open now brought.
+            // None reported yet reads as unknown, as `host.list` reads it.
             const current = connected && host.summaryFromCurrentLink !== false ? host.summary : null;
-            return { connected, agentIds: current?.agentClis.map((cli) => cli.agentId) ?? null };
+            const clis = current?.agentClis ?? [];
+            return {
+              connected,
+              agentIds: clis.length === 0 ? null : clis.map((cli) => cli.agentId),
+            };
           },
           controlOn: (hostId) => this.deps.controlEnabled?.(hostId) === true,
           ...(start

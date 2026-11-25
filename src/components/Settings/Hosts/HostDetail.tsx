@@ -78,6 +78,8 @@ interface HostDetailProps {
    * taken. One for a CLI not listed here is left alone, and ends on its host.
    */
   signInOffer?: HostSignInOffer & { seq: number };
+  /** Told once the offer of that `seq` was opened or left alone, so it isn't offered again. */
+  onSignInOfferTaken?: (seq: number) => void;
 }
 
 /**
@@ -146,6 +148,7 @@ export function HostDetail({
   offerCopySettings = false,
   focusBackOnMount = false,
   signInOffer,
+  onSignInOfferTaken,
 }: HostDetailProps) {
   const { descriptor, connection, summary } = entry;
   const hostName = descriptor.name;
@@ -235,8 +238,13 @@ export function HostDetail({
   if (!connected && agentSignIn !== null) setAgentSignIn(null);
   // An assistant's sign-in opens the dialog its CLI's row would, adopting the
   // terminal Main started rather than starting one (#18197).
+  // Decided once the host's rows are known: a summary still on its way holds it.
   const [takenOffer, setTakenOffer] = useState<number | null>(null);
-  if (signInOffer !== undefined && signInOffer.seq !== takenOffer) {
+  if (
+    signInOffer !== undefined &&
+    signInOffer.seq !== takenOffer &&
+    (!connected || (liveSummary !== null && liveSummary !== undefined))
+  ) {
     setTakenOffer(signInOffer.seq);
     const cli = agentClis.find((row) => row.agentId === signInOffer.agentId);
     if (connected && cli && agentSignIn === null) {
@@ -247,6 +255,9 @@ export function HostDetail({
       });
     }
   }
+  useEffect(() => {
+    if (takenOffer !== null) onSignInOfferTaken?.(takenOffer);
+  }, [takenOffer, onSignInOfferTaken]);
   const forges = liveSummary?.forges
     ? [...liveSummary.forges].sort((a, b) => nameCollator.compare(a.name, b.name))
     : liveSummary?.forges;

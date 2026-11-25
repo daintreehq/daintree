@@ -347,6 +347,48 @@ describe("HostDetail sign-in started by an assistant (#18197)", () => {
     expect(screen.getByTestId("host-agent-sign-in-dialog")).toBeTruthy();
   });
 
+  it("holds it while the host's rows are on their way, and says once it was taken", async () => {
+    const taken = vi.fn();
+    const waiting = { ...entry(), summary: null } as HostListEntry;
+    const { rerender } = render(
+      <HostDetail
+        entry={waiting}
+        onBack={() => {}}
+        signInOffer={offer()}
+        onSignInOfferTaken={taken}
+      />
+    );
+    await settle();
+    expect(screen.queryByTestId("host-agent-sign-in-dialog")).toBeNull();
+    expect(taken).not.toHaveBeenCalled();
+
+    rerender(
+      <HostDetail
+        entry={entry()}
+        onBack={() => {}}
+        signInOffer={offer()}
+        onSignInOfferTaken={taken}
+      />
+    );
+    await settle();
+    expect(screen.getByTestId("host-agent-sign-in-dialog")).toBeTruthy();
+    expect(taken.mock.calls).toEqual([[1]]);
+  });
+
+  it("says one it left alone was taken too, so it isn't offered again", async () => {
+    const taken = vi.fn();
+    render(
+      <HostDetail
+        entry={entry()}
+        onBack={() => {}}
+        signInOffer={offer({ seq: 4, agentId: "codex" })}
+        onSignInOfferTaken={taken}
+      />
+    );
+    await settle();
+    expect(taken.mock.calls).toEqual([[4]]);
+  });
+
   it("keeps the sign-in through StrictMode's replayed mount", async () => {
     render(
       <StrictMode>
