@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Callout } from "@/components/ui/Callout";
 import { Spinner } from "@/components/ui/Spinner";
@@ -8,6 +8,7 @@ import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import type { HostSignInTerminal } from "@shared/types/ipc/canopyHost";
 import type { HostId } from "@shared/types/remoteHosts";
 import { agentSignInLabels, hostSignInTerminalApi, newSignInConsumer } from "./hostAgentSignIn";
+import { holdSignInDialog } from "./hostSignInOffers";
 
 type Phase =
   | { kind: "starting" }
@@ -21,12 +22,16 @@ function SignInTerminal({
   hostId,
   consumer,
   terminal,
+  acknowledge,
 }: {
   hostId: HostId;
   consumer: string;
   terminal: HostSignInTerminal;
+  /** An assistant's sign-in (#18197): Main hears once its terminal is live here, and nothing else. */
+  acknowledge: boolean;
 }) {
   const [api] = useState(() => hostSignInTerminalApi(hostId, consumer));
+  const acknowledged = useRef(false);
   return (
     <CanopyTerminal
       runId={terminal.terminalId}
@@ -34,6 +39,11 @@ function SignInTerminal({
       api={api}
       endedMessage={ENDED_MESSAGE}
       autoFocus
+      onStreamChange={(stream) => {
+        if (!acknowledge || acknowledged.current || stream.watchId === null) return;
+        acknowledged.current = true;
+        void canopyHostClient.signInShown(consumer).catch(() => {});
+      }}
     />
   );
 }
@@ -43,24 +53,53 @@ function SignInTerminal({
  * see and type into (#18196). Opening it starts the sign-in; closing it ends
  * it there, finished or not. Nothing here says whether it worked: the CLI's
  * own screen is the only word on that.
+ *
+ * `offered` is a sign-in Main already started here for an assistant (#18197):
+ * the first attempt shows it rather than starting one, and Retry starts the
+ * person's own.
  */
 export function HostAgentSignInDialog({
   hostId,
   hostName,
   agentId,
   agentName,
+  offered,
   onClose,
 }: {
   hostId: HostId;
   hostName: string;
   agentId: string;
   agentName: string;
+  offered?: { consumer: string; terminal: HostSignInTerminal };
   onClose: () => void;
 }) {
   const [attempt, setAttempt] = useState(0);
-  const [phase, setPhase] = useState<Phase>({ kind: "starting" });
+  const [phase, setPhase] = useState<Phase>(() =>
+    offered
+      ? { kind: "running", consumer: offered.consumer, terminal: offered.terminal }
+      : { kind: "starting" }
+  );
+  // The adopted sign-in is let go a task after unmount, so StrictMode's
+  // replayed mount keeps it rather than showing one already ended.
+  const adoptedRelease = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // While this is open, an assistant's sign-in isn't opened over it.
+  useEffect(() => holdSignInDialog(), []);
 
   useEffect(() => {
+    if (attempt === 0 && offered) {
+      const adopted = offered.consumer;
+      if (adoptedRelease.current !== null) {
+        clearTimeout(adoptedRelease.current);
+        adoptedRelease.current = null;
+      }
+      return () => {
+        adoptedRelease.current = setTimeout(() => {
+          adoptedRelease.current = null;
+          void canopyHostClient.releaseSignIn(adopted).catch(() => {});
+        }, 0);
+      };
+    }
     const consumer = newSignInConsumer();
     let current = true;
     canopyHostClient.startSignIn(consumer, hostId, agentId).then(
@@ -82,7 +121,7 @@ export function HostAgentSignInDialog({
       // Ends it on the host, a start still in flight included.
       void canopyHostClient.releaseSignIn(consumer).catch(() => {});
     };
-  }, [hostId, agentId, attempt]);
+  }, [hostId, agentId, attempt, offered]);
 
   const retry = () => {
     setPhase({ kind: "starting" });
@@ -141,6 +180,7 @@ export function HostAgentSignInDialog({
                   hostId={hostId}
                   consumer={phase.consumer}
                   terminal={phase.terminal}
+                  acknowledge={phase.consumer === offered?.consumer}
                 />
               ) : (
                 <p

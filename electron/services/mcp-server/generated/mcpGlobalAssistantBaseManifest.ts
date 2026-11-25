@@ -1278,6 +1278,76 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
+      "Open an installed agent CLI's own sign-in on a connected host, in a terminal in the window showing you, as its Sign in in Settings → Hosts does. The person approves in the browser and types any code there; you can't. ok means the window opened it, not that it worked.",
+    enabled: true,
+    id: "host.startAgentSignIn",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        hostId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+          description: "A host id from the host list.",
+        },
+        agentId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+          description: "An agentId the host list names in that host's installed CLIs.",
+        },
+      },
+      required: ["hostId", "agentId"],
+    },
+    keywords: ["host", "remote", "agent", "cli", "sign in", "login", "auth"],
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    name: "host.startAgentSignIn",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        outcome: {
+          type: "string",
+          enum: [
+            "ok",
+            "ambiguous",
+            "opted_out",
+            "disconnected",
+            "unsupported",
+            "policy_rejected",
+            "expired",
+            "not_found",
+            "rate_limited",
+            "too_large",
+            "conflict",
+            "confirmation_timeout",
+          ],
+        },
+        detail: {
+          type: ["string", "null"],
+        },
+        retryAfterMs: {
+          type: ["number", "null"],
+        },
+      },
+      required: ["outcome", "detail", "retryAfterMs"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Start an agent CLI sign-in on a host",
+  },
+  {
+    band: "reversible",
+    category: "help",
+    danger: "safe",
+    description:
       "Read agents' status in many projects on many hosts in one call, as each project's own status read answers it: states, handbacks and, with includeOutput, screen tails, redacted. Read it before prompting, keying or interrupting an agent, or answering about running work. Never fails whole.",
     enabled: true,
     id: "host.status",

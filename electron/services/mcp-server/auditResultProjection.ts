@@ -432,6 +432,15 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  [
+    "host.startAgentSignIn",
+    // What became of it, never anything its terminal showed (#18197).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      return { outcome: fromSet(record.outcome, HOST_OUTCOMES) };
+    },
+  ],
   // Never a screen, a handback or a check's words (#16191): outcomes and counts.
   ["host.status", projectHostStatus],
   ["plugin.capturePanel", projectPanelCapture],
@@ -490,6 +499,14 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
     },
   ],
   ["host.bringBack", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
+  [
+    "host.startAgentSignIn",
+    // The host and the agent's registry id, each only when it is id-shaped.
+    (args) => {
+      const record = asRecord(args);
+      return { hostId: auditHostId(record?.hostId), agentId: auditHostId(record?.agentId) };
+    },
+  ],
   [
     "host.status",
     // The projects named and how many terminals in each, and whether output was asked for.

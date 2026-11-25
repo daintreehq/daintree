@@ -45,6 +45,8 @@ import {
 } from "./hostLabels";
 import { SshSignInDialog } from "./SshSignInDialog";
 import { HostAgentSignInDialog } from "./HostAgentSignInDialog";
+import type { HostSignInOffer } from "./hostSignInOffers";
+import type { HostSignInTerminal } from "@shared/types/ipc/canopyHost";
 import { useSshSignIn } from "./useSshSignIn";
 import { describeHostForge } from "@/components/Hosts/hostForges";
 import { cancelPlacement, isSwitchFailure, placeAgain } from "@/components/Hosts/pendingPlacement";
@@ -70,6 +72,12 @@ interface HostDetailProps {
   offerCopySettings?: boolean;
   /** Opened from the keyboard: focus the header's way back once it is there. */
   focusBackOnMount?: boolean;
+  /**
+   * A sign-in an assistant started for one of this host's CLIs (#18197), opened
+   * as its row's Sign in opens one; `seq` tells a new offer from one already
+   * taken. One for a CLI not listed here is left alone, and ends on its host.
+   */
+  signInOffer?: HostSignInOffer & { seq: number };
 }
 
 /**
@@ -137,6 +145,7 @@ export function HostDetail({
   focusSection,
   offerCopySettings = false,
   focusBackOnMount = false,
+  signInOffer,
 }: HostDetailProps) {
   const { descriptor, connection, summary } = entry;
   const hostName = descriptor.name;
@@ -218,8 +227,26 @@ export function HostDetail({
     .sort((a, b) => nameCollator.compare(a.name, b.name));
   // The CLI whose own sign-in runs in a terminal on the host (#18196). A
   // dropped link ends it there, so it is put away rather than reopened later.
-  const [agentSignIn, setAgentSignIn] = useState<{ agentId: string; name: string } | null>(null);
+  const [agentSignIn, setAgentSignIn] = useState<{
+    agentId: string;
+    name: string;
+    offered?: { consumer: string; terminal: HostSignInTerminal };
+  } | null>(null);
   if (!connected && agentSignIn !== null) setAgentSignIn(null);
+  // An assistant's sign-in opens the dialog its CLI's row would, adopting the
+  // terminal Main started rather than starting one (#18197).
+  const [takenOffer, setTakenOffer] = useState<number | null>(null);
+  if (signInOffer !== undefined && signInOffer.seq !== takenOffer) {
+    setTakenOffer(signInOffer.seq);
+    const cli = agentClis.find((row) => row.agentId === signInOffer.agentId);
+    if (connected && cli && agentSignIn === null) {
+      setAgentSignIn({
+        agentId: cli.agentId,
+        name: cli.name,
+        offered: { consumer: signInOffer.consumer, terminal: signInOffer.terminal },
+      });
+    }
+  }
   const forges = liveSummary?.forges
     ? [...liveSummary.forges].sort((a, b) => nameCollator.compare(a.name, b.name))
     : liveSummary?.forges;
@@ -692,6 +719,7 @@ export function HostDetail({
           hostName={hostName}
           agentId={agentSignIn.agentId}
           agentName={agentSignIn.name}
+          {...(agentSignIn.offered ? { offered: agentSignIn.offered } : {})}
           onClose={() => setAgentSignIn(null)}
         />
       )}

@@ -43,6 +43,7 @@ import { useMcpBridge } from "./hooks/useMcpBridge";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useScheduledRunLaunchBridge } from "./hooks/useScheduledRunLaunchBridge";
 import { useScheduledRunFinishBridge } from "./hooks/useScheduledRunFinishBridge";
+import { useHostSignInOfferBridge } from "./hooks/useHostSignInOfferBridge";
 import { useTerminalWhenDoneBridge } from "./hooks/useTerminalWhenDoneBridge";
 import { useCodexLimitContinueBridge } from "./hooks/useCodexLimitContinueBridge";
 import { useHeldComposerSendBridge } from "./hooks/useHeldComposerSendBridge";
@@ -179,6 +180,7 @@ function AppInner() {
   usePluginBridge();
   useScheduledRunLaunchBridge();
   useScheduledRunFinishBridge();
+  useHostSignInOfferBridge();
   useTerminalWhenDoneBridge();
   useCodexLimitContinueBridge();
   useHeldComposerSendBridge();

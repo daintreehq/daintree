@@ -584,7 +584,7 @@ describe("global assistant prompts (#14546)", () => {
     ["global/AGENTS.md", readFileSync(path.join(root, "assistant/global/AGENTS.md"), "utf8")],
   ];
 
-  it.each(GLOBAL)("%s carries the routing guidance and its seven tools", (_name, body) => {
+  it.each(GLOBAL)("%s carries the routing guidance and its eight tools", (_name, body) => {
     for (const tool of [
       "host.list",
       "host.call",
@@ -592,6 +592,7 @@ describe("global assistant prompts (#14546)", () => {
       "host.settings",
       "host.watch",
       "host.bringBack",
+      "host.startAgentSignIn",
       "mcp.surface",
       "actions.search",
     ]) {
