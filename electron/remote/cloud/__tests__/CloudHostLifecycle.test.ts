@@ -661,6 +661,24 @@ describe("CloudHostLifecycle.create", () => {
     expect(hostId).toBe("build");
   });
 
+  it("prices a machine it created at its account's catalog rate for the size (#18233)", async () => {
+    const { lifecycle, accounts, store } = await setup();
+    const accountId = store.accounts()[0]!.id;
+    await accounts.catalog(accountId);
+    await lifecycle.create({ accountId, name: "build", machineType: "default", lifetimeHours: 2 });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.resourceId).not.toBeNull());
+    expect(lifecycle.statuses()[0]?.hourlyDollars).toBe(0.036);
+    expect(store.bindings()[0]?.leaseRate).toBeUndefined();
+  });
+
+  it("prices a machine imported from a provider with list prices at its catalog rate (#18233)", async () => {
+    const { lifecycle, accounts, store } = await setup({ machineType: "xlarge" });
+    const accountId = store.accounts()[0]!.id;
+    await accounts.catalog(accountId);
+    await lifecycle.importMachine({ accountId, resourceId: "bx_23456789", name: "build" });
+    expect(lifecycle.statuses()[0]).toMatchObject({ machineType: "xlarge", hourlyDollars: 0.2 });
+  });
+
   it("sends the lifetime saved while a Retry was looking, not the one it began with (#17928)", async () => {
     const { lifecycle, provider, store } = await setup();
     vi.mocked(provider.create).mockRejectedValueOnce(

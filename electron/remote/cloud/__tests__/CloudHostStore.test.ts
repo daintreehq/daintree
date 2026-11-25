@@ -940,6 +940,44 @@ describe("CloudHostStore machine claims (#17927)", () => {
   });
 });
 
+describe("CloudHostStore lease rates (#18233)", () => {
+  const RESOURCE = "dseq-41";
+
+  it("keeps a machine's lease rate across a restart, a free lease's too", () => {
+    const backend = disk();
+    for (const hourlyDollars of [0.37, 0]) {
+      new CloudHostStore(backend).putBinding(
+        binding({ resourceId: RESOURCE, leaseRate: { resourceId: RESOURCE, hourlyDollars } })
+      );
+      expect(new CloudHostStore(backend).bindings()[0]!.leaseRate).toEqual({
+        resourceId: RESOURCE,
+        hourlyDollars,
+      });
+    }
+  });
+
+  it("reads a rate said of another machine, or one that isn't a rate, as none", () => {
+    const backend = disk();
+    for (const [resourceId, leaseRate] of [
+      [RESOURCE, { resourceId: "dseq-99", hourlyDollars: 0.37 }],
+      [null, { resourceId: RESOURCE, hourlyDollars: 0.37 }],
+      [RESOURCE, { resourceId: RESOURCE, hourlyDollars: -0.1 }],
+      [RESOURCE, { resourceId: RESOURCE, hourlyDollars: "0.37" }],
+      [RESOURCE, { resourceId: RESOURCE, hourlyDollars: null }],
+      [RESOURCE, 0.37],
+    ] as const) {
+      backend.write({
+        version: 1,
+        accounts: [],
+        bindings: [{ ...binding({ resourceId }), leaseRate }],
+      });
+      const read = new CloudHostStore(backend).bindings()[0]!;
+      expect(read.leaseRate).toBeUndefined();
+      expect(read.resourceId).toBe(resourceId);
+    }
+  });
+});
+
 describe("CloudHostStore create orders (#18230)", () => {
   /** A settings file holding each key on its own, as the app's store does. */
   function keyedDisk() {

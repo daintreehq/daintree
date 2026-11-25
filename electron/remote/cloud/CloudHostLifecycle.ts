@@ -690,6 +690,11 @@ function leaseRefused(code: CloudHostErrorCode): boolean {
   return DEFINITE_REFUSALS.has(code) || code === "not-found";
 }
 
+/** A lease's rate as a provider reported it, when it is one; null otherwise. */
+function reportedRate(raw: unknown): number | null {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : null;
+}
+
 /** Why an offer can't be leased as the person chose it; null when it can. */
 function offerRefusal(offer: CloudCreateOffer | undefined, sawHourly: number): string | null {
   if (!offer) return "That offer isn't on the order now. Choose one from the list.";
@@ -955,6 +960,14 @@ export class CloudHostLifecycle {
       return lifetimes.get(providerId)!;
     };
     const choices = this.offerChoices();
+    // An offer-based provider's sizes have no one price: its machines cost what their lease said.
+    const leasePriced = new Map<string, boolean>();
+    const leasePricedFor = (providerId: CloudProviderId): boolean => {
+      if (!leasePriced.has(providerId)) {
+        leasePriced.set(providerId, !!this.registeredProvider(providerId)?.offerCreate);
+      }
+      return leasePriced.get(providerId)!;
+    };
     return this.deps.store
       .bindings()
       .filter(
@@ -998,7 +1011,11 @@ export class CloudHostLifecycle {
           machineType,
           vcpu: observation?.vcpu ?? null,
           memoryGB: observation?.memoryGB ?? null,
-          hourlyDollars: this.deps.accounts.cachedHourly(binding.accountId, machineType),
+          hourlyDollars: binding.leaseRate
+            ? binding.leaseRate.hourlyDollars
+            : leasePricedFor(binding.providerId)
+              ? null
+              : this.deps.accounts.cachedHourly(binding.accountId, machineType),
           lifetime: machineLifetime(lifetimeFor(binding.providerId), observation),
           autoStopAt: observation?.autoStopAt ?? null,
           lifetimeSeconds: binding.lifetimeSeconds,
@@ -1585,10 +1602,29 @@ export class CloudHostLifecycle {
    * Binds what a create made, checked as it is written: a machine another
    * host holds is never this one's ("held"), and a create settled meanwhile
    * (by a Retry's own answer) is never overwritten by an older look ("settled").
+   * `leaseHourly` is the rate a lease made it at, kept with the machine in
+   * the same write; null for an immediate create, or a lease whose rate
+   * nobody said.
    */
-  private bindCreated(bindingId: string, resource: ProviderResource): "bound" | "held" | "settled" {
+  private bindCreated(
+    bindingId: string,
+    resource: ProviderResource,
+    leaseHourly: number | null = null
+  ): "bound" | "held" | "settled" {
     const current = this.deps.store.binding(bindingId);
-    if (current?.resourceId === resource.resourceId) return "bound";
+    const leaseRate =
+      leaseHourly === null ? null : { resourceId: resource.resourceId, hourlyDollars: leaseHourly };
+    if (current?.resourceId === resource.resourceId) {
+      // Bound by an answer that couldn't say the rate: a later one about the same lease can.
+      if (leaseRate && !current.leaseRate) {
+        this.deps.store.updateBinding(bindingId, (latest) =>
+          latest.resourceId === resource.resourceId && !latest.leaseRate
+            ? { ...latest, leaseRate }
+            : latest
+        );
+      }
+      return "bound";
+    }
     if (!current || current.resourceId || !current.creation) return "settled";
     if (this.heldElsewhere(current.providerId, bindingId, resource.resourceId)) return "held";
     this.deps.store.updateBinding(bindingId, (latest) => ({
@@ -1597,6 +1633,7 @@ export class CloudHostLifecycle {
       creation: null,
       observation: observationOf(resource, this.now()),
       lastError: null,
+      ...(leaseRate ? { leaseRate } : {}),
     }));
     return "bound";
   }
@@ -2041,7 +2078,11 @@ export class CloudHostLifecycle {
       // Bound before the order is struck off, so a crash between the two binds it again.
       if (outcome.kind === "leased") {
         leased = true;
-        if (this.adoptLease(order, provider, outcome.resource)) bound = true;
+        if (
+          this.adoptLease(order, provider, outcome.resource, reportedRate(outcome.hourlyDollars))
+        ) {
+          bound = true;
+        }
       }
       this.deps.store.updateCreateOrder(order.id, (current) => ({
         ...current,
@@ -2057,16 +2098,19 @@ export class CloudHostLifecycle {
    * bound to it while the host is still here and holds no other machine.
    * Otherwise it stays in the provider account, as every machine of a host
    * removed from this device does. True when it is the host's machine now.
+   * `hourlyDollars` is the rate the lease runs at, null when nobody said.
    */
   private adoptLease(
     order: StoredCreateOrder,
     provider: CloudProvider,
-    resource: ProviderResource
+    resource: ProviderResource,
+    hourlyDollars: number | null
   ): boolean {
     const binding = this.deps.store.binding(order.bindingId);
     // The host as it is now: one rewritten for another account meanwhile is never given it.
     const ours = binding?.accountId === order.accountId && binding.providerId === order.providerId;
-    const bound = binding && ours ? this.bindCreated(binding.id, resource) : "settled";
+    const bound =
+      binding && ours ? this.bindCreated(binding.id, resource, hourlyDollars) : "settled";
     if (bound === "bound") {
       const key = this.placedKeys.get(order.id);
       if (key) this.heldKeys.set(order.bindingId, key);
@@ -2465,8 +2509,9 @@ export class CloudHostLifecycle {
       }
       throw this.deps.accounts.asAppError(provider, error);
     }
-    // Leased: the order is done, whatever becomes of the machine.
-    const bound = this.adoptLease(marked, provider, resource);
+    // Leased: the order is done, whatever becomes of the machine. The provider accepted it at
+    // the rate the person saw, since a lease is refused at any other.
+    const bound = this.adoptLease(marked, provider, resource, chosen.hourlyDollars);
     this.retireOrder(orderRecordId);
     if (!bound) {
       const message = this.deps.store.binding(bindingId)?.lastError?.message ?? ORDER_GONE;

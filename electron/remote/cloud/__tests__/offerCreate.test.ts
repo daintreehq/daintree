@@ -117,6 +117,8 @@ interface FakeOrder {
   state: "open" | "closed" | "leased";
   offers: CloudCreateOffer[];
   machine: ProviderResource | null;
+  /** The rate its lease runs at, once leased. */
+  leasedAt?: number;
 }
 
 /** An offer-based provider's account: orders, their offers, and the machines leased from them. */
@@ -131,6 +133,8 @@ class FakeOffers {
   };
   /** Offers every new order gets. */
   offersOnPlace: CloudCreateOffer[] = [];
+  /** Whether a close that finds a lease says the rate it runs at. */
+  closeReportsRate = true;
   /** What was stored when each placement and lease reached the provider. */
   readonly storedAtSend: Array<StoredCreateOrder[]> = [];
   storedNow: () => StoredCreateOrder[] = () => [];
@@ -233,6 +237,7 @@ class FakeOffers {
       const leased = machine(`lease-${orderId}`, order.labels, "starting");
       order.state = "leased";
       order.machine = leased;
+      order.leasedAt = quoted.hourlyDollars;
       this.machines.set(leased.resourceId, machine(leased.resourceId, order.labels));
       if (plan === "lost") throw lost();
       if (plan === "hang-commit") return this.hang<ProviderResource>(credentials.signal);
@@ -243,17 +248,24 @@ class FakeOffers {
   readonly closeOrder = vi.fn(async (_credentials: unknown, orderId: string) => {
     if (this.plan("close") === "fail") throw lost();
     const order = this.orders.get(orderId);
-    if (order?.state === "leased") return { kind: "leased" as const, resource: order.machine! };
+    if (order?.state === "leased") {
+      return {
+        kind: "leased" as const,
+        resource: order.machine!,
+        hourlyDollars: this.closeReportsRate ? (order.leasedAt ?? null) : null,
+      };
+    }
     if (order) order.state = "closed";
     return { kind: "closed" as const };
   });
 
   /** A lease made where this device never saw it: the person's console, say. */
-  leaseElsewhere(orderId: string): string {
+  leaseElsewhere(orderId: string, hourlyDollars = 0.5): string {
     const order = this.orders.get(orderId)!;
     const leased = machine(`lease-${orderId}`, order.labels);
     order.state = "leased";
     order.machine = leased;
+    order.leasedAt = hourlyDollars;
     this.machines.set(leased.resourceId, leased);
     return leased.resourceId;
   }
@@ -1231,5 +1243,225 @@ describe("offer-based create (#18230)", () => {
       });
       expect(env.store.account(env.account.id)).not.toBeNull();
     });
+  });
+});
+
+describe("a leased machine's price (#18233)", () => {
+  type Env = Awaited<ReturnType<typeof offerCloud>>;
+
+  const statusOf = (env: Env, hostId: string) =>
+    env.lifecycle.statuses().find((status) => status.hostId === hostId);
+
+  /** A host's create from Settings, by name, so one account can hold several. */
+  async function createNamed(env: Env, name: string): Promise<string> {
+    const { hostId } = await env.lifecycle.create({
+      accountId: env.account.id,
+      name,
+      machineType: "default",
+      lifetimeHours: null,
+    });
+    return hostId;
+  }
+
+  async function choiceFor(env: Env, hostId: string) {
+    await vi.waitFor(() => {
+      const status = statusOf(env, hostId);
+      expect(status?.operation).toBeNull();
+      expect(typeof status?.pendingCreate?.offersReadAt).toBe("number");
+    });
+    return statusOf(env, hostId)!.pendingCreate!;
+  }
+
+  async function runningOn(env: Env, hostId: string) {
+    await vi.waitFor(() => {
+      const status = statusOf(env, hostId);
+      expect(status?.machine).toBe("running");
+      expect(status?.operation).toBeNull();
+    });
+    return statusOf(env, hostId)!;
+  }
+
+  /** Every hosts write that first gave a binding its machine, by machine. */
+  function firstBoundWrites(env: Env): Map<string, Record<string, unknown>> {
+    const firsts = new Map<string, Record<string, unknown>>();
+    const set = env.saved.set.bind(env.saved);
+    env.saved.set = (key: string, value: unknown) => {
+      if (key === "cloudHosts") {
+        const bindings = (value as { bindings?: Record<string, unknown>[] }).bindings ?? [];
+        for (const binding of bindings) {
+          const resourceId = binding.resourceId;
+          if (typeof resourceId === "string" && !firsts.has(resourceId)) {
+            firsts.set(resourceId, structuredClone(binding));
+          }
+        }
+      }
+      return set(key, value);
+    };
+    return firsts;
+  }
+
+  it("prices two machines of one size at the rates they were leased at, across a restart", async () => {
+    const env = await offerCloud();
+    const firsts = firstBoundWrites(env);
+    // The catalog lists the size at its own rate, which neither lease paid.
+    await env.accounts.catalog(env.account.id);
+    env.api.offersOnPlace = [offer("cheap", 0.3), offer("dear", 0.7)];
+    const first = await createNamed(env, "build");
+    const firstChoice = await choiceFor(env, first);
+    await env.lifecycle.chooseOffer(first, firstChoice.order.id, "cheap", 0.3);
+    const second = await createNamed(env, "build-2");
+    const secondChoice = await choiceFor(env, second);
+    await env.lifecycle.chooseOffer(second, secondChoice.order.id, "dear", 0.7);
+
+    expect(await runningOn(env, first)).toMatchObject({
+      machineType: "default",
+      hourlyDollars: 0.3,
+    });
+    expect(await runningOn(env, second)).toMatchObject({
+      machineType: "default",
+      hourlyDollars: 0.7,
+    });
+    // The rate went out in the write that bound each machine, so no restart finds one without it.
+    for (const [choice, hourlyDollars] of [
+      [firstChoice, 0.3],
+      [secondChoice, 0.7],
+    ] as const) {
+      const resourceId = `lease-${choice.order.id}`;
+      expect(firsts.get(resourceId)?.leaseRate).toEqual({ resourceId, hourlyDollars });
+    }
+
+    env.crash();
+    await env.accounts.catalog(env.account.id);
+    expect(statusOf(env, first)?.hourlyDollars).toBe(0.3);
+    expect(statusOf(env, second)?.hourlyDollars).toBe(0.7);
+  });
+
+  it("keeps the rate of a lease whose answer was lost, found by closing its order", async () => {
+    const env = await offerCloud();
+    await env.accounts.catalog(env.account.id);
+    env.api.offersOnPlace = [offer("a", 0.3), offer("b", 0.8)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    // The first choice is turned down, so the rate that holds is the second's.
+    env.api.plans.lease.push("refused", "lost");
+    await expect(
+      env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.3)
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(env.store.createOrders()).toMatchObject([{ state: "open" }]);
+    await env.lifecycle.chooseOffer(hostId, choice.order.id, "b", 0.8);
+    expect(await runningOn(env, hostId)).toMatchObject({
+      resourceId: `lease-${choice.order.id}`,
+      hourlyDollars: 0.8,
+    });
+    expect(env.api.leaseOffer).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([0.25, 0])(
+    "keeps the rate of a lease sent just before a crash, bound by the next run ($%s an hour)",
+    async (rate) => {
+      const env = await offerCloud();
+      env.api.offersOnPlace = [offer("a", rate)];
+      const hostId = await env.create();
+      const choice = await env.awaitChoice();
+      env.api.plans.lease.push("hang-commit");
+      void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", rate).catch(() => {});
+      await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+      env.crash();
+      await env.accounts.catalog(env.account.id);
+      await vi.waitFor(() => expect(env.status()?.resourceId).toBe(`lease-${choice.order.id}`));
+      expect(env.status()?.hourlyDollars).toBe(rate);
+    }
+  );
+
+  it("learns a lease's rate from a later close of its order, and never replaces one it knows", async () => {
+    const env = await offerCloud();
+    await env.accounts.catalog(env.account.id);
+    env.api.offersOnPlace = [offer("a", 0.45)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    const resourceId = `lease-${choice.order.id}`;
+    env.api.plans.lease.push("hang-commit");
+    void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.45).catch(() => {});
+    await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+    const owed = { ...env.store.createOrders()[0]!, state: "close" as const, offerId: null };
+    // The close that binds the machine can't say its rate.
+    env.api.closeReportsRate = false;
+    await env.lifecycle.cancelOrder(hostId, choice.order.id);
+    expect(await runningOn(env, hostId)).toMatchObject({ resourceId, hourlyDollars: null });
+
+    // A crash after the bind, before the order was struck off: the next run closes it again.
+    env.store.putCreateOrder(owed);
+    env.api.closeReportsRate = true;
+    env.crash();
+    await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
+    expect(env.status()).toMatchObject({ resourceId, hourlyDollars: 0.45 });
+
+    // Once known, a later answer about the same lease changes nothing.
+    env.store.putCreateOrder(owed);
+    env.api.orders.get(choice.order.id)!.leasedAt = 0.9;
+    env.crash();
+    await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
+    expect(env.status()).toMatchObject({ resourceId, hourlyDollars: 0.45 });
+    expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the rate when a cancel finds the lease won", async () => {
+    const env = await offerCloud();
+    await env.accounts.catalog(env.account.id);
+    env.api.offersOnPlace = [offer("a", 0.45)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    env.api.plans.lease.push("hang-commit");
+    void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.45).catch(() => {});
+    await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+    await env.lifecycle.cancelOrder(hostId, choice.order.id);
+    expect(await runningOn(env, hostId)).toMatchObject({
+      resourceId: `lease-${choice.order.id}`,
+      hourlyDollars: 0.45,
+    });
+  });
+
+  it("prices a lease made elsewhere at the rate the close reports, not the one Daintree asked for", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a", 0.3)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    // Daintree's lease never lands; one made in the provider's console at another rate does.
+    env.api.plans.lease.push("hang");
+    void env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.3).catch(() => {});
+    await vi.waitFor(() => expect(env.api.leaseOffer).toHaveBeenCalledTimes(1));
+    env.api.leaseElsewhere(choice.order.id, 0.9);
+    await env.lifecycle.cancelOrder(hostId, choice.order.id);
+    expect(await runningOn(env, hostId)).toMatchObject({
+      resourceId: `lease-${choice.order.id}`,
+      hourlyDollars: 0.9,
+    });
+  });
+
+  it("shows no price for a lease found by a close that can't say its rate", async () => {
+    const env = await offerCloud();
+    await env.accounts.catalog(env.account.id);
+    env.api.closeReportsRate = false;
+    env.api.offersOnPlace = [offer("a", 0.3)];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    env.api.plans.lease.push("lost");
+    await env.lifecycle.chooseOffer(hostId, choice.order.id, "a", 0.3);
+    expect(await runningOn(env, hostId)).toMatchObject({
+      resourceId: `lease-${choice.order.id}`,
+      hourlyDollars: null,
+    });
+  });
+
+  it("shows no price for a machine whose lease rate this device never saw", async () => {
+    const env = await offerCloud();
+    await env.accounts.catalog(env.account.id);
+    env.api.machines.set("dseq-elsewhere", machine("dseq-elsewhere", {}));
+    const { hostId } = await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "dseq-elsewhere",
+      name: "imported",
+    });
+    expect(statusOf(env, hostId)).toMatchObject({ machineType: "default", hourlyDollars: null });
   });
 });
