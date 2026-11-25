@@ -111,6 +111,7 @@ const PTY_FIELD_CLASSIFICATION = {
   stateChangeTrigger: false,
   stateChangeConfidence: false,
   waitingReason: false,
+  approvalKind: false,
   error: false,
   sessionCost: false,
   sessionTokens: false,

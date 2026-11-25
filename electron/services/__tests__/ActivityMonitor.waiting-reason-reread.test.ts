@@ -45,12 +45,16 @@ const REASON_READ_ROWS = WAITING_REASON_SCAN_LINE_COUNT + WAITING_REASON_CHECKLI
 
 const monitors: ActivityMonitor[] = [];
 
-function startClaude(id: string, initial: string[], options: { restored?: boolean } = {}) {
+function startClaude(
+  id: string,
+  initial: string[],
+  options: { restored?: boolean; agentId?: string } = {}
+) {
   const onStateChange = vi.fn();
   let visible = initial;
   let reasonReads = 0;
   const monitor = new ActivityMonitor(id, 1000, onStateChange, {
-    agentId: "claude",
+    agentId: options.agentId ?? "claude",
     getVisibleLines: (n) => {
       if (n === REASON_READ_ROWS) reasonReads++;
       return visible.slice(-n);
@@ -468,5 +472,155 @@ describe("ActivityMonitor and a selector drawn short of the pane's bottom (#1801
     vi.advanceTimersByTime(5000);
 
     expect(reasonUpdates(onStateChange)).toEqual([]);
+  });
+});
+
+describe("ActivityMonitor and a CLI's folder-trust prompt (#18170)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    for (const monitor of monitors.splice(0)) monitor.dispose();
+    vi.useRealTimers();
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+  });
+
+  const TRUST = [
+    "Accessing workspace:",
+    "",
+    " /repo/wt-1",
+    "",
+    " Quick safety check: Is this a project you created or one you trust?",
+    "",
+    " ❯ 1. Yes, I trust this folder",
+    "   2. No, exit",
+    "",
+    " Enter to confirm · Esc to cancel",
+  ];
+  const TOOL_APPROVAL = [
+    RULE,
+    " Bash command",
+    "",
+    "   npm test",
+    "",
+    " Do you want to proceed?",
+    " ❯ 1. Yes",
+    "   2. No, and tell Claude what to do differently (esc)",
+  ];
+  const fresh = (drawn: string[], rows = 48) => [
+    ...drawn,
+    ...Array.from({ length: rows - drawn.length }, () => ""),
+  ];
+  const lastReading = (onStateChange: ReturnType<typeof vi.fn>) =>
+    onStateChange.mock.calls.at(-1)?.[3];
+
+  it("names the trust prompt a fresh pane settles on, drawn at its top or filling it", () => {
+    const top = startClaude("trust-top", ["waiting 0"]);
+    top.show(fresh(TRUST));
+    vi.advanceTimersByTime(8200);
+    expect(lastReading(top.onStateChange)).toMatchObject({
+      waitingReason: "approval",
+      approvalKind: "trust",
+    });
+
+    const full = startClaude("trust-full", ["waiting 0"]);
+    full.show(TRUST);
+    vi.advanceTimersByTime(8200);
+    expect(lastReading(full.onStateChange)).toMatchObject({
+      waitingReason: "approval",
+      approvalKind: "trust",
+    });
+  });
+
+  it("names nothing for another startup selector or a tool approval", () => {
+    const theme = startClaude("trust-theme", ["waiting 0"]);
+    theme.show(fresh([" Choose the text style", "", " ❯ 1. Dark mode ✔", "   2. Light mode"]));
+    vi.advanceTimersByTime(8200);
+    expect(lastReading(theme.onStateChange)).toMatchObject({ waitingReason: "approval" });
+    expect(lastReading(theme.onStateChange)).not.toHaveProperty("approvalKind");
+    const tool = startClaude("trust-tool", ["waiting 0"]);
+    tool.show(TOOL_APPROVAL);
+    vi.advanceTimersByTime(8200);
+    expect(lastReading(tool.onStateChange)).toMatchObject({ waitingReason: "approval" });
+    expect(lastReading(tool.onStateChange)).not.toHaveProperty("approvalKind");
+  });
+
+  it("drops the name once a tool approval is drawn under the old trust prompt, once", () => {
+    const { monitor, onStateChange, show } = startClaude("trust-swap", ["waiting 0"]);
+    show(fresh(TRUST));
+    vi.advanceTimersByTime(8200);
+    expect(lastReading(onStateChange)).toMatchObject({ approvalKind: "trust" });
+    onStateChange.mockClear();
+
+    monitor.onData("tool approval");
+    show(fresh([...TRUST, "", ...TOOL_APPROVAL]));
+    vi.advanceTimersByTime(5000);
+    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
+    expect(lastReading(onStateChange)).not.toHaveProperty("approvalKind");
+
+    // The same screen again is no news.
+    monitor.onData("redraw");
+    vi.advanceTimersByTime(5000);
+    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
+  });
+
+  it("names a trust prompt that replaced a plain approval, though its unnumbered list passes no selector check", () => {
+    const { monitor, onStateChange, show } = startClaude("trust-after-theme", ["waiting 0"]);
+    show([" Choose the text style", "", " ❯ 1. Dark mode ✔", "   2. Light mode"]);
+    vi.advanceTimersByTime(8200);
+    expect(lastReading(onStateChange)).toMatchObject({ waitingReason: "approval" });
+    expect(lastReading(onStateChange)).not.toHaveProperty("approvalKind");
+    onStateChange.mockClear();
+
+    // Filling the pane, so the bottom rows the classifier reads hold it.
+    monitor.onData("trust prompt");
+    show([
+      " Claude Code'll be able to read, edit, and execute files here.",
+      "",
+      " ❯ No, exit",
+      "   Yes, I trust this folder",
+      "",
+      " Enter to confirm · Esc to cancel",
+    ]);
+    vi.advanceTimersByTime(5000);
+    expect(reasonUpdates(onStateChange)).toEqual(["approval"]);
+    expect(lastReading(onStateChange)).toMatchObject({ approvalKind: "trust" });
+  });
+
+  it("names Codex's trust prompt when the bottom rows hold its options but not its question", () => {
+    const codexTrust = [
+      "> You are in /Users/me/proj",
+      "",
+      "  Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.",
+      "",
+      "› 1. Yes, continue",
+      "  2. No, quit",
+      "",
+      "  Press enter to continue",
+    ];
+    const pane = startClaude("trust-codex-short", ["waiting 0"], { agentId: "codex" });
+    pane.show([...codexTrust, ...Array.from({ length: 8 }, () => "")]);
+    vi.advanceTimersByTime(8200);
+    expect(lastReading(pane.onStateChange)).toMatchObject({
+      waitingReason: "approval",
+      approvalKind: "trust",
+    });
+  });
+
+  it("names a trust prompt drawn after the agent settled", () => {
+    const { monitor, onStateChange, show } = settleOn(
+      "trust-late",
+      fresh(["$ claude --resume 0199f8c1"]),
+      "prompt"
+    );
+    monitor.onData("trust prompt");
+    show(fresh(TRUST));
+    vi.advanceTimersByTime(5000);
+    expect(lastReading(onStateChange)).toMatchObject({
+      waitingReason: "approval",
+      approvalKind: "trust",
+    });
   });
 });

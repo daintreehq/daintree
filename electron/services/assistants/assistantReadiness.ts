@@ -4,6 +4,8 @@
  * the caller's.
  */
 
+import { CLAUDE_TRUST_OPTION, CODEX_TRUST_QUESTION } from "../pty/trustPromptWording.js";
+
 export const READY_POLL_MS = 1_000;
 /** How long a new assistant gets to open its prompt, its trust question answered on the way. */
 export const READY_WAIT_MS = 45_000;
@@ -19,8 +21,8 @@ export const READY_SCREEN_LINES = 40;
  * once per project.
  */
 const TRUST_ANSWERS: Readonly<Record<string, { question: RegExp; answer: string }>> = {
-  claude: { question: /Yes, I trust this folder/, answer: "Yes, I trust this folder" },
-  codex: { question: /Do you trust the contents of this directory/i, answer: "Yes, continue" },
+  claude: { question: new RegExp(CLAUDE_TRUST_OPTION), answer: CLAUDE_TRUST_OPTION },
+  codex: { question: CODEX_TRUST_QUESTION, answer: "Yes, continue" },
 };
 
 /** What a CLI's footer shows once it's at its own prompt, ready for input. */

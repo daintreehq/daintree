@@ -29,6 +29,25 @@ describe("the delivered line", () => {
     expect(line).toContain("; and 2 more: t-10, t-11.");
   });
 
+  it("names a folder-trust prompt apart from any other approval (#18170)", () => {
+    const at = (approvalKind?: "trust"): FiredNotice =>
+      notice("t-a", {
+        observation: {
+          kind: "state",
+          state: "waiting",
+          waitingReason: "approval",
+          ...(approvalKind !== undefined ? { approvalKind } : {}),
+          handback: false,
+        },
+      });
+    expect(formatNoticeLine([at("trust")])).toContain(
+      "t-a stopped working, now waiting on its CLI's folder-trust prompt"
+    );
+    const plain = formatNoticeLine([at()]);
+    expect(plain).toContain("t-a stopped working, now waiting on an approval");
+    expect(plain).not.toContain("folder-trust");
+  });
+
   it("says how many older notices were dropped", () => {
     expect(formatNoticeLine([notice("t-a")], 3)).toContain(" 3 older notices were dropped.");
   });
@@ -468,6 +487,23 @@ describe("the agent watch line (#16188)", () => {
     expect(line).toContain("; and 3 more.");
     expect(line).toMatch(/Observations only/);
     expect(line).toMatch(/terminal\.getStatus, through host\.call for a host,/);
+  });
+
+  it("names a folder-trust prompt an agent was seen at (#18170)", () => {
+    const fired = (seen: (typeof agent & { approvalKind?: "trust" })[]) =>
+      formatHostWatchLine({
+        hostName: null,
+        watchId: "hw-1",
+        event: "fired",
+        condition,
+        armedAt: 0,
+        observed: null,
+        agents: { seen, omitted: 0 },
+      });
+    expect(fired([{ ...agent, approvalKind: "trust" }])).toContain(
+      "waiting on its CLI's folder-trust prompt at 2026-11-03T10:00:00.000Z"
+    );
+    expect(fired([agent])).toContain("waiting on an approval at");
   });
 
   it("tells an agent watch on every host that expired or was lost what it waited for", () => {

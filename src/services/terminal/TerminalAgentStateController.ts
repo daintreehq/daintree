@@ -1,5 +1,5 @@
 import type { AgentState } from "@/types";
-import type { WaitingReason } from "@shared/types/agent";
+import type { ApprovalKind, WaitingReason } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
 import type { ManagedTerminal } from "./types";
 import { usePanelStore } from "@/store/panelStore";
@@ -201,6 +201,7 @@ export class TerminalAgentStateController {
 
     const before = usePanelStore.getState().panelsById[id];
     const waitingReason = before && isPtyPanel(before) ? before.waitingReason : undefined;
+    const approvalKind = before && isPtyPanel(before) ? before.approvalKind : undefined;
 
     managed.agentState = "working";
     this.notifySubscribers(managed, "working");
@@ -211,7 +212,7 @@ export class TerminalAgentStateController {
       id,
       window.setTimeout(() => {
         this.optimisticWorkingTimers.delete(id);
-        this.revertUnconfirmedWorking(id, waitingReason);
+        this.revertUnconfirmedWorking(id, waitingReason, approvalKind);
       }, OPTIMISTIC_WORKING_CONFIRM_MS)
     );
   }
@@ -223,7 +224,11 @@ export class TerminalAgentStateController {
     this.optimisticWorkingTimers.delete(id);
   }
 
-  private revertUnconfirmedWorking(id: string, waitingReason: WaitingReason | undefined): void {
+  private revertUnconfirmedWorking(
+    id: string,
+    waitingReason: WaitingReason | undefined,
+    approvalKind: ApprovalKind | undefined
+  ): void {
     const managed = this.deps.getInstance(id);
     const panel = usePanelStore.getState().panelsById[id];
     if (!managed || !panel || !isPtyPanel(panel) || panel.agentState !== "working") return;
@@ -244,7 +249,10 @@ export class TerminalAgentStateController {
         undefined,
         undefined,
         undefined,
-        observed === "waiting" ? waitingReason : undefined
+        observed === "waiting" ? waitingReason : undefined,
+        undefined,
+        undefined,
+        observed === "waiting" ? approvalKind : undefined
       );
   }
 

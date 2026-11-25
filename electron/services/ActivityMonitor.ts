@@ -40,6 +40,7 @@ import { detectCompletion } from "./pty/CompletionDetector.js";
 import { CompletionTimer } from "./pty/CompletionTimer.js";
 import { BootDetector } from "./pty/BootDetector.js";
 import {
+  classifyApprovalKind,
   classifyWaitingReason,
   endsOnChoiceSelector,
   endsOnDrawnSelector,
@@ -51,7 +52,7 @@ import {
 import { inputRowShapeFor, readInputRow } from "./pty/inputRowEvidence.js";
 import { CpuHighStateTracker } from "./pty/CpuHighStateTracker.js";
 import { WaitingWatchdog } from "./pty/WaitingWatchdog.js";
-import type { WaitingReason } from "../../shared/types/agent.js";
+import type { ApprovalKind, WaitingReason } from "../../shared/types/agent.js";
 import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import { getAgentObservationLevel, subscribePtyPowerLevel } from "./pty/ptyPowerPolicy.js";
 
@@ -205,6 +206,8 @@ export interface ActivityStateMetadata {
   trigger: "input" | "output" | "pattern" | "timeout" | "dispose";
   patternConfidence?: number;
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` reading showed, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   sessionCost?: number;
   sessionTokens?: number;
   /**
@@ -232,7 +235,16 @@ export interface ActivityStateMetadata {
    * only ends the hold the opening put on sends.
    */
   workingDialog?: boolean;
+  /**
+   * When an `approval` settle's screen was read (#18170): the time to date it
+   * by when the record was already waiting and the FSM drops it.
+   */
+  readAt?: number;
 }
+
+/** What a settle read off the screen, as its idle report carries it. */
+type SettleReading = Required<Pick<ActivityStateMetadata, "waitingReason">> &
+  Pick<ActivityStateMetadata, "approvalKind" | "readAt" | "promptDrawnAt" | "inputRowEmpty">;
 
 /** More rows than any pane has: a viewport read asks for this many and gets them all. */
 const WHOLE_VIEWPORT_ROWS = 1000;
@@ -323,6 +335,7 @@ export class ActivityMonitor {
   // read for it (#16093). A screen that changes while the agent stays idle is
   // read again once it settles past that read.
   private idleWaitingReason: WaitingReason | undefined;
+  private idleApprovalKind: ApprovalKind | undefined;
   private waitingReasonReadAt = 0;
   // Whether that reading showed the agent's own input row empty (#18018). One
   // that didn't is read again, and the row's first empty sight sent, even with
@@ -1103,17 +1116,18 @@ export class ActivityMonitor {
    * rather than counted against the window. A settle on the agent's own input
    * row carries when it was read (#18018).
    */
-  private settleReading(
-    lines: string[],
-    isPromptDetected: boolean,
-    now: number
-  ): { waitingReason: WaitingReason; promptDrawnAt?: number; inputRowEmpty?: true } {
-    const { reason, promptDrawn } = this.readWaitingScreen(lines, isPromptDetected);
+  private settleReading(lines: string[], isPromptDetected: boolean, now: number): SettleReading {
+    const { reason, approvalKind, promptDrawn } = this.readWaitingScreen(lines, isPromptDetected);
     this.idlePromptDrawn = promptDrawn === "empty";
-    if (promptDrawn === null) return { waitingReason: reason };
+    const reading: SettleReading = {
+      waitingReason: reason,
+      ...(reason === "approval" ? { readAt: now } : {}),
+      ...(approvalKind !== undefined ? { approvalKind } : {}),
+    };
+    if (promptDrawn === null) return reading;
     return promptDrawn === "empty"
-      ? { waitingReason: reason, promptDrawnAt: now, inputRowEmpty: true }
-      : { waitingReason: reason, promptDrawnAt: now };
+      ? { ...reading, promptDrawnAt: now, inputRowEmpty: true }
+      : { ...reading, promptDrawnAt: now };
   }
 
   // The agent's empty input row bounds the error window when it is in view,
@@ -1126,6 +1140,8 @@ export class ActivityMonitor {
     isPromptDetected: boolean
   ): {
     reason: WaitingReason;
+    /** Which selector an `approval` reason showed, read off the rows that gave it. */
+    approvalKind: ApprovalKind | undefined;
     composerRow: number | undefined;
     read: string[];
     rows: number;
@@ -1148,6 +1164,7 @@ export class ActivityMonitor {
     const reason = classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId);
     let drawnSelector = false;
     let drawnComposer = false;
+    let viewportRead: string[] | undefined;
     let promptDrawn: "empty" | "drawn" | null = null;
     if ((reason === "prompt" || reason === "question") && composerRow !== undefined) {
       // Read again by the agent's own shape: a frame with the line that
@@ -1160,12 +1177,23 @@ export class ActivityMonitor {
       // Fewer rows than were asked for: that read was already the whole viewport.
       const viewport =
         read !== lines && read.length < wanted ? read : this.getVisibleLines(WHOLE_VIEWPORT_ROWS);
+      viewportRead = viewport;
       drawnSelector = endsOnDrawnSelector(viewport, this.agentId);
       drawnComposer = !drawnSelector && endsOnEmptyComposer(viewport, patterns);
       if (!drawnSelector) promptDrawn = readInputRow(viewport, inputRowShapeFor(this.agentId));
     }
+    // Named off the rows that gave the reason (#18170): everything drawn for a
+    // selector found that way, as a fresh pane's trust prompt sits at its top;
+    // otherwise the whole read, wider than the classifier's window so a
+    // question just above a selector's options is in view.
+    const approvalKind = drawnSelector
+      ? classifyApprovalKind(viewportRead ?? read, this.agentId)
+      : reason === "approval"
+        ? classifyApprovalKind(read, this.agentId)
+        : undefined;
     return {
       reason: drawnSelector ? "approval" : reason,
+      approvalKind,
       composerRow,
       read,
       rows,
@@ -1216,16 +1244,27 @@ export class ActivityMonitor {
       this.getCursorLine?.() ?? null,
       { allowHistoryScan: true }
     );
-    const { reason, composerRow, read, rows, drawnSelector, drawnComposer, promptDrawn } =
-      this.readWaitingScreen(lines, promptResult.isPrompt);
+    const {
+      reason,
+      approvalKind,
+      composerRow,
+      read,
+      rows,
+      drawnSelector,
+      drawnComposer,
+      promptDrawn,
+    } = this.readWaitingScreen(lines, promptResult.isPrompt);
     // A row with something in it again: its next empty sight is news.
     if (promptDrawn !== "empty") this.idlePromptDrawn = false;
-    if (reason === this.idleWaitingReason) {
+    if (reason === this.idleWaitingReason && approvalKind === this.idleApprovalKind) {
       // The same reason again, sent only as the first sight of the agent's
       // empty input row after a reading that had none (#18018), such as a CLI
       // that drew its prompt into a pane read before it had drawn anything.
       if (this.idlePromptDrawn || promptDrawn !== "empty") return;
     } else if (
+      // A trust prompt is a selector by how it is read (#18170), whatever
+      // checks below know its shape; it admits no send.
+      !(reason === "approval" && approvalKind !== undefined) &&
       // A fresh pane draws its input row as high as a dialog it replaced, out of the bottom rows.
       composerRow === undefined &&
       !drawnComposer &&
@@ -1234,11 +1273,13 @@ export class ActivityMonitor {
       return;
     }
     this.idleWaitingReason = reason;
+    this.idleApprovalKind = approvalKind;
     this.idlePromptDrawn = promptDrawn === "empty";
     // A re-read moves the gate's settle to `now`, so only an empty row is sent as one.
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "pattern",
       waitingReason: reason,
+      ...(approvalKind !== undefined ? { approvalKind } : {}),
       rereadAt: now,
       ...(promptDrawn === "empty" ? { promptDrawnAt: now, inputRowEmpty: true as const } : {}),
     });
@@ -2239,6 +2280,7 @@ export class ActivityMonitor {
       this.idleSince = Date.now();
       this.patternBuf.clear();
       this.idleWaitingReason = undefined;
+      this.idleApprovalKind = undefined;
       this.idlePromptDrawn = false;
       this.waitingReasonReadAt = this.idleSince;
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
@@ -2306,8 +2348,7 @@ export class ActivityMonitor {
     this.forgetWorkingDialog();
     this.idleSince = now;
     this.patternBuf.clear();
-    let reading: { waitingReason?: WaitingReason; promptDrawnAt?: number; inputRowEmpty?: true } =
-      {};
+    let reading: Partial<SettleReading> = {};
     this.idlePromptDrawn = false;
     if (this.getVisibleLines) {
       const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);
@@ -2323,6 +2364,7 @@ export class ActivityMonitor {
       reading = this.settleReading(lines, promptResult.isPrompt, now);
     }
     this.idleWaitingReason = reading.waitingReason;
+    this.idleApprovalKind = reading.approvalKind;
     this.waitingReasonReadAt = now;
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "timeout",

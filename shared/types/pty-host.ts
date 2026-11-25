@@ -8,7 +8,7 @@
  */
 
 import type { HostLogEvent } from "./host-log.js";
-import type { AgentState, AgentId, WaitingReason } from "./agent.js";
+import type { AgentState, AgentId, ApprovalKind, WaitingReason } from "./agent.js";
 import type {
   PanelKind,
   TerminalFlowStatus,
@@ -864,6 +864,8 @@ export type PtyHostEvent =
       /** Terminal cwd (the worktree root in the typical case). */
       cwd?: string;
       waitingReason?: WaitingReason;
+      /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+      approvalKind?: ApprovalKind;
       sessionCost?: number;
       sessionTokens?: number;
       /** Process exit code on completed/exited transitions; null on a signal kill with no numeric code. */
@@ -1412,6 +1414,8 @@ export interface PtyHostTerminalInfo {
   cwd: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   /** Its agent run hasn't been observed waiting at its prompt or a question yet (#18014). */
   promptUnseen?: true;

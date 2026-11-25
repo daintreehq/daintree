@@ -262,6 +262,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     // resolved state is still "waiting" — mirrors the main-process rule that
     // clears it on any other state.
     const waitingReason = agentState === "waiting" ? options.waitingReason : undefined;
+    const approvalKind = waitingReason === "approval" ? options.approvalKind : undefined;
     const lastStateChange = isReconnect
       ? options.lastStateChange
       : (options.lastStateChange ?? (agentState !== undefined ? Date.now() : undefined));
@@ -385,6 +386,7 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
       rows: constructionDims?.rows ?? 24,
       agentState,
       waitingReason,
+      approvalKind,
       lastStateChange,
       location,
       ...(location === "background" && {

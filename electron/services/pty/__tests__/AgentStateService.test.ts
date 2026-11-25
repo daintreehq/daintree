@@ -517,6 +517,186 @@ describe("AgentStateService", () => {
     });
   });
 
+  describe("the kind of an approval wait (#18170)", () => {
+    function capture() {
+      const changes: Array<Record<string, unknown>> = [];
+      events.on("agent:state-changed", (payload) => changes.push({ ...payload }));
+      return changes;
+    }
+
+    it("publishes and records a trust prompt's kind with the settle that read it", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "working" });
+      const changes = capture();
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "timeout",
+        waitingReason: "approval",
+        approvalKind: "trust",
+      });
+
+      expect(terminal.agentState).toBe("waiting");
+      expect(terminal.approvalKind).toBe("trust");
+      expect(changes).toEqual([
+        expect.objectContaining({
+          state: "waiting",
+          waitingReason: "approval",
+          approvalKind: "trust",
+        }),
+      ]);
+    });
+
+    it("never carries a kind beside any other reason, or out of waiting", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({ agentState: "working" });
+      const changes = capture();
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "timeout",
+        waitingReason: "prompt",
+        approvalKind: "trust",
+      });
+      expect(terminal.approvalKind).toBeUndefined();
+      expect(changes[0]).not.toHaveProperty("approvalKind");
+
+      terminal.waitingReason = "approval";
+      terminal.approvalKind = "trust";
+      service.handleActivityState(terminal, "busy", { trigger: "output" });
+      expect(terminal.agentState).toBe("working");
+      expect(terminal.approvalKind).toBeUndefined();
+    });
+
+    it("publishes a trust prompt swapped for another selector, once, without its kind", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "waiting",
+        waitingReason: "approval",
+        approvalKind: "trust",
+        lastStateChange: 1_000,
+        detectedAgentId: "claude",
+      } as Partial<TerminalInfo>);
+      const changes = capture();
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "approval",
+        rereadAt: 5_000,
+      });
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "approval",
+        rereadAt: 6_000,
+      });
+
+      expect(terminal.waitingReason).toBe("approval");
+      expect(terminal.approvalKind).toBeUndefined();
+      expect(changes).toHaveLength(1);
+      expect(changes[0]).toMatchObject({ previousState: "waiting", waitingReason: "approval" });
+      expect(changes[0]).not.toHaveProperty("approvalKind");
+      expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({
+        kind: "blocked",
+        reason: "approval",
+      });
+    });
+
+    it("names a trust prompt a re-read found where another selector was", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "waiting",
+        waitingReason: "approval",
+        lastStateChange: 1_000,
+      } as Partial<TerminalInfo>);
+      const changes = capture();
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "approval",
+        approvalKind: "trust",
+        rereadAt: 5_000,
+      });
+
+      expect(terminal.approvalKind).toBe("trust");
+      expect(terminal.lastStateChange).toBe(5_000);
+      expect(changes).toEqual([
+        expect.objectContaining({
+          previousState: "waiting",
+          waitingReason: "approval",
+          approvalKind: "trust",
+          timestamp: 5_000,
+        }),
+      ]);
+      // A read no newer than that one is refused, kind and all.
+      expect(service.updateWaitingReason(terminal, "approval", 5_000)).toBe(false);
+      expect(terminal.approvalKind).toBe("trust");
+    });
+
+    it("publishes a selector settled on a record a title report already put waiting, dated by its read", () => {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "waiting",
+        lastStateChange: 1_000,
+        detectedAgentId: "claude",
+        hasPty: true,
+      } as Partial<TerminalInfo>);
+      const changes = capture();
+      const settle = (readAt: number) =>
+        service.handleActivityState(terminal, "idle", {
+          trigger: "timeout",
+          waitingReason: "approval",
+          approvalKind: "trust",
+          readAt,
+        });
+
+      settle(3_000);
+
+      expect(terminal.waitingReason).toBe("approval");
+      expect(terminal.approvalKind).toBe("trust");
+      // Typing after the read, not after the report's arrival, still holds a send.
+      expect(terminal.lastStateChange).toBe(3_000);
+      expect(changes).toEqual([
+        expect.objectContaining({
+          waitingReason: "approval",
+          approvalKind: "trust",
+          timestamp: 3_000,
+        }),
+      ]);
+      expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({
+        kind: "blocked",
+        reason: "approval",
+      });
+      // The same settle again is no news.
+      settle(3_500);
+      expect(changes).toHaveLength(1);
+    });
+
+    it("dates a dropped selector to a read in the same millisecond, never to one before a newer wait", () => {
+      const service = new AgentStateService();
+      const record = (lastStateChange: number) =>
+        createTerminal({
+          agentState: "waiting",
+          lastStateChange,
+          detectedAgentId: "claude",
+        } as Partial<TerminalInfo>);
+      const settle = (terminal: TerminalInfo, readAt: number) =>
+        service.handleActivityState(terminal, "idle", {
+          trigger: "timeout",
+          waitingReason: "approval",
+          approvalKind: "trust",
+          readAt,
+        });
+
+      const tied = record(2_000);
+      settle(tied, 2_000);
+      expect(tied).toMatchObject({ waitingReason: "approval", approvalKind: "trust" });
+
+      // The pane went working and settled again after this screen was read.
+      const newer = record(2_000);
+      settle(newer, 1_500);
+      expect(newer.waitingReason).toBeUndefined();
+      expect(newer.approvalKind).toBeUndefined();
+    });
+  });
+
   describe("a run's first prompt (#18014)", () => {
     const DECISION_GATE = { acceptWorking: true, acceptQuestion: true };
 

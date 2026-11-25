@@ -134,7 +134,7 @@ import type {
 } from "../../shared/types/processes.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
-import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
+import type { AgentState, AgentId, ApprovalKind, WaitingReason } from "../../shared/types/agent.js";
 import type {
   PanelKind,
   PanelTitleMode,
@@ -183,6 +183,8 @@ interface TerminalInfoResponse {
   ptyRows?: number;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   /** Its agent run hasn't been observed waiting at its prompt or a question yet (#18014). */
   promptUnseen?: true;

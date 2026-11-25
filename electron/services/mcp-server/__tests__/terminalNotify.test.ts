@@ -398,6 +398,51 @@ describe("TerminalNotifyService", () => {
       ]);
     });
 
+    it("names the selector each settle last showed, trust or not (#18170)", async () => {
+      const h = setup();
+      await h.service.whenIdle(PANE, { terminalId: "t-a" });
+      await h.service.whenIdle(PANE, { terminalId: "t-b" });
+
+      // Within the settle window, t-a's plain approval turns out to be a trust
+      // prompt and t-b's trust prompt gives way to another selector.
+      h.settle("t-a", { waitingReason: "approval" });
+      h.settle("t-b", { waitingReason: "approval", approvalKind: "trust" });
+      h.stateChange({
+        terminalId: "t-a",
+        previousState: "waiting",
+        waitingReason: "approval",
+        approvalKind: "trust",
+      });
+      h.stateChange({ terminalId: "t-b", previousState: "waiting", waitingReason: "approval" });
+      await vi.advanceTimersByTimeAsync(NOTIFY_TARGET_SETTLE_MS + NOTIFY_COALESCE_MS + 10);
+
+      const [line] = h.client.submitted.map((s) => s.text);
+      expect(line).toMatch(
+        /t-a stopped working, now waiting on its CLI's folder-trust prompt[ ;(]/
+      );
+      expect(line).toMatch(/t-b stopped working, now waiting on an approval/);
+      expect(line).not.toMatch(/t-b stopped working, now waiting on its CLI's folder-trust/);
+    });
+
+    it("answers a terminal already at a folder-trust prompt with its kind (#18170)", async () => {
+      const h = setup();
+      h.client.terminals.set("t-idle", {
+        ...atPrompt(Date.now() - 1_000),
+        waitingReason: "approval",
+        approvalKind: "trust",
+      });
+      const result = await h.service.whenIdle(PANE, { terminalId: "t-idle" });
+
+      expect(result).toEqual({
+        armed: false,
+        terminalId: "t-idle",
+        state: "waiting",
+        waitingReason: "approval",
+        approvalKind: "trust",
+      });
+      expect(TerminalNotifyWhenIdleResultSchema.parse(result)).toEqual(result);
+    });
+
     it("reports what it last saw during the settle window", async () => {
       const h = setup();
       await h.service.whenIdle(PANE, { terminalId: "t-a" });

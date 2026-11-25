@@ -1219,10 +1219,12 @@ describe("TerminalAgentStateController — postCompleteHook", () => {
       ...overrides,
     });
 
-    function pressEnterOnWaiting(): ManagedTerminal {
+    function pressEnterOnWaiting(
+      waiting: Record<string, unknown> = { waitingReason: "prompt" }
+    ): ManagedTerminal {
       const managed = makeMockManaged({ agentState: "waiting", canonicalAgentState: "waiting" });
       instances.set("t1", managed);
-      mockPanelsById.t1 = panel({ agentState: "waiting", waitingReason: "prompt" });
+      mockPanelsById.t1 = panel({ agentState: "waiting", ...waiting });
       controller.onEnterPressed("t1");
       expect(managed.agentState).toBe("working");
       // The store's write echoes back through TerminalPane, as it does live.
@@ -1245,7 +1247,28 @@ describe("TerminalAgentStateController — postCompleteHook", () => {
         undefined,
         undefined,
         undefined,
-        "prompt"
+        "prompt",
+        undefined,
+        undefined,
+        undefined
+      );
+    });
+
+    it("returns to a trust prompt with its kind when the host never reports the submission (#18170)", () => {
+      pressEnterOnWaiting({ waitingReason: "approval", approvalKind: "trust" });
+      vi.advanceTimersByTime(5000);
+
+      expect(mockUpdateAgentState).toHaveBeenCalledWith(
+        "t1",
+        "waiting",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "approval",
+        undefined,
+        undefined,
+        "trust"
       );
     });
 

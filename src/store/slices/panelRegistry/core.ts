@@ -397,7 +397,8 @@ export const createCorePanelActions = (
     confidence,
     waitingReason,
     sessionCost,
-    sessionTokens
+    sessionTokens,
+    approvalKind
   ) => {
     set((state) => {
       const terminal = state.panelsById[id];
@@ -418,6 +419,7 @@ export const createCorePanelActions = (
       // trigger here the confirmation would be suppressed and HybridInputBar
       // would never see `agentHasLifecycleEvent === true`. See #8592.
       const nextWaitingReason = agentState === "waiting" ? waitingReason : undefined;
+      const nextApprovalKind = nextWaitingReason === "approval" ? approvalKind : undefined;
       // Only the host's own reports carry its timestamp: the input controller's
       // `directing`, its optimistic `working` and the exit fallback pass none,
       // and none of those is something the host saw (#14017). A report of the
@@ -429,7 +431,8 @@ export const createCorePanelActions = (
         lastStateChange !== undefined &&
         agentState !== "directing" &&
         (priorObservation?.agentState !== agentState ||
-          (nextWaitingReason !== terminal.waitingReason &&
+          ((nextWaitingReason !== terminal.waitingReason ||
+            nextApprovalKind !== terminal.approvalKind) &&
             lastStateChange > (priorObservation.at ?? 0)))
           ? { agentState, at: lastStateChange }
           : undefined;
@@ -446,6 +449,7 @@ export const createCorePanelActions = (
         terminal.agentState === agentState &&
         terminal.error === error &&
         terminal.waitingReason === nextWaitingReason &&
+        terminal.approvalKind === nextApprovalKind &&
         terminal.stateChangeTrigger === trigger
       ) {
         if (!observation) return state;
@@ -471,6 +475,7 @@ export const createCorePanelActions = (
             stateChangeTrigger: trigger,
             stateChangeConfidence: confidence,
             waitingReason: nextWaitingReason,
+            approvalKind: nextApprovalKind,
             sessionCost:
               (agentState === "completed" || agentState === "exited") && sessionCost != null
                 ? sessionCost

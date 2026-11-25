@@ -65,7 +65,7 @@ To cover agents stopping on an approval or a question, arm `host.watch` with `ag
 
 ## Agents You Launch
 
-A CLI you start can stop on a dialog (trust, permission, login) while reading `working`. Answer one only inside the authority the user already gave, and say you did; otherwise ask the user. Pick with `terminal.sendKeysOwned` and the label shown, never a guessed `y`. If the screen is unreadable, don't send a selection. After two waits with no change in an agent's output, report it as possibly stuck.
+A CLI you start can stop on a dialog (trust, permission, login) while reading `working`; `approvalKind: "trust"` in its status marks a folder-trust prompt. Answer one only inside the authority the user already gave, and say you did; otherwise ask the user. Pick with `terminal.sendKeysOwned` and the label shown, never a guessed `y`. If the screen is unreadable, don't send a selection. After two waits with no change in an agent's output, report it as possibly stuck.
 
 ## Recovering Agents After a Restart
 

@@ -849,6 +849,10 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                                 },
                               ],
                             },
+                            approvalKind: {
+                              type: "string",
+                              const: "trust",
+                            },
                             since: {
                               type: ["number", "null"],
                             },
@@ -1485,6 +1489,11 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               },
               waitingReason: {
                 type: "string",
+              },
+              approvalKind: {
+                description: "The CLI showed its own folder-trust prompt.",
+                type: "string",
+                const: "trust",
               },
               updateInstalled: {
                 type: "object",
@@ -2161,6 +2170,10 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                         type: "null",
                       },
                     ],
+                  },
+                  approvalKind: {
+                    type: "string",
+                    const: "trust",
                   },
                   seenAt: {
                     type: ["number", "null"],

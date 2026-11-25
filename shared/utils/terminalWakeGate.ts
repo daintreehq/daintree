@@ -1,4 +1,4 @@
-import type { AgentState, WaitingReason } from "../types/agent.js";
+import type { AgentState, ApprovalKind, WaitingReason } from "../types/agent.js";
 import { getEffectiveAgentConfig } from "../config/agentRegistry.js";
 
 /**
@@ -9,6 +9,8 @@ import { getEffectiveAgentConfig } from "../config/agentRegistry.js";
 export interface WakeGateSnapshot {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   /**
    * Its agent run started and hasn't been observed waiting at its prompt or a
@@ -148,6 +150,25 @@ export function composerSendHoldCause(snapshot: WakeGateSnapshot): ComposerSendH
 }
 
 /**
+/**
+ * Whether the terminal's agent was last observed at its CLI's own
+ * folder-trust prompt (#18170): a choice dialog, and one that only the
+ * user's authority answers.
+ */
+export function isAtTrustPrompt(snapshot: WakeGateSnapshot): boolean {
+  return (
+    isAtChoiceDialog(snapshot) &&
+    snapshot.agentState === "waiting" &&
+    snapshot.approvalKind === "trust"
+  );
+}
+
+/** What a refused send says at a trust prompt, which a caller answers only on the user's authority. */
+export function trustPromptRefusalMessage(terminalId: string): string {
+  return `Terminal '${terminalId}' was last observed waiting on its CLI's folder-trust prompt, which would take the text. Nothing was sent. Answer it with keys only for the folder the user asked you to launch in, and say you did; for any other folder, show them the terminal and its folder.`;
+}
+
+/**
  * What a refused send says, wherever it was refused. A menu over a running
  * turn needs no answer, so the message never asks for one.
  */
@@ -155,6 +176,9 @@ export function choiceDialogRefusalMessage(
   terminalId: string,
   snapshot?: WakeGateSnapshot
 ): string {
+  if (snapshot !== undefined && isAtTrustPrompt(snapshot)) {
+    return trustPromptRefusalMessage(terminalId);
+  }
   if (snapshot !== undefined && isUnderWorkingDialog(snapshot)) {
     return `Terminal '${terminalId}' is working with a menu open over its turn, which would take the text. Nothing was sent. The menu needs no answer and closes by itself; send again once it has.`;
   }

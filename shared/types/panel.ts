@@ -1,4 +1,10 @@
-import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from "./agent.js";
+import type {
+  AgentState,
+  AgentStateChangeTrigger,
+  AgentId,
+  ApprovalKind,
+  WaitingReason,
+} from "./agent.js";
 import type { TerminalCheckResult } from "./checkResult.js";
 import type { TerminalHandback } from "./handback.js";
 import type { BrowserHistory } from "./browser.js";
@@ -650,6 +656,8 @@ export interface PtyPanelData extends BasePanelData {
   stateChangeConfidence?: number;
   /** Why the agent is waiting (only meaningful while agentState is "waiting") */
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   /** Error code or message from agent state transitions (e.g., "ECONNRESET", "EPIPE") */
   error?: string;
   /** Extracted session cost in dollars from the last completed agent run */
@@ -1416,6 +1424,7 @@ export interface TerminalInstance {
   stateChangeTrigger?: AgentStateChangeTrigger;
   stateChangeConfidence?: number;
   waitingReason?: WaitingReason;
+  approvalKind?: ApprovalKind;
   /** Error code or message from agent state transitions (e.g., "ECONNRESET", "EPIPE") */
   error?: string;
   /** Extracted session cost in dollars from the last completed agent run */

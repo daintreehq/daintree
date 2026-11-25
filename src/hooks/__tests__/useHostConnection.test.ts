@@ -508,7 +508,10 @@ describe("host connection sync", () => {
       20,
       undefined,
       undefined,
-      "prompt"
+      "prompt",
+      undefined,
+      undefined,
+      undefined
     );
     expect(setAgentState).toHaveBeenCalledWith("t-1", "waiting");
   });
@@ -3091,7 +3094,10 @@ describe("resyncs owed while the view is cached", () => {
       20,
       undefined,
       undefined,
-      "prompt"
+      "prompt",
+      undefined,
+      undefined,
+      undefined
     );
     expectNoFullPass(view);
     view.stop();

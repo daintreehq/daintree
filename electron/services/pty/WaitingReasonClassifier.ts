@@ -1,4 +1,4 @@
-import type { WaitingReason } from "../../../shared/types/agent.js";
+import type { ApprovalKind, WaitingReason } from "../../../shared/types/agent.js";
 import { stripAnsi } from "./AgentPatternDetector.js";
 import {
   endsOnChoiceDialog,
@@ -8,6 +8,7 @@ import {
 } from "../../../shared/utils/terminalChoice.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { UNIVERSAL_APPROVAL_HINT_PATTERNS } from "./terminalActivityPatterns.js";
+import { trustPromptFormsFor } from "./trustPromptWording.js";
 
 /**
  * Number of trailing visible lines the classifier wants to see. Wider than
@@ -331,6 +332,9 @@ export function classifyWaitingReason(
   ) {
     return "approval";
   }
+  // A CLI's own trust prompt is a selector however it is drawn (#18170), read
+  // off its open options, never off its words quoted anywhere else.
+  if (classifyApprovalKind(lines, agentId, rows) !== undefined) return "approval";
 
   // Priority 2: the agent settled right after a blocking error. With its input
   // row known, the window is the transcript above it, so the input's own frame
@@ -383,6 +387,112 @@ export function classifyWaitingReason(
 
   // Default: if we're going idle, a prompt is the safest assumption
   return "prompt";
+}
+
+/** Non-blank rows at the bottom of a screen a trust prompt's wording is looked for in. */
+const TRUST_SCAN_LINES = 10;
+/** Selector and frame glyphs, and an option's number, ahead of a row's text. */
+const TRUST_ROW_CHROME = /^[\s>❯›▶➜→●○◉│┃║]*(?:\d+[.)]\s*)?/;
+/** A row drawn with a selector's highlight: the option the cursor is on. */
+const HIGHLIGHTED_ROW = /^[\s│┃║]*[❯›>▶➜→●]\s*\S/;
+/** A numbered option row, highlighted or not. */
+const NUMBERED_OPTION_ROW = /^[\s│┃║]*(?:[❯›>▶➜→●]\s*)?\d+[.)]\s+\S/;
+/** Frame, highlight and indent ahead of an option's text, numbers left on. */
+const OPTION_INDENT = /^[\s│┃║]*(?:[❯›>▶➜→●]\s*)?/;
+/**
+ * A rule or a box's top edge: where a newer dialog or input box starts. A
+ * box's bottom edge only closes the one the wording sits in.
+ */
+const DIALOG_START_ROW = /^\s*(?:[╭┌╔]|[─━═]{8,})/;
+/** Rows a selector's key hint can take under its options ("Enter to confirm · Esc to cancel"). */
+const TRUST_HINT_ROWS = 2;
+
+const isBlank = (row: string): boolean => row.trim().length === 0;
+
+/**
+ * Whether `row` is one of the options in the list `cursor` (its highlighted
+ * row) belongs to: numbered like it, or unnumbered with its text where the
+ * cursor's starts. A command or description quoted in the dialog is neither.
+ */
+function isOptionOf(row: string, cursor: string): boolean {
+  if (row === cursor) return true;
+  const numbered = NUMBERED_OPTION_ROW.test(row);
+  if (numbered !== NUMBERED_OPTION_ROW.test(cursor)) return false;
+  if (numbered) return true;
+  const indent = (r: string) => r.length - r.replace(OPTION_INDENT, "").length;
+  return indent(row) === indent(cursor);
+}
+
+/**
+ * Which selector an `approval` wait shows (#18170), from the rows it was read
+ * off: `trust` when the open selector is `agentId`'s own folder-trust prompt,
+ * in its CLI's fixed words. The open selector is the block of rows around the
+ * lowest highlighted option and at least one more, with nothing under it but
+ * a key hint: no other dialog, input box, option or question. One of its
+ * options must be one only the trust prompt offers,
+ * and where the CLI asks a question with it, that question must sit in the
+ * block above the cursor or in the block of rows just above it. So a trust
+ * prompt left above a newer selector, or its words quoted in a command a tool
+ * approval shows, is not read as open. Undefined for anything else, and for a
+ * CLI whose wording isn't known: a field that is sometimes wrong is worse than
+ * none.
+ */
+export function classifyApprovalKind(
+  lines: string[],
+  agentId: string | undefined,
+  rows = lines.length
+): ApprovalKind | undefined {
+  const forms = trustPromptFormsFor(agentId);
+  if (forms === undefined) return undefined;
+  const read = withoutTrailingChecklist(
+    lines.map((l) => stripAnsi(l)),
+    rows
+  );
+  let end = read.length;
+  while (end > 0 && isBlank(read[end - 1]!)) end--;
+  let start = end;
+  for (let seen = 0; start > 0 && seen < TRUST_SCAN_LINES;) {
+    start--;
+    if (!isBlank(read[start]!)) seen++;
+  }
+  const tail = read.slice(start, end);
+
+  let cursor = tail.length - 1;
+  while (cursor >= 0 && !HIGHLIGHTED_ROW.test(tail[cursor]!)) cursor--;
+  if (cursor < 0) return undefined;
+  if (tail.slice(cursor + 1).some((row) => DIALOG_START_ROW.test(row))) return undefined;
+  let top = cursor;
+  while (top > 0 && !isBlank(tail[top - 1]!)) top--;
+  let bottom = cursor;
+  while (bottom < tail.length - 1 && !isBlank(tail[bottom + 1]!)) bottom++;
+
+  // Under the options: blank rows and a short key hint, never another dialog's rows.
+  const under = tail.slice(bottom + 1).filter((row) => !isBlank(row));
+  if (
+    under.length > TRUST_HINT_ROWS ||
+    under.some((row) => NUMBERED_OPTION_ROW.test(row) || row.trim().endsWith("?"))
+  ) {
+    return undefined;
+  }
+  const textOf = (row: string) => row.replace(TRUST_ROW_CHROME, "");
+  const options = tail
+    .slice(top, bottom + 1)
+    .filter((row) => isOptionOf(row, tail[cursor]!))
+    .map(textOf);
+  // A highlighted row alone (an input row's draft, an echoed prompt) is no list.
+  if (options.length < 2) return undefined;
+  const asked = tail.slice(top, cursor).map(textOf);
+  let headingEnd = top - 1;
+  while (headingEnd >= 0 && isBlank(tail[headingEnd]!)) headingEnd--;
+  let heading = headingEnd;
+  while (heading > 0 && !isBlank(tail[heading - 1]!)) heading--;
+  if (headingEnd >= 0) asked.push(...tail.slice(heading, headingEnd + 1).map(textOf));
+  const open = forms.some(
+    (form) =>
+      options.some((text) => form.option.test(text)) &&
+      (form.question === undefined || asked.some((text) => form.question!.test(text)))
+  );
+  return open ? "trust" : undefined;
 }
 
 /**

@@ -91,6 +91,16 @@ function makeTerminal(overrides: Record<string, unknown> = {}) {
 }
 
 describe("mapTerminalInfo", () => {
+  it("reports an approval wait's kind back to main beside its reason (#18170)", () => {
+    const ctx = createCtx();
+    expect(
+      mapTerminalInfo(
+        makeTerminal({ agentState: "waiting", waitingReason: "approval", approvalKind: "trust" }),
+        ctx
+      )
+    ).toMatchObject({ waitingReason: "approval", approvalKind: "trust" });
+  });
+
   it("reports the assistant stamp back to main", () => {
     // #10927: a spawn-time field present in four of five layers still vanishes
     // silently. Main's teardown and hydration paths only ever see the record

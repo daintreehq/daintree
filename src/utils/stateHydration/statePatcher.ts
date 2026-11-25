@@ -1,8 +1,10 @@
 import type { PanelKind, AgentState } from "@/types";
 import {
   coerceAgentState,
+  coerceApprovalKind,
   coerceWaitingReason,
   type AgentId,
+  type ApprovalKind,
   type WaitingReason,
 } from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
@@ -307,6 +309,15 @@ function restoredWaitingReason(t: {
     : undefined;
 }
 
+/** The selector a restored approval wait shows, read off the same snapshot as its reason (#18170). */
+function restoredApprovalKind(t: {
+  agentState?: AgentState;
+  waitingReason?: WaitingReason;
+  approvalKind?: ApprovalKind;
+}): ApprovalKind | undefined {
+  return restoredWaitingReason(t) === "approval" ? coerceApprovalKind(t.approvalKind) : undefined;
+}
+
 interface BackendTerminalData {
   id: string;
   kind?: PanelKind;
@@ -316,6 +327,7 @@ interface BackendTerminalData {
   cwd: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   activityTier?: "active" | "background";
   agentSessionId?: string;
@@ -346,6 +358,7 @@ interface ReconnectedTerminalData {
   cwd?: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   activityTier?: "active" | "background";
   agentSessionId?: string;
@@ -485,6 +498,7 @@ export function buildArgsForBackendTerminal(
     ...(restoredExitCode !== undefined && { restoredExitCode }),
     agentState: coerceAgentState(backendTerminal.agentState),
     waitingReason: restoredWaitingReason(backendTerminal),
+    approvalKind: restoredApprovalKind(backendTerminal),
     lastStateChange: backendTerminal.lastStateChange,
     devCommand,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,
@@ -588,6 +602,7 @@ export function buildArgsForReconnectedFallback(
     existingId: reconnectedTerminal.id,
     agentState: coerceAgentState(reconnectedTerminal.agentState),
     waitingReason: restoredWaitingReason(reconnectedTerminal),
+    approvalKind: restoredApprovalKind(reconnectedTerminal),
     lastStateChange: reconnectedTerminal.lastStateChange,
     devCommand,
     browserUrl: isDevPreview ? saved.browserUrl : undefined,
@@ -1332,6 +1347,7 @@ export function buildArgsForOrphanedTerminal(
     existingId: terminal.id,
     agentState: coerceAgentState(terminal.agentState),
     waitingReason: restoredWaitingReason(terminal),
+    approvalKind: restoredApprovalKind(terminal),
     lastStateChange: terminal.lastStateChange,
     agentSessionId: terminal.agentSessionId,
     agentLaunchFlags: terminal.agentLaunchFlags,

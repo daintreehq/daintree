@@ -176,6 +176,9 @@ describe("resyncHostTerminals", () => {
       200,
       undefined,
       undefined,
+      undefined,
+      undefined,
+      undefined,
       undefined
     );
   });
@@ -492,6 +495,41 @@ describe("resyncHostTerminals", () => {
     expect(store.updateAgentState).toHaveBeenCalledTimes(1);
   });
 
+  it("takes a host's approval wait with the selector it named (#18170)", async () => {
+    panel("t-1", {
+      agentState: "working",
+      lastStateChange: 50,
+      lastAgentObservation: { agentState: "working", at: 50 },
+      agentIncarnation: 1,
+    });
+    getForProject.mockResolvedValue([
+      {
+        id: "t-1",
+        cwd: "/",
+        agentState: "waiting",
+        waitingReason: "approval",
+        approvalKind: "trust",
+        lastStateChange: 90,
+        agentIncarnation: 1,
+      },
+    ]);
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(store.updateAgentState).toHaveBeenCalledWith(
+      "t-1",
+      "waiting",
+      undefined,
+      90,
+      undefined,
+      undefined,
+      "approval",
+      undefined,
+      undefined,
+      "trust"
+    );
+  });
+
   it("takes a host report newer than its last one over this machine's later overlay (#16062)", async () => {
     // The host's clock runs a minute behind this one: the pane's own revert
     // from directing is stamped ahead of anything the host can report.
@@ -513,6 +551,9 @@ describe("resyncHostTerminals", () => {
       "working",
       undefined,
       100_000,
+      undefined,
+      undefined,
+      undefined,
       undefined,
       undefined,
       undefined

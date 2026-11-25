@@ -4,7 +4,7 @@ import {
   type GlobalCloseClass,
 } from "../../../shared/types/assistantControl.js";
 import type { QueuedSendReceipt } from "../../../shared/types/queuedSend.js";
-import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
+import type { AgentState, ApprovalKind, WaitingReason } from "../../../shared/types/agent.js";
 import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { classifyWorkerSteerCommand } from "../../../shared/config/workerSteerCommands.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
@@ -35,7 +35,12 @@ import {
   foreignTypedInputAt,
   typedSinceSettle,
 } from "../../../shared/utils/terminalInputProvenance.js";
-import { ASSISTANT_SEND_GATE, evaluateWakeGate } from "../../../shared/utils/terminalWakeGate.js";
+import {
+  ASSISTANT_SEND_GATE,
+  evaluateWakeGate,
+  isAtTrustPrompt,
+  trustPromptRefusalMessage,
+} from "../../../shared/utils/terminalWakeGate.js";
 import type { PendingNotify } from "../mcp-server/terminalNotify.js";
 import type { PtyClient } from "../PtyClient.js";
 import { AssistantTargetError } from "./AssistantTerminalControl.js";
@@ -68,6 +73,7 @@ export interface WorkerSteerRecord {
   detectedAgentId?: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   lastTypedInputAt?: number;
   lastOwnedInput?: { owner: string; at: number };
@@ -310,9 +316,11 @@ export class GlobalWorkerSteer {
                 // suggestion) that the prompt's Enter would send along (#16094).
                 `The only input in terminal '${target.terminalId}' since its agent last settled is keys you sent, which can leave text at its prompt. ${NOTHING_SENT} Send once the agent settles again.`
               : `${personAtTerminal(target.terminalId, record, target.inputOwner) ?? `Someone has typed into terminal '${target.terminalId}'.`} ${NOTHING_SENT}`
-            : `Terminal '${target.terminalId}' isn't waiting at its agent's prompt (state: ${record.agentState ?? "unknown"}${
-                record.waitingReason ? `, ${record.waitingReason}` : ""
-              }). ${NOTHING_SENT} Answer a dialog with keys, or send once it is waiting.`
+            : isAtTrustPrompt(record)
+              ? trustPromptRefusalMessage(target.terminalId)
+              : `Terminal '${target.terminalId}' isn't waiting at its agent's prompt (state: ${record.agentState ?? "unknown"}${
+                  record.waitingReason ? `, ${record.waitingReason}` : ""
+                }). ${NOTHING_SENT} Answer a dialog with keys, or send once it is waiting.`
         );
       }
       const pending = personAtTerminal(target.terminalId, record, target.inputOwner);

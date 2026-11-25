@@ -88,6 +88,7 @@ export function setupIdentityListeners(): DisposableStore {
           trigger,
           confidence,
           waitingReason,
+          approvalKind,
           sessionCost,
           sessionTokens,
         } = data;
@@ -155,7 +156,8 @@ export function setupIdentityListeners(): DisposableStore {
             clampedConfidence,
             waitingReason,
             sessionCost,
-            sessionTokens
+            sessionTokens,
+            approvalKind
           );
 
         if (state === "waiting" || state === "idle") {

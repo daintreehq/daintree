@@ -477,6 +477,24 @@ describe("terminal:submit and a choice dialog (#16209)", () => {
     expect(ptyClient.submit).not.toHaveBeenCalled();
   });
 
+  it("refuses a guarded send at a folder-trust prompt in its own words (#18170)", async () => {
+    reading = { ...AT_DIALOG, waitingReason: "approval", approvalKind: "trust" };
+    const envelope = await submit(undefined, undefined, "no-choice-dialog");
+
+    expect(envelope.ok ? null : envelope.error.code).toBe("TERMINAL_CHOICE_DIALOG");
+    const message = envelope.ok ? "" : envelope.error.message;
+    expect(message).toContain("folder-trust prompt");
+    expect(message).toContain("Nothing was sent");
+    expect(message).toContain("only for the folder the user asked you to launch in");
+    expect(ptyClient.submit).not.toHaveBeenCalled();
+
+    reading = AT_DIALOG;
+    const plain = await submit(undefined, undefined, "no-choice-dialog");
+    const plainMessage = plain.ok ? "" : plain.error.message;
+    expect(plainMessage).toContain("Read its screen and answer it with keys.");
+    expect(plainMessage).not.toContain("folder-trust");
+  });
+
   it("hands the guard on to the host, which checks it again at the lane", async () => {
     reading = { ...AT_DIALOG, waitingReason: "prompt" };
     const envelope = await submit(undefined, undefined, "no-choice-dialog");

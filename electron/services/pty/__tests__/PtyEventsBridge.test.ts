@@ -363,6 +363,30 @@ describe("bridgePtyEvent", () => {
     expect(payloads[0]?.waitingReason).toBe("prompt");
   });
 
+  it("forwards an approval wait's kind, and adds none where it was absent (#18170)", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    events.on("agent:state-changed", (payload) => payloads.push({ ...payload }));
+    const settle = (extra: Record<string, unknown>) =>
+      bridgePtyEvent({
+        type: "agent-state",
+        id: "term-1",
+        agentId: "claude",
+        state: "waiting",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "activity",
+        confidence: 1.0,
+        waitingReason: "approval",
+        ...extra,
+      });
+
+    settle({ approvalKind: "trust" });
+    settle({});
+
+    expect(payloads[0]).toMatchObject({ waitingReason: "approval", approvalKind: "trust" });
+    expect(payloads[1]).not.toHaveProperty("approvalKind");
+  });
+
   it("forwards exitCode and exitSignal across the pty-host wire (#10638)", () => {
     const payloads: Array<{ exitCode?: number | null; exitSignal?: number }> = [];
     events.on("agent:state-changed", (payload) => {

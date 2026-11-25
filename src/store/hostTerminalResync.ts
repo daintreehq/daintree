@@ -142,7 +142,7 @@ async function terminalServiceForResync(state: PanelState): Promise<ResyncTermin
 
 type HostAgentStateRecord = Pick<
   BackendTerminalInfo,
-  "agentState" | "lastStateChange" | "agentIncarnation" | "waitingReason"
+  "agentState" | "lastStateChange" | "agentIncarnation" | "waitingReason" | "approvalKind"
 >;
 
 /**
@@ -195,7 +195,10 @@ export function takeHostAgentState(
     record.lastStateChange,
     undefined,
     undefined,
-    record.waitingReason
+    record.waitingReason,
+    undefined,
+    undefined,
+    record.approvalKind
   );
 }
 

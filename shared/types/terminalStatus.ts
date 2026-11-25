@@ -1,4 +1,4 @@
-import type { AgentState, WaitingReason } from "./agent.js";
+import type { AgentState, ApprovalKind, WaitingReason } from "./agent.js";
 import type { TerminalCheckResult } from "./checkResult.js";
 import type { TerminalHandback } from "./handback.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
@@ -80,6 +80,9 @@ export const INPUT_LINE_TRUNCATED_DESCRIPTION = "`text` was cut to its first 200
 export const UPDATE_INSTALLED_DESCRIPTION =
   'Claude Code showed "Update installed" this run: when, and if its text named /restart.';
 
+/** Model-facing description of `approvalKind` (#18170), wherever an approval wait is reported. */
+export const APPROVAL_KIND_DESCRIPTION = "The CLI showed its own folder-trust prompt.";
+
 /** Model-facing description of `inputLine.text`. */
 export const INPUT_LINE_TEXT_DESCRIPTION =
   "Text after the prompt glyph; empty for `empty` and `unknown`.";
@@ -90,6 +93,12 @@ export interface TerminalStatusEntry {
   agentId: string | null;
   agentState: AgentState | null;
   waitingReason?: WaitingReason;
+  /**
+   * Which selector an `approval` wait shows, when the screen named it
+   * (#18170): `trust` for a CLI's own folder-trust prompt. Read on both
+   * surfaces, from the panel and from the pty-host record.
+   */
+  approvalKind?: ApprovalKind;
   lastTransitionAt?: number;
   /**
    * When the terminal's visible content last changed, ignoring recognised

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  classifyApprovalKind,
   classifyWaitingReason,
   endsOnWorkingDialog,
   hasRateLimitMessage,
@@ -767,5 +768,302 @@ describe("Codex's safety-buffering picker (#18167)", () => {
     expect(classifyWaitingReason(confirmation, true, undefined, undefined, "codex")).toBe(
       "approval"
     );
+  });
+});
+
+describe("a CLI's folder-trust prompt (#18170)", () => {
+  const CLAUDE_TRUST = [
+    "Accessing workspace:",
+    "",
+    " /repo/wt-1",
+    "",
+    " Quick safety check: Is this a project you created or one you trust?",
+    "",
+    " Claude Code'll be able to read, edit, and execute files here.",
+    "",
+    " ❯ 1. Yes, I trust this folder",
+    "   2. No, exit",
+    "",
+    " Enter to confirm · Esc to cancel",
+  ];
+  const CODEX_TRUST = [
+    "> You are in /Users/me/proj",
+    "",
+    "  Do you trust the contents of this directory? Working with untrusted contents comes with higher risk of prompt injection.",
+    "",
+    "› 1. Yes, continue",
+    "  2. No, quit",
+    "",
+    "  Press enter to continue",
+  ];
+  const TOOL_APPROVAL = [
+    "─".repeat(60),
+    " Bash command",
+    "",
+    "   npm test",
+    "   Run the tests",
+    "",
+    " Do you want to proceed?",
+    " ❯ 1. Yes",
+    "   2. No, and tell Claude what to do differently (esc)",
+  ];
+
+  it("classifies Claude's unnumbered trust prompt as an approval by its open option", () => {
+    const unnumbered = [" ❯ No, exit", "   Yes, I trust this folder", "", " Enter to confirm"];
+    expect(classifyWaitingReason(unnumbered, false, 12, undefined, "claude")).toBe("approval");
+    // Without the CLI that draws it, it is just a highlighted row.
+    expect(classifyWaitingReason(unnumbered, false)).toBe("prompt");
+  });
+
+  it("reads Claude's option quoted in a reply above an empty input row as a prompt", () => {
+    const rule = "─".repeat(40);
+    const quoted = [
+      "⏺ The first option reads:",
+      "  Yes, I trust this folder",
+      "",
+      rule,
+      "❯ ",
+      rule,
+    ];
+    expect(classifyWaitingReason(quoted, true, 12, undefined, "claude")).toBe("prompt");
+    expect(classifyApprovalKind(quoted, "claude")).toBeUndefined();
+  });
+
+  it("names Claude's trust prompt, numbered or not, wherever its highlight is", () => {
+    expect(classifyApprovalKind(CLAUDE_TRUST, "claude")).toBe("trust");
+    const unnumbered = [
+      " Claude Code'll be able to read, edit, and execute files here.",
+      "",
+      " ❯ No, exit",
+      "   Yes, I trust this folder",
+      "",
+      " Enter to confirm · Esc to cancel",
+    ];
+    expect(classifyApprovalKind(unnumbered, "claude")).toBe("trust");
+    const ascii = CLAUDE_TRUST.map((row) => row.replace("❯", ">"));
+    expect(classifyApprovalKind(ascii, "claude")).toBe("trust");
+  });
+
+  it("names the trust prompt older Claude builds ask outright", () => {
+    const older = [
+      "╭──────────────────────────────────────────────╮",
+      "│ Do you trust the files in this folder?       │",
+      "│                                              │",
+      "│ /Users/me/proj                               │",
+      "│                                              │",
+      "│ ❯ 1. Yes, proceed                            │",
+      "│   2. No, exit                                │",
+      "╰──────────────────────────────────────────────╯",
+      "   Enter to confirm · Esc to exit",
+    ];
+    expect(classifyWaitingReason(older, false)).toBe("approval");
+    expect(classifyApprovalKind(older, "claude")).toBe("trust");
+  });
+
+  it("names Codex's trust prompt by its question over numbered options", () => {
+    expect(classifyWaitingReason(CODEX_TRUST, false)).toBe("approval");
+    expect(classifyApprovalKind(CODEX_TRUST, "codex")).toBe("trust");
+  });
+
+  it("names the trust prompt Codex 0.156 and later draws", () => {
+    const current = [
+      "> Folder access",
+      "  /Users/me/proj",
+      "",
+      "  Trust this folder? Codex can read, edit, and run files here, subject to your",
+      "  permission settings. Continue only if you trust these files.",
+      "",
+      "› 1. Trust and continue",
+      "  2. Quit",
+      "",
+      "  enter continue · esc quit",
+    ];
+    expect(classifyWaitingReason(current, false, current.length, undefined, "codex")).toBe(
+      "approval"
+    );
+    expect(classifyApprovalKind(current, "codex")).toBe("trust");
+    // Its header and question drawn as one block.
+    const tight = [...current.slice(0, 2), ...current.slice(3)];
+    expect(classifyApprovalKind(tight, "codex")).toBe("trust");
+    // Either option alone, without the question above it, is not the prompt.
+    expect(classifyApprovalKind(current.slice(5), "codex")).toBeUndefined();
+  });
+
+  it("reads it through colour, blank rows under it and a long checklist", () => {
+    const coloured = CLAUDE_TRUST.map((row) =>
+      row.includes("❯") ? `\x1b[36m${row}\x1b[39m` : row
+    );
+    const checklist = [
+      "  10 tasks (1 done, 9 open)",
+      ...Array.from({ length: 10 }, (_, i) => `  ◻ Task ${i}`),
+    ];
+    expect(classifyApprovalKind([...coloured, "", "", ...checklist], "claude")).toBe("trust");
+  });
+
+  it("names nothing for a tool approval or any other selector", () => {
+    expect(classifyApprovalKind(TOOL_APPROVAL, "claude")).toBeUndefined();
+    expect(
+      classifyApprovalKind(
+        ["Choose a theme", "❯ 1. Dark mode", "  2. Light mode", "", "Enter to confirm"],
+        "claude"
+      )
+    ).toBeUndefined();
+  });
+
+  it("keeps each CLI's wording to that CLI", () => {
+    expect(classifyApprovalKind(CLAUDE_TRUST, "codex")).toBeUndefined();
+    expect(classifyApprovalKind(CODEX_TRUST, "claude")).toBeUndefined();
+    expect(classifyApprovalKind(CLAUDE_TRUST, "gemini")).toBeUndefined();
+    expect(classifyApprovalKind(CLAUDE_TRUST, undefined)).toBeUndefined();
+    expect(classifyApprovalKind(CLAUDE_TRUST, "constructor")).toBeUndefined();
+  });
+
+  it("names nothing once a newer dialog or input box is drawn under an old trust prompt", () => {
+    const old = [" ❯ 1. Yes, I trust this folder", "   2. No, exit", ""];
+    expect(classifyApprovalKind([...old, ...TOOL_APPROVAL], "claude")).toBeUndefined();
+    // A frame with no highlight of its own still closes the prompt above it.
+    const rule = "─".repeat(40);
+    expect(classifyApprovalKind([...old, rule, "❯ ", rule], "claude")).toBeUndefined();
+  });
+
+  it("names nothing for the option's words inside another option or a continuation row", () => {
+    expect(
+      classifyApprovalKind(
+        [" Do you want to proceed?", " ❯ 1. Run: Yes, I trust this folder", "   2. No"],
+        "claude"
+      )
+    ).toBeUndefined();
+    expect(
+      classifyApprovalKind(
+        [" Do you want to proceed?", " ❯ 1. Yes", "      Yes, I trust this folder", "   2. No"],
+        "claude"
+      )
+    ).toBeUndefined();
+  });
+
+  it("names a prompt whose question or option a narrow pane wrapped", () => {
+    expect(
+      classifyApprovalKind(
+        [
+          "  Do you trust the contents of this",
+          "  directory?",
+          "",
+          "› 1. Yes, continue",
+          "  2. No, quit",
+        ],
+        "codex"
+      )
+    ).toBe("trust");
+    expect(
+      classifyApprovalKind([" ❯ 1. Yes, I trust this", "   folder", "   2. No, exit"], "claude")
+    ).toBe("trust");
+  });
+
+  it("names nothing for the wording quoted in a command a tool approval shows", () => {
+    const quoted = [
+      "─".repeat(60),
+      " Bash command",
+      "",
+      '   rg -n "Yes, I trust this folder" src',
+      "   Find the trust option",
+      "",
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+    ];
+    expect(classifyApprovalKind(quoted, "claude")).toBeUndefined();
+  });
+
+  it("names nothing for the wording in a heredoc a tool approval shows", () => {
+    const heredoc = [
+      "─".repeat(60),
+      " Bash command",
+      "",
+      "   cat <<'END' > fixture.txt",
+      "   Yes, I trust this folder",
+      "   Do you trust the files in this folder?",
+      "   END",
+      "",
+      " Do you want to proceed?",
+      " ❯ 1. Yes",
+      "   2. No",
+    ];
+    expect(classifyApprovalKind(heredoc, "claude")).toBeUndefined();
+    const codex = [
+      "Would you like to run the following command?",
+      "",
+      "  $ cat <<'EOF'",
+      "  Do you trust the contents of this directory?",
+      "  EOF",
+      "",
+      "› 1. Yes, proceed (y)",
+      "  2. No, and tell Codex what to do differently (esc)",
+    ];
+    expect(classifyApprovalKind(codex, "codex")).toBeUndefined();
+    // A blank row puts the quoted question at the top of the block over the options.
+    const spaced = [...codex.slice(0, 3), "", ...codex.slice(3)];
+    expect(classifyApprovalKind(spaced, "codex")).toBeUndefined();
+  });
+
+  it("names Codex's prompt drawn with its question against its options", () => {
+    const tight = [
+      "> You are in /Users/me/Library/Application Support/Daintree/",
+      "  help-sessions/9630935fa5c2fbb7.codex",
+      "  Do you trust the contents of this directory?",
+      "› 1. Yes, continue",
+      "  2. No, quit",
+    ];
+    expect(classifyApprovalKind(tight, "codex")).toBe("trust");
+  });
+
+  it("names nothing for a lone highlighted row that starts with the option's words", () => {
+    const echoed = ["Authentication failed", "> Yes, I trust this plan"];
+    expect(classifyApprovalKind(echoed, "claude")).toBeUndefined();
+    expect(classifyWaitingReason(echoed, false, 12, undefined, "claude")).toBe("error");
+    const draft = [
+      "Do you trust the contents of this design?",
+      "",
+      "› Yes, continue reviewing",
+      "",
+      "  ⏎ send   ⌃J newline",
+    ];
+    expect(classifyApprovalKind(draft, "codex")).toBeUndefined();
+  });
+
+  it("names nothing for an old trust prompt above a newer dialog drawn without a highlight", () => {
+    const rows = [
+      " ❯ 1. Yes, I trust this folder",
+      "   2. No, exit",
+      ...Array.from({ length: 5 }, () => ""),
+      " Do you want to proceed?",
+      "   1. Yes",
+      "   2. No",
+    ];
+    expect(classifyApprovalKind(rows, "claude")).toBeUndefined();
+  });
+
+  it("names Codex's prompt with either version's question over either version's options", () => {
+    const hybrid = [
+      "  Do you trust the contents of this directory?",
+      "",
+      "› 1. Trust and continue",
+      "  2. Quit",
+    ];
+    expect(classifyApprovalKind(hybrid, "codex")).toBe("trust");
+  });
+
+  it("names nothing for Codex's question typed into its input row", () => {
+    const draft = ["› Do you trust the contents of this directory?", "", "  ⏎ send   ⌃J newline"];
+    expect(classifyApprovalKind(draft, "codex")).toBeUndefined();
+  });
+
+  it("names nothing for a prompt scrolled above the rows it reads", () => {
+    const scrolled = [
+      ...CLAUDE_TRUST.slice(0, 10),
+      ...Array.from({ length: 12 }, (_, i) => `output line ${i}`),
+      " ❯ 1. Yes",
+      "   2. No",
+    ];
+    expect(classifyApprovalKind(scrolled, "claude")).toBeUndefined();
   });
 });

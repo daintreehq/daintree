@@ -1733,6 +1733,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               waitingReason: {
                 type: "string",
               },
+              approvalKind: {
+                description: "The CLI showed its own folder-trust prompt.",
+                type: "string",
+                const: "trust",
+              },
               updateInstalled: {
                 type: "object",
                 properties: {

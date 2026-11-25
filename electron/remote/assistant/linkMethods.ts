@@ -549,6 +549,8 @@ const relayObservationSchema = z.discriminatedUnion("kind", [
       kind: z.literal("state"),
       state: agentStateSchema,
       waitingReason: waitingReasonSchema.optional(),
+      // A kind a later host adds is read as absent, never refused with its batch.
+      approvalKind: z.literal("trust").optional().catch(undefined),
       handback: z.boolean(),
     })
     .strip(),

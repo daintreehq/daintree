@@ -1,7 +1,12 @@
 import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
-import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
+import type {
+  AgentState,
+  AgentId,
+  ApprovalKind,
+  WaitingReason,
+} from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { PanelKind, PanelTitleMode, ScheduledRunRef } from "../../../shared/types/panel.js";
@@ -70,6 +75,8 @@ export interface TerminalPublicState {
   isExited?: boolean;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   /**
    * An agent run started in this PTY and hasn't yet been observed waiting at

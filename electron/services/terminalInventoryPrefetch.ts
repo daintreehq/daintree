@@ -103,6 +103,7 @@ export async function buildTerminalInventory(
         ptyRows: terminal.ptyRows,
         agentState: terminal.agentState,
         waitingReason: terminal.waitingReason,
+        approvalKind: terminal.approvalKind,
         lastStateChange: terminal.lastStateChange,
         spawnedAt: terminal.spawnedAt,
         isTrashed: terminal.isTrashed,

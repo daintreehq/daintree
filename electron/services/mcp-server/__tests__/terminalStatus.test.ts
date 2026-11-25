@@ -501,6 +501,34 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(working.terminals[0]?.waitingReason).toBeUndefined();
   });
 
+  it("names a folder-trust prompt only beside the approval wait it qualifies (#18170)", async () => {
+    const read = (fields: Record<string, unknown>) =>
+      buildViewlessTerminalStatus(deps([record(fields)]), WORKSPACE, { terminalIds: ["t-1"] });
+
+    const trust = await read({
+      agentState: "waiting",
+      waitingReason: "approval",
+      approvalKind: "trust",
+    });
+    const tool = await read({ agentState: "waiting", waitingReason: "approval" });
+    const working = await read({
+      agentState: "working",
+      waitingReason: "approval",
+      approvalKind: "trust",
+    });
+    const prompt = await read({
+      agentState: "waiting",
+      waitingReason: "prompt",
+      approvalKind: "trust",
+    });
+
+    expect(trust.terminals[0]).toMatchObject({ waitingReason: "approval", approvalKind: "trust" });
+    expect(tool.terminals[0]).not.toHaveProperty("approvalKind");
+    expect(working.terminals[0]).not.toHaveProperty("approvalKind");
+    expect(prompt.terminals[0]).toMatchObject({ waitingReason: "prompt" });
+    expect(prompt.terminals[0]).not.toHaveProperty("approvalKind");
+  });
+
   it("never reports an exitCode, even for an agent that has finished", async () => {
     // Main caches exit metadata per terminal in `AgentAvailabilityStore`, but
     // this answer is built from the pty-host record and does not splice in a

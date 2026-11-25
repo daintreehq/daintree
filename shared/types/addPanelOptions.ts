@@ -18,7 +18,7 @@ import type {
 } from "./panel.js";
 import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
-import type { AgentState, AgentId, WaitingReason } from "./agent.js";
+import type { AgentState, AgentId, ApprovalKind, WaitingReason } from "./agent.js";
 import type { UpdateInstalledObservation } from "./ipc/agent.js";
 import type {
   ConversationStore,
@@ -168,6 +168,8 @@ export interface AddPanelOptionsBase {
   agentState?: AgentState;
   /** Why the agent is waiting, restored from the backend snapshot on reconnect. Only meaningful when `agentState` is "waiting". */
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   /** Store command on instance but don't execute it on spawn */
   skipCommandExecution?: boolean;

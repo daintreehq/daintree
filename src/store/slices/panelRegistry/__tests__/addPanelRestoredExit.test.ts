@@ -330,3 +330,47 @@ describe("addPanel — a restored exit (#15941)", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 });
+
+describe("addPanel — a reconnect's approval kind (#18170)", () => {
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    spawn.mockReset();
+    spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
+    usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
+  });
+
+  const reconnect = (fields: Record<string, unknown>) =>
+    usePanelStore.getState().addPanel({
+      kind: "terminal",
+      existingId: "kept",
+      cwd: "/repo",
+      bypassLimits: true,
+      agentState: "waiting",
+      ...fields,
+    });
+
+  it.each([
+    ["directly", false],
+    ["inside a hydration batch", true],
+  ])("takes the kind from the record that gave the reason, %s", async (_label, batched) => {
+    await reconnect({ waitingReason: "approval", approvalKind: "trust" });
+    await drainMicrotasks();
+    expect(ptyPanel("kept")).toMatchObject({ waitingReason: "approval", approvalKind: "trust" });
+
+    if (batched) beginBatch();
+    try {
+      // A record that names no reason keeps the stored pair.
+      await reconnect({});
+      await drainMicrotasks();
+      expect(ptyPanel("kept")).toMatchObject({ waitingReason: "approval", approvalKind: "trust" });
+
+      // One that read a plain approval clears the kind, never borrowing the stored one.
+      await reconnect({ waitingReason: "approval" });
+      await drainMicrotasks();
+      expect(ptyPanel("kept")?.waitingReason).toBe("approval");
+      expect(ptyPanel("kept")?.approvalKind).toBeUndefined();
+    } finally {
+      resetBatchState();
+    }
+  });
+});

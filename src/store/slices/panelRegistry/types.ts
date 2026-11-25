@@ -201,7 +201,8 @@ export interface PanelRegistrySlice {
     confidence?: number,
     waitingReason?: import("@shared/types/agent.js").WaitingReason,
     sessionCost?: number,
-    sessionTokens?: number
+    sessionTokens?: number,
+    approvalKind?: import("@shared/types/agent.js").ApprovalKind
   ) => void;
   /**
    * Record a state the host reported without showing it: the pane keeps an

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
-import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
+import type { AgentState, ApprovalKind, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import type {
@@ -150,6 +150,7 @@ export interface NotifyTerminalInfo {
   projectId?: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
+  approvalKind?: ApprovalKind;
   lastStateChange?: number;
   /** Its agent run hasn't been observed at its prompt yet: starting up, not in a turn (#18014). */
   promptUnseen?: true;
@@ -206,6 +207,8 @@ export interface NotifyStateChange {
   previousState: AgentState;
   timestamp: number;
   waitingReason?: WaitingReason;
+  /** Which selector an `approval` wait shows, when the screen named it (#18170). */
+  approvalKind?: ApprovalKind;
   lastHandback?: TerminalHandback;
 }
 
@@ -528,6 +531,7 @@ interface Notice {
   settling?: {
     state: AgentState;
     waitingReason?: WaitingReason;
+    approvalKind?: ApprovalKind;
     /** When the target left `working`, by the event's own clock. */
     startedAt: number;
     /** When it entered `state`: later than `startedAt` once the settle moved between states. */
@@ -727,6 +731,7 @@ export class TerminalNotifyService {
           terminalId: args.terminalId,
           ...(target.agentState !== undefined ? { state: target.agentState } : {}),
           ...(target.waitingReason !== undefined ? { waitingReason: target.waitingReason } : {}),
+          ...approvalKindOf(target),
         };
       }
       const notice = this.addNotice(
@@ -2050,6 +2055,7 @@ export class TerminalNotifyService {
           kind: "state",
           state: change.state,
           ...(change.waitingReason !== undefined ? { waitingReason: change.waitingReason } : {}),
+          ...approvalKindOf(change),
           handback: true,
         },
         change.timestamp
@@ -2074,6 +2080,7 @@ export class TerminalNotifyService {
     if (notice.settling !== undefined) {
       notice.settling.state = change.state;
       notice.settling.waitingReason = change.waitingReason;
+      notice.settling.approvalKind = approvalKindOf(change).approvalKind;
       notice.settling.lastTransitionAt = change.timestamp;
       return;
     }
@@ -2082,6 +2089,7 @@ export class TerminalNotifyService {
     notice.settling = {
       state: change.state,
       ...(change.waitingReason !== undefined ? { waitingReason: change.waitingReason } : {}),
+      ...approvalKindOf(change),
       startedAt: change.timestamp,
       lastTransitionAt: change.timestamp,
       timer: setTimeout(() => this.fireSettled(owner, notice), delay),
@@ -2100,6 +2108,7 @@ export class TerminalNotifyService {
         kind: "state",
         state: settling.state,
         ...(settling.waitingReason !== undefined ? { waitingReason: settling.waitingReason } : {}),
+        ...approvalKindOf(settling),
         handback: notice.handbackSeen,
       },
       settling.lastTransitionAt,
@@ -2935,6 +2944,15 @@ export class TerminalNotifyService {
       console.error("[MCP] terminal notify: publishing pane state failed:", err);
     }
   }
+}
+
+/** An approval wait's kind, as a field to spread: only beside the reason it qualifies (#18170). */
+function approvalKindOf(reading: { waitingReason?: WaitingReason; approvalKind?: ApprovalKind }): {
+  approvalKind?: ApprovalKind;
+} {
+  return reading.waitingReason === "approval" && reading.approvalKind !== undefined
+    ? { approvalKind: reading.approvalKind }
+    : {};
 }
 
 /** The wake gate's inputs, for a log line. Times are epoch ms. */

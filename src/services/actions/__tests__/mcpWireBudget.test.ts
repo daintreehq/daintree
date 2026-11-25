@@ -644,7 +644,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 64_377): `holdOnRestart` on `agent.launch`, so a one-shot worker can be
   // launched already held on restart instead of resuming into its finished
   // conversation. Its description was cut to a clause first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 64_500;
+  // 64_500 → 64_700 for #18170, measured at 64_606 B (+109 over develop's
+  // 64_497): `approvalKind` on `terminal.getStatus`, so a caller can tell a
+  // CLI's folder-trust prompt from a tool approval without reading the screen.
+  // The result schema is closed, so the field must be advertised; its one
+  // description was cut to a clause first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 64_700;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -1128,7 +1133,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // the launch's, plus `terminal.setHoldOnRestartOwned`, in-app only, so an
   // Assistant can hold a worker it launched after the fact. Its descriptions
   // were trimmed first.
-  const MAX_COHORT_PAYLOAD_BYTES = 206_000;
+  // 206_000 → 206_500 for #18170, measured at 206_414 B (+483 over develop's
+  // 205_931): the same `approvalKind` the external half above pays for, on
+  // `terminal.getStatus` and the reads that extend its entry (the host status
+  // read among them), `terminal.notifyWhenIdle`'s answer, and `host.watch`'s
+  // agents and the agent directory it lists. Each
+  // result schema is closed, so the field must be advertised; only the status
+  // and notify fields carry the one short description.
+  const MAX_COHORT_PAYLOAD_BYTES = 206_500;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
