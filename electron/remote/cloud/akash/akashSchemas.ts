@@ -228,3 +228,55 @@ export const akashLeasesCreatedSchema = z
   .loose();
 
 export const akashAnySchema = z.unknown();
+
+/** A close's answer: a close that finished says so. */
+export const akashClosedSchema = z
+  .object({ data: z.object({ success: z.boolean() }).loose() })
+  .loose();
+
+const akashQuantitySchema = z.object({ val: z.string() }).loose();
+
+/** What a group asks for, read only where Daintree reports it: none of it is required. */
+export const akashGroupSpecSchema = z
+  .object({
+    group_spec: z
+      .object({
+        requirements: z
+          .object({
+            attributes: z
+              .array(z.object({ key: z.string(), value: z.string() }).loose())
+              .optional(),
+          })
+          .loose()
+          .optional(),
+        resources: z
+          .array(
+            z
+              .object({
+                resource: z
+                  .object({
+                    cpu: z.object({ units: akashQuantitySchema.optional() }).loose().optional(),
+                    memory: z
+                      .object({ quantity: akashQuantitySchema.optional() })
+                      .loose()
+                      .optional(),
+                    storage: z
+                      .array(z.object({ quantity: akashQuantitySchema.optional() }).loose())
+                      .optional(),
+                  })
+                  .loose(),
+                count: z.number(),
+              })
+              .loose()
+          )
+          .optional(),
+      })
+      .loose()
+      .optional(),
+  })
+  .loose();
+
+/** A block, as the Console's public route answers: when it was made. */
+export const akashBlockSchema = z
+  .object({ height: z.number().int().positive(), datetime: z.string() })
+  .loose();

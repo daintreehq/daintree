@@ -194,6 +194,9 @@ export class FakeAkashConsole {
   readonly requests: FakeAkashRequest[] = [];
   private readonly failures: Failure[] = [];
   private readonly holds: FakeAkashMatch[] = [];
+  private readonly afterwards: Array<
+    FakeAkashMatch & { times: number; outcome: () => Response | Error }
+  > = [];
   /** The regions placement options list; null lists every region with a count. */
   placementRegions: string[] | null = null;
   readonly deployments: FakeAkashDeployment[] = [];
@@ -223,6 +226,21 @@ export class FakeAkashConsole {
   }
 
   /** Matching requests never answer; they reject once their caller aborts. */
+  /** The next `times` matching requests are carried out, then answered with `outcome()` instead. */
+  commitThen(method: string, path: RegExp, outcome: () => Response | Error, times = 1): void {
+    this.afterwards.push({ method, path, times, outcome });
+  }
+
+  /** The next `times` matching requests are carried out, and only their answers lost. */
+  lose(method: string, path: RegExp, times = 1): void {
+    this.commitThen(
+      method,
+      path,
+      () => new TypeError("fetch failed: the connection dropped before the answer came"),
+      times
+    );
+  }
+
   hold(match: FakeAkashMatch): void {
     this.holds.push(match);
   }
@@ -262,7 +280,15 @@ export class FakeAkashConsole {
       if (outcome instanceof Error) throw outcome;
       return outcome;
     }
-    return this.route(method, path, headers, body, url.searchParams);
+    const answer = this.route(method, path, headers, body, url.searchParams);
+    const after = this.afterwards.find((entry) => entry.times > 0 && matches(entry, request));
+    if (after) {
+      after.times--;
+      const outcome = after.outcome();
+      if (outcome instanceof Error) throw outcome;
+      return outcome;
+    }
+    return answer;
   };
 
   private route(
@@ -406,7 +432,8 @@ export class FakeAkashConsole {
 
   /** The service the SDL declares and whether it exposes port 22 to the internet. */
   private serviceOf(deployment: FakeAkashDeployment): { name: string; sshExposed: boolean } {
-    const services = (deployment.definition as { services?: Record<string, unknown> }).services;
+    const services = (deployment.definition as { services?: Record<string, unknown> } | null)
+      ?.services;
     const [name, service] = Object.entries(services ?? {})[0] ?? ["app", {}];
     const expose = (service as { expose?: unknown[] }).expose ?? [];
     const sshExposed = expose.some((entry) => {
@@ -472,12 +499,58 @@ export class FakeAkashConsole {
         {
           id: { owner: deployment.owner, dseq: deployment.dseq, gseq: 1 },
           state: deployment.groupState,
-          group_spec: { name: "dcloud", requirements: {}, resources: [] },
+          group_spec: this.groupSpecOf(deployment),
           created_at: String(deployment.createdHeight),
         },
       ],
       settings: null,
       projectId: deployment.projectId,
+    };
+  }
+
+  /** The group the chain recorded from the SDL: its placement and its one unit, in the chain's units. */
+  private groupSpecOf(deployment: FakeAkashDeployment) {
+    const definition = deployment.definition as {
+      profiles?: {
+        compute?: Record<string, { resources?: Record<string, unknown> }>;
+        placement?: Record<string, { attributes?: Record<string, string> }>;
+      };
+    } | null;
+    const resources = Object.values(definition?.profiles?.compute ?? {})[0]?.resources as
+      | {
+          cpu?: { units?: number };
+          memory?: { size?: string };
+          storage?: Array<{ size?: string }>;
+        }
+      | undefined;
+    const attributes = Object.values(definition?.profiles?.placement ?? {})[0]?.attributes ?? {};
+    const gib = (size: string | undefined) =>
+      String(Number(/^(\d+)Gi$/.exec(size ?? "")?.[1]) * 1024 ** 3);
+    return {
+      name: "region",
+      requirements: {
+        signed_by: { all_of: [], any_of: [AUDITOR] },
+        attributes: Object.entries(attributes).map(([key, value]) => ({ key, value })),
+      },
+      resources: resources
+        ? [
+            {
+              resource: {
+                id: 1,
+                cpu: { units: { val: String((resources.cpu?.units ?? 0) * 1000) } },
+                memory: { quantity: { val: gib(resources.memory?.size) } },
+                storage: (resources.storage ?? []).map((volume) => ({
+                  name: "default",
+                  quantity: { val: gib(volume.size) },
+                })),
+                gpu: { units: { val: "0" } },
+                endpoints: [],
+              },
+              count: 1,
+              price: { denom: "uact", amount: "100000.000000000000000000" },
+            },
+          ]
+        : [],
     };
   }
 
@@ -544,7 +617,28 @@ export class FakeAkashConsole {
       const dseq = one[1]!.replace(/^0+/, "");
       const deployment = this.deployments.find((entry) => entry.dseq === dseq && visible(entry));
       if (!deployment) return notFound();
-      if (method === "GET") return json(200, { data: this.deploymentJson(deployment, true) });
+      if (method === "GET") {
+        // A deployment's own route carries the stored SDL, and no groups.
+        const {
+          groups: _groups,
+          settings: _settings,
+          ...detail
+        } = this.deploymentJson(deployment, true);
+        return json(200, {
+          data: {
+            ...detail,
+            consoleSettings:
+              deployment.definition === null
+                ? null
+                : {
+                    sdl: "",
+                    manifestVersion: "",
+                    definition: deployment.definition,
+                    templateId: null,
+                  },
+          },
+        });
+      }
       if (!caller.canDeploy(deployment.projectId)) {
         return coded(
           403,
@@ -669,6 +763,23 @@ export class FakeAkashConsole {
         "project_forbidden",
         "The deployment is filed in a project you can't change"
       );
+    }
+    // The same request again, once its lease exists, sends the manifest again.
+    const leased = deployment.leases.find(
+      (lease) =>
+        lease.state === "active" &&
+        lease.provider === asked.provider &&
+        lease.gseq === asked.gseq &&
+        lease.oseq === asked.oseq
+    );
+    if (leased) {
+      return json(200, {
+        data: {
+          deployment: this.deploymentJson(deployment, false).deployment,
+          leases: [this.leaseJson(deployment, leased, true)],
+          escrow_account: {},
+        },
+      });
     }
     const bid = deployment.bids.find(
       (entry) =>

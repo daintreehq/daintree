@@ -4,6 +4,8 @@ import {
   AKASH_DSEQ,
   akashAnySchema,
   akashBidListSchema,
+  akashBlockSchema,
+  akashClosedSchema,
   akashCreatedDeploymentSchema,
   akashDeploymentEnvelopeSchema,
   akashDeploymentPageSchema,
@@ -79,7 +81,13 @@ export type AkashErrorKind =
   /** The key no longer reaches the project the account was connected for. */
   | "wrong-scope"
   /** Something Daintree can't do through Akash yet, or ever (a create outside an offer). */
-  | "unsupported";
+  | "unsupported"
+  /** The chosen offer can't be leased any more; nothing was leased and the order stays open. */
+  | "offer-gone"
+  /** A request that changes something was sent and its answer lost: it may or may not have happened. */
+  | "outcome-unknown"
+  /** The machine is leased but its provider doesn't say yet where its SSH port is. */
+  | "not-ready";
 
 export class AkashApiError extends Error {
   constructor(
@@ -301,7 +309,7 @@ export class AkashConsoleClient {
       { method: "GET", path: `/deployments?${params}`, retry: true },
       akashDeploymentPageSchema
     );
-    return page.data;
+    return { deployments: page.data.deployments, hasMore: page.data.pagination.hasMore };
   }
 
   /** One deployment with its leases, each with what its provider reports of it now. */
@@ -316,11 +324,19 @@ export class AkashConsoleClient {
 
   /** Closes a deployment, ending its leases. One already closed closes again as a success. */
   async closeDeployment(ctx: AkashRequestContext, dseq: string): Promise<void> {
-    await this.call(
+    const result = await this.call(
       ctx,
       { method: "DELETE", path: `/deployments/${requireDseq(dseq)}`, retry: true },
-      akashAnySchema
+      akashClosedSchema
     );
+    if (!result.data.success) {
+      throw new AkashApiError(
+        "bad-response",
+        "The Akash Console didn't say the deployment closed",
+        null,
+        null
+      );
+    }
   }
 
   /** Renames a deployment, touching nothing it runs. */
@@ -368,6 +384,35 @@ export class AkashConsoleClient {
       akashLeasesCreatedSchema
     );
     return result.data.leases;
+  }
+
+  /**
+   * When the block at `height` was made; null when the Console has no such
+   * block. Public: no key is sent.
+   */
+  async blockTime(height: number, signal?: AbortSignal): Promise<string | null> {
+    if (!Number.isSafeInteger(height) || height < 1) {
+      throw new AkashApiError("invalid-request", "Not a block height", null, null);
+    }
+    try {
+      const block = await this.call(
+        { signal },
+        { method: "GET", path: `/blocks/${height}`, retry: true },
+        akashBlockSchema
+      );
+      if (block.height !== height || !Number.isFinite(Date.parse(block.datetime))) {
+        throw new AkashApiError(
+          "bad-response",
+          "The Akash Console answered with another block, or no time for it",
+          null,
+          null
+        );
+      }
+      return new Date(block.datetime).toISOString();
+    } catch (error) {
+      if (error instanceof AkashApiError && error.kind === "not-found") return null;
+      throw error;
+    }
   }
 
   private async call<S extends z.ZodType>(

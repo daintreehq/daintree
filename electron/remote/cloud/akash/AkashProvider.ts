@@ -1,8 +1,11 @@
 import type {
   CloudAccountCheckResult,
   CloudAccountScopeChoice,
+  CloudCreateOffer,
+  CloudCreateOrder,
   CloudCredentialValues,
   CloudHostError,
+  CloudMachineState,
   CloudMachineType,
   CloudProviderInfo,
   CloudProvisioningChoice,
@@ -12,25 +15,61 @@ import { pluralize } from "../../../../shared/utils/pluralize.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import {
   CLOUD_HOSTS_UNSUPPORTED_ON_WINDOWS,
+  type CloseOrderOutcome,
   type CloudProvider,
   type OfferCreate,
   type ProviderCatalog,
+  type ProviderCreateRequest,
   type ProviderCredentials,
   type ProviderResource,
   type ProviderSshAccess,
 } from "../provider.js";
+import { isValidSshEndpoint } from "../sshEndpoint.js";
 import {
   AkashApiError,
+  parseItems,
   redactAkashText,
   type AkashConsoleClient,
   type AkashRequestContext,
 } from "./AkashConsoleClient.js";
+import { AKASH_UACT, akashHourlyDollars } from "./akashBilling.js";
+import {
+  AKASH_CREATE_KEY_LABEL,
+  AKASH_HOST_IMAGE,
+  AKASH_SERVICE,
+  AKASH_SSH_USER,
+  akashDefinition,
+  akashDefinitionSize,
+  akashGroupsFacts,
+  akashMarkedName,
+  akashMarkToken,
+  akashOfferId,
+  akashRenamed,
+  akashResourceId,
+  parseAkashName,
+  parseAkashOfferId,
+  parseAkashResourceId,
+  type AkashDeploymentId,
+  type AkashOfferId,
+  type AkashParsedName,
+} from "./akashDeployments.js";
 import {
   AKASH_INSTANCE_TYPES,
+  akashInstanceType,
   akashInstanceTypeLabel,
   akashScreeningRequest,
 } from "./akashInstanceTypes.js";
-import type { AkashPlacementOptions, AkashScreenedProvider } from "./akashSchemas.js";
+import {
+  akashBidSchema,
+  akashDeploymentSchema,
+  akashForwardedPortSchema,
+  akashGroupSchema,
+  akashLeaseSchema,
+  type AkashBid,
+  type AkashLease,
+  type AkashPlacementOptions,
+  type AkashScreenedProvider,
+} from "./akashSchemas.js";
 
 const MAX_KEY_LENGTH = 4096;
 
@@ -55,9 +94,167 @@ function unsupported(message: string): AkashApiError {
   return new AkashApiError("unsupported", message, null, null);
 }
 
-/** Until deployments are placed, reached and closed through the Console (#18236). */
-function notYet(): Promise<never> {
-  return Promise.reject(unsupported("Daintree can't manage Akash deployments yet."));
+const PAGE_SIZE = 100;
+/** Ten thousand deployments: past that a listing is refused rather than read without end. */
+const MAX_PAGES = 100;
+const MAX_BLOCK_TIMES = 512;
+
+/** An OpenSSH public key on one line: its type, its base64, and any comment. */
+const PUBLIC_KEY = /^[a-z0-9@.-]+ [A-Za-z0-9+/]+={0,3}(?: [^\r\n]*)?$/;
+
+/** A deployment as Daintree reads it, from the list or from its own route. */
+interface DeploymentView {
+  id: AkashDeploymentId;
+  state: string;
+  /** The block the order was placed in; null when the Console didn't say. */
+  createdHeight: number | null;
+  rawName: string | null;
+  name: AkashParsedName;
+  leases: AkashLease[];
+  /** Only the list carries them. */
+  groups: unknown[] | undefined;
+  /** The SDL Console stored, which only a deployment's own route carries. */
+  definition: unknown;
+}
+
+function viewOf(raw: unknown): DeploymentView {
+  const parsed = akashDeploymentSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new AkashApiError(
+      "bad-response",
+      "The Akash Console described a deployment in a shape Daintree doesn't recognise",
+      null,
+      null
+    );
+  }
+  const { deployment, leases, groups, name } = parsed.data;
+  const height = Number(deployment.created_at);
+  const settings = (raw as { consoleSettings?: { definition?: unknown } | null }).consoleSettings;
+  return {
+    id: { owner: deployment.id.owner, dseq: deployment.id.dseq.replace(/^0+/, "") },
+    state: deployment.state,
+    createdHeight: Number.isSafeInteger(height) && height > 0 ? height : null,
+    rawName: name ?? null,
+    name: parseAkashName(name),
+    leases: parseItems(leases, akashLeaseSchema),
+    groups,
+    definition: settings?.definition ?? null,
+  };
+}
+
+/** The lease that says what the machine is: the active one, else the latest. */
+function currentLease(leases: readonly AkashLease[]): AkashLease | null {
+  const active = leases.find((lease) => lease.state === "active");
+  if (active) return active;
+  return (
+    [...leases].sort((a, b) => Number(b.created_at ?? 0) - Number(a.created_at ?? 0))[0] ?? null
+  );
+}
+
+/** The machine a deployment is; null for an order nobody leased, which is none. */
+function machineOf(
+  view: DeploymentView
+): { machine: CloudMachineState; error: string | null } | null {
+  if (view.leases.length === 0) return null;
+  if (view.state === "closed") return { machine: "deleted", error: null };
+  if (view.state !== "active") return { machine: "unknown", error: null };
+  const lease = currentLease(view.leases)!;
+  switch (lease.state) {
+    case "active":
+      return { machine: "running", error: null };
+    case "insufficient_funds":
+      return {
+        machine: "error",
+        error: "Its lease ran out of funds. Add credit on the Akash Console, or delete it.",
+      };
+    case "closed":
+      return {
+        machine: "error",
+        error:
+          "Its provider ended the lease, so the container is gone. Delete it to close the deployment.",
+      };
+    default:
+      return { machine: "unknown", error: null };
+  }
+}
+
+function sameDeployment(found: { owner: string; dseq: string }, id: AkashDeploymentId): boolean {
+  return found.owner === id.owner && found.dseq.replace(/^0+/, "") === id.dseq;
+}
+
+/** What a lease names of its bid: the order and the bidder, never the bid's own number. */
+function tupleOf(id: { gseq: number; oseq: number; provider: string }): string {
+  return `${id.gseq}/${id.oseq}/${id.provider}`;
+}
+
+function sameLease(lease: AkashLease, offer: AkashOfferId): boolean {
+  const bseq = (lease.id as { bseq?: unknown }).bseq;
+  return tupleOf(lease.id) === tupleOf(offer) && (typeof bseq !== "number" || bseq === offer.bseq);
+}
+
+function groupsOpen(groups: readonly unknown[] | undefined): boolean {
+  if (!groups || groups.length === 0) return false;
+  return groups.every((group) => akashGroupSchema.safeParse(group).data?.state === "open");
+}
+
+function sameLabels(
+  found: Readonly<Record<string, string>>,
+  wanted: Readonly<Record<string, string>>
+): boolean {
+  const keys = Object.keys(wanted);
+  return (
+    keys.length === Object.keys(found).length &&
+    keys.every((key) => Object.hasOwn(found, key) && found[key] === wanted[key])
+  );
+}
+
+function splitLabel(label: string): { key: string; value: string } {
+  const at = label.indexOf("=");
+  if (at <= 0) throw new AkashApiError("invalid-request", "Not a key=value label", null, null);
+  return { key: label.slice(0, at), value: label.slice(at + 1) };
+}
+
+/** Why an offer can't be chosen, in words for its row; null when it can. */
+function offerReason(state: string, openFromBidder: number): string | null {
+  switch (state) {
+    case "open":
+      return openFromBidder === 1 ? null : "The provider made more than one offer on this order";
+    case "active":
+      return "Already leased";
+    case "lost":
+      return "Another offer was leased";
+    case "closed":
+      return "No longer open";
+    default:
+      return `The Akash Console says it is ${state}`;
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * A change whose answer never came, or came unreadable, may have happened:
+ * said so, rather than passed off as the Console being unreachable.
+ */
+function maybeDone(error: unknown, message: string): unknown {
+  if (
+    error instanceof AkashApiError &&
+    (error.kind === "network" ||
+      error.kind === "timeout" ||
+      error.kind === "server" ||
+      error.kind === "bad-response")
+  ) {
+    return new AkashApiError("outcome-unknown", message, error.status, error.code);
+  }
+  return error;
+}
+
+/** What an Akash provider is built with beyond its Console client. */
+export interface AkashProviderOptions {
+  /** The host image every deployment runs, by digest: `ghcr.io/daintreehq/daintree-host@sha256:…`. */
+  hostImage: string;
 }
 
 /**
@@ -169,8 +366,20 @@ function regionsOf(
 
 export class AkashProvider implements CloudProvider {
   readonly id = "akash" as const;
+  /** A second order placed for a lost answer would be a second order: a lost one is only looked for. */
+  readonly createReplay = "lookup-only" as const;
+  private readonly hostImage: string;
+  private readonly blockTimes = new Map<string, string>();
 
-  constructor(private readonly clientFor: (apiUrl: string) => AkashConsoleClient) {}
+  constructor(
+    private readonly clientFor: (apiUrl: string) => AkashConsoleClient,
+    options: AkashProviderOptions
+  ) {
+    if (!AKASH_HOST_IMAGE.test(options.hostImage)) {
+      throw new Error(`Not a Daintree host image by digest: ${options.hostImage}`);
+    }
+    this.hostImage = options.hostImage;
+  }
 
   info(platform: NodeJS.Platform): CloudProviderInfo {
     return {
@@ -224,6 +433,11 @@ export class AkashProvider implements CloudProvider {
     // Never sent without one: an empty key would only come back as the Console's refusal.
     if (!apiKey) throw new AkashApiError("unauthorized", "No API key", null, null);
     return { apiKey, signal: credentials.signal };
+  }
+
+  /** As `ctx`, acting in the account's project, which its deployments are filed in. */
+  private account(credentials: ProviderCredentials): AkashRequestContext {
+    return { ...this.ctx(credentials), projectId: credentials.scopeId.toLowerCase() };
   }
 
   async checkCredentials(
@@ -345,12 +559,45 @@ export class AkashProvider implements CloudProvider {
     };
   }
 
-  list(): Promise<ProviderResource[]> {
-    return notYet();
+  /**
+   * The account's machines: deployments one of its offers was leased for. An
+   * order nobody leased yet is no machine, and `findOrders` finds it. With a
+   * label, closed deployments are looked through too, so a create's lookup
+   * sees a machine it made and deleted since.
+   */
+  async list(
+    credentials: ProviderCredentials,
+    options: { label?: string; location?: string } = {}
+  ): Promise<ProviderResource[]> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const label = options.label ? splitLabel(options.label) : null;
+    const search = label ? akashMarkToken(label.key, label.value) : undefined;
+    const found = new Map<string, DeploymentView>();
+    for (const state of label ? (["active", "closed"] as const) : (["active"] as const)) {
+      for (const view of await this.everyDeployment(client, ctx, state, search)) {
+        found.set(akashResourceId(view.id), view);
+      }
+    }
+    const location = options.location?.toLowerCase() ?? null;
+    const machines = [...found.values()].filter((view) => {
+      if (view.leases.length === 0) return false;
+      if (label && view.name.labels[label.key] !== label.value) return false;
+      // A region it doesn't say can't rule it out.
+      const region = akashGroupsFacts(view.groups).region;
+      return location === null || region === null || region === location;
+    });
+    return Promise.all(machines.map((view) => this.resourceOf(client, view, ctx.signal)));
   }
 
-  inspect(): Promise<ProviderResource> {
-    return notYet();
+  async inspect(credentials: ProviderCredentials, resourceId: string): Promise<ProviderResource> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const view = await this.read(client, ctx, parseAkashResourceId(resourceId));
+    if (view.leases.length === 0) {
+      throw new AkashApiError("not-found", "Nothing was leased for that order yet", null, null);
+    }
+    return this.resourceOf(client, view, ctx.signal);
   }
 
   /** A machine here is leased from the offer a person chose, never made by one request. */
@@ -363,23 +610,543 @@ export class AkashProvider implements CloudProvider {
   }
 
   readonly offerCreate: OfferCreate = {
-    placeOrder: notYet,
-    findOrders: notYet,
-    listOffers: notYet,
-    leaseOffer: notYet,
-    closeOrder: notYet,
+    placeOrder: (credentials, request) => this.placeOrder(credentials, request),
+    findOrders: (credentials, match) => this.findOrders(credentials, match),
+    listOffers: (credentials, orderId) => this.listOffers(credentials, orderId),
+    leaseOffer: (credentials, orderId, offerId) => this.leaseOffer(credentials, orderId, offerId),
+    closeOrder: (credentials, orderId) => this.closeOrder(credentials, orderId),
   };
 
-  rename(): Promise<void> {
-    return notYet();
+  /**
+   * Places the order as one deployment of the host image, named with the
+   * create's labels and key so it is found again, then reads it back for the
+   * wallet that owns it, which the create's answer doesn't name.
+   */
+  private async placeOrder(
+    credentials: ProviderCredentials,
+    request: ProviderCreateRequest
+  ): Promise<CloudCreateOrder> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const type = akashInstanceType(request.machineType);
+    if (!type) {
+      throw new AkashApiError(
+        "invalid-request",
+        `Daintree has no Akash size called ${request.machineType}`,
+        null,
+        null
+      );
+    }
+    const region = request.provisioning.location;
+    if (!region) {
+      throw new AkashApiError("invalid-request", "An Akash machine needs a region", null, null);
+    }
+    const publicKey = request.publicKey?.trim() ?? "";
+    if (!PUBLIC_KEY.test(publicKey)) {
+      throw new AkashApiError(
+        "invalid-request",
+        "An Akash machine needs the account's SSH public key, on one line",
+        null,
+        null
+      );
+    }
+    const name = akashMarkedName(request.name, request.labels, request.idempotencyKey);
+    let dseq: string;
+    try {
+      ({ dseq } = await client.createDeployment(ctx, {
+        definition: akashDefinition({ image: this.hostImage, type, region, publicKey }),
+        name,
+        // A public key is no secret, and a sealed value can't be read back to check it.
+        secretEnv: [],
+        projectId: ctx.projectId,
+      }));
+    } catch (error) {
+      throw maybeDone(error, "The Akash Console may have placed the order: its answer was lost.");
+    }
+    let view: DeploymentView;
+    try {
+      view = await this.read(client, ctx, { owner: null, dseq });
+    } catch (error) {
+      throw new AkashApiError(
+        "outcome-unknown",
+        `The Akash Console placed order ${dseq}, but Daintree couldn't read it back: ${errorText(error)}`,
+        null,
+        null
+      );
+    }
+    if (view.name.createKey !== request.idempotencyKey) {
+      throw new AkashApiError(
+        "outcome-unknown",
+        `The Akash Console placed order ${dseq}, but it doesn't carry this create's mark`,
+        null,
+        null
+      );
+    }
+    return { id: akashResourceId(view.id) };
   }
 
-  delete(): Promise<void> {
-    return notYet();
+  /** Open orders carrying the create's labels and key: placed, never leased, not closed. */
+  private async findOrders(
+    credentials: ProviderCredentials,
+    match: Pick<ProviderCreateRequest, "labels" | "idempotencyKey">
+  ): Promise<CloudCreateOrder[]> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const search = akashMarkToken(AKASH_CREATE_KEY_LABEL, match.idempotencyKey);
+    const views = await this.everyDeployment(client, ctx, "active", search);
+    const orders = new Map<string, CloudCreateOrder>();
+    for (const view of views) {
+      if (
+        view.state === "active" &&
+        view.name.createKey === match.idempotencyKey &&
+        sameLabels(view.name.labels, match.labels) &&
+        // Any lease, ended or not, means one of its offers was taken.
+        view.leases.length === 0 &&
+        groupsOpen(view.groups)
+      ) {
+        const id = akashResourceId(view.id);
+        orders.set(id, { id });
+      }
+    }
+    return [...orders.values()];
   }
 
-  sshAccess(): Promise<ProviderSshAccess> {
-    return notYet();
+  /** Every bid on the order now, priced in dollars per hour as Console prices them. */
+  private async listOffers(
+    credentials: ProviderCredentials,
+    orderId: string
+  ): Promise<CloudCreateOffer[]> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const id = parseAkashResourceId(orderId);
+    const bids = await this.bidsOf(client, ctx, id);
+    const open = new Map<string, number>();
+    for (const bid of bids) {
+      if (bid.state === "open") open.set(tupleOf(bid.id), (open.get(tupleOf(bid.id)) ?? 0) + 1);
+    }
+    return bids.map((bid): CloudCreateOffer => {
+      const hourlyDollars =
+        bid.price.denom === AKASH_UACT ? akashHourlyDollars(bid.price.amount) : null;
+      if (hourlyDollars === null) {
+        throw new AkashApiError(
+          "bad-response",
+          `The Akash Console quoted an offer in ${bid.price.denom}, which Daintree can't price`,
+          null,
+          null
+        );
+      }
+      const offer = {
+        id: akashOfferId({ ...bid.id, bseq: bid.id.bseq ?? 0 }),
+        hourlyDollars,
+        // Who the bidder is, beyond its address, is the trusted provider list's to look up (#18237).
+        bidder: { id: bid.id.provider, name: bid.id.provider, region: null },
+      };
+      const reason = offerReason(bid.state, open.get(tupleOf(bid.id)) ?? 0);
+      return reason === null
+        ? { ...offer, choosable: true, reason: null }
+        : { ...offer, choosable: false, reason };
+    });
+  }
+
+  /**
+   * Leases exactly the chosen bid. A lease an earlier try made, whose answer
+   * was lost, is answered as it stands; any other lease, or a bid that isn't
+   * open, is refused with nothing sent.
+   */
+  private async leaseOffer(
+    credentials: ProviderCredentials,
+    orderId: string,
+    offerId: string
+  ): Promise<ProviderResource> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const id = parseAkashResourceId(orderId);
+    const offer = parseAkashOfferId(offerId);
+    const view = await this.read(client, ctx, id);
+    if (view.state !== "active") {
+      throw new AkashApiError(
+        "offer-gone",
+        "That order was closed, so nothing can be leased from it.",
+        null,
+        null
+      );
+    }
+    const taken = view.leases.find((lease) => sameLease(lease, offer));
+    if (taken) return this.resourceOf(client, view, ctx.signal);
+    if (view.leases.length > 0) {
+      throw new AkashApiError(
+        "conflict",
+        "Another offer on this order was already leased",
+        null,
+        null
+      );
+    }
+    const bids = await this.bidsOf(client, ctx, id);
+    const bid = bids.find(
+      (entry) => tupleOf(entry.id) === tupleOf(offer) && (entry.id.bseq ?? 0) === offer.bseq
+    );
+    if (!bid || bid.state !== "open") {
+      throw new AkashApiError(
+        "offer-gone",
+        "That offer isn't open any more. Choose another.",
+        null,
+        null
+      );
+    }
+    // A lease names no bseq, so another open bid from the same bidder would make the choice ambiguous.
+    if (
+      bids.some(
+        (entry) => entry !== bid && entry.state === "open" && tupleOf(entry.id) === tupleOf(offer)
+      )
+    ) {
+      throw new AkashApiError(
+        "offer-gone",
+        "That provider made more than one offer on this order. Choose another.",
+        null,
+        null
+      );
+    }
+    const lease = { dseq: id.dseq, gseq: offer.gseq, oseq: offer.oseq, provider: offer.provider };
+    let leases: unknown[];
+    try {
+      leases = await client.createLease(ctx, lease);
+    } catch (error) {
+      if (!(error instanceof AkashApiError)) throw error;
+      if (error.code === "provider_unreachable") {
+        throw new AkashApiError(
+          "offer-gone",
+          "The provider couldn't be reached, so nothing was leased. Choose another offer.",
+          error.status,
+          error.code
+        );
+      }
+      if (error.code === "provider_manifest_invalid") {
+        return this.leasedAnyway(
+          client,
+          ctx,
+          id,
+          offer,
+          "The provider refused the deployment as invalid, so it won't run. Delete it."
+        );
+      }
+      if (error.code !== "manifest_not_delivered") {
+        throw maybeDone(error, "The Akash Console may have leased the offer: its answer was lost.");
+      }
+      // The lease exists; Console takes the same request again as a retry of the manifest.
+      try {
+        leases = await client.createLease(ctx, lease);
+      } catch {
+        return this.leasedAnyway(
+          client,
+          ctx,
+          id,
+          offer,
+          "The provider hasn't taken the deployment yet, so it may not start."
+        );
+      }
+    }
+    const made = parseItems(leases, akashLeaseSchema).find(
+      (entry) => sameDeployment(entry.id, id) && sameLease(entry, offer)
+    );
+    if (!made) {
+      throw new AkashApiError(
+        "outcome-unknown",
+        "The Akash Console answered the lease with another one; Daintree can't tell what it leased",
+        null,
+        null
+      );
+    }
+    return this.resourceOf(client, { ...view, leases: [made] }, ctx.signal);
+  }
+
+  /** The lease the Console said exists after all, with why it may not run. */
+  private async leasedAnyway(
+    client: AkashConsoleClient,
+    ctx: AkashRequestContext,
+    id: AkashDeploymentId,
+    offer: AkashOfferId,
+    problem: string
+  ): Promise<ProviderResource> {
+    let view: DeploymentView;
+    try {
+      view = await this.read(client, ctx, id);
+    } catch (error) {
+      throw new AkashApiError(
+        "outcome-unknown",
+        `${problem} Daintree couldn't read the lease back: ${errorText(error)}`,
+        null,
+        null
+      );
+    }
+    if (!view.leases.some((lease) => sameLease(lease, offer))) {
+      throw new AkashApiError(
+        "outcome-unknown",
+        `${problem} The lease isn't there yet.`,
+        null,
+        null
+      );
+    }
+    const resource = await this.resourceOf(client, view, ctx.signal);
+    return { ...resource, error: resource.error ?? problem };
+  }
+
+  /**
+   * Closes an order nobody leased. Console can't close a deployment only
+   * while it is unleased, so this reads first and closes after: a lease
+   * created between the two would end with it. The lifecycle sends one lease
+   * or close for an order at a time, which is what keeps that window shut.
+   */
+  private async closeOrder(
+    credentials: ProviderCredentials,
+    orderId: string
+  ): Promise<CloseOrderOutcome> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const id = parseAkashResourceId(orderId);
+    let view: DeploymentView;
+    try {
+      view = await this.read(client, ctx, id);
+    } catch (error) {
+      if (error instanceof AkashApiError && error.kind === "not-found") return { kind: "closed" };
+      throw error;
+    }
+    if (view.state === "closed") return { kind: "closed" };
+    if (view.state !== "active") {
+      throw new AkashApiError(
+        "bad-response",
+        `The Akash Console says order ${id.dseq} is ${view.state}`,
+        null,
+        null
+      );
+    }
+    if (view.leases.length > 0) {
+      return { kind: "leased", resource: await this.resourceOf(client, view, ctx.signal) };
+    }
+    await client.closeDeployment(ctx, id.dseq);
+    return { kind: "closed" };
+  }
+
+  async rename(credentials: ProviderCredentials, resourceId: string, name: string): Promise<void> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const id = parseAkashResourceId(resourceId);
+    const view = await this.read(client, ctx, id);
+    await client.renameDeployment(ctx, id.dseq, akashRenamed(view.rawName, name));
+  }
+
+  /** Closes the deployment, ending its lease: the container and its disk are gone. */
+  async delete(credentials: ProviderCredentials, resourceId: string): Promise<void> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const id = parseAkashResourceId(resourceId);
+    const view = await this.read(client, ctx, id);
+    if (view.state === "closed") return;
+    await client.closeDeployment(ctx, id.dseq);
+  }
+
+  /**
+   * Where the provider forwards the container's port 22 now, read afresh:
+   * the port can change while the machine runs. The provider vouches for no
+   * host key, so the person confirms the first one (#18238 pins it).
+   */
+  async sshAccess(
+    credentials: ProviderCredentials,
+    resourceId: string
+  ): Promise<ProviderSshAccess> {
+    const client = this.clientFor(credentials.apiUrl);
+    const ctx = this.account(credentials);
+    const view = await this.read(client, ctx, parseAkashResourceId(resourceId));
+    const state = machineOf(view);
+    if (state === null || state.machine === "deleted") {
+      throw new AkashApiError("not-found", "That machine's deployment was closed", null, null);
+    }
+    const lease = currentLease(view.leases);
+    if (state.machine !== "running" || !lease) {
+      throw new AkashApiError(
+        "conflict",
+        `Its lease is ${lease?.state ?? "gone"}, so it can't be reached`,
+        null,
+        null
+      );
+    }
+    const notReady = new AkashApiError(
+      "not-ready",
+      "The provider doesn't say where the machine's SSH port is yet",
+      null,
+      null
+    );
+    const ports = lease.status?.forwarded_ports?.[AKASH_SERVICE];
+    if (!ports) throw notReady;
+    const ssh = ports
+      .map((entry) => akashForwardedPortSchema.safeParse(entry))
+      .find((parsed) => parsed.success && parsed.data.port === 22);
+    if (!ssh?.success) throw notReady;
+    const { host, externalPort, available } = ssh.data as typeof ssh.data & { available?: unknown };
+    if (!host || available === 0) throw notReady;
+    const endpoint = { host, port: externalPort };
+    if (!isValidSshEndpoint(endpoint)) {
+      throw new AkashApiError(
+        "bad-response",
+        "The provider reported an SSH address Daintree can't use",
+        null,
+        null
+      );
+    }
+    return { user: AKASH_SSH_USER, endpoint, hostKey: null };
+  }
+
+  /**
+   * One deployment, from the account's project, checked to be the wallet's and
+   * the dseq's asked for: another wallet's deployment of the same number is
+   * not this one. `owner: null` takes whichever wallet the account deploys from.
+   */
+  private async read(
+    client: AkashConsoleClient,
+    ctx: AkashRequestContext,
+    id: { owner: string | null; dseq: string }
+  ): Promise<DeploymentView> {
+    const view = viewOf(await client.deployment(ctx, id.dseq));
+    if (view.id.dseq !== id.dseq || (id.owner !== null && view.id.owner !== id.owner)) {
+      throw new AkashApiError("not-found", "That deployment isn't in this account", null, null);
+    }
+    return view;
+  }
+
+  /** The order's bids, every one checked to be on that order of that wallet. */
+  private async bidsOf(
+    client: AkashConsoleClient,
+    ctx: AkashRequestContext,
+    id: AkashDeploymentId
+  ): Promise<AkashBid[]> {
+    const bids = parseItems(await client.bids(ctx, id.dseq), akashBidSchema).map(
+      (entry) => entry.bid
+    );
+    if (bids.some((bid) => !sameDeployment(bid.id, id))) {
+      throw new AkashApiError("not-found", "That order isn't in this account", null, null);
+    }
+    return bids;
+  }
+
+  /**
+   * Every page of the account's deployments in `state`. A search the Console
+   * won't run over that many deployments is run again as a plain listing,
+   * read whole, rather than answered with part of one.
+   */
+  private async everyDeployment(
+    client: AkashConsoleClient,
+    ctx: AkashRequestContext,
+    state: "active" | "closed",
+    search: string | undefined
+  ): Promise<DeploymentView[]> {
+    try {
+      return await this.pages(client, ctx, state, search);
+    } catch (error) {
+      if (
+        search === undefined ||
+        state !== "active" ||
+        !(error instanceof AkashApiError) ||
+        error.kind !== "unprocessable"
+      ) {
+        throw error;
+      }
+      return this.pages(client, ctx, state, undefined);
+    }
+  }
+
+  private async pages(
+    client: AkashConsoleClient,
+    ctx: AkashRequestContext,
+    state: "active" | "closed",
+    search: string | undefined
+  ): Promise<DeploymentView[]> {
+    const views: DeploymentView[] = [];
+    for (let skip = 0, page = 0; ; page++) {
+      if (page >= MAX_PAGES) {
+        throw new AkashApiError(
+          "bad-response",
+          "The Akash Console listed more deployments than Daintree reads",
+          null,
+          null
+        );
+      }
+      const answer = await client.deployments(ctx, { state, skip, limit: PAGE_SIZE, search });
+      views.push(...answer.deployments.map(viewOf));
+      if (!answer.hasMore) return views;
+      if (answer.deployments.length === 0) {
+        throw new AkashApiError(
+          "bad-response",
+          "The Akash Console said more deployments followed, then listed none",
+          null,
+          null
+        );
+      }
+      skip += answer.deployments.length;
+    }
+  }
+
+  private async resourceOf(
+    client: AkashConsoleClient,
+    view: DeploymentView,
+    signal: AbortSignal | undefined
+  ): Promise<ProviderResource> {
+    const state = machineOf(view) ?? { machine: "unknown" as const, error: null };
+    const lease = currentLease(view.leases);
+    const size = view.groups
+      ? akashGroupsFacts(view.groups).size
+      : akashDefinitionSize(view.definition);
+    // Only a create's lookup reads when it was made, and only a marked deployment is one it looks for.
+    const marked = Object.keys(view.name.labels).length > 0;
+    const createdAt = marked ? await this.blockTime(client, view.createdHeight, signal) : null;
+    return {
+      resourceId: akashResourceId(view.id),
+      name: view.name.display || akashResourceId(view.id),
+      machine: state.machine,
+      rawState: `deployment ${view.state}, lease ${lease?.state ?? "none"}`,
+      machineType: size.machineType,
+      vcpu: size.vcpu,
+      memoryGB: size.memoryGB,
+      autoStopAt: null,
+      lifetimeSeconds: null,
+      stoppedAt: null,
+      createdAt,
+      stop: null,
+      lastSnapshotAt: null,
+      dataExpired: false,
+      snapshotsDisabled: false,
+      labels: { ...view.name.labels },
+      restricted: false,
+      error: state.error,
+    };
+  }
+
+  /**
+   * When the order was placed, from the chain's block: a deployment carries
+   * its height, not a time. Null when that can't be read, which a create's
+   * lookup treats as maybe made by it, never as not made.
+   */
+  private async blockTime(
+    client: AkashConsoleClient,
+    height: number | null,
+    signal: AbortSignal | undefined
+  ): Promise<string | null> {
+    if (height === null) return null;
+    const key = `${client.baseUrl} ${height}`;
+    const known = this.blockTimes.get(key);
+    if (known) return known;
+    let time: string | null;
+    try {
+      time = await client.blockTime(height, signal);
+    } catch (error) {
+      if (error instanceof AkashApiError && error.kind === "cancelled") throw error;
+      return null;
+    }
+    if (time === null) return null;
+    // A block's time never changes; only how many are kept is bounded.
+    if (this.blockTimes.size >= MAX_BLOCK_TIMES) {
+      this.blockTimes.delete(this.blockTimes.keys().next().value!);
+    }
+    this.blockTimes.set(key, time);
+    return time;
   }
 
   describeError(error: unknown): CloudHostError {
@@ -451,6 +1218,12 @@ export class AkashProvider implements CloudProvider {
         };
       case "unsupported":
         return { code: "unsupported", message: said, at };
+      case "offer-gone":
+        return { code: "refused", message: said, at };
+      case "outcome-unknown":
+        return { code: "outcome-unknown", message: said, at };
+      case "not-ready":
+        return { code: "provider-unreachable", message: said, at };
       case "cancelled":
         return { code: "failed", message: "Cancelled.", at };
       default:
