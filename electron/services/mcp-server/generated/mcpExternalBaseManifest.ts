@@ -332,8 +332,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           maxLength: 200,
         },
         holdOnRestart: {
-          description:
-            "Don't resume it after a restart: it waits to be started. For one-shot work.",
+          description: "Don't resume after a restart; wait to be started. For one-shot work.",
           type: "boolean",
         },
       },
