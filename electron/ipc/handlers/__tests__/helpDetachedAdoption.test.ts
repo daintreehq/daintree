@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HelpAdoptResult } from "../../../../shared/types/ipc/help.js";
 import type { ClientEndpoint } from "../../endpoint.js";
-import { adoptForReturningViews, installDetachedAdoption } from "../helpDetachedAdoption.js";
+import {
+  adoptForReturningViews,
+  detachedAdoptionDriver,
+  installDetachedAdoption,
+} from "../helpDetachedAdoption.js";
 
 function endpoint(endpointId: string, projectId: string | null, handle: number) {
   let closed = false;
@@ -126,6 +130,39 @@ describe("adoptForReturningViews (#13389)", () => {
     await adoptForReturningViews(deps);
     expect(deps.adopted).toHaveBeenCalledTimes(1);
     expect(deps.adopted.mock.calls[0]![2]).toBe(1);
+  });
+});
+
+describe("detachedAdoptionDriver (#18165)", () => {
+  it("hands a project to its one window here while Host-mode routing is off", () => {
+    const local = endpoint("e-local", "proj", 42);
+    expect(detachedAdoptionDriver(null, [local])).toBe("e-local");
+  });
+
+  it("hands it to nobody with routing off when no window here, or more than one, shows it", () => {
+    const first = endpoint("e-first", "proj", 42);
+    const second = endpoint("e-second", "proj", 43);
+    const closed = endpoint("e-closed", "proj", 44);
+    closed.close();
+    expect(detachedAdoptionDriver(null, [])).toBeNull();
+    expect(detachedAdoptionDriver(null, [closed])).toBeNull();
+    expect(detachedAdoptionDriver(null, [first, second])).toBeNull();
+    expect(detachedAdoptionDriver(null, [first, closed])).toBe("e-first");
+  });
+
+  it("follows only the live holder with routing on, never a window here that merely shows it", () => {
+    const local = endpoint("e-local", "proj", 42);
+    const remote = endpoint("e-remote", "proj", -2);
+    expect(detachedAdoptionDriver({ state: "live", endpoint: remote }, [local, remote])).toBe(
+      "e-remote"
+    );
+    expect(detachedAdoptionDriver({ state: "live", endpoint: local }, [local, remote])).toBe(
+      "e-local"
+    );
+    expect(detachedAdoptionDriver({ state: "vacant" }, [local])).toBeNull();
+    expect(
+      detachedAdoptionDriver({ state: "unavailable", reason: "reserved" }, [local])
+    ).toBeNull();
   });
 });
 

@@ -2,6 +2,7 @@
 import { store } from "../../store.js";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { markViewHydrated } from "../../window/viewHydration.js";
+import { loadedHelpSessionService } from "../../services/helpSessionRuntime.js";
 import { endStartupTracking } from "../startupInvokeTracker.js";
 import type { SessionRestoreConfig } from "../../../shared/types/ipc/sessionRestore.js";
 import type { HandlerDependencies } from "../types.js";
@@ -57,6 +58,10 @@ export function registerSessionRestoreHandlers(deps: HandlerDependencies): () =>
               deps?.windowRegistry?.getByWindowId(senderWindow.id)?.services?.projectViewManager) ??
             deps?.projectViewManager;
           pvm?.signalViewHydrated(ctx.webContentsId);
+          // Only the active view's load announces itself to the assistant
+          // take-over (`noteViewReady`); a view restored in the background, or
+          // bound to its project after it loaded, is first ready here (#18165).
+          loadedHelpSessionService()?.noteViewReady();
         },
         { withContext: true }
       ),

@@ -1,7 +1,27 @@
 import type { HelpAdoptResult } from "../../../shared/types/ipc/help.js";
+import type { McpDriveTarget } from "../../services/mcp-server/driveTarget.js";
 import type { ClientEndpoint } from "../endpoint.js";
 
 type Adopted = Extract<HelpAdoptResult, { status: "adopted" }>;
+
+/**
+ * The view that takes over a project's detached assistants, from `views` (the
+ * project's views that can run an assistant's calls now). With Host-mode
+ * routing on (`target` non-null), only the drive lease's live holder. Off, no
+ * other machine can attach and nothing holds a lease, so this machine's window
+ * of the project drives it, as `relayWriteStanding` treats a local call
+ * (#18165): left with no view, the assistant's every change would be refused
+ * while the person has the project open. Two such windows would be a guess at
+ * which one the person is using, so neither takes it.
+ */
+export function detachedAdoptionDriver(
+  target: McpDriveTarget | null,
+  views: readonly ClientEndpoint[]
+): string | null {
+  if (target !== null) return target.state === "live" ? target.endpoint.endpointId : null;
+  const local = views.filter((view) => view.kind === "local-view" && !view.isClosed());
+  return local.length === 1 ? local[0]!.endpointId : null;
+}
 
 export interface DetachedAdoptionDeps {
   /** The projects with an assistant running with no view. */
