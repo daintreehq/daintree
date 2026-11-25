@@ -47,6 +47,7 @@ import {
 import { ClientAppError } from "@/utils/clientAppError";
 import { isUnknownOutcomeError, resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
 import { logInfo, logWarn } from "@/utils/logger";
+import { beginPanelRestore } from "@/utils/stateHydration/panelRestoreGate";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { primeHostPreviewCapability } from "@/components/FileViewer/filePreviewKinds";
 import { watchHostConnectionAnnouncements } from "@/components/Recovery/hostConnectionAnnouncements";
@@ -1055,6 +1056,9 @@ function readBackAsDriver(
   const stillThisLease = () => (getDriveLeaseSnapshot()?.holder?.leaseId ?? null) === leaseId;
   let handedOver = navigation === null;
   let read = false;
+  // Its phases add panels one after another, so an assistant's close reads
+  // none as missing until the last has run (#18176).
+  const endPanelRestore = beginPanelRestore();
   return (async () => {
     // The saved active worktree may be one the last driver made meanwhile,
     // which this view only learns of from the refresh.
@@ -1112,7 +1116,8 @@ function readBackAsDriver(
       }
       settleTakeOver(settling, projectId);
       return read;
-    });
+    })
+    .finally(endPanelRestore);
 }
 
 /**

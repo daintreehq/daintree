@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ActionManifestEntry } from "@shared/types/actions";
 import {
   MCP_CONFIRM_DECISION_MS,
@@ -19,6 +19,7 @@ import {
   resetWorktreeSnapshotSyncForTesting,
   trackWorktreeSnapshot,
 } from "@/store/worktreeSnapshotSync";
+import { beginPanelRestore } from "@/utils/stateHydration/panelRestoreGate";
 
 const mocks = vi.hoisted(() => ({
   listForTransfer: vi.fn(() => [] as ActionManifestEntry[]),
@@ -1049,6 +1050,159 @@ describe("useMcpBridge", () => {
       result: { ok: true, result: { selectedTargetIds: ["p2"] } },
       confirmationDecision: "approved",
     });
+  });
+
+  // #18176: a close of a panel this view doesn't have answers what the close
+  // itself would, instead of asking the person about a panel that isn't there.
+  it.each(["terminal-does-not-exist-052", "constructor"])(
+    "answers an assistant close of '%s', which no panel here has, as a miss without asking",
+    async (terminalId) => {
+      beginPanelRestore()();
+      mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.close", title: "Close panel" }));
+      mocks.panelsById = { p1: { id: "p1", title: "zsh" } };
+
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: "req-close-missing",
+        actionId: "terminal.close",
+        args: { terminalIds: [terminalId] },
+        sessionOrigin: "help",
+        approvalOnly: true,
+        approvalReason: "protected-close",
+        requester: { kind: "assistant", helpSessionId: "help-1" },
+      });
+
+      await Promise.resolve();
+      expect(useMcpConfirmStore.getState().current).toBeNull();
+      await dispatched;
+
+      expect(useMcpConfirmStore.getState().current).toBeNull();
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      expect(holdDispatch).not.toHaveBeenCalled();
+      expect(sendDispatchActionResponse).toHaveBeenCalledTimes(1);
+      expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+        requestId: "req-close-missing",
+        result: {
+          ok: false,
+          error: {
+            code: "EXECUTION_ERROR",
+            message: `terminal.close: no panel with id "${terminalId}" — pass an \`id\` from the terminal listing.`,
+          },
+        },
+      });
+    }
+  );
+
+  it.each([
+    ["a browser panel", { id: "browser-1", title: "Docs", kind: "browser" }],
+    ["a trashed panel", { id: "browser-1", title: "Docs", kind: "browser", location: "trash" }],
+  ])("asks about an assistant close of %s this view has", async (_label, panel) => {
+    beginPanelRestore()();
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.close", title: "Close panel" }));
+    mocks.panelsById = { "browser-1": panel };
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-close-present",
+      actionId: "terminal.close",
+      args: { terminalIds: ["browser-1"] },
+      sessionOrigin: "help",
+      approvalOnly: true,
+      approvalReason: "protected-close",
+      requester: { kind: "assistant", helpSessionId: "help-1" },
+    });
+
+    await Promise.resolve();
+    const pending = useMcpConfirmStore.getState().current;
+    expect(pending?.approvalReason).toBe("protected-close");
+    expect(pending?.selectableTargets?.map((t) => t.id)).toEqual(["browser-1"]);
+
+    useMcpConfirmStore.getState().resolveCurrent("approved", ["browser-1"]);
+    await dispatched;
+
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+      requestId: "req-close-present",
+      result: { ok: true, result: { selectedTargetIds: ["browser-1"] } },
+      confirmationDecision: "approved",
+    });
+  });
+
+  // A window that just took an assistant over is up before its panels are,
+  // so an id it hasn't put back yet waits for the person as it always has.
+  it("still asks about a panel this view hasn't restored yet", async () => {
+    beginPanelRestore()();
+    onTestFinished(beginPanelRestore());
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.close", title: "Close panel" }));
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-close-restoring",
+      actionId: "terminal.close",
+      args: { terminalIds: ["terminal-restoring"] },
+      sessionOrigin: "help",
+      approvalOnly: true,
+      approvalReason: "protected-close",
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.selectableTargets?.map((t) => t.id)).toEqual([
+      "terminal-restoring",
+    ]);
+    expect(sendDispatchActionResponse).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an above-tier approval with no reason", undefined, { terminalIds: ["gone"] }],
+    ["an above-tier approval", "above-tier" as const, { terminalIds: ["gone"] }],
+    [
+      "a protected close whose ids don't parse",
+      "protected-close" as const,
+      { terminalIds: ["gone", 42] },
+    ],
+  ])("leaves %s of a missing panel to its dialog", async (_label, approvalReason, args) => {
+    beginPanelRestore()();
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.close", title: "Close panel" }));
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-close-other",
+      actionId: "terminal.close",
+      args,
+      sessionOrigin: "help",
+      approvalOnly: true,
+      ...(approvalReason !== undefined ? { approvalReason } : {}),
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-close-other");
+    expect(sendDispatchActionResponse).not.toHaveBeenCalled();
+  });
+
+  // A batch keeps its one checklist over every id it named: the rows the
+  // person leaves checked close, and a missing one answers per item.
+  it("still asks about a one-panel closeMany whose panel this view doesn't have", async () => {
+    beginPanelRestore()();
+    mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.closeMany", title: "Close" }));
+
+    renderHook(() => useMcpBridge());
+
+    void dispatchHandler?.({
+      requestId: "req-close-many-missing",
+      actionId: "terminal.closeMany",
+      args: { terminalIds: ["gone"] },
+      sessionOrigin: "help",
+      approvalOnly: true,
+      approvalReason: "protected-close",
+    });
+
+    await Promise.resolve();
+    expect(useMcpConfirmStore.getState().current?.selectableTargets?.map((t) => t.id)).toEqual([
+      "gone",
+    ]);
   });
 
   it("keeps an above-tier close as a plain approval, without the close checklist", async () => {

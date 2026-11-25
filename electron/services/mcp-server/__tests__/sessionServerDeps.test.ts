@@ -15,6 +15,7 @@ import {
   type SessionServerDepsSource,
 } from "../sessionServerDeps.js";
 import { setMcpDriveTargetResolver, type McpDriveTarget } from "../driveTarget.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import { SessionBindingError } from "../rendererBridge.js";
 import { helpNotifyKey } from "../terminalNotify.js";
 import { setPluginAssistantReachSource } from "../../plugin/pluginAssistantReach.js";
@@ -1023,5 +1024,81 @@ describe("createSessionServerDeps", () => {
       expect(options).toHaveProperty("relay");
       expect(options).not.toHaveProperty("requester");
     });
+  });
+});
+
+describe("a close question with no window to ask in (#18176)", () => {
+  let restore: (() => void) | undefined;
+
+  afterEach(() => {
+    restore?.();
+    restore = undefined;
+  });
+
+  /** A help session with no pin, held by `viewlessProjectId` as the handshake leaves it when given one. */
+  function unpinnedSession(
+    viewlessProjectId: string | null,
+    role: "project-assistant" | "global-assistant" = "project-assistant"
+  ) {
+    const deps = fakeSource();
+    const dispatchActionForWebContents = vi.fn(async () => ({
+      result: { ok: true, result: null },
+    }));
+    (deps as { dispatchActionForWebContents?: unknown }).dispatchActionForWebContents =
+      dispatchActionForWebContents;
+    deps.sessionStore.sessionOriginMap.set("s", "help");
+    deps.sessionStore.sessionHelpIdMap.set("s", "help-1");
+    if (viewlessProjectId !== null) {
+      deps.sessionStore.sessionViewlessHelpMap.set("s", viewlessProjectId);
+    }
+    const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+      sessionId: "s",
+      role,
+    });
+    const refusal = () =>
+      sessionDeps.requestCloseApproval!("terminal.close", { terminalIds: ["t"] }).then(
+        () => null,
+        (err: Error) => err.message
+      );
+    return { deps, refusal, dispatchActionForWebContents };
+  }
+
+  it("tells a project assistant with no view how a window takes it over, in the mode it asks in", async () => {
+    const { refusal, dispatchActionForWebContents } = unpinnedSession(WS_A);
+
+    const routingOff = await refusal();
+    expect(routingOff).toMatch(/^This assistant isn't attached to a window of this project/);
+    expect(routingOff).toMatch(/Opening the project in one window here takes it over/);
+    expect(routingOff).toMatch(/opening this assistant in the project's Assistant panel/);
+
+    // Read when it asks, not when the session was built.
+    restore = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    const routingOn = await refusal();
+    expect(routingOn).toMatch(/The window that has control of this project takes it over/);
+    expect(routingOn).toMatch(
+      /while no window has control, opening this assistant in the project's Assistant panel/
+    );
+    expect(routingOn).not.toMatch(/one window here/);
+
+    expect(dispatchActionForWebContents).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "the global assistant, which no project window takes over",
+      GLOBAL_ASSISTANT_ID,
+      "global-assistant" as const,
+      false,
+    ],
+    ["a session whose viewless binding is gone", WS_A, "project-assistant" as const, true],
+  ])("refuses %s as any session without a window", async (_label, projectId, role, unbind) => {
+    const ordinary = await unpinnedSession(null).refusal();
+    const { deps, refusal } = unpinnedSession(projectId, role);
+    if (unbind) deps.sessionStore.sessionViewlessHelpMap.delete("s");
+
+    const message = await refusal();
+    expect(message).not.toBeNull();
+    expect(message).toBe(ordinary);
+    expect(message).not.toMatch(/takes it over/);
   });
 });

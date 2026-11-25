@@ -37,6 +37,7 @@ import {
   WorkspaceBindingError,
 } from "./rendererBridge.js";
 import { relayWriteStanding } from "./relayWriteRule.js";
+import { isMcpHostRoutingEnabled } from "./driveTarget.js";
 import { getGlobalAssistantBaseManifest, getViewlessHelpBaseManifest } from "./baseManifest.js";
 import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -1105,6 +1106,31 @@ export function createSessionServerDeps(
       : undefined;
 
   /**
+   * Why no window can ask about a close (#18176). A project assistant running
+   * with no view gets a window to ask in only once one of its project's
+   * windows takes it over, so it is told how that happens: on its own (the
+   * one window here with Host mode off, the window with control with it on;
+   * two windows here take it over on neither's say), or by opening it in a
+   * window's Assistant panel, which with Host mode on only works while no
+   * window has control. Any other session without a pin has lost the window
+   * it was given.
+   */
+  const noCloseApprovalWindow = (): string => {
+    const viewless =
+      viewlessProjectId !== null &&
+      !isGlobalAssistantId(viewlessProjectId) &&
+      deps.sessionStore.sessionViewlessHelpMap.get(sessionId) === viewlessProjectId;
+    if (!viewless) return "No Daintree window is pinned to this session to ask the user.";
+    const takeOver = isMcpHostRoutingEnabled()
+      ? "The window that has control of this project takes it over once it's ready, or, while no window has control, opening this assistant in the project's Assistant panel in a window here does."
+      : "Opening the project in one window here takes it over, and so does opening this assistant in the project's Assistant panel in a window here.";
+    return (
+      "This assistant isn't attached to a window of this project, so nobody can be asked to approve this close. " +
+      `${takeOver} Retry once it's attached.`
+    );
+  };
+
+  /**
    * Ask the user whether Daintree's own assistant may close panels it did not
    * open, or whose agent is busy, without closing anything yet (#12881).
    * Routed to the window the session is pinned to, where the close would
@@ -1115,9 +1141,7 @@ export function createSessionServerDeps(
     (actionId, args) => {
       const id = deps.sessionStore.sessionWebContentsMap.get(sessionId);
       if (id === undefined || !pinnedDispatch) {
-        return Promise.reject(
-          new Error("No Daintree window is pinned to this session to ask the user.")
-        );
+        return Promise.reject(new Error(noCloseApprovalWindow()));
       }
       return pinnedDispatch(
         id,

@@ -138,6 +138,7 @@ import {
   useHostConnectionSync,
 } from "../useHostConnection";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
+import { arePanelsRestored, beginPanelRestore } from "@/utils/stateHydration/panelRestoreGate";
 import { onHostResync, type HostResync, type HydratedSettings } from "@/store/hostResyncSignal";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import { resolveUnknownOutcome } from "@/utils/resolveUnknownOutcome";
@@ -1011,6 +1012,26 @@ describe("coming back to drive after someone else drove meanwhile (#13921)", () 
     expect(held.replay).not.toHaveBeenCalled();
     expect(held.send).not.toHaveBeenCalled();
     expect(hasDeferredHostOwnedWrite("app-state:mruList")).toBe(false);
+    stop();
+  });
+
+  // #18176: the terminals come back before the saved layout does, so an
+  // assistant's close reads no panel as missing until the whole read is done.
+  it("holds the close check open from its first read to its last", async () => {
+    const { electron, emitHost, stop } = await openUnder(mine());
+    beginPanelRestore()();
+    electron.driveLease.get.mockResolvedValue(mine({ leaseId: 9, tenureId: "tenure-b" }));
+    let finishRead!: () => void;
+    rehydrate.mockImplementationOnce(
+      () => new Promise<undefined>((resolve) => (finishRead = () => resolve(undefined)))
+    );
+    await bringTheLinkBack(emitHost);
+    // The terminals are read by now; the saved layout is still on its way.
+    await vi.waitFor(() => expect(rehydrate).toHaveBeenCalledTimes(1));
+    expect(arePanelsRestored()).toBe(false);
+
+    finishRead();
+    await vi.waitFor(() => expect(arePanelsRestored()).toBe(true));
     stop();
   });
 

@@ -183,6 +183,7 @@ vi.mock("../SystemSleepService.js", () => ({
 }));
 
 import { McpServerService } from "../McpServerService.js";
+import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 
 type DispatchRequest = {
   requestId: string;
@@ -190,6 +191,9 @@ type DispatchRequest = {
   args?: unknown;
   confirmed?: boolean;
   callerInfo?: { token4LastChars: string; userAgent: string };
+  approvalOnly?: boolean;
+  approvalReason?: string;
+  requester?: unknown;
 };
 
 type TextToolResult = {
@@ -910,6 +914,113 @@ describe("McpServerService", () => {
     });
     httpTransports.push(again.transport);
     expect(httpSessions.size).toBe(1);
+  });
+
+  it("asks a viewless assistant's close question in the window that took it over (#18176)", async () => {
+    const closeManifest = () => [
+      createManifestEntry({
+        id: "terminal.close",
+        title: "Close panel",
+        description: "Close a panel",
+      }),
+    ];
+    // The focused window, which never shows this project: nothing may reach it.
+    const elsewhere: DispatchRequest[] = [];
+    const { window } = createMockWindow({
+      getManifest: closeManifest,
+      dispatchAction: (payload) => {
+        elsewhere.push(payload);
+        return { ok: true, result: null };
+      },
+    });
+    // The project's window, which takes the assistant over.
+    const requests: DispatchRequest[] = [];
+    const { webContents } = createMockWindow({
+      getManifest: closeManifest,
+      dispatchAction: (payload) => {
+        requests.push(payload);
+        return payload.approvalOnly === true
+          ? {
+              result: { ok: true, result: { selectedTargetIds: ["terminal-user"] } },
+              confirmationDecision: "approved",
+            }
+          : { ok: true, result: { closedIds: ["terminal-user"] } };
+      },
+    });
+    await service.start(window);
+    const httpSessions = (
+      service as unknown as { sessionStore: { httpSessions: Map<string, unknown> } }
+    ).sessionStore.httpSessions;
+    const helpToken = "help-token-viewless";
+    let pin = NO_VIEW_HANDLE;
+    service.setHelpTokenValidator((token) => (token === helpToken ? "core" : false));
+    service.setHelpSessionWebContentsResolver((token) => (token === helpToken ? pin : null));
+    service.setHelpSessionViewlessProjectResolver((token) =>
+      token === helpToken ? "project-a" : null
+    );
+    service.setHelpSessionIdResolver((token) => (token === helpToken ? "help-1" : null));
+    const auth = { Authorization: `Bearer ${helpToken}` };
+    // A panel the person opened: the assistant has no record of launching it.
+    const close = async (client: Client) =>
+      getTextResult(
+        await client.callTool({
+          name: "terminal.close",
+          arguments: { terminalId: "terminal-user" },
+        })
+      );
+
+    // Started with no view, nobody can be asked yet, and it is told how a window comes to.
+    const viewless = await connectHttpClient(service.currentPort!, auth);
+    httpTransports.push(viewless.transport);
+    const refused = await close(viewless.client);
+    expect(refused.isError).toBe(true);
+    const refusal = JSON.parse(refused.content[0].text) as {
+      code: string;
+      message: string;
+      details?: { confirmationChannel?: string };
+    };
+    expect(refusal.code).toBe("CONFIRMATION_REQUIRED");
+    expect(refusal.details?.confirmationChannel).toBe("unavailable");
+    expect(refusal.message).toMatch(/Opening the project in one window here takes it over/);
+    expect(requests).toEqual([]);
+    expect(elsewhere).toEqual([]);
+
+    // The project's window takes it over: re-pinned, and its transports
+    // retired so the client reconnects onto that window.
+    expect(httpSessions.size).toBe(1);
+    pin = webContents.id;
+    service.resetHelpTransports(helpToken);
+    await vi.waitFor(() => expect(httpSessions.size).toBe(0));
+    const adopted = await connectHttpClient(service.currentPort!, auth);
+    httpTransports.push(adopted.transport);
+    const closed = await close(adopted.client);
+
+    expect(closed.isError).not.toBe(true);
+    expect(elsewhere).toEqual([]);
+    expect(
+      requests.map(({ actionId, args, approvalOnly, approvalReason, requester }) => ({
+        actionId,
+        args,
+        approvalOnly,
+        approvalReason,
+        requester,
+      }))
+    ).toEqual([
+      {
+        actionId: "terminal.close",
+        args: { terminalIds: ["terminal-user"] },
+        approvalOnly: true,
+        approvalReason: "protected-close",
+        requester: { kind: "assistant", helpSessionId: "help-1" },
+      },
+      {
+        actionId: "terminal.close",
+        args: { terminalId: "terminal-user" },
+        approvalOnly: undefined,
+        approvalReason: undefined,
+        requester: { kind: "assistant", helpSessionId: "help-1" },
+      },
+    ]);
   });
 
   it("requires a fresh session after api-key rotation rather than adopting the old one", async () => {
