@@ -8,6 +8,8 @@ const {
   updateForgeCredentialsMock,
   registerEnterpriseMock,
   disposeEnterpriseMock,
+  registerGhSignInMock,
+  disposeGhSignInMock,
 } = vi.hoisted(() => ({
   gitHubAuthMock: {
     initializeStorage: vi.fn(),
@@ -22,11 +24,14 @@ const {
   updateForgeCredentialsMock: vi.fn(),
   registerEnterpriseMock: vi.fn(),
   disposeEnterpriseMock: vi.fn(),
+  registerGhSignInMock: vi.fn(),
+  disposeGhSignInMock: vi.fn(),
 }));
 
 vi.mock("../GitHubAuth.js", () => ({ GitHubAuth: gitHubAuthMock }));
 vi.mock("../forgeProvider.js", () => ({ githubForgeProvider: {} }));
 vi.mock("../GitHubEnterprise.js", () => ({ registerGitHubEnterprise: registerEnterpriseMock }));
+vi.mock("../GitHubCliSignIn.js", () => ({ registerGhSignIn: registerGhSignInMock }));
 vi.mock("../reviewDecorationProvider.js", () => ({
   registerReviewDecorationProvider: vi.fn(() => vi.fn()),
   createReviewDecorationProvider: vi.fn(),
@@ -60,6 +65,7 @@ describe("github plugin activate", () => {
     gitHubAuthMock.getToken.mockReturnValue(undefined);
     gitHubAuthMock.getTokenVersion.mockReturnValue(0);
     registerEnterpriseMock.mockResolvedValue(disposeEnterpriseMock);
+    registerGhSignInMock.mockResolvedValue(disposeGhSignInMock);
   });
 
   it("loads token storage and the Enterprise Server host before registering the forge provider", async () => {
@@ -96,6 +102,33 @@ describe("github plugin activate", () => {
     dispose();
 
     expect(disposeEnterpriseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the gh sign-in channels when the provider can't register", async () => {
+    const host = makeHost();
+    vi.mocked(host.registerForgeProvider).mockRejectedValue(new Error("registry refused"));
+
+    await expect(activate(host)).rejects.toThrow("registry refused");
+
+    expect(registerGhSignInMock).toHaveBeenCalledWith(host);
+    expect(disposeGhSignInMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("empties the Enterprise Server session when the gh sign-in channels can't register", async () => {
+    registerGhSignInMock.mockRejectedValue(new Error("channel taken"));
+
+    await expect(activate(makeHost())).rejects.toThrow("channel taken");
+
+    expect(disposeEnterpriseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops the gh sign-in channels on deactivation", async () => {
+    const dispose = await activate(makeHost());
+    expect(disposeGhSignInMock).not.toHaveBeenCalled();
+
+    dispose();
+
+    expect(disposeGhSignInMock).toHaveBeenCalledTimes(1);
   });
 
   it("returns synchronously even while a stored-token validate hangs (#10325)", async () => {
