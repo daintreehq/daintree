@@ -1021,6 +1021,12 @@ export interface StoreSchema {
    * Device-owned; additive key with no numbered migration, validated on load.
    */
   cloudHosts?: unknown;
+  /**
+   * Orders offer-based cloud creates placed, kept until the provider confirms
+   * each closed or leased (#18230). Its own key, so a build that rewrites
+   * `cloudHosts` whole never drops one. Device-owned; validated on load.
+   */
+  cloudCreateOrders?: unknown;
   /** This machine as a host: whether it listens for Shells and starts at login. */
   hostMode?: { enabled: boolean; startAtLogin: boolean; advertise?: boolean };
   /**

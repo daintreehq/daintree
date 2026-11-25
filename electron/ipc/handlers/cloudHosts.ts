@@ -22,6 +22,10 @@ import type {
   CloudWorktreeCleanupRequest,
   CloudWorktreeRef,
 } from "../../../shared/types/cloudHosts.js";
+import type {
+  CloudOfferChoiceRequest,
+  CloudOrderRequest,
+} from "../../../shared/types/ipc/cloudHosts.js";
 
 const EMPTY_SNAPSHOT: CloudHostsSnapshot = { providers: [], accounts: [], hosts: [] };
 
@@ -202,6 +206,34 @@ export const cloudHostsNamespace = defineIpcNamespace({
       CLOUD_HOSTS_METHOD_CHANNELS.retryCreate,
       async (payload: { hostId: string }): Promise<void> =>
         requireRemoteService("cloudHosts").retryCreate(field(payload, "hostId"))
+    ),
+    // The person's choice of offer on the order their create placed: the only path that leases one.
+    chooseOffer: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.chooseOffer,
+      async (payload: CloudOfferChoiceRequest): Promise<void> =>
+        requireRemoteService("cloudHosts").chooseOffer(
+          field(payload, "hostId"),
+          field(payload, "orderId"),
+          field(payload, "offerId"),
+          field(payload, "hourlyDollars")
+        )
+    ),
+    // Names the order the view showed, so a stale view never closes a later one.
+    cancelOrder: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.cancelOrder,
+      async (payload: CloudOrderRequest): Promise<void> =>
+        requireRemoteService("cloudHosts").cancelOrder(
+          field(payload, "hostId"),
+          field(payload, "orderId")
+        )
+    ),
+    refreshOffers: op(
+      CLOUD_HOSTS_METHOD_CHANNELS.refreshOffers,
+      async (payload: CloudOrderRequest): Promise<void> =>
+        requireRemoteService("cloudHosts").refreshOffers(
+          field(payload, "hostId"),
+          field(payload, "orderId")
+        )
     ),
     refreshHost: op(
       CLOUD_HOSTS_METHOD_CHANNELS.refreshHost,

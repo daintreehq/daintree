@@ -5,17 +5,22 @@ import {
   cloudMachineClaim,
   madeInSendWindow,
   readConsoleUrl,
+  type CloudHostsStoreBackend,
   type CloudHostsValue,
   type StoredCloudBinding,
+  type StoredCreateOrder,
 } from "../CloudHostStore.js";
 
 /** A settings file: what goes in comes back out as JSON, and survives a new store over it. */
 function disk() {
   let saved: unknown;
+  let orders: unknown;
   return {
-    get: () => saved,
-    set: (_key: "cloudHosts", value: CloudHostsValue) => {
-      saved = JSON.parse(JSON.stringify(value));
+    get: (key: "cloudHosts" | "cloudCreateOrders" = "cloudHosts") =>
+      key === "cloudHosts" ? saved : orders,
+    set: (key: "cloudHosts" | "cloudCreateOrders", value: unknown) => {
+      if (key === "cloudHosts") saved = JSON.parse(JSON.stringify(value));
+      else orders = JSON.parse(JSON.stringify(value));
     },
     write(value: unknown) {
       saved = JSON.parse(JSON.stringify(value));
@@ -932,5 +937,112 @@ describe("CloudHostStore machine claims (#17927)", () => {
     expect(
       cloudMachineClaim([{ ...pending, resourceId: "bx_other0001" }], "boat", machine)
     ).toBeNull();
+  });
+});
+
+describe("CloudHostStore create orders (#18230)", () => {
+  /** A settings file holding each key on its own, as the app's store does. */
+  function keyedDisk() {
+    const saved = new Map<string, unknown>();
+    return {
+      get: (key: string) => saved.get(key),
+      set: (key: string, value: unknown) => {
+        saved.set(key, JSON.parse(JSON.stringify(value)));
+      },
+      saved,
+    } as CloudHostsStoreBackend & { saved: Map<string, unknown> };
+  }
+
+  function order(overrides: Partial<StoredCreateOrder> = {}): StoredCreateOrder {
+    return {
+      id: "co_1",
+      bindingId: "cb_abcdefgh12",
+      accountId: "ca_0123456789",
+      providerId: "boat",
+      labels: { daintree: "1", "daintree-binding": "cb_abcdefgh12" },
+      idempotencyKey: "key-1",
+      state: "open",
+      orderIds: ["dseq-1"],
+      placedAt: 1_000,
+      waitingSince: 1_500,
+      offerId: null,
+      ...overrides,
+    };
+  }
+
+  it("keeps an order across a restart, apart from the hosts", () => {
+    const backend = keyedDisk();
+    new CloudHostStore(backend).putCreateOrder(order());
+    new CloudHostStore(backend).putCreateOrder(order({ state: "leasing", offerId: "bid-7" }));
+    expect(new CloudHostStore(backend).createOrders()).toEqual([
+      order({ state: "leasing", offerId: "bid-7" }),
+    ]);
+    expect(backend.saved.has("cloudHosts")).toBe(false);
+  });
+
+  it("writes no order key for a store that never had one", () => {
+    const backend = keyedDisk();
+    const store = new CloudHostStore(backend);
+    store.putBinding(binding());
+    store.removeBinding("cb_abcdefgh12");
+    expect(backend.saved.has("cloudCreateOrders")).toBe(false);
+  });
+
+  it("marks a removed host's orders for closing, and keeps them, before the host goes", () => {
+    const backend = keyedDisk();
+    const store = new CloudHostStore(backend);
+    store.putBinding(binding());
+    store.putCreateOrder(order({ state: "leasing", offerId: "bid-7" }));
+    store.putCreateOrder(order({ id: "co_2", bindingId: "cb_other00001" }));
+    store.putCreateOrder(order({ id: "co_3", state: "placing", orderIds: null }));
+    const writes: string[] = [];
+    const set = backend.set.bind(backend);
+    backend.set = ((key: "cloudHosts", value: CloudHostsValue) => {
+      writes.push(key);
+      set(key, value);
+    }) as CloudHostsStoreBackend["set"];
+    store.removeBinding("cb_abcdefgh12");
+    expect(writes).toEqual(["cloudCreateOrders", "cloudHosts"]);
+    expect(store.bindings()).toEqual([]);
+    expect(store.createOrders().map((entry) => [entry.id, entry.state, entry.offerId])).toEqual([
+      ["co_1", "close", null],
+      ["co_2", "open", null],
+      ["co_3", "close", null],
+    ]);
+    // A placement whose answer is unknown is still looked for by its key once it closes, and
+    // one whose order is known keeps it to close.
+    expect(store.createOrder("co_3")?.orderIds).toBeNull();
+    expect(store.createOrder("co_1")?.orderIds).toEqual(["dseq-1"]);
+  });
+
+  it("never acts on an order that doesn't read, and keeps it on disk through every write", () => {
+    const backend = keyedDisk();
+    backend.set("cloudCreateOrders", [
+      order({ id: "co_bad", state: "open", orderIds: null }),
+      { ...order({ id: "co_odd" }), state: "someday" },
+      order({ id: "co_lease", state: "leasing", offerId: null }),
+      order(),
+    ] as StoredCreateOrder[]);
+    const store = new CloudHostStore(backend);
+    expect(store.createOrders().map((entry) => entry.id)).toEqual(["co_1"]);
+    expect(store.unreadableOrdersFor("ca_0123456789")).toBe(3);
+    store.updateCreateOrder("co_1", (current) => ({ ...current, state: "close" }));
+    expect(store.createOrder("co_1")?.state).toBe("close");
+    store.removeCreateOrder("co_1");
+    expect(backend.saved.get("cloudCreateOrders")).toHaveLength(3);
+  });
+
+  it("reads a placement whose answer is unknown, and drops an offer on any state but leasing", () => {
+    const backend = keyedDisk();
+    backend.set("cloudCreateOrders", [
+      order({ state: "placing", orderIds: null, waitingSince: null }),
+      order({ id: "co_2", state: "close", orderIds: null, offerId: "bid-1" }),
+      order({ id: "co_3", offerId: "bid-2" }),
+    ]);
+    expect(new CloudHostStore(backend).createOrders()).toEqual([
+      order({ state: "placing", orderIds: null, waitingSince: null }),
+      order({ id: "co_2", state: "close", orderIds: null, offerId: null }),
+      order({ id: "co_3", offerId: null }),
+    ]);
   });
 });

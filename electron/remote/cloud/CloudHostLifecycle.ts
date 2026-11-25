@@ -11,6 +11,9 @@ import {
   cloudProvisioningNoun,
   isCloudProviderId,
   type CloudCatalog,
+  type CloudCreateOffer,
+  type CloudCreateOfferChoice,
+  type CloudCreateOrder,
   type CloudHostCreatedFor,
   type CloudHostCreateRequest,
   type CloudHostProvisioning,
@@ -59,6 +62,7 @@ import {
   type CloudHostStore,
   type StoredCloudBinding,
   type StoredCloudObservation,
+  type StoredCreateOrder,
   type StoredWorktreeCleanup,
 } from "./CloudHostStore.js";
 import { findOnPath } from "../../utils/findOnPath.js";
@@ -87,6 +91,7 @@ import {
   type IdleSleepingCloudProvider,
   sshKeyTiming,
   type CloudProvider,
+  type OfferCreate,
   type ProviderCreateRequest,
   type ProviderCredentials,
   type ProviderResource,
@@ -116,6 +121,14 @@ const MAX_NAME_LENGTH = 64;
 const KEEPER_INTERVAL_MS = 60_000;
 /** After an idle stop whose answer was lost, how long a machine still read as running is followed. */
 const LOST_STOP_SETTLE_MS = 60_000;
+/** How often the offers on an order waiting for a choice are read again. */
+const OFFER_POLL_MS = 10_000;
+/**
+ * How long a placement whose answer was lost must go unseen by every lookup
+ * of one run before it counts as never placed. Counted from that run's first
+ * empty lookup, so a clock corrected at startup can't cut it short.
+ */
+const PLACEMENT_SETTLE_MS = 10 * 60_000;
 const IDLE_STOP_SNAPSHOTS_OFF =
   "This device doesn't stop the machine when the host's idle time ends: snapshots are off on it, so a stop would erase its disk.";
 const IDLE_STOP_HOST_TOO_OLD =
@@ -649,6 +662,45 @@ function machineOf(binding: StoredCloudBinding): CloudMachineState {
   return (binding.observation?.machine as CloudMachineState | undefined) ?? "unknown";
 }
 
+/**
+ * What settling an order record came to: every order it held `closed` with
+ * nothing leased; one `leased`, bound to its host or left in the account; a
+ * lost placement found `open` again, waiting on a choice; or one still
+ * `pending`, unseen but inside its settle window.
+ */
+type OrderSettlement =
+  { kind: "closed" } | { kind: "leased"; bound: boolean } | { kind: "open" } | { kind: "pending" };
+
+const ORDER_GONE = "That order isn't waiting on a choice any more. Check the host and try again.";
+
+/** A provider's id for an order or offer, kept whatever its length; null for none. */
+function opaqueId(raw: unknown): string | null {
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+}
+
+/** An id a view sends back: one it read from a snapshot, so never an unbounded string. */
+function checkedOpaqueId(raw: unknown, what: string): string {
+  const id = opaqueId(raw);
+  if (id === null || id.length > 4096) throw invalid(`Missing the ${what}.`);
+  return id;
+}
+
+/** Lease refusals that leave nothing leased: the provider's own refusal, or an offer it no longer has. */
+function leaseRefused(code: CloudHostErrorCode): boolean {
+  return DEFINITE_REFUSALS.has(code) || code === "not-found";
+}
+
+/** Why an offer can't be leased as the person chose it; null when it can. */
+function offerRefusal(offer: CloudCreateOffer | undefined, sawHourly: number): string | null {
+  if (!offer) return "That offer isn't on the order now. Choose one from the list.";
+  if (!offer.choosable) return `That offer can't be chosen: ${offer.reason}`;
+  // The same offer id quoted again at another rate: never leased at a rate nobody saw.
+  if (Math.abs(offer.hourlyDollars - sawHourly) > 1e-9) {
+    return `That offer now quotes $${offer.hourlyDollars.toFixed(4)} an hour, not the rate you saw. Nothing was leased; check it and choose again.`;
+  }
+  return null;
+}
+
 interface RunningOperation extends CloudOperation {
   controller: AbortController;
   promise: Promise<void>;
@@ -706,6 +758,9 @@ export class CloudHostLifecycle {
    * stop; whether it may is its keepers' word, read as the pass goes.
    */
   private idleCandidates = false;
+  /** Some order waits on a choice, or is still to settle: the timers' passes over orders read them. */
+  private ordersChoosing = false;
+  private ordersSettling = false;
   /** An idle stop being prepared or carried out, per binding. */
   private readonly idleAttempts = new Map<string, Promise<void>>();
   /** The stopping operation each idle stop runs as, so a person's Stop can tell it from their own. */
@@ -736,6 +791,25 @@ export class CloudHostLifecycle {
     string,
     { until: number; enable: boolean; stuckOn: number | null }
   >();
+  /** The offers last read on each order waiting for a choice, this run, by its record. */
+  private readonly offerReads = new Map<
+    string,
+    { orderId: string; offers: CloudCreateOffer[]; readAt: number }
+  >();
+  /** Offer reads under way, by order record, which a refresh joins. */
+  private readonly offerReading = new Map<string, Promise<void>>();
+  /** When each order record's offers are next read. */
+  private readonly offersDueAt = new Map<string, number>();
+  /** Each order record's latest offer read: only its answer is shown, so a slow one never undoes a newer. */
+  private readonly offerReadSeq = new Map<string, number>();
+  /** Order records being looked for or closed now, which every caller joins. */
+  private readonly orderWork = new Map<string, Promise<OrderSettlement>>();
+  /** When the keeper last tried each order record, so a failing close waits for its next pass. */
+  private readonly orderTriedAt = new Map<string, number>();
+  /** When this run first looked for a lost placement and found nothing. */
+  private readonly placementUnseenSince = new Map<string, number>();
+  /** The account key each placement sent, this run: the machine leased from it holds that key. */
+  private readonly placedKeys = new Map<string, string>();
   private disposed = false;
 
   constructor(private readonly deps: CloudHostLifecycleDeps) {}
@@ -755,6 +829,8 @@ export class CloudHostLifecycle {
     this.armTimers();
     for (const bindingId of this.reconciling) this.reconcileOvertaken.add(bindingId);
     this.resumeDueCleanups();
+    // An order whose provider was away is settled now it may be back.
+    this.settleOrdersDue(true);
     if (this.awaitingProvider.size === 0) return;
     void this.reconcileUnfinishedCreates(new Set(this.awaitingProvider));
   }
@@ -767,6 +843,7 @@ export class CloudHostLifecycle {
     void this.dropOrphanBindings();
     this.markInterruptedCreates();
     void this.reconcileUnfinishedCreates();
+    this.reconcileOrders();
     this.stopWatchingWorktrees =
       this.deps.onWorktreeRemoved?.((worktreeId) => void this.worktreeRemoved(worktreeId)) ?? null;
     this.resumeDueCleanups();
@@ -782,19 +859,34 @@ export class CloudHostLifecycle {
     if (this.disposed) return;
     const bindings = this.deps.store.bindings();
     const machines = bindings.some((binding) => Boolean(binding.resourceId && binding.hostId));
+    const orders = this.deps.store.createOrders();
+    // An order waiting on a choice has its offers read; any other is still to settle.
+    const choosing = orders.some((order) => order.state === "open");
+    const withMachine = new Set(bindings.filter((b) => b.resourceId).map((b) => b.id));
+    const settling = orders.some(
+      (order) => order.state !== "open" || withMachine.has(order.bindingId)
+    );
     const keeper =
       machines ||
+      settling ||
       (this.deps.machineKeys !== undefined && this.deps.store.machineKeys().some(awaitsRevoke));
-    if (machines && !this.pollTimer) {
-      this.pollTimer = setInterval(() => void this.pollDue(), 5_000);
+    const polling = machines || choosing;
+    this.ordersChoosing = choosing;
+    this.ordersSettling = settling;
+    if (polling && !this.pollTimer) {
+      this.pollTimer = setInterval(() => {
+        void this.pollDue();
+        if (this.ordersChoosing) this.pollOffersDue();
+      }, 5_000);
       this.pollTimer.unref?.();
-    } else if (!machines && this.pollTimer) {
+    } else if (!polling && this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
     this.idleCandidates = machines;
     if (keeper && !this.keeperTimer) {
       this.keeperTimer = setInterval(() => {
+        if (this.ordersSettling) this.settleOrdersDue();
         void this.renewDue();
         if (this.idleCandidates) void this.stopIdleDue();
         void this.deps.machineKeys?.tick();
@@ -817,8 +909,11 @@ export class CloudHostLifecycle {
    * SSH key) left nothing to look for, and no error to offer Retry with.
    */
   private markInterruptedCreates(): void {
+    const ordered = new Set(this.deps.store.createOrders().map((order) => order.bindingId));
     for (const binding of this.deps.store.bindings()) {
       if (binding.resourceId || !binding.hostId || binding.creation?.sentAt !== null) continue;
+      // An order placed for it is settled or chosen from instead.
+      if (ordered.has(binding.id)) continue;
       if (binding.lastError || this.operations.has(binding.id)) continue;
       this.recordError(binding.id, {
         code: "failed",
@@ -859,6 +954,7 @@ export class CloudHostLifecycle {
       }
       return lifetimes.get(providerId)!;
     };
+    const choices = this.offerChoices();
     return this.deps.store
       .bindings()
       .filter(
@@ -929,6 +1025,8 @@ export class CloudHostLifecycle {
                 stage: operation.stage,
               }
             : null,
+          // Only on a host whose create waits on a choice, so every other snapshot reads as before.
+          ...(choices.has(binding.id) ? { pendingCreate: choices.get(binding.id)! } : {}),
           lastError: binding.lastError,
           observedAt: observation?.observedAt ?? null,
           lastEndpoint: binding.access
@@ -1046,6 +1144,12 @@ export class CloudHostLifecycle {
     if (unfit) throw invalid(`${size.label} isn't available: ${unfit}.`);
     // Only Settings' create offers it, as with the mark: a worktree's machine is made without asking.
     const mcpMark = mark === null ? mcpServerOnConnectMark(request.mcpServerOnConnect) : {};
+    // Checked with nothing awaited before the binding is written: a removal or key replacement
+    // that began first refuses the create, and one that begins after sees the host. One that
+    // finished while the catalog was read took the account with it.
+    this.deps.accounts.requireAccount(account.id);
+    const fenced = this.deps.accounts.createRefusal(account.id);
+    if (fenced) throw invalid(fenced);
     const bindingId = `cb_${crypto.randomBytes(6).toString("hex")}`;
     const binding: StoredCloudBinding = {
       id: bindingId,
@@ -1114,6 +1218,17 @@ export class CloudHostLifecycle {
       throw error;
     }
     const { provider, credentials } = context;
+    // An order this host placed is never left behind by a create of another kind.
+    if (
+      !provider.offerCreate &&
+      this.deps.store.createOrders().some((o) => o.bindingId === bindingId)
+    ) {
+      const message = `${nameOf(provider)} no longer creates through offers, and this host still holds an order with it. Remove the host and add it again.`;
+      this.recordError(bindingId, { code: "unsupported", message, at: this.now() });
+      throw invalid(message);
+    }
+    // What an offer-based create already placed is chosen from or settled, never placed over.
+    if (provider.offerCreate && (await this.resumeOrders(bindingId, provider, signal))) return;
     // A create already sent may have made the machine: look for it (a read) before asking again.
     if (creation.sentAt !== null) {
       this.stage(bindingId, `Looking for the machine ${nameOf(provider)} may already have made`);
@@ -1235,6 +1350,10 @@ export class CloudHostLifecycle {
       idempotencyKey: creation.idempotencyKey,
       publicKey,
     };
+    if (provider.offerCreate) {
+      await this.placeOrder(latest, provider, provider.offerCreate, credentials, request, signal);
+      return;
+    }
     const sentBefore = creation.sentAt !== null;
     let send = () => provider.create(credentials, request);
     if (provider.prepareCreate) {
@@ -1612,6 +1731,821 @@ export class CloudHostLifecycle {
       }`,
       at: this.now(),
     });
+  }
+
+  // --- Creating through offers (#18230) ----------------------------------
+
+  /**
+   * Whether a record names the account and provider its host does, and an
+   * account of its provider: one that doesn't is kept and never acted on.
+   */
+  private orderConsistent(order: StoredCreateOrder): boolean {
+    const account = this.deps.store.account(order.accountId);
+    if (account && account.providerId !== order.providerId) return false;
+    const binding = this.deps.store.binding(order.bindingId);
+    return (
+      !binding || (binding.accountId === order.accountId && binding.providerId === order.providerId)
+    );
+  }
+
+  private actionableOrders(): StoredCreateOrder[] {
+    return this.deps.store.createOrders().filter((order) => this.orderConsistent(order));
+  }
+
+  private ordersFor(bindingId: string): StoredCreateOrder[] {
+    return this.actionableOrders().filter((order) => order.bindingId === bindingId);
+  }
+
+  private registeredProvider(providerId: CloudProviderId): CloudProvider | null {
+    return this.deps.accounts.providerUnavailable(providerId)
+      ? null
+      : this.deps.accounts.provider(providerId);
+  }
+
+  /**
+   * Each host's create waiting on a choice, with its order's offers as last
+   * read. Shown while the chosen offer's lease is out too, so the view that
+   * sent the choice is still there to say why, if the provider refuses it.
+   */
+  private offerChoices(): Map<string, CloudCreateOfferChoice> {
+    const choices = new Map<string, CloudCreateOfferChoice>();
+    for (const order of this.actionableOrders()) {
+      if (order.state !== "open" && order.state !== "leasing") continue;
+      const orderId = order.orderIds![0]!;
+      const read = this.offerReads.get(order.id);
+      const current = read?.orderId === orderId ? read : null;
+      choices.set(order.bindingId, {
+        kind: "awaiting-offer",
+        order: { id: orderId },
+        waitingSince: order.waitingSince ?? order.placedAt,
+        offers: current?.offers ?? [],
+        offersReadAt: current?.readAt ?? null,
+      });
+    }
+    return choices;
+  }
+
+  /** Nothing may be leased from it any more; a lease that already landed is found by its close. */
+  private markClosing(orderRecordId: string): void {
+    this.deps.store.updateCreateOrder(orderRecordId, (order) =>
+      order.state === "close" ? order : { ...order, state: "close", offerId: null }
+    );
+    this.offerReads.delete(orderRecordId);
+  }
+
+  private retireOrder(orderRecordId: string): void {
+    this.deps.store.removeCreateOrder(orderRecordId);
+    this.offerReads.delete(orderRecordId);
+    this.offersDueAt.delete(orderRecordId);
+    this.offerReadSeq.delete(orderRecordId);
+    this.orderTriedAt.delete(orderRecordId);
+    this.placementUnseenSince.delete(orderRecordId);
+    this.placedKeys.delete(orderRecordId);
+  }
+
+  /**
+   * Places the order a create on an offer-based provider asks for, leasing
+   * nothing. Its record is written first, under a key of its own, so a lost
+   * answer or a restart finds it again. Once placed, the operation ends: the
+   * person's choice may be minutes away, and leasing it is its own operation.
+   */
+  private async placeOrder(
+    binding: StoredCloudBinding,
+    provider: CloudProvider,
+    offers: OfferCreate,
+    credentials: ProviderCredentials,
+    request: ProviderCreateRequest,
+    signal: AbortSignal
+  ): Promise<void> {
+    const record: StoredCreateOrder = {
+      id: `co_${crypto.randomBytes(6).toString("hex")}`,
+      bindingId: binding.id,
+      accountId: binding.accountId,
+      providerId: binding.providerId,
+      labels: request.labels,
+      idempotencyKey: crypto.randomUUID(),
+      state: "placing",
+      orderIds: null,
+      placedAt: this.now(),
+      waitingSince: null,
+      offerId: null,
+    };
+    this.stage(binding.id, `Placing an order with ${nameOf(provider)}`);
+    const current = this.deps.store.binding(binding.id);
+    if (signal.aborted || !current) {
+      throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    }
+    // A lease bound while this was readied gave the host its machine: nothing more is placed.
+    if (current.resourceId) return;
+    const fenced = this.deps.accounts.createRefusal(binding.accountId);
+    if (fenced) throw invalid(fenced);
+    this.deps.store.putCreateOrder(record);
+    if (request.publicKey !== null) this.placedKeys.set(record.id, keyIdentity(request.publicKey));
+    let placedId: string | null;
+    try {
+      const placed: CloudCreateOrder = await offers.placeOrder(
+        { ...credentials, signal },
+        { ...request, idempotencyKey: record.idempotencyKey }
+      );
+      placedId = opaqueId(placed?.id);
+    } catch (error) {
+      const described = provider.describeError(error);
+      if (!signal.aborted && DEFINITE_REFUSALS.has(described.code)) {
+        // Turned down: no order was placed, so there is none to look for or close.
+        this.retireOrder(record.id);
+        this.recordError(binding.id, {
+          ...described,
+          message: `${asSentence(described.message)} No order was placed; Retry to try again.`,
+        });
+        throw error;
+      }
+      // Stopped by a removal, which closes whatever was placed.
+      if (signal.aborted) throw error;
+      if (await this.placementLost(record.id, binding.id, provider)) return;
+      throw error;
+    }
+    // An answer that names no order Daintree can keep is no answer: it is looked for instead.
+    if (placedId === null) {
+      if (await this.placementLost(record.id, binding.id, provider)) return;
+      const message = `${nameOf(provider)} answered the order without saying which it was.`;
+      throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
+    }
+    const id = placedId;
+    const opened = this.deps.store.updateCreateOrder(record.id, (current) =>
+      current.state === "placing"
+        ? { ...current, state: "open", orderIds: [id], waitingSince: this.now() }
+        : { ...current, orderIds: current.orderIds ?? [id] }
+    );
+    if (opened?.state !== "open") {
+      // Its host was removed while it was placed: the close takes it from here.
+      void this.settleOrder(record.id).catch(() => {});
+      throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    }
+    this.clearSupersededError(binding.id);
+    void this.readOffers(record.id).catch(() => {});
+  }
+
+  /**
+   * A placement whose answer was lost may still have made the order: it is
+   * looked for now, and the keeper looks again until it is found or can't
+   * have been placed. True when it was found, waiting on a choice.
+   */
+  private async placementLost(
+    orderRecordId: string,
+    bindingId: string,
+    provider: CloudProvider
+  ): Promise<boolean> {
+    const outcome = await this.settleOrder(orderRecordId).catch((): OrderSettlement => ({
+      kind: "pending",
+    }));
+    if (outcome.kind === "open") return true;
+    this.recordError(bindingId, {
+      code: outcome.kind === "pending" ? "outcome-unknown" : "failed",
+      message:
+        outcome.kind === "pending"
+          ? `${nameOf(provider)} didn't confirm the order. Daintree keeps looking for it and brings back the choice if it turns up; Retry places a new order.`
+          : `${nameOf(provider)} didn't confirm the order and had placed more than one, so Daintree closed them. Retry places a new order.`,
+      at: this.now(),
+    });
+    return false;
+  }
+
+  /**
+   * Before a create places an order: one its host still holds is chosen from,
+   * a lost placement is looked for, and a lease that may have landed is
+   * settled by closing its order. True when that leaves the host a choice or
+   * a machine, so nothing new is placed.
+   */
+  private async resumeOrders(
+    bindingId: string,
+    provider: CloudProvider,
+    signal: AbortSignal
+  ): Promise<boolean> {
+    for (const order of this.ordersFor(bindingId)) {
+      if (order.state === "open") {
+        void this.readOffers(order.id).catch(() => {});
+        return true;
+      }
+      if (order.state === "leasing") this.markClosing(order.id);
+      let outcome: OrderSettlement;
+      try {
+        outcome = await this.settleOrder(order.id);
+      } catch (error) {
+        throw this.deps.accounts.asAppError(provider, error);
+      }
+      if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+      if (outcome.kind === "open") return true;
+      if (outcome.kind === "leased" && outcome.bound) {
+        await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
+        return true;
+      }
+      // Unseen so far: the keeper keeps looking for it, to close it, while a new one is placed.
+      if (outcome.kind === "pending") this.markClosing(order.id);
+    }
+    return this.deps.store.binding(bindingId)?.resourceId != null;
+  }
+
+  /**
+   * Settles one order record: a lost placement is looked for by its labels
+   * and key (one found waits on a choice again), and a record marked for
+   * closing has each of its orders closed, binding a lease one of them
+   * answers with to its host while that host is still here. Throws when the
+   * provider couldn't be asked; the record stays for the keeper.
+   */
+  private settleOrder(orderRecordId: string): Promise<OrderSettlement> {
+    const running = this.orderWork.get(orderRecordId);
+    if (running) return running;
+    const work = this.runSettleOrder(orderRecordId).finally(() => {
+      if (this.orderWork.get(orderRecordId) === work) this.orderWork.delete(orderRecordId);
+    });
+    this.orderWork.set(orderRecordId, work);
+    return work;
+  }
+
+  private async runSettleOrder(orderRecordId: string): Promise<OrderSettlement> {
+    let order = this.deps.store.createOrder(orderRecordId);
+    if (!order) return { kind: "closed" };
+    if (order.state === "open") return { kind: "open" };
+    // A lease under way is its operation's to settle.
+    if (order.state === "leasing") return { kind: "pending" };
+    const account = this.deps.store.account(order.accountId);
+    if (!account) {
+      // Its credentials left without it being closed (an edit outside Daintree): nothing here can ask.
+      console.warn(
+        `[CloudHostLifecycle] An order record outlived its cloud account; dropping it (${order.id}).`
+      );
+      this.retireOrder(order.id);
+      return { kind: "closed" };
+    }
+    // Never another provider's credentials for it, nor a lease bound to another account's host.
+    if (!this.orderConsistent(order)) {
+      throw new Error("The order record names an account or host of another provider");
+    }
+    const provider = this.deps.accounts.requireSupported(order.providerId);
+    const offers = provider.offerCreate;
+    if (!offers) throw new Error(`${nameOf(provider)} no longer creates through offers`);
+    const credentials = await this.deps.accounts.credentials(account);
+    if (order.orderIds === null) {
+      const answered = await offers.findOrders(credentials, {
+        labels: order.labels,
+        idempotencyKey: order.idempotencyKey,
+      });
+      const found = answered.flatMap((placed) => {
+        const id = opaqueId(placed?.id);
+        return id === null ? [] : [{ id }];
+      });
+      order = this.deps.store.createOrder(orderRecordId);
+      if (!order) return { kind: "closed" };
+      if (order.orderIds === null) {
+        if (found.length === 0) {
+          const since = this.placementUnseenSince.get(order.id) ?? this.now();
+          this.placementUnseenSince.set(order.id, since);
+          if (this.now() - since < PLACEMENT_SETTLE_MS) return { kind: "pending" };
+          // Looked for all along and never there: the placement never reached the provider.
+          this.retireOrder(order.id);
+          return { kind: "closed" };
+        }
+        this.placementUnseenSince.delete(order.id);
+        const ids = [...new Set(found.map((placed) => placed.id))];
+        // One order for a host still waiting on it: the choice comes back.
+        const reopened =
+          order.state === "placing" && ids.length === 1
+            ? this.deps.store.updateCreateOrder(order.id, (current) =>
+                current.state === "placing" && current.orderIds === null
+                  ? { ...current, state: "open", orderIds: ids, waitingSince: this.now() }
+                  : current
+              )
+            : null;
+        if (reopened?.state === "open") {
+          this.clearSupersededError(order.bindingId);
+          void this.readOffers(order.id).catch(() => {});
+          return { kind: "open" };
+        }
+        // More than one, or nothing waits on it any more: every one found is closed.
+        this.deps.store.updateCreateOrder(order.id, (current) => ({
+          ...current,
+          state: "close",
+          orderIds: current.orderIds ?? ids,
+          offerId: null,
+        }));
+        order = this.deps.store.createOrder(orderRecordId);
+        if (!order) return { kind: "closed" };
+      }
+    }
+    if (order.state !== "close") return { kind: "pending" };
+    let leased = false;
+    let bound = false;
+    for (const orderId of order.orderIds ?? []) {
+      if (this.disposed) throw new AppError({ code: "CANCELLED", message: "Stopping" });
+      const outcome = await offers.closeOrder(credentials, orderId);
+      // Bound before the order is struck off, so a crash between the two binds it again.
+      if (outcome.kind === "leased") {
+        leased = true;
+        if (this.adoptLease(order, provider, outcome.resource)) bound = true;
+      }
+      this.deps.store.updateCreateOrder(order.id, (current) => ({
+        ...current,
+        orderIds: (current.orderIds ?? []).filter((id) => id !== orderId),
+      }));
+    }
+    this.retireOrder(order.id);
+    return leased ? { kind: "leased", bound } : { kind: "closed" };
+  }
+
+  /**
+   * A lease the provider answered with, for the host that placed its order:
+   * bound to it while the host is still here and holds no other machine.
+   * Otherwise it stays in the provider account, as every machine of a host
+   * removed from this device does. True when it is the host's machine now.
+   */
+  private adoptLease(
+    order: StoredCreateOrder,
+    provider: CloudProvider,
+    resource: ProviderResource
+  ): boolean {
+    const binding = this.deps.store.binding(order.bindingId);
+    // The host as it is now: one rewritten for another account meanwhile is never given it.
+    const ours = binding?.accountId === order.accountId && binding.providerId === order.providerId;
+    const bound = binding && ours ? this.bindCreated(binding.id, resource) : "settled";
+    if (bound === "bound") {
+      const key = this.placedKeys.get(order.id);
+      if (key) this.heldKeys.set(order.bindingId, key);
+      // The host has its machine: any other order it holds is closed, never chosen from.
+      for (const other of this.ordersFor(order.bindingId)) {
+        if (other.id === order.id || other.state === "close") continue;
+        if (other.state === "leasing" && this.operations.has(order.bindingId)) continue;
+        this.markClosing(other.id);
+        void this.settleOrder(other.id).catch(() => {});
+      }
+      return true;
+    }
+    if (bound === "held") {
+      this.recordHeldElsewhere(order.bindingId, provider, resource);
+      return false;
+    }
+    console.warn(
+      `[CloudHostLifecycle] A ${nameOf(provider)} order was leased after its host was settled or removed; the machine stays in the account (${resource.resourceId}).`
+    );
+    return false;
+  }
+
+  /** The host's create waits on a choice now: what was said about an earlier attempt is history. */
+  private clearSupersededError(bindingId: string): void {
+    this.deps.store.updateBinding(bindingId, (binding) =>
+      binding.lastError && !binding.resourceId ? { ...binding, lastError: null } : binding
+    );
+  }
+
+  /** Says on a host that its order couldn't be settled yet, once per reason; the keeper keeps trying. */
+  private orderSettleFailed(
+    order: StoredCreateOrder,
+    error: unknown,
+    provider: CloudProvider | null
+  ): void {
+    const binding = this.deps.store.binding(order.bindingId);
+    if (!binding?.hostId || binding.resourceId || this.operations.has(binding.id)) return;
+    // A choice waiting on the person speaks for the host.
+    if (this.ordersFor(binding.id).some((other) => other.state === "open")) return;
+    const said = asSentence(
+      provider
+        ? (this.deps.accounts.asAppError(provider, error).userMessage ??
+            formatErrorMessage(error, "The provider couldn't be asked"))
+        : formatErrorMessage(error, "The provider couldn't be asked")
+    );
+    const message = `Setup didn't finish: Daintree couldn't settle the order this host placed${provider ? ` with ${nameOf(provider)}` : ""} yet. ${said} It keeps trying.`;
+    if (binding.lastError?.message === message) return;
+    this.recordError(binding.id, { code: "outcome-unknown", message, at: this.now() });
+  }
+
+  /**
+   * Says on a host what the background close of its order came to, unless
+   * a newer order speaks for it or it has a machine now.
+   */
+  private orderSettled(
+    order: StoredCreateOrder,
+    outcome: OrderSettlement,
+    provider: CloudProvider | null
+  ): void {
+    const binding = this.deps.store.binding(order.bindingId);
+    if (!binding?.hostId || binding.resourceId || this.operations.has(binding.id)) return;
+    const name = provider ? nameOf(provider) : "the provider";
+    if (outcome.kind === "pending") {
+      // A placement still unseen: the host says it is being looked for, once.
+      if (order.state !== "placing" || binding.lastError) return;
+      this.recordError(binding.id, {
+        code: "outcome-unknown",
+        message: `Setup didn't finish: ${name} hasn't confirmed the order this host placed. Daintree keeps looking for it and brings back the choice if it turns up; Retry places a new order.`,
+        at: this.now(),
+      });
+      return;
+    }
+    if (outcome.kind !== "closed") return;
+    // A newer order speaks for the host.
+    if (this.ordersFor(binding.id).some((other) => other.state !== "close")) return;
+    this.recordError(binding.id, {
+      code: "failed",
+      message: `Setup didn't finish: no order from this host is open with ${name}, and no machine was leased. Retry places a new order.`,
+      at: this.now(),
+    });
+  }
+
+  /**
+   * Settles every order record not waiting on a choice: at startup, when a
+   * provider returns, when a host is removed (`bindingId`), and on each keeper
+   * pass for those whose last try failed. Nothing here places or leases.
+   */
+  private settleOrdersDue(now = false, bindingId?: string): void {
+    if (this.disposed) return;
+    const at = this.now();
+    for (const order of this.actionableOrders()) {
+      if (bindingId !== undefined && order.bindingId !== bindingId) continue;
+      if (this.orderWork.has(order.id)) continue;
+      if (order.state === "open") {
+        // A host with its machine chooses nothing more: an order left open (a crash after the
+        // bind, say) is closed.
+        if (!this.deps.store.binding(order.bindingId)?.resourceId) continue;
+        this.markClosing(order.id);
+      }
+      // A placement or lease still out is its operation's; a close is anyone's, joined if under way.
+      if (
+        order.state !== "close" &&
+        this.operations.has(order.bindingId) &&
+        this.deps.store.binding(order.bindingId)
+      ) {
+        continue;
+      }
+      if (this.deps.accounts.providerUnavailable(order.providerId)) continue;
+      if (!now && at - (this.orderTriedAt.get(order.id) ?? 0) < KEEPER_INTERVAL_MS) continue;
+      this.orderTriedAt.set(order.id, at);
+      // A lease sent before a restart is settled by closing its order, never sent again.
+      if (order.state === "leasing") this.markClosing(order.id);
+      const provider = this.deps.accounts.provider(order.providerId);
+      void this.settleOrder(order.id)
+        .then((outcome) => this.orderSettled(order, outcome, provider))
+        .catch((error: unknown) => this.orderSettleFailed(order, error, provider));
+    }
+  }
+
+  /** After a restart: each choice comes back with its offers read again, and every other order is settled. */
+  private reconcileOrders(): void {
+    for (const order of this.actionableOrders()) {
+      // A host gone without its orders marked (a record from an older write): they close.
+      if (order.state !== "close" && !this.deps.store.binding(order.bindingId)) {
+        this.markClosing(order.id);
+      } else if (order.state === "open") {
+        void this.readOffers(order.id).catch(() => {});
+      }
+    }
+    this.settleOrdersDue(true);
+  }
+
+  /** Reads the offers on an order waiting for a choice; a read under way is joined. */
+  private readOffers(orderRecordId: string): Promise<void> {
+    const running = this.offerReading.get(orderRecordId);
+    if (running) return running;
+    const read = this.runReadOffers(orderRecordId).finally(() => {
+      if (this.offerReading.get(orderRecordId) === read) this.offerReading.delete(orderRecordId);
+      if (this.deps.store.createOrder(orderRecordId)?.state === "open") {
+        this.offersDueAt.set(orderRecordId, this.now() + OFFER_POLL_MS);
+      }
+    });
+    this.offerReading.set(orderRecordId, read);
+    return read;
+  }
+
+  private async runReadOffers(orderRecordId: string): Promise<void> {
+    const order = this.deps.store.createOrder(orderRecordId);
+    const binding = order ? this.deps.store.binding(order.bindingId) : null;
+    if (!order || order.state !== "open" || !binding || this.disposed) return;
+    const orderId = order.orderIds![0]!;
+    const { provider, credentials } = await this.context(binding);
+    const offers = provider.offerCreate;
+    if (!offers) return;
+    const seq = this.beginOfferRead(orderRecordId);
+    const stillOpen = () => {
+      const current = this.deps.store.createOrder(orderRecordId);
+      return !this.disposed && current?.state === "open" && current.orderIds?.[0] === orderId;
+    };
+    let read: CloudCreateOffer[];
+    try {
+      read = await offers.listOffers(credentials, orderId);
+    } catch (error) {
+      // An order the provider no longer has ended without a choice here: its close says how.
+      if (
+        stillOpen() &&
+        this.offerReadSeq.get(orderRecordId) === seq &&
+        provider.describeError(error).code === "not-found"
+      ) {
+        this.markClosing(orderRecordId);
+        void this.settleOrder(orderRecordId)
+          .then((outcome) => this.orderSettled(order, outcome, provider))
+          .catch(() => {});
+      }
+      throw error;
+    }
+    this.publishOffers(orderRecordId, orderId, read, seq);
+  }
+
+  private beginOfferRead(orderRecordId: string): number {
+    const seq = (this.offerReadSeq.get(orderRecordId) ?? 0) + 1;
+    this.offerReadSeq.set(orderRecordId, seq);
+    return seq;
+  }
+
+  /**
+   * Shows what a read of the order's offers found, unless the order was
+   * chosen, cancelled or closed while it read, or a newer read began.
+   */
+  private publishOffers(
+    orderRecordId: string,
+    orderId: string,
+    offers: CloudCreateOffer[],
+    seq: number
+  ): void {
+    const current = this.deps.store.createOrder(orderRecordId);
+    if (this.disposed || current?.state !== "open" || current.orderIds?.[0] !== orderId) return;
+    if (this.offerReadSeq.get(orderRecordId) !== seq) return;
+    this.offerReads.set(orderRecordId, { orderId, offers, readAt: this.now() });
+    this.deps.changed();
+  }
+
+  /** The poll's pass over orders waiting on a choice: each one's offers, read again when due. */
+  private pollOffersDue(): void {
+    if (this.disposed) return;
+    const now = this.now();
+    for (const order of this.actionableOrders()) {
+      if (order.state !== "open" || this.offerReading.has(order.id)) continue;
+      if (now < (this.offersDueAt.get(order.id) ?? 0)) continue;
+      if (this.deps.accounts.providerUnavailable(order.providerId)) continue;
+      void this.readOffers(order.id).catch(() => {});
+    }
+  }
+
+  /** The record of the order a host's create waits on, as the asking view named it. */
+  private requireOpenOrder(
+    binding: StoredCloudBinding,
+    orderId: string
+  ): StoredCreateOrder & { orderIds: [string] } {
+    const order = this.ordersFor(binding.id).find(
+      (candidate) => candidate.state === "open" && candidate.orderIds?.[0] === orderId
+    );
+    if (!order) throw invalid(ORDER_GONE);
+    return order as StoredCreateOrder & { orderIds: [string] };
+  }
+
+  /** Reads the offers on the order a host's create waits on again now. */
+  async refreshOffers(hostId: unknown, orderId: unknown): Promise<void> {
+    const binding = this.requireBindingForHost(hostId);
+    const order = this.requireOpenOrder(binding, checkedOpaqueId(orderId, "order"));
+    try {
+      await this.readOffers(order.id);
+    } catch (error) {
+      const provider = this.registeredProvider(order.providerId);
+      throw provider ? this.deps.accounts.asAppError(provider, error) : error;
+    }
+  }
+
+  /**
+   * Leases the offer the person chose, the only path that leases a machine
+   * through offers. Resolves once the provider answers with the machine and
+   * it is bound to the host; the create then carries on as any other (wait
+   * for it to run, then setup). An offer the provider turns down leaves the
+   * order open for another choice. `hourlyDollars` is the rate the person
+   * saw: a bidder can quote again under the same offer id, and a lease is
+   * never sent at a rate nobody saw.
+   */
+  async chooseOffer(
+    hostId: unknown,
+    orderId: unknown,
+    offerId: unknown,
+    hourlyDollars: unknown
+  ): Promise<void> {
+    const binding = this.requireBindingForHost(hostId);
+    const order = this.requireOpenOrder(binding, checkedOpaqueId(orderId, "order"));
+    const offer = checkedOpaqueId(offerId, "offer");
+    if (typeof hourlyDollars !== "number" || !Number.isFinite(hourlyDollars) || hourlyDollars < 0) {
+      throw invalid("Missing the rate of the offer you chose.");
+    }
+    if (this.removing.has(binding.id)) throw invalid("This host is being removed.");
+    if (binding.resourceId) throw invalid("This host has its machine already.");
+    // Never joined: a second choice while one is leased would be a second lease asked for.
+    if (this.operations.has(binding.id)) {
+      throw invalid("An offer is being leased for this host already. Wait for it to finish.");
+    }
+    const read = this.offerReads.get(order.id);
+    const known = read?.orderId === order.orderIds[0] ? read.offers : [];
+    const refusal = offerRefusal(
+      known.find((candidate) => candidate.id === offer),
+      hourlyDollars
+    );
+    if (refusal) throw invalid(refusal);
+    let accepted!: () => void;
+    const leased = new Promise<void>((resolve) => (accepted = resolve));
+    const work = this.operate(binding.id, "creating", (signal) =>
+      this.runLease(
+        binding.id,
+        order.id,
+        order.orderIds[0],
+        { id: offer, hourlyDollars },
+        signal,
+        accepted
+      )
+    );
+    work.catch(() => {});
+    await Promise.race([leased, work]);
+  }
+
+  private async runLease(
+    bindingId: string,
+    orderRecordId: string,
+    orderId: string,
+    chosen: { id: string; hourlyDollars: number },
+    signal: AbortSignal,
+    accepted: () => void
+  ): Promise<void> {
+    const offerId = chosen.id;
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    const { provider, credentials } = await this.context(binding, signal);
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    const offers = provider.offerCreate;
+    if (!offers || !this.stillRegistered(binding.providerId, provider)) {
+      throw invalid(`${nameOf(provider)} changed while the offer was being leased. Try again.`);
+    }
+    // Read again just before the lease: the offer the person saw may have gone or been
+    // quoted again since the last read. Nothing is leased then, and the order stays open.
+    this.stage(bindingId, `Checking the offer you chose with ${nameOf(provider)}`);
+    const seq = this.beginOfferRead(orderRecordId);
+    let current: CloudCreateOffer[];
+    try {
+      current = await offers.listOffers({ ...credentials, signal }, orderId);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      throw this.deps.accounts.asAppError(provider, error);
+    }
+    if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    this.publishOffers(orderRecordId, orderId, current, seq);
+    const refusal = offerRefusal(
+      current.find((candidate) => candidate.id === offerId),
+      chosen.hourlyDollars
+    );
+    if (refusal) throw invalid(refusal);
+    // Written before the lease, the request that costs money: a lost answer is settled by
+    // closing the order, never by leasing again.
+    const marked = this.deps.store.updateCreateOrder(orderRecordId, (order) =>
+      order.state === "open" && order.orderIds?.[0] === orderId
+        ? { ...order, state: "leasing", offerId }
+        : order
+    );
+    if (marked?.state !== "leasing" || marked.offerId !== offerId) throw invalid(ORDER_GONE);
+    this.stage(bindingId, `Leasing the offer you chose from ${nameOf(provider)}`);
+    let resource: ProviderResource;
+    try {
+      resource = await offers.leaseOffer({ ...credentials, signal }, orderId, offerId, {
+        hourlyDollars: chosen.hourlyDollars,
+      });
+    } catch (error) {
+      const described = provider.describeError(error);
+      if (!signal.aborted && leaseRefused(described.code)) {
+        // Nothing was leased: the order stays open for another choice, unless the host got its
+        // machine meanwhile, when it is closed.
+        const hasMachine = !!this.deps.store.binding(bindingId)?.resourceId;
+        const reopened = this.deps.store.updateCreateOrder(orderRecordId, (order) =>
+          order.state === "leasing" && order.offerId === offerId
+            ? hasMachine
+              ? { ...order, state: "close", offerId: null }
+              : { ...order, state: "open", offerId: null }
+            : order
+        );
+        if (reopened?.state === "close") void this.settleOrder(orderRecordId).catch(() => {});
+        const read = this.offerReads.get(orderRecordId);
+        if (read) {
+          this.offerReads.set(orderRecordId, {
+            ...read,
+            offers: read.offers.filter((candidate) => candidate.id !== offerId),
+          });
+        }
+        if (reopened?.state === "open") void this.readOffers(orderRecordId).catch(() => {});
+        // Another offer can help only when this one was the problem, not the account.
+        const offerAtFault =
+          described.code === "refused" ||
+          described.code === "not-found" ||
+          described.code === "capacity";
+        const message =
+          reopened?.state === "close"
+            ? `${asSentence(described.message)} Nothing was leased, and this host has its machine already.`
+            : `${asSentence(described.message)} Nothing was leased, and the order is still open${offerAtFault ? ": choose another offer." : "."}`;
+        throw new AppError({ code: "VALIDATION", message, userMessage: message });
+      }
+      // Stopped by a cancel or removal, which closes the order and keeps a lease that landed.
+      if (signal.aborted) throw error;
+      // The answer was lost, so the lease may have landed: only closing the order says.
+      this.markClosing(orderRecordId);
+      let outcome: OrderSettlement;
+      try {
+        outcome = await this.settleOrder(orderRecordId);
+      } catch (closeError) {
+        const said = asSentence(
+          this.deps.accounts.asAppError(provider, closeError).userMessage ??
+            formatErrorMessage(closeError, "No answer")
+        );
+        const message = `${nameOf(provider)} didn't confirm the lease, and the order couldn't be closed yet. ${said} Daintree keeps trying, and the machine is this host's if the lease went through.`;
+        this.recordError(bindingId, { code: "outcome-unknown", message, at: this.now() });
+        throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
+      }
+      if (outcome.kind === "leased" && outcome.bound) {
+        accepted();
+        await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
+        return;
+      }
+      if (outcome.kind === "closed") {
+        const message = `${nameOf(provider)} didn't confirm the lease, so Daintree closed the order and no machine was leased. Retry places a new order.`;
+        this.recordError(bindingId, { code: "failed", message, at: this.now() });
+        throw invalid(message);
+      }
+      throw this.deps.accounts.asAppError(provider, error);
+    }
+    // Leased: the order is done, whatever becomes of the machine.
+    const bound = this.adoptLease(marked, provider, resource);
+    this.retireOrder(orderRecordId);
+    if (!bound) {
+      const message = this.deps.store.binding(bindingId)?.lastError?.message ?? ORDER_GONE;
+      throw invalid(message);
+    }
+    accepted();
+    await this.waitFor(bindingId, "running", START_DEADLINE_MS, signal, "Starting the machine");
+  }
+
+  /**
+   * Withdraws the create waiting on this order: nothing more is leased from
+   * it, and it is closed. The host stays, offering Retry. A lease that won
+   * the race is kept as the host's machine, and the create carries on.
+   */
+  async cancelOrder(hostId: unknown, orderId: unknown): Promise<void> {
+    const binding = this.requireBindingForHost(hostId);
+    const id = checkedOpaqueId(orderId, "order");
+    const order = this.ordersFor(binding.id).find((candidate) => candidate.orderIds?.includes(id));
+    if (!order) throw invalid(ORDER_GONE);
+    // Written before anything is stopped: a lease that lands meanwhile is found by the close.
+    this.markClosing(order.id);
+    // Only this order's lease gives way; one already closing has none, and the host may be
+    // placing a newer one. The close goes out at once, whatever the lease's request does with
+    // the abort: whichever reaches the provider first decides, and the close says which.
+    const running = order.state === "leasing" ? this.operations.get(binding.id) : undefined;
+    if (running?.kind === "creating") running.controller.abort();
+    let outcome: OrderSettlement;
+    try {
+      outcome = await this.settleOrder(order.id);
+    } catch (error) {
+      const provider = this.registeredProvider(order.providerId);
+      const said = asSentence(
+        (provider ? this.deps.accounts.asAppError(provider, error).userMessage : undefined) ??
+          formatErrorMessage(error, "No answer")
+      );
+      const message = `The order couldn't be closed yet. ${said} Daintree keeps trying, and a machine a lease made is this host's. Retry closes it first, then places a new order.`;
+      this.recordError(binding.id, { code: "outcome-unknown", message, at: this.now() });
+      throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
+    }
+    if (outcome.kind === "leased" && outcome.bound) {
+      // The lease won: the create carries on once the aborted lease's operation has let go.
+      void (async () => {
+        await running?.promise.catch(() => {});
+        await this.operate(binding.id, "creating", (signal) =>
+          this.waitFor(binding.id, "running", START_DEADLINE_MS, signal, "Starting the machine")
+        );
+      })().catch(() => {});
+      return;
+    }
+    if (this.deps.store.binding(binding.id)?.resourceId) return;
+    this.recordError(binding.id, {
+      code: "failed",
+      message: "The create was cancelled, and no machine was leased. Retry places a new order.",
+      at: this.now(),
+    });
+  }
+
+  /**
+   * Before an account's credentials leave this device: closes every order
+   * its creates placed, and refuses while one may still be open, since
+   * nothing here could close it afterwards.
+   */
+  async settleAccountOrders(accountId: string): Promise<void> {
+    const orders = this.deps.store.createOrders().filter((order) => order.accountId === accountId);
+    for (const order of orders) {
+      if (order.state !== "close" && !this.operations.has(order.bindingId)) {
+        this.markClosing(order.id);
+      }
+      await this.settleOrder(order.id).catch(() => {});
+    }
+    if (this.deps.store.unreadableOrdersFor(accountId) > 0) {
+      const message =
+        "This device holds an order this account placed that this version of Daintree can't read, so it can't close it. Remove the account in the version of Daintree that placed it.";
+      throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
+    }
+    const left = this.deps.store.createOrders().filter((order) => order.accountId === accountId);
+    if (left.length === 0) return;
+    const message = `Daintree couldn't yet close ${left.length === 1 ? "an order" : `${left.length} orders`} this account placed for new machines. Try again once the provider can be reached.`;
+    throw new AppError({ code: "OUTCOME_UNKNOWN", message, userMessage: message });
   }
 
   /** Adds an existing machine as a host. Importing never starts it, and never changes its lifetime. */
@@ -2020,6 +2954,31 @@ export class CloudHostLifecycle {
     if (running && running.kind !== "deleting") {
       running.controller.abort();
       await running.promise.catch(() => {});
+    }
+    // Its orders are closed first, so a machine a lease made (here, or one this device never
+    // heard of) is deleted with the host. One still being placed leased nothing: its close runs
+    // once the host is forgotten. A provider that no longer takes orders can't close them here:
+    // the host goes, its orders keep trying, unless one may hold a lease nobody could delete.
+    const closesOrders = !!this.registeredProvider(confirmed.providerId)?.offerCreate;
+    // A host with its machine has it deleted below whatever its leftover orders hold.
+    if (!closesOrders && !this.deps.store.binding(confirmed.id)?.resourceId) {
+      const mayHoldLease = this.ordersFor(confirmed.id).some(
+        (order) => order.state === "leasing" || order.state === "close"
+      );
+      if (mayHoldLease) {
+        throw invalid(
+          "A lease for this host may have gone through, and its provider can't be asked about it now. Try again once it can."
+        );
+      }
+    }
+    for (const order of closesOrders ? this.ordersFor(confirmed.id) : []) {
+      if (order.state === "placing") continue;
+      this.markClosing(order.id);
+      try {
+        await this.settleOrder(order.id);
+      } catch (error) {
+        throw this.deps.accounts.asAppError(this.deps.accounts.provider(order.providerId), error);
+      }
     }
     let binding = this.deps.store.binding(confirmed.id) ?? confirmed;
     // A create that reached the provider may have made a machine nothing here has heard
@@ -4506,8 +5465,10 @@ export class CloudHostLifecycle {
 
   private async dropBinding(bindingId: string): Promise<void> {
     this.operations.get(bindingId)?.controller.abort();
-    // Its machine's own key goes with it, at the provider (#17361).
+    // Its machine's own key goes with it, at the provider (#17361), and its orders are
+    // marked for closing in the same removal, then closed from their own records.
     this.deps.store.removeBinding(bindingId);
+    this.settleOrdersDue(true, bindingId);
     this.renewals.delete(bindingId);
     this.observedTicket.delete(bindingId);
     this.heldKeys.delete(bindingId);

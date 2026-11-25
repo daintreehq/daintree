@@ -369,9 +369,15 @@ export interface GeneratedElectronAPI {
     allowAccountProvider(
       ...args: IpcInvokeMap["cloud-hosts:allow-account-provider"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:allow-account-provider"]["result"]>;
+    cancelOrder(
+      ...args: IpcInvokeMap["cloud-hosts:cancel-order"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:cancel-order"]["result"]>;
     checkAccountKey(
       ...args: IpcInvokeMap["cloud-hosts:check-account-key"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:check-account-key"]["result"]>;
+    chooseOffer(
+      ...args: IpcInvokeMap["cloud-hosts:choose-offer"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:choose-offer"]["result"]>;
     createHost(
       ...args: IpcInvokeMap["cloud-hosts:create-host"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:create-host"]["result"]>;
@@ -405,6 +411,9 @@ export interface GeneratedElectronAPI {
     refreshHost(
       ...args: IpcInvokeMap["cloud-hosts:refresh-host"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:refresh-host"]["result"]>;
+    refreshOffers(
+      ...args: IpcInvokeMap["cloud-hosts:refresh-offers"]["args"]
+    ): Promise<IpcInvokeMap["cloud-hosts:refresh-offers"]["result"]>;
     removeAccount(
       ...args: IpcInvokeMap["cloud-hosts:remove-account"]["args"]
     ): Promise<IpcInvokeMap["cloud-hosts:remove-account"]["result"]>;

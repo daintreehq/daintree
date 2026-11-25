@@ -226,6 +226,7 @@ export const SETTING_CATALOG = {
       devPreviewUserStopped: hostPerProject,
       remoteHosts: device,
       cloudHosts: device,
+      cloudCreateOrders: device,
       hostMode: device,
       // This machine's own listener and the devices paired to it.
       deviceAnswer: device,
