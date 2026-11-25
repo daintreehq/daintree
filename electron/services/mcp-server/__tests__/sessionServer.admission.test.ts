@@ -1699,7 +1699,11 @@ describe("a tool id no higher tier would admit (#18163)", () => {
   function missDeps(caller: Caller, tier: "core" | "full" | "external") {
     const notifyTierMismatch = vi.fn(() => true);
     const recordDenial = vi.fn(() => ({ tripped: false }));
-    const deps = fakeDeps({ sessionStore: fakeSessionStore(tier), notifyTierMismatch, recordDenial });
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore(tier),
+      notifyTierMismatch,
+      recordDenial,
+    });
     if (caller === "assistant") deps.sessionStore.sessionOriginMap.set("s-miss", "help");
     if (caller === "relay") {
       (deps as { relay?: unknown }).relay = {
