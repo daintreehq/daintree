@@ -404,7 +404,7 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
         )}
         {failed && status?.lastError && (
           <Callout severity="error" title="The machine isn't ready">
-            {status.lastError.message}
+            <p>{status.lastError.message}</p>
             {addedTunnelMissing && (
               <div className="mt-3">
                 <TunnelSetupCommands tunnel={addedTunnelMissing} from="install" />

@@ -1012,8 +1012,9 @@ describe("AddCloudHostDialog showing the tunnel's setup lines (#18181)", () => {
     client.findTunnel.mockResolvedValue({ command: "agent37", found: true });
     cloud.snapshot = { providers: [declared()], accounts: [account("agent37")], hosts: [] };
     client.getCatalog.mockResolvedValue(catalog());
-    const dialog = <AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />;
-    const view = render(dialog);
+    // A fresh element each time, so a rerender reads the snapshot again.
+    const dialog = () => <AddCloudHostDialog isOpen onClose={() => {}} onReady={() => {}} />;
+    const view = render(dialog());
     fireEvent.change(screen.getByTestId("add-cloud-host-name"), { target: { value: "build" } });
     await create();
     await screen.findByTestId("add-cloud-host-progress");
@@ -1033,7 +1034,7 @@ describe("AddCloudHostDialog showing the tunnel's setup lines (#18181)", () => {
       lastError: { code: "ssh-tunnel-command-missing", message, at: 1 },
     } as unknown as CloudHostStatus;
     cloud.snapshot = { ...cloud.snapshot, hosts: [refused] };
-    view.rerender(dialog);
+    view.rerender(dialog());
     expect(screen.getByText(message)).toBeTruthy();
     expect(screen.getByTestId("tunnel-install-command").textContent).toContain(
       "npm install -g agent37"
@@ -1045,7 +1046,7 @@ describe("AddCloudHostDialog showing the tunnel's setup lines (#18181)", () => {
       ...cloud.snapshot,
       hosts: [{ ...refused, lastError: { code: "refused", message: "No capacity.", at: 2 } }],
     };
-    view.rerender(dialog);
+    view.rerender(dialog());
     expect(screen.getByText("No capacity.")).toBeTruthy();
     expect(screen.queryByTestId("tunnel-setup-commands")).toBeNull();
   });
