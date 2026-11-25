@@ -99,7 +99,7 @@ describe("readClaudeLimitScreen (#18192)", () => {
       RULE,
       FOOTER,
     ];
-    expect(readClaudeLimitScreen(wrapped, 40)).toMatchObject({
+    expect(readClaudeLimitScreen(wrapped, 36)).toMatchObject({
       resetText: "9pm (UTC)",
       cancelled: true,
       last: true,
@@ -110,13 +110,17 @@ describe("readClaudeLimitScreen (#18192)", () => {
     expect(readClaudeLimitScreen(rows({ between: [COUNTDOWN] }), 80)).toMatchObject({
       countdown: true,
     });
-    const wrapped = [
-      "  Usage limit reached · continuing",
-      "  automatically at 10am · esc to cancel",
-    ];
-    expect(readClaudeLimitScreen(rows({ between: wrapped }), 40)).toMatchObject({
-      countdown: true,
-    });
+    for (const [first, second] of [
+      ["  Usage limit reached · continuing", "  automatically at 10am · esc to cancel"],
+      ["  Usage limit reached · continu", "  ing automatically at 10am · esc to cancel"],
+    ]) {
+      expect(readClaudeLimitScreen(rows({ between: [first!, second!] }), 40)).toMatchObject({
+        countdown: true,
+      });
+      expect(readClaudeLimitScreen([...rows({ footer: first }), second!], 40)).toMatchObject({
+        countdown: true,
+      });
+    }
   });
 });
 

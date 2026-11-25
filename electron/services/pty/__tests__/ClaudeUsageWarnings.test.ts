@@ -221,12 +221,17 @@ describe("scanClaudeUsageMessages", () => {
       );
     });
 
-    it("reads a reset wrapped onto the next row with its separator (#18192)", () => {
-      expect(wrapped("  ⎿  You've hit your weekly limit", "     · resets 9pm (UTC)")).toBe(
-        "9pm (UTC)"
-      );
-      // A row under a message that names no reset, and isn't one, adds nothing.
-      expect(wrapped("  ⎿  You've hit your weekly limit", "     · /upgrade for more")).toBeNull();
+    it("reads a reset wrapped onto the next row with its separator, from a row at the edge (#18192)", () => {
+      const banner = "  ⎿  You've hit your weekly limit";
+      const atEdge = (next: string) =>
+        scanClaudeUsageMessages([banner, next], banner.length + 2)[0]?.resetText;
+      expect(atEdge("     · resets 9pm (UTC)")).toBe("9pm (UTC)");
+      // A row under it that isn't a plain reset adds nothing, and hides nothing.
+      expect(atEdge("     · /upgrade for more")).toBeNull();
+      expect(atEdge('     · resets "counter"')).toBeNull();
+      // Short of the edge, nothing wrapped: a bullet under it is its own.
+      expect(wrapped(banner, "     · resets 9pm (UTC)")).toBeNull();
+      expect(wrapped("  ⎿  You've used 87% of your weekly limit", "• resets 9pm (UTC)")).toBeNull();
     });
 
     it("leaves a row that only looks like a zone out of it", () => {

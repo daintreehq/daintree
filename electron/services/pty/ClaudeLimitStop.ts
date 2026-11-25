@@ -36,10 +36,10 @@ export interface LimitStopGuard {
 /** A Claude Code stop Daintree may continue at the reset (#18192). */
 export interface ClaudeLimitStop {
   seq: number;
-  /** The banner, the history above it, and whether Claude's wait was cancelled. */
-  key: string;
-  /** The same without the history, as the reset's check compares it. */
+  /** The banner and whether Claude's wait was cancelled, as the reset's check compares it. */
   bannerKey: string;
+  /** The history above the banner, the most of it any look showed. */
+  context: string;
   incarnation: number;
   observedSince: number | null;
   /** When this stop first showed. */
@@ -60,6 +60,8 @@ export interface ClaudeLimitStop {
 /** One look at the pane, with what the terminal knew at that moment. */
 export interface ClaudeLimitLook {
   now: number;
+  /** A monotonic clock, which orders the look against keys and an arming. */
+  tick: number;
   cols: number | undefined;
   inputSeq: number;
   incarnation: number;
@@ -69,6 +71,7 @@ export interface ClaudeLimitLook {
 }
 
 interface EscapeNote {
+  /** On the monotonic clock. */
   at: number;
   /** Written for an assistant, rather than a person's (or nobody's) key. */
   assistant: boolean;
@@ -92,8 +95,9 @@ interface EscapeNote {
 export class ClaudeLimitStopTracker {
   private stop: ClaudeLimitStop | null = null;
   private escapes: EscapeNote[] = [];
-  /** When a look first showed a live banner, since the last that showed none. */
+  /** When a look first showed a live banner, since the last that showed none (monotonic). */
   private bannerSince: number | null = null;
+  /** When the pane was armed (monotonic). */
   private armedAt: number | null = null;
 
   constructor(private readonly nextSeq: () => number) {}
@@ -102,7 +106,7 @@ export class ClaudeLimitStopTracker {
     return this.stop;
   }
 
-  /** Forget everything: the agent gone or replaced, or the pane torn down. */
+  /** Forget everything: the pane torn down. */
   clear(): void {
     this.stop = null;
     if (this.escapes.length > 0) this.escapes = [];
@@ -111,16 +115,29 @@ export class ClaudeLimitStopTracker {
   }
 
   /**
-   * The pane was armed at `now`. A stop still held from an earlier arming
+   * Claude isn't what the pane shows now (another agent detected, or none).
+   * The stop is kept out of view rather than forgotten: Claude back under the
+   * same run brings it back with what happened since it showed.
+   */
+  hide(): void {
+    this.bannerSince = null;
+    if (this.stop) {
+      this.stop.shown = false;
+      this.stop.ownWait = false;
+    }
+  }
+
+  /**
+   * The pane was armed at `tick`. A stop still held from an earlier arming
    * keeps what happened since it showed, but arming is the ask to continue
    * it, which lifts a verdict that it was a person's.
    */
-  arm(now: number): void {
-    this.armedAt = now;
+  arm(tick: number): void {
+    this.armedAt = tick;
     if (this.stop) this.stop.skipAtStop = null;
   }
 
-  /** A write of input at `at`, as the pty host took it; `owner` names the assistant it was written for. */
+  /** A write of input at monotonic `at`, as the pty host took it; `owner` names the assistant it was written for. */
   noteInput(data: string, owner: string | undefined, at: number): void {
     if (!isEscapeOnly(data)) return;
     this.escapes.push({ at, assistant: owner !== undefined });
@@ -148,7 +165,7 @@ export class ClaudeLimitStopTracker {
       }
       return;
     }
-    this.bannerSince ??= look.now;
+    this.bannerSince ??= look.tick;
     if (screen.countdown) {
       if (held) {
         held.shown = false;
@@ -156,26 +173,28 @@ export class ClaudeLimitStopTracker {
       }
       return;
     }
-    if (
-      held &&
-      !held.ended &&
-      held.key === screen.key &&
+    const same =
+      held !== null &&
+      held.bannerKey === screen.bannerKey &&
       held.incarnation === look.incarnation &&
-      held.observedSince === look.observedSince
-    ) {
+      sameHistory(held.context, screen.context);
+    const context =
+      same && held.context.length > screen.context.length ? held.context : screen.context;
+    if (same && !held.ended && held.observedSince === look.observedSince) {
       held.shown = true;
       held.ownWait = false;
+      held.context = context;
       return;
     }
     // The same stop of the same run seen again keeps its guard: input since
     // it first showed still counts. After a gap in the read it is the stop it
     // was; after a turn ran past it, its sighting and verdict start afresh.
-    const kept = held?.key === screen.key && held.incarnation === look.incarnation ? held : null;
+    const kept = same ? held : null;
     const resumed = kept !== null && !kept.ended;
     this.stop = {
       seq: this.nextSeq(),
-      key: screen.key,
       bannerKey: screen.bannerKey,
+      context,
       incarnation: look.incarnation,
       observedSince: look.observedSince,
       observedAt: resumed ? kept.observedAt : look.now,
@@ -201,6 +220,17 @@ export class ClaudeLimitStopTracker {
     if (escapes.length > 0) return null;
     return armedAt !== null && armedAt >= bannerSince ? null : "auto-continue-cancelled";
   }
+}
+
+/**
+ * Whether two looks show the same history above a banner: one pane cut
+ * shorter than the other shows the end of it. None at all (the banner at the
+ * top of the pane) matches only none.
+ */
+function sameHistory(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (a === "" || b === "") return false;
+  return a.endsWith(b) || b.endsWith(a);
 }
 
 function resetOf(

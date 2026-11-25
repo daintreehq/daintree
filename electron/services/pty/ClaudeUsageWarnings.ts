@@ -161,6 +161,11 @@ function messageStarts(row: string, cols: number | undefined): MessageStart[] {
   return starts;
 }
 
+/** Whether `row` reaches the pane's right edge, where the next word would wrap. */
+function fillsRow(row: string, cols: number | undefined): boolean {
+  return cols !== undefined && row.trimEnd().length >= cols - RIGHT_EDGE_SLACK;
+}
+
 function withoutTrailingBorder(text: string): string {
   let end = text.length;
   while (end > 0 && (BORDER_GLYPHS.has(text[end - 1]!) || text[end - 1]!.trim() === "")) end--;
@@ -208,8 +213,15 @@ function matchRow(
       const percentForm = PERCENT_FORMS.has(form.statement);
       const named = percentForm ? match[2]! : match[1]!;
       const own = segmentsOf(percentForm ? match[3] : match[2]);
-      const wrapped = own.length === 0 && next !== undefined ? WRAPPED_RESET.exec(next) : null;
-      const segments = wrapped === null ? own : segmentsOf(wrapped[1]);
+      // Only a row that ran to the pane's edge can have wrapped, and a row
+      // under it that isn't a plain reset is something else.
+      const wrapped =
+        own.length === 0 && next !== undefined && !start.atGap && fillsRow(row, cols)
+          ? WRAPPED_RESET.exec(next)
+          : null;
+      const carried = wrapped === null ? null : segmentsOf(wrapped[1]);
+      const segments =
+        carried === null || carried.some((segment) => CODE_DELIMITER.test(segment)) ? own : carried;
       if (segments.some((segment) => CODE_DELIMITER.test(segment))) continue;
       const resetIndex = segments.findIndex((segment) => /^resets(?:\s|$)/i.test(segment));
       if (form.needsReset && resetIndex < 0) continue;
@@ -218,7 +230,7 @@ function matchRow(
       let resetText: string | null = null;
       if (resetIndex >= 0) {
         resetText = segments[resetIndex]!.slice("resets".length).trim();
-        if (resetIndex === segments.length - 1 && next !== undefined && wrapped === null) {
+        if (resetIndex === segments.length - 1 && next !== undefined && segments === own) {
           resetText = carriedReset(resetText, next) ?? resetText;
         }
         // Claude truncates a footer warning that doesn't fit with "…"; any

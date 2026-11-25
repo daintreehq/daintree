@@ -37,6 +37,12 @@ function isRule(row: string): boolean {
   return RULE_RUN.test(row) && RULE_ONLY.test(row);
 }
 
+/** Claude's own wait on any of `rows`, read across a wrap at a word or inside one. */
+function showsCountdown(rows: readonly string[]): boolean {
+  const trimmed = rows.map((row) => row.trim());
+  return COUNTDOWN.test(trimmed.join(" ")) || COUNTDOWN.test(trimmed.join(""));
+}
+
 /**
  * A Claude Code pane's screen at a usage limit (#18192): the limit banner
  * last in the transcript, whether Claude's own wait for the reset is on
@@ -48,6 +54,11 @@ export interface ClaudeLimitScreen {
   resetText: string | null;
   /** Names the stop: the banner, the history above it, and whether its wait was cancelled. */
   key: string;
+  /**
+   * The history just above the banner, as text: a pane cut shorter shows
+   * less of it, which ends the same way.
+   */
+  context: string;
   /**
    * The banner and whether its wait was cancelled, without the history: a
    * sample reads the viewport and the reset's check the whole buffer, which
@@ -100,16 +111,15 @@ export function readClaudeLimitScreen(
   const banner = reached(transcript);
   if (banner === undefined) return null;
   const after = transcript.slice(banner.row + 1);
-  const footer = rows.slice(bottom + 1).join(" ");
   const cancelled = after.some((row) => CANCELLED.test(row));
   const context = codexStopContext(transcript, banner.row);
   return {
     window: banner.window,
     resetText: banner.resetText,
     key: JSON.stringify([banner.window, banner.resetText, cancelled, context]),
+    context,
     bannerKey: JSON.stringify([banner.window, banner.resetText, cancelled]),
-    // Joined, so a wait a narrow pane wrapped mid-phrase still reads.
-    countdown: COUNTDOWN.test(footer) || COUNTDOWN.test(after.join(" ")),
+    countdown: showsCountdown(rows.slice(bottom + 1)) || showsCountdown(after),
     cancelled,
     last: after.every((row) => CANCELLED.test(row) || CARRIED.test(row) || TURN_TIMING.test(row)),
   };

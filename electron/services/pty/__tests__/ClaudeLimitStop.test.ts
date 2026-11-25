@@ -47,6 +47,7 @@ function harness() {
     observe(lines: string[], extra: Partial<ClaudeLimitLook> = {}) {
       tracker.observe(lines, {
         now: clock,
+        tick: clock,
         cols: 80,
         inputSeq,
         incarnation: 0,
@@ -209,6 +210,36 @@ describe("ClaudeLimitStopTracker (#18192)", () => {
     expect(again).toMatchObject({ skipAtStop: null, observedAt: NOW, reset: first.reset });
     expect(again.guard).toBe(first.guard);
     expect(again.guard).toEqual({ key: expect.any(String), inputSeq: 1, dialogSeen: true });
+  });
+
+  it("is the same stop in a pane cut shorter, which shows less of the history above it", () => {
+    const h = harness();
+    const tall = [
+      "● Read the lexer and the parser, then traced the failing case to the tokenizer.",
+      "● Refactoring the parser so empty input reaches the tokenizer as one token.",
+      BANNER,
+      RULE,
+      "❯ ",
+      RULE,
+    ];
+    const first = h.observe(tall)!;
+    h.type("\x7f");
+    expect(h.observe(tall.slice(1))).toBe(first);
+    expect(h.observe(tall)).toBe(first);
+    // Other history over the same words is another stop, guarded afresh.
+    const other = h.observe(["● Fixed the lexer.", ...tall.slice(2)])!;
+    expect(other).not.toBe(first);
+    expect(other.guard.inputSeq).toBe(1);
+  });
+
+  it("brings the stop back as it was once Claude is on view again", () => {
+    const h = harness();
+    const first = h.observe(screen())!;
+    h.type("\x7f");
+    h.tracker.hide();
+    expect(first.shown).toBe(false);
+    expect(h.observe(screen())).toBe(first);
+    expect(first).toMatchObject({ shown: true, guard: { inputSeq: 0 } });
   });
 
   it("keeps the guard through a row drawn for a moment under the banner", () => {

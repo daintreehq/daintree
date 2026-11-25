@@ -2494,11 +2494,11 @@ export class TerminalProcess {
     // showed; arming asks for it to be continued, and one already on screen is
     // looked at now rather than when the pane next prints.
     if (armed) {
-      const now = Date.now();
-      this.claudeLimitStop.arm(now);
+      const tick = performance.now();
+      this.claudeLimitStop.arm(tick);
       if (getLiveAgentId(this.terminalInfo) === "claude") {
         const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
-        this.observeClaudeLimitStop(this.analysis.getViewportLines(rows), now);
+        this.observeClaudeLimitStop(this.analysis.getViewportLines(rows), Date.now(), tick);
       }
     }
     this.trackCodexStop();
@@ -2507,7 +2507,7 @@ export class TerminalProcess {
   /** Input as the pty host takes it, kept only for an armed Claude Code pane (#18192). */
   private noteLimitStopInput(data: string, owner: string | undefined): void {
     if (this.codexContinueArmed && getLiveAgentId(this.terminalInfo) === "claude") {
-      this.claudeLimitStop.noteInput(data, owner, Date.now());
+      this.claudeLimitStop.noteInput(data, owner, performance.now());
     }
   }
 
@@ -2515,7 +2515,11 @@ export class TerminalProcess {
    * Follow an armed Claude Code pane's stop (#18192). Nothing here runs for a
    * pane that isn't armed, and leaving Claude, or its run ending, drops it.
    */
-  private observeClaudeLimitStop(lines: readonly string[], now: number): void {
+  private observeClaudeLimitStop(
+    lines: readonly string[],
+    now: number,
+    tick = performance.now()
+  ): void {
     const t = this.terminalInfo;
     const held = this.claudeLimitStop.held();
     if (
@@ -2525,7 +2529,7 @@ export class TerminalProcess {
       !this.lifecycle.isAlive
     ) {
       if (held !== null || this.codexContinueArmed) {
-        this.claudeLimitStop.clear();
+        this.claudeLimitStop.hide();
         if (held !== null) this.trackCodexStop();
       }
       return;
@@ -2535,6 +2539,7 @@ export class TerminalProcess {
     const seen = this.claudeUsageSeen;
     this.claudeLimitStop.observe(lines, {
       now,
+      tick,
       cols: readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined,
       inputSeq: this.inputController.inputSequence,
       incarnation: t.agentIncarnation ?? 0,
