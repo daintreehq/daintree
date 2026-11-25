@@ -1023,8 +1023,8 @@ export function installTerminalBoundListeners(
   const joinSurrogatePairs = createSurrogatePairJoiner();
   const handleInput = (data: string) => {
     if (managed.isInputLocked) {
-      // A history refill holds typing, not the program's own queries (#14220).
-      if (managed.historyRefilling && isTerminalReply(data)) terminalClient.writeReply(id, data);
+      // A lock holds typing, not the program's own queries (#14220, #18185).
+      if (isTerminalReply(data)) terminalClient.writeReply(id, data);
       return;
     }
     if (isHostSwitchPending()) {

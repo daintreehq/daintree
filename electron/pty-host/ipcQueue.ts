@@ -41,6 +41,8 @@ export class IpcQueueManager {
   // Terminals whose cached views were already told they missed output, so a
   // sustained skip sends one notice rather than one per chunk.
   private readonly hiddenSkipNotified = new Set<string>();
+  // Terminals whose latest copy for cached views was skipped rather than sent.
+  private readonly lastHiddenCopySkipped = new Set<string>();
   private totalQueuedBytes = 0;
 
   constructor(private readonly deps: IpcQueueDeps) {}
@@ -59,6 +61,7 @@ export class IpcQueueManager {
   }
 
   addHiddenBytes(id: string, bytes: number): void {
+    this.lastHiddenCopySkipped.delete(id);
     // A terminal whose project was just hidden can still owe acks for primary
     // copies its view took while shown. They come back from that same view,
     // ahead of the hidden ones, so they move to the hidden balance: every ack
@@ -173,9 +176,19 @@ export class IpcQueueManager {
    * those views need telling.
    */
   noteHiddenSkip(id: string): boolean {
+    this.lastHiddenCopySkipped.add(id);
     if (this.hiddenSkipNotified.has(id)) return false;
     this.hiddenSkipNotified.add(id);
     return true;
+  }
+
+  /**
+   * Whether the latest chunk for `id` was skipped for its cached views rather
+   * than sent: they are not parsing its output now, whatever they missed
+   * before and will repaint.
+   */
+  isLastHiddenCopySkipped(id: string): boolean {
+    return this.lastHiddenCopySkipped.has(id);
   }
 
   /**
@@ -345,6 +358,7 @@ export class IpcQueueManager {
     this.pauseStartTimes.delete(id);
     this.hiddenQueuedBytes.delete(id);
     this.hiddenSkipNotified.delete(id);
+    this.lastHiddenCopySkipped.delete(id);
     // A cleared terminal (exit, force-resume) can be the one holding most of
     // the aggregate — sweep so aggregate-paused siblings resume now instead of
     // waiting out their safety timeouts.
@@ -364,6 +378,7 @@ export class IpcQueueManager {
     this.queuedBytes.clear();
     this.hiddenQueuedBytes.clear();
     this.hiddenSkipNotified.clear();
+    this.lastHiddenCopySkipped.clear();
     this.totalQueuedBytes = 0;
   }
 }

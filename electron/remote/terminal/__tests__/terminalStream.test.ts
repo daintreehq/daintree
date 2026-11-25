@@ -242,6 +242,26 @@ describe("terminal stream over the link", () => {
     ]);
   });
 
+  it("tells the pty-host whether its client is reading the stream (#18185)", async () => {
+    const h = await setup();
+    await waitFor(() => h.pty().presence.length === 1);
+    expect(h.pty().presence).toEqual([false]);
+
+    await h.connectLink();
+    await waitFor(() => h.pty().presence.length === 2);
+    expect(h.pty().presence).toEqual([false, true]);
+
+    await h.dropLink();
+    await waitFor(() => h.pty().presence.length === 3);
+    expect(h.pty().presence).toEqual([false, true, false]);
+
+    // A replacement connection hears where the client is from its first message.
+    await h.connectLink();
+    h.bridge.reconnect();
+    await waitFor(() => h.pty().presence.length === 1);
+    expect(h.pty().presence).toEqual([true]);
+  });
+
   it("drops input and resizes while this endpoint does not drive, and stamps its lease when it does", async () => {
     // Asked as each message is applied, so answer per message, in order.
     const answers: Array<number | null | false> = [false, false, 7, 7, null];

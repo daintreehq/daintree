@@ -1217,8 +1217,8 @@ export const createRestartActions = (
       const terminalService = peekTerminalService() ?? (await loadTerminalService());
       await terminalService.waitForInstance(id, { timeoutMs: 5000 });
 
-      // Re-apply the input lock on the freshly created xterm instance:
-      // xterm 6.0 does not inherit `disableStdin` across instance recreation.
+      // Re-apply the input lock on the freshly created instance: the lock
+      // lives on the instance, which the teardown above replaced.
       peekTerminalService()?.setInputLocked(id, true);
 
       // Read at spawn time, not from the panel captured before the kill: a

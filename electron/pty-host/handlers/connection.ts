@@ -262,6 +262,12 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
               console.error(`[PtyHost] Failed to serialize terminal ${id} for a fence:`, error);
               answer(null);
             });
+          } else if (portMsg.type === "client-presence" && typeof portMsg.present === "boolean") {
+            // Only a remote endpoint's bridge knows whether its client reads.
+            const current = rendererConnections.get(windowId);
+            if (windowId < 0 && current?.port === receivedPort) {
+              current.clientAway = !portMsg.present;
+            }
           } else if (
             portMsg.type === "worker-ingest-release" &&
             typeof portMsg.id === "string" &&
@@ -309,6 +315,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
         portQueueManager: perWindowQueueManager,
         batcher: perWindowBatcher,
         holderWebContentsId,
+        clientAway: windowId < 0,
       });
       console.log(`[PtyHost] MessagePort listener installed for window ${windowId}`);
     },

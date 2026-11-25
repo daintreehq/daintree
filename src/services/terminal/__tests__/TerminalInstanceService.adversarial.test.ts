@@ -69,6 +69,7 @@ type AdversarialService = {
   instances: Map<string, ManagedTerminal>;
   maybeReflowTerminal: (managed: ManagedTerminal) => void;
   writeToTerminal: (id: string, data: string | Uint8Array) => void;
+  setInputLocked: (id: string, locked: boolean) => void;
   attach: (id: string, container: HTMLElement) => ManagedTerminal | null;
   destroy: (id: string) => void;
   dispose: () => void;
@@ -367,5 +368,19 @@ describe("TerminalInstanceService adversarial", () => {
     expect(testState.clientMocks.acknowledgeData).toHaveBeenCalledWith("t1", 3);
     expect(notifyWriteCompleteSpy).toHaveBeenCalledTimes(1);
     expect(notifyWriteCompleteSpy).toHaveBeenCalledWith("t1", 3);
+  });
+
+  it("USER_LOCK_HOLDS_TYPING_WITHOUT_XTERMS_STDIN_GATE (#18185)", () => {
+    // xterm's stdin gate swallows the replies a program's queries need, and
+    // while this view parses the terminal nothing else answers them.
+    const managed = makeManaged();
+    service.instances.set("t1", managed);
+
+    service.setInputLocked("t1", true);
+    expect(managed.isInputLocked).toBe(true);
+    expect(managed.terminal.options.disableStdin).not.toBe(true);
+
+    service.setInputLocked("t1", false);
+    expect(managed.isInputLocked).toBe(false);
   });
 });

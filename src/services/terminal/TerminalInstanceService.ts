@@ -3984,12 +3984,12 @@ class TerminalInstanceService {
     this.applyInputLock(managed);
   }
 
-  // Every input route checks `isInputLocked`, so a history refill holds typing
-  // through it. Only the user's lock reaches xterm's stdin gate: that gate
-  // also swallows the replies a program's queries need while it replays.
+  // Every input route checks `isInputLocked`, so a lock holds typing through
+  // it, never through xterm's stdin gate: that gate also swallows the replies
+  // a program's queries need, and while a view parses the terminal the host
+  // leaves those replies to it (#18185).
   private applyInputLock(managed: ManagedTerminal): void {
     managed.isInputLocked = managed.inputLockedByUser === true || managed.historyRefilling === true;
-    managed.terminal.options.disableStdin = managed.inputLockedByUser === true;
   }
 
   /**

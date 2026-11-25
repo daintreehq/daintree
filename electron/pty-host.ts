@@ -73,6 +73,7 @@ import {
 } from "./pty-host/handlers/index.js";
 import { PluginPtyProcessManager } from "./pty-host/services/PluginPtyProcessManager.js";
 import { createVisualOutputRouter } from "./pty-host/visualOutputRouter.js";
+import { createAnsweringViewProbe } from "./pty-host/answeringView.js";
 import {
   beginWindowsExitBatch,
   flushWindowsExitBatch,
@@ -794,6 +795,20 @@ const visualOutputRouter = createVisualOutputRouter({
   sendEvent,
   metricsEnabled,
 });
+
+ptyManager.setAnsweringViewProbe(
+  createAnsweringViewProbe({
+    getTerminal: (id) => ptyManager.getTerminal(id),
+    rendererConnections,
+    terminalWorkerConnections,
+    windowProjectMap,
+    fallbackEligibleProjects,
+    frozenViewProjects,
+    mayDriveFrom: (id, connectionId) => ptyManager.mayDriveFrom(id, connectionId),
+    mayDriveLocally: (id) => ptyManager.mayDriveLocally(id),
+    isHiddenCopySkipped: (id) => ipcQueueManager.isLastHiddenCopySkipped(id),
+  })
+);
 
 const resourceGovernor = new ResourceGovernor({
   getTerminalIds: () => ptyManager.getAll().map((t) => t.id),

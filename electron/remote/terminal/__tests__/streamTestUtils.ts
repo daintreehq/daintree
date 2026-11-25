@@ -26,8 +26,10 @@ export class FakePeer {
   private readonly channel = new MessageChannel();
   private closed = false;
 
-  constructor() {
-    this.channel.port2.on("message", (message: Recorded) => this.received.push(message));
+  constructor(record: (message: Recorded) => boolean = () => true) {
+    this.channel.port2.on("message", (message: Recorded) => {
+      if (record(message)) this.received.push(message);
+    });
   }
 
   /** Also react to what the code under test posts. */
@@ -78,11 +80,19 @@ export class FakePtyHost extends FakePeer {
   /** Stamp each chunk with its end offset in the terminal's stream, as the real pty-host does. */
   stampStreams = false;
   private readonly streamOffsets = new Map<string, number>();
+  /**
+   * Every `client-presence` the bridge posted, in order. Presence is the
+   * connection's state rather than traffic, so it stays out of `received`.
+   */
+  readonly presence: boolean[] = [];
 
   constructor(
     private readonly snapshotFor: (id: string) => SerializedTerminalSnapshot | null = () => null
   ) {
-    super();
+    super((message) => message.type !== "client-presence");
+    this.onReceive((message) => {
+      if (message.type === "client-presence") this.presence.push(message.present as boolean);
+    });
     this.onReceive((message) => {
       if (message.type !== "serialize-fence") return;
       const fence = { id: message.id as string, requestId: message.requestId as number };
