@@ -49,6 +49,8 @@ interface GhAnswer {
   spawnError?: NodeJS.ErrnoException;
   /** Starts with no pipes, like a spawn that ran out of file descriptors. */
   noPipes?: boolean;
+  /** Every kill fails, the way Node reports EPERM: an `error` emitted in the call. */
+  killFails?: boolean;
 }
 
 interface SpawnRecord {
@@ -97,6 +99,10 @@ beforeEach(() => {
       };
       child.kill = (signal = "SIGTERM") => {
         record.kills.push(signal);
+        if (answer.killFails) {
+          child.emit("error", Object.assign(new Error("kill EPERM"), { code: "EPERM" }));
+          return false;
+        }
         if (answer.ignoreTerm && signal !== "SIGKILL") return true;
         queueMicrotask(() => exit(null, signal));
         return true;
@@ -179,7 +185,13 @@ describe("parseGhAuthStatusJson", () => {
   });
 
   it("never shows a login that isn't one, or is shaped like a token", () => {
-    for (const login of ["not a login", "a".repeat(101), TOKEN, "github_pat_11ABCDEF"]) {
+    for (const login of [
+      "not a login",
+      "a".repeat(101),
+      TOKEN,
+      "github_pat_11ABCDEF",
+      "0123456789abcdef0123456789abcdef01234567",
+    ]) {
       const out = hostsJson("github.com", [{ active: true, login }]);
       expect(parseGhAuthStatusJson(out, "github.com")).toEqual({
         ok: true,
@@ -188,6 +200,16 @@ describe("parseGhAuthStatusJson", () => {
         accounts: [],
       });
     }
+  });
+
+  it("keeps the account list to what a confirmation can carry back", () => {
+    const entries = Array.from({ length: 60 }, (_, index) => ({
+      active: index === 0,
+      login: `user-${index}`,
+    }));
+    const parsed = parseGhAuthStatusJson(hostsJson("github.com", entries), "github.com");
+    expect(parsed).toMatchObject({ account: "user-0" });
+    expect(parsed && parsed.ok && parsed.signedIn ? parsed.accounts : []).toHaveLength(50);
   });
 
   it("returns null for a host listed with entries it can't read", () => {
@@ -483,6 +505,17 @@ describe("signInGhWithToken", () => {
       ok: false,
       reason: "cli-failed",
     });
+  });
+
+  it("survives a kill that fails, trying it once", async () => {
+    vi.useFakeTimers();
+    ghAnswers({ hang: true, killFails: true });
+
+    const pending = signInGhWithToken(TOKEN, "github.com");
+    await vi.advanceTimersByTimeAsync(GH_LOGIN_TIMEOUT_MS);
+
+    await expect(pending).resolves.toEqual({ ok: false, reason: "cli-timeout" });
+    expect(spawned[0]!.kills).toEqual(["SIGTERM"]);
   });
 
   it("stops a login that doesn't finish, and kills it outright if it lingers", async () => {

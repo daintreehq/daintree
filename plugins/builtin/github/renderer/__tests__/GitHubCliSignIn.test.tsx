@@ -338,6 +338,20 @@ describe("gh sign-in from the github.com token save", () => {
     expect((option() as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("still shows a sign-in already handed to gh when a later save goes ahead unticked", async () => {
+    const signIn = deferred<unknown>();
+    ghSignIn = [signIn.promise];
+    renderTab();
+    saveToken(true);
+    await waitFor(() => expect(signInCalls()).toHaveLength(1));
+
+    saveToken(false);
+    await waitFor(() => expect(setCredential).toHaveBeenCalledTimes(2));
+    signIn.resolve({ ok: true, gitConfigured: true });
+
+    await screen.findByText(FRESH);
+  });
+
   it("drops gh work in flight when the token is cleared", async () => {
     const status = deferred<unknown>();
     ghStatus = status.promise;

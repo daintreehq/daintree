@@ -111,6 +111,7 @@ function spawnGh(
     }
     let child: ChildProcess | undefined;
     let settled = false;
+    let stopped = false;
     let stdout = "";
     let stderr = "";
 
@@ -124,7 +125,9 @@ function spawnGh(
     const stop = (reason: GhCliFailureReason) => {
       finish({ ok: false, reason });
       const target = child;
-      if (!target) return;
+      // Once only: a kill that fails emits `error`, which lands back here.
+      if (!target || stopped) return;
+      stopped = true;
       target.stdin?.destroy();
       target.stdout?.destroy();
       target.stderr?.destroy();
@@ -149,7 +152,7 @@ function spawnGh(
     // Before any pipe is touched: a spawn that fails (ENOENT, EMFILE) reports
     // it on the next tick, possibly with no pipes at all, and an unheard
     // `error` would take the process down.
-    child.once("error", (error) => stop(classifySpawnError(error)));
+    child.on("error", (error) => stop(classifySpawnError(error)));
     const { stdin, stdout: out, stderr: err } = child;
     if (!stdin || !out || !err) {
       stop("cli-failed");
@@ -171,8 +174,11 @@ function spawnGh(
 }
 
 const LOGIN_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/;
-// A token in a login field is never an account to show.
-const TOKEN_SHAPE = /^(?:gh[opsur]_|github_pat_)/i;
+// A token in a login field is never an account to show: the prefixed kinds,
+// and the older 40-hex ones.
+const TOKEN_SHAPE = /^(?:gh[opsur]_|github_pat_)|^[0-9a-f]{40}$/i;
+// What the commit request accepts back; more than that is never a real list.
+const MAX_ACCOUNTS = 50;
 
 function asLogin(value: unknown): string | null {
   return typeof value === "string" && LOGIN_SHAPE.test(value) && !TOKEN_SHAPE.test(value)
@@ -186,7 +192,11 @@ function observation(
   if (accounts.length === 0) return { signedIn: false };
   const chosen = accounts.find((entry) => entry.active === true) ?? accounts[0]!;
   const named = accounts.map((entry) => entry.login).filter((login) => login !== null);
-  return { signedIn: true, account: chosen.login, accounts: [...new Set(named)] };
+  return {
+    signedIn: true,
+    account: chosen.login,
+    accounts: [...new Set(named)].slice(0, MAX_ACCOUNTS),
+  };
 }
 
 /**
@@ -410,7 +420,7 @@ const ObservationSchema = z.union([
   z.object({
     signedIn: z.literal(true),
     account: z.string().max(100).nullable(),
-    accounts: z.array(z.string().max(100)).max(50),
+    accounts: z.array(z.string().max(100)).max(MAX_ACCOUNTS),
   }),
 ]);
 const SignInArgsSchema = z.object({

@@ -208,8 +208,13 @@ export function useGhCliSignIn(host: string | null, machine: string) {
      * whatever an earlier one started. Null when the option is off.
      */
     async capture(token: string): Promise<GhSignInTicket | null> {
+      if (!checked || !host) {
+        // A sign-in already handed to gh finishes there either way, so its
+        // result still shows.
+        if (phase !== "signing-in") supersede();
+        return null;
+      }
       supersede();
-      if (!checked || !host) return null;
       const attempt = generation.current.value;
       try {
         return { generation: attempt, host, tokenDigest: await digestToken(token) };
