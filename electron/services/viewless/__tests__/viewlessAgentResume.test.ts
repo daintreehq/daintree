@@ -1174,8 +1174,7 @@ describe("resumeAgentSessionAsPane on what the session launched on (#18191)", ()
     made.deps.agents.getCcrPresets = async () => [
       { id: "ccr-team", name: "Team route", env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:3456" } },
     ];
-    made.deps.agents.getProjectPresets = async () =>
-      repository.length > 0 ? { claude: repository as never } : {};
+    made.deps.agents.getProjectPresets = async () => ({ claude: repository });
 
     await expect(
       resumeAgentSessionAsPane(REQUEST, made.deps, makeRuntime())
