@@ -43,7 +43,7 @@ export async function connectLink(params: {
   clientName: string;
   /** One install across its connections: it takes back the lease it left. */
   deviceId: string;
-  setup?: HostSetupService;
+  setup?: Pick<HostSetupService, "ensureHostRunning">;
 }): Promise<{
   link: LinkClient;
   session: LinkSession;

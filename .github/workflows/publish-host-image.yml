@@ -26,13 +26,19 @@ permissions:
   contents: read
 
 concurrency:
-  # Every write to the package goes through one run at a time.
-  group: publish-host-image
+  # One run at a time per tag, so a version's check and push can't interleave
+  # with another run's. Per tag rather than one group: a group keeps a single
+  # pending run, and a newer one would cancel a release waiting its turn.
+  group: publish-host-image-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   NODE_VERSION: "22"
   IMAGE_REPOSITORY: daintreehq/daintree-host
+  # onnxruntime-node's install fetches the GPU runtime from nuget.org, which the
+  # runners can't reliably reach; the CPU runtime ships in its npm tarball.
+  # scripts/host-install-e2e.mjs hands it on to the install it packages in.
+  ONNXRUNTIME_NODE_INSTALL: "skip"
 
 jobs:
   smoke:
@@ -127,7 +133,9 @@ jobs:
         with:
           name: host-image
           path: ${{ runner.temp }}/host-image.tar.gz
-          retention-days: 7
+          # As long as a failed publish job can be re-run, which finds this
+          # image already pushed and records it rather than rebuilding.
+          retention-days: 30
           if-no-files-found: error
 
   publish:
@@ -211,7 +219,7 @@ jobs:
           if node scripts/ci/host-image-registry.mjs anonymous "$IMAGE_REPOSITORY" "$DIGEST"; then
             echo "Anyone can pull ghcr.io/${IMAGE_REPOSITORY}@${DIGEST}"
           else
-            echo "::warning::ghcr.io/${IMAGE_REPOSITORY} isn't public yet, so providers can't pull it: make the package public in its settings"
+            echo "::warning::Couldn't pull ghcr.io/${IMAGE_REPOSITORY}@${DIGEST} without credentials (the reason is above). A new package is private: make it public in its settings so providers can pull it"
           fi
 
       - name: Record the reference

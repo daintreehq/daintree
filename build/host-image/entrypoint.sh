@@ -27,8 +27,10 @@ read_input() {
     [ -n "$value" ] || fail "$name is set but empty"
   else
     if [ -n "$file_given" ]; then
-      [ -r "$file" ] || fail "${name}_FILE names ${file:-nothing}, which can't be read"
-    elif [ -f "$default" ]; then
+      [ -f "$file" ] && [ -r "$file" ] || fail "${name}_FILE names ${file:-nothing}, which isn't a file it can read"
+    elif [ -e "$default" ] || [ -L "$default" ]; then
+      # A secret mounted wrong stops the start rather than reading as no secret.
+      [ -f "$default" ] && [ -r "$default" ] || fail "$default isn't a file it can read"
       file=$default
     else
       return 0
@@ -41,21 +43,38 @@ read_input() {
 
 # Writes `value` to `out` as given when `check` accepts that, else base64-decoded
 # when `check` accepts that, for environments that can't carry the lines a key
-# spans. Fails when it's neither.
+# spans. Fails when it's neither. Called where `set -e` doesn't hold, so every
+# step says how it went.
 write_checked() {
   value=$1
   out=$2
   shift 2
-  printf '%s\n' "$value" > "$out"
+  printf '%s\n' "$value" > "$out" || return 1
   "$@" "$out" > /dev/null 2>&1 && return 0
   decoded=$(printf '%s' "$value" | base64 -d 2>/dev/null) || return 1
-  printf '%s\n' "$decoded" > "$out"
+  printf '%s\n' "$decoded" > "$out" || return 1
   "$@" "$out" > /dev/null 2>&1
 }
 
-# Public keys only: ssh-keygen -l reads a private key too, and the login can read this file.
+# Public keys only, each line one on its own: ssh-keygen -l reads a private key
+# too, and passes a file when any one line is a key, and the login can read this
+# file. Blank lines and comments are allowed; at least one key is required.
 public_keys() {
-  ! grep -q "PRIVATE KEY" "$1" && ssh-keygen -l -f "$1"
+  found=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in
+      "" | "#"*) continue ;;
+      *"PRIVATE KEY"*) return 1 ;;
+    esac
+    printf '%s\n' "$line" > "$1.line" || return 1
+    if ! ssh-keygen -l -f "$1.line" > /dev/null 2>&1; then
+      rm -f "$1.line"
+      return 1
+    fi
+    found=yes
+  done < "$1"
+  rm -f "$1.line"
+  [ -n "$found" ]
 }
 
 umask 077
@@ -65,8 +84,10 @@ chmod 755 "$dir"
 
 keys=$(read_input DAINTREE_AUTHORIZED_KEYS "$secrets/daintree_authorized_keys")
 [ -n "$keys" ] || fail "no authorized key: set DAINTREE_AUTHORIZED_KEYS or mount $secrets/daintree_authorized_keys"
-write_checked "$keys" "$authorized_keys.new" public_keys \
-  || fail "DAINTREE_AUTHORIZED_KEYS holds no public key sshd can read, as given or base64-decoded"
+if ! write_checked "$keys" "$authorized_keys.new" public_keys; then
+  rm -f "$authorized_keys.new"
+  fail "DAINTREE_AUTHORIZED_KEYS isn't public keys sshd can read, one per line, as given or base64-decoded"
+fi
 chmod 644 "$authorized_keys.new"
 mv -f "$authorized_keys.new" "$authorized_keys"
 
@@ -74,8 +95,10 @@ provided=$(read_input DAINTREE_SSH_HOST_KEY "$secrets/daintree_ssh_host_key")
 if [ -n "$provided" ]; then
   # A bad key stops the start even with a good one from an earlier start on disk:
   # a client pinning the key it gave would only be turned away later.
-  write_checked "$provided" "$host_key.new" ssh-keygen -y -P "" -f \
-    || fail "DAINTREE_SSH_HOST_KEY isn't an unencrypted private key sshd can read, as given or base64-decoded"
+  if ! write_checked "$provided" "$host_key.new" ssh-keygen -y -P "" -f; then
+    rm -f "$host_key.new"
+    fail "DAINTREE_SSH_HOST_KEY isn't an unencrypted private key sshd can read, as given or base64-decoded"
+  fi
   ssh-keygen -y -P "" -f "$host_key.new" > "$host_key.pub.new"
   mv -f "$host_key.new" "$host_key"
   mv -f "$host_key.pub.new" "$host_key.pub"

@@ -87,6 +87,10 @@ function packageCurrentCommit() {
         `DAINTREE_BUILD_COMMIT=${commit}`,
         "--env",
         "NODE_OPTIONS=--max-old-space-size=6144",
+        // CI skips onnxruntime-node's GPU download; the install in here does as its caller does.
+        ...(process.env.ONNXRUNTIME_NODE_INSTALL
+          ? ["--env", `ONNXRUNTIME_NODE_INSTALL=${process.env.ONNXRUNTIME_NODE_INSTALL}`]
+          : []),
         `node:${nodeVersion}-bookworm`,
         "timeout",
         "--signal=KILL",

@@ -84,6 +84,42 @@ async function volume(files: Record<string, string>): Promise<string> {
   return name;
 }
 
+/** Starts every machine and settles every start, so none outlives teardown unrecorded. */
+async function startAll(
+  all: Array<ImageInputs & { userKey: string; hostPublicKey?: string }>
+): Promise<ImageHost[]> {
+  const settled = await Promise.allSettled(all.map((inputs) => start(inputs)));
+  const failed = settled.find((result) => result.status === "rejected");
+  if (failed) throw failed.reason;
+  return settled.map((result) => (result as PromiseFulfilledResult<ImageHost>).value);
+}
+
+/** `type base64` of a public key line, as `offeredKeys` lists one. */
+const keyOf = (publicKey: string) => publicKey.trim().split(/\s+/).slice(0, 2).join(" ");
+
+/** A line from the middle of a key's body: what would show up wherever the key leaked. */
+function needle(key: string): string {
+  const lines = key.trim().split("\n");
+  // A public key's blob, or a line of a private key's armored body.
+  if (lines.length === 1) return lines[0]!.split(/\s+/)[1]!.slice(0, 40);
+  return lines[Math.floor(lines.length / 2)]!.trim().slice(0, 40);
+}
+
+/** As `ssh-keygen -l` prints a key's fingerprint. */
+const fingerprintOf = (publicKey: string) =>
+  `SHA256:${crypto
+    .createHash("sha256")
+    .update(Buffer.from(publicKey.trim().split(/\s+/)[1]!, "base64"))
+    .digest("base64")
+    .replace(/=+$/, "")}`;
+
+/** What a login through the harness's route prints, as the login. */
+async function inSession(host: ImageHost, script: string): Promise<string> {
+  const result = await host.runCommand("ssh", [host.target, script], { timeoutMs: 30_000 });
+  expect(result.code, result.stderr).toBe(0);
+  return result.stdout.trim();
+}
+
 /** known_hosts holding `publicKey` under the name the harness pins it by. */
 async function pinning(publicKey: string): Promise<string> {
   const file = path.join(root, `known_hosts-${crypto.randomBytes(4).toString("hex")}`);
@@ -140,10 +176,13 @@ describe.skipIf(!ENABLED)(
     }, SETUP_TIMEOUT_MS);
 
     afterAll(async () => {
-      await Promise.all(hosts.map((host) => host.dispose()));
-      await removeVolumes(volumes);
-      if ((await remainingContainers()).length === 0) disarmWatchdog();
+      // Every cleanup is tried, whatever fails before it; the watchdog stays
+      // armed for anything left.
+      await Promise.allSettled(hosts.map((host) => host.dispose()));
+      await removeVolumes(volumes).catch((err: unknown) => report(String(err)));
       if (root) await fs.rm(root, { recursive: true, force: true });
+      const left = await Promise.all([remainingContainers(), remainingVolumes()]);
+      if (left.every((ids) => ids.length === 0)) disarmWatchdog();
     }, TEST_TIMEOUT_MS);
 
     it(
@@ -157,18 +196,44 @@ describe.skipIf(!ENABLED)(
         expect(keygen.code).toBe(0);
         const encryptedWithPassphrase = await fs.readFile(encrypted, "utf8");
 
-        const cases: Array<[string, Record<string, string>, RegExp]> = [
-          ["nothing", {}, /no authorized key/],
-          ["an empty key", { DAINTREE_AUTHORIZED_KEYS: "" }, /set but empty/],
+        const badAuthorized =
+          "daintree-host: DAINTREE_AUTHORIZED_KEYS isn't public keys sshd can read, one per line, as given or base64-decoded";
+        const badHostKey =
+          "daintree-host: DAINTREE_SSH_HOST_KEY isn't an unencrypted private key sshd can read, as given or base64-decoded";
+        const cases: Array<[string, Record<string, string>, string]> = [
+          [
+            "nothing",
+            {},
+            "daintree-host: no authorized key: set DAINTREE_AUTHORIZED_KEYS or mount /run/secrets/daintree_authorized_keys",
+          ],
+          [
+            "an empty key",
+            { DAINTREE_AUTHORIZED_KEYS: "" },
+            "daintree-host: DAINTREE_AUTHORIZED_KEYS is set but empty",
+          ],
           [
             "a key file that isn't there",
             { DAINTREE_AUTHORIZED_KEYS_FILE: "/run/secrets/missing" },
-            /can't be read/,
+            "daintree-host: DAINTREE_AUTHORIZED_KEYS_FILE names /run/secrets/missing, which isn't a file it can read",
           ],
           [
-            "a private key to authorize",
-            { DAINTREE_AUTHORIZED_KEYS: privateLogin },
-            /no public key sshd can read/,
+            "a key file that's a directory",
+            { DAINTREE_AUTHORIZED_KEYS: login.publicKey, DAINTREE_SSH_HOST_KEY_FILE: "/etc" },
+            "daintree-host: DAINTREE_SSH_HOST_KEY_FILE names /etc, which isn't a file it can read",
+          ],
+          ["a private key to authorize", { DAINTREE_AUTHORIZED_KEYS: privateLogin }, badAuthorized],
+          [
+            "a private key to authorize, base64-encoded",
+            { DAINTREE_AUTHORIZED_KEYS: Buffer.from(privateLogin).toString("base64") },
+            badAuthorized,
+          ],
+          [
+            // ssh-keygen -l alone passes a file when any one line is a key.
+            "a public key followed by the lines of a private one",
+            {
+              DAINTREE_AUTHORIZED_KEYS: `${login.publicKey}\n${privateLogin.split("\n").slice(1, -2).join("\n")}`,
+            },
+            badAuthorized,
           ],
           [
             "an encrypted host key",
@@ -176,21 +241,31 @@ describe.skipIf(!ENABLED)(
               DAINTREE_AUTHORIZED_KEYS: login.publicKey,
               DAINTREE_SSH_HOST_KEY: encryptedWithPassphrase,
             },
-            /isn't an unencrypted private key/,
+            badHostKey,
           ],
           [
             "a host key that isn't one",
             { DAINTREE_AUTHORIZED_KEYS: login.publicKey, DAINTREE_SSH_HOST_KEY: "not a key" },
-            /isn't an unencrypted private key/,
+            badHostKey,
           ],
         ];
+        const secrets = [privateLogin, encryptedWithPassphrase];
         for (const [label, env, refusal] of cases) {
           const attempt = startImageHost(image, { env, userKey: login.file });
-          await expect(attempt, label).rejects.toThrow(/stopped \(exit [1-9]/);
-          const message = await attempt.catch((err: Error) => err.message);
-          expect(message, label).toMatch(refusal);
-          // What it says about a key never includes the key.
-          expect(message, label).not.toContain("PRIVATE KEY-----\n");
+          const message = await attempt.then(
+            () => "started",
+            (err: Error) => err.message
+          );
+          expect(message, label).toMatch(/^The container stopped \(exit 1\): /);
+          const printed = message.replace(/^The container stopped \(exit 1\): /, "");
+          expect(printed.trim().split("\n"), label).toEqual([refusal]);
+          // What it says about a key never includes the key, in any form.
+          for (const secret of secrets) {
+            expect(message, label).not.toContain(needle(secret));
+            expect(message, label).not.toContain(
+              Buffer.from(secret).toString("base64").slice(0, 40)
+            );
+          }
         }
       },
       TEST_TIMEOUT_MS
@@ -226,12 +301,16 @@ describe.skipIf(!ENABLED)(
             /REMOTE HOST IDENTIFICATION HAS CHANGED|verification failed/
           );
 
+          // The listener offers that key and no other.
+          expect(await host.offeredKeys()).toEqual([keyOf(hostKey.publicKey)]);
+
+          // Turned away with public keys the only method offered: no password to try.
           const asRoot = await host.login({ ...pinned, user: "root" });
           expect(asRoot.code).not.toBe(0);
-          expect(asRoot.stderr).toMatch(/Permission denied/);
+          expect(asRoot.stderr).toMatch(/Permission denied \(publickey\)\./);
           const otherKeyLogin = await host.login({ ...pinned, identity: stranger.file });
           expect(otherKeyLogin.code).not.toBe(0);
-          expect(otherKeyLogin.stderr).toMatch(/Permission denied/);
+          expect(otherKeyLogin.stderr).toMatch(/Permission denied \(publickey\)\./);
 
           const settings = await effectiveConfig(host);
           expect(settings.get("hostkey")).toEqual([HOST_KEY]);
@@ -242,21 +321,33 @@ describe.skipIf(!ENABLED)(
           expect(settings.get("authenticationmethods")).toEqual(["publickey"]);
           expect(settings.get("allowusers")).toEqual([IMAGE_USER]);
 
-          expect(await host.shell("id -un; id -u")).toBe(`${IMAGE_USER}\n1500`);
-          expect(await host.shell(`cat ${HOST_KEY} 2>&1 || true`)).toMatch(/Permission denied/);
-          // Nothing past the entrypoint was handed the keys: not tini, not sshd, not a
-          // login. (`docker exec` is, from the container's settings, so it can't look.)
+          expect(await inSession(host, 'id -un; id -u; id -g; echo "$SHELL"')).toBe(
+            `${IMAGE_USER}\n1500\n1500\n/bin/bash`
+          );
+          expect(await inSession(host, `cat ${HOST_KEY} 2>&1 || true`)).toMatch(
+            /Permission denied/
+          );
           expect(
             await host.rootShell(
-              "for p in 1 $(pgrep -x sshd); do tr '\\0' '\\n' < /proc/$p/environ; done | grep -c '^DAINTREE_' || true"
+              `stat -c '%U %a %n' /etc/ssh/daintree ${HOST_KEY} /etc/ssh/daintree/authorized_keys`
+            )
+          ).toBe(
+            [
+              "root 755 /etc/ssh/daintree",
+              `root 600 ${HOST_KEY}`,
+              "root 644 /etc/ssh/daintree/authorized_keys",
+            ].join("\n")
+          );
+          // Nothing past the entrypoint was handed the keys, under any name: not tini,
+          // not the sshd listener, not a login. (`docker exec` is, from the
+          // container's settings, so it reads them and searches nothing of its own.)
+          const search = `-e '${needle(hostKey.privateKey)}' -e '${needle(login.publicKey)}'`;
+          expect(
+            await host.rootShell(
+              `set -e; l=$(pgrep -o -x sshd); for p in 1 "$l"; do tr '\\0' '\\n' < /proc/$p/environ > /tmp/environ.$p; done; cat /tmp/environ.* | grep -cF ${search} || true`
             )
           ).toBe("0");
-          const session = await host.runCommand(
-            "ssh",
-            [host.target, "env | grep -c '^DAINTREE_' || true"],
-            { timeoutMs: 30_000 }
-          );
-          expect(session).toMatchObject({ code: 0, stdout: "0\n" });
+          expect(await inSession(host, `env | grep -cF ${search} || true`)).toBe("0");
         });
       },
       TEST_TIMEOUT_MS
@@ -267,42 +358,53 @@ describe.skipIf(!ENABLED)(
       async () => {
         const first = await userKey("secret-first");
         const second = await userKey("secret-second");
-        const hostKey = await makeHostKey(root, "secret-host");
-        // One secret base64-encoded, as a store that keeps one line per value would hold it.
+        const third = await userKey("secret-third");
+        // A PEM key, named by _FILE, base64-encoded as a store keeping one line per value holds it.
+        const hostKey = await makeHostKey(root, "secret-host", "ecdsa-pem");
         const secrets = await volume({
           daintree_authorized_keys: `${first.publicKey}\n`,
-          daintree_ssh_host_key: Buffer.from(hostKey.privateKey).toString("base64"),
+          host_key_pem: Buffer.from(hostKey.privateKey).toString("base64"),
         });
         const host = await start({
           secrets,
+          env: { DAINTREE_SSH_HOST_KEY_FILE: "/run/secrets/host_key_pem" },
           userKey: first.file,
           hostPublicKey: hostKey.publicKey,
         });
         await withDiagnostics(host, async () => {
-          expect(await host.shell("cat /run/secrets/daintree_ssh_host_key 2>&1 || true")).toMatch(
+          expect(await host.offeredKeys()).toEqual([keyOf(hostKey.publicKey)]);
+          expect(await inSession(host, "cat /run/secrets/host_key_pem 2>&1 || true")).toMatch(
             /Permission denied/
           );
 
+          // Two keys now, with a comment and a blank line between them, and the first gone.
           await writeSecrets(image, secrets, {
-            daintree_authorized_keys: `${second.publicKey}\n`,
-            daintree_ssh_host_key: hostKey.privateKey,
+            daintree_authorized_keys: `# rotated\n${second.publicKey}\n\n${third.publicKey}\n`,
+            host_key_pem: hostKey.privateKey,
           });
           // Held to the same host key throughout, by the route's pin.
           await host.restart(second.file);
           const pinned = { knownHosts: host.knownHosts };
-          expect(await host.login({ ...pinned, identity: second.file })).toMatchObject({
-            code: 0,
-          });
+          for (const now of [second, third]) {
+            expect(await host.login({ ...pinned, identity: now.file })).toMatchObject({ code: 0 });
+          }
           const replaced = await host.login({ ...pinned, identity: first.file });
           expect(replaced.code).not.toBe(0);
-          expect(replaced.stderr).toMatch(/Permission denied/);
+          expect(replaced.stderr).toMatch(/Permission denied \(publickey\)\./);
 
           // A bad key given now isn't covered for by the good one on disk from before.
           await writeSecrets(image, secrets, {
             daintree_authorized_keys: `${second.publicKey}\n`,
-            daintree_ssh_host_key: "not a key",
+            host_key_pem: "not a key",
           });
-          await expect(host.restart()).rejects.toThrow(/isn't an unencrypted private key/);
+          const refused = await host.restart().then(
+            () => "restarted",
+            (err: Error) => err.message
+          );
+          expect(refused).toMatch(/^The container stopped \(exit 1\): /);
+          expect(refused).toContain(
+            "daintree-host: DAINTREE_SSH_HOST_KEY isn't an unencrypted private key sshd can read"
+          );
         });
       },
       TEST_TIMEOUT_MS
@@ -313,26 +415,30 @@ describe.skipIf(!ENABLED)(
       async () => {
         const login = await userKey("generated-login");
         const env = { DAINTREE_AUTHORIZED_KEYS: login.publicKey };
-        const [one, two] = await Promise.all([
-          start({ env, userKey: login.file }),
-          start({ env, userKey: login.file }),
+        const [one, two] = await startAll([
+          { env, userKey: login.file },
+          { env, userKey: login.file },
         ]);
-        await withDiagnostics(one, async () => {
-          const publicKey = (host: ImageHost) => host.rootShell(`cat ${HOST_KEY}.pub`);
-          const before = await publicKey(one);
-          expect(before).toMatch(/^ssh-ed25519 /);
-          expect(await publicKey(two)).not.toBe(before);
+        await withDiagnostics(one!, async () => {
+          const [offered] = await one!.offeredKeys();
+          expect(await one!.offeredKeys()).toEqual([offered]);
+          expect(offered).toMatch(/^ssh-ed25519 /);
+          const [other] = await two!.offeredKeys();
+          expect(other).toMatch(/^ssh-ed25519 /);
+          expect(other).not.toBe(offered);
           // Its log names it, for a person checking a first connection.
-          const fingerprint = (await one.rootShell(`ssh-keygen -l -f ${HOST_KEY}.pub`)).split(
-            " "
-          )[1]!;
-          expect(await one.logs()).toContain(fingerprint);
+          expect(await one!.logs()).toMatch(
+            new RegExp(
+              `^daintree-host: host key 256 ${fingerprintOf(offered!).replace(/[+/]/g, "\\$&")} .*\\(ED25519\\)$`,
+              "m"
+            )
+          );
 
           // The route trusted it on first use; a different key now would be refused.
-          await one.restart();
-          expect(await publicKey(one)).toBe(before);
+          await one!.restart();
+          expect(await one!.offeredKeys()).toEqual([offered]);
           expect(
-            await one.login({ identity: login.file, knownHosts: one.knownHosts })
+            await one!.login({ identity: login.file, knownHosts: one!.knownHosts })
           ).toMatchObject({ code: 0 });
         });
       },
@@ -353,13 +459,18 @@ describe.skipIf(!ENABLED)(
           hostPublicKey: hostKey.publicKey,
         });
         await withDiagnostics(host, async () => {
+          // tini at PID 1 with the sshd listener beneath it; no systemd running, no
+          // FUSE device, and no login session's runtime directory.
           expect(await host.rootShell("cat /proc/1/comm")).toBe("tini");
-          expect(await host.rootShell("ps -o comm= --ppid 1")).toBe("sshd");
-          // No FUSE device, no systemd booted, and no login session's runtime directory.
-          expect(
-            await host.rootShell("ls -d /dev/fuse /run/systemd/system /run/user/1500 2>&1 || true")
-          ).not.toMatch(/^\/(dev|run)\//m);
-          expect(await host.shell(`ls "$HOME/Applications" 2>/dev/null || true`)).toBe("");
+          expect(await host.rootShell("ps -o ppid= -p $(pgrep -o -x sshd)")).toBe("1");
+          const absent = () =>
+            host.rootShell(
+              'pgrep -x systemd || true; for p in /dev/fuse /run/systemd/system /run/user/1500; do [ ! -e "$p" ] || echo "$p"; done'
+            );
+          expect(await absent()).toBe("");
+          const running = () => host.shell("pgrep -x daintree || true");
+          expect(await host.shell(`ls -A "$HOME" | grep -v '^\\.' || true`)).toBe("");
+          expect(await running()).toBe("");
 
           const stages: string[] = [];
           const setup = new HostSetupService({
@@ -410,6 +521,8 @@ describe.skipIf(!ENABLED)(
           expect(await host.shell(`test -x "$HOME/${INSTALLED_PATH}" && echo installed`)).toBe(
             "installed"
           );
+          // Installed, and nothing has started it.
+          expect(await running()).toBe("");
 
           const { probe } = await setup.startHostMode({ connection: host.connection });
           expect(probe.hostModeListening).toBe(true);
@@ -421,6 +534,7 @@ describe.skipIf(!ENABLED)(
             startAtLogin: false,
           });
           expect(probe.advice).toMatchObject({ systemd: false, fuse: false, hostModeUnit: false });
+          expect(await absent()).toBe("");
 
           const listening = async () => {
             const record = await host.shell(
@@ -452,20 +566,30 @@ describe.skipIf(!ENABLED)(
           }
 
           // A restart that keeps the disk, as a provider restarts a container in place:
-          // the Host is gone, and a connection starts it again.
+          // the Host is gone, and the next connection is what starts it again.
           await host.restart();
-          expect(await host.shell("pgrep -x daintree || true")).toBe("");
+          expect(await running()).toBe("");
+          const ensured: string[] = [];
           const again = await connectLink({
             host,
             build,
             clientName: "host-image-e2e",
             deviceId: DEVICE_ID,
-            setup,
+            setup: {
+              ensureHostRunning: async (connection, signal) => {
+                const outcome = await setup.ensureHostRunning(connection, signal);
+                ensured.push(outcome);
+                return outcome;
+              },
+            },
           });
           try {
-            expect(again.handshake).toMatchObject({ version, commit });
+            expect(ensured).toContain("started");
+            expect(again.handshake).toMatchObject({ version, commit, platform: "linux", arch });
+            expect(again.transport.route).toBe("forward");
             const restarted = await listening();
             expect(restarted).not.toBeNull();
+            expect(await host.shell(`ps -o comm= -p ${restarted}`)).toBe("daintree");
             await expectWorkingTerminal(host, again.session);
           } finally {
             await again.link.stop();

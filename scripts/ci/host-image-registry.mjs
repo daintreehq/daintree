@@ -13,6 +13,7 @@
 // <repository> is `owner/name` on ghcr.io; GHCR_USER and GHCR_TOKEN
 // authenticate every call but `anonymous`.
 
+import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -55,16 +56,20 @@ export async function pullToken({ repository, user, token, fetchImpl = fetch }) 
   return issued;
 }
 
+const ABSENT = new Set(["MANIFEST_UNKNOWN", "NAME_UNKNOWN"]);
+
 /**
- * The manifest `reference` names: `{ found: false }` only on a 404 that says
- * there's no such tag or repository, its digest and body when there is one,
- * and a throw on anything else.
+ * The manifest `reference` names: `{ found: false }` only on a 404 whose every
+ * error says there's no such tag or repository, its digest and body when there
+ * is one, and a throw on anything else.
  */
 export async function readManifest({ repository, reference, bearer, fetchImpl = fetch }) {
   const response = await request(fetchImpl, `${REGISTRY}/v2/${repository}/manifests/${reference}`, {
+    method: "GET",
     headers: { authorization: `Bearer ${bearer}`, accept: MANIFEST_TYPES },
   });
-  const text = await response.text();
+  const body = Buffer.from(await response.arrayBuffer());
+  const text = body.toString("utf8");
   if (response.status === 404) {
     let codes = [];
     try {
@@ -72,9 +77,7 @@ export async function readManifest({ repository, reference, bearer, fetchImpl = 
     } catch {
       // Not the registry's error document: not an answer to rely on.
     }
-    if (codes.includes("MANIFEST_UNKNOWN") || codes.includes("NAME_UNKNOWN")) {
-      return { found: false };
-    }
+    if (codes.length > 0 && codes.every((code) => ABSENT.has(code))) return { found: false };
   }
   if (response.status !== 200) {
     throw new Error(`GHCR answered ${response.status} for ${repository}:${reference}: ${text}`);
@@ -82,6 +85,13 @@ export async function readManifest({ repository, reference, bearer, fetchImpl = 
   const digest = response.headers.get("docker-content-digest");
   if (!digest || !/^sha256:[0-9a-f]{64}$/.test(digest)) {
     throw new Error(`GHCR named no digest for ${repository}:${reference}`);
+  }
+  // What gets pinned and attested is the digest of these bytes, not the header's word for it.
+  const actual = `sha256:${createHash("sha256").update(body).digest("hex")}`;
+  if (actual !== digest) {
+    throw new Error(
+      `GHCR named ${digest} for ${repository}:${reference}, but its bytes are ${actual}`
+    );
   }
   return { found: true, digest, manifest: JSON.parse(text) };
 }
@@ -103,13 +113,25 @@ export function publishDecision(found, { repository, version, imageId }) {
   );
 }
 
-function output(name, value) {
+function writeOutput(name, value) {
   const line = `${name}=${value}\n`;
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, line);
   process.stdout.write(line);
 }
 
-async function main(argv) {
+/**
+ * Runs one command and returns its exit status; `output` receives the step
+ * outputs and `env` the credentials.
+ */
+export async function main(
+  argv,
+  {
+    env = process.env,
+    fetchImpl = fetch,
+    output = writeOutput,
+    report = (line) => process.stderr.write(`${line}\n`),
+  } = {}
+) {
   const [command, repository, ...rest] = argv;
   if (!repository || !/^[a-z0-9-]+\/[a-z0-9._-]+$/.test(repository)) {
     throw new Error(`Not a repository: ${repository ?? "(none)"}`);
@@ -117,11 +139,13 @@ async function main(argv) {
   if (command === "anonymous") {
     const [digest] = rest;
     try {
-      const bearer = await pullToken({ repository });
-      const found = await readManifest({ repository, reference: digest, bearer });
+      if (!/^sha256:[0-9a-f]{64}$/.test(digest ?? "")) throw new Error(`Not a digest: ${digest}`);
+      const bearer = await pullToken({ repository, fetchImpl });
+      const found = await readManifest({ repository, reference: digest, bearer, fetchImpl });
       if (found.found) return 0;
+      report(`GHCR has no ${repository}@${digest} for anyone to pull`);
     } catch (err) {
-      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      report(err instanceof Error ? err.message : String(err));
     }
     return 3;
   }
@@ -130,12 +154,14 @@ async function main(argv) {
     throw new Error(`Not a version: ${version ?? "(none)"}`);
   }
   if (!/^sha256:[0-9a-f]{64}$/.test(imageId ?? "")) throw new Error(`Not an image ID: ${imageId}`);
+  if (!env.GHCR_USER || !env.GHCR_TOKEN) throw new Error("GHCR_USER and GHCR_TOKEN are required");
   const bearer = await pullToken({
     repository,
-    user: process.env.GHCR_USER,
-    token: process.env.GHCR_TOKEN,
+    user: env.GHCR_USER,
+    token: env.GHCR_TOKEN,
+    fetchImpl,
   });
-  const found = await readManifest({ repository, reference: version, bearer });
+  const found = await readManifest({ repository, reference: version, bearer, fetchImpl });
   if (command === "check") {
     const decision = publishDecision(found, { repository, version, imageId });
     output("push", String(decision === "push"));

@@ -12,21 +12,21 @@ Reference the image by digest, never by tag:
 ghcr.io/daintreehq/daintree-host@sha256:<digest>
 ```
 
-Each version is published once, under its version tag (`1.0.0`) and nothing else. There is no `latest` and no floating tag such as `1` or `1.0`. The publish run's summary gives the full `@sha256:` reference, and so does its `host-image-record` artifact (`host-image.json`, with the version, source commit and platform). A build-provenance attestation ties that digest to the commit and the run, and `gh attestation verify oci://ghcr.io/daintreehq/daintree-host@sha256:<digest> --repo daintreehq/daintree` checks it.
+Each version is published under its version tag (`1.0.0`) and nothing else. There is no `latest` and no floating tag such as `1` or `1.0`. GHCR can't make a tag write-once, so the publish workflow does: it pushes a version only when the registry has no such tag, and refuses one that already holds another image. That holds while the workflow is the package's only writer; someone with admin rights on the package could still delete a version and push it again, which is why references use the digest, which can't change. The publish run's summary gives the full `@sha256:` reference, and so does its `host-image-record` artifact (`host-image.json`, with the version, source commit and platform). A build-provenance attestation ties that digest to the commit and the run, and `gh attestation verify oci://ghcr.io/daintreehq/daintree-host@sha256:<digest> --repo daintreehq/daintree` checks it.
 
 Only `linux/amd64` is published.
 
 ## Inputs
 
-The container reads two inputs when it starts. Each comes from an environment variable, or a file a `_FILE` variable names, or a secret file mounted at its default path, in that order. Setting a variable and its `_FILE` together is refused.
+The container reads two inputs when it starts. Each comes from an environment variable, or a file a `_FILE` variable names, or a secret file mounted at its default path, in that order. Setting a variable and its `_FILE` together is refused, and so is a `_FILE` or default path that's there but isn't a file it can read, such as a directory or a broken link, rather than reading it as no secret.
 
 | Input | Variable | File variable | Default secret file | Required |
 | --- | --- | --- | --- | --- |
-| Public keys the login accepts, one per line, in `authorized_keys` format | `DAINTREE_AUTHORIZED_KEYS` | `DAINTREE_AUTHORIZED_KEYS_FILE` | `/run/secrets/daintree_authorized_keys` | Yes |
+| Public keys the login accepts, one per line, in `authorized_keys` format (blank lines and `#` comments allowed) | `DAINTREE_AUTHORIZED_KEYS` | `DAINTREE_AUTHORIZED_KEYS_FILE` | `/run/secrets/daintree_authorized_keys` | Yes |
 | The SSH host private key, unencrypted, in OpenSSH or PEM format | `DAINTREE_SSH_HOST_KEY` | `DAINTREE_SSH_HOST_KEY_FILE` | `/run/secrets/daintree_ssh_host_key` | No |
 
 - **As given or base64.** A value is used as given when it reads as a key, and base64-decoded otherwise, for an environment that can't carry the lines a key spans. Either form is checked with `ssh-keygen` before sshd starts.
-- **Refused starts.** The container exits non-zero, saying which input is wrong and never echoing it, when there's no authorized key, when an input is set but empty, when a `_FILE` names a file it can't read, when the authorized keys hold no public key (or hold a private one), or when the host key is encrypted or isn't a key.
+- **Refused starts.** The container exits non-zero, saying which input is wrong and never echoing it, when there's no authorized key, when an input is set but empty, when a file it was pointed at isn't one it can read, when any line of the authorized keys isn't a public key (a private key, or a line of one, is refused), or when the host key is encrypted or isn't a key.
 - **The host key.** With a host key given, sshd serves that key and no other, so a client that pinned it before the first connection reaches exactly that machine. A bad key given at a restart stops the start even when a good one from an earlier start is still on disk. Without one, the container generates an ed25519 key on its first start, keeps it across restarts that keep the filesystem, and prints its fingerprint to the container log for a person checking a first connection. A container started on a fresh filesystem generates a different key.
 - **Every start replaces the authorized keys** with exactly what it was given.
 
@@ -40,7 +40,7 @@ Prefer a mounted secret to an environment variable where the runtime has one: an
 | Authentication | Public key only. Password, keyboard-interactive and empty-password logins are off, root can't log in, and no other user is allowed |
 | Port | 22 |
 | Forwarding | TCP and Unix socket forwarding are on: the link reaches the Host's socket through `ssh -O forward -L` |
-| Locale | Sessions get `LANG=C.UTF-8`, and sshd accepts no locale or other variables from the client |
+| Locale | Sessions get `LANG=C.UTF-8`. sshd takes no environment variables from the client beyond the terminal type a session with a terminal asks for, so a Mac's `LC_CTYPE=UTF-8` doesn't reach it |
 
 The authorized keys live in `/etc/ssh/daintree/authorized_keys`, owned by root, so nothing running as the login can add a key of its own.
 
@@ -48,7 +48,7 @@ The authorized keys live in `/etc/ssh/daintree/authorized_keys`, owned by root, 
 
 The entrypoint installs the keys, checks sshd's configuration, then hands PID 1 to `tini`, with `sshd -D` beneath it in the foreground. The container lives as long as sshd. tini reaps the processes a Host leaves behind when the SSH login that started it ends.
 
-There's no init system: systemd's package is installed (Ubuntu's `openssh-server` depends on it) but never runs, and there's no `/run/user/1500` or `/dev/fuse`. Host setup sees PID 1 isn't systemd, so it starts Host mode on connect, in a session of its own, with its socket under `~/.cache/daintree/run` and its output in `~/.cache/daintree/host.log`. A connection that finds it stopped, after a container restart for example, starts it again. The AppImage runs extracted, since there's no FUSE. None of this needs `--privileged`, an added capability or `--init`.
+There's no init system: systemd's package comes in as a dependency of the packages the Host needs but never runs, and there's no `/run/user/1500` or `/dev/fuse`. Host setup sees PID 1 isn't systemd, so it starts Host mode on connect, in a session of its own, with its socket under `~/.cache/daintree/run` and its output in `~/.cache/daintree/host.log`. A connection that finds it stopped, after a container restart for example, starts it again. The AppImage runs extracted, since there's no FUSE. None of this needs `--privileged`, an added capability or `--init`.
 
 The image is Ubuntu 24.04, pinned by digest in the Dockerfile, plus the packages in [`linuxHostPackages.ts`](../../shared/config/linuxHostPackages.ts) (a test holds the Dockerfile to that list), `openssh-server` and `tini`.
 

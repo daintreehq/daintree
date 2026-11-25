@@ -64,7 +64,10 @@ export async function writeSshRoute(params: {
       "  IdentitiesOnly yes",
       `  UserKnownHostsFile ${params.knownHosts}`,
       `  StrictHostKeyChecking ${params.strictHostKeyChecking}`,
-      ...(params.hostKeyAlias ? [`  HostKeyAlias ${params.hostKeyAlias}`] : []),
+      // Pinned by name, and held to that file alone: no system-wide known_hosts.
+      ...(params.hostKeyAlias
+        ? [`  HostKeyAlias ${params.hostKeyAlias}`, "  GlobalKnownHostsFile /dev/null"]
+        : []),
       "  BatchMode yes",
       "",
     ].join("\n")

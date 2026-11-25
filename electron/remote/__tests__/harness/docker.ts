@@ -1,13 +1,9 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 
-/**
- * Docker for the container end to ends. Everything a run makes carries its
- * label, so a run removes what it made and only that: other runs may share
- * the daemon.
- */
+/** Docker for the container end to ends. */
 
-/** Names this run's containers, and only this run's: other runs may share the daemon. */
+/** Names this run's containers and volumes, and only this run's: other runs may share the daemon. */
 export const RUN_LABEL = `org.daintree.e2e.host-install=${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
 
 export function exec(
@@ -70,21 +66,26 @@ export function installExitHook(): void {
   if (exitHookInstalled) return;
   exitHookInstalled = true;
   process.on("exit", () => {
-    disarmWatchdog();
-    if (live.size === 0 && liveVolumes.size === 0) return;
-    try {
-      if (live.size > 0) {
+    let swept = true;
+    if (live.size > 0) {
+      try {
         execFileSync("docker", ["rm", "--force", ...live], { stdio: "ignore", timeout: 20_000 });
+      } catch {
+        swept = false;
       }
-      if (liveVolumes.size > 0) {
+    }
+    if (liveVolumes.size > 0) {
+      try {
         execFileSync("docker", ["volume", "rm", "--force", ...liveVolumes], {
           stdio: "ignore",
           timeout: 20_000,
         });
+      } catch {
+        swept = false;
       }
-    } catch {
-      // Their own time limit, or the watchdog, removes them.
     }
+    // What this couldn't remove, their own time limit or the watchdog does.
+    if (swept) disarmWatchdog();
   });
 }
 
@@ -95,12 +96,14 @@ export function trackContainer(id: string): void {
 }
 
 /**
- * A sweep of everything carrying this run's label an hour from now, in a
- * process of its own, for containers with no time limit of their own: a worker
- * killed outright runs no exit hook. A suite's teardown calls it off with
- * {@link disarmWatchdog}, since a test worker may end without an exit event.
+ * A sweep of everything carrying this run's label once the longest run could
+ * have ended, in a process of its own, for containers and volumes with no time
+ * limit of their own: a worker killed outright runs no exit hook. Armed before
+ * the first of them is made, so it covers one whose ID never came back. A
+ * suite's teardown calls it off with {@link disarmWatchdog}, since a test
+ * worker may end without an exit event.
  */
-export function armWatchdog(seconds = 3600): void {
+export function armWatchdog(seconds = 3 * 60 * 60): void {
   installExitHook();
   if (watchdog) return;
   const filter = `label=${RUN_LABEL}`;
@@ -109,8 +112,15 @@ export function armWatchdog(seconds = 3600): void {
     `docker ps --all --quiet --filter '${filter}' | xargs -r docker rm --force`,
     `docker volume ls --quiet --filter '${filter}' | xargs -r docker volume rm --force`,
   ].join("; ");
-  watchdog = spawn("sh", ["-c", script], { detached: true, stdio: "ignore" });
-  watchdog.unref();
+  const child = spawn("sh", ["-c", script], { detached: true, stdio: "ignore" });
+  // Once it's gone its pid may be another process group's: forget it.
+  const forget = () => {
+    if (watchdog === child) watchdog = null;
+  };
+  child.on("exit", forget);
+  child.on("error", forget);
+  child.unref();
+  watchdog = child;
 }
 
 /** Calls off the sweep: its process group, so the `sleep` goes too. */
@@ -158,7 +168,7 @@ export async function startContainer(args: string[]): Promise<string> {
 
 /** A named volume for this run, removed with its containers. */
 export async function createVolume(): Promise<string> {
-  installExitHook();
+  armWatchdog();
   const name = await docker([
     "volume",
     "create",
