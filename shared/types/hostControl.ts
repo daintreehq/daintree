@@ -81,6 +81,15 @@ export const HOST_BRING_BACK_TOOL = "host.bringBack";
  */
 export const HOST_STATUS_TOOL = "host.status";
 
+/**
+ * Opens an agent CLI's own sign-in on a connected host (#18197), as the Sign
+ * in on that CLI's row in Settings → Hosts does, in the window showing the
+ * calling assistant. The assistant only starts it: the terminal is the
+ * person's to read and type into, and nothing it answers says whether the
+ * sign-in worked.
+ */
+export const HOST_START_AGENT_SIGN_IN_TOOL = "host.startAgentSignIn";
+
 export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
@@ -89,6 +98,7 @@ export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_WATCH_TOOL,
   HOST_BRING_BACK_TOOL,
   HOST_STATUS_TOOL,
+  HOST_START_AGENT_SIGN_IN_TOOL,
 ]);
 
 /** Most projects `host.list` names for one host in one answer: a page. */
@@ -827,6 +837,20 @@ export const HostBringBackResultSchema = z.object({
 });
 export type HostBringBackResult = z.infer<typeof HostBringBackResultSchema>;
 
+export const HostStartAgentSignInArgsSchema = z.object({
+  hostId: hostIdSchema,
+  agentId: z
+    .string()
+    .min(1)
+    .max(256)
+    .describe("An agentId the host list names in that host's installed CLIs."),
+});
+export type HostStartAgentSignInArgs = z.infer<typeof HostStartAgentSignInArgsSchema>;
+
+/** `ok` when the window showing the assistant opened the sign-in's terminal; never that it worked. */
+export const HostStartAgentSignInResultSchema = z.object({ ...outcomeFields });
+export type HostStartAgentSignInResult = z.infer<typeof HostStartAgentSignInResultSchema>;
+
 /** Most projects one `host.status` reads, across every host. */
 export const HOST_STATUS_TARGETS_MAX = 64;
 /** Most terminals one project's read names: `terminal.getStatus`'s own bound. */
@@ -956,7 +980,8 @@ export type HostControlToolResult =
   | HostSettingsResult
   | HostWatchResult
   | HostBringBackResult
-  | HostStatusResult;
+  | HostStatusResult
+  | HostStartAgentSignInResult;
 
 export type HostControlOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostControlRefusalCode; message: string };

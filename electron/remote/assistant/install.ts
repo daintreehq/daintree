@@ -33,7 +33,11 @@ import type { LaneWake } from "../../services/mcp-server/terminalNotify.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
 import { machineDisplayName } from "../../utils/machineName.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
-import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
+import {
+  getProjectForWebContents,
+  getShownAppWebContents,
+  getWindowForWebContents,
+} from "../../window/webContentsRegistry.js";
 import type { LinkSession } from "../link/session.js";
 import { getLocalSummaryLoop } from "../metrics/localLoop.js";
 import { agentWaitingOf, type AgentWaitingListener } from "../metrics/agentWaiting.js";
@@ -110,6 +114,17 @@ const helpSessions = {
  */
 function isOwnScheduledWithoutView(helpSessionId: string, handle: number): boolean {
   return handle === NO_VIEW_HANDLE && helpSessions.getScheduledRunOf(helpSessionId) !== null;
+}
+
+/**
+ * Whether a view is in front of the person: its window's current app view,
+ * never a cached project view, in a window that is visible and not minimized.
+ */
+function isOnScreen(webContentsId: number): boolean {
+  const view = getShownAppWebContents().find((contents) => contents.id === webContentsId);
+  if (!view) return false;
+  const win = getWindowForWebContents(view);
+  return win !== null && !win.isDestroyed() && win.isVisible() && !win.isMinimized();
 }
 
 /** How long a host's project listing may take to name a worker's project before it goes unnamed. */
@@ -362,7 +377,11 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   });
   // A global assistant session has no window of its own: it is asked in one
   // that shows that session, never the focused one, and not at all while none does.
-  const askingWindow = (helpSessionId: string): number | null => {
+  // `eligible` narrows the views that may answer, inside the global choice.
+  const askingWindow = (
+    helpSessionId: string,
+    eligible: (webContentsId: number) => boolean = () => true
+  ): number | null => {
     const lane = helpSessions.getSessionLane(helpSessionId);
     const webContentsId =
       lane !== null && isGlobalAssistantId(lane.projectId)
@@ -370,10 +389,11 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
             isGlobalAssistantSlot(lane.slot) ? lane.slot : GLOBAL_ASSISTANT_SLOT
           )?.presenterWebContentsId(
             // The Canopy window shows the assistant but mounts no approval dialog.
-            (id) => !isProjectlessAppView(id)
+            (id) => !isProjectlessAppView(id) && eligible(id)
           ) ?? null)
         : helpSessions.getWebContentsIdForSessionId(helpSessionId);
-    return webContentsId === null || isRemoteEndpointHandle(webContentsId) ? null : webContentsId;
+    if (webContentsId === null || isRemoteEndpointHandle(webContentsId)) return null;
+    return eligible(webContentsId) ? webContentsId : null;
   };
   const runtime = new HostCallRuntime({
     getSessionLane: (helpSessionId) => helpSessions.getSessionLane(helpSessionId),
@@ -433,6 +453,19 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       if (webContentsId === null) return null;
       const { askSettingsApprovalInWindow } = await import("../client/viewRequests.js");
       return askSettingsApprovalInWindow(webContentsId, ask);
+    },
+    // An agent CLI's sign-in on a host, started for the window showing the
+    // assistant and answered once that window opens it (#18197). Only a view
+    // on screen counts: a cached project view or a hidden window shows nobody.
+    startAgentSignIn: async ({ helpSessionId, hostId, agentId, signal }) => {
+      const webContentsId = askingWindow(helpSessionId, isOnScreen);
+      if (webContentsId === null) return "no_window";
+      const canopyHosts = getRemoteService("canopyHosts");
+      if (!canopyHosts) return "unsupported";
+      return canopyHosts.offerSignIn(webContentsId, hostId, agentId, {
+        stillShown: () => isOnScreen(webContentsId),
+        ...(signal ? { signal } : {}),
+      });
     },
     // A host's notice rides its run's own notice line (#13500).
     queueNotice: queueOnNoticeLine,

@@ -52,6 +52,7 @@ function fakeRuntime() {
       ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, answer: null })
     ),
     status: vi.fn(() => ok({ hosts: [], targets: [], terminals: [] })),
+    startAgentSignIn: vi.fn(() => ok({ outcome: "ok" as const, detail: null, retryAfterMs: null })),
   } satisfies HostControlRuntimeHandle;
 }
 
@@ -533,6 +534,47 @@ describe("runHostControlTool (#13493)", () => {
     // No assistant session, no attempt.
     expect(
       await runHostControlTool("host.bringBack", { hostId: "studio" }, undefined)
+    ).toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
+    uninstall();
+  });
+
+  it("hands host.startAgentSignIn a host and an agent id, nothing more, with the call's abort (#18197)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const signal = new AbortController().signal;
+    await runHostControlTool(
+      "host.startAgentSignIn",
+      { hostId: "studio", agentId: "codex", command: "codex login --api-key sk-x", input: "y\n" },
+      access,
+      { tier: "core", signal }
+    );
+    // What runs there is the host's registry entry for that agent: nothing the caller adds reaches it.
+    expect(runtime.startAgentSignIn).toHaveBeenCalledWith(
+      "hub",
+      { hostId: "studio", agentId: "codex" },
+      signal
+    );
+    for (const args of [
+      {},
+      { hostId: "studio" },
+      { agentId: "codex" },
+      { hostId: "studio", agentId: "" },
+      { hostId: "studio", agentId: "x".repeat(257) },
+      { hostId: "", agentId: "codex" },
+    ]) {
+      expect(await runHostControlTool("host.startAgentSignIn", args, access)).toMatchObject({
+        ok: false,
+        code: "INVALID_ARGS",
+      });
+    }
+    expect(runtime.startAgentSignIn).toHaveBeenCalledTimes(1);
+    expect(
+      await runHostControlTool(
+        "host.startAgentSignIn",
+        { hostId: "studio", agentId: "codex" },
+        undefined
+      )
     ).toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
     uninstall();
   });

@@ -3,6 +3,7 @@ import {
   HOST_CALL_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_START_AGENT_SIGN_IN_TOOL,
   HOST_STATUS_TOOL,
   HOST_WATCH_TOOL,
 } from "../types/hostControl.js";
@@ -48,7 +49,9 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * work for one hears when it comes back (#14463), and `host.bringBack` names
  * one to wake or start where the person set that up (#16170). `host.status`
  * reads `terminal.getStatus` in many projects on many hosts at once, each as
- * `host.call` would read it there (#16191). `mcp.surface` reports its own
+ * `host.call` would read it there (#16191). `host.startAgentSignIn` names a
+ * host, never a project, and opens an agent CLI's own sign-in there in the
+ * window showing it, for the person to finish (#18197). `mcp.surface` reports its own
  * session, `role` included, so it can tell when the `daintree` server it
  * reached took it for something other than the global assistant (#16765).
  */
@@ -59,6 +62,7 @@ export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_WATCH_TOOL,
   HOST_BRING_BACK_TOOL,
   HOST_STATUS_TOOL,
+  HOST_START_AGENT_SIGN_IN_TOOL,
   "mcp.surface",
 ]);
 

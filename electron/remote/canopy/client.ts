@@ -55,6 +55,36 @@ export interface CanopyHostConnection {
 export const RELEASE_RETRIES = 5;
 export const RELEASE_RETRY_MS = 1_000;
 
+/**
+ * How long the window showing an assistant has to open the sign-in started for
+ * it (#18197), counted from the call: past it the sign-in ends on its host.
+ */
+export const SIGN_IN_OFFER_MS = 30_000;
+
+/**
+ * What became of a sign-in started for an assistant (#18197). `shown`: the
+ * window's dialog opened its terminal live. `withdrawn`: it ended before that,
+ * closed in the window, refused there over another sign-in, or its link or
+ * view went. `busy`: a sign-in was already open in that window, so none started.
+ */
+export type SignInOfferAnswer =
+  | "shown"
+  | "withdrawn"
+  | "busy"
+  | "expired"
+  | "cancelled"
+  | "no_window"
+  | "unsupported"
+  | "disconnected"
+  | "rate_limited"
+  | "failed";
+
+interface SignInOffer {
+  finish(answer: SignInOfferAnswer, release: boolean): void;
+  /** Whether its window still shows it to the person. */
+  stillShown(): boolean;
+}
+
 export interface CanopyHostsClientOptions {
   manager: {
     get(hostId: HostId): CanopyHostConnection | undefined;
@@ -210,6 +240,8 @@ export class CanopyHostsClient {
   private readonly byViewer = new Map<string, Subscription>();
   private readonly disposers: Array<() => void> = [];
   private readonly retries = new Set<ReturnType<typeof setTimeout>>();
+  /** Sign-ins started for an assistant that their window hasn't opened yet, by view and consumer. */
+  private readonly offers = new Map<string, SignInOffer>();
   private disposed = false;
 
   constructor(private readonly options: CanopyHostsClientOptions) {}
@@ -238,6 +270,7 @@ export class CanopyHostsClient {
 
   dispose(): void {
     for (const dispose of this.disposers.splice(0)) dispose();
+    for (const offer of [...this.offers.values()]) offer.finish("cancelled", false);
     for (const webContentsId of [...this.views.keys()]) this.releaseView(webContentsId);
     this.disposed = true;
     for (const timer of this.retries) clearTimeout(timer);
@@ -565,6 +598,76 @@ export class CanopyHostsClient {
     this.forgetIfEmpty(webContentsId, record);
   }
 
+  /**
+   * Start an agent CLI's own sign-in on a connected host for one of this
+   * machine's assistants (#18197), in the view showing it, and wait until that
+   * view's dialog opens it. Main starts it, so the view only ever adopts a
+   * sign-in under way: it watches it and lets it go, and the person types into
+   * it. Never started over another sign-in open in that view; one nobody
+   * opened within {@link SIGN_IN_OFFER_MS}, or whose call was cancelled first,
+   * ends on its host.
+   */
+  offerSignIn(
+    webContentsId: number,
+    hostId: HostId,
+    agentId: string,
+    options: { stillShown: () => boolean; signal?: AbortSignal }
+  ): Promise<SignInOfferAnswer> {
+    if (options.signal?.aborted === true) return Promise.resolve("cancelled");
+    if ((this.views.get(webContentsId)?.signIns.size ?? 0) > 0) return Promise.resolve("busy");
+    const consumer = `offer-${this.options.newViewerId?.() ?? randomUUID()}`.slice(0, 64);
+    const key = offerKey(webContentsId, consumer);
+    const expiresAt = Date.now() + SIGN_IN_OFFER_MS;
+    return new Promise<SignInOfferAnswer>((resolve) => {
+      let settled = false;
+      const finish = (answer: SignInOfferAnswer, release: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        options.signal?.removeEventListener("abort", onAbort);
+        if (this.offers.get(key) === offer) this.offers.delete(key);
+        if (release) this.releaseSignIn(webContentsId, consumer);
+        resolve(answer);
+      };
+      const onAbort = () => finish("cancelled", true);
+      const offer: SignInOffer = { finish, stillShown: options.stillShown };
+      // Armed before the start, so a slow one is held to the same deadline.
+      const timer = setTimeout(() => finish("expired", true), SIGN_IN_OFFER_MS);
+      timer.unref?.();
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+      this.offers.set(key, offer);
+      this.startSignIn(webContentsId, consumer, hostId, agentId).then(
+        (terminal) => {
+          if (settled) return;
+          const sent = this.options.send(webContentsId, {
+            kind: "sign-in-offer",
+            hostId,
+            agentId,
+            consumer,
+            terminal,
+            expiresAt,
+          });
+          if (!sent) finish("no_window", true);
+        },
+        (error: unknown) => finish(signInOfferFailure(error), false)
+      );
+    });
+  }
+
+  /**
+   * The view's dialog opened the terminal of a sign-in started for an
+   * assistant, live, on screen (#18197). Only the view it was started in says
+   * so, and only while that view is still shown; nothing it sends is read.
+   */
+  signInShown(webContentsId: number, consumer: unknown): void {
+    if (!isCanopyViewerId(consumer)) return;
+    const offer = this.offers.get(offerKey(webContentsId, consumer));
+    const sub = this.views.get(webContentsId)?.signIns.get(consumer);
+    if (!offer || !sub?.signIn || sub.signIn.terminalId === null) return;
+    if (!offer.stillShown()) return;
+    offer.finish("shown", false);
+  }
+
   /** The consumer stopped showing its assistant: its viewer and watch there end. */
   releaseAssistant(webContentsId: number, consumer: unknown): void {
     if (!isCanopyViewerId(consumer)) return;
@@ -811,6 +914,10 @@ export class CanopyHostsClient {
     if (sub.consumer === null) record?.hosts.delete(sub.hostId);
     else if (sub.signIn) {
       if (record?.signIns.get(sub.consumer) === sub) record.signIns.delete(sub.consumer);
+      // Ended before its window opened it. One still starting answers with why it didn't.
+      if (sub.signIn.terminalId !== null) {
+        this.offers.get(offerKey(sub.webContentsId, sub.consumer))?.finish("withdrawn", false);
+      }
     } else if (record?.assistants.get(sub.consumer) === sub) {
       record.assistants.delete(sub.consumer);
     }
@@ -976,6 +1083,28 @@ function signInStepOf(step: unknown): HostSignInStep {
       break;
   }
   throw invalid("Invalid sign-in step");
+}
+
+function offerKey(webContentsId: number, consumer: string): string {
+  return `${webContentsId}:${consumer}`;
+}
+
+/** Why a sign-in started for an assistant didn't start, by the error its start ended in. */
+function signInOfferFailure(error: unknown): SignInOfferAnswer {
+  switch (codeOf(error)) {
+    case "UNSUPPORTED":
+      return "unsupported";
+    case "HOST_DISCONNECTED":
+      return "disconnected";
+    case "RATE_LIMITED":
+      return "rate_limited";
+    // Its viewer went while it started: the view, the link or the host.
+    case "NOT_FOUND":
+    case "CANCELLED":
+      return "withdrawn";
+    default:
+      return "failed";
+  }
 }
 
 function consumerOf(consumer: unknown): string {

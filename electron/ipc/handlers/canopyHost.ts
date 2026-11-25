@@ -134,6 +134,17 @@ export const canopyHostNamespace = defineIpcNamespace({
       },
       { withContext: true }
     ),
+    /**
+     * The consumer's dialog opened, live, a sign-in this Shell started for one
+     * of its assistants (#18197): what that assistant's call answers with.
+     */
+    signInShown: op(
+      CANOPY_HOST_METHOD_CHANNELS.signInShown,
+      async (ctx, consumer: string): Promise<void> => {
+        getRemoteService("canopyHosts")?.signInShown(ctx.webContentsId, consumer);
+      },
+      { withContext: true }
+    ),
     /** The consumer stopped showing its assistant. */
     releaseAssistant: op(
       CANOPY_HOST_METHOD_CHANNELS.releaseAssistant,

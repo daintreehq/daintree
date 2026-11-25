@@ -143,6 +143,7 @@ export const CHANNEL_LOCALITY = {
   "canopy-host:release-assistant": "shell",
   "canopy-host:release-sign-in": "shell",
   "canopy-host:resolve-assistant": "shell",
+  "canopy-host:sign-in-shown": "shell",
   "canopy-host:sign-in-step": "shell",
   "canopy-host:start-sign-in": "shell",
   "canopy-host:watch-assistant": "shell",

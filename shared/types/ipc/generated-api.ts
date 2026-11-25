@@ -284,6 +284,9 @@ export interface GeneratedElectronAPI {
     resolveAssistant(
       ...args: IpcInvokeMap["canopy-host:resolve-assistant"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:resolve-assistant"]["result"]>;
+    signInShown(
+      ...args: IpcInvokeMap["canopy-host:sign-in-shown"]["args"]
+    ): Promise<IpcInvokeMap["canopy-host:sign-in-shown"]["result"]>;
     signInStep(
       ...args: IpcInvokeMap["canopy-host:sign-in-step"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:sign-in-step"]["result"]>;

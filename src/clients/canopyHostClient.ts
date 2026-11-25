@@ -94,6 +94,14 @@ export const canopyHostClient = {
     return window.electron.canopyHost.releaseSignIn(consumer);
   },
 
+  /**
+   * The consumer's dialog opened, live, a sign-in started for an assistant
+   * (#18197); its call answers with that.
+   */
+  signInShown: (consumer: string): Promise<void> => {
+    return window.electron.canopyHost.signInShown(consumer);
+  },
+
   /** Every host's pushes, each tagged with the host it came from. */
   onEvent: (callback: (event: CanopyHostEvent) => void): (() => void) => {
     return window.electron.canopyHost.onEvent(callback);

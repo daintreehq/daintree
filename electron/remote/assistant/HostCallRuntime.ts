@@ -41,6 +41,8 @@ import {
   HOST_SETTINGS_TOOL,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostStartAgentSignInArgs,
+  type HostStartAgentSignInResult,
   type HostStatusArgs,
   type HostStatusResult,
   type HostWatchArgs,
@@ -66,6 +68,8 @@ import { HostWatches, type AgentWatchRead, type HostWatchListener } from "./Host
 import type { AssistantPluginNotifications } from "../../services/assistantPluginNotifications.js";
 import type { AgentWaitingListener } from "../metrics/agentWaiting.js";
 import { runHostBringBack } from "./hostBringBack.js";
+import { runHostAgentSignIn } from "./hostAgentSignIn.js";
+import type { SignInOfferAnswer } from "../canopy/client.js";
 import { runHostStatus } from "./hostStatus.js";
 import { STATUS_READ_TOOL } from "./projectStatusRead.js";
 import { ThrowawaySession } from "./throwawaySession.js";
@@ -303,6 +307,17 @@ export interface HostCallRuntimeDeps {
    * (#16170), joined by every caller. Absent, `host.bringBack` is unsupported.
    */
   bringBack?(hostId: HostId): Promise<HostBringBackAnswer>;
+  /**
+   * Starts an agent CLI's own sign-in on a connected host in the window
+   * showing the calling assistant, and waits until that window opens it
+   * (#18197). Absent, `host.startAgentSignIn` is unsupported.
+   */
+  startAgentSignIn?(request: {
+    helpSessionId: string;
+    hostId: HostId;
+    agentId: string;
+    signal?: AbortSignal;
+  }): Promise<SignInOfferAnswer>;
   /**
    * Puts a host's question about one of this Shell's relayed calls to the
    * person, in the window of the assistant that made it (#13501), showing the
@@ -744,6 +759,13 @@ function notCoordinatingDetail(slot: number): string {
     ? `Global assistant session ${globalAssistantSessionNumber(slot)}`
     : "This global assistant session";
   return `${name} isn't coordinating, so it acts on no worker: the other session leads the work, and holds what this one launched before. Nothing was sent. It can still read with ${[...GLOBAL_STANDBY_TOOLS].join(", ")}. The person can hand coordination to it from the Assistant panel.`;
+}
+/** Why a global assistant session that isn't coordinating starts no sign-in (#18197). */
+function notCoordinatingSignInDetail(slot: number): string {
+  const name = isGlobalAssistantSlot(slot)
+    ? `Global assistant session ${globalAssistantSessionNumber(slot)}`
+    : "This global assistant session";
+  return `${name} isn't coordinating, so it starts nothing on hosts and no sign-in was started. The person can hand coordination to it from the Assistant panel.`;
 }
 const CALL_AMBIGUOUS_DETAIL =
   "No answer came back, so the call may have reached the host and run. Resend it under this callId, which never runs it twice.";
@@ -2650,6 +2672,49 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         args
       )
     );
+  }
+
+  /**
+   * Opens an agent CLI's own sign-in on a connected host in the window showing
+   * the caller (#18197), for a CLI that host reports on the link open now.
+   */
+  startAgentSignIn(
+    helpSessionId: string,
+    args: HostStartAgentSignInArgs,
+    signal?: AbortSignal
+  ): Promise<HostControlOutcome<HostStartAgentSignInResult>> {
+    return this.settle(helpSessionId, async (caller) => {
+      if (caller.standby === true) {
+        return this.outcomeWith("policy_rejected", notCoordinatingSignInDetail(caller.slot));
+      }
+      const start = this.deps.startAgentSignIn;
+      return runHostAgentSignIn(
+        {
+          host: (hostId) => {
+            const host = this.deps.hosts().find((candidate) => candidate.hostId === hostId);
+            if (!host) return null;
+            const connected = host.connection.status === "connected";
+            // As Settings → Hosts lists them: only what the link open now brought.
+            const current = connected && host.summaryFromCurrentLink !== false ? host.summary : null;
+            return { connected, agentIds: current?.agentClis.map((cli) => cli.agentId) ?? null };
+          },
+          controlOn: (hostId) => this.deps.controlEnabled?.(hostId) === true,
+          ...(start
+            ? {
+                offer: (hostId: HostId, agentId: string, abort?: AbortSignal) =>
+                  start({
+                    helpSessionId,
+                    hostId,
+                    agentId,
+                    ...(abort ? { signal: abort } : {}),
+                  }),
+              }
+            : {}),
+        },
+        args,
+        signal
+      );
+    });
   }
 
   /**

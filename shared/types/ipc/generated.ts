@@ -311,6 +311,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./canopy.js").AssistantOpenDestination | null;
   };
+  "canopy-host:sign-in-shown": {
+    args: [consumer: string];
+    result: void;
+  };
   "canopy-host:sign-in-step": {
     args: [consumer: string, step: import("./canopyHost.js").HostSignInStep];
     result: import("./canopy.js").CanopyTerminalView | null;

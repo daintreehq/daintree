@@ -10,6 +10,8 @@ import {
   HostListResultSchema,
   HostSettingsArgsSchema,
   HostSettingsResultSchema,
+  HostStartAgentSignInArgsSchema,
+  HostStartAgentSignInResultSchema,
   HostStatusArgsSchema,
   HostStatusResultSchema,
   HostWatchArgsSchema,
@@ -37,7 +39,9 @@ function mainProcessOnly(id: string): () => Promise<never> {
  * wakes an assistant once a host's link or capacity is seen to change (#14463),
  * `host.bringBack` tries to bring back a host whose link is down (#16170), and
  * `host.status` reads agents' status and screens across projects and hosts in
- * one call (#16191). `run()` throws if the renderer ever invokes it directly.
+ * one call (#16191), and `host.startAgentSignIn` opens an agent CLI's own
+ * sign-in on a host for the person to finish (#18197). `run()` throws if the
+ * renderer ever invokes it directly.
  */
 export function registerHostControlActions(actions: ActionRegistry): void {
   actions.set("host.list", () => ({
@@ -223,5 +227,30 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.status"),
+  }));
+
+  actions.set("host.startAgentSignIn", () => ({
+    id: "host.startAgentSignIn",
+    title: "Start an agent CLI sign-in on a host",
+    description:
+      "Open an installed agent CLI's own sign-in on a connected host, in a terminal in the window showing you, as its Sign in in Settings → Hosts does. The person approves in the browser and types any code there; you can't. ok means the window opened it, not that it worked.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "agent", "cli", "sign in", "login", "auth"],
+    palette: { mode: "hidden" },
+    argsSchema: HostStartAgentSignInArgsSchema,
+    resultSchema: HostStartAgentSignInResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // Each call opens a sign-in of its own while none is open in that window.
+      idempotentHint: false,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.startAgentSignIn"),
   }));
 }

@@ -227,6 +227,9 @@ export const CORE_TIER_TOOLS = [
   // `terminal.getStatus` across projects and hosts in one answer (#16191): a
   // read, at the tier `terminal.getStatus` itself is.
   "host.status",
+  // An agent CLI's own sign-in on a host, opened in the window showing the
+  // assistant for the person to finish (#18197): it types and reads nothing there.
+  "host.startAgentSignIn",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -390,6 +393,7 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.watch",
   "host.bringBack",
   "host.status",
+  "host.startAgentSignIn",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
   // A project's own links are the assistant's to keep (#17091).

@@ -128,6 +128,11 @@ export interface HostAssistantDirectory {
  * `sign-in-terminal-data` is one agent CLI sign-in's stream, named by its
  * consumer. A link that drops ends the sign-in on the host, which reaches the
  * view as that stream's `ended`.
+ *
+ * `sign-in-offer` is a sign-in this Shell started on a host for one of its
+ * assistants (#18197), already running under `consumer` for this view, which
+ * opens it as that CLI's row in Settings → Hosts does. Opened after
+ * `expiresAt` (this machine's clock), it has already ended.
  */
 export type CanopyHostEvent =
   | { kind: "canopy-snapshot"; hostId: HostId; snapshot: CanopySnapshot }
@@ -136,7 +141,15 @@ export type CanopyHostEvent =
   | { kind: "resync"; hostId: HostId }
   | { kind: "assistant-terminal-data"; hostId: HostId; consumer: string; chunk: CanopyTerminalData }
   | { kind: "assistant-resync"; hostId: HostId; consumer: string }
-  | { kind: "sign-in-terminal-data"; hostId: HostId; consumer: string; chunk: CanopyTerminalData };
+  | { kind: "sign-in-terminal-data"; hostId: HostId; consumer: string; chunk: CanopyTerminalData }
+  | {
+      kind: "sign-in-offer";
+      hostId: HostId;
+      agentId: string;
+      consumer: string;
+      terminal: HostSignInTerminal;
+      expiresAt: number;
+    };
 
 /** The terminal an agent CLI's sign-in runs in on its host (#18196), by this incarnation. */
 export interface HostSignInTerminal {
