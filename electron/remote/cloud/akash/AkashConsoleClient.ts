@@ -303,8 +303,8 @@ export class AkashConsoleClient {
     const onAbort = () => timeout.abort();
     caller.signal?.addEventListener("abort", onAbort, { once: true });
     const failed = (error: unknown): AkashApiError => {
-      if (error instanceof AkashApiError) return error;
       if (caller.signal?.aborted) return cancelled();
+      if (error instanceof AkashApiError) return error;
       if (timeout.signal.aborted) {
         return new AkashApiError("timeout", "The Akash Console didn't answer in time", null, null);
       }
@@ -327,8 +327,10 @@ export class AkashConsoleClient {
       try {
         text = await readBounded(response);
       } catch (error) {
-        // A refusal's status and Retry-After came with its headers: a body that stalls or overflows takes neither away.
-        if (response.ok || caller.signal?.aborted) throw failed(error);
+        // A throttle's or outage's status and Retry-After came with its headers, and its body
+        // decides nothing; any other refusal's code is in the body, so it is asked for again.
+        const decidedByStatus = response.status === 429 || response.status >= 500;
+        if (response.ok || !decidedByStatus || caller.signal?.aborted) throw failed(error);
       }
     } finally {
       clearTimeout(timer);

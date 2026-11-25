@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  abortableAkashSleep,
   AkashApiError,
   AkashConsoleClient,
   type AkashConsoleClientOptions,
@@ -202,9 +203,11 @@ describe("AkashProvider account connection", () => {
   it("names a team's projects after the team, and only that team's", async () => {
     const { provider, fake } = setup();
     const checked = await provider.checkCredentials({ apiKey: TEAM_KEY }, fake.baseUrl);
-    expect(checked.scopes.map((choice) => [choice.scope.id, choice.scope.name])).toEqual([
-      [TEAM_DEFAULT, "Web team · Default"],
-      [TEAM_AGENTS, "Web team · Agents"],
+    expect(
+      checked.scopes.map((choice) => [choice.scope.id, choice.scope.name, choice.active])
+    ).toEqual([
+      [TEAM_DEFAULT, "Web team · Default", true],
+      [TEAM_AGENTS, "Web team · Agents", false],
     ]);
   });
 
@@ -341,9 +344,9 @@ describe("AkashProvider account connection", () => {
     expect(paths("/organizations")).toHaveLength(3);
     expect(sleeps).toHaveLength(2);
     expect(sleeps[0]).toBeGreaterThanOrEqual(500);
-    expect(sleeps[0]).toBeLessThan(750);
+    expect(sleeps[0]).toBeLessThanOrEqual(750);
     expect(sleeps[1]).toBeGreaterThanOrEqual(1000);
-    expect(sleeps[1]).toBeLessThan(1250);
+    expect(sleeps[1]).toBeLessThanOrEqual(1250);
   });
 
   it("waits as long as Retry-After asks, and gives up rather than ask sooner than a long one allows", async () => {
@@ -420,6 +423,10 @@ describe("AkashProvider.validate", () => {
       ["/projects", TEAM_AGENTS],
       ["/user/me", null],
     ]);
+    // Another project it may only read is no concern of this account's.
+    await expect(provider.validate(credentials(MIXED_KEY, TEAM_AGENTS))).resolves.toEqual({
+      identity: "person@example.com",
+    });
   });
 
   it("reads a key that no longer reaches the project as invalid for this account", async () => {
@@ -440,7 +447,12 @@ describe("AkashProvider.validate", () => {
     expect(gone.provider.describeError(missing).code).toBe("credential-invalid");
 
     const unlisted = setup();
-    unlisted.fake.fail("GET", /^\/projects$/, () => reply(200, { data: [] }));
+    // Another project, deployable, but not the one this account deploys into.
+    unlisted.fake.fail("GET", /^\/projects$/, () =>
+      reply(200, {
+        data: [{ id: TEAM_DEFAULT, name: "Default", isDefault: true, access: { canDeploy: true } }],
+      })
+    );
     const absent = await rejection(
       unlisted.provider.validate(unlisted.credentials(TEAM_KEY, TEAM_AGENTS))
     );
@@ -612,13 +624,15 @@ describe("AkashProvider.catalog", () => {
 
   it("suggests the busiest region some size fits, not merely the busiest", async () => {
     const { provider, fake, credentials } = setup();
+    // ap-southeast is busiest but fits nothing; eu-west is the busiest that fits, and not last by name.
     fake.regionProviderCounts["ap-southeast"] = 9;
+    fake.regionProviderCounts["na-us-west"] = 2;
     fake.providers.splice(
       fake.providers.findIndex((entry) => entry.owner === "akash1tiny"),
       1
     );
     const catalog = await provider.catalog(credentials(TEAM_KEY, TEAM_AGENTS));
-    expect(catalog.provisioning?.location?.defaultId).toBe("na-us-west");
+    expect(catalog.provisioning?.location?.defaultId).toBe("eu-west");
   });
 
   it("screens each size in the chain's units, audited only, carrying no credential", async () => {
@@ -801,22 +815,37 @@ describe("AkashConsoleClient transport", () => {
     expect(paths("/organizations")).toHaveLength(3);
   });
 
-  it("stops waiting to retry the moment its caller gives up", async () => {
-    const { fake, paths } = setup();
+  it("waits out a backoff on its caller's signal", async () => {
+    const seen: Array<AbortSignal | undefined> = [];
+    const { fake } = setup();
     const client = new AkashConsoleClient({
       baseUrl: fake.baseUrl,
       fetch: fake.fetch as unknown as typeof fetch,
+      sleep: async (_ms, signal) => {
+        seen.push(signal);
+      },
     });
     const controller = new AbortController();
-    fake.fail("GET", /^\/organizations$/, () => {
-      setTimeout(() => controller.abort(), 0);
-      return reply(429, { statusCode: 429, message: "Slow" });
-    });
-    const started = Date.now();
-    const error = await rejection(client.organizations({ ...ctx, signal: controller.signal }));
-    expect(error).toMatchObject({ kind: "cancelled" });
-    expect(Date.now() - started).toBeLessThan(400);
-    expect(paths("/organizations")).toHaveLength(1);
+    fake.fail("GET", /^\/organizations$/, () => reply(429, { statusCode: 429, message: "Slow" }));
+    await client.organizations({ ...ctx, signal: controller.signal });
+    expect(seen).toEqual([controller.signal]);
+  });
+
+  it("ends a backoff the moment its caller gives up, leaving no timer behind", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const waiting = rejection(abortableAkashSleep(10_000, controller.signal));
+      controller.abort();
+      expect(await waiting).toMatchObject({ kind: "cancelled" });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(await rejection(abortableAkashSleep(10_000, controller.signal))).toMatchObject({
+        kind: "cancelled",
+      });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses an answer too large to read, whether or not it says so up front", async () => {
@@ -871,6 +900,23 @@ describe("AkashConsoleClient transport", () => {
     const error = await rejection(client.organizations(ctx));
     expect(error).toMatchObject({ kind: "rate-limited", status: 429, retryAfterMs: 120_000 });
     expect(paths("/organizations")).toHaveLength(1);
+  });
+
+  it("asks again when another refusal's body stalls, since its code is in the body", async () => {
+    const { provider, fake, credentials, paths } = setup({ timeoutMs: 20 });
+    fake.fail("GET", /^\/projects$/, (request) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          request.signal?.addEventListener("abort", () =>
+            controller.error(new DOMException("aborted", "AbortError"))
+          );
+        },
+      });
+      return new Response(body, { status: 403 });
+    });
+    const error = await rejection(provider.validate(credentials(BOUND_KEY, TEAM_DEFAULT)));
+    expect(error).toMatchObject({ kind: "wrong-scope", code: "project_forbidden" });
+    expect(paths("/projects")).toHaveLength(2);
   });
 });
 
