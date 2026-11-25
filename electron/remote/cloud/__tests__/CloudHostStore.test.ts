@@ -1009,8 +1009,10 @@ describe("CloudHostStore create orders (#18230)", () => {
       ["co_2", "open", null],
       ["co_3", "close", null],
     ]);
-    // A placement whose answer is unknown is still looked for by its key once it closes.
+    // A placement whose answer is unknown is still looked for by its key once it closes, and
+    // one whose order is known keeps it to close.
     expect(store.createOrder("co_3")?.orderIds).toBeNull();
+    expect(store.createOrder("co_1")?.orderIds).toEqual(["dseq-1"]);
   });
 
   it("never acts on an order that doesn't read, and keeps it on disk through every write", () => {

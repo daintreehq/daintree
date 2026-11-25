@@ -806,7 +806,7 @@ export class CloudAccountService {
     values: CloudCredentialValues
   ): Promise<void> {
     // An order a create placed is closed with the account's key, after its host may be gone
-    // (#18230): the new key must reach one of them.
+    // (#18230): the new key must reach one of them, as well as any machine below.
     const orders = this.deps.store.createOrders().filter((order) => order.accountId === account.id);
     let reached = false;
     if (orders.length > 0 || this.deps.store.unreadableOrdersFor(account.id) > 0) {
@@ -822,10 +822,18 @@ export class CloudAccountService {
     const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
     // A create sent and not yet found is looked for, and deleted, with the account's key; one
     // still being readied (Agent 37 registers its key first) is about to be sent with it (#17928).
-    // One whose host was never added (a crash between the two writes) is never sent.
+    // One whose host was never added (a crash between the two writes) is never sent. One waiting
+    // on an offer the new key was just seen to reach is that key's to finish.
+    const ordered = new Set(
+      orders.filter((order) => order.orderIds !== null).map((order) => order.bindingId)
+    );
     if (
       bound.some(
-        (binding) => binding.resourceId === null && binding.creation && binding.hostId !== null
+        (binding) =>
+          binding.resourceId === null &&
+          binding.creation &&
+          binding.hostId !== null &&
+          !(reached && ordered.has(binding.id))
       )
     ) {
       throw invalid(
@@ -835,7 +843,7 @@ export class CloudAccountService {
     const resourceIds = bound
       .filter((binding) => binding.resourceId !== null)
       .map((binding) => binding.resourceId!);
-    if (resourceIds.length === 0 || reached) return;
+    if (resourceIds.length === 0) return;
     const credentials = { values, scopeId: account.scope.id, apiUrl: account.apiUrl };
     for (const resourceId of resourceIds) {
       try {

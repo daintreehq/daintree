@@ -656,6 +656,53 @@ describe("offer-based create (#18230)", () => {
     await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
   });
 
+  it("closes an order left open on a host that has its machine, and refuses its choice meanwhile", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a")];
+    const hostId = await env.create();
+    const first = await env.awaitChoice();
+    await env.lifecycle.chooseOffer(hostId, first.order.id, "a", 0.5);
+    await env.settled();
+    // A second order the host still names as open: written before a crash cut its close short.
+    const stray = env.api.commitLate({ labels: { daintree: "1" }, idempotencyKey: "stray" });
+    const binding = env.store.bindings()[0]!;
+    env.store.putCreateOrder({
+      id: "co_stray",
+      bindingId: binding.id,
+      accountId: env.account.id,
+      providerId: "boat",
+      labels: { daintree: "1" },
+      idempotencyKey: "stray",
+      state: "open",
+      orderIds: [stray],
+      placedAt: env.clock.at,
+      waitingSince: env.clock.at,
+      offerId: null,
+    });
+    await expect(env.lifecycle.chooseOffer(hostId, stray, "a", 0.5)).rejects.toMatchObject({
+      userMessage: "This host has its machine already.",
+    });
+    env.crash();
+    await vi.waitFor(() => expect(env.api.orders.get(stray)?.state).toBe("closed"));
+    await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
+    expect(env.api.leaseOffer).toHaveBeenCalledTimes(1);
+  });
+
+  it("won't delete a host whose lease may have landed while its provider takes no orders", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a")];
+    const hostId = await env.create();
+    const choice = await env.awaitChoice();
+    env.api.plans.close.push("fail");
+    await expect(env.lifecycle.cancelOrder(hostId, choice.order.id)).rejects.toThrow();
+    delete (env.provider as { offerCreate?: unknown }).offerCreate;
+    await expect(env.lifecycle.deleteMachine(hostId, null)).rejects.toMatchObject({
+      userMessage: expect.stringContaining("may have gone through"),
+    });
+    expect(env.hosts.map((host) => host.id)).toEqual([hostId]);
+    expect(env.store.createOrders()).toMatchObject([{ state: "close" }]);
+  });
+
   it("deletes a host whose provider no longer takes orders, leaving its order to be closed", async () => {
     const env = await offerCloud();
     env.api.offersOnPlace = [offer("a")];
@@ -1108,6 +1155,25 @@ describe("offer-based create (#18230)", () => {
       await expect(
         env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_z" })
       ).rejects.toMatchObject({ userMessage: expect.stringContaining("can't reach it") });
+    });
+
+    it("takes a new key for a host waiting on an offer once the key reaches its order", async () => {
+      const env = await offerCloud();
+      env.api.offersOnPlace = [offer("a")];
+      await env.create();
+      const choice = await env.awaitChoice();
+      env.provider.checkCredentials = async () => ({
+        identity: null,
+        scopes: [
+          { scope: { kind: "personal" as const, id: "personal", name: "Personal" }, active: true },
+        ],
+      });
+      await env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_y" });
+      expect(env.api.listOffers).toHaveBeenLastCalledWith(
+        expect.objectContaining({ values: { apiKey: "boat_live_y" } }),
+        choice.order.id
+      );
+      expect(env.status()?.pendingCreate?.order.id).toBe(choice.order.id);
     });
 
     it("keeps an account whose order record this build can't read", async () => {

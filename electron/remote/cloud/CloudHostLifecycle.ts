@@ -673,14 +673,15 @@ type OrderSettlement =
 
 const ORDER_GONE = "That order isn't waiting on a choice any more. Check the host and try again.";
 
-/** A provider's id for an order or offer, as Daintree keeps and passes it; null for one it can't. */
+/** A provider's id for an order or offer, kept whatever its length; null for none. */
 function opaqueId(raw: unknown): string | null {
-  return typeof raw === "string" && raw.length > 0 && raw.length <= 512 ? raw : null;
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
 }
 
+/** An id a view sends back: one it read from a snapshot, so never an unbounded string. */
 function checkedOpaqueId(raw: unknown, what: string): string {
   const id = opaqueId(raw);
-  if (id === null) throw invalid(`Missing the ${what}.`);
+  if (id === null || id.length > 4096) throw invalid(`Missing the ${what}.`);
   return id;
 }
 
@@ -1823,9 +1824,14 @@ export class CloudHostLifecycle {
       offerId: null,
     };
     this.stage(binding.id, `Placing an order with ${nameOf(provider)}`);
-    if (signal.aborted || !this.deps.store.binding(binding.id)) {
+    const current = this.deps.store.binding(binding.id);
+    if (signal.aborted || !current) {
       throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     }
+    // A lease bound while this was readied gave the host its machine: nothing more is placed.
+    if (current.resourceId) return;
+    const fenced = this.deps.accounts.createRefusal(binding.accountId);
+    if (fenced) throw invalid(fenced);
     this.deps.store.putCreateOrder(record);
     if (request.publicKey !== null) this.placedKeys.set(record.id, keyIdentity(request.publicKey));
     let placedId: string | null;
@@ -2146,7 +2152,13 @@ export class CloudHostLifecycle {
     const at = this.now();
     for (const order of this.actionableOrders()) {
       if (bindingId !== undefined && order.bindingId !== bindingId) continue;
-      if (order.state === "open" || this.orderWork.has(order.id)) continue;
+      if (this.orderWork.has(order.id)) continue;
+      if (order.state === "open") {
+        // A host with its machine chooses nothing more: an order left open (a crash after the
+        // bind, say) is closed.
+        if (!this.deps.store.binding(order.bindingId)?.resourceId) continue;
+        this.markClosing(order.id);
+      }
       // A placement or lease still out is its operation's; a close is anyone's, joined if under way.
       if (
         order.state !== "close" &&
@@ -2388,12 +2400,17 @@ export class CloudHostLifecycle {
     } catch (error) {
       const described = provider.describeError(error);
       if (!signal.aborted && leaseRefused(described.code)) {
-        // Nothing was leased: the order stays open for another choice.
+        // Nothing was leased: the order stays open for another choice, unless the host got its
+        // machine meanwhile, when it is closed.
+        const hasMachine = !!this.deps.store.binding(bindingId)?.resourceId;
         const reopened = this.deps.store.updateCreateOrder(orderRecordId, (order) =>
           order.state === "leasing" && order.offerId === offerId
-            ? { ...order, state: "open", offerId: null }
+            ? hasMachine
+              ? { ...order, state: "close", offerId: null }
+              : { ...order, state: "open", offerId: null }
             : order
         );
+        if (reopened?.state === "close") void this.settleOrder(orderRecordId).catch(() => {});
         const read = this.offerReads.get(orderRecordId);
         if (read) {
           this.offerReads.set(orderRecordId, {
@@ -2929,10 +2946,20 @@ export class CloudHostLifecycle {
       await running.promise.catch(() => {});
     }
     // Its orders are closed first, so a machine a lease made (here, or one this device never
-    // heard of) is deleted with the host. One still being placed leased nothing, and one whose
-    // provider no longer takes orders can't be closed here: their closes run once the host is
-    // forgotten, and keep trying.
+    // heard of) is deleted with the host. One still being placed leased nothing: its close runs
+    // once the host is forgotten. A provider that no longer takes orders can't close them here:
+    // the host goes, its orders keep trying, unless one may hold a lease nobody could delete.
     const closesOrders = !!this.registeredProvider(confirmed.providerId)?.offerCreate;
+    if (!closesOrders) {
+      const mayHoldLease = this.ordersFor(confirmed.id).some(
+        (order) => order.state === "leasing" || order.state === "close"
+      );
+      if (mayHoldLease) {
+        throw invalid(
+          "A lease for this host may have gone through, and its provider can't be asked about it now. Try again once it can."
+        );
+      }
+    }
     for (const order of closesOrders ? this.ordersFor(confirmed.id) : []) {
       if (order.state === "placing") continue;
       this.markClosing(order.id);
