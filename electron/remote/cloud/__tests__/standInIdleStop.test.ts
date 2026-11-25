@@ -456,6 +456,22 @@ describe("stopping a machine from the desktop when its own idle stop was refused
     expect(env.standInClaims()).toBe(1);
   });
 
+  it("refuses an idle stop through a provider with no stop, as a stop it never sent", async () => {
+    const env = await device("boat");
+    env.fake.issue.mockRejectedValue(ADMIN_MISSING());
+    await env.armed();
+    const describeError = vi.spyOn(env.fake.impl, "describeError");
+    delete (env.fake.impl as { stop?: unknown }).stop;
+
+    await env.host.idleTimeEnds();
+    await env.lifecycle.stopIdleDue();
+
+    expect(env.standInClaims()).toBe(1);
+    // Never read as a stop whose answer was lost, which would go looking for its outcome.
+    expect(describeError).not.toHaveBeenCalled();
+    expect(env.status()).toMatchObject({ machine: "running", lastError: null });
+  });
+
   it.each(["aws", "gce"] as const)(
     "stops an %s machine whose login sudo won't let power off, once it confirmed it is that machine",
     async (kind) => {

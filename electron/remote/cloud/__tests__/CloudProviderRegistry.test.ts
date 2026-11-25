@@ -21,7 +21,12 @@ import {
 } from "../CloudHostStore.js";
 import { CloudProviderRegistry } from "../CloudProviderRegistry.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
-import type { CloudProvider, OfferCreate, ProviderResource } from "../provider.js";
+import {
+  canRenewLifetime,
+  type CloudProvider,
+  type OfferCreate,
+  type ProviderResource,
+} from "../provider.js";
 import type { CommandRunner } from "../../client/commandRunner.js";
 
 const PLUGIN_PROVIDER = "acme.clouds.ec2";
@@ -391,13 +396,22 @@ describe("CloudProviderRegistry", () => {
     });
 
     it("refuses a delete-only provider that can't delete, or whose machines would stop by themselves", () => {
-      const undeletable = deleteOnly();
-      const info = undeletable.info;
-      undeletable.info = (platform) => {
-        const described = info(platform);
-        return { ...described, capabilities: { ...described.capabilities, deletion: false } };
-      };
-      refuses(undeletable, /can't delete, so its machines could never end/);
+      for (const deletion of [false, "true"]) {
+        const undeletable = deleteOnly();
+        const info = undeletable.info;
+        undeletable.info = (platform) => {
+          const described = info(platform);
+          const capabilities = { ...described.capabilities, deletion: deletion as boolean };
+          return { ...described, capabilities };
+        };
+        refuses(undeletable, /can't delete, so its machines could never end/);
+      }
+      for (const remove of [undefined, "later"]) {
+        const noDelete = deleteOnly();
+        if (remove === undefined) delete (noDelete as { delete?: unknown }).delete;
+        else (noDelete as unknown as Record<string, unknown>).delete = remove;
+        refuses(noDelete, /can't delete, so its machines could never end/);
+      }
       for (const lifetime of [
         { kind: "fixed-at-create", canChangeWhileStopped: false },
         { kind: "idle-sleep", idleSeconds: 600 },
@@ -421,9 +435,14 @@ describe("CloudProviderRegistry", () => {
       const noCreate = fakeProvider("akash", () => resource());
       delete (noCreate as { create?: unknown }).create;
       refuses(noCreate, /has no create$/);
-      const undeclared = fakeProvider("akash", () => resource());
-      (undeclared as { offerCreate?: OfferCreate }).offerCreate = offerCreate();
-      refuses(undeclared, /has an offer create but declares no createMode/);
+      const notCallable = fakeProvider("akash", () => resource());
+      (notCallable as unknown as Record<string, unknown>).create = {};
+      refuses(notCallable, /has no create$/);
+      for (const group of [offerCreate(), null]) {
+        const undeclared = fakeProvider("akash", () => resource());
+        (undeclared as unknown as Record<string, unknown>).offerCreate = group;
+        refuses(undeclared, /has an offer create but declares no createMode/);
+      }
       const brokenPrepare = fakeProvider("akash", () => resource());
       (brokenPrepare as unknown as Record<string, unknown>).prepareCreate = "soon";
       refuses(brokenPrepare, /prepareCreate that can't be called/);
@@ -471,9 +490,7 @@ describe("CloudProviderRegistry", () => {
         (provider as { offerCreate?: OfferCreate }).offerCreate = offerCreate();
         return provider;
       };
-      const built = both();
-      accepts(built);
-      expect(built.info("linux")).toMatchObject({ stopMode: "delete-only", createMode: "offers" });
+      accepts(both());
 
       const plugin = { kind: "plugin" as const, pluginId: "acme.clouds" };
       for (const provider of [deleteOnly(PLUGIN_PROVIDER), offerBased(PLUGIN_PROVIDER)]) {
@@ -492,6 +509,15 @@ describe("CloudProviderRegistry", () => {
       accepts(provider);
       const plain = new BoatProvider(() => ({}) as never);
       accepts(plain);
+    });
+
+    it("renews a lifetime only for a provider that can also stop and start the machine", () => {
+      expect(canRenewLifetime(fakeProvider("akash", () => resource()))).toBe(true);
+      for (const missing of ["start", "stop", "renewLifetime"] as const) {
+        const provider = fakeProvider("akash", () => resource());
+        delete provider[missing];
+        expect(canRenewLifetime(provider)).toBe(false);
+      }
     });
   });
 

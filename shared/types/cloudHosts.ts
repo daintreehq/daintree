@@ -584,8 +584,11 @@ export type CloudCreateOffer = {
 export interface CloudCreateOfferChoice {
   kind: "awaiting-offer";
   order: CloudCreateOrder;
-  /** When the order was placed. */
-  placedAt: number;
+  /**
+   * When this device began waiting on the choice: it placed the order then,
+   * or found it again after the placement's answer was lost.
+   */
+  waitingSince: number;
   /** Its offers as last read, those that can't be chosen too; [] before any arrived. */
   offers: CloudCreateOffer[];
   /** When the offers were last read; null before the first read. */

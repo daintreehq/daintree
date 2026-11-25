@@ -90,6 +90,9 @@ export type GuestPowerOffCheck =
       problem: string;
     };
 
+/** How a close left an order: closed, or kept because one of its offers was leased, with that machine. */
+export type CloseOrderOutcome = { kind: "closed" } | { kind: "leased"; resource: ProviderResource };
+
 /**
  * A create that goes through offers (`createMode: "offers"`): an order is
  * placed, bidders answer it with offers, and the one the person chose is
@@ -131,9 +134,10 @@ export interface OfferCreate {
   /**
    * Closes an order nobody chose from: `closed` once it is, and when it
    * already was. Never ends a lease: when one of its offers was leased it
-   * answers `leased` and leaves the order, whose machine only `delete` ends.
+   * leaves the order and answers `leased` with that machine, which only
+   * `delete` ends, so a lease whose answer was lost is still bound.
    */
-  closeOrder(credentials: ProviderCredentials, orderId: string): Promise<"closed" | "leased">;
+  closeOrder(credentials: ProviderCredentials, orderId: string): Promise<CloseOrderOutcome>;
 }
 
 /**
@@ -364,7 +368,7 @@ export function stopContractProblem(
   );
   if (present.length > 0) return `has no stop but has ${present.join(", ")}`;
   // Delete is then the only way a machine ends, and a deadline or idle sleep would be a stop.
-  if (info.capabilities.deletion !== true) {
+  if (info.capabilities.deletion !== true || typeof provider.delete !== "function") {
     return "has no stop and can't delete, so its machines could never end";
   }
   const { lifetime } = info.capabilities;
