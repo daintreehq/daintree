@@ -78,16 +78,17 @@ export const HOST_PACKAGES_COMMAND = `apt-get update && apt-get satisfy -y --no-
 export const HOST_PACKAGES_ROOT_SCRIPT = [
   `[ "$(id -u)" = 0 ] || exit 40`,
   `trap '' HUP PIPE`,
-  `l=/run/lock; [ -d "$l" ] && [ -w "$l" ] || l=/tmp`,
-  `exec 9>"$l/daintree-host-packages.lock"`,
-  `if command -v flock >/dev/null 2>&1; then flock -w 480 9 || exit 44; fi`,
+  // In /run, where only root makes files; without it or flock, nothing is waited for.
+  `k=/run/daintree-host-packages.lock`,
+  `if command -v flock >/dev/null 2>&1 && ( umask 077; : >>"$k" ) 2>/dev/null; then exec 9>>"$k"; flock -w 480 9 || exit 44; fi`,
   `export DEBIAN_FRONTEND=noninteractive`,
   `e=$(mktemp) || exit 43`,
   `trap 'rm -f "$e"' 0`,
   `fail() { tail -n 3 "$e" >&2; exit "$1"; }`,
   `t=""; if command -v timeout >/dev/null 2>&1; then t="timeout 60s"; fi`,
-  `n=0; until $t apt-get -o DPkg::Lock::Timeout=60 --error-on=any update </dev/null >/dev/null 2>"$e"; do n=$((n+1)); [ "$n" -ge 6 ] && fail 41; sleep 10; done`,
-  `apt-get -o DPkg::Lock::Timeout=120 satisfy -y --no-install-recommends ${RELATIONS} </dev/null >/dev/null 2>"$e" || fail 42`,
+  `n=0; until $t apt-get -o DPkg::Lock::Timeout=60 --error-on=any update </dev/null >/dev/null 2>"$e" 9>&-; do n=$((n+1)); [ "$n" -ge 6 ] && fail 41; sleep 10; done`,
+  // fd 9 stays with this script: a service a package starts mustn't hold the lock after it.
+  `apt-get -o DPkg::Lock::Timeout=120 satisfy -y --no-install-recommends ${RELATIONS} </dev/null >/dev/null 2>"$e" 9>&- || fail 42`,
 ].join("; ");
 
 const INSTALL_FAILURES: Record<number, string> = {
