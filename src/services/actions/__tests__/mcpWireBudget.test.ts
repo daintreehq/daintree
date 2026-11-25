@@ -640,6 +640,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // result schema is closed, so the field must be advertised; it reuses
   // `terminal.list`'s schema and description, and the neighbouring descriptions
   // that name the held case (`hasPty`, `exitCode`, `error`) net to 3 B less.
+  // 64_400 → MEASURE_EXT_CEIL for #18178, measured at MEASURE_EXT B (+MEASURE_EXT_DELTA over develop's
+  // 64_377): `holdOnRestart` on `agent.launch`, so a one-shot worker can be
+  // launched already held on restart instead of resuming into its finished
+  // conversation. Its description was cut to a clause first.
   const MAX_EXTERNAL_PAYLOAD_BYTES = 64_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
@@ -1118,6 +1122,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // develop's 204_229): the same `restored` the external half above pays for,
   // on `terminal.getStatus` and on the host status read, whose terminal rows
   // extend the same entry schema.
+  // 205_300 → MEASURE_COH_CEIL for #18178, measured at MEASURE_COH B (+MEASURE_COH_DELTA over develop's
+  // 205_243): the same `holdOnRestart` the external half above pays for, on
+  // `agent.launch` and on `agent.launchInNewWorktree`, whose arguments extend
+  // the launch's, plus `terminal.setHoldOnRestartOwned`, in-app only, so an
+  // Assistant can hold a worker it launched after the fact. Its descriptions
+  // were trimmed first.
   const MAX_COHORT_PAYLOAD_BYTES = 205_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
