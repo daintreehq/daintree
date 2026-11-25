@@ -58,6 +58,7 @@ import {
   type StoredWorktreeCleanup,
 } from "./CloudHostStore.js";
 import { findOnPath } from "../../utils/findOnPath.js";
+import { raceAbort } from "../../utils/raceAbort.js";
 import type {
   CloudSshAccessRecord,
   CloudSshFiles,
@@ -591,6 +592,22 @@ function sameWorktree(a: CloudWorktreeRef, b: CloudWorktreeRef): boolean {
   return a.hostId === b.hostId && a.projectId === b.projectId && a.worktreeId === b.worktreeId;
 }
 
+/** What a Bring back's wake asks of the start it runs (#18183). */
+interface WakeRequest {
+  hostId: HostId;
+  /** The Bring back's own signal: once it aborts, the wake no longer wants the machine. */
+  asked: AbortSignal;
+  /** Hears the provider take the start. */
+  sent(): void;
+  /** A person's Start joined it: it starts the machine as that Start would. */
+  joined: boolean;
+}
+
+/** Whether the provider's last word on the machine is that it is asleep. */
+function readsAsleep(binding: StoredCloudBinding): boolean {
+  return machineOf(binding) === "stopped" && binding.observation?.asleep === true;
+}
+
 function machineOf(binding: StoredCloudBinding): CloudMachineState {
   if (!binding.resourceId) return "not-created";
   return (binding.observation?.machine as CloudMachineState | undefined) ?? "unknown";
@@ -669,6 +686,8 @@ export class CloudHostLifecycle {
   private stopWatchingStore: (() => void) | null = null;
   /** Machines being put to sleep by their host's idle time: no dial resolves access to them meanwhile (#17916). */
   private readonly idleSleeping = new Set<string>();
+  /** A Bring back's start under way per binding (#18183), which may yet decide not to start. */
+  private readonly wakeStarts = new Map<string, WakeRequest>();
   /** Idle times being sent to each machine's provider, so a later one never lands first. */
   private readonly idleTimeWrites = new Map<string, Promise<void>>();
   /**
@@ -1613,6 +1632,17 @@ export class CloudHostLifecycle {
       if (binding.creation) return this.retryCreate(hostId);
       throw invalid("This host has no machine yet.");
     }
+    // A Bring back's wake under way becomes this Start: it joins it, and it starts the machine
+    // as a Start would, whatever the wake would have decided. One a Stop or removal already
+    // ended is waited out instead, so this Start comes after that, not into it.
+    const waking = this.wakeStarts.get(binding.id);
+    const running = this.operations.get(binding.id);
+    if (waking && running?.kind === "starting" && running.controller.signal.aborted) {
+      await running.promise.catch(() => {});
+    } else if (waking) {
+      waking.joined = true;
+      this.deps.store.updateBinding(binding.id, (current) => ({ ...current, intent: "run" }));
+    }
     await this.operate(
       binding.id,
       "starting",
@@ -1621,7 +1651,106 @@ export class CloudHostLifecycle {
     );
   }
 
-  private async runStart(bindingId: string, signal: AbortSignal): Promise<void> {
+  /**
+   * An explicit Bring back's wake (#18183): when the provider, asked now, says
+   * the machine is asleep, starts it as a person's Start would and waits until
+   * it runs. Anything else is left as it is, for the dial to report: a machine
+   * a person stopped, one its provider stopped rather than put to sleep, one
+   * being removed or operated on. A start already under way is waited out, and
+   * a sleep this device is putting it into finishes before it is read. Nothing
+   * is sent once `signal` aborts; a start already sent runs to its end.
+   * Resolves whether this sent a start, and `sent` hears the provider take it.
+   */
+  async wakeIfAsleep(
+    hostId: HostId,
+    bindingId: string,
+    signal: AbortSignal,
+    sent: () => void
+  ): Promise<boolean> {
+    // A few looks at most: a sleep or an operation beginning between two of them means look again.
+    for (let look = 0; look < 3; look++) {
+      const sleeping = this.idleSleeping.has(bindingId) ? this.idleAttempts.get(bindingId) : null;
+      if (sleeping) await raceAbort(sleeping, signal, undefined);
+      let binding = this.wakeable(hostId, bindingId, signal);
+      if (!binding) return false;
+      const running = this.operations.get(bindingId);
+      if (running) {
+        // Someone else's start: the dial follows it, but this attempt sent nothing.
+        if (running.kind === "starting") {
+          await raceAbort(
+            running.promise.catch(() => {}),
+            signal,
+            undefined
+          );
+        }
+        return false;
+      }
+      const { provider, credentials } = await this.context(binding);
+      try {
+        await this.inspectInto(bindingId, provider, credentials);
+      } catch (error) {
+        throw this.deps.accounts.asAppError(provider, error);
+      }
+      // Whether this read was written or a newer one overtook it, the binding holds the newest word.
+      binding = this.wakeable(hostId, bindingId, signal);
+      if (!binding) return false;
+      if (this.idleSleeping.has(bindingId) || this.operations.has(bindingId)) continue;
+      if (!readsAsleep(binding)) return false;
+      let startSent = false;
+      const request: WakeRequest = {
+        hostId,
+        asked: signal,
+        joined: false,
+        sent: () => {
+          startSent = true;
+          sent();
+        },
+      };
+      // runStart reads it once more inside the operation and starts it only if still asleep
+      // and still wakeable, so a Stop, cleanup or removal that came while this looked wins.
+      const starting = this.operate(bindingId, "starting", (operation) =>
+        this.runStart(bindingId, operation, request)
+      );
+      this.wakeStarts.set(bindingId, request);
+      void starting
+        .finally(() => {
+          if (this.wakeStarts.get(bindingId) === request) this.wakeStarts.delete(bindingId);
+        })
+        .catch(() => {});
+      try {
+        // Let go of a caller that gave up; the start, once sent, is the lifecycle's to finish.
+        await raceAbort(starting, signal, undefined);
+      } catch (error) {
+        throw this.deps.accounts.asAppError(provider, error);
+      }
+      return startSent;
+    }
+    return false;
+  }
+
+  /** The binding a Bring back may wake, while nothing rules a wake out. */
+  private wakeable(
+    hostId: HostId,
+    bindingId: string,
+    signal: AbortSignal
+  ): StoredCloudBinding | null {
+    if (this.disposed || signal.aborted || this.removing.has(bindingId)) return null;
+    // A worktree's cleanup stops or deletes it: never started from under that.
+    if (this.cleanupRuns.has(bindingId)) return null;
+    const binding = this.deps.store.binding(bindingId);
+    if (!binding?.resourceId || binding.hostId !== hostId) return null;
+    if (binding.worktreeCleanup?.phase === "due") return null;
+    // A person's Stop holds until they Start it again.
+    if (binding.intent === "stop") return null;
+    if (this.deps.accounts.providerUnavailable(binding.providerId) !== null) return null;
+    return binding;
+  }
+
+  private async runStart(
+    bindingId: string,
+    signal: AbortSignal,
+    wake?: WakeRequest
+  ): Promise<void> {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) return;
     const { provider, credentials } = await this.context(binding, signal);
@@ -1630,6 +1759,24 @@ export class CloudHostLifecycle {
     // A read overtaken by a newer one is asked again: a start acts on the newest word.
     while (!(resource = await this.inspectInto(bindingId, provider, credentials))) {
       if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
+    }
+    // A Stop or removal that ended the wake while it read sends nothing, a joined Start included.
+    if (wake && signal.aborted) return;
+    // Whether this start is the wake's own decision, rather than a person's Start that joined it.
+    const woken = wake !== undefined && !wake.joined;
+    if (wake && woken) {
+      // Only a machine asleep by this read and by the newest one, through the provider still
+      // registered, while nothing has ruled a wake out and someone still wants it back.
+      const current = this.wakeable(wake.hostId, bindingId, wake.asked);
+      if (
+        !current ||
+        resource.machine !== "stopped" ||
+        resource.asleep !== true ||
+        !readsAsleep(current) ||
+        !this.stillRegistered(current.providerId, provider)
+      ) {
+        return;
+      }
     }
     if (resource.dataExpired) {
       const error: CloudHostError = {
@@ -1653,6 +1800,10 @@ export class CloudHostLifecycle {
     }
     if (startable) {
       this.stage(bindingId, "Starting the machine");
+      // A wake is a Start asked for another way: the machine is meant to run from here.
+      if (wake && binding.intent !== "run") {
+        this.deps.store.updateBinding(bindingId, (current) => ({ ...current, intent: "run" }));
+      }
       try {
         const ticket = this.ticket();
         const started = await provider.start(
@@ -1660,6 +1811,7 @@ export class CloudHostLifecycle {
           binding.resourceId!,
           startOptions(lifetimeModelOf(provider), binding.lifetimeSeconds)
         );
+        if (wake && woken) wake.sent();
         if (started) this.observe(bindingId, started, ticket);
       } catch (error) {
         this.recordError(bindingId, provider.describeError(error));

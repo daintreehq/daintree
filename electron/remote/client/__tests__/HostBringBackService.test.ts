@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { HostWakeSetup } from "../../../../shared/types/hostWake.js";
+import {
+  HOST_BRING_BACK_OBSERVED_MAX,
+  type HostWakeSetup,
+} from "../../../../shared/types/hostWake.js";
 import type {
   HostConnection,
   HostConnectionState,
@@ -35,6 +38,7 @@ function descriptor(
 }
 
 const WAKE = { mac: "0a:1b:2c:3d:4e:5f", lan: "192.168.1.0/24" };
+const CLOUD: HostConnection = { kind: "cloud", bindingId: "binding-1" };
 const ROUTE: WakeRoute = {
   kind: "route",
   localAddress: "192.168.1.20",
@@ -65,6 +69,8 @@ interface Setup {
   state?: HostConnectionState;
   route?: WakeRoute;
   sendWake?: (signal: AbortSignal) => Promise<void>;
+  /** A cloud host's wake; no start goes unless given. */
+  wakeCloud?: (signal: AbortSignal, sent: () => void) => Promise<boolean>;
   /** What the link reports right after the redial; connecting unless given. */
   afterRedial?: HostConnectionState;
 }
@@ -78,6 +84,7 @@ function world(setup: Setup = {}) {
   let holds = 0;
   let allowed = 0;
   const wakes: Array<{ mac: string; route: WakeRoute; signal: AbortSignal }> = [];
+  const cloudWakes: Array<{ hostId: HostId; bindingId: string; signal: AbortSignal }> = [];
   const setLink = (next: HostConnectionState) => {
     state = next;
     for (const listener of [...linkListeners]) listener(HOST, next);
@@ -116,6 +123,11 @@ function world(setup: Setup = {}) {
       wakes.push({ mac, route, signal });
       await setup.sendWake?.(signal);
     },
+    wakeCloud: async (hostId, bindingId, signal, sent) => {
+      calls.push("wake-cloud");
+      cloudWakes.push({ hostId, bindingId, signal });
+      return (await setup.wakeCloud?.(signal, sent)) ?? false;
+    },
     deadlineMs: DEADLINE_MS,
     nudgeMs: NUDGE_MS,
     restartSettleMs: SETTLE_MS,
@@ -134,6 +146,7 @@ function world(setup: Setup = {}) {
       if (host) host = { ...host, connection };
     },
     wakes,
+    cloudWakes,
     allowed: () => allowed,
     /** Everything an attempt held is let go. */
     released: () =>
@@ -513,6 +526,188 @@ describe("HostBringBackService", () => {
     const w = world();
     expect(() => w.service.bringBack("local")).toThrow(/isn't a host to bring back/);
     expect(() => w.service.bringBack("elsewhere")).toThrow(/No host with id elsewhere/);
+  });
+
+  it("starts a cloud host's asleep machine before it dials, and answers woken once the link comes up", async () => {
+    let running!: (started: boolean) => void;
+    let took!: () => void;
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: (_signal, sent) =>
+        new Promise<boolean>((resolve) => {
+          took = sent;
+          running = resolve;
+        }),
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    expect(w.cloudWakes).toMatchObject([{ hostId: HOST, bindingId: "binding-1" }]);
+    // Nothing is dialled while the machine starts.
+    took();
+    await vi.advanceTimersByTimeAsync(NUDGE_MS * 2);
+    expect(w.calls).toEqual(["hold", "wake-cloud"]);
+    running(true);
+    await flush();
+    expect(w.calls).toEqual(["hold", "wake-cloud", "redial"]);
+    w.setLink(CONNECTED);
+    await expect(answer).resolves.toMatchObject({ status: "woken", wake: "sent", reached: true });
+    expect(w.released()).toBe(true);
+  });
+
+  it("calls a start the provider took sent, even when the attempt runs out while it runs", async () => {
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: (_signal, sent) => {
+        sent();
+        return new Promise<boolean>(() => {});
+      },
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS);
+    await expect(answer).resolves.toMatchObject({
+      status: "timed_out",
+      wake: "sent",
+      reached: false,
+    });
+    expect(w.calls).not.toContain("redial");
+    expect(w.cloudWakes[0]!.signal.aborted).toBe(true);
+    expect(w.released()).toBe(true);
+  });
+
+  it("still dials when a cloud machine's start fails, and says why ahead of what the dial saw", async () => {
+    const asleep = "The cloud machine is asleep. Start it to wake it and connect.";
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: () => Promise.reject(new Error("The account is out of credit")),
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    expect(w.calls).toEqual(["hold", "wake-cloud", "redial"]);
+    w.setLink(unreachable(asleep, { stoppedRetrying: true }));
+    await expect(answer).resolves.toMatchObject({
+      status: "unreachable",
+      wake: "failed",
+      observed: `The account is out of credit. ${asleep}`,
+    });
+  });
+
+  it("keeps a start the provider took as sent when the machine then fails to come up", async () => {
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: (_signal, sent) => {
+        sent();
+        return Promise.reject(new Error("The machine failed to start."));
+      },
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    expect(w.calls).toEqual(["hold", "wake-cloud", "redial"]);
+    w.setLink(unreachable("ssh exited with code 255"));
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS);
+    await expect(answer).resolves.toMatchObject({
+      status: "timed_out",
+      wake: "sent",
+      observed: "The machine failed to start. ssh exited with code 255",
+    });
+  });
+
+  it("gives a host that says it is restarting during a long cloud wake its while from when it said so", async () => {
+    let running!: (started: boolean) => void;
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: (_signal, sent) => {
+        sent();
+        return new Promise<boolean>((resolve) => {
+          running = resolve;
+        });
+      },
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    await vi.advanceTimersByTimeAsync(40_000);
+    w.setLink(unreachable(null, { restarting: true }));
+    running(true);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS - 1);
+    expect(w.calls).not.toContain("redial");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(w.calls).toContain("redial");
+    w.setLink(CONNECTED);
+    await expect(answer).resolves.toMatchObject({ status: "woken", wake: "sent" });
+  });
+
+  it("keeps what the dial saw when a cloud machine's start failed at length", async () => {
+    const long = `The provider refused the start: ${"x".repeat(HOST_BRING_BACK_OBSERVED_MAX)}`;
+    const blocker = "The machine's host key changed. Review it in the host's details.";
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: () => Promise.reject(new Error(long)),
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    w.setLink(unreachable(blocker, { stoppedRetrying: true }));
+    const settled = await answer;
+    expect(settled.observed!.endsWith(blocker)).toBe(true);
+    expect(settled.observed!.startsWith("The provider refused the start:")).toBe(true);
+    expect(settled.observed!.length).toBeLessThanOrEqual(HOST_BRING_BACK_OBSERVED_MAX);
+  });
+
+  it("dials nothing once a cloud host's attempt is cancelled while its machine starts", async () => {
+    let running!: (started: boolean) => void;
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: (_signal, sent) => {
+        sent();
+        return new Promise<boolean>((resolve) => {
+          running = resolve;
+        });
+      },
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    w.service.cancel(HOST);
+    await expect(answer).resolves.toMatchObject({ status: "cancelled", wake: "sent" });
+    expect(w.cloudWakes[0]!.signal.aborted).toBe(true);
+    running(true);
+    await flush();
+    expect(w.calls).not.toContain("redial");
+  });
+
+  it("keeps dialling a cloud host whose tunnel fails before it answers, until it comes up", async () => {
+    const w = world({ host: descriptor({ connection: CLOUD }) });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    // Its machine wasn't asleep: no start went, and the dial follows at once.
+    expect(w.calls).toEqual(["hold", "wake-cloud", "redial"]);
+    // The tunnel may be waking the machine: failed dials are no answer while time remains.
+    for (let attempt = 2; attempt <= 4; attempt++) {
+      w.setLink(unreachable("ssh exited with code 255"));
+      await vi.advanceTimersByTimeAsync(NUDGE_MS);
+      w.setLink({ status: "connecting", attempt });
+    }
+    expect(w.calls.filter((call) => call === "nudge")).toHaveLength(3);
+    w.setLink(CONNECTED);
+    await expect(answer).resolves.toMatchObject({
+      status: "connected",
+      wake: "not_needed",
+      reached: true,
+    });
+    expect(w.released()).toBe(true);
+  });
+
+  it("ends a cloud host's attempt as unreachable once its link parks", async () => {
+    const w = world({ host: descriptor({ connection: CLOUD }) });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    w.setLink(unreachable("ssh exited with code 255"));
+    w.setLink({ status: "connecting", attempt: 2 });
+    const stopped = "The cloud machine is stopped. Start it to connect.";
+    w.setLink(unreachable(stopped, { stoppedRetrying: true }));
+    await expect(answer).resolves.toMatchObject({
+      status: "unreachable",
+      wake: "not_needed",
+      observed: stopped,
+    });
   });
 
   it("never wakes a WSL distro, and calls one it can't open unreachable", async () => {

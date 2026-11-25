@@ -1028,6 +1028,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     observeStarts: (hostId, listener) => starts.observe(hostId, listener),
     wakeRoute: (wake) => wakeRouteFor(wake),
     sendWake: (mac, route, signal) => sendWakePacket(mac, route, { signal }),
+    wakeCloud: (hostId, bindingId, signal, sent) =>
+      requireCloudLifecycle().wakeIfAsleep(hostId, bindingId, signal, sent),
   });
   const recheckStart = (hostId: HostId): void => {
     const descriptor = registry.get(hostId);

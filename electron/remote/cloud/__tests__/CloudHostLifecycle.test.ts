@@ -18,6 +18,7 @@ import type {
   CloudSshTransport,
   CloudSshTrust,
 } from "../../../../shared/types/cloudHosts.js";
+import { AppError } from "../../../utils/errorTypes.js";
 import { TransportError, UnusableConnectionError } from "../../client/transport.js";
 import { hostKeyFingerprint } from "../sshEndpoint.js";
 import { BoatApiError } from "../boat/BoatClient.js";
@@ -4919,6 +4920,310 @@ describe("CloudHostLifecycle with a provider that takes the key at create and sl
   });
 });
 
+describe("CloudHostLifecycle wake for an explicit Bring back (#18183)", () => {
+  const IDLE: CloudLifetimeModel = { kind: "idle-sleep", idleSeconds: 1800 };
+  const ASLEEP: Partial<ProviderResource> = {
+    machine: "stopped",
+    rawState: "sleeping",
+    asleep: true,
+  };
+
+  async function imported(initial: Partial<ProviderResource>) {
+    const env = await setup(initial, { lifetime: IDLE });
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    return { ...env, bindingId: env.store.bindings()[0]!.id };
+  }
+
+  it("starts a machine its provider says is asleep, and settles once it runs", async () => {
+    const env = await imported(ASLEEP);
+    const sent = vi.fn();
+    const woke = env.lifecycle.wakeIfAsleep(
+      "build",
+      env.bindingId,
+      new AbortController().signal,
+      sent
+    );
+    await expect(woke).resolves.toBe(true);
+    expect(env.provider.start).toHaveBeenCalledTimes(1);
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(env.lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null });
+    expect(env.store.bindings()[0]!.intent).toBe("run");
+    // The dial that follows resolves access to the running machine.
+    await expect(env.lifecycle.ensureAccess(env.bindingId)).resolves.toBeDefined();
+  });
+
+  it("reads the machine afresh, so one that fell asleep since a look found it running is started", async () => {
+    let now = 1_000_000;
+    const env = await setup({ machine: "running" }, { lifetime: IDLE, now: () => now });
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    env.state.machine = resource(ASLEEP);
+    now += 1_000;
+    const bindingId = env.store.bindings()[0]!.id;
+    await expect(
+      env.lifecycle.wakeIfAsleep("build", bindingId, new AbortController().signal, () => {})
+    ).resolves.toBe(true);
+    expect(env.provider.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a running machine, and one stopped rather than asleep, as they are", async () => {
+    for (const initial of [
+      { machine: "running" },
+      { machine: "stopped", rawState: "stopped" },
+    ] as const) {
+      const env = await imported(initial);
+      const sent = vi.fn();
+      await expect(
+        env.lifecycle.wakeIfAsleep("build", env.bindingId, new AbortController().signal, sent)
+      ).resolves.toBe(false);
+      expect(env.provider.start).not.toHaveBeenCalled();
+      expect(sent).not.toHaveBeenCalled();
+    }
+  });
+
+  it("never wakes a machine a person stopped, a host it doesn't belong to, or once the caller gave up", async () => {
+    const env = await imported(ASLEEP);
+    const signal = new AbortController().signal;
+    env.store.updateBinding(env.bindingId, (current) => ({ ...current, intent: "stop" }));
+    await expect(
+      env.lifecycle.wakeIfAsleep("build", env.bindingId, signal, () => {})
+    ).resolves.toBe(false);
+    env.store.updateBinding(env.bindingId, (current) => ({ ...current, intent: null }));
+    await expect(
+      env.lifecycle.wakeIfAsleep("other", env.bindingId, signal, () => {})
+    ).resolves.toBe(false);
+    const gaveUp = new AbortController();
+    gaveUp.abort();
+    await expect(
+      env.lifecycle.wakeIfAsleep("build", env.bindingId, gaveUp.signal, () => {})
+    ).resolves.toBe(false);
+    expect(env.provider.start).not.toHaveBeenCalled();
+  });
+
+  it("starts nothing when the machine's newest read, inside the start, no longer says asleep", async () => {
+    const env = await imported(ASLEEP);
+    vi.mocked(env.provider.inspect)
+      .mockImplementationOnce(async () => resource(ASLEEP))
+      .mockImplementationOnce(async () => resource({ machine: "stopped", rawState: "stopped" }));
+    await expect(
+      env.lifecycle.wakeIfAsleep("build", env.bindingId, new AbortController().signal, () => {})
+    ).resolves.toBe(false);
+    expect(env.provider.start).not.toHaveBeenCalled();
+    expect(env.lifecycle.statuses()[0]!.operation).toBeNull();
+  });
+
+  it("sends nothing when a person's Start and then their Stop come while the wake reads", async () => {
+    const env = await imported(ASLEEP);
+    const inspect = vi.mocked(env.provider.inspect);
+    let answer!: (resource: ProviderResource) => void;
+    inspect
+      .mockImplementationOnce(async () => resource(ASLEEP))
+      .mockImplementationOnce(
+        () =>
+          new Promise<ProviderResource>((resolve) => {
+            answer = resolve;
+          })
+      );
+    const calls = inspect.mock.calls.length;
+    const woke = env.lifecycle.wakeIfAsleep(
+      "build",
+      env.bindingId,
+      new AbortController().signal,
+      () => {}
+    );
+    await vi.waitFor(() => expect(inspect.mock.calls.length).toBe(calls + 2));
+    const starting = env.lifecycle.startMachine("build");
+    const stopping = env.lifecycle.stopMachine("build");
+    answer(resource(ASLEEP));
+    await expect(woke).resolves.toBe(false);
+    await starting.catch(() => {});
+    await stopping;
+    expect(env.provider.start).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.intent).toBe("stop");
+  });
+
+  it("puts a person's Start after a Stop that already ended the wake, not into the wake", async () => {
+    const env = await imported(ASLEEP);
+    const inspect = vi.mocked(env.provider.inspect);
+    let answer!: (resource: ProviderResource) => void;
+    inspect
+      .mockImplementationOnce(async () => resource(ASLEEP))
+      .mockImplementationOnce(
+        () =>
+          new Promise<ProviderResource>((resolve) => {
+            answer = resolve;
+          })
+      );
+    const calls = inspect.mock.calls.length;
+    const woke = env.lifecycle.wakeIfAsleep(
+      "build",
+      env.bindingId,
+      new AbortController().signal,
+      () => {}
+    );
+    await vi.waitFor(() => expect(inspect.mock.calls.length).toBe(calls + 2));
+    const stopping = env.lifecycle.stopMachine("build");
+    const starting = env.lifecycle.startMachine("build");
+    answer(resource(ASLEEP));
+    await expect(woke).resolves.toBe(false);
+    await stopping;
+    // Refused in so many words, never answered as done with nothing sent.
+    await expect(starting).rejects.toThrow(/stopping/);
+    expect(env.provider.start).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.intent).toBe("stop");
+  });
+
+  it("never calls a person's Start that joined the wake the wake's own start", async () => {
+    const env = await imported(ASLEEP);
+    const inspect = vi.mocked(env.provider.inspect);
+    let answer!: (resource: ProviderResource) => void;
+    inspect
+      .mockImplementationOnce(async () => resource(ASLEEP))
+      .mockImplementationOnce(
+        () =>
+          new Promise<ProviderResource>((resolve) => {
+            answer = resolve;
+          })
+      );
+    const calls = inspect.mock.calls.length;
+    const sent = vi.fn();
+    const woke = env.lifecycle.wakeIfAsleep(
+      "build",
+      env.bindingId,
+      new AbortController().signal,
+      sent
+    );
+    await vi.waitFor(() => expect(inspect.mock.calls.length).toBe(calls + 2));
+    const starting = env.lifecycle.startMachine("build");
+    // Stopped rather than asleep by now: no wake would start it, the person's Start does.
+    answer(resource({ machine: "stopped", rawState: "stopped" }));
+    await expect(woke).resolves.toBe(false);
+    await starting;
+    expect(env.provider.start).toHaveBeenCalledTimes(1);
+    expect(sent).not.toHaveBeenCalled();
+    expect(env.lifecycle.statuses()[0]!.machine).toBe("running");
+  });
+
+  it("hears the start sent only once the provider took it", async () => {
+    const env = await imported(ASLEEP);
+    let take!: () => void;
+    vi.mocked(env.provider.start).mockImplementationOnce(
+      () =>
+        new Promise<ProviderResource>((resolve) => {
+          take = () => {
+            env.state.machine = resource({ machine: "running" });
+            resolve(resource({ machine: "starting", rawState: "provisioning" }));
+          };
+        })
+    );
+    const sent = vi.fn();
+    const woke = env.lifecycle.wakeIfAsleep(
+      "build",
+      env.bindingId,
+      new AbortController().signal,
+      sent
+    );
+    await vi.waitFor(() => expect(env.provider.start).toHaveBeenCalledTimes(1));
+    expect(sent).not.toHaveBeenCalled();
+    take();
+    await expect(woke).resolves.toBe(true);
+    expect(sent).toHaveBeenCalledTimes(1);
+  });
+
+  it("still starts the machine for a person's Start that came while a wake gave up", async () => {
+    const env = await imported(ASLEEP);
+    const inspect = vi.mocked(env.provider.inspect);
+    let answer!: (resource: ProviderResource) => void;
+    inspect
+      .mockImplementationOnce(async () => resource(ASLEEP))
+      .mockImplementationOnce(
+        () =>
+          new Promise<ProviderResource>((resolve) => {
+            answer = resolve;
+          })
+      );
+    const calls = inspect.mock.calls.length;
+    const bringBack = new AbortController();
+    const woke = env.lifecycle.wakeIfAsleep("build", env.bindingId, bringBack.signal, () => {});
+    await vi.waitFor(() => expect(inspect.mock.calls.length).toBe(calls + 2));
+    const starting = env.lifecycle.startMachine("build");
+    // The Bring back ends before the wake decides: the wake sends nothing, the person's Start does.
+    bringBack.abort();
+    await expect(woke).resolves.toBe(false);
+    answer(resource(ASLEEP));
+    await starting;
+    expect(env.provider.start).toHaveBeenCalledTimes(1);
+    expect(env.lifecycle.statuses()[0]!.machine).toBe("running");
+  });
+
+  it("sends no start when a person's Stop comes while the wake reads the machine", async () => {
+    const env = await imported(ASLEEP);
+    const inspect = vi.mocked(env.provider.inspect);
+    // The wake's own look answers at once; the start's look inside the operation waits.
+    let answer!: (resource: ProviderResource) => void;
+    inspect
+      .mockImplementationOnce(async () => resource(ASLEEP))
+      .mockImplementationOnce(
+        () =>
+          new Promise<ProviderResource>((resolve) => {
+            answer = resolve;
+          })
+      );
+    const calls = inspect.mock.calls.length;
+    const sent = vi.fn();
+    const woke = env.lifecycle.wakeIfAsleep(
+      "build",
+      env.bindingId,
+      new AbortController().signal,
+      sent
+    );
+    await vi.waitFor(() => expect(inspect.mock.calls.length).toBe(calls + 2));
+    const stopping = env.lifecycle.stopMachine("build");
+    answer(resource(ASLEEP));
+    await expect(woke).resolves.toBe(false);
+    await stopping;
+    expect(env.provider.start).not.toHaveBeenCalled();
+    expect(sent).not.toHaveBeenCalled();
+    expect(env.store.bindings()[0]!.intent).toBe("stop");
+  });
+
+  it("follows a start already under way without calling it its own", async () => {
+    const env = await imported(ASLEEP);
+    const starting = env.lifecycle.startMachine("build");
+    const sent = vi.fn();
+    await expect(
+      env.lifecycle.wakeIfAsleep("build", env.bindingId, new AbortController().signal, sent)
+    ).resolves.toBe(false);
+    // Settled only once that start has the machine running, so the dial that follows finds it up.
+    expect(env.lifecycle.statuses()[0]!.machine).toBe("running");
+    await starting;
+    expect(env.provider.start).toHaveBeenCalledTimes(1);
+    expect(sent).not.toHaveBeenCalled();
+  });
+
+  it("says why when the provider can't be asked, and leaves a background dial read-only", async () => {
+    const env = await imported(ASLEEP);
+    vi.mocked(env.provider.inspect).mockRejectedValueOnce(
+      new BoatApiError("network", "lost", null, null, null)
+    );
+    await expect(
+      env.lifecycle.wakeIfAsleep("build", env.bindingId, new AbortController().signal, () => {})
+    ).rejects.toBeInstanceOf(AppError);
+    // A dial alone never starts it.
+    await expect(env.lifecycle.ensureAccess(env.bindingId)).rejects.toBeInstanceOf(
+      UnusableConnectionError
+    );
+    expect(env.provider.start).not.toHaveBeenCalled();
+  });
+});
+
 describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
   const ROOT = "/Users/me/code/app-worktrees/feature-login";
   const MARK: CloudHostCreatedFor = {
@@ -5209,6 +5514,25 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     supported.mockRestore();
     lifecycle.providersChanged();
     await vi.waitFor(() => expect(provider.delete).toHaveBeenCalledTimes(1));
+  });
+
+  it("never lets an explicit Bring back wake a machine whose worktree's cleanup is due (#18183)", async () => {
+    const { lifecycle, provider, store, state, accounts } = await marked();
+    state.machine = resource({ machine: "stopped", rawState: "sleeping", asleep: true });
+    await lifecycle.refresh("build");
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"));
+    // Its provider is away as the cleanup comes due, so it waits, due, to run.
+    const unavailable = vi
+      .spyOn(accounts, "providerUnavailable")
+      .mockReturnValue("Its plugin is disabled");
+    await lifecycle.settleWorktreeCleanup(WORKTREE, true);
+    unavailable.mockRestore();
+    expect(cleanupOf(store)).toMatchObject({ phase: "due" });
+    const bindingId = store.bindings()[0]!.id;
+    await expect(
+      lifecycle.wakeIfAsleep("build", bindingId, new AbortController().signal, () => {})
+    ).resolves.toBe(false);
+    expect(provider.start).not.toHaveBeenCalled();
   });
 
   it("ends a start under way before its stop, so the machine doesn't come back up", async () => {

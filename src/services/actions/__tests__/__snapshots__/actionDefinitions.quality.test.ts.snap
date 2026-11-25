@@ -3265,7 +3265,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Bring back a host whose link is down: wake it where a wake is set up here, then start Daintree there if its Host mode is on. Up to 2 min; repeat calls join. Answers with what was observed.",
+    "description": "Bring back a host whose link is down: wake it if set up here or start its asleep cloud machine, then start Daintree if Host mode is on. Up to 2 min; repeat calls join. Says what it saw.",
     "examples": undefined,
     "id": "host.bringBack",
     "keywords": [

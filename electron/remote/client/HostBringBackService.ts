@@ -51,6 +51,17 @@ export interface HostBringBackDeps {
     route: Extract<WakeRoute, { kind: "route" }>,
     signal: AbortSignal
   ): Promise<void>;
+  /**
+   * A cloud host's wake (#18183): starts its machine when its provider, asked
+   * now, says it is asleep, and settles once it runs. Resolves whether a start
+   * went; `sent` hears the provider take it. Sends nothing once `signal` aborts.
+   */
+  wakeCloud(
+    hostId: HostId,
+    bindingId: string,
+    signal: AbortSignal,
+    sent: () => void
+  ): Promise<boolean>;
   now?: () => number;
   deadlineMs?: number;
   nudgeMs?: number;
@@ -66,13 +77,20 @@ const REFUSALS: Record<HostStartRefusal, string | null> = {
   busy: "Daintree is being installed there, or the host changed, from this machine.",
 };
 
-function clip(text: string | null): string | null {
+function clip(text: string | null, max = HOST_BRING_BACK_OBSERVED_MAX): string | null {
   if (text === null) return null;
   const trimmed = text.trim();
   if (trimmed.length === 0) return null;
-  return trimmed.length > HOST_BRING_BACK_OBSERVED_MAX
-    ? `${trimmed.slice(0, HOST_BRING_BACK_OBSERVED_MAX - 1)}…`
-    : trimmed;
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+}
+
+/** One observation and then another, as sentences; the first takes half the room at most. */
+function followedBy(first: string, then: string | null): string | null {
+  const after = clip(then);
+  if (after === null || then!.trim() === first.trim()) return clip(first);
+  const lead = clip(first, Math.floor(HOST_BRING_BACK_OBSERVED_MAX / 2));
+  if (lead === null) return after;
+  return `${/[.!?…]$/.test(lead) ? lead : `${lead}.`} ${after}`;
 }
 
 function linkUp(state: HostConnectionState): boolean {
@@ -91,10 +109,13 @@ function restarting(state: HostConnectionState): boolean {
  * host's row) and this machine's assistants (`host.bringBack`) alike: one
  * attempt per host, which every later caller joins until it answers. It
  * sends the host's wake first when one is set up and this machine is on its
- * LAN, then dials it as a person's Retry does, letting that dial start
- * Daintree there in Host mode where Host mode is on. It answers with what it
- * observed once the link is up, can't come up by waiting, or the deadline
- * passes. It never changes the host's settings or turns Host mode on.
+ * LAN, or starts a cloud host's machine that its provider says is asleep
+ * (#18183), then dials it as a person's Retry does, letting that dial start
+ * Daintree there in Host mode where Host mode is on. A cloud host is dialled
+ * again until the deadline, since its tunnel may be waking the machine. It
+ * answers with what it observed once the link is up, can't come up by
+ * waiting, or the deadline passes. It never changes the host's settings or
+ * turns Host mode on.
  */
 export class HostBringBackService {
   private readonly attempts = new Map<HostId, Promise<HostBringBackAnswer>>();
@@ -158,6 +179,7 @@ export class HostBringBackService {
     const hostId = descriptor.id;
     const startedAt = now();
     const ssh = descriptor.connection.kind === "ssh";
+    const cloud = descriptor.connection.kind === "cloud";
     let wake: HostWakeResult = "not_needed";
     let wakeError: string | null = null;
     let reached = false;
@@ -169,6 +191,8 @@ export class HostBringBackService {
     let dialing = false;
     let settled = false;
     let lastStatus = deps.linkState(hostId).status;
+    /** When the host was first seen saying it was restarting, before this attempt's own dial. */
+    let restartSeenAt: number | null = restarting(deps.linkState(hostId)) ? startedAt : null;
     const abort = new AbortController();
     const cleanups: Array<() => void> = [];
 
@@ -184,8 +208,16 @@ export class HostBringBackService {
             console.error("[HostBringBack] Cleanup failed:", error);
           }
         }
-        // Why no wake went is what matters when nothing else got through.
-        const said = status === "not_wakeable" && wakeError !== null ? wakeError : observed;
+        // Why no wake went is what matters when nothing else got through. A cloud machine's
+        // failed start leads, ahead of whatever the dial saw after it.
+        const said =
+          wakeError === null
+            ? observed
+            : status === "not_wakeable"
+              ? wakeError
+              : cloud && !reached && (status === "unreachable" || status === "timed_out")
+                ? followedBy(wakeError, observed)
+                : observed;
         resolve({
           status,
           wake,
@@ -231,6 +263,8 @@ export class HostBringBackService {
         if (settled) return;
         const previous = lastStatus;
         lastStatus = state.status;
+        // Said during a wake that takes a while: its settle period runs from when it was said.
+        if (!dialStarted && restartSeenAt === null && restarting(state)) restartSeenAt = now();
         // It said it was shutting down after this attempt began dialling (an
         // update starting just now): no start until it has had its while.
         if (dialStarted && !restartWaited && restarting(state)) {
@@ -276,8 +310,9 @@ export class HostBringBackService {
               return;
             }
             // Nothing more to try: no wake went, and the dial got nowhere the
-            // host answered from (a host saying it is restarting has).
-            if (!reached && wake !== "sent" && state.restarting !== true) {
+            // host answered from (a host saying it is restarting has). A cloud
+            // host's tunnel may be waking its machine, so it has the deadline.
+            if (!cloud && !reached && wake !== "sent" && state.restarting !== true) {
               finish(ssh ? "not_wakeable" : "unreachable");
             }
             return;
@@ -352,7 +387,7 @@ export class HostBringBackService {
       // itself, as an update does, before anything starts it.
       const afterSettle = (): void => {
         if (settled) return;
-        const wait = settleMs - Math.max(0, now() - startedAt);
+        const wait = settleMs - Math.max(0, now() - (restartSeenAt ?? now()));
         if (!restarting(deps.linkState(hostId))) {
           startDial();
           return;
@@ -366,6 +401,28 @@ export class HostBringBackService {
         cleanups.push(() => clearTimeout(timer));
       };
 
+      const connection = descriptor.connection;
+      if (connection.kind === "cloud") {
+        let waking: Promise<boolean>;
+        try {
+          waking = deps.wakeCloud(hostId, connection.bindingId, abort.signal, () => {
+            if (!settled) wake = "sent";
+          });
+        } catch (error) {
+          waking = Promise.reject(error);
+        }
+        void waking.then(
+          () => afterSettle(),
+          (error: unknown) => {
+            if (settled) return;
+            // A start the provider took and then didn't finish was still sent.
+            if (wake !== "sent") wake = "failed";
+            wakeError = formatErrorMessage(error, "The cloud machine couldn't be started");
+            afterSettle();
+          }
+        );
+        return;
+      }
       const setup = ssh ? descriptor.wake : undefined;
       if (!ssh) {
         afterSettle();
