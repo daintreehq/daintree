@@ -572,23 +572,40 @@ describe("HostBringBackService", () => {
     expect(w.released()).toBe(true);
   });
 
-  it("still dials when a cloud machine's start fails, and says why when nothing got through", async () => {
+  it("still dials when a cloud machine's start fails, and says why ahead of what the dial saw", async () => {
+    const asleep = "The cloud machine is asleep. Start it to wake it and connect.";
     const w = world({
       host: descriptor({ connection: CLOUD }),
-      wakeCloud: () => Promise.reject(new Error("The account is out of credit.")),
+      wakeCloud: () => Promise.reject(new Error("The account is out of credit")),
     });
     const answer = w.service.bringBack(HOST);
     await flush();
     expect(w.calls).toEqual(["hold", "wake-cloud", "redial"]);
-    w.setLink(
-      unreachable("The cloud machine is asleep. Start it to wake it and connect.", {
-        stoppedRetrying: true,
-      })
-    );
+    w.setLink(unreachable(asleep, { stoppedRetrying: true }));
     await expect(answer).resolves.toMatchObject({
       status: "unreachable",
       wake: "failed",
-      observed: "The account is out of credit.",
+      observed: `The account is out of credit. ${asleep}`,
+    });
+  });
+
+  it("keeps a start the provider took as sent when the machine then fails to come up", async () => {
+    const w = world({
+      host: descriptor({ connection: CLOUD }),
+      wakeCloud: (_signal, sent) => {
+        sent();
+        return Promise.reject(new Error("The machine failed to start."));
+      },
+    });
+    const answer = w.service.bringBack(HOST);
+    await flush();
+    expect(w.calls).toEqual(["hold", "wake-cloud", "redial"]);
+    w.setLink(unreachable("ssh exited with code 255"));
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS);
+    await expect(answer).resolves.toMatchObject({
+      status: "timed_out",
+      wake: "sent",
+      observed: "The machine failed to start. ssh exited with code 255",
     });
   });
 
@@ -619,11 +636,13 @@ describe("HostBringBackService", () => {
     await flush();
     // Its machine wasn't asleep: no start went, and the dial follows at once.
     expect(w.calls).toEqual(["hold", "wake-cloud", "redial"]);
-    // The tunnel may be waking the machine: one failed dial is no answer.
-    w.setLink(unreachable("ssh exited with code 255"));
-    await vi.advanceTimersByTimeAsync(NUDGE_MS);
-    expect(w.calls.filter((call) => call === "nudge")).toHaveLength(1);
-    w.setLink({ status: "connecting", attempt: 2 });
+    // The tunnel may be waking the machine: failed dials are no answer while time remains.
+    for (let attempt = 2; attempt <= 4; attempt++) {
+      w.setLink(unreachable("ssh exited with code 255"));
+      await vi.advanceTimersByTimeAsync(NUDGE_MS);
+      w.setLink({ status: "connecting", attempt });
+    }
+    expect(w.calls.filter((call) => call === "nudge")).toHaveLength(3);
     w.setLink(CONNECTED);
     await expect(answer).resolves.toMatchObject({
       status: "connected",

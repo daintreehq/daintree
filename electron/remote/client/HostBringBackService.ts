@@ -86,6 +86,13 @@ function clip(text: string | null): string | null {
     : trimmed;
 }
 
+/** One observation and then another, as sentences. */
+function followedBy(first: string, then: string | null): string {
+  const lead = first.trim();
+  if (then === null || then.trim() === lead) return lead;
+  return `${/[.!?]$/.test(lead) ? lead : `${lead}.`} ${then.trim()}`;
+}
+
 function linkUp(state: HostConnectionState): boolean {
   return state.status === "connected" || state.status === "driven-elsewhere";
 }
@@ -199,14 +206,16 @@ export class HostBringBackService {
             console.error("[HostBringBack] Cleanup failed:", error);
           }
         }
-        // Why no wake went, or why a cloud machine's start failed, is what matters when nothing
-        // else got through.
+        // Why no wake went is what matters when nothing else got through. A cloud machine's
+        // failed start leads, ahead of whatever the dial saw after it.
         const said =
-          wakeError !== null &&
-          (status === "not_wakeable" ||
-            (cloud && !reached && (status === "unreachable" || status === "timed_out")))
-            ? wakeError
-            : observed;
+          wakeError === null
+            ? observed
+            : status === "not_wakeable"
+              ? wakeError
+              : cloud && !reached && (status === "unreachable" || status === "timed_out")
+                ? followedBy(wakeError, observed)
+                : observed;
         resolve({
           status,
           wake,

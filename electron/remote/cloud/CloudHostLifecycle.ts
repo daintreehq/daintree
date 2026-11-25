@@ -583,6 +583,11 @@ function sameWorktree(a: CloudWorktreeRef, b: CloudWorktreeRef): boolean {
   return a.hostId === b.hostId && a.projectId === b.projectId && a.worktreeId === b.worktreeId;
 }
 
+/** Whether the provider's last word on the machine is that it is asleep. */
+function readsAsleep(binding: StoredCloudBinding): boolean {
+  return machineOf(binding) === "stopped" && binding.observation?.asleep === true;
+}
+
 function machineOf(binding: StoredCloudBinding): CloudMachineState {
   if (!binding.resourceId) return "not-created";
   return (binding.observation?.machine as CloudMachineState | undefined) ?? "unknown";
@@ -661,6 +666,8 @@ export class CloudHostLifecycle {
   private stopWatchingStore: (() => void) | null = null;
   /** Machines being put to sleep by their host's idle time: no dial resolves access to them meanwhile (#17916). */
   private readonly idleSleeping = new Set<string>();
+  /** A Bring back's start under way per binding (#18183), which may yet decide not to start. */
+  private readonly wakeStarts = new Map<string, Promise<void>>();
   /** Idle times being sent to each machine's provider, so a later one never lands first. */
   private readonly idleTimeWrites = new Map<string, Promise<void>>();
   /**
@@ -1600,6 +1607,9 @@ export class CloudHostLifecycle {
       if (binding.creation) return this.retryCreate(hostId);
       throw invalid("This host has no machine yet.");
     }
+    // A Bring back's wake may still decide against starting it: this Start runs its own after.
+    const waking = this.wakeStarts.get(binding.id);
+    if (waking) await waking.catch(() => {});
     await this.operate(
       binding.id,
       "starting",
@@ -1643,21 +1653,22 @@ export class CloudHostLifecycle {
         return false;
       }
       const { provider, credentials } = await this.context(binding);
-      let resource: ProviderResource | null;
       try {
-        resource = await this.inspectInto(bindingId, provider, credentials);
+        await this.inspectInto(bindingId, provider, credentials);
       } catch (error) {
         throw this.deps.accounts.asAppError(provider, error);
       }
+      // Whether this read was written or a newer one overtook it, the binding holds the newest word.
       binding = this.wakeable(hostId, bindingId, signal);
       if (!binding) return false;
-      if (!resource || this.idleSleeping.has(bindingId) || this.operations.has(bindingId)) continue;
-      if (resource.machine !== "stopped" || resource.asleep !== true) return false;
+      if (this.idleSleeping.has(bindingId) || this.operations.has(bindingId)) continue;
+      if (!readsAsleep(binding)) return false;
       let startSent = false;
-      // runStart reads it once more inside the operation and starts it only if still asleep,
-      // so a Stop or removal that came while this looked wins.
+      // runStart reads it once more inside the operation and starts it only if still asleep
+      // and still wakeable, so a Stop, cleanup or removal that came while this looked wins.
       const starting = this.operate(bindingId, "starting", (operation) =>
         this.runStart(bindingId, operation, {
+          hostId,
           asked: signal,
           sent: () => {
             startSent = true;
@@ -1665,8 +1676,18 @@ export class CloudHostLifecycle {
           },
         })
       );
-      // Let go of a caller that gave up; the start, once sent, is the lifecycle's to finish.
-      await raceAbort(starting, signal, undefined);
+      this.wakeStarts.set(bindingId, starting);
+      void starting
+        .finally(() => {
+          if (this.wakeStarts.get(bindingId) === starting) this.wakeStarts.delete(bindingId);
+        })
+        .catch(() => {});
+      try {
+        // Let go of a caller that gave up; the start, once sent, is the lifecycle's to finish.
+        await raceAbort(starting, signal, undefined);
+      } catch (error) {
+        throw this.deps.accounts.asAppError(provider, error);
+      }
       return startSent;
     }
     return false;
@@ -1679,8 +1700,11 @@ export class CloudHostLifecycle {
     signal: AbortSignal
   ): StoredCloudBinding | null {
     if (this.disposed || signal.aborted || this.removing.has(bindingId)) return null;
+    // A worktree's cleanup stops or deletes it: never started from under that.
+    if (this.cleanupRuns.has(bindingId)) return null;
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId || binding.hostId !== hostId) return null;
+    if (binding.worktreeCleanup?.phase === "due") return null;
     // A person's Stop holds until they Start it again.
     if (binding.intent === "stop") return null;
     if (this.deps.accounts.providerUnavailable(binding.providerId) !== null) return null;
@@ -1690,7 +1714,7 @@ export class CloudHostLifecycle {
   private async runStart(
     bindingId: string,
     signal: AbortSignal,
-    wake?: { asked: AbortSignal; sent: () => void }
+    wake?: { hostId: HostId; asked: AbortSignal; sent: () => void }
   ): Promise<void> {
     const binding = this.deps.store.binding(bindingId);
     if (!binding?.resourceId) return;
@@ -1701,12 +1725,18 @@ export class CloudHostLifecycle {
     while (!(resource = await this.inspectInto(bindingId, provider, credentials))) {
       if (signal.aborted) throw new AppError({ code: "CANCELLED", message: "Cancelled" });
     }
-    // A wake starts only a machine still asleep, and only while someone still wants it back.
-    if (
-      wake &&
-      (signal.aborted || wake.asked.aborted || resource.machine !== "stopped" || !resource.asleep)
-    ) {
-      return;
+    if (wake) {
+      // Only a machine still asleep by the newest word, through the provider still registered,
+      // while nothing has ruled a wake out and someone still wants it back.
+      const current = this.wakeable(wake.hostId, bindingId, wake.asked);
+      if (
+        signal.aborted ||
+        !current ||
+        !readsAsleep(current) ||
+        !this.stillRegistered(current.providerId, provider)
+      ) {
+        return;
+      }
     }
     if (resource.dataExpired) {
       const error: CloudHostError = {

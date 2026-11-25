@@ -268,6 +268,45 @@ describe("putting a linked Agent 37 instance to sleep once its host is idle (#17
     expect(env.status().asleep).toBe(true);
   });
 
+  it("lets a sleep under way finish before an explicit Bring back wakes the machine (#18183)", async () => {
+    const env = await agent37();
+    const starts = () => env.api.calls("POST", /\/start$/);
+    let grant!: (granted: boolean) => void;
+    env.answerClaim(() => new Promise<boolean>((resolve) => (grant = resolve)));
+    const pass = env.summary();
+    await env.until(() => env.claims.mock.calls.length === 1);
+    const sent = vi.fn();
+    const woke = env.lifecycle.wakeIfAsleep(
+      "build",
+      env.bindingId,
+      new AbortController().signal,
+      sent
+    );
+    // Nothing is started into the sleep while it is being asked for.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(starts()).toHaveLength(0);
+    grant(true);
+    await pass;
+    await expect(woke).resolves.toBe(true);
+    expect(env.sleeps()).toHaveLength(1);
+    expect(starts()).toHaveLength(1);
+    expect(sent).toHaveBeenCalledTimes(1);
+    expect(env.machine.status).toBe("running");
+    expect(env.status()).toMatchObject({ machine: "running", asleep: false });
+  });
+
+  it("says in Agent 37's words why an asleep machine couldn't be woken (#18183)", async () => {
+    const env = await agent37({ status: "sleeping", past_due: true });
+    await env.lifecycle.refresh("build");
+    const failure = await env.lifecycle
+      .wakeIfAsleep("build", env.bindingId, new AbortController().signal, () => {})
+      .catch((error: unknown) => error);
+    expect(String((failure as Error).message)).toContain(
+      "Agent 37 needs more balance in the workspace wallet"
+    );
+    expect(env.machine.status).toBe("sleeping");
+  });
+
   it("sends nothing to a host too old to confirm its idle time, and says so on that link", async () => {
     const env = await agent37();
     env.answerClaim(() => unsupported());

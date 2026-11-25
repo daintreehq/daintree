@@ -133,10 +133,11 @@ export const HOST_BRING_BACK_STATUSES = [
 export type HostBringBackStatus = (typeof HOST_BRING_BACK_STATUSES)[number];
 
 /**
- * What became of the wake: `sent` when a Wake-on-LAN packet went, or a cloud
- * host's machine that its provider said was asleep was started (#18183);
- * `not_needed` when the link was already up, the host is a WSL distro on this
- * PC, or a cloud host's machine wasn't asleep; `not_set_up` when no wake is
+ * What became of the wake: `sent` when a Wake-on-LAN packet went, or the
+ * provider took a start for a cloud host's machine it said was asleep
+ * (#18183); `not_needed` when no wake was asked for: the link was already up,
+ * the host is a WSL distro on this PC, or a cloud host's machine wasn't read
+ * as asleep (one a person stopped stays stopped); `not_set_up` when no wake is
  * recorded for it; `not_on_lan` when this machine has no address on its LAN;
  * `failed` when sending it failed, or a cloud machine couldn't be read or
  * started.

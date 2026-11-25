@@ -4869,7 +4869,88 @@ describe("CloudHostLifecycle wake for an explicit Bring back (#18183)", () => {
     await expect(
       env.lifecycle.wakeIfAsleep("build", env.bindingId, gaveUp.signal, () => {})
     ).resolves.toBe(false);
+    // A worktree's cleanup due to stop it.
+    env.store.updateBinding(env.bindingId, (current) => ({
+      ...current,
+      worktreeCleanup: {
+        attemptId: "cleanup-1",
+        mutationId: null,
+        choice: "stop",
+        resourceId: "bx_23456789",
+        worktree: { hostId: null, projectId: "project-1", worktreeId: "/repo" },
+        phase: "due",
+        error: null,
+        requestedAt: 0,
+      },
+    }));
+    await expect(
+      env.lifecycle.wakeIfAsleep("build", env.bindingId, signal, () => {})
+    ).resolves.toBe(false);
     expect(env.provider.start).not.toHaveBeenCalled();
+  });
+
+  it("starts nothing when the machine's newest read, inside the start, no longer says asleep", async () => {
+    const env = await imported(ASLEEP);
+    vi.mocked(env.provider.inspect)
+      .mockImplementationOnce(async () => resource(ASLEEP))
+      .mockImplementationOnce(async () => resource({ machine: "stopped", rawState: "stopped" }));
+    await expect(
+      env.lifecycle.wakeIfAsleep("build", env.bindingId, new AbortController().signal, () => {})
+    ).resolves.toBe(false);
+    expect(env.provider.start).not.toHaveBeenCalled();
+    expect(env.lifecycle.statuses()[0]!.operation).toBeNull();
+  });
+
+  it("hears the start sent only once the provider took it", async () => {
+    const env = await imported(ASLEEP);
+    let take!: () => void;
+    vi.mocked(env.provider.start).mockImplementationOnce(
+      () =>
+        new Promise<ProviderResource>((resolve) => {
+          take = () => {
+            env.state.machine = resource({ machine: "running" });
+            resolve(resource({ machine: "starting", rawState: "provisioning" }));
+          };
+        })
+    );
+    const sent = vi.fn();
+    const woke = env.lifecycle.wakeIfAsleep(
+      "build",
+      env.bindingId,
+      new AbortController().signal,
+      sent
+    );
+    await vi.waitFor(() => expect(env.provider.start).toHaveBeenCalledTimes(1));
+    expect(sent).not.toHaveBeenCalled();
+    take();
+    await expect(woke).resolves.toBe(true);
+    expect(sent).toHaveBeenCalledTimes(1);
+  });
+
+  it("still starts the machine for a person's Start that came while a wake gave up", async () => {
+    const env = await imported(ASLEEP);
+    const inspect = vi.mocked(env.provider.inspect);
+    let answer!: (resource: ProviderResource) => void;
+    inspect
+      .mockImplementationOnce(async () => resource(ASLEEP))
+      .mockImplementationOnce(
+        () =>
+          new Promise<ProviderResource>((resolve) => {
+            answer = resolve;
+          })
+      );
+    const calls = inspect.mock.calls.length;
+    const bringBack = new AbortController();
+    const woke = env.lifecycle.wakeIfAsleep("build", env.bindingId, bringBack.signal, () => {});
+    await vi.waitFor(() => expect(inspect.mock.calls.length).toBe(calls + 2));
+    const starting = env.lifecycle.startMachine("build");
+    // The Bring back ends before the wake decides: the wake sends nothing, the person's Start does.
+    bringBack.abort();
+    await expect(woke).resolves.toBe(false);
+    answer(resource(ASLEEP));
+    await starting;
+    expect(env.provider.start).toHaveBeenCalledTimes(1);
+    expect(env.lifecycle.statuses()[0]!.machine).toBe("running");
   });
 
   it("sends no start when a person's Stop comes while the wake reads the machine", async () => {
@@ -4910,10 +4991,11 @@ describe("CloudHostLifecycle wake for an explicit Bring back (#18183)", () => {
     await expect(
       env.lifecycle.wakeIfAsleep("build", env.bindingId, new AbortController().signal, sent)
     ).resolves.toBe(false);
+    // Settled only once that start has the machine running, so the dial that follows finds it up.
+    expect(env.lifecycle.statuses()[0]!.machine).toBe("running");
     await starting;
     expect(env.provider.start).toHaveBeenCalledTimes(1);
     expect(sent).not.toHaveBeenCalled();
-    expect(env.lifecycle.statuses()[0]!.machine).toBe("running");
   });
 
   it("says why when the provider can't be asked, and leaves a background dial read-only", async () => {
