@@ -483,6 +483,8 @@ describe("AddCloudHostDialog MCP server (#18187)", () => {
     expect(checked()).toBe("true");
     fireEvent.click(mcpBox());
     fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
+    // The list is read again on the way back; the machine chosen stays chosen.
+    await screen.findByRole("radio", { name: /^old/ });
     expect(checked()).toBe("true");
 
     fireEvent.click(screen.getByRole("button", { name: "Add machine" }));

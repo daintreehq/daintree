@@ -426,6 +426,9 @@ vi.mock("../settingsControl/install.js", () => ({
 vi.mock("../host/machineKeeperHost.js", () => ({
   installMachineKeeperHost: vi.fn(() => () => {}),
 }));
+vi.mock("../host/mcpServerEnableHost.js", () => ({
+  installMcpServerEnableHost: vi.fn(() => () => {}),
+}));
 vi.mock("../ports/clientInstall.js", () => ({
   installPortForwardClient: vi.fn((deps: unknown) => {
     m.installPortForwardClient(deps);
