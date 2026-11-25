@@ -41,7 +41,11 @@ vi.mock("@/components/Canopy/CanopyTerminal", () => ({
     runId: string;
     endedMessage?: string;
     autoFocus?: boolean;
-    onStreamChange?: (state: { watchId: number | null; ended: boolean; secretPrompt: boolean }) => void;
+    onStreamChange?: (state: {
+      watchId: number | null;
+      ended: boolean;
+      secretPrompt: boolean;
+    }) => void;
   }) => (
     <div
       data-testid="sign-in-pane"
@@ -413,9 +417,7 @@ describe("HostDetail sign-in started by an assistant (#18197)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Sign in to Gemini on studio-01" }));
     await settle();
-    rerender(
-      <HostDetail entry={entry()} onBack={() => {}} signInOffer={offer({ seq: 2 })} />
-    );
+    rerender(<HostDetail entry={entry()} onBack={() => {}} signInOffer={offer({ seq: 2 })} />);
     await settle();
     // The person's own sign-in stays, untouched.
     expect(screen.getByTestId("host-agent-sign-in-dialog").textContent).toContain("Gemini");

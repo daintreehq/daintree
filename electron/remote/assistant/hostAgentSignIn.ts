@@ -41,10 +41,7 @@ const NOT_INSTALLED_DETAIL =
   "The host doesn't report that CLI installed, so no sign-in was started. host.list names its installed CLIs by agentId.";
 
 /** What each answer means and what to do next; fixed text, never anything the host or window said. */
-const ANSWERS: Record<
-  SignInOfferAnswer,
-  { outcome: HostControlOutcomeCode; detail: string }
-> = {
+const ANSWERS: Record<SignInOfferAnswer, { outcome: HostControlOutcomeCode; detail: string }> = {
   shown: {
     outcome: "ok",
     detail:
@@ -76,7 +73,8 @@ const ANSWERS: Record<
   },
   unsupported: {
     outcome: "unsupported",
-    detail: "That host's Daintree is too old to start sign-ins from here. It needs a newer Daintree.",
+    detail:
+      "That host's Daintree is too old to start sign-ins from here. It needs a newer Daintree.",
   },
   disconnected: { outcome: "disconnected", detail: DISCONNECTED_DETAIL },
   rate_limited: {

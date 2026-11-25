@@ -145,9 +145,7 @@ export default function HostsSettingsTab() {
   const [copyRequest, setCopyRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
   // A sign-in an assistant started on a host (#18197): its details open, and
   // they open the CLI's sign-in as its row would. Nothing remounts for it.
-  const [signInOffer, setSignInOffer] = useState<(HostSignInOffer & { seq: number }) | null>(
-    null
-  );
+  const [signInOffer, setSignInOffer] = useState<(HostSignInOffer & { seq: number }) | null>(null);
 
   useEffect(() => {
     const open = (hostId: HostId, intent: HostUpdateIntent) => {
@@ -253,9 +251,7 @@ export default function HostsSettingsTab() {
           focusSection={focusPlugins ? pluginsRequest.sectionId : undefined}
           offerCopySettings={offerCopySettings}
           signInOffer={signInOffer?.hostId === detail.descriptor.id ? signInOffer : undefined}
-          onSignInOfferTaken={(seq) =>
-            setSignInOffer((prev) => (prev?.seq === seq ? null : prev))
-          }
+          onSignInOfferTaken={(seq) => setSignInOffer((prev) => (prev?.seq === seq ? null : prev))}
           onBack={(viaKeyboard) => {
             returnFocusTo.current = { hostId: detail.descriptor.id, visible: viaKeyboard === true };
             setFocusBackFor(null);

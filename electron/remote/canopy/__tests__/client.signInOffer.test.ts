@@ -102,7 +102,10 @@ describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
     await settleStart();
 
     expect(s.starts()).toEqual([
-      { method: CanopyLinkMethod.SIGN_IN, payload: { viewerId: "v1", op: "start", agentId: "codex" } },
+      {
+        method: CanopyLinkMethod.SIGN_IN,
+        payload: { viewerId: "v1", op: "start", agentId: "codex" },
+      },
     ]);
     const [offer] = s.offers();
     expect(offer).toMatchObject({
@@ -214,7 +217,10 @@ describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
 
     const before = s.starts().length;
     await expect(
-      s.client.offerSignIn(VIEW, "studio", "codex", { stillShown: () => true, signal: abort.signal })
+      s.client.offerSignIn(VIEW, "studio", "codex", {
+        stillShown: () => true,
+        signal: abort.signal,
+      })
     ).resolves.toBe("cancelled");
     expect(s.starts()).toHaveLength(before);
   });
