@@ -84,6 +84,13 @@ export interface TerminalPublicState {
    */
   promptUnseenAt?: number;
   /**
+   * The working agent's screen ends on a menu its CLI opens over a turn it
+   * keeps running (#18167), such as Codex's safety-buffering picker. Not a
+   * wait, but a line typed now would pick an option, so sends are held.
+   * Absent whenever the agent isn't working.
+   */
+  workingDialogVisible?: true;
+  /**
    * When the visible content last changed, ignoring recognised spinner and
    * timer redraws (#12428). Absent until a change has been observed.
    */

@@ -186,6 +186,8 @@ interface TerminalInfoResponse {
   lastStateChange?: number;
   /** Its agent run hasn't been observed waiting at its prompt or a question yet (#18014). */
   promptUnseen?: true;
+  /** Working, with a menu over its turn that would take a typed line (#18167). */
+  workingDialogVisible?: true;
   /** Last visible-content change, ignoring spinner and timer redraws (#12428). */
   lastOutputChangeAt?: number;
   lastInputTime?: number;

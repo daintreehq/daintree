@@ -1415,6 +1415,8 @@ export interface PtyHostTerminalInfo {
   lastStateChange?: number;
   /** Its agent run hasn't been observed waiting at its prompt or a question yet (#18014). */
   promptUnseen?: true;
+  /** Working, with a menu over its turn that would take a typed line (#18167). */
+  workingDialogVisible?: true;
   /**
    * When the visible content last changed, ignoring recognised spinner and
    * timer redraws (#12428). Absent until a change has been observed.

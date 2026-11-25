@@ -2137,3 +2137,90 @@ describe("AgentStateService update-installed observation (#17905)", () => {
     expect(cleared).toEqual(["term-1"]);
   });
 });
+
+describe("AgentStateService and a menu over a running turn (#18167)", () => {
+  afterEach(() => {
+    events.removeAllListeners();
+  });
+
+  const OPEN = { trigger: "pattern", patternConfidence: 0.95, workingDialog: true } as const;
+  const CLOSE = { trigger: "pattern", workingDialog: false } as const;
+
+  it("marks a working agent under the menu without a transition of its own", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working", lastStateChange: 1_000 });
+    const changes: string[] = [];
+    events.on("agent:state-changed", (payload) => changes.push(payload.state));
+
+    service.handleActivityState(terminal, "busy", OPEN);
+
+    expect(terminal.workingDialogVisible).toBe(true);
+    expect(terminal.agentState).toBe("working");
+    expect(terminal.lastStateChange).toBe(1_000);
+    expect(changes).toEqual([]);
+  });
+
+  it("moves an agent misread as waiting back to working under the menu", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "waiting", waitingReason: "approval" });
+
+    service.handleActivityState(terminal, "busy", OPEN);
+
+    expect(terminal.agentState).toBe("working");
+    expect(terminal.waitingReason).toBeUndefined();
+    expect(terminal.workingDialogVisible).toBe(true);
+  });
+
+  it("ends the hold on close and leaves the agent working as it was", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working", lastStateChange: 1_000 });
+    service.handleActivityState(terminal, "busy", OPEN);
+    const changes: string[] = [];
+    events.on("agent:state-changed", (payload) => changes.push(payload.state));
+
+    service.handleActivityState(terminal, "busy", CLOSE);
+
+    expect(terminal.workingDialogVisible).toBeUndefined();
+    expect(terminal.agentState).toBe("working");
+    expect(terminal.lastStateChange).toBe(1_000);
+    expect(changes).toEqual([]);
+  });
+
+  it("never leaves the mark on an agent that stopped working", () => {
+    const service = new AgentStateService();
+    for (const event of [{ type: "prompt" }, { type: "exit", code: 0 }, { type: "kill" }] as const) {
+      const terminal = createTerminal({ agentState: "working" });
+      service.handleActivityState(terminal, "busy", OPEN);
+      service.updateAgentState(terminal, event);
+      expect(terminal.agentState, event.type).not.toBe("working");
+      expect(terminal.workingDialogVisible, event.type).toBeUndefined();
+    }
+    // Its monitor torn down: nothing watches the menu any more.
+    const disposed = createTerminal({ agentState: "working" });
+    service.handleActivityState(disposed, "busy", OPEN);
+    service.handleActivityState(disposed, "idle", { trigger: "dispose" });
+    expect(disposed.workingDialogVisible).toBeUndefined();
+  });
+
+  it("holds a queued send until the menu closes", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({
+      agentState: "working",
+      lastStateChange: 1_000,
+      detectedAgentId: "codex",
+    });
+    const snapshot = () => ({
+      agentState: terminal.agentState,
+      lastStateChange: terminal.lastStateChange,
+      workingDialogVisible: terminal.workingDialogVisible,
+      detectedAgentId: terminal.detectedAgentId,
+      hasPty: true,
+    });
+    const queued = { acceptWorking: true };
+
+    service.handleActivityState(terminal, "busy", OPEN);
+    expect(evaluateWakeGate(snapshot(), queued)).toEqual({ kind: "hold", reason: "working" });
+    service.handleActivityState(terminal, "busy", CLOSE);
+    expect(evaluateWakeGate(snapshot(), queued)).toEqual({ kind: "ready" });
+  });
+});

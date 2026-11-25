@@ -510,6 +510,7 @@ export class AgentStateService {
     } else {
       terminal.waitingReason = undefined;
     }
+    if (newState !== "working") delete terminal.workingDialogVisible;
     // A respawn starts a run that has shown no prompt yet (#18014).
     if (event.type === "respawn") markPromptUnseen(terminal, timestamp);
     else notePromptSeen(terminal, promptDrawnAt);
@@ -779,6 +780,7 @@ export class AgentStateService {
       rereadAt?: number;
       promptDrawnAt?: number;
       inputRowEmpty?: true;
+      workingDialog?: boolean;
     }
   ): void {
     // The ActivityMonitor emits a synthetic `idle` observation with
@@ -795,6 +797,7 @@ export class AgentStateService {
     // event are not stranded in `working` — the renderer's direct idle
     // observation covers that path.
     if (metadata?.trigger === "dispose") {
+      delete terminal.workingDialogVisible;
       this.emitTransitionDropped(terminal, {
         outcome: "no-op",
         currentState: terminal.agentState || "idle",
@@ -812,6 +815,13 @@ export class AgentStateService {
           metadata.promptDrawnAt
         );
       }
+      return;
+    }
+
+    // A menu over a running turn closed (#18167): sends may go again, and the
+    // agent works on as it was.
+    if (metadata?.workingDialog === false) {
+      delete terminal.workingDialogVisible;
       return;
     }
 
@@ -888,6 +898,10 @@ export class AgentStateService {
         temperature,
         promptDrawnAt
       );
+    }
+
+    if (metadata?.workingDialog === true && terminal.agentState === "working") {
+      terminal.workingDialogVisible = true;
     }
 
     // A record already waiting drops the settle as a no-op (a title report can

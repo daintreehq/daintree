@@ -88,8 +88,16 @@ export interface PromptInputProvenance {
   lastForeignPromptInputAt?: number;
 }
 
-/** Whether keys arriving now reach the agent's prompt rather than an approval dialog's selector. */
-export function keysReachPrompt(state: { agentState?: string; waitingReason?: string }): boolean {
+/**
+ * Whether keys arriving now reach the agent's prompt rather than an approval
+ * dialog's selector, or a menu its CLI opened over the turn (#18167).
+ */
+export function keysReachPrompt(state: {
+  agentState?: string;
+  waitingReason?: string;
+  workingDialogVisible?: boolean;
+}): boolean {
+  if (state.agentState === "working" && state.workingDialogVisible === true) return false;
   return !(state.agentState === "waiting" && state.waitingReason === "approval");
 }
 

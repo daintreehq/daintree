@@ -81,6 +81,7 @@ export function mapTerminalInfo(
     waitingReason: t.waitingReason,
     lastStateChange: t.lastStateChange,
     promptUnseen: t.promptUnseen,
+    workingDialogVisible: t.workingDialogVisible,
     lastOutputChangeAt: t.lastOutputChangeAt,
     lastInputTime: t.lastInputTime,
     lastTypedInputAt: t.lastTypedInputAt,

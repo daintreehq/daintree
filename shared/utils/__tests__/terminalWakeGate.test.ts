@@ -14,10 +14,12 @@ vi.mock("../../config/agentRegistry.js", async (importOriginal) => {
 import {
   ASSISTANT_SEND_GATE,
   EXACT_PROMPT_GATE,
+  choiceDialogRefusalMessage,
   composerSendHoldCause,
   decisionGateOptionsFor,
   evaluateWakeGate,
   isAtChoiceDialog,
+  wakeGateOptionsFor,
   type WakeGateSnapshot,
 } from "../terminalWakeGate.js";
 
@@ -261,5 +263,47 @@ describe("composerSendHoldCause (#16872)", () => {
       expect(composerSendHoldCause({ ...snapshot, isTrashed: true })).toBeNull();
       expect(composerSendHoldCause({ ...snapshot, isClosing: true })).toBeNull();
     }
+  });
+});
+
+describe("a menu over a running turn (#18167)", () => {
+  // A Codex pane mid-turn, seen at its prompt before: a CLI that queues a line.
+  const WORKING: WakeGateSnapshot = {
+    ...AT_PROMPT,
+    agentState: "working",
+    waitingReason: undefined,
+    detectedAgentId: "codex",
+  };
+  const UNDER_MENU: WakeGateSnapshot = { ...WORKING, workingDialogVisible: true };
+
+  it("holds every send the turn would otherwise queue", () => {
+    const queued = wakeGateOptionsFor("codex");
+    expect(evaluateWakeGate(WORKING, queued)).toEqual({ kind: "ready" });
+    expect(evaluateWakeGate(UNDER_MENU, queued)).toEqual({ kind: "hold", reason: "working" });
+    expect(evaluateWakeGate(UNDER_MENU, decisionGateOptionsFor("codex"))).toEqual({
+      kind: "hold",
+      reason: "working",
+    });
+  });
+
+  it("holds the person's composer send and refuses a guarded line", () => {
+    expect(composerSendHoldCause(WORKING)).toBeNull();
+    expect(composerSendHoldCause(UNDER_MENU)).toBe("choice-dialog");
+    expect(isAtChoiceDialog(UNDER_MENU)).toBe(true);
+  });
+
+  it("counts only while the agent is working in a live pane", () => {
+    expect(isAtChoiceDialog({ ...UNDER_MENU, agentState: "waiting" })).toBe(false);
+    expect(isAtChoiceDialog({ ...UNDER_MENU, isExited: true })).toBe(false);
+    expect(isAtChoiceDialog({ ...UNDER_MENU, detectedAgentId: undefined })).toBe(false);
+    expect(composerSendHoldCause({ ...UNDER_MENU, isClosing: true })).toBeNull();
+  });
+
+  it("never asks for an answer the menu doesn't need", () => {
+    const menu = choiceDialogRefusalMessage("codex-1", UNDER_MENU);
+    const dialog = choiceDialogRefusalMessage("codex-1", { ...AT_PROMPT, waitingReason: "approval" });
+    expect(menu).not.toBe(dialog);
+    expect(menu).not.toMatch(/answer it/i);
+    expect(dialog).toBe(choiceDialogRefusalMessage("codex-1"));
   });
 });

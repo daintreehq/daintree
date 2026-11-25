@@ -17,6 +17,11 @@ export interface WakeGateSnapshot {
    * prompt reading is the previous run's.
    */
   promptUnseen?: boolean;
+  /**
+   * Working, with a menu its CLI opens over the turn on screen (#18167): no
+   * wait, but a typed line would pick one of its options.
+   */
+  workingDialogVisible?: boolean;
   /** Last input that could have put text in the composer; see `lastTypedInputAt`. */
   lastTypedInputAt?: number;
   detectedAgentId?: string;
@@ -97,18 +102,23 @@ export function decisionGateOptionsFor(agentId: string | undefined): WakeGateOpt
 
 /**
  * Whether the terminal's agent was last observed waiting on a choice dialog
- * (#16209): a selector, not its prompt, so a line typed there picks an option
- * or is lost. Only a live agent pane can be; a shell, or a pane whose agent
- * has gone, takes a send as it always has.
+ * (#16209), or working under a menu its CLI opened over the turn (#18167): a
+ * selector, not its prompt, so a line typed there picks an option or is lost.
+ * Only a live agent pane can be; a shell, or a pane whose agent has gone,
+ * takes a send as it always has.
  */
 export function isAtChoiceDialog(snapshot: WakeGateSnapshot): boolean {
   return (
     snapshot.detectedAgentId !== undefined &&
     snapshot.isExited !== true &&
     snapshot.hasPty !== false &&
-    snapshot.agentState === "waiting" &&
-    snapshot.waitingReason === "approval"
+    ((snapshot.agentState === "waiting" && snapshot.waitingReason === "approval") ||
+      isUnderWorkingDialog(snapshot))
   );
+}
+
+function isUnderWorkingDialog(snapshot: WakeGateSnapshot): boolean {
+  return snapshot.agentState === "working" && snapshot.workingDialogVisible === true;
 }
 
 /**
@@ -137,8 +147,14 @@ export function composerSendHoldCause(snapshot: WakeGateSnapshot): ComposerSendH
     : null;
 }
 
-/** What a refused send says, wherever it was refused. */
-export function choiceDialogRefusalMessage(terminalId: string): string {
+/**
+ * What a refused send says, wherever it was refused. A menu over a running
+ * turn needs no answer, so the message never asks for one.
+ */
+export function choiceDialogRefusalMessage(terminalId: string, snapshot?: WakeGateSnapshot): string {
+  if (snapshot !== undefined && isUnderWorkingDialog(snapshot)) {
+    return `Terminal '${terminalId}' is working with a menu open over its turn, which would take the text. Nothing was sent. The menu needs no answer and closes by itself; send again once it has.`;
+  }
   return `Terminal '${terminalId}' was last observed waiting on a choice dialog, which would take the text. Nothing was sent. Read its screen and answer it with keys. A dialog closed into a draft reads this way until the input row is empty or the agent next settles.`;
 }
 
@@ -170,6 +186,7 @@ export function evaluateWakeGate(
   if (snapshot.agentState === "working") {
     if (
       options.acceptWorking !== true ||
+      snapshot.workingDialogVisible === true ||
       snapshot.lastStateChange === undefined ||
       snapshot.promptUnseen === true
     ) {

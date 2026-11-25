@@ -287,7 +287,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       if (guard !== undefined && isAtChoiceDialog(info)) {
         throw new AppError({
           code: "TERMINAL_CHOICE_DIALOG",
-          message: choiceDialogRefusalMessage(id),
+          message: choiceDialogRefusalMessage(id, info),
           context: { terminalId: id },
         });
       }

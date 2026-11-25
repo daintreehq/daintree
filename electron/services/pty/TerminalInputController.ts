@@ -112,6 +112,7 @@ function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
     waitingReason: terminal.waitingReason,
     lastStateChange: terminal.lastStateChange,
     promptUnseen: terminal.promptUnseen,
+    workingDialogVisible: terminal.workingDialogVisible,
     lastTypedInputAt: terminal.lastTypedInputAt,
     detectedAgentId: terminal.detectedAgentId,
     isExited: terminal.isExited,
