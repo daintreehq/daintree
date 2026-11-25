@@ -658,6 +658,25 @@ describe("spawnAndConfirm (#13511)", () => {
     }
   });
 
+  it("counts a strict caller's wait only from the spawn, so a slow preparation is no failure (#18169)", async () => {
+    vi.useFakeTimers();
+    try {
+      const pty = new EventEmitter();
+      const strict = spawnAndConfirm(
+        pty as never,
+        () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 20_000)),
+        "t-1",
+        { unreportedStarted: false }
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      pty.emit("spawn-result", "t-1", { success: true });
+      await expect(strict).resolves.toBe(true);
+      expect(pty.listenerCount("spawn-result")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("never waits on a spawn the handler refused outright", async () => {
     const pty = new EventEmitter();
     await expect(spawnAndConfirm(pty as never, async () => false, "t-1")).resolves.toBe(false);

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import os from "os";
 import path from "path";
-import { resolveLaunchCodexHome } from "../codexLaunchHome.js";
+import { resolveLaunchCodexHome, usesOwnCodexHome } from "../codexLaunchHome.js";
 
 describe("resolveLaunchCodexHome", () => {
   const fallback = path.join(os.homedir(), ".codex");
@@ -42,5 +42,28 @@ describe("resolveLaunchCodexHome", () => {
 
   it.runIf(process.platform === "win32")("reads the variable whatever its casing", () => {
     expect(resolveLaunchCodexHome({ codex_home: "C:\\accounts\\work" })).toBe("C:\\accounts\\work");
+  });
+});
+
+describe("usesOwnCodexHome (#18169)", () => {
+  const own = path.resolve(os.tmpdir(), "own-codex");
+  const base = { PATH: "/usr/bin", CODEX_HOME: own };
+
+  it("takes a launch that sets nothing, or this process's own home, for this one", () => {
+    expect(usesOwnCodexHome(undefined, base)).toBe(true);
+    expect(usesOwnCodexHome({ OTHER: "x" }, base)).toBe(true);
+    expect(usesOwnCodexHome({ CODEX_HOME: `${own}${path.sep}` }, base)).toBe(true);
+  });
+
+  it("tells an account's home apart from this one", () => {
+    const account = path.resolve(os.tmpdir(), "accounts", "codex-work");
+    expect(usesOwnCodexHome({ CODEX_HOME: account }, base)).toBe(false);
+  });
+
+  it("never takes a home it can't tell for this one, on either side", () => {
+    expect(usesOwnCodexHome({ CODEX_HOME: "accounts/work" }, base)).toBe(false);
+    expect(usesOwnCodexHome({ CODEX_HOME: "accounts/work" }, { CODEX_HOME: "accounts/work" })).toBe(
+      false
+    );
   });
 });

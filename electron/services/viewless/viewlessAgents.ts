@@ -67,7 +67,7 @@ import { recordViewlessTerminal } from "./projectStateAuthoring.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
 import { isClaudeForkFlag } from "../assistants/forkedConversation.js";
-import { resolveLaunchCodexHome } from "../codex/codexLaunchHome.js";
+import { usesOwnCodexHome } from "../codex/codexLaunchHome.js";
 import {
   AgentLaunchArgsSchema,
   AgentListAccountsArgsSchema,
@@ -674,7 +674,7 @@ export async function spawnHostAssistant(
     spec.resumeAgentSessionId &&
     spec.exactConversation &&
     agentId === "codex" &&
-    resolveLaunchCodexHome({ ...process.env, ...env }) !== resolveLaunchCodexHome(process.env)
+    !usesOwnCodexHome(env)
   ) {
     return false;
   }

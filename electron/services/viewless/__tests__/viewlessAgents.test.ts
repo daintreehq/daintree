@@ -4,6 +4,7 @@ import type { AgentSettings } from "../../../../shared/types/agentSettings.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
 import { runAgentLaunch, spawnHostAssistant } from "../viewlessAgents.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
+import { resolveLaunchCodexHome } from "../../codex/codexLaunchHome.js";
 import {
   makeDeps,
   makeHosts,
@@ -773,6 +774,14 @@ describe("an Assistant reopening one exact conversation with no frontend (#16753
     const home = launchDeps();
     await expect(spawnHostAssistant(PROJECT, codexSpec, home.deps)).resolves.toBe(true);
     expect(String(spawned(home.invoke).command)).toContain("thread-9");
+
+    // A layer naming this process's own home is no other account's.
+    const ownHome = resolveLaunchCodexHome(process.env);
+    if (!ownHome) throw new Error("expected this process's Codex home");
+    const named = launchDeps({
+      getLaunchEnvLayers: async () => ({ global: { CODEX_HOME: ownHome }, project: {} }),
+    });
+    await expect(spawnHostAssistant(PROJECT, codexSpec, named.deps)).resolves.toBe(true);
   });
 
   it("leaves a resume that didn't ask for it as it was", async () => {

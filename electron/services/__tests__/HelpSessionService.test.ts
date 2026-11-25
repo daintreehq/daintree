@@ -4297,6 +4297,26 @@ describe("HelpSessionService", () => {
             expect(globalOwnership()).toBe(ids["conv-b"]);
           });
 
+          it("says a lane's capture is landing only until it has", async () => {
+            const run = await launchGlobal("g-codex", "");
+            let finish!: (id: string | null) => void;
+            mockPtyGracefulKill.mockReturnValueOnce(
+              new Promise<string | null>((resolve) => {
+                finish = resolve;
+              })
+            );
+
+            const revoked = service.revokeSession(run.sessionId, { captureHibernation: true });
+            await vi.waitFor(() => expect(mockPtyGracefulKill).toHaveBeenCalledWith("g-codex"));
+            expect(service.laneCaptureInFlight(GLOBAL_ASSISTANT_ID, 0)).toBe(true);
+            expect(service.laneCaptureInFlight(GLOBAL_ASSISTANT_ID, 1)).toBe(false);
+
+            finish("thread-1");
+            await revoked;
+            expect(service.laneCaptureInFlight(GLOBAL_ASSISTANT_ID, 0)).toBe(false);
+            expect(backing.get(globalKey())?.agentSessionId).toBe("thread-1");
+          });
+
           it("takes a forked spawn of the switch by the fork's rules, writing no switch", async () => {
             const { run, ids } = await seatOn([]);
             const work = service.laneWorkOwnershipId(GLOBAL_ASSISTANT_ID, 0);
