@@ -2395,8 +2395,9 @@ export class HelpSessionService {
     if (this.standingRunsPty === pty) return;
     this.unwatchStandingRuns?.();
     const onExit = (terminalId: string) => this.noteStandingRunEnded(terminalId);
+    // A refused spawn never ran, a quit under way or not.
     const onSpawnResult = (terminalId: string, result: { success: boolean }) => {
-      if (!result.success) this.noteStandingRunEnded(terminalId);
+      if (!result.success) this.noteStandingRunEnded(terminalId, { neverRan: true });
     };
     const onIncarnationLost = (fact: { terminalId: string }) =>
       this.noteStandingRunUnsettled(fact.terminalId);
@@ -2423,8 +2424,8 @@ export class HelpSessionService {
    * agent CLI quit. A kept lane is left down by the next launch, unless the
    * run is one an orderly quit is stopping.
    */
-  noteStandingRunEnded(terminalId: string): void {
-    if (this.quitHeldTerminals?.has(terminalId)) return;
+  noteStandingRunEnded(terminalId: string, options?: { neverRan?: true }): void {
+    if (options?.neverRan !== true && this.quitHeldTerminals?.has(terminalId)) return;
     const ended: Record<string, boolean> = {};
     for (const [slotKey, run] of this.laneRuns) {
       if (run.terminalId !== terminalId) continue;

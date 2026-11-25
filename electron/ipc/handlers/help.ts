@@ -40,6 +40,7 @@ import {
   isValidAssistantSlot,
 } from "../../../shared/config/assistantSlots.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
+import { keepRunningNotSaved } from "../../services/globalAssistant.js";
 
 /**
  * Resolve a renderer-supplied slot (#12108). Absent means slot 0 — an older
@@ -757,7 +758,8 @@ export async function handleGetKeepRunning(
 
 /**
  * Keep a lane of this project running across restarts, or stop keeping it
- * (#18177). Answers with the choice now held.
+ * (#18177). Answers with the choice now held; refused when it wasn't saved,
+ * though the choice is held and saved again with the next write.
  */
 export async function handleSetKeepRunning(
   ctx: import("../types.js").IpcContext,
@@ -769,9 +771,7 @@ export async function handleSetKeepRunning(
   if (!lane || typeof keep !== "boolean") return false;
   const { helpSessionService } = await getHelpSessionService();
   if (!(await helpSessionService.setLaneKeepRunning(lane.projectId, lane.slot, keep))) {
-    logger.warn("Keeping an assistant lane running across restarts wasn't saved", {
-      slot: lane.slot,
-    });
+    throw keepRunningNotSaved();
   }
   return helpSessionService.isLaneKeptRunning(lane.projectId, lane.slot);
 }

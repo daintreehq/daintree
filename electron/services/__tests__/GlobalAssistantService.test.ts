@@ -163,6 +163,31 @@ describe("GlobalAssistantService", () => {
       expect(state).toMatchObject({ agentId: "codex", pinnedAgentId: null });
     });
 
+    it("needs no usable default to reopen it on the agent it ran", async () => {
+      const { deps } = makeDeps({ agentId: vi.fn(async () => null) });
+      deps.takeResume.mockResolvedValue({ ...kept, agentId: "copilot" });
+
+      await new GlobalAssistantService(deps).resumeAfterRestart("conv");
+
+      expect(deps.spawn.mock.calls[0]![0]).toMatchObject({ agentId: "copilot", exactResume: true });
+    });
+
+    it("keeps a restore on another agent going through a change of default while it starts", async () => {
+      const usable = deferred<boolean>();
+      const { deps } = makeDeps({ canRun: vi.fn(() => usable.promise) });
+      deps.takeResume.mockResolvedValue({ ...kept, agentId: "codex" });
+      const service = new GlobalAssistantService(deps);
+      const restoring = service.resumeAfterRestart("conv");
+      await vi.waitFor(() => expect(deps.canRun).toHaveBeenCalled());
+
+      await service.onAgentChanged("antigravity");
+      usable.resolve(true);
+
+      await expect(restoring).resolves.toMatchObject({ phase: "running", agentId: "codex" });
+      await service.onAgentChanged("claude");
+      expect(service.getState().phase).toBe("running");
+    });
+
     it("starts nothing when the agent it ran can't run here now, and hands the claim back", async () => {
       const { deps } = makeDeps({ canRun: vi.fn(async (agentId: string) => agentId !== "codex") });
       deps.takeResume.mockResolvedValue({ ...kept, agentId: "codex" });

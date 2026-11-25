@@ -28,6 +28,7 @@ const help = vi.hoisted(() => ({
   refuseHandOver: null as "starting" | "unheld" | null,
   /** The sessions kept running across restarts (#18177), and how each was last discarded. */
   keptRunning: new Set<number>(),
+  keepSaves: true,
   discards: [] as Array<{ slot: number; keepRunningChoice: boolean }>,
 }));
 /** What each handover gave the MCP server to move, outgoing run first. */
@@ -74,7 +75,7 @@ vi.mock("../HelpSessionService.js", () => ({
     setLaneKeepRunning: async (_projectId: string, slot: number, keep: boolean) => {
       if (keep) help.keptRunning.add(slot);
       else help.keptRunning.delete(slot);
-      return true;
+      return help.keepSaves;
     },
     provisionSession: async (input: { slot: number; agentId: string }) => {
       help.provisioned.push({ slot: input.slot, agentId: input.agentId });
@@ -138,6 +139,7 @@ beforeEach(async () => {
   help.spawnGate = null;
   help.refuseHandOver = null;
   help.keptRunning.clear();
+  help.keepSaves = true;
   help.discards = [];
   work.moved = [];
   vi.resetModules();
@@ -311,6 +313,19 @@ describe("global assistant sessions (#18142)", () => {
       { slot: 0, keepRunningChoice: false },
     ]);
     expect(first!.getState().keepRunning).toBe(false);
+  });
+
+  it("refuses a choice that wasn't saved, telling every window what it holds (#18177)", async () => {
+    const [first] = registry.getGlobalAssistantServices();
+    const heard: boolean[] = [];
+    first!.onChange((state) => heard.push(state.keepRunning));
+    help.keepSaves = false;
+
+    await expect(registry.setGlobalAssistantKeepRunning(0, true)).rejects.toMatchObject({
+      code: "INTERNAL",
+      userMessage: expect.stringContaining("couldn't save"),
+    });
+    expect(heard.at(-1)).toBe(true);
   });
 
   it("starts no new session before the kept conversations can be read", async () => {

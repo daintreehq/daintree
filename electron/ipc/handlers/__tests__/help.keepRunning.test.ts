@@ -39,6 +39,14 @@ describe("keeping a lane running across restarts over IPC (#18177)", () => {
     await expect(handleGetKeepRunning(viewOf("p1"), "p1", 0)).resolves.toBe(false);
   });
 
+  it("refuses with the reason when the choice wasn't saved, holding it", async () => {
+    service.saves = false;
+    await expect(handleSetKeepRunning(viewOf("p1"), "p1", 0, true)).rejects.toMatchObject({
+      userMessage: expect.stringContaining("couldn't save"),
+    });
+    await expect(handleGetKeepRunning(viewOf("p1"), "p1", 0)).resolves.toBe(true);
+  });
+
   it("refuses another project's lane, a lane that doesn't exist, and a choice that isn't one", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     service.kept.add("p2:0");

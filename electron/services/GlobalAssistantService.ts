@@ -374,9 +374,12 @@ export class GlobalAssistantService {
     // Chosen before the await, so a stop meanwhile can't hand it another's agent.
     // A hand-off names its own agent for the run (#18140).
     const pinned = this.pinnedAgentId;
-    let agentId = choice ? choice.agentId : (pinned ?? (await this.deps.agentId()));
+    let agentId: string | null = choice ? choice.agentId : (pinned ?? (await this.deps.agentId()));
     if (superseded()) throw stoppedWhileStarting();
-    if (!agentId) throw refuse("UNSUPPORTED", "No agent is available to run the global assistant.");
+    const noAgent = () =>
+      refuse("UNSUPPORTED", "No agent is available to run the global assistant.");
+    // A restore after a restart needs no default: it runs as its conversation did (#18177).
+    if (!agentId && exact === null) throw noAgent();
     this.launchAgentId = agentId;
     this.startingExited = false;
 
@@ -399,6 +402,7 @@ export class GlobalAssistantService {
     ) {
       agentId = pending.agentId;
       this.launchAgentId = agentId;
+      this.launchChosen = true;
       restoredElsewhere = true;
     }
     const resume =
@@ -416,6 +420,10 @@ export class GlobalAssistantService {
     if (exact !== null && resume?.agentSessionId !== exact) {
       await releaseResume();
       throw refuse("NOT_FOUND", "The global assistant's conversation can't be reopened as it was.");
+    }
+    if (!agentId) {
+      await releaseResume();
+      throw noAgent();
     }
     // The agent it will run, when no default chose it, is checked here: the CLI
     // may have gone, or be too old for its wiring. The conversation is kept.

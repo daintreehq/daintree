@@ -21,6 +21,15 @@ import type { HelpSessionService } from "./HelpSessionService.js";
 import type { PtyClient } from "./PtyClient.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 
+/** A keep-running choice that didn't reach disk (#18177): held, and saved again with the next write. */
+export const keepRunningNotSaved = () =>
+  new AppError({
+    code: "INTERNAL",
+    message: "The choice to keep the assistant running across restarts wasn't saved.",
+    userMessage:
+      "Daintree couldn't save that choice. It holds it and saves it with its next change.",
+  });
+
 const stillStarting = () =>
   new AppError({
     code: "UNSUPPORTED",
@@ -500,7 +509,8 @@ export async function handGlobalAssistantCoordination(slot: GlobalAssistantSlot)
 
 /**
  * Keep the session at `slot` running across restarts, or stop keeping it
- * (#18177); every window hears the change.
+ * (#18177); every window hears the change. Refused when it couldn't be saved,
+ * though the choice is held and saved again with the next write.
  */
 export async function setGlobalAssistantKeepRunning(
   slot: GlobalAssistantSlot,
@@ -508,10 +518,9 @@ export async function setGlobalAssistantKeepRunning(
 ): Promise<void> {
   if (shuttingDown) throw shuttingDownError();
   const service = await help();
-  if (!(await service.setLaneKeepRunning(GLOBAL_ASSISTANT_ID, slot, keep))) {
-    console.warn("[GlobalAssistant] Keeping the session running across restarts wasn't saved");
-  }
+  const saved = await service.setLaneKeepRunning(GLOBAL_ASSISTANT_ID, slot, keep);
   getGlobalAssistantService(slot).refresh();
+  if (!saved) throw keepRunningNotSaved();
 }
 
 /**

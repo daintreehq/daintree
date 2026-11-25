@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { notify } from "@/lib/notify";
 
 interface KeptChoice {
   lane: string;
@@ -42,17 +43,27 @@ export function useLaneKeepRunning(
   const setKeepRunning = useCallback(
     (keep: boolean) => {
       if (projectId === null || lane === null) return;
-      const asked = ++latest.current;
-      setChoice({ lane, keep });
-      const change = window.electron.help.setKeepRunning?.(projectId, slot, keep);
-      void change?.then(
-        (held) => {
-          if (latest.current === asked) setChoice({ lane, keep: held });
-        },
-        () => {
-          if (latest.current === asked) setReads((count) => count + 1);
-        }
-      );
+      const save = () => {
+        const asked = ++latest.current;
+        setChoice({ lane, keep });
+        const change = window.electron.help.setKeepRunning?.(projectId, slot, keep);
+        void change?.then(
+          (held) => {
+            if (latest.current === asked) setChoice({ lane, keep: held });
+          },
+          () => {
+            if (latest.current === asked) setReads((count) => count + 1);
+            // Held in main, but a crash before its next save would forget it.
+            notify({
+              type: "error",
+              title: "Couldn't save keep running across restarts",
+              message: "Daintree holds the choice and saves it with its next change.",
+              action: { label: "Retry", onClick: save },
+            });
+          }
+        );
+      };
+      save();
     },
     [projectId, slot, lane]
   );

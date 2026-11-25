@@ -4541,6 +4541,18 @@ describe("HelpSessionService", () => {
           expect(marks.get(lane)).toBe(true);
         });
 
+        it("unmarks a run whose spawn the host refuses during the quit: it never ran", async () => {
+          const pty = new EventEmitter();
+          service.watchStandingRuns(pty as never);
+          await launchSlot(0, "term-0", "conv-0");
+          await service.holdStandingRunsForQuit(new Set());
+
+          pty.emit("exit", "term-0");
+          expect(marks.get(lane)).toBe(true);
+          pty.emit("spawn-result", "term-0", { success: false, id: "term-0" });
+          expect(marks.get(lane)).toBe(false);
+        });
+
         it("holds a run the quit's snapshot didn't see, as one on a shard that didn't answer", async () => {
           await launchSlot(0, "term-0", "conv-0");
 

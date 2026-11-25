@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+const notify = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/notify", () => ({ notify }));
+
 import { useLaneKeepRunning } from "../useLaneKeepRunning";
 
 function deferred<T>() {
@@ -18,6 +21,7 @@ const flush = () => act(async () => {});
 describe("useLaneKeepRunning (#18177)", () => {
   afterEach(() => {
     Reflect.deleteProperty(window, "electron");
+    notify.mockReset();
   });
 
   it("reads the lane on screen's choice, and nothing for no project", async () => {
@@ -61,6 +65,34 @@ describe("useLaneKeepRunning (#18177)", () => {
     read.resolve(true);
     await flush();
     expect(result.current.keepRunning).toBe(false);
+  });
+
+  it("says a choice wasn't saved, and Retry asks again for the same one", async () => {
+    const setKeepRunning = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("not saved"))
+      .mockResolvedValueOnce(true);
+    installHelp({ getKeepRunning: vi.fn(async () => true), setKeepRunning });
+    const { result } = renderHook(() => useLaneKeepRunning("proj-1", 0));
+    await flush();
+
+    act(() => result.current.setKeepRunning(true));
+    await flush();
+    expect(notify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        type: "error",
+        action: expect.objectContaining({ label: "Retry" }),
+      })
+    );
+    expect(result.current.keepRunning).toBe(true);
+
+    act(() => notify.mock.calls[0]![0].action.onClick());
+    await flush();
+    expect(setKeepRunning.mock.calls).toEqual([
+      ["proj-1", 0, true],
+      ["proj-1", 0, true],
+    ]);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it("reads it again on refresh, after a Stop elsewhere turned it off", async () => {
