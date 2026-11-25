@@ -734,7 +734,7 @@ export class TerminalInputController {
       if (ctx?.abandonEnterOnInput === true) {
         const owner = this.captureOwner();
         const typedBefore = terminal.lastTypedInputAt;
-        const screen = await this.readScreenAtEnter(observedAtAdmission);
+        const screen = await this.readScreenAtEnter(observedAtAdmission, ctx.holdsAtScreen);
         if (
           screen === null ||
           !this.isStillOwnedBy(generation, owner) ||
@@ -839,7 +839,7 @@ export class TerminalInputController {
       !this.isStillOwnedBy(generation, owner);
     const screen =
       ctx?.abandonEnterOnInput === true && !enterStopped()
-        ? await this.readScreenAtEnter(observedAtAdmission)
+        ? await this.readScreenAtEnter(observedAtAdmission, ctx.holdsAtScreen)
         : undefined;
 
     if (!this.host.terminalInfo.ptyProcess) {
@@ -916,7 +916,8 @@ export class TerminalInputController {
    * hasn't flushed, can't be seen from here.
    */
   private async readScreenAtEnter(
-    observedAtAdmission: number | null
+    observedAtAdmission: number | null,
+    holdsAtScreen?: (serialized: string) => boolean
   ): Promise<{ unchanged: () => boolean } | null> {
     if (observedAtAdmission === null) return null;
     const mark = this.host.outputMark();
@@ -936,6 +937,7 @@ export class TerminalInputController {
       ]);
       if (snapshot === null || !unchanged()) return null;
       if (showsSelectorAtEnter(snapshot.data, this.host.terminalInfo.detectedAgentId)) return null;
+      if (holdsAtScreen !== undefined && !holdsAtScreen(snapshot.data)) return null;
       return { unchanged };
     } catch {
       return null;

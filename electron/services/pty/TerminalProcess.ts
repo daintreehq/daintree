@@ -79,7 +79,7 @@ import {
   type CodexLimitScreenVerdict,
 } from "./codexLimitContinueScreen.js";
 import { ClaudeLimitStopTracker, type LimitStopGuard } from "./ClaudeLimitStop.js";
-import { judgeClaudeLimitScreen } from "./claudeLimitStopScreen.js";
+import { judgeClaudeLimitScreen, showsClaudeStop } from "./claudeLimitStopScreen.js";
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
@@ -147,8 +147,10 @@ interface HeldLimitStop {
   guard: LimitStopGuard;
   /** Whether a serialized screen is still the one the stop left, and the line that continues it. */
   judge(serialized: string, cols: number | undefined): CodexLimitScreenVerdict;
-  /** Asked again right before the line's Enter, where the agent's screen can still say no. */
-  holdsAtEnter?: () => boolean;
+  /** Asked again right before the line's Enter, and of the screen read then, where the agent can still say no. */
+  holdsAtEnter?: (screenAtEnter?: string) => boolean;
+  /** The stop isn't Daintree's to continue, whatever the screen shows. */
+  refusal?: CodexLimitContinueSkipReason;
 }
 
 /** Minimum gap between two rate-limit observations from one pane (#12797). */
@@ -2488,12 +2490,15 @@ export class TerminalProcess {
     this.codexContinueArmGeneration++;
     if (!armed) this.withdrawCodexContinue();
     this.codexStopReportedSeq = null;
-    // Each arming starts afresh: a Claude stop already on screen is looked at
-    // now, as the arming's own, rather than when the pane next prints.
-    this.claudeLimitStop.clear();
-    if (armed && getLiveAgentId(this.terminalInfo) === "claude") {
-      const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
-      this.observeClaudeLimitStop(this.analysis.getViewportLines(rows), Date.now(), true);
+    // A Claude stop is kept across a disarm, with what happened since it
+    // showed; arming asks for it to be continued, and one already on screen is
+    // looked at now rather than when the pane next prints.
+    if (armed) {
+      this.claudeLimitStop.arm();
+      if (getLiveAgentId(this.terminalInfo) === "claude") {
+        const rows = readPtyDimension(() => this.terminalInfo.ptyProcess.rows, null) ?? 24;
+        this.observeClaudeLimitStop(this.analysis.getViewportLines(rows), Date.now());
+      }
     }
     this.trackCodexStop();
   }
@@ -2509,10 +2514,11 @@ export class TerminalProcess {
    * Follow an armed Claude Code pane's stop (#18192). Nothing here runs for a
    * pane that isn't armed, and leaving Claude, or its run ending, drops it.
    */
-  private observeClaudeLimitStop(lines: readonly string[], now: number, armLook = false): void {
+  private observeClaudeLimitStop(lines: readonly string[], now: number): void {
     const t = this.terminalInfo;
+    // Disarmed, the stop is held as it was for an arming again to pick up.
+    if (!this.codexContinueArmed) return;
     if (
-      !this.codexContinueArmed ||
       this.samplingFinalFrame ||
       getLiveAgentId(t) !== "claude" ||
       !this.isAgentLive ||
@@ -2525,21 +2531,17 @@ export class TerminalProcess {
       return;
     }
     const seen = this.claudeUsageSeen;
-    this.claudeLimitStop.observe(
-      lines,
-      {
-        now,
-        cols: readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined,
-        inputSeq: this.inputController.inputSequence,
-        incarnation: t.agentIncarnation ?? 0,
-        observedSince: this.analysis.observedSince(),
-        shownAt: (window, resetText) => {
-          const last = seen.get(window);
-          return last?.key === `reached|null|${resetText}` ? last.observedAt : null;
-        },
+    this.claudeLimitStop.observe(lines, {
+      now,
+      cols: readPtyDimension(() => t.ptyProcess.cols, null) ?? undefined,
+      inputSeq: this.inputController.inputSequence,
+      incarnation: t.agentIncarnation ?? 0,
+      observedSince: this.analysis.observedSince(),
+      shownAt: (window, resetText) => {
+        const last = seen.get(window);
+        return last?.key === `reached|null|${resetText}` ? last.observedAt : null;
       },
-      armLook
-    );
+    });
     // A dialog on screen as the stop first shows marks it at once.
     this.noteCodexStopState();
     this.trackCodexStop();
@@ -2556,6 +2558,7 @@ export class TerminalProcess {
       reset: { status: "unknown", reason },
     });
     if (
+      !this.codexContinueArmed ||
       !this.isAgentLive ||
       !this.lifecycle.isAlive ||
       held === null ||
@@ -2600,7 +2603,16 @@ export class TerminalProcess {
         guard: held.guard,
         judge: (serialized, cols) => judgeClaudeLimitScreen(serialized, cols, held.bannerKey),
         // Claude can draw its own wait again between the line and its Enter.
-        holdsAtEnter: () => this.claudeLimitStop.held() === held && held.shown,
+        holdsAtEnter: (screenAtEnter) =>
+          this.claudeLimitStop.held() === held &&
+          held.shown &&
+          (screenAtEnter === undefined ||
+            showsClaudeStop(
+              screenAtEnter,
+              readPtyDimension(() => this.terminalInfo.ptyProcess.cols, null) ?? undefined,
+              held.bannerKey
+            )),
+        ...(held.skipAtStop !== null && { refusal: held.skipAtStop }),
       };
     }
     const held = this.codexLimit;
@@ -2715,6 +2727,7 @@ export class TerminalProcess {
       return "banner-changed";
     }
     if (!held.shown) return held.goneReason;
+    if (held.refusal !== undefined) return held.refusal;
     // A banner seen before a gap in the read may have been replaced unseen.
     if (this.analysis.observedSince() !== held.observedSince) return "not-observed";
     if (this.inputController.inputSequence !== held.guard.inputSeq) return "input-since";

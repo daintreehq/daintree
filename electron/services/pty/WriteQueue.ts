@@ -67,6 +67,11 @@ export interface SubmitExecutionContext {
    * they are delivered as attachments is `performSubmit`'s decision.
    */
   imagePaths?: readonly string[];
+  /**
+   * Asked of the screen a guarded line reads right before its Enter
+   * (#18192): false holds the Enter back, as a selector there does.
+   */
+  holdsAtScreen?: (serialized: string) => boolean;
 }
 
 /** One queued submission plus the caller's optional correlation token. */
@@ -92,8 +97,10 @@ interface SubmitJob {
   /**
    * Asked of a guarded line again right before its Enter (#17908): false
    * holds the Enter back as a withdrawal would, leaving the body a draft.
+   * Asked once more of the screen read just before the Enter, when there is
+   * one (#18192).
    */
-  holdsAtEnter?: () => boolean;
+  holdsAtEnter?: (screenAtEnter?: string) => boolean;
 }
 
 /**
@@ -233,7 +240,7 @@ export class WriteQueue {
     admit?: () => boolean,
     imagePaths?: readonly string[],
     refuse?: () => boolean,
-    holdsAtEnter?: () => boolean
+    holdsAtEnter?: (screenAtEnter?: string) => boolean
   ): void {
     if (this.disposed) {
       // A tracked submit into a disposed queue is answered rather than
@@ -601,6 +608,9 @@ export class WriteQueue {
                   markEnterHeld: () => {
                     enterHeld = true;
                   },
+                  ...(next.holdsAtEnter !== undefined
+                    ? { holdsAtScreen: (serialized: string) => next.holdsAtEnter!(serialized) }
+                    : {}),
                 }
               : {}),
             ...(next.imagePaths !== undefined && next.imagePaths.length > 0

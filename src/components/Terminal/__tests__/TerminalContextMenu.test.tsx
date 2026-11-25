@@ -1724,17 +1724,19 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
     expect(screen.queryByText("Continue when usage limit resets")).toBeNull();
   });
 
-  it("offers Continue when usage limit resets on a Claude Code pane, ahead of any limit (#18192)", () => {
+  it("offers Continue when usage limit resets on a pane running Claude Code, ahead of any limit (#18192)", () => {
+    // Launched as another agent, with Claude Code running in it now.
     renderMenu({
       ...agentPane,
       title: "Claude",
-      launchAgentId: "claude",
+      launchAgentId: "gemini",
       detectedAgentId: "claude",
     });
+    continueClient.set.mockClear();
     fireEvent.click(
       screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" })
     );
-    expect(continueClient.set).toHaveBeenLastCalledWith("panel-1", true);
+    expect(continueClient.set.mock.calls).toEqual([["panel-1", true]]);
   });
 
   it("keeps the checked item on a pane armed while Codex ran in it, once Codex has left (#17911)", () => {

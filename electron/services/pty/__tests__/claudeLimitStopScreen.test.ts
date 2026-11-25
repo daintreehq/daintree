@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { judgeClaudeLimitScreen, readClaudeLimitScreen } from "../claudeLimitStopScreen.js";
+import {
+  judgeClaudeLimitScreen,
+  readClaudeLimitScreen,
+  showsClaudeStop,
+} from "../claudeLimitStopScreen.js";
 
 const RULE = "─".repeat(60);
 const BANNER = "  ⎿  You've hit your weekly limit · resets Oct 2 at 9pm (Europe/Lisbon)";
@@ -75,16 +79,33 @@ describe("readClaudeLimitScreen (#18192)", () => {
     expect(readClaudeLimitScreen(["● Done.", "", RULE, "❯ ", RULE, FOOTER], 80)).toBeNull();
   });
 
-  it("leaves a usage warning in the footer, which isn't a stop", () => {
-    const warning = [
-      "● Done.",
-      "",
+  it("leaves a usage warning, in the footer or the transcript, which isn't a stop", () => {
+    const warning = "  You've used 90% of your weekly limit · resets 9pm";
+    expect(readClaudeLimitScreen(["● Done.", "", RULE, "❯ ", RULE, warning], 80)).toBeNull();
+    expect(
+      readClaudeLimitScreen(["● Done.", `  ⎿ ${warning.trim()}`, RULE, "❯ ", RULE], 80)
+    ).toBeNull();
+  });
+
+  it("reads past a banner a narrow pane wrapped and the timing line a turn closes with", () => {
+    const wrapped = [
+      "● Refactoring the parser.",
+      "  ⎿  You've hit your weekly limit",
+      "     · resets 9pm (UTC)",
+      "✻ Worked for 3m 12s",
+      CANCELLED,
       RULE,
       "❯ ",
       RULE,
-      "  You've used 90% of your weekly limit · resets 9pm",
+      FOOTER,
     ];
-    expect(readClaudeLimitScreen(warning, 80)).toBeNull();
+    expect(readClaudeLimitScreen(wrapped, 40)).toMatchObject({ cancelled: true, last: true });
+  });
+
+  it("reads the countdown drawn between the banner and the composer", () => {
+    expect(readClaudeLimitScreen(rows({ between: [COUNTDOWN] }), 80)).toMatchObject({
+      countdown: true,
+    });
   });
 });
 
@@ -109,7 +130,12 @@ describe("judgeClaudeLimitScreen (#18192)", () => {
       rows({ between: [CANCELLED, "● Retrying."] }),
       "banner-not-last",
     ],
-    ["another banner", rows({ between: [] }), "banner-changed"],
+    ["the same banner, its wait not cancelled", rows({ between: [] }), "banner-changed"],
+    [
+      "another banner",
+      rows({ between: [CANCELLED] }).map((row) => row.replace("Oct 2", "Oct 9")),
+      "banner-changed",
+    ],
     ["no banner", ["● Done.", RULE, "❯ ", RULE, FOOTER], "banner-gone"],
     [
       "a dialog in the composer's place",
@@ -118,5 +144,30 @@ describe("judgeClaudeLimitScreen (#18192)", () => {
     ],
   ])("types nothing with %s", (_label, lines, skip) => {
     expect(judgeClaudeLimitScreen(serialized(lines), 80, key)).toEqual({ skip });
+  });
+
+  it("reads only what follows the switch into the alternate screen", () => {
+    const behind = serialized(rows({ between: [CANCELLED], footer: COUNTDOWN }));
+    expect(
+      judgeClaudeLimitScreen(`${behind}\x1b[?1049h${serialized(cancelled())}`, 80, key)
+    ).toEqual({ line: "continue" });
+  });
+});
+
+describe("showsClaudeStop (#18192)", () => {
+  const serialized = (lines: string[]) => lines.join("\r\n");
+  const key = bannerKeyOf(cancelled());
+
+  it("still shows the stop with the line in the composer, and not once the countdown is back", () => {
+    expect(
+      showsClaudeStop(serialized(rows({ between: [CANCELLED], input: "❯ continue" })), 80, key)
+    ).toBe(true);
+    expect(
+      showsClaudeStop(
+        serialized(rows({ between: [CANCELLED], input: "❯ continue", footer: COUNTDOWN })),
+        80,
+        key
+      )
+    ).toBe(false);
   });
 });

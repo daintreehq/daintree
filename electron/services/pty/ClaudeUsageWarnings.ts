@@ -239,9 +239,11 @@ export function scanClaudeUsageMessages(
   lines: readonly string[],
   cols?: number
 ): ClaudeUsageMessage[] {
+  const tail = lines.slice(-SCAN_LINES).map((line) => stripAnsi(line));
   const byWindow = new Map<ClaudeUsageWindow, ClaudeUsageMessage>();
-  for (const { row: _row, ...message } of locateClaudeUsageMessages(lines, cols)) {
-    byWindow.set(message.window, message);
+  for (let i = 0; i < tail.length; i++) {
+    const message = matchRow(tail[i]!, tail[i + 1], cols);
+    if (message !== null) byWindow.set(message.window, message);
   }
   return [...byWindow.values()];
 }

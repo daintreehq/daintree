@@ -2195,7 +2195,12 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
     const assistant = await armedClaudePane(idle);
     assistant.terminal.write("\x1b", undefined, "assistant-1");
     await show(cancelledScreen());
-    expect(answer(assistant.terminal)).not.toHaveProperty("skipAtStop");
+    const reply = answer(assistant.terminal);
+    expect(reply).toMatchObject({
+      reset: { status: "known", resetsAt },
+      stamp: expect.any(Object),
+    });
+    expect(reply).not.toHaveProperty("skipAtStop");
     assistant.terminal.dispose();
   });
 
@@ -2212,7 +2217,6 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
     const { terminal, stops, typed } = await armedClaudePane(countdownScreen());
     terminal.write("\x1b", undefined, "assistant-1");
     await show(cancelledScreen());
-    terminal.write("x");
     terminal.write("\x7f");
     expect(await continueAt(terminal, stops[0]!)).toEqual({
       status: "skipped",
@@ -2264,6 +2268,83 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
       reason: "own-wait",
     });
     expect(typed()).toBe("\x1b");
+    terminal.dispose();
+  });
+
+  it("holds the Enter when Claude draws its own wait again while `continue` sits in the composer", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(countdownScreen());
+    terminal.write("\x1b", undefined, "assistant-1");
+    await show(cancelledScreen());
+    const result = terminal.continueAtCodexLimit(stops[0]!);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(typed()).toBe("\x1bcontinue");
+    ptyOnDataCallback!(
+      claudeScreen({ notice: [CANCELLED, ""], footer: COUNTDOWN }).replace("❯ ", "❯ continue")
+    );
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await result).toEqual({ status: "skipped", reason: "not-delivered" });
+    expect(typed()).toBe("\x1bcontinue");
+    terminal.dispose();
+  });
+
+  it("types nothing once a choice dialog showed after the stop, though it has gone", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(claudeScreen());
+    const info = (terminal as unknown as { terminalInfo: Record<string, unknown> }).terminalInfo;
+    info.agentState = "waiting";
+    info.waitingReason = "approval";
+    await show(claudeScreen());
+    info.waitingReason = "error";
+    expect(await continueAt(terminal, stops[0]!)).toEqual({
+      status: "skipped",
+      reason: "dialog-since",
+    });
+    expect(typed()).toBe("");
+    terminal.dispose();
+  });
+
+  it("refuses a stop a person's Escape left, even if asked", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(countdownScreen());
+    terminal.write("\x1b");
+    await show(cancelledScreen());
+    expect(await continueAt(terminal, stops[0]!)).toEqual({
+      status: "skipped",
+      reason: "auto-continue-cancelled",
+    });
+    expect(typed()).toBe("\x1b");
+    terminal.dispose();
+  });
+
+  it("hands a stop a person's Escape left back once the pane is turned off and on", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(countdownScreen());
+    terminal.write("\x1b");
+    await show(cancelledScreen());
+    expect(answer(terminal)).toMatchObject({ skipAtStop: "auto-continue-cancelled" });
+
+    terminal.setCodexLimitContinueArmed(false);
+    terminal.setCodexLimitContinueArmed(true);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+    // Reported again, as the same sighting, now Daintree's.
+    expect(stops).toEqual([stops[0], stops[0]]);
+    expect(answer(terminal)).not.toHaveProperty("skipAtStop");
+    expect(await continueAt(terminal, stops[1]!)).toEqual({
+      status: "continued",
+      line: "continue",
+    });
+    expect(typed()).toBe("\x1bcontinue\r");
+    terminal.dispose();
+  });
+
+  it("still counts input written before an arming again as input since the stop", async () => {
+    const { terminal, stops, typed } = await armedClaudePane(claudeScreen());
+    terminal.write("x");
+    terminal.write("\x7f");
+    terminal.setCodexLimitContinueArmed(false);
+    terminal.setCodexLimitContinueArmed(true);
+    expect(await continueAt(terminal, stops[0]!)).toEqual({
+      status: "skipped",
+      reason: "input-since",
+    });
+    expect(typed()).toBe("x\x7f");
     terminal.dispose();
   });
 

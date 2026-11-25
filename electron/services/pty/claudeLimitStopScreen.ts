@@ -26,10 +26,12 @@ const COUNTDOWN = /\bcontinuing\s+automatically\b/i;
 const CANCELLED = /^\s*(?:⎿\s*)?Automatic continue cancelled\b/i;
 /**
  * A row carrying on the message above it: indented text that opens no new
- * transcript entry (an assistant bullet, a tool result, a prompt echo, a
- * spinner).
+ * transcript entry (an assistant bullet, a tool result, a prompt echo), a
+ * wrapped "· resets …" among it.
  */
-const CARRIED = /^\s+[^\s●⎿❯>│┃✻✶✳✢·*]/;
+const CARRIED = /^\s+[^\s●⎿❯>│┃]/;
+/** The timing line Claude closes a turn with: "✻ Worked for 3m 12s". */
+const TURN_TIMING = /^\s*[✻✶✳✢·*]\s+[A-Z][a-z]+ for \d+[hms]/;
 
 function isRule(row: string): boolean {
   return RULE_RUN.test(row) && RULE_ONLY.test(row);
@@ -108,7 +110,7 @@ export function readClaudeLimitScreen(
     bannerKey: JSON.stringify([banner.window, banner.resetText, cancelled]),
     countdown: COUNTDOWN.test(footer) || after.some((row) => COUNTDOWN.test(row)),
     cancelled,
-    last: after.every((row) => CANCELLED.test(row) || CARRIED.test(row)),
+    last: after.every((row) => CANCELLED.test(row) || CARRIED.test(row) || TURN_TIMING.test(row)),
   };
 }
 
@@ -122,6 +124,34 @@ function viewRows(serialized: string): string[] {
 export type ClaudeLimitScreenVerdict =
   { line: "continue" } | { skip: CodexLimitContinueSkipReason };
 
+/** Why the screen no longer shows the stop `bannerKey` names, or null while it does, whatever the composer holds. */
+function stopGoneFrom(
+  serialized: string,
+  cols: number | undefined,
+  bannerKey: string
+): CodexLimitContinueSkipReason | null {
+  const screen = readClaudeLimitScreen(viewRows(serialized), cols);
+  if (screen === null) return "banner-gone";
+  if (screen === "no-composer") return "no-composer";
+  if (screen.bannerKey !== bannerKey) return "banner-changed";
+  if (screen.countdown) return "own-wait";
+  if (!screen.last) return "banner-not-last";
+  return null;
+}
+
+/**
+ * Whether the screen read right before a continuation's Enter still shows
+ * its stop (#18192): Claude can draw its own wait again while `continue`
+ * sits in the composer, which the line's text doesn't change.
+ */
+export function showsClaudeStop(
+  serialized: string,
+  cols: number | undefined,
+  bannerKey: string
+): boolean {
+  return stopGoneFrom(serialized, cols, bannerKey) === null;
+}
+
 /**
  * Whether a Claude Code pane's screen is still the one its stop left
  * (#18192): the banner `bannerKey` names, with no wait of Claude's own on
@@ -132,12 +162,8 @@ export function judgeClaudeLimitScreen(
   cols: number | undefined,
   bannerKey: string
 ): ClaudeLimitScreenVerdict {
-  const screen = readClaudeLimitScreen(viewRows(serialized), cols);
-  if (screen === null) return { skip: "banner-gone" };
-  if (screen === "no-composer") return { skip: "no-composer" };
-  if (screen.bannerKey !== bannerKey) return { skip: "banner-changed" };
-  if (screen.countdown) return { skip: "own-wait" };
-  if (!screen.last) return { skip: "banner-not-last" };
+  const gone = stopGoneFrom(serialized, cols, bannerKey);
+  if (gone !== null) return { skip: gone };
   const inputLine = observeInputLine(serialized, inputSuggestionRuleFor("claude")).inputLine;
   if (inputLine.state === "unknown") return { skip: "no-composer" };
   // A suggestion is Claude's dim offer, not text in the box: typing replaces it.

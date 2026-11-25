@@ -207,10 +207,10 @@ describe("FallbackChainEditor — continuing when the usage limit resets (#17912
     }
   );
 
-  it("clears it rather than storing false", () => {
+  it.each(["codex", "claude"])("clears it on a %s preset rather than storing false", (agentId) => {
     const onUpdatePreset = renderEditor(
       { id: "home", name: "Home", continueAtLimitReset: true },
-      "codex"
+      agentId
     );
     const toggle = screen.getByRole("switch", { name: label });
     expect(toggle.getAttribute("aria-checked")).toBe("true");

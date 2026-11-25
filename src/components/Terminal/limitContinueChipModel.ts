@@ -115,7 +115,7 @@ const SKIPS: Record<
   },
   "auto-continue-cancelled": {
     kind: "skipped",
-    copy: "Claude Code's automatic continue was cancelled from the pane. Turn this off and on again to continue at the reset anyway.",
+    copy: "Claude Code's automatic continue was cancelled, and nothing showed an assistant did it. Turning this off and on hands the stop back to Daintree.",
   },
   "own-wait": {
     kind: "skipped",
