@@ -3,6 +3,7 @@ import type { TerminalCheckResult } from "./checkResult.js";
 import type { TerminalHandback } from "./handback.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
 import type { UpdateInstalledObservation } from "./ipc/agent.js";
+import type { RestoredSummary } from "./restoreProvenance.js";
 
 /**
  * Which surface answered a `terminal.getStatus` call (#12316).
@@ -15,7 +16,9 @@ import type { UpdateInstalledObservation } from "./ipc/agent.js";
  *
  * Neither strictly contains the other, so a client must not prefer one wholesale
  * (#12336): `hasPty` is computed in the pty-host and only the `pty` answer
- * reports it. Read `unavailableFields` on each response rather than assuming a
+ * reports it for a pane that spawned; the `renderer` answer reports `false`
+ * only for a pane restore held (#18171). Read `unavailableFields` on each
+ * response rather than assuming a
  * ranking, and treat a field that drops out when a view opens as unknown, not as
  * a value that stayed true.
  */
@@ -29,7 +32,9 @@ export type TerminalStatusSource = "renderer" | "pty";
  * It cuts both ways. `hasPty` and `lastOutputChangeAt` are read in the
  * pty-host, so the reduced `pty` answer reports them and the richer `renderer`
  * answer cannot — a surface listing nothing is not the same as a surface that
- * saw everything. The renderer reads `lastOutputChangeAt` only when the call
+ * saw everything. A pane restore held is the one `hasPty` the renderer can
+ * report (#18171), so it drops `hasPty` from this list when a held row is in
+ * the answer. The renderer reads `lastOutputChangeAt` only when the call
  * asked for output (#12495), so it drops out of this list for those calls.
  * `lastTypedInputAt` rides the same read (#12718) and drops out with it.
  */
@@ -122,8 +127,9 @@ export interface TerminalStatusEntry {
    *
    * Zero is a real reading — none observed in this PTY generation. Absent means
    * the surface could not observe it, which is not zero — except on the
-   * `renderer` answer, which reports zero for any pane it holds, including one
-   * it adopted without ever being told the count. One counter exists and the
+   * `renderer` answer, which reports zero for any pane it holds that spawned,
+   * including one it adopted without ever being told the count; a pane restore
+   * held has no PTY generation and leaves it out (#18171). One counter exists and the
    * pty-host owns it; the `renderer` answer is a cache of what the host has
    * told this view, so it can lag a `pty` answer for the same terminal and can
    * read zero before the first reading reaches it. Compare readings from one
@@ -157,7 +163,18 @@ export interface TerminalStatusEntry {
    */
   recentOutputTruncated?: boolean;
   armed?: boolean;
+  /**
+   * Off the pty-host on the `pty` answer. The `renderer` answer sets it only
+   * for a pane restore held (#18171), which never spawned, so `false` there is
+   * the panel's own knowledge rather than a borrowed process fact.
+   */
   hasPty?: boolean;
+  /**
+   * How restore rebuilt the pane, as `terminal.list` reports it (#18171). A
+   * held pane has no process, so this is what tells it from an idle one while
+   * `agentState` stays the detector's.
+   */
+  restored?: RestoredSummary;
   /**
    * The record for the `submissionToken` the query named (#12337). Present only
    * on entries the surface could read, and only when a token was asked for.

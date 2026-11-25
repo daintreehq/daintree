@@ -1,9 +1,12 @@
 import { coerceAgentState } from "../types/agent.js";
 import type {
+  RestoredSummary,
   TerminalAgentObservation,
   TerminalRestoreDisposition,
   TerminalRestoreProvenance,
-} from "../types/panel.js";
+} from "../types/restoreProvenance.js";
+
+export type { RestoredSummary };
 
 const DISPOSITIONS: ReadonlySet<string> = new Set<TerminalRestoreDisposition>([
   "resume",
@@ -112,18 +115,6 @@ export function sanitizeLiveRestoreProvenance(
 ): TerminalRestoreProvenance | undefined {
   const provenance = sanitizeRestoreProvenance(value);
   return provenance?.disposition === "held" ? undefined : provenance;
-}
-
-/**
- * The `restored` field the terminal listing and info reads report (#14017).
- * A pane held right now reports `held` with its hold's reason, whatever the
- * record says, so the answer follows the hold rather than a stale copy of it.
- */
-export interface RestoredSummary {
-  at: number;
-  disposition: TerminalRestoreDisposition;
-  heldReason?: string;
-  lastSeen?: TerminalAgentObservation;
 }
 
 export function summarizeRestoreProvenance(panel: {

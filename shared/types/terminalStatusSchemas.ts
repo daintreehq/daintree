@@ -82,6 +82,23 @@ export const TerminalInputLineSchema = z
   })
   .describe(INPUT_LINE_DESCRIPTION);
 
+/**
+ * How restore brought a terminal back (#14017), absent on a pane it never
+ * rebuilt. Strings, not enums, for the reason and state: they come off
+ * persisted panel data, where a stale spelling should degrade one field rather
+ * than fail the whole read.
+ */
+export const TerminalRestoredSchema = z
+  .object({
+    at: z.number(),
+    disposition: z.enum(["resume", "fresh", "held"]),
+    heldReason: z.string().optional(),
+    lastSeen: z.object({ agentState: z.string(), at: z.number().optional() }).optional(),
+  })
+  .describe(
+    "Set when restore rebuilt the panel (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended."
+  );
+
 export const TerminalStatusEntrySchema = z.object({
   terminalId: z.string(),
   agentId: z.string().nullable(),
@@ -97,7 +114,7 @@ export const TerminalStatusEntrySchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Set once the process exits, so absence means still running unless listed in `unavailableFields`. Null means killed by a signal with no numeric code."
+      "Set once the process exits; absent means running unless listed in `unavailableFields` or the pane is held. Null: killed by a signal with no numeric code."
     ),
   spawnedAt: z.number().optional().describe("Spawn time, epoch ms."),
   agentIncarnation: z
@@ -139,8 +156,9 @@ export const TerminalStatusEntrySchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "False once the process exited or a kill was requested. Not a health probe: a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface."
+      "False once it exited, a kill was requested or restore held it. Not a health probe: a keep-open shell or a wedged agent still reads true. `renderer`: held panes only."
     ),
+  restored: TerminalRestoredSchema.optional(),
   submission: TerminalSubmissionRecordSchema.optional().describe(
     "Delivery record for the named token. Absent without a token or when the terminal could not be read, which differs from holding no record."
   ),
@@ -148,7 +166,7 @@ export const TerminalStatusEntrySchema = z.object({
     .string()
     .optional()
     .describe(
-      "Set when the terminal was not found, and on every resolved entry when a batched fetch fails; then the status fields are still set and only that fetch's field is missing. Never fails the call."
+      "Set when the terminal was not found, and on each entry a failed batched fetch covered; then the status fields are still set and only that fetch's field is missing. Never fails the call."
     ),
 });
 

@@ -108,6 +108,46 @@ describe("readProjectStatuses (#16191)", () => {
   });
 });
 
+describe("readProjectStatuses for a pane restore held (#18171)", () => {
+  it("carries the hold through the host's parse, which drops what the schema doesn't name", async () => {
+    const held = {
+      terminalId: "held",
+      agentId: "mistral",
+      agentState: null,
+      hasPty: false,
+      restored: {
+        at: 5_000,
+        disposition: "held",
+        heldReason: "host-ended-uncleanly",
+        lastSeen: { agentState: "waiting", at: 4_000 },
+      },
+    };
+    const [answer] = await readProjectStatuses(
+      {
+        getStatus: async () => ({
+          status: "done",
+          result: {
+            isError: false,
+            // An unnamed key is dropped by the parse; `restored` must not be.
+            structured: {
+              terminals: [{ ...held, notInTheSchema: true }],
+              source: "pty",
+              unavailableFields: [],
+            },
+            text: null,
+          },
+        }),
+      },
+      [{ projectId: "p", terminalIds: ["held"] }],
+      null,
+      1_000
+    );
+
+    expect(answer).toMatchObject({ status: "done" });
+    expect(answer?.status === "done" ? answer.result?.terminals : undefined).toEqual([held]);
+  });
+});
+
 describe("createLocalMcpRelay status (#16191)", () => {
   it("redacts this machine's screens as a host's are, through the gates its calls meet", async () => {
     const opened: string[] = [];

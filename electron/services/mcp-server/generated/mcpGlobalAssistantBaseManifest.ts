@@ -1516,7 +1516,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               },
               exitCode: {
                 description:
-                  "Set once the process exits, so absence means still running unless listed in `unavailableFields`. Null means killed by a signal with no numeric code.",
+                  "Set once the process exits; absent means running unless listed in `unavailableFields` or the pane is held. Null: killed by a signal with no numeric code.",
                 anyOf: [
                   {
                     type: "integer",
@@ -1627,12 +1627,44 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               },
               hasPty: {
                 description:
-                  "False once the process exited or a kill was requested. Not a health probe: a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface.",
+                  "False once it exited, a kill was requested or restore held it. Not a health probe: a keep-open shell or a wedged agent still reads true. `renderer`: held panes only.",
                 type: "boolean",
+              },
+              restored: {
+                type: "object",
+                properties: {
+                  at: {
+                    type: "number",
+                  },
+                  disposition: {
+                    type: "string",
+                    enum: ["resume", "fresh", "held"],
+                  },
+                  heldReason: {
+                    type: "string",
+                  },
+                  lastSeen: {
+                    type: "object",
+                    properties: {
+                      agentState: {
+                        type: "string",
+                      },
+                      at: {
+                        type: "number",
+                      },
+                    },
+                    required: ["agentState"],
+                    additionalProperties: false,
+                  },
+                },
+                required: ["at", "disposition"],
+                additionalProperties: false,
+                description:
+                  "Set when restore rebuilt the panel (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended.",
               },
               error: {
                 description:
-                  "Set when the terminal was not found, and on every resolved entry when a batched fetch fails; then the status fields are still set and only that fetch's field is missing. Never fails the call.",
+                  "Set when the terminal was not found, and on each entry a failed batched fetch covered; then the status fields are still set and only that fetch's field is missing. Never fails the call.",
                 type: "string",
               },
               hostId: {

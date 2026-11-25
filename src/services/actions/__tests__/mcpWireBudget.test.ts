@@ -634,7 +634,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // schema is closed, so the field must be advertised; it went from a
   // three-way union with per-field descriptions to one flat object with a
   // single description first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 63_900;
+  // 63_900 → 64_400 for #18171, measured at 64_377 B (+507 over develop's
+  // 63_870): `restored` on `terminal.getStatus`, so a watcher can tell a pane
+  // restore held, which has no process yet, from a missing or idle one. The
+  // result schema is closed, so the field must be advertised; it reuses
+  // `terminal.list`'s schema and description, and the neighbouring descriptions
+  // that name the held case (`hasPty`, `exitCode`, `error`) net to 3 B less.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 64_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -1108,7 +1114,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // it is the closed output schema, which names each notification an arm hands
   // over and the one a read returns, with its text; the argument descriptions
   // were trimmed first. In-app only, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 204_300;
+  // 204_300 → 205_300 for #18171, measured at 205_243 B (+1_014 over
+  // develop's 204_229): the same `restored` the external half above pays for,
+  // on `terminal.getStatus` and on the host status read, whose terminal rows
+  // extend the same entry schema.
+  const MAX_COHORT_PAYLOAD_BYTES = 205_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

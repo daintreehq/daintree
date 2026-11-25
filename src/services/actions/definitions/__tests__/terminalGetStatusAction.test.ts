@@ -1394,3 +1394,152 @@ describe("terminal.getStatus output for plugin dispatch (#13155)", () => {
     await expect(getStatusDef().run({ includeOutput: false }, pluginCtx)).resolves.toBeDefined();
   });
 });
+
+describe("terminal.getStatus for a pane restore held (#18171)", () => {
+  const held = {
+    id: "held",
+    kind: "terminal",
+    location: "grid",
+    launchAgentId: "mistral",
+    // `addPanel` commits a hold with no PTY and never spawns it.
+    hasPty: false,
+    restoreRecovery: { reason: "host-ended-uncleanly" },
+    restoreProvenance: {
+      at: 5_000,
+      disposition: "resume",
+      lastSeen: { agentState: "waiting", at: 4_000 },
+    },
+  };
+  const live = { id: "live", kind: "terminal", location: "grid", agentState: "working" };
+  const heldRow = {
+    terminalId: "held",
+    agentId: "mistral",
+    agentState: null,
+    hasPty: false,
+    restored: {
+      at: 5_000,
+      disposition: "held",
+      heldReason: "host-ended-uncleanly",
+      lastSeen: { agentState: "waiting", at: 4_000 },
+    },
+  };
+
+  function panels(...entries: Array<Record<string, unknown>>) {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: entries.map((e) => e.id),
+      panelsById: Object.fromEntries(entries.map((e) => [e.id, e])),
+    });
+  }
+
+  it("answers with how restore held it, not as a missing or idle pane", async () => {
+    panels(held);
+
+    const result = await callGetStatus(setupActions(), { terminalIds: ["held"] });
+
+    expect(result.terminals).toEqual([
+      {
+        terminalId: "held",
+        agentId: "mistral",
+        agentState: null,
+        hasPty: false,
+        armed: false,
+        restored: {
+          at: 5_000,
+          disposition: "held",
+          heldReason: "host-ended-uncleanly",
+          lastSeen: { agentState: "waiting", at: 4_000 },
+        },
+      },
+    ]);
+    expect(result.unavailableFields).toEqual(["lastOutputChangeAt", "lastTypedInputAt"]);
+    const def = setupActions().get("terminal.getStatus")!() as AnyActionDefinition;
+    expect(def.resultSchema?.parse(result).terminals[0]?.restored?.disposition).toBe("held");
+    expect(TerminalStatusResultSchema.parse(result).terminals[0]?.hasPty).toBe(false);
+  });
+
+  it("lists hasPty as unavailable only while no row reports it", async () => {
+    panels(held, live);
+
+    const mixed = await callGetStatus(setupActions());
+    panels(live);
+    const liveOnly = await callGetStatus(setupActions());
+
+    // The held row reports it, so the envelope can't claim every row lacks it;
+    // the live row still leaves the key out rather than guessing.
+    expect(mixed.terminals.map((t) => t.terminalId)).toEqual(["held", "live"]);
+    expect(mixed.terminals[0]).toMatchObject(heldRow);
+    expect(mixed.unavailableFields).not.toContain("hasPty");
+    expect(JSON.parse(JSON.stringify(mixed.terminals[1]))).not.toHaveProperty("hasPty");
+    expect(liveOnly.unavailableFields).toContain("hasPty");
+  });
+
+  it("keeps the not-found row for an id no panel has beside a held one", async () => {
+    panels(held);
+
+    const result = await callGetStatus(setupActions(), { terminalIds: ["held", "gone"] });
+
+    expect(result.terminals[0]).toMatchObject(heldRow);
+    expect(result.terminals[0]?.error).toBeUndefined();
+    expect(result.terminals[1]).toEqual({
+      terminalId: "gone",
+      agentId: null,
+      agentState: null,
+      error: "Terminal not found",
+    });
+  });
+
+  it("asks the pty-host about none of a held pane's output, activity or submissions", async () => {
+    panels(held, live);
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ live: "$ ok" }));
+    terminalClientMock.getSubmissions.mockResolvedValue({ live: { status: "absent" } });
+    terminalClientMock.getOutputActivity.mockResolvedValue({
+      live: { status: "read", lastOutputChangeAt: 7_000 },
+    });
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["held", "live"],
+      includeOutput: true,
+      submissionToken: "tok",
+    });
+
+    expect(getSerializedStatesMock.mock.calls).toEqual([[["live"]]]);
+    expect(terminalClientMock.getOutputActivity.mock.calls).toEqual([[["live"]]]);
+    expect(terminalClientMock.getSubmissions.mock.calls).toEqual([[["live"], "tok"]]);
+    expect(result.terminals[0]).toMatchObject({ ...heldRow, recentOutput: null });
+    expect(result.terminals[0]?.error).toBeUndefined();
+    expect(result.terminals[0]?.submission).toBeUndefined();
+    expect(result.terminals[1]).toMatchObject({
+      lastOutputChangeAt: 7_000,
+      submission: { token: "tok", phase: "unknown" },
+    });
+  });
+
+  it("issues no pty-host read at all for a query of held panes alone", async () => {
+    panels(held);
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["held"],
+      includeOutput: true,
+      submissionToken: "tok",
+    });
+
+    expect(getSerializedStatesMock).not.toHaveBeenCalled();
+    expect(terminalClientMock.getOutputActivity).not.toHaveBeenCalled();
+    expect(terminalClientMock.getSubmissions).not.toHaveBeenCalled();
+    expect(result.terminals[0]).toMatchObject({ ...heldRow, recentOutput: null });
+    expect(result.terminals[0]?.submission).toBeUndefined();
+    expect(result.unavailableFields).toEqual([]);
+  });
+
+  it("keeps a held row free of a batch failure its live siblings report", async () => {
+    panels(held, live);
+    getSerializedStatesMock.mockRejectedValue(new Error("output fetch died"));
+    terminalClientMock.getOutputActivity.mockRejectedValue(new Error("activity died"));
+
+    const result = await callGetStatus(setupActions(), { includeOutput: true });
+
+    expect(result.terminals[0]).toMatchObject({ ...heldRow, recentOutput: null });
+    expect(result.terminals[0]?.error).toBeUndefined();
+    expect(result.terminals[1]?.error).toMatch(/output fetch died.*activity died/);
+  });
+});
