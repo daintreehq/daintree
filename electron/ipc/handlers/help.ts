@@ -24,6 +24,7 @@ import * as globalAssistant from "./helpGlobalAssistant.js";
 import { detachedAdoptionDriver, installDetachedAdoption } from "./helpDetachedAdoption.js";
 import { createLogger } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { isMainAppRoute } from "../../../shared/utils/trustedRenderer.js";
 import type { HelpAssistantTier } from "../../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../../shared/types/actions.js";
 import {
@@ -896,7 +897,13 @@ export const helpNamespace = defineIpcNamespace({
 function localViewIsUp(handle: number): boolean {
   const view = webContents.fromId(handle);
   return (
-    view !== undefined && !view.isDestroyed() && !view.isCrashed() && !view.isLoadingMainFrame()
+    view !== undefined &&
+    !view.isDestroyed() &&
+    !view.isCrashed() &&
+    !view.isLoadingMainFrame() &&
+    // A crash loop leaves the recovery page in the same view, still bound to
+    // its project, and it can answer none of an assistant's calls.
+    isMainAppRoute(view.getURL())
   );
 }
 

@@ -11,6 +11,7 @@ import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { notificationService } from "../services/NotificationService.js";
+import { loadedHelpSessionService } from "../services/helpSessionRuntime.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { isCheckoutPendingPath } from "../services/projectClone/checkoutGate.js";
 import { scratchStore } from "../services/ScratchStore.js";
@@ -669,6 +670,10 @@ export async function setupWindowServices(
     // resolved against a PVM with no active project. Converge them now (#11136).
     refreshProjectMenuState();
     notificationService.refreshTitles();
+    // The view may have loaded and hydrated before this binding, which no
+    // endpoint change reports: offer it the project's assistants left with no
+    // view now (#18165).
+    loadedHelpSessionService()?.noteViewReady();
   }
 
   // Bring back the rest of this window's live projects (#12320) — the warm

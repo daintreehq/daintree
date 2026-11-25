@@ -148,6 +148,8 @@ describe("detachedAdoptionDriver (#18165)", () => {
     expect(detachedAdoptionDriver(null, [closed])).toBeNull();
     expect(detachedAdoptionDriver(null, [first, second])).toBeNull();
     expect(detachedAdoptionDriver(null, [first, closed])).toBe("e-first");
+    // Another machine's view never drives with routing off: nothing there can attach.
+    expect(detachedAdoptionDriver(null, [endpoint("e-remote", "proj", -2)])).toBeNull();
   });
 
   it("follows only the live holder with routing on, never a window here that merely shows it", () => {

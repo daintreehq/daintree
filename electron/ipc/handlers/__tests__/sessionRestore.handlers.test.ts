@@ -31,6 +31,10 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
 
 import { registerSessionRestoreHandlers } from "../sessionRestore.js";
 import { isViewHydrated, _resetViewHydrationForTesting } from "../../../window/viewHydration.js";
+import {
+  publishHelpSessionService,
+  resetHelpSessionRuntimeForTests,
+} from "../../../services/helpSessionRuntime.js";
 import type { HandlerDependencies } from "../../types.js";
 
 const CHANNEL = "session-restore:view-hydrated";
@@ -43,8 +47,12 @@ function fakeSender(id: number) {
 describe("sessionRestore notifyViewHydrated", () => {
   const windowPvm = { signalViewHydrated: vi.fn() };
   const globalPvm = { signalViewHydrated: vi.fn() };
+  const helpSessions = { noteViewReady: vi.fn() };
 
   beforeEach(() => {
+    resetHelpSessionRuntimeForTests();
+    publishHelpSessionService(helpSessions as never);
+    helpSessions.noteViewReady.mockClear();
     utilsMock.registered.clear();
     windowForSender.clear();
     windowPvm.signalViewHydrated.mockClear();
@@ -73,12 +81,22 @@ describe("sessionRestore notifyViewHydrated", () => {
     expect(globalPvm.signalViewHydrated).not.toHaveBeenCalled();
   });
 
+  it("offers each assistant left with no view to the hydrated view, background or not (#18165)", async () => {
+    const sender = fakeSender(44);
+    utilsMock.ctx = { webContentsId: sender.id, event: { sender } };
+
+    await utilsMock.registered.get(CHANNEL)!();
+
+    expect(helpSessions.noteViewReady).toHaveBeenCalledTimes(1);
+  });
+
   it("latches nothing for a view attached over a link", async () => {
     utilsMock.ctx = { webContentsId: 43, event: null };
 
     await utilsMock.registered.get(CHANNEL)!();
 
     expect(isViewHydrated(43)).toBe(false);
+    expect(helpSessions.noteViewReady).not.toHaveBeenCalled();
     expect(windowPvm.signalViewHydrated).not.toHaveBeenCalled();
     expect(globalPvm.signalViewHydrated).not.toHaveBeenCalled();
   });

@@ -262,7 +262,7 @@ export class RelayDrivenElsewhereError extends Error {
             ? `${holder} took control of this project, so this call stopped before changing anything more. Part of it may already have run. Your calls go through their window once it takes this assistant over.`
             : holderName !== null
               ? `${holderName} has control of this project, so this call can't change it. Nothing was run. Your calls go through their window once it takes this assistant over.`
-              : `This assistant isn't attached to a window of this project, and with Host mode off it can only change the project through one. Nothing was run. A window of this project here takes it over once it has loaded; retry then.`
+              : `This assistant isn't attached to a window of this project, and with Host mode off it can only change the project through one. Nothing was run. Open the project in one window here, which takes this assistant over, and retry once it has.`
           : options?.stopped === true
             ? `${holder} took control of this project on the host, so this call stopped before changing anything more. Part of it may already have run. The person can take control in a window on this Shell.`
             : holderName !== null
