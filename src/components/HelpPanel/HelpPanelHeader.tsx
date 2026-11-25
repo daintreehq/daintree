@@ -190,6 +190,14 @@ interface HelpPanelHeaderProps {
   /** Whether opening the panel starts a session by itself. */
   autoLaunchEnabled: boolean;
   onAutoLaunchEnabledChange: (enabled: boolean) => void;
+  /**
+   * Whether the lane on screen is kept running across restarts (#18177); null
+   * while unread, or where it can't be (a scratch), which leaves the item out.
+   */
+  keepRunning?: boolean | null;
+  onKeepRunningChange?: (keep: boolean) => void;
+  /** The menu opened: a choice shown in it may have changed elsewhere since it was read. */
+  onMenuOpen?: () => void;
   onClose: () => void;
   isFocused?: boolean;
   /** Agents a session can be started on by name; offered only when there are several. */
@@ -218,6 +226,9 @@ export function HelpPanelHeader({
   onOpenDocs,
   autoLaunchEnabled,
   onAutoLaunchEnabledChange,
+  keepRunning = null,
+  onKeepRunningChange,
+  onMenuOpen,
   onClose,
   isFocused = false,
   newSessionAgentIds = [],
@@ -237,6 +248,7 @@ export function HelpPanelHeader({
   const atSessionCeiling = !canStartNewSession && openSessionCount >= MAX_ASSISTANT_SLOTS;
   const handleMenuOpenChange = (open: boolean) => {
     setIsMenuOpen(open);
+    if (open) onMenuOpen?.();
     if (open && hasAgentItems && atSessionCeiling) announceSessionCeiling();
   };
   return (
@@ -363,6 +375,17 @@ export function HelpPanelHeader({
             >
               Start when the panel opens
             </DropdownMenuCheckboxItem>
+            {/* The lane on screen's own: a quit or crash brings it back running
+                its conversation. A Stop turns it off with the conversation. */}
+            {keepRunning !== null && onKeepRunningChange && (
+              <DropdownMenuCheckboxItem
+                checked={keepRunning}
+                onCheckedChange={(checked) => onKeepRunningChange(checked === true)}
+                data-testid="assistant-keep-running-toggle"
+              >
+                Keep running across restarts
+              </DropdownMenuCheckboxItem>
+            )}
             {canEndSession && (
               <>
                 <DropdownMenuSeparator />
