@@ -52,18 +52,42 @@ export const HOST_PACKAGES_COMMAND = `apt-get update && apt-get satisfy -y --no-
 export const HOST_PACKAGES_INSTRUCTION = `On Debian or Ubuntu, run this there as root, then try again: ${HOST_PACKAGES_COMMAND}`;
 
 /**
+ * `text` without {@link HOST_PACKAGES_INSTRUCTION}, wherever it sits and
+ * however often: after a Connect or Bring back prefix, before an installer's
+ * recovery note (which joins with ". ", so a doubled stop goes too), or twice
+ * over after a rollback. `found` says whether it was there whole; words cut
+ * inside it don't count.
+ */
+export function withoutHostPackagesInstruction(text: string): { text: string; found: boolean } {
+  let rest = text;
+  let at = rest.indexOf(HOST_PACKAGES_INSTRUCTION);
+  if (at < 0) return { text, found: false };
+  while (at >= 0) {
+    const before = rest.slice(0, at).replace(/ $/, "");
+    let after = rest.slice(at + HOST_PACKAGES_INSTRUCTION.length);
+    if (after.startsWith(".") && /[.!?]$/.test(before)) after = after.slice(1);
+    rest = before + after;
+    at = rest.indexOf(HOST_PACKAGES_INSTRUCTION);
+  }
+  return { text: rest.trim(), found: true };
+}
+
+function clipEnd(text: string, max: number): string {
+  if (max <= 0) return "";
+  return `${text.slice(0, max - 1)}…`;
+}
+
+/**
  * `text` cut to at most `max` characters, ending in "…" where it was cut.
- * Where it carries {@link HOST_PACKAGES_INSTRUCTION} whole, the words before
- * it are cut instead, and anything after it dropped, so the command stays
- * whole and can still be offered.
+ * Where it carries {@link HOST_PACKAGES_INSTRUCTION} whole, that goes last,
+ * once, and the words before it are what's cut, so the command stays whole
+ * and can still be offered.
  */
 export function clipKeepingHostPackagesFix(text: string, max: number): string {
   if (text.length <= max) return text;
-  const at = text.indexOf(HOST_PACKAGES_INSTRUCTION);
+  const { text: words, found } = withoutHostPackagesInstruction(text);
   const tail = ` ${HOST_PACKAGES_INSTRUCTION}`;
-  if (at < 0 || tail.length >= max) return `${text.slice(0, max - 1)}…`;
-  return `${text
-    .slice(0, at)
-    .trimEnd()
-    .slice(0, max - tail.length - 1)}…${tail}`;
+  if (!found || tail.length >= max) return clipEnd(text, max);
+  const room = max - tail.length;
+  return `${words.length <= room ? words : clipEnd(words, room)}${tail}`;
 }

@@ -749,14 +749,16 @@ export function AddHostDialog({
 
   /** Another target: what was checked, installed or switched on spoke for the last one. */
   const retarget = (address: string) => {
+    // A failed step's fix names the machine it failed on, never the one chosen now.
+    if (address.trim() !== target.trim()) {
+      setError(null);
+      setInstallError(null);
+    }
     setTarget(address);
-    if (probe && sshTargetOf(probe.connection) !== address.trim()) {
+    if (probe && addressOf(probe.connection) !== address.trim()) {
       setProbe(null);
       setPlan(null);
       setInstallResult(null);
-      // Its fix names the machine it failed on, never the one typed now.
-      setError(null);
-      setInstallError(null);
       setHostModeTurnedOn(false);
       setLingerRefused(null);
     }
@@ -1472,7 +1474,7 @@ export function AddHostDialog({
                       disabled={host.alreadyAdded || refusal !== null || busy}
                       aria-pressed={target === address}
                       onClick={() => {
-                        setTarget(address);
+                        retarget(address);
                         nameFromTarget(address, host.name);
                       }}
                       className={cn(

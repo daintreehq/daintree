@@ -2384,6 +2384,41 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
     expect(screen.getByRole("heading", { name: "Ubuntu-24.04 is up to date" })).toBeTruthy();
   });
 
+  it("never names another distro in a refused start's fix (#18181)", async () => {
+    remoteHosts.discover!.mockResolvedValueOnce([distro("Debian", 2), distro("Ubuntu", 2)]);
+    remoteHosts.probe!.mockResolvedValue(
+      probeResult({
+        connection: { kind: "wsl", distro: "Debian" },
+        platform: "linux",
+        install: {
+          path: "/home/u/Applications/Daintree.AppImage",
+          version: "1.4.0",
+          commit: "abcdef0",
+          packaging: "appimage",
+        },
+        hostModeListening: false,
+        hostModeState: null,
+      })
+    );
+    const refusal = `Daintree can't start on Debian: these libraries it needs aren't installed there: libnspr4.so. ${HOST_PACKAGES_INSTRUCTION}`;
+    remoteHosts.startHostMode!.mockRejectedValueOnce(
+      new ClientAppError("UNSUPPORTED", refusal, refusal)
+    );
+    render(<AddHostDialog isOpen onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Debian/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Check distribution" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Set up Host mode…" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Turn on Host mode" }));
+    expect((await screen.findByTestId("host-root-command")).textContent).toContain(
+      "run this on Debian as root"
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Back" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Ubuntu/ }));
+    expect(screen.queryByTestId("host-root-command")).toBeNull();
+  });
+
   it("lists every distro without a filter, however many there are", async () => {
     remoteHosts.discover!.mockResolvedValueOnce(
       Array.from({ length: 9 }, (_, i) => distro(`Distro-${i + 1}`, 2, i === 0))

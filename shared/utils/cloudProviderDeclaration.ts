@@ -106,7 +106,7 @@ function tunnelProblem(tunnel: CloudSshTunnelCommand): string | null {
     const line: unknown = tunnel[key];
     if (line === undefined) continue;
     if (!isTunnelCommandLine(line)) {
-      return `The tunnel's ${label} must be one line of at most ${MAX_CLOUD_TUNNEL_COMMAND_LINE} characters`;
+      return `The tunnel's ${label} must be one visible line of at most ${MAX_CLOUD_TUNNEL_COMMAND_LINE} characters, with single plain spaces between words`;
     }
   }
   return null;

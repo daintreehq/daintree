@@ -1,4 +1,7 @@
-import { HOST_PACKAGES_COMMAND, HOST_PACKAGES_INSTRUCTION } from "@shared/config/linuxHostPackages";
+import {
+  HOST_PACKAGES_COMMAND,
+  withoutHostPackagesInstruction,
+} from "@shared/config/linuxHostPackages";
 
 /** An error's words with a fix Daintree knows taken out of them, and that fix. */
 export interface HostErrorFix {
@@ -9,25 +12,13 @@ export interface HostErrorFix {
 
 /**
  * Takes the package install a refused Linux start names out of its words,
- * wherever it sits: after a Connect or Bring back prefix, before an
- * installer's recovery note, or twice over after a rollback. The words then
- * read as a sentence and the command is shown once, whole, to copy. Only the
- * exact text main writes counts, so words cut short keep what they say and
- * offer no command.
+ * wherever it sits, so the words read as a sentence and the command is shown
+ * once, whole, to copy. Only the exact text main writes counts, so words cut
+ * short keep what they say and offer no command.
  */
 export function splitHostFix(message: string): HostErrorFix {
-  let text = message;
-  let at = text.indexOf(HOST_PACKAGES_INSTRUCTION);
-  const found = at >= 0;
-  while (at >= 0) {
-    const before = text.slice(0, at).replace(/ $/, "");
-    let after = text.slice(at + HOST_PACKAGES_INSTRUCTION.length);
-    // An installer's note joins with ". " after the command; the sentence before has its own stop.
-    if (after.startsWith(".") && /[.!?]$/.test(before)) after = after.slice(1);
-    text = before + after;
-    at = text.indexOf(HOST_PACKAGES_INSTRUCTION);
-  }
+  const { text, found } = withoutHostPackagesInstruction(message);
   return found
-    ? { text: text.trim(), rootCommand: HOST_PACKAGES_COMMAND }
+    ? { text, rootCommand: HOST_PACKAGES_COMMAND }
     : { text: message, rootCommand: null };
 }
