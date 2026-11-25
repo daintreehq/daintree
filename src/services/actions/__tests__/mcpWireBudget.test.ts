@@ -1140,7 +1140,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // agents and the agent directory it lists. Each
   // result schema is closed, so the field must be advertised; only the status
   // and notify fields carry the one short description.
-  const MAX_COHORT_PAYLOAD_BYTES = 206_500;
+  // 206_500 → 207_200 for #18197, measured at 207_198 B (+846 over develop's
+  // 206_352): `host.startAgentSignIn`, in-app only. Half of it is the closed
+  // outcome schema every host tool answers in; the description and the one
+  // field description were trimmed twice first.
+  const MAX_COHORT_PAYLOAD_BYTES = 207_200;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

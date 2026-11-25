@@ -86,6 +86,7 @@ import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { usePendingHostSwitchSync } from "./hooks/usePendingHostSwitchSync";
 import { HostSwitchScreenHost } from "./components/HostSwitch/HostSwitchScreenHost";
+import { HostSignInOffers } from "./components/Settings/Hosts/HostSignInOffers";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CopyFlash } from "./components/ui/CopyFlash";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -595,6 +596,7 @@ function AppInner() {
               </Profiler>
             </DndProvider>
             <HostSwitchScreenHost />
+            <HostSignInOffers />
 
             <Suspense fallback={null}>
               <LazyModalHostLayer

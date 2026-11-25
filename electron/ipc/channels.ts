@@ -1932,6 +1932,7 @@ export const CHANNELS = {
   CANOPY_HOST_START_SIGN_IN: "canopy-host:start-sign-in",
   CANOPY_HOST_SIGN_IN_STEP: "canopy-host:sign-in-step",
   CANOPY_HOST_RELEASE_SIGN_IN: "canopy-host:release-sign-in",
+  CANOPY_HOST_SIGN_IN_SHOWN: "canopy-host:sign-in-shown",
   CANOPY_HOST_EVENT: "canopy-host:event",
   CANOPY_WINDOW_OPEN: "canopy-window:open",
   CANOPY_WINDOW_FOCUS: "canopy-window:focus",

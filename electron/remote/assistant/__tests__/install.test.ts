@@ -130,9 +130,22 @@ vi.mock("../../../utils/machineName.js", () => ({ machineDisplayName: () => "gre
 vi.mock("../../../window/serviceRefs.js", () => ({
   getPtyClient: () => ({ getLiveGeneration: (id: string) => generations.get(id) ?? null }),
 }));
+/** Each window's current app view, by id, and how its window stands (#18197). */
+const onScreen = vi.hoisted(() => new Map<number, { visible: boolean; minimized: boolean }>());
 vi.mock("../../../window/webContentsRegistry.js", () => ({
   getProjectForWebContents: (id: number) => views.get(id) ?? null,
   getWebContentsForProject: () => [],
+  getShownAppWebContents: () => [...onScreen.keys()].map((id) => ({ id })),
+  getWindowForWebContents: (contents: { id: number }) => {
+    const state = onScreen.get(contents.id);
+    return state
+      ? {
+          isDestroyed: () => false,
+          isVisible: () => state.visible,
+          isMinimized: () => state.minimized,
+        }
+      : null;
+  },
 }));
 vi.mock("../../../services/McpServerService.js", () => ({
   mcpServerService: {
@@ -523,6 +536,123 @@ describe("installHostControl (#13493)", () => {
 
       expect(askHostApprovalInWindow).toHaveBeenCalledWith(40, expect.anything());
       off();
+    });
+
+    describe("opening an agent CLI sign-in on a host (#18197)", () => {
+      type Offer = (
+        webContentsId: number,
+        hostId: string,
+        agentId: string,
+        options: {
+          hostName: string;
+          canDeliver: () => boolean;
+          stillShown: () => boolean;
+          signal?: AbortSignal;
+        }
+      ) => Promise<string>;
+      const offerSignIn = vi.fn<Offer>(async () => "shown");
+      let unregister: (() => void) | null = null;
+
+      function start(helpSessionId: string, signal?: AbortSignal): Promise<unknown> {
+        const runtime = hostControl.runtime as unknown as {
+          deps: {
+            startAgentSignIn: (request: {
+              helpSessionId: string;
+              hostId: string;
+              hostName: string;
+              agentId: string;
+              signal?: AbortSignal;
+            }) => Promise<unknown>;
+          };
+        };
+        return runtime.deps.startAgentSignIn({
+          helpSessionId,
+          hostId: "studio",
+          hostName: "Studio",
+          agentId: "codex",
+          ...(signal ? { signal } : {}),
+        });
+      }
+
+      beforeEach(() => {
+        offerSignIn.mockClear();
+        unregister = registerRemoteService("canopyHosts", { offerSignIn } as never);
+      });
+      afterEach(() => {
+        unregister?.();
+        onScreen.clear();
+      });
+
+      it("starts it in the first view showing the assistant that is on screen", async () => {
+        // 40 is a cached project view; 41 is its window's current one.
+        globalAssistant.views = [canopyView.id, 40, 41];
+        onScreen.set(41, { visible: true, minimized: false });
+        const off = installHostControl({
+          observeHosts: () => [],
+          isHostControlEnabled: () => true,
+        });
+        const signal = new AbortController().signal;
+
+        await expect(start("global", signal)).resolves.toBe("shown");
+        expect(offerSignIn).toHaveBeenCalledWith(41, "studio", "codex", {
+          hostName: "Studio",
+          canDeliver: expect.any(Function),
+          stillShown: expect.any(Function),
+          signal,
+        });
+        // Each is read when it is asked, not when it started.
+        const { canDeliver, stillShown } = offerSignIn.mock.calls[0]![3];
+        expect(canDeliver()).toBe(true);
+        expect(stillShown()).toBe(true);
+        onScreen.set(41, { visible: true, minimized: true });
+        expect(canDeliver()).toBe(false);
+        expect(stillShown()).toBe(false);
+        onScreen.set(41, { visible: true, minimized: false });
+        // Another view on screen showing it too doesn't take it from 41.
+        onScreen.set(42, { visible: true, minimized: false });
+        globalAssistant.views = [42, 41];
+        expect(canDeliver()).toBe(true);
+        // Moved off 41 to another window: it isn't told to 41, but a dialog
+        // already open there, on screen, still counts as shown.
+        globalAssistant.views = [42];
+        expect(canDeliver()).toBe(false);
+        expect(stillShown()).toBe(true);
+        off();
+      });
+
+      it("starts it in a project assistant's own view only while that view is on screen", async () => {
+        views.set(50, "proj-1");
+        running.set("proj-1:0", {
+          sessionId: "own",
+          terminalId: "t-own",
+          projectViewWebContentsId: 50,
+        });
+        const off = installHostControl({
+          observeHosts: () => [],
+          isHostControlEnabled: () => true,
+        });
+        await expect(start("own")).resolves.toBe("no_window");
+        onScreen.set(50, { visible: true, minimized: false });
+        await expect(start("own")).resolves.toBe("shown");
+        expect(offerSignIn.mock.calls.map((call) => call[0])).toEqual([50]);
+        off();
+      });
+
+      it("starts none when no view showing it is on screen", async () => {
+        globalAssistant.views = [canopyView.id, 40, 41];
+        onScreen.set(41, { visible: true, minimized: true });
+        onScreen.set(canopyView.id, { visible: true, minimized: false });
+        const off = installHostControl({
+          observeHosts: () => [],
+          isHostControlEnabled: () => true,
+        });
+
+        await expect(start("global")).resolves.toBe("no_window");
+        onScreen.set(41, { visible: false, minimized: false });
+        await expect(start("global")).resolves.toBe("no_window");
+        expect(offerSignIn).not.toHaveBeenCalled();
+        off();
+      });
     });
 
     it("asks nowhere when only the Canopy window shows it", async () => {

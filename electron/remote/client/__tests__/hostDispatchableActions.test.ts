@@ -31,6 +31,8 @@ const WITHHELD_FROM_HOSTS: Record<string, string> = {
     "wakes and starts hosts for this machine's own assistants, never one a Shell's window runs on a host",
   "host.status":
     "reads hosts' projects for this machine's own assistants, never one a Shell's window runs on a host",
+  "host.startAgentSignIn":
+    "opens sign-ins on hosts in this machine's windows for its own assistants, never one a Shell's window runs on a host",
   // #17091: the view ignores a host session's origin, so it is never this
   // Shell's assistant, the only caller these keep a project's links for.
   "project.links.list": "keeps a project's own links for this Shell's own assistant",

@@ -7,6 +7,7 @@ import {
   HOST_WATCH_STATUSES,
   HOST_WATCH_WAITING_REASONS,
 } from "../../../shared/types/hostControl.js";
+import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { HANDBACK_REPORTS } from "../../../shared/types/handback.js";
 import { isHostSettingKey } from "../../../shared/types/hostSettings.js";
 import { HOST_BRING_BACK_STATUSES, HOST_WAKE_RESULTS } from "../../../shared/types/hostWake.js";
@@ -432,6 +433,15 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  [
+    "host.startAgentSignIn",
+    // What became of it, never anything its terminal showed (#18197).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      return { outcome: fromSet(record.outcome, HOST_OUTCOMES) };
+    },
+  ],
   // Never a screen, a handback or a check's words (#16191): outcomes and counts.
   ["host.status", projectHostStatus],
   ["plugin.capturePanel", projectPanelCapture],
@@ -490,6 +500,19 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
     },
   ],
   ["host.bringBack", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
+  [
+    "host.startAgentSignIn",
+    // The host when it is id-shaped, and the agent only by an id the registry
+    // knows: a code pasted into the wrong field never reaches the log.
+    (args) => {
+      const record = asRecord(args);
+      const agentId = record?.agentId;
+      return {
+        hostId: auditHostId(record?.hostId),
+        agentId: typeof agentId === "string" && getAgentConfig(agentId) ? agentId : null,
+      };
+    },
+  ],
   [
     "host.status",
     // The projects named and how many terminals in each, and whether output was asked for.

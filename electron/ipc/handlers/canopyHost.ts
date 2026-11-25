@@ -9,6 +9,7 @@ import type {
   HostAssistantDirectory,
   HostSignInStep,
   HostSignInTerminal,
+  SignInShownAnswer,
 } from "../../../shared/types/ipc/canopyHost.js";
 import type {
   AssistantOpenDestination,
@@ -132,6 +133,16 @@ export const canopyHostNamespace = defineIpcNamespace({
       async (ctx, consumer: string): Promise<void> => {
         getRemoteService("canopyHosts")?.releaseSignIn(ctx.webContentsId, consumer);
       },
+      { withContext: true }
+    ),
+    /**
+     * The consumer's dialog opened, live, a sign-in this Shell started for one
+     * of its assistants (#18197): what that assistant's call answers with.
+     */
+    signInShown: op(
+      CANOPY_HOST_METHOD_CHANNELS.signInShown,
+      async (ctx, consumer: string): Promise<SignInShownAnswer> =>
+        getRemoteService("canopyHosts")?.signInShown(ctx.webContentsId, consumer) ?? "gone",
       { withContext: true }
     ),
     /** The consumer stopped showing its assistant. */

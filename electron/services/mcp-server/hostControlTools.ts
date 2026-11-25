@@ -10,6 +10,7 @@ import {
   HOST_ENSURE_PROJECT_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_START_AGENT_SIGN_IN_TOOL,
   HOST_STATUS_TOOL,
   HOST_WATCH_TOOL,
   HostBringBackArgsSchema,
@@ -17,6 +18,7 @@ import {
   HostEnsureProjectArgsSchema,
   HostListArgsSchema,
   HostSettingsArgsSchema,
+  HostStartAgentSignInArgsSchema,
   HostStatusArgsSchema,
   HostWatchArgsSchema,
   type HostBringBackArgs,
@@ -32,6 +34,8 @@ import {
   type HostListResult,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostStartAgentSignInArgs,
+  type HostStartAgentSignInResult,
   type HostStatusArgs,
   type HostStatusResult,
   type HostWatchArgs,
@@ -84,6 +88,15 @@ export interface HostControlRuntimeHandle {
     helpSessionId: string,
     args: HostBringBackArgs
   ): Promise<HostControlOutcome<HostBringBackResult>>;
+  /**
+   * Opens an agent CLI's own sign-in on a connected host in the window showing
+   * the caller (#18197), answered once that window opened its terminal.
+   */
+  startAgentSignIn(
+    helpSessionId: string,
+    args: HostStartAgentSignInArgs,
+    signal?: AbortSignal
+  ): Promise<HostControlOutcome<HostStartAgentSignInResult>>;
   /** `terminal.getStatus` in many projects on many hosts, in one answer (#16191). */
   status(
     helpSessionId: string,
@@ -374,6 +387,12 @@ async function dispatch(
       return parsed.success
         ? runtime.bringBack(helpSessionId, parsed.data)
         : parseRefusal(HostBringBackArgsSchema, raw, parsed.error);
+    }
+    case HOST_START_AGENT_SIGN_IN_TOOL: {
+      const parsed = HostStartAgentSignInArgsSchema.safeParse(raw);
+      return parsed.success
+        ? runtime.startAgentSignIn(helpSessionId, parsed.data, context?.signal)
+        : invalidArgs();
     }
     case HOST_STATUS_TOOL: {
       // Each project is read at the tier the call was admitted at here, as `host.call` is.

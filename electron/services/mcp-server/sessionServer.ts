@@ -173,6 +173,7 @@ import {
   HOST_CALL_TOOL,
   HOST_CONTROL_TOOL_IDS,
   HOST_SETTINGS_TOOL,
+  HOST_START_AGENT_SIGN_IN_TOOL,
   HOST_STATUS_TOOL,
 } from "../../../shared/types/hostControl.js";
 import { auditCodeForHostControlRefusal, runHostControlTool } from "./hostControlTools.js";
@@ -3245,7 +3246,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             // own skip preference (#15698), which only this machine decides;
             // so does a `host.settings` apply the person handed over (#16752).
             // `host.status` reads each project at that tier too (#16191), and asks nobody.
-            // A cancelled `host.call` is cancelled on its host too (#17985).
+            // A cancelled `host.call` is cancelled on its host too (#17985), and a
+            // cancelled sign-in that no window has opened yet ends (#18197).
             const callContext =
               tier === "core" || tier === "full"
                 ? actionId === HOST_CALL_TOOL || actionId === HOST_SETTINGS_TOOL
@@ -3258,7 +3260,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                     }
                   : actionId === HOST_STATUS_TOOL
                     ? { tier }
-                    : undefined
+                    : actionId === HOST_START_AGENT_SIGN_IN_TOOL
+                      ? { tier, signal: extra.signal }
+                      : undefined
                 : undefined;
             const settled = await runHostControlTool(
               actionId,

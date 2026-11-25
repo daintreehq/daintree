@@ -12,6 +12,7 @@ export const CANOPY_HOST_METHOD_CHANNELS = {
   startSignIn: "canopy-host:start-sign-in",
   signInStep: "canopy-host:sign-in-step",
   releaseSignIn: "canopy-host:release-sign-in",
+  signInShown: "canopy-host:sign-in-shown",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CANOPY_HOST_METHOD_CHANNELS;

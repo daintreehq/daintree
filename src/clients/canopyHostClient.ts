@@ -5,6 +5,7 @@ import type {
   HostAssistantDirectory,
   HostSignInStep,
   HostSignInTerminal,
+  SignInShownAnswer,
 } from "@shared/types/ipc/canopyHost";
 import type { AssistantOpenDestination, CanopyTerminalView } from "@shared/types/ipc/canopy";
 import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
@@ -92,6 +93,14 @@ export const canopyHostClient = {
   /** The consumer closed its sign-in: the host ends its terminal. */
   releaseSignIn: (consumer: string): Promise<void> => {
     return window.electron.canopyHost.releaseSignIn(consumer);
+  },
+
+  /**
+   * The consumer's dialog opened, live, a sign-in started for an assistant
+   * (#18197); its call answers with that.
+   */
+  signInShown: (consumer: string): Promise<SignInShownAnswer> => {
+    return window.electron.canopyHost.signInShown(consumer);
   },
 
   /** Every host's pushes, each tagged with the host it came from. */
