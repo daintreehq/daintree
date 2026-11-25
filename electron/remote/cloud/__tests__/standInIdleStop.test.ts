@@ -472,6 +472,24 @@ describe("stopping a machine from the desktop when its own idle stop was refused
     expect(env.status()).toMatchObject({ machine: "running", lastError: null });
   });
 
+  it("never idle-stops a machine whose provider declares it has no stop, nor says it would (#18228)", async () => {
+    const env = await device("boat");
+    env.fake.issue.mockRejectedValue(ADMIN_MISSING());
+    await env.armed();
+    expect(env.status().linkedIdleStop).toEqual({ kind: "stops" });
+    // The declaration alone rules it out, whatever stop the provider still carries.
+    const declared = env.fake.impl.info.bind(env.fake.impl);
+    env.fake.impl.info = (platform) => ({ ...declared(platform), stopMode: "delete-only" });
+    expect(env.status().linkedIdleStop).toBeNull();
+
+    await env.host.idleTimeEnds();
+    await env.lifecycle.stopIdleDue();
+
+    expect(env.standInClaims()).toBe(0);
+    expect(env.fake.stop).not.toHaveBeenCalled();
+    expect(env.status()).toMatchObject({ machine: "running", operation: null, lastError: null });
+  });
+
   it.each(["aws", "gce"] as const)(
     "stops an %s machine whose login sudo won't let power off, once it confirmed it is that machine",
     async (kind) => {

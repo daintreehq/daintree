@@ -33,11 +33,12 @@ import {
   type StoredCloudBinding,
 } from "../CloudHostStore.js";
 import { CloudSshFiles } from "../CloudSshFiles.js";
-import type {
-  CloudProvider,
-  ProviderCatalog,
-  ProviderResource,
-  RenewingCloudProvider,
+import {
+  stopContractProblem,
+  type CloudProvider,
+  type ProviderCatalog,
+  type ProviderResource,
+  type RenewingCloudProvider,
 } from "../provider.js";
 import type { CommandResult, CommandRunner } from "../../client/commandRunner.js";
 
@@ -174,6 +175,21 @@ function fakeProvider(
     sshAccess: vi.fn(async () => access),
   } as FakeProvider;
 }
+
+/**
+ * Setup options that make the fake a provider whose machines can only be
+ * deleted (#18227), declared as registration accepts it.
+ */
+const DELETE_ONLY = {
+  lifetime: { kind: "none" },
+  adapt: (provider: CloudProvider) => {
+    const declared = provider.info.bind(provider);
+    provider.info = (platform) => ({ ...declared(platform), stopMode: "delete-only" });
+    delete provider.start;
+    delete provider.stop;
+    delete provider.renewLifetime;
+  },
+} satisfies Parameters<typeof setup>[1];
 
 let root: string;
 
@@ -3939,6 +3955,99 @@ describe("CloudHostLifecycle.deleteMachine by the provider's declaration (#17346
   });
 });
 
+describe("CloudHostLifecycle with a provider whose machines can only be deleted (#18228)", () => {
+  const ONLY_DELETED = { code: "UNSUPPORTED", userMessage: expect.stringMatching(/only be deleted/) };
+
+  /** A machine of that provider, imported, with what a refusal must leave alone watched from here. */
+  async function imported(initial: Partial<ProviderResource> = {}) {
+    const env = await setup(initial, DELETE_ONLY);
+    expect(stopContractProblem(env.provider, env.provider.info("darwin"))).toBeNull();
+    await env.lifecycle.importMachine({
+      accountId: env.account.id,
+      resourceId: "bx_23456789",
+      name: "build",
+    });
+    const credentials = vi.spyOn(env.accounts, "credentials");
+    vi.mocked(env.provider.inspect).mockClear();
+    env.disconnect.mockClear();
+    const before = env.store.bindings()[0]!;
+    /** Nothing was written, let go, read or asked: the machine is as the refusal found it. */
+    const untouched = () => {
+      expect(env.store.bindings()[0]).toEqual(before);
+      expect(credentials).not.toHaveBeenCalled();
+      expect(env.provider.inspect).not.toHaveBeenCalled();
+      expect(env.disconnect).not.toHaveBeenCalled();
+      expect(env.lifecycle.statuses()[0]).toMatchObject({ operation: null, lastError: null });
+    };
+    return { ...env, bindingId: before.id, untouched };
+  }
+
+  it("refuses a Stop before its intent, the link or the provider hears of it", async () => {
+    const env = await imported({ machine: "running" });
+    await expect(env.lifecycle.stopMachine("build")).rejects.toMatchObject(ONLY_DELETED);
+    env.untouched();
+  });
+
+  it.each([
+    { machine: "stopped", rawState: "archived" },
+    { machine: "running" },
+    { machine: "stopped", rawState: "archived", dataExpired: true },
+  ] as const)("refuses a Start of a machine read as %o before reading it again", async (initial) => {
+    const env = await imported(initial);
+    await expect(env.lifecycle.startMachine("build")).rejects.toMatchObject(ONLY_DELETED);
+    env.untouched();
+  });
+
+  it("refuses a Bring back's wake before reading the machine, and says no start went", async () => {
+    for (const initial of [
+      { machine: "stopped", rawState: "sleeping", asleep: true },
+      { machine: "running" },
+    ] as const) {
+      const env = await imported(initial);
+      const sent = vi.fn();
+      await expect(
+        env.lifecycle.wakeIfAsleep("build", env.bindingId, new AbortController().signal, sent)
+      ).rejects.toMatchObject(ONLY_DELETED);
+      expect(sent).not.toHaveBeenCalled();
+      env.untouched();
+      // A wake for a host the machine isn't on is still nothing to wake.
+      await expect(
+        env.lifecycle.wakeIfAsleep("other", env.bindingId, new AbortController().signal, sent)
+      ).resolves.toBe(false);
+    }
+  });
+
+  it("still retries a create that never made the machine on Start", async () => {
+    const { lifecycle, provider, store } = await setup({}, DELETE_ONLY);
+    vi.mocked(provider.create).mockRejectedValueOnce(
+      new BoatApiError("payment-required", "pay", 402, null, null)
+    );
+    await lifecycle.create({
+      accountId: store.accounts()[0]!.id,
+      name: "build",
+      machineType: "default",
+      lifetimeHours: null,
+    });
+    await vi.waitFor(() => expect(lifecycle.statuses()[0]?.operation).toBeNull());
+    expect(store.bindings()[0]!.resourceId).toBeNull();
+    await lifecycle.startMachine("build");
+    expect(provider.create).toHaveBeenCalledTimes(2);
+    expect(lifecycle.statuses()[0]).toMatchObject({ machine: "running", resourceId: "bx_23456789" });
+  });
+
+  it("deletes a confirmed machine as any other", async () => {
+    const env = await imported({ machine: "running" });
+    await env.lifecycle.deleteMachine("build", "bx_23456789");
+    expect(env.provider.delete).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+    expect(env.hosts).toEqual([]);
+  });
+
+  it("reports no idle stop of its own from this device", async () => {
+    const env = await imported({ machine: "running" });
+    expect(env.lifecycle.statuses()[0]!.linkedIdleStop).toBeNull();
+  });
+});
+
 describe("CloudHostLifecycle SSH key at create", () => {
   const request = (accountId: string): CloudHostCreateRequest => ({
     accountId,
@@ -5642,11 +5751,11 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     hostName: null,
   };
   const WORKTREE = { hostId: null, projectId: MARK.projectId, worktreeId: ROOT };
-  const request = (accountId: string): CloudHostCreateRequest => ({
+  const request = (accountId: string, lifetimeHours: number | null = 2): CloudHostCreateRequest => ({
     accountId,
     name: "build",
     machineType: "default",
-    lifetimeHours: 2,
+    lifetimeHours,
   });
   const choose = (choice: "stop" | "delete") => [
     { hostId: "build", resourceId: "bx_23456789", choice },
@@ -5660,7 +5769,8 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     const gone = { value: true as boolean | null };
     const worktreeGone = vi.fn(async (_path: string): Promise<boolean | null> => gone.value);
     const ctx = await setup({}, { worktreeGone, ...options });
-    await ctx.lifecycle.create(request(ctx.account.id), mark);
+    const lifetimeHours = options.lifetime?.kind === "none" ? null : 2;
+    await ctx.lifecycle.create(request(ctx.account.id, lifetimeHours), mark);
     await vi.waitFor(() =>
       expect(ctx.lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null })
     );
@@ -6206,6 +6316,73 @@ describe("CloudHostLifecycle with its worktree's delete (#17360)", () => {
     lifecycle.dispose();
     expect(stopListening).toHaveBeenCalled();
   });
+
+  it("refuses a stop for a machine that can only be deleted, writing nothing, and still keeps or deletes it (#18228)", async () => {
+    const { lifecycle, provider, store, hosts } = await marked(MARK, DELETE_ONLY);
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    const chosen = cleanupOf(store);
+    expect(() => lifecycle.prepareWorktreeCleanup(WORKTREE, choose("stop"))).toThrow(
+      /only be deleted/
+    );
+    expect(cleanupOf(store)).toEqual(chosen);
+
+    lifecycle.prepareWorktreeCleanup(WORKTREE, []);
+    expect(cleanupOf(store)).toBeNull();
+    lifecycle.prepareWorktreeCleanup(WORKTREE, choose("delete"));
+    expect(await lifecycle.settleWorktreeCleanup(WORKTREE, true)).toEqual([
+      { hostId: "build", machineName: "build", choice: "delete", error: null },
+    ]);
+    expect(provider.delete).toHaveBeenCalledWith(expect.anything(), "bx_23456789");
+    expect(hosts).toEqual([]);
+  });
+
+  it.each(["due", "waiting"] as const)(
+    "fails a stop chosen %s before its provider had none when Daintree starts again, touching nothing (#18228)",
+    async (phase) => {
+      const { lifecycle, provider, store, hosts, disconnect, restart } = await marked(
+        MARK,
+        DELETE_ONLY
+      );
+      store.updateBinding(store.bindings()[0]!.id, (current) => ({
+        ...current,
+        worktreeCleanup: {
+          attemptId: "attempt-1",
+          mutationId: null,
+          choice: "stop",
+          resourceId: "bx_23456789",
+          worktree: WORKTREE,
+          phase,
+          error: null,
+          requestedAt: 0,
+        },
+      }));
+      const intent = store.bindings()[0]!.intent;
+      vi.mocked(provider.inspect).mockClear();
+      disconnect.mockClear();
+
+      const next = restart(lifecycle);
+      await vi.waitFor(() =>
+        expect(cleanupOf(next.store)).toMatchObject({
+          phase: "failed",
+          error: { code: "unsupported", message: expect.stringMatching(/only be deleted/) },
+        })
+      );
+      expect(next.store.bindings()[0]!.intent).toBe(intent);
+      expect(provider.inspect).not.toHaveBeenCalled();
+      expect(disconnect).not.toHaveBeenCalled();
+      expect(hosts.map((host) => host.id)).toEqual(["build"]);
+      expect(next.lifecycle.statuses()[0]).toMatchObject({ machine: "running", operation: null });
+
+      // Retry refuses as the stop did; Keep leaves the machine running as it is.
+      await expect(next.lifecycle.retryWorktreeCleanup("build")).rejects.toMatchObject({
+        code: "UNSUPPORTED",
+      });
+      expect(cleanupOf(next.store)).toMatchObject({ phase: "failed", attemptId: "attempt-1" });
+      next.lifecycle.dismissWorktreeCleanup("build");
+      expect(cleanupOf(next.store)).toBeNull();
+      next.lifecycle.dispose();
+    }
+  );
 });
 
 describe("CloudHostLifecycle with a lost create's label on a machine it didn't make (#17927)", () => {
