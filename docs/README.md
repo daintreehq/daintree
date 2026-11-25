@@ -87,6 +87,7 @@ The plugin sub-index links onward to getting-started, the manifest reference, co
 | [release.md](./release.md) | Release and code-signing — the three per-OS workflows, dry runs, signing and publishing. |
 | [distribution/asar-integrity.md](./distribution/asar-integrity.md) | Embedded ASAR integrity validation (macOS / Windows) via the electron-builder fuse. |
 | [distribution/microsoft-store.md](./distribution/microsoft-store.md) | Microsoft Store `.appx` build, certification, and the parallel NSIS path. |
+| [distribution/host-image.md](./distribution/host-image.md) | The Host container image container clouds run as a Remote Host: referencing it by digest, its key inputs, the login, and publishing a version. |
 
 ## Testing
 

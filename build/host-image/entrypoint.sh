@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs the login's authorized keys and the SSH host key this container was
 # given, then hands PID 1 to tini with sshd in the foreground beneath it.
-# docs/host-image.md documents the inputs.
+# docs/distribution/host-image.md documents the inputs.
 set -eu
 
 dir=/etc/ssh/daintree

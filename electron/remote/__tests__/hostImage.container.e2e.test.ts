@@ -29,8 +29,8 @@ import { listProcesses, makeShortTempRoot } from "./harness/privateSshd.js";
 import { makeUserKey } from "./harness/sshRoute.js";
 
 /**
- * The published Host image (build/host-image, docs/host-image.md) as a
- * container cloud runs it: its own entrypoint, its keys from the environment
+ * The published Host image (build/host-image, docs/distribution/host-image.md)
+ * as a container cloud runs it: its own entrypoint, its keys from the environment
  * or a read-only secrets volume, no systemd, no FUSE, no `--privileged` and no
  * `--init`. The last scenario runs Daintree's own Host setup against it, from
  * a bare machine through to a started Host and a working terminal.

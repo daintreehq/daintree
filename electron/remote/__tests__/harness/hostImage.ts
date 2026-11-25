@@ -17,8 +17,8 @@ import { makeShortTempRoot } from "./privateSshd.js";
 import { makeUserKey, writeSshRoute, type SshRoute } from "./sshRoute.js";
 
 /**
- * The published Host image (build/host-image, docs/host-image.md) as a
- * container cloud runs it: its own entrypoint, its inputs from the environment
+ * The published Host image (build/host-image, docs/distribution/host-image.md)
+ * as a container cloud runs it: its own entrypoint, its inputs from the environment
  * or a secrets volume, sshd on a loopback port. Unlike the e2e machine in
  * containerHost.ts it has no time limit of its own, so every container here
  * is also on a watchdog's list (see armWatchdog).

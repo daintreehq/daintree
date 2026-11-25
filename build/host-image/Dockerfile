@@ -1,8 +1,9 @@
 # The machine a container cloud runs as a Daintree Remote Host: sshd on port
 # 22, one unprivileged login, and every package a Linux Host needs, with tini
 # rather than systemd as PID 1 and no Daintree. Host setup installs Daintree
-# over SSH and starts it without systemd or FUSE. docs/host-image.md documents
-# the inputs and how a version is published.
+# over SSH and starts it without systemd or FUSE.
+# docs/distribution/host-image.md documents the inputs and how a version is
+# published.
 #
 # Ubuntu 24.04 as it was on 2026-10-25, moved on deliberately.
 FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852

@@ -12,6 +12,7 @@ The release runbook is [`docs/release.md`](../../docs/release.md): signing, nota
 | `release-packages.yml` | npm publish for the plugin-ecosystem packages, triggered by per-package tags (not `v*`) |
 | `nightly-publish.yml` | Nightly macOS and Linux builds published to the nightly update channel; no unit or E2E suites, launch smoke tests still run |
 | `publish-plugin-blocklist.yml` | Publishes `plugins/blocklist.json`, the plugin kill-switch list, to `updates.daintree.org/plugins/blocklist.json` when a change to it lands on `develop`; validates it first and verifies the CDN edge after |
+| `publish-host-image.yml` | Publishes the Host container image (`build/host-image`) to `ghcr.io/daintreehq/daintree-host` from a `host-image-vX.Y.Z` tag on a commit on `main`: builds it for `linux/amd64`, runs the container suite against it with an AppImage packaged from the same commit, then pushes those bytes under the version tag only (never `latest`) and records the digest with a provenance attestation. A manual run builds and tests without publishing. See [`docs/distribution/host-image.md`](../../docs/distribution/host-image.md) |
 | `publish-plugin-catalog.yml` | Publishes `plugins/catalog.json`, the community plugin catalog, to `updates.daintree.org/plugins/catalog.json` when a change to it lands on `develop`, the same way and as a separate run; validates it and downloads every entry's asset first, and verifies the CDN edge after |
 | `propose-plugin-catalog-updates.yml` | Every six hours, opens a pull request adding a catalog entry for each new release of a plugin listed in `plugins/catalog.json`, marked for a quick merge or as needing a person; a person merges every one. Opens nothing without `PLUGIN_CATALOG_BOT_TOKEN` |
 | `ci.yml` | Checks and tests on pull requests to `main` and `develop`, never on pushes: each PR runs only the jobs its diff needs and only the unit tests the diff reaches (`vitest --changed`); on a pull request that changes `plugins/catalog.json`, the `plugin-catalog` job downloads each added or changed entry's asset and checks it against the entry. `docs/development.md#ci` has the job list |
@@ -81,6 +82,10 @@ Other secrets the release, nightly and plugin catalog workflows read:
 ### 4. Publish URL
 
 The auto-update feed is configured in [`electron-builder.config.cjs`](../../electron-builder.config.cjs), not `package.json`. It publishes to `https://updates.daintree.org/releases/` for stable builds and `https://updates.daintree.org/nightly/` when the version contains `-nightly`, and sets the `rc` or `beta` channel from the version string. To publish elsewhere, change the URL constants in that file, and the hardcoded live-feed URLs in `.github/actions/publish-daintree/action.yml`, `scripts/ci/check-version-monotonic.mjs` and `nightly-publish.yml`, so they all match the public URL of your bucket.
+
+### 5. Host image package
+
+`publish-host-image.yml` needs no secret: it pushes to GHCR with the workflow's own token. The first version it publishes creates `ghcr.io/daintreehq/daintree-host` as a private package linked to this repository. Container clouds pull it without credentials, so make the package public once in its settings (Package settings → Change visibility); each publish run warns until it is. GHCR can't make a tag write-once, so keep this workflow the package's only writer: leave it out of other repositories' access and don't push to it by hand.
 
 ## Code signing
 

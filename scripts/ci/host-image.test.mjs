@@ -54,7 +54,7 @@ describe("publish-host-image workflow", () => {
     expect(publish.if).toContain("needs.smoke.outputs.publish == 'true'");
 
     const resolve = commands(smoke.steps[stepIndex(smoke.steps, /GITHUB_REF_NAME#host-image-v/)]);
-    expect(resolve).toContain("git merge-base --is-ancestor \"$GITHUB_SHA\" origin/main");
+    expect(resolve).toContain('git merge-base --is-ancestor "$GITHUB_SHA" origin/main');
     expect(resolve).toMatch(/\^\(0\|\[1-9\]\[0-9\]\*\)\\\./);
   });
 
@@ -82,7 +82,12 @@ describe("publish-host-image workflow", () => {
     const build = stepIndex(smoke.steps, /docker buildx build/);
     const smokeTest = stepIndex(smoke.steps, /scripts\/host-install-e2e\.mjs image$/m);
     const save = stepIndex(smoke.steps, /docker save daintree-host:candidate/);
-    inOrder([stepIndex(smoke.steps, /vitest run scripts\/ci\/host-image\.test\.mjs/), build, smokeTest, save]);
+    inOrder([
+      stepIndex(smoke.steps, /vitest run scripts\/ci\/host-image\.test\.mjs/),
+      build,
+      smokeTest,
+      save,
+    ]);
     expect(commands(smoke.steps[build])).toContain("--tag daintree-host:candidate");
     expect(commands(smoke.steps[build])).toContain("--provenance=false");
     expect(smoke.steps[smokeTest].env).toEqual({ DAINTREE_HOST_IMAGE: "daintree-host:candidate" });
