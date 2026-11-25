@@ -255,6 +255,8 @@ function HostsSettingsContent() {
                   : `detail-${detail.descriptor.id}`
           }
           entry={detail}
+          // A press from the list, and what it found, carry on here.
+          bringBacks={bringBacks}
           focusBackOnMount={focusBackFor === detail.descriptor.id}
           openUpdate={openUpdate ? updateRequest.intent : false}
           focusSection={focusPlugins ? pluginsRequest.sectionId : undefined}
@@ -332,7 +334,7 @@ function HostsSettingsContent() {
                 const bringing = bringBacks.isPending(descriptor.id);
                 const said = bringing
                   ? null
-                  : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor, connection);
+                  : bringBackMessage(bringBacks.outcomeFor(descriptor), descriptor, connection);
                 return (
                   <SettingsRow
                     key={descriptor.id}
@@ -458,7 +460,7 @@ function HostsSettingsContent() {
                             data-host-bring-back={descriptor.id}
                             aria-label={`Bring back ${descriptor.name}`}
                             loading={bringing}
-                            onClick={() => bringBacks.bringBack(descriptor.id)}
+                            onClick={() => bringBacks.bringBack(descriptor)}
                           >
                             Bring back
                           </Button>

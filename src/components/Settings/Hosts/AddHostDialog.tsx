@@ -424,9 +424,9 @@ function connectFailureText(state: HostConnectionState, hostName: string): strin
     : `Couldn't connect to ${hostName}`;
 }
 
-function ErrorLine({ message, host }: { message: string; host: string }) {
+function ErrorLine({ message, host }: { message: string; host: string | null }) {
   const fix = splitHostFix(message);
-  if (!fix.rootCommand) {
+  if (!fix.rootCommand || host === null) {
     return (
       <Callout severity="error" role="alert" className="mt-4 select-text">
         {message}
@@ -577,6 +577,8 @@ export function AddHostDialog({
   const [linuxPackage, setLinuxPackage] = useState<LinuxPackagePreference>("appimage");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The target the last failed step ran on: its fix is offered only while that's still chosen. */
+  const [failedOn, setFailedOn] = useState<string | null>(null);
   const [opId, setOpId] = useState<OperationId | null>(null);
   const [installResult, setInstallResult] = useState<InstallHostResult | null>(null);
   /** How the last install was asked to treat running work; it decides whether waiting is a step. */
@@ -749,11 +751,6 @@ export function AddHostDialog({
 
   /** Another target: what was checked, installed or switched on spoke for the last one. */
   const retarget = (address: string) => {
-    // A failed step's fix names the machine it failed on, never the one chosen now.
-    if (address.trim() !== target.trim()) {
-      setError(null);
-      setInstallError(null);
-    }
     setTarget(address);
     if (probe && addressOf(probe.connection) !== address.trim()) {
       setProbe(null);
@@ -809,6 +806,7 @@ export function AddHostDialog({
     then: (value: T) => void,
     failed: (message: string, err: unknown) => void = (message) => setError(message)
   ) => {
+    const ranOn = target.trim();
     setBusy(true);
     setError(null);
     // A bridge call that throws before it returns a promise fails like one that rejects.
@@ -825,6 +823,7 @@ export function AddHostDialog({
             : clientErrorText(err, "Something went wrong");
         // A run the person stopped hasn't failed.
         if (!(isClientAppError(err) && err.code === "CANCELLED")) noteFailure(message);
+        setFailedOn(ranOn);
         failed(message, err);
       }
     );
@@ -1968,6 +1967,8 @@ export function AddHostDialog({
           : null;
       const title = !ended ? runTitle : installStopped ? stoppedTitle : failedTitle;
       const endedFix = ended ? splitHostFix(stoppedNote ?? installError!) : null;
+      // Offered only while the machine it failed on is still the one chosen.
+      const endedCommand = failedOn === target.trim() ? (endedFix?.rootCommand ?? null) : null;
       // A stage that reports none (waiting for idle) is indeterminate, never the last figure.
       const fraction = progress?.fraction ?? null;
       const detail = progress?.message ? namedProgressMessage(progress.message, hostLabel) : null;
@@ -1977,22 +1978,22 @@ export function AddHostDialog({
           {ended && (failed || stoppedNote) ? (
             <Callout
               severity={failed ? "error" : "neutral"}
-              role={failed && !endedFix!.rootCommand ? "alert" : undefined}
+              role={failed && !endedCommand ? "alert" : undefined}
               title={
                 failed ? (installFailureLead(installError!, hostLabel) ?? undefined) : undefined
               }
               className="select-text"
             >
-              {endedFix!.rootCommand ? (
+              {endedCommand ? (
                 <p role={failed ? "alert" : undefined}>
                   {namedProgressMessage(endedFix!.text, hostLabel)}
                 </p>
               ) : (
-                namedProgressMessage(endedFix!.text, hostLabel)
+                namedProgressMessage(stoppedNote ?? installError!, hostLabel)
               )}
-              {endedFix!.rootCommand && (
+              {endedCommand && (
                 <div className="mt-3">
-                  <HostRootCommand host={hostLabel} command={endedFix!.rootCommand} />
+                  <HostRootCommand host={hostLabel} command={endedCommand} />
                 </div>
               )}
             </Callout>
@@ -2496,7 +2497,9 @@ export function AddHostDialog({
             </Callout>
           )}
           {body}
-          {error && <ErrorLine message={error} host={hostLabel} />}
+          {error && (
+            <ErrorLine message={error} host={failedOn === target.trim() ? hostLabel : null} />
+          )}
           {/* No role: the discovery list's own status line stays the dialog's one status. */}
           <p aria-live="polite" aria-atomic="true" className="sr-only">
             {announce}

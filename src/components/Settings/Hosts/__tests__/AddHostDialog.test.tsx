@@ -808,14 +808,16 @@ describe("AddHostDialog", () => {
     expect(screen.getByText(words).getAttribute("role")).toBe("alert");
     expect(screen.queryByLabelText("Open command in a new terminal")).toBeNull();
 
-    // Another machine: its fix never names this one.
+    // Another machine: what failed on studio still says so, but its fix isn't offered for build.
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     fireEvent.click(await screen.findByRole("button", { name: "Back" }));
-    fireEvent.change(await screen.findByPlaceholderText("user@devbox.local"), {
-      target: { value: "greg@build" },
-    });
+    const field = await screen.findByPlaceholderText("user@devbox.local");
+    fireEvent.change(field, { target: { value: "greg@build" } });
     expect(screen.queryByTestId("host-root-command")).toBeNull();
-    expect(screen.queryByText(words)).toBeNull();
+    expect(screen.getByText(/Daintree can't start on greg@studio/)).toBeTruthy();
+    // Back on the machine it failed on, it is offered again.
+    fireEvent.change(field, { target: { value: "greg@studio" } });
+    expect(screen.getByTestId("host-root-command")).toBeTruthy();
   });
 
   it("saves what turning Host mode on saw there, not the check before it", async () => {
@@ -2417,6 +2419,10 @@ describe("AddHostDialog on Windows (WSL distros)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Back" }));
     fireEvent.click(await screen.findByRole("button", { name: /Ubuntu/ }));
     expect(screen.queryByTestId("host-root-command")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Debian/ }));
+    expect(screen.getByTestId("host-root-command").textContent).toContain(
+      "run this on Debian as root"
+    );
   });
 
   it("lists every distro without a filter, however many there are", async () => {

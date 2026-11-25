@@ -310,6 +310,35 @@ describe("HostDetail connection controls", () => {
     );
   });
 
+  it("drops what a Connect said once the host points at another machine", async () => {
+    const words =
+      "Daintree can't start on greg@studio: these libraries it needs aren't installed there: libnspr4.so.";
+    client.connectAndSettle.mockResolvedValueOnce({
+      status: "unreachable",
+      lastSeenAt: null,
+      detail: `${words} ${HOST_PACKAGES_INSTRUCTION}`,
+      stoppedRetrying: true,
+    });
+    const before = entry({ status: "disconnected" });
+    const view = render(<HostDetail entry={before} onBack={() => {}} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+    });
+    expect(screen.getByTestId("host-root-command")).toBeTruthy();
+    // Change target… keeps the record and its id; only the machine it reaches changes.
+    view.rerender(
+      <HostDetail
+        entry={{
+          ...before,
+          descriptor: { ...before.descriptor, connection: { kind: "ssh", target: "greg@build" } },
+        }}
+        onBack={() => {}}
+      />
+    );
+    expect(screen.queryByTestId("host-root-command")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("leaves Host mode off to its own row rather than calling it a failed connect", async () => {
     client.connectAndSettle.mockResolvedValueOnce({
       status: "unreachable",
