@@ -294,6 +294,8 @@ export interface SessionServerDepsSource {
   readTerminalProcesses?: import("./sessionServer.js").SessionServerDeps["readTerminalProcesses"];
   readWorktreeGit?: import("./sessionServer.js").SessionServerDeps["readWorktreeGit"];
   readCloseWorktrees?: import("./sessionServer.js").SessionServerDeps["readCloseWorktrees"];
+  readClosingAgentPane?: import("./sessionServer.js").SessionServerDeps["readClosingAgentPane"];
+  readClosedPaneWorktrees?: import("./sessionServer.js").SessionServerDeps["readClosedPaneWorktrees"];
   waitForClosedPanelExits?: import("./sessionServer.js").SessionServerDeps["waitForClosedPanelExits"];
   terminalGenerationOf?: import("./sessionServer.js").SessionServerDeps["terminalGenerationOf"];
   trackedTerminalIds?: import("./sessionServer.js").SessionServerDeps["trackedTerminalIds"];
@@ -1205,6 +1207,12 @@ export function createSessionServerDeps(
     ...(deps.readWorktreeGit !== undefined ? { readWorktreeGit: deps.readWorktreeGit } : {}),
     ...(deps.readCloseWorktrees !== undefined
       ? { readCloseWorktrees: deps.readCloseWorktrees }
+      : {}),
+    ...(deps.readClosingAgentPane !== undefined
+      ? { readClosingAgentPane: deps.readClosingAgentPane }
+      : {}),
+    ...(deps.readClosedPaneWorktrees !== undefined
+      ? { readClosedPaneWorktrees: deps.readClosedPaneWorktrees }
       : {}),
     ...(deps.waitForClosedPanelExits !== undefined
       ? { waitForClosedPanelExits: deps.waitForClosedPanelExits }

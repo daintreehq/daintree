@@ -2737,7 +2737,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         worktree: {
           description:
-            "Agent you didn't launch: its worktree when asked. unpushedCommits: on no remote at last fetch (null: none yet); changedEntries: changed or untracked paths.",
+            "A closed agent pane's worktree. unpushedCommits: on no remote at last fetch (null: none yet); changedEntries: changed or untracked paths.",
           type: "object",
           properties: {
             kind: {

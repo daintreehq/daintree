@@ -86,6 +86,8 @@ function harness(
     refuseWrite?:
       { code: string; message: string } | (() => { code: string; message: string } | null);
     readCloseWorktrees?: SessionServerDeps["readCloseWorktrees"];
+    readClosingAgentPane?: SessionServerDeps["readClosingAgentPane"];
+    readClosedPaneWorktrees?: SessionServerDeps["readClosedPaneWorktrees"];
   } = {}
 ) {
   const records = new Map<string, WorkerSteerRecord>([
@@ -165,6 +167,12 @@ function harness(
     terminalGenerationOf: (id) => generations.get(id),
     ...(options.readCloseWorktrees !== undefined
       ? { readCloseWorktrees: options.readCloseWorktrees }
+      : {}),
+    ...(options.readClosingAgentPane !== undefined
+      ? { readClosingAgentPane: options.readClosingAgentPane }
+      : {}),
+    ...(options.readClosedPaneWorktrees !== undefined
+      ? { readClosedPaneWorktrees: options.readClosedPaneWorktrees }
       : {}),
   });
   return { deps, store, owner, records, screens, generations, askClose, dispatchAction };
@@ -636,6 +644,46 @@ describe("the global Assistant closing an agent it didn't launch (#16750)", () =
         closedIds: [WORKER],
         worktree: observed(72, 0),
       });
+    });
+
+    it("keeps what its question read, while its own agent in the batch is read after the close (#18173)", async () => {
+      const readCloseWorktrees = vi.fn(
+        async (_projectId: string, ids: ReadonlyArray<string | undefined>) =>
+          ids.map(() => observed(72, 0))
+      );
+      const readClosingAgentPane = vi.fn(async (terminalId: string) => ({
+        terminalId,
+        projectId: PROJECT,
+        worktreeId: `/wt/${terminalId}`,
+      }));
+      const readClosedPaneWorktrees = vi.fn(
+        async (panes: ReadonlyArray<{ projectId: string | undefined; worktreeId: string }>) =>
+          panes.map(() => observed(1, 0))
+      );
+      const h = harness({ readCloseWorktrees, readClosingAgentPane, readClosedPaneWorktrees });
+      h.records.set(WORKER, atPrompt({ worktreeId: "/wt/worker" }));
+      const server = await serve(h.deps);
+
+      const result = await callTool(
+        server,
+        relayed("terminal.closeMany", { terminalIds: [WORKER, MINE] })
+      );
+
+      const { results } = batchAnswer(result) as unknown as {
+        results: Array<{ target: string; ok: boolean; result?: { worktree?: unknown } }>;
+      };
+      expect(results.map(({ target, result: answer }) => [target, answer?.worktree])).toEqual([
+        [WORKER, observed(72, 0)],
+        [MINE, observed(1, 0)],
+      ]);
+      // The agent it didn't launch is read once, for the question; only its
+      // own agent is read again, after the close.
+      expect(readCloseWorktrees).toHaveBeenCalledTimes(1);
+      expect(readClosingAgentPane.mock.calls.map(([id]) => id)).toEqual([MINE]);
+      expect(readClosedPaneWorktrees).toHaveBeenCalledTimes(1);
+      expect(readClosedPaneWorktrees.mock.calls[0]![0]).toEqual([
+        { projectId: PROJECT, worktreeId: `/wt/${MINE}` },
+      ]);
     });
 
     it("still refuses a panel moved to another worktree while asked", async () => {

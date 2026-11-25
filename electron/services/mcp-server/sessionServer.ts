@@ -98,6 +98,11 @@ import {
 } from "./launchInNewWorktree.js";
 import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
 import { withClosedPanelProcesses } from "./closedPanelProcesses.js";
+import {
+  readClosedPaneWorktrees,
+  withCloseWorktree,
+  type ClosingAgentPane,
+} from "./closedPaneWorktree.js";
 import type { ClosedPanelExitTarget } from "./closedPanelExits.js";
 import type { ActionError } from "../../../shared/types/actions.js";
 import {
@@ -184,7 +189,6 @@ import {
   globalCloseExpired,
   globalCloseQuestion,
   readGlobalCloseWorktrees,
-  withGlobalCloseWorktree,
   type GlobalCloseItem,
   sameGlobalCloseTarget,
   settleGlobalCloseAnswer,
@@ -368,6 +372,8 @@ const CLOSE_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeOwned",
   "terminal.closeAll",
 ]);
+/** The closes of one named panel whose answer says what its agent's worktree holds (#18173). */
+const SINGLE_CLOSE_TOOLS: ReadonlySet<string> = new Set(["terminal.close", "terminal.closeOwned"]);
 const ASSISTANT_SEND_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommand",
   "terminal.sendCommandOwned",
@@ -937,7 +943,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // and closes only that run.
       // Null: the batch read it as nothing the global close takes.
       globalClose?: GlobalCloseItem | null;
-    }
+    },
+    // A batch close's agent panes (#18173): an item that closed one adds it
+    // here, and the batch reads their worktrees together once every item has
+    // run, so a worktree several share is read once. Apart from `batchItem`,
+    // whose presence alone changes how an item asks. Never reachable from a
+    // client either.
+    closedPanes?: Map<string, ClosingAgentPane>
   ): Promise<CallToolResult> => {
     const actionId = request.params.name;
     const { args, requestKey } = parseToolArguments(request.params.arguments);
@@ -2706,6 +2718,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             batchArgs.notify === true && terminalNotify !== undefined && tier !== "external"
               ? ownPane()
               : null;
+          const batchClosedPanes =
+            actionId === "terminal.closeMany" && deps.readClosedPaneWorktrees !== undefined
+              ? new Map<string, ClosingAgentPane>()
+              : undefined;
           // Every item is sent first and waited on together, so the call lasts
           // as long as the slowest agent, not the sum of them.
           const waits: Array<ReplyWait | undefined> = [];
@@ -2802,7 +2818,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                       ...(relayCallId !== undefined ? { relayCallId } : {}),
                       ...(globalClose !== undefined ? { globalClose } : {}),
                     }
-                  : undefined
+                  : undefined,
+                batchClosedPanes
               );
             } catch (error) {
               // One item's refusal is its own outcome, not the batch's.
@@ -2820,6 +2837,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             releaseItemNotice();
             waits.push(wait);
             results.push(batchItemOutcome(item.target, itemResult));
+          }
+          if (batchClosedPanes !== undefined && batchClosedPanes.size > 0) {
+            const panes = [...batchClosedPanes.values()];
+            const worktrees = await readClosedPaneWorktrees(
+              deps.readClosedPaneWorktrees,
+              panes,
+              extra.signal
+            );
+            const worktreeOf = new Map(panes.map((pane, index) => [pane.terminalId, worktrees[index]]));
+            results.forEach((entry, index) => {
+              const worktree = entry.ok ? worktreeOf.get(entry.target) : undefined;
+              const answer = entry.result;
+              if (worktree === undefined || answer === null || typeof answer !== "object") return;
+              results[index] = { ...entry, result: { ...answer, worktree } };
+            });
           }
           const replies = await Promise.all(waits.map((wait) => wait?.promise));
           // Share the response ceiling so every item's receipt survives:
@@ -3947,6 +3979,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             closeGenerations.set(terminalId, deps.terminalGenerationOf?.(terminalId));
           }
         }
+        // The agent pane a close of one panel names, read as the close goes
+        // out (#18173): the host answers in order, so this is its record from
+        // before the close, and the facts the answer carries are about its
+        // worktree whatever runs under the id by then. Awaited only after the
+        // dispatch, so the close never waits on it. A global close carries
+        // what its question read instead.
+        const closingId =
+          SINGLE_CLOSE_TOOLS.has(actionId) && !globalCloseAdmitted && assistantTarget === undefined
+            ? namedTerminalIds(args)[0]
+            : undefined;
+        const closingPane: Promise<ClosingAgentPane | null> | undefined =
+          closingId !== undefined && deps.readClosingAgentPane !== undefined
+            ? deps
+                .readClosingAgentPane(closingId)
+                .catch((): ClosingAgentPane => ({ terminalId: closingId, unread: true }))
+            : undefined;
 
         // An assistant target runs in main (#13496), with the notice and the
         // reply wait set up above around it like any send. Its refusals are
@@ -4277,20 +4325,34 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // grace, so the answer says what the host saw of each one (#14474).
           // Every route a close takes ends here: renderer, viewless, owned,
           // an assistant's, and each item of `terminal.closeMany`.
-          const withProcesses: DispatchEnvelope =
+          // Every agent close also says what its pane's worktree holds that
+          // exists only on this machine (#18173), read once it closed, beside
+          // its process. A batch item leaves the read to its batch.
+          const closingAgent = closingPane !== undefined ? await closingPane : null;
+          const closedPane =
+            closingAgent !== null &&
+            dispatched.result.ok &&
+            closedIdsInclude(dispatched.result.result, closingAgent.terminalId)
+              ? closingAgent
+              : undefined;
+          if (closedPane !== undefined) closedPanes?.set(closedPane.terminalId, closedPane);
+          const [withProcesses, closedPaneWorktree] = await Promise.all([
             readClosedPanelProcess !== undefined && CLOSE_TOOLS.has(actionId)
-              ? {
-                  ...dispatched,
-                  result: await withClosedPanelProcesses(dispatched.result, readClosedPanelProcess),
-                }
-              : dispatched;
+              ? withClosedPanelProcesses(dispatched.result, readClosedPanelProcess).then(
+                  (result): DispatchEnvelope => ({ ...dispatched, result })
+                )
+              : dispatched,
+            closedPane !== undefined && closedPanes === undefined
+              ? readClosedPaneWorktrees(deps.readClosedPaneWorktrees, [closedPane], extra.signal).then(
+                  ([worktree]) => worktree
+                )
+              : undefined,
+          ]);
           // A global close says what its question said of the worktree (#18151).
+          const closeWorktree = globalCloseAdmitted ? globalCloseWorktree : closedPaneWorktree;
           const envelope: DispatchEnvelope =
-            globalCloseAdmitted && globalCloseWorktree !== undefined
-              ? {
-                  ...withProcesses,
-                  result: withGlobalCloseWorktree(withProcesses.result, globalCloseWorktree),
-                }
+            closeWorktree !== undefined
+              ? { ...withProcesses, result: withCloseWorktree(withProcesses.result, closeWorktree) }
               : withProcesses;
           // Narrow renderer-computed results against this session before
           // anything downstream reads them: the effective action surface for
