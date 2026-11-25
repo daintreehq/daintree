@@ -859,7 +859,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.setHoldOnRestartOwned",
     title: "Hold owned agent on restart",
     description:
-      "Hold or release an agent panel this session launched (not a handed one) on restart. A held panel comes back without starting, whatever the resume setting; the user starting it clears the hold.",
+      "Keep an agent panel this session launched (not a handed one) from resuming on restart, or release it. Held, it waits to be started whatever the resume setting; starting it clears the hold.",
     category: "terminal",
     kind: "command",
     danger: "safe",

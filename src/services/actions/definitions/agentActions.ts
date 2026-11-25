@@ -153,7 +153,7 @@ const AgentLaunchArgsSchema = z.object({
   holdOnRestart: z
     .boolean()
     .optional()
-    .describe("Don't resume it after a restart: it waits to be started. For one-shot work."),
+    .describe("Don't resume after a restart; wait to be started. For one-shot work."),
 });
 
 /** Why a preset write asks first, shown in the host's confirm dialog. */

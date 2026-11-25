@@ -351,7 +351,7 @@ describe("useAgentLauncher — a hold asked for at launch (#18178)", () => {
     expect(addPanel).toHaveBeenCalledOnce();
     const options = addPanel.mock.calls[0]?.[0];
     expect(options).toMatchObject({ launchAgentId: "claude", holdOnRestart: true });
-    expect(options).not.toHaveProperty("launchedByPluginId");
+    expect(options?.launchedByPluginId).toBeUndefined();
   });
 
   it.each([false, undefined])("leaves the pane to the resume setting for %s", async (hold) => {

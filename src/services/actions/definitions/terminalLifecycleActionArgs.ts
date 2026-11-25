@@ -48,7 +48,7 @@ export const SetHoldOnRestartArgsSchema = z.object({
 });
 
 export const SetHoldOnRestartOwnedArgsSchema = z.object({
-  terminalId: z.string().min(1).describe("Panel `id` this session got when launching it."),
+  terminalId: z.string().min(1).describe("Panel `id` this session launched."),
   hold: z.boolean().describe("False hands it back to the resume setting."),
 });
 
