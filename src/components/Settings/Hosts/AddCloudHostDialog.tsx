@@ -61,7 +61,6 @@ interface AddCloudHostDialogProps {
 
 type Mode = "create" | "import";
 
-/** One clause stays a bare line; several are sentences, each ended once. */
 /**
  * What an account lets Daintree do with machines, across every provider it
  * could be on: start and stop only where one of them stops its machines,
@@ -74,6 +73,7 @@ function machineVerbs(providers: readonly CloudProviderInfo[]): string {
   return deletes ? "create, start, stop and delete" : "create, start and stop";
 }
 
+/** One clause stays a bare line; several are sentences, each ended once. */
 function importNote(...parts: Array<string | null>): string {
   const clauses = parts
     .filter((part): part is string => !!part)
