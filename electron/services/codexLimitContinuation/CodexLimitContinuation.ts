@@ -140,7 +140,8 @@ interface PendingLaunch extends ContinuationLaunch {
 }
 
 /**
- * Continuing armed Codex panes once their usage limit resets (#17909). The
+ * Continuing armed Codex panes once their usage limit resets (#17909), and
+ * Claude Code panes once Claude's own wait for the reset is gone (#18192). The
  * user arms a pane; its host reports the stop once it has settled; this asks
  * whether the pane falls back instead and when the limit resets, waits until
  * then, and has the host check the pane and type the line. Lives in main, so
