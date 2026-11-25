@@ -5,6 +5,7 @@ import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, GitDiffSide, DiffChangeSetEntry } from "./git.js";
 import type { ScheduledRunRef } from "./scheduledRunRef.js";
 import type { UpdateInstalledObservation } from "./ipc/agent.js";
+import type { TerminalAgentObservation, TerminalRestoreProvenance } from "./restoreProvenance.js";
 import {
   BUILT_IN_PANEL_KINDS,
   panelKindIsDockable,
@@ -544,41 +545,11 @@ export interface PanelHostEnd {
   missedBeats?: number;
 }
 
-/**
- * What restore did with a pane it rebuilt from its saved snapshot (#14017): ran
- * the agent's resume command, started it without its conversation (a plain
- * shell always comes back this way), or held it. The route restore chose, not
- * a claim that the CLI reopened anything.
- */
-export type TerminalRestoreDisposition = "resume" | "fresh" | "held";
-
-/**
- * An agent state Daintree's detector reported for a pane, and when that state
- * began (#14017). Only what the host observed: never the renderer's
- * `directing` overlay or an optimistic guess made before the host confirmed.
- */
-export interface TerminalAgentObservation {
-  agentState: AgentState;
-  /** Epoch ms; absent only on a snapshot saved before observations were kept. */
-  at?: number;
-}
-
-/**
- * How the pane's current process, or its hold, came from restore (#14017).
- * Absent on a pane restore never rebuilt, and cleared once the pane is
- * restarted. Persisted, so a pane held across several restarts keeps the
- * last state Daintree saw before the first of them.
- */
-export interface TerminalRestoreProvenance {
-  /** When restore rebuilt the pane from its snapshot (epoch ms). */
-  at: number;
-  disposition: TerminalRestoreDisposition;
-  /**
-   * The last agent state observed for the pane before this restore. What the
-   * screen last showed, never a verdict on whether the run had finished.
-   */
-  lastSeen?: TerminalAgentObservation;
-}
+export type {
+  TerminalAgentObservation,
+  TerminalRestoreDisposition,
+  TerminalRestoreProvenance,
+} from "./restoreProvenance.js";
 
 /**
  * A terminal's Scratchpad (#12835): throwaway Markdown notes that belong to the

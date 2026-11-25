@@ -3,7 +3,7 @@ import type { TerminalCheckResult } from "./checkResult.js";
 import type { TerminalHandback } from "./handback.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
 import type { UpdateInstalledObservation } from "./ipc/agent.js";
-import type { RestoredSummary } from "../utils/restoreProvenance.js";
+import type { RestoredSummary } from "./restoreProvenance.js";
 
 /**
  * Which surface answered a `terminal.getStatus` call (#12316).
