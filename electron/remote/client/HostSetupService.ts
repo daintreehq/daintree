@@ -57,7 +57,11 @@ import {
   type LinuxLaunchTarget,
 } from "./hostModeBootstrap.js";
 import { liveHostRecord, probeHost, type ProbeOutcome } from "./hostProbe.js";
-import { checkLinuxStart, type LibraryCheckTarget } from "./linuxHostLibraries.js";
+import {
+  checkLinuxStart,
+  HostLibrariesMissingError,
+  type LibraryCheckTarget,
+} from "./linuxHostLibraries.js";
 import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -387,7 +391,15 @@ export class HostSetupService {
         sleep: this.deps.sleep ?? abortableSleep,
         now: this.deps.now,
         updateChannel: this.deps.clientBuild().channel,
-        checkLinuxStart: this.linuxStartCheck(connection, channel),
+        checkLinuxStart: async (target) => {
+          await this.linuxStartCheck(
+            connection,
+            channel,
+            () => !this.deps.isRetiring?.(connection)
+          )(target);
+          // The check can take minutes: nothing is changed there for a host removed meanwhile.
+          this.refuseWhileRetiring(connection);
+        },
       });
     } finally {
       // Host mode may be on there now, whatever a dial that checked meanwhile saw.
@@ -485,9 +497,17 @@ export class HostSetupService {
       probe.platform === "linux" ? (detached ?? serviceLaunchTarget(outcome.parsed, probe)) : null;
     if (checkTarget) {
       try {
-        await this.linuxStartCheck(connection, channel)(checkTarget, signal);
+        await this.linuxStartCheck(connection, channel, () => !busy())(checkTarget, signal);
       } catch (error) {
         if (signal?.aborted) return "not-startable";
+        if (busy()) return refused("busy");
+        // Every dial would check, and install as root, again: they go by this answer for a while.
+        if (
+          error instanceof HostLibrariesMissingError &&
+          rechecks === (this.rechecks.get(key) ?? 0)
+        ) {
+          this.unstartable.set(key, now());
+        }
         throw error;
       }
       // The check can take minutes (an install as root among them): looked at again.
@@ -589,7 +609,8 @@ export class HostSetupService {
   /** The check a Linux start on this connection runs first: see linuxHostLibraries.ts. */
   private linuxStartCheck(
     connection: HostConnection,
-    channel: HostCommandChannel
+    channel: HostCommandChannel,
+    mayInstall?: () => boolean
   ): (
     target: LibraryCheckTarget,
     signal?: AbortSignal,
@@ -604,6 +625,7 @@ export class HostSetupService {
             connection.kind === "cloud" && options?.install !== false
               ? (this.deps.cloudPackageInstaller?.(connection.bindingId) ?? null)
               : null,
+          mayInstall,
         },
         target,
         signal

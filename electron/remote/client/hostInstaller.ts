@@ -1175,6 +1175,8 @@ export async function runHostInstall(
 
     /** Why recovery didn't start the build it put back, when a library check said so. */
     let recoveryRefusal: string | null = null;
+    /** The new build's start was checked, so any install as root this run allows was tried. */
+    let startChecked = false;
 
     /** Stop whatever the swap started, put the previous build back, start it, and check it. */
     const recover = async (): Promise<Recovery> => {
@@ -1211,8 +1213,8 @@ export async function runHostInstall(
         if (!lock.held()) return "lock-lost";
         if (startTarget && deps.checkLinuxStart) {
           try {
-            // Putting back what ran installs nothing: any install was this run's to try already.
-            await deps.checkLinuxStart(startTarget, settle, { install: false });
+            // The new build's check already had this run's one install as root.
+            await deps.checkLinuxStart(startTarget, settle, { install: !startChecked });
           } catch (error) {
             recoveryRefusal = formatErrorMessage(error, "a library check failed");
             return "not-restored";
@@ -1311,8 +1313,11 @@ export async function runHostInstall(
         report({ stage: "restarting", fraction: 0.9, message: "Starting Daintree on the host" });
         ensureHeld();
         if (startTarget && deps.checkLinuxStart) {
+          startChecked = true;
           await deps.checkLinuxStart(startTarget, settle);
           ensureHeld();
+          // A cancel during the check still lands before the new build runs.
+          if (signal.aborted) throw cancelled();
         }
         await exec(deps, start, settle, "Couldn't start Daintree on the host");
       }
@@ -1457,12 +1462,24 @@ async function applyStagedUpdate(
     const launchStop = restart === "on-connect" ? ("wait" as const) : null;
     const start = stagedStart(platform, { ...current, parsed });
     if (start === null) throw refusal(NO_SERVICE_TO_RESTART);
+    // What `start` runs, checked whenever it stands in for a start read after the quit.
+    let startTarget: LinuxLaunchTarget | null = null;
+    if (platform === "linux") {
+      if (restart !== "on-connect") startTarget = serviceLaunchTarget(parsed, current.result);
+      else {
+        try {
+          startTarget = linuxLaunchTarget(current.result);
+        } catch {
+          startTarget = null;
+        }
+      }
+    }
     /**
      * The start to run now, and on Linux what it runs, to check first. A host
      * started on connect is started from the image there once it has quit:
      * its updater may have given the new build a name of its own as it
-     * installed it, and pointed a service at it. What it ran before stands in,
-     * unchecked, while the image there can't be told.
+     * installed it, and pointed a service at it. What it ran before stands in
+     * while the image there can't be told.
      */
     const currentStart = async (): Promise<{
       script: string;
@@ -1470,11 +1487,11 @@ async function applyStagedUpdate(
     }> => {
       // A service's start is the same line whatever it runs: looked at only to check it.
       if (platform !== "linux" || (restart !== "on-connect" && !deps.checkLinuxStart)) {
-        return { script: start, target: null };
+        return { script: start, target: startTarget };
       }
       const seen = await deps.probe(settle).catch(() => null);
       if (!seen?.parsed || seen.parsed.appImageConflict || !seen.result.install) {
-        return { script: start, target: null };
+        return { script: start, target: startTarget };
       }
       if (restart !== "on-connect") {
         return { script: start, target: serviceLaunchTarget(seen.parsed, seen.result) };
@@ -1483,7 +1500,7 @@ async function applyStagedUpdate(
         const target = linuxLaunchTarget(seen.result);
         return { script: detachedStartScript(target), target };
       } catch {
-        return { script: start, target: null };
+        return { script: start, target: startTarget };
       }
     };
     /** A start a library check refused: the retry after a failure isn't checked, or installed for, again. */
@@ -1624,9 +1641,16 @@ async function applyStagedUpdate(
         err instanceof AppError
           ? err
           : failed("The update failed", formatErrorMessage(err, "unknown error"));
+      // A library check that refused only this restart says why, as the failure itself would.
+      const refusedHere =
+        refusedStart !== null && refusedStart !== err
+          ? formatErrorMessage(refusedStart, "a library check refused it")
+          : null;
       const note = back
         ? "Daintree is running on the host again."
-        : "Daintree couldn't be started again on the host; start it at the machine.";
+        : refusedHere
+          ? `Daintree couldn't be started again on the host. ${refusedHere}`
+          : "Daintree couldn't be started again on the host; start it at the machine.";
       throw new AppError({
         code: base.code,
         message: `${base.message}. ${note}`,

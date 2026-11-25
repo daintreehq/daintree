@@ -575,15 +575,48 @@ describe("HostSetupService", () => {
         };
         const cloudPackageInstaller = vi.fn(() => async () => ok());
         const onStart = vi.fn();
-        const error = await service("", { run, cloudPackageInstaller })
+        const error = (await service("", { run, cloudPackageInstaller })
           .setup.ensureHostRunning(studio, undefined, onStart)
-          .catch((e: unknown) => e as { userMessage?: string });
+          .then(
+            () => ({}),
+            (e: unknown) => e
+          )) as { userMessage?: string };
         expect(error.userMessage).toContain("studio");
         expect(error.userMessage).toContain("libnspr4.so, libnss3.so");
         expect(error.userMessage).toContain("apt-get update && apt-get satisfy");
         expect(launches(scripts)).toEqual([]);
         expect(onStart).not.toHaveBeenCalled();
         expect(cloudPackageInstaller).not.toHaveBeenCalled();
+      });
+
+      it("goes by a library refusal for a while, rather than checking and installing on every dial", async () => {
+        const scripts: string[] = [];
+        const run: CommandRunner = async (_command, args) => {
+          const script = args.at(-1) ?? "";
+          scripts.push(script);
+          if (script.includes("@@dt:uname")) return ok(box({ image: true }));
+          if (script.includes("@@dt:libs")) return ok("@@dt:libs missing libnspr4.so\n");
+          return ok();
+        };
+        const { setup } = service("", { run });
+        await expect(setup.ensureHostRunning(studio)).rejects.toMatchObject({
+          code: "UNSUPPORTED",
+        });
+        const checks = () => scripts.filter((c) => c.includes("@@dt:libs")).length;
+        expect(checks()).toBe(1);
+        const onRefused = vi.fn();
+        await expect(
+          setup.ensureHostRunning(studio, undefined, undefined, { onRefused })
+        ).resolves.toBe("not-startable");
+        expect(onRefused).toHaveBeenCalledWith("held");
+        expect(checks()).toBe(1);
+        // Someone asking for the host back looks again.
+        await expect(
+          setup.ensureHostRunning(studio, undefined, undefined, { explicit: true })
+        ).rejects.toMatchObject({
+          code: "UNSUPPORTED",
+        });
+        expect(checks()).toBe(2);
       });
 
       it("installs the packages as root on a cloud machine that allows it, checks again, then starts", async () => {

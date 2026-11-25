@@ -48,8 +48,13 @@ const MARK = "@@dt:";
 const SONAME = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$/;
 /** Unpacking the binary out of an AppImage, as the installer's own build check allows for. */
 const CHECK_TIMEOUT_MS = 5 * 60_000;
-/** Past the remote `timeout` in {@link HOST_PACKAGES_ROOT_SCRIPT}, so the machine's own deadline speaks first. */
+/**
+ * How long this device waits on the install as root. Only the wait ends: the
+ * install itself is left to finish there (see {@link HOST_PACKAGES_ROOT_SCRIPT}).
+ */
 export const HOST_PACKAGES_INSTALL_TIMEOUT_MS = 9 * 60_000;
+/** The most of an install's own words a message carries. */
+const DETAIL_MAX = 300;
 
 function sq(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
@@ -61,20 +66,31 @@ const RELATIONS = sq(LINUX_HOST_PACKAGES.join(", "));
 export const HOST_PACKAGES_COMMAND = `apt-get update && apt-get satisfy -y --no-install-recommends ${RELATIONS}`;
 
 /**
- * The same install, run unattended as root through a provider's tunnel:
- * waits out a first boot's unattended-upgrades for apt's lock, counts an
- * index that failed to download as a failure, and is bounded on the machine
- * itself so it ends even if this device goes away. Each step exits with its
- * own status; apt's output stays there.
+ * The same install, run unattended as root through a provider's tunnel.
+ * Fetching the package lists is retried (a first boot's apt-daily holds
+ * their lock for a while) and each try is bounded, since stopping it harms
+ * nothing. The install itself is never cut short: a dpkg stopped halfway
+ * leaves apt refusing everything until someone repairs it by hand. So it
+ * ignores the session going away, writes nothing to it while it runs, and
+ * says only the last lines apt printed, after, when a step failed.
  */
-const INSTALL_STEPS = `export DEBIAN_FRONTEND=noninteractive; apt-get -o DPkg::Lock::Timeout=120 --error-on=any update >/dev/null || exit 41; apt-get -o DPkg::Lock::Timeout=120 satisfy -y --no-install-recommends ${RELATIONS} >/dev/null || exit 42`;
-export const HOST_PACKAGES_ROOT_SCRIPT = `[ "$(id -u)" = 0 ] || exit 40; if command -v timeout >/dev/null 2>&1; then exec timeout -k 30s 8m sh -c ${sq(INSTALL_STEPS)}; fi; exec sh -c ${sq(INSTALL_STEPS)}`;
+export const HOST_PACKAGES_ROOT_SCRIPT = [
+  `[ "$(id -u)" = 0 ] || exit 40`,
+  `trap '' HUP PIPE`,
+  `export DEBIAN_FRONTEND=noninteractive`,
+  `e=$(mktemp) || exit 43`,
+  `trap 'rm -f "$e"' 0`,
+  `fail() { tail -n 3 "$e" >&2; exit "$1"; }`,
+  `t=""; if command -v timeout >/dev/null 2>&1; then t="timeout 60s"; fi`,
+  `n=0; until $t apt-get -o DPkg::Lock::Timeout=60 --error-on=any update </dev/null >/dev/null 2>"$e"; do n=$((n+1)); [ "$n" -ge 6 ] && fail 41; sleep 10; done`,
+  `apt-get -o DPkg::Lock::Timeout=120 satisfy -y --no-install-recommends ${RELATIONS} </dev/null >/dev/null 2>"$e" || fail 42`,
+].join("; ");
 
 const INSTALL_FAILURES: Record<number, string> = {
   40: "the login wasn't root",
-  41: "apt-get update failed",
+  41: "apt-get couldn't fetch the package lists",
   42: "apt-get couldn't install them",
-  124: "it took longer than eight minutes",
+  43: "it couldn't make a temporary file",
 };
 
 /** What to check: the executable a start runs, and whether it is an AppImage to look inside. */
@@ -92,12 +108,13 @@ export type LibraryCheck =
 const PREFIX = `unknown() { echo "${MARK}libs unknown"; exit 0; }; export LC_ALL=C; unset LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT TARGET_APPIMAGE; command -v ldd >/dev/null 2>&1 || unknown`;
 
 /**
- * ldd's `name => not found` lines are the libraries the loader can't find.
+ * ldd's `name => not found` lines (musl's `Error loading shared library
+ * name: No such file or directory`) are the libraries the loader can't find.
  * Anything else that says "not found" (a symbol version) or no dynamic
  * executable at all is no verdict on libraries, and neither is a run that
  * resolved nothing.
  */
-const CLASSIFY = `printf '%s\\n' "$o" | awk -v rc="$r" '$2=="=>" && $3=="not" && $4=="found" && NF==4 { m=m " " $1; next } $2=="=>" && $3 ~ /^\\// { dynamic=1 } /not found|not a dynamic executable|statically linked/ { other=1 } END { if (m!="") print "${MARK}libs missing" m; else if (rc==0 && dynamic && !other) print "${MARK}libs ok"; else print "${MARK}libs unknown" }'`;
+const CLASSIFY = `printf '%s\\n' "$o" | awk -v rc="$r" '$2=="=>" && $3=="not" && $4=="found" && NF==4 { m=m " " $1; next } $1=="Error" && $2=="loading" && $3=="shared" && $4=="library" && /: No such file or directory/ { n=$5; sub(/:$/, "", n); m=m " " n; next } $2=="=>" && $3 ~ /^\\// { dynamic=1 } /not found|not a dynamic executable|statically linked/ { other=1 } END { if (m!="") print "${MARK}libs missing" m; else if (rc==0 && dynamic && !other) print "${MARK}libs ok"; else print "${MARK}libs unknown" }'`;
 
 /**
  * One line of sh that runs ldd on the binary a start would run, as that
@@ -161,19 +178,33 @@ function missingSentence(hostLabel: string, libraries: readonly string[]): strin
   return `Daintree can't start on ${hostLabel}: these libraries it needs aren't installed there: ${libraries.join(", ")}`;
 }
 
-function missingLibrariesError(
-  hostLabel: string,
-  libraries: readonly string[],
-  note?: string
-): AppError {
-  // The libraries come first: a place that shortens the text cuts the command, never the names.
-  const text = `${missingSentence(hostLabel, libraries)}.${note ? ` ${note}.` : ""} On Debian or Ubuntu, run this there as root, then try again: ${HOST_PACKAGES_COMMAND}`;
-  return new AppError({ code: "UNSUPPORTED", message: text, userMessage: text });
+/** A start refused because the loader can't find libraries its binary needs. */
+export class HostLibrariesMissingError extends AppError {
+  constructor(
+    readonly libraries: readonly string[],
+    hostLabel: string,
+    note?: string
+  ) {
+    // The libraries come first: a place that shortens the text cuts the command, never the names.
+    const text = `${missingSentence(hostLabel, libraries)}.${note ? ` ${note}.` : ""} On Debian or Ubuntu, run this there as root, then try again: ${HOST_PACKAGES_COMMAND}`;
+    super({ code: "UNSUPPORTED", message: text, userMessage: text });
+    this.name = "HostLibrariesMissingError";
+  }
+}
+
+function clip(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > DETAIL_MAX ? `${flat.slice(0, DETAIL_MAX - 1)}…` : flat;
 }
 
 function installFailure(result: CommandResult): string {
-  const said = result.code !== null ? INSTALL_FAILURES[result.code] : undefined;
-  return said ?? failureDetail(result, "the root login failed");
+  if (result.timedOut) {
+    return "it was still running after nine minutes, and may yet finish there";
+  }
+  const step = result.code !== null ? INSTALL_FAILURES[result.code] : undefined;
+  if (!step) return clip(failureDetail(result, "the root login failed"));
+  const said = clip(failureDetail(result, ""));
+  return said ? `${step} (${said})` : step;
 }
 
 export interface LinuxStartCheckDeps {
@@ -185,6 +216,8 @@ export interface LinuxStartCheckDeps {
    * login); null everywhere else.
    */
   installPackages: ((signal?: AbortSignal) => Promise<CommandResult>) | null;
+  /** Asked right before an install as root: false once the start it is for is no longer wanted. */
+  mayInstall?: () => boolean;
 }
 
 async function check(
@@ -192,11 +225,32 @@ async function check(
   target: LibraryCheckTarget,
   signal: AbortSignal | undefined
 ): Promise<LibraryCheck> {
-  const result = await deps.channel.exec(libraryCheckScript(target), {
-    timeoutMs: CHECK_TIMEOUT_MS,
-    signal,
-  });
-  return result.code === 0 ? parseLibraryCheck(result.stdout) : { kind: "unknown" };
+  try {
+    const result = await deps.channel.exec(libraryCheckScript(target), {
+      timeoutMs: CHECK_TIMEOUT_MS,
+      signal,
+    });
+    return result.code === 0 ? parseLibraryCheck(result.stdout) : { kind: "unknown" };
+  } catch {
+    return { kind: "unknown" };
+  }
+}
+
+async function install(
+  installPackages: NonNullable<LinuxStartCheckDeps["installPackages"]>,
+  signal: AbortSignal | undefined
+): Promise<CommandResult> {
+  try {
+    return await installPackages(signal);
+  } catch (error) {
+    return {
+      code: null,
+      stdout: "",
+      stderr: error instanceof Error ? error.message : "",
+      spawnError: null,
+      timedOut: false,
+    };
+  }
 }
 
 function cancelled(): AppError {
@@ -207,8 +261,9 @@ function cancelled(): AppError {
  * Before a Linux start: refuses it, naming every library the loader can't
  * find, rather than letting it exit naming one. Where Daintree may install
  * the packages as root, it does, and checks again as the Host's own login.
- * A check that can't conclude lets the start go ahead, so a host that starts
- * today never stops starting because of it.
+ * A first check that can't conclude lets the start go ahead, so a host that
+ * starts today never stops starting because of it. Once libraries were seen
+ * missing, only a check that finds them all lets it go ahead.
  */
 export async function checkLinuxStart(
   deps: LinuxStartCheckDeps,
@@ -218,29 +273,33 @@ export async function checkLinuxStart(
   const first = await check(deps, target, signal);
   if (signal?.aborted) throw cancelled();
   if (first.kind !== "missing") return;
-  if (!deps.installPackages) throw missingLibrariesError(deps.hostLabel, first.libraries);
-  const installed = await deps.installPackages(signal).catch((error: unknown): CommandResult => ({
-    code: null,
-    stdout: "",
-    stderr: error instanceof Error ? error.message : "",
-    spawnError: null,
-    timedOut: false,
-  }));
+  if (!deps.installPackages) {
+    throw new HostLibrariesMissingError(first.libraries, deps.hostLabel);
+  }
+  if (deps.mayInstall?.() === false) throw cancelled();
+  const installed = await install(deps.installPackages, signal);
   if (signal?.aborted) throw cancelled();
   if (installed.code !== 0) {
-    throw missingLibrariesError(
-      deps.hostLabel,
+    throw new HostLibrariesMissingError(
       first.libraries,
+      deps.hostLabel,
       `Daintree couldn't install them as root there: ${installFailure(installed)}`
     );
   }
-  const second = await check(deps, target, signal);
+  let second = await check(deps, target, signal);
+  // Once more: a check that only lost its connection says nothing about the install.
+  if (second.kind === "unknown" && !signal?.aborted) second = await check(deps, target, signal);
   if (signal?.aborted) throw cancelled();
-  if (second.kind === "missing") {
-    throw missingLibrariesError(
-      deps.hostLabel,
-      second.libraries,
-      "They were still missing after Daintree installed its packages there as root"
-    );
-  }
+  if (second.kind === "ok") return;
+  throw second.kind === "missing"
+    ? new HostLibrariesMissingError(
+        second.libraries,
+        deps.hostLabel,
+        "They were still missing after Daintree installed its packages there as root"
+      )
+    : new HostLibrariesMissingError(
+        first.libraries,
+        deps.hostLabel,
+        "Daintree installed its packages there as root, but couldn't check the libraries again"
+      );
 }

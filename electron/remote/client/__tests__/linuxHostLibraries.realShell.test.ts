@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { libraryCheckScript, parseLibraryCheck } from "../linuxHostLibraries.js";
+import {
+  HOST_PACKAGES_ROOT_SCRIPT,
+  LINUX_HOST_PACKAGES,
+  libraryCheckScript,
+  parseLibraryCheck,
+} from "../linuxHostLibraries.js";
 
 /**
  * The library check under a real /bin/sh, with stand-ins for `ldd` and an
@@ -20,7 +25,7 @@ exit "$(cat "$HOME/ldd-code" 2>/dev/null || echo 0)"
 
 const FAKE_IMAGE = `#!/bin/sh
 [ "$1" = --appimage-extract ] || exit 2
-[ -f "$HOME/extract-fails" ] && exit 1
+[ "$(cat "$HOME/extract-fails" 2>/dev/null)" = "$2" ] && exit 1
 printf '%s\\n' "$2" >> "$HOME/patterns"
 mkdir -p squashfs-root/usr/lib
 case "$2" in
@@ -84,7 +89,8 @@ describe.skipIf(process.platform === "win32")("library check (real shell)", () =
         "\tlibnss3.so => not found",
         "\tlibnspr4.so => not found",
       ].join("\n"),
-      1
+      // A missing library is a verdict whatever ldd exits with.
+      0
     );
     const run = sh(libraryCheckScript({ executable: image, appImageExtractAndRun: true }));
     expect(run.status).toBe(0);
@@ -118,7 +124,7 @@ describe.skipIf(process.platform === "win32")("library check (real shell)", () =
     [
       "a symbol version rather than a library",
       `${FOUND}\n./daintree: /lib/x86_64-linux-gnu/libc.so.6: version \`GLIBC_2.38' not found (required by ./daintree)`,
-      1,
+      0,
     ],
     ["ldd failing with nothing resolved", "", 1],
   ])("concludes nothing from %s", (_label, out, code) => {
@@ -127,9 +133,23 @@ describe.skipIf(process.platform === "win32")("library check (real shell)", () =
     expect(parseLibraryCheck(run.stdout)).toEqual({ kind: "unknown" });
   });
 
-  it("concludes nothing, and leaves nothing, when the image can't be unpacked", () => {
+  it("reads musl's words for a library it can't find", () => {
+    lddSays(
+      [
+        "\t/lib/ld-musl-x86_64.so.1 (0x7f00)",
+        "Error loading shared library libnss3.so: No such file or directory (needed by /x/daintree)",
+        "Error relocating /x/daintree: g_free: symbol not found",
+      ].join("\n"),
+      1
+    );
+    const run = sh(libraryCheckScript({ executable: image }));
+    expect(parseLibraryCheck(run.stdout)).toEqual({ kind: "missing", libraries: ["libnss3.so"] });
+  });
+
+  it("concludes nothing, and leaves nothing, when part of the image can't be unpacked", () => {
     lddSays(`${FOUND}\n\tlibnspr4.so => not found`);
-    fs.writeFileSync(path.join(home, "extract-fails"), "");
+    // The binary comes out, its libraries don't: ldd would call those missing.
+    fs.writeFileSync(path.join(home, "extract-fails"), "usr/lib");
     const run = sh(libraryCheckScript({ executable: image }));
     expect(run.status).toBe(0);
     expect(parseLibraryCheck(run.stdout)).toEqual({ kind: "unknown" });
@@ -142,5 +162,69 @@ describe.skipIf(process.platform === "win32")("library check (real shell)", () =
     const run = sh(libraryCheckScript({ executable: `${image}.gone` }));
     expect(parseLibraryCheck(run.stdout)).toEqual({ kind: "unknown" });
     expect(leftOver()).toEqual([]);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("the install as root (real shell)", () => {
+  let dir: string;
+
+  const STUB = `#!/bin/sh
+printf '%s\\n' "$*" >> "$HOME/apt-calls"
+case "$*" in
+  *" update") [ -f "$HOME/update-fails" ] && { echo "E: lists lock" >&2; exit 100; } ;;
+  *satisfy*) [ -f "$HOME/satisfy-fails" ] && { printf 'one\\ntwo\\nthree\\nE: Unable to locate package libgbm1\\n' >&2; exit 100; } ;;
+esac
+exit 0
+`;
+
+  function root(uid: string) {
+    fs.writeFileSync(path.join(dir, "bin", "id"), `#!/bin/sh\necho ${uid}\n`, { mode: 0o755 });
+    return spawnSync("/bin/sh", ["-c", HOST_PACKAGES_ROOT_SCRIPT], {
+      env: { HOME: dir, PATH: `${path.join(dir, "bin")}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+      encoding: "utf8",
+      timeout: 15_000,
+    });
+  }
+
+  const calls = () => {
+    const file = path.join(dir, "apt-calls");
+    return fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim().split("\n") : [];
+  };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "dt-rootinstall-"));
+    fs.mkdirSync(path.join(dir, "bin"));
+    fs.writeFileSync(path.join(dir, "bin", "apt-get"), STUB, { mode: 0o755 });
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses a login that isn't root before apt runs", () => {
+    expect(root("1000").status).toBe(40);
+    expect(calls()).toEqual([]);
+  });
+
+  it("fetches the lists, then installs every relation as one argument", () => {
+    const run = root("0");
+    expect(run.status).toBe(0);
+    expect(run.stdout).toBe("");
+    const [update, satisfy] = calls();
+    expect(update).toMatch(/ update$/);
+    expect(satisfy).toContain(
+      `satisfy -y --no-install-recommends ${LINUX_HOST_PACKAGES.join(", ")}`
+    );
+  });
+
+  it("says only apt's last lines when the install fails", () => {
+    fs.writeFileSync(path.join(dir, "satisfy-fails"), "");
+    const run = root("0");
+    expect(run.status).toBe(42);
+    expect(run.stderr.trim().split("\n")).toEqual([
+      "two",
+      "three",
+      "E: Unable to locate package libgbm1",
+    ]);
   });
 });

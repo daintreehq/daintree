@@ -800,7 +800,7 @@ describe("runHostInstall", () => {
       await expect(install(deps, { hostId: "box" })).rejects.toThrow(
         /libnspr4\.so isn't installed there\. The previous build was put back and is running again/
       );
-      // Putting back what ran installs nothing.
+      // The new build's check already had this run's install as root.
       expect(asked).toEqual([undefined, { install: false }]);
       expect(starts(shell.scripts)).toHaveLength(1);
       expect(shell.scripts.findIndex((s) => s.includes("nohup"))).toBeGreaterThan(
@@ -811,17 +811,45 @@ describe("runHostInstall", () => {
     it("says why the previous build wasn't started again when its libraries are missing too", async () => {
       const shell = fakeShell();
       const deps = makeDeps({ shell, probes: [box(), box(), box()], working: [0] });
+      const missing = ["libnss3.so", "libgbm.so.1"];
       deps.checkLinuxStart = vi.fn(async () => {
-        throw new AppError({
-          code: "UNSUPPORTED",
-          message: "libnss3.so is missing",
-          userMessage: "libnss3.so is missing",
-        });
+        const name = missing.shift()!;
+        throw new AppError({ code: "UNSUPPORTED", message: `${name} is missing` });
       });
       await expect(install(deps, { hostId: "box" })).rejects.toThrow(
-        /libnss3\.so is missing\. The previous build wasn't started again\. libnss3\.so is missing/
+        /libnss3\.so is missing\. The previous build wasn't started again\. libgbm\.so\.1 is missing/
       );
       expect(starts(shell.scripts)).toEqual([]);
+    });
+
+    it("puts the previous build back, unstarted new one and all, when cancelled during the check", async () => {
+      const shell = fakeShell();
+      const deps = makeDeps({ shell, probes: [box(), box(), box()], working: [0] });
+      const controller = new AbortController();
+      deps.checkLinuxStart = vi.fn(async () => {
+        controller.abort();
+      });
+      await expect(install(deps, { hostId: "box" }, controller.signal)).rejects.toThrow(
+        /put back and is running again/
+      );
+      // The previous build's start, after the rollback: never the new one's.
+      expect(starts(shell.scripts)).toHaveLength(1);
+      expect(shell.scripts.findIndex((s) => s.includes("nohup"))).toBeGreaterThan(
+        shell.scripts.findIndex((s) => s.includes("@@dt:rolledback"))
+      );
+    });
+
+    it("lets recovery install as root when the new build's check never ran", async () => {
+      const shell = fakeShell((script) =>
+        script.includes("mv -f") && script.includes(NEW_BUILD) ? { ...ok(), code: 1 } : ok()
+      );
+      const deps = makeDeps({ shell, probes: [box(), box(), box()], working: [0] });
+      const asked: unknown[] = [];
+      deps.checkLinuxStart = vi.fn(async (_target, _signal, options) => {
+        asked.push(options);
+      });
+      await expect(install(deps, { hostId: "box" })).rejects.toThrow(/put back/);
+      expect(asked).toEqual([{ install: true }]);
     });
 
     it("won't stop one whose own record doesn't say it was started on connect", async () => {
@@ -1969,6 +1997,49 @@ describe("runHostInstall applying the host's own downloaded update", () => {
       ).rejects.toThrow(/libgbm\.so\.1 is missing\. Daintree couldn't be started again/);
       expect(deps.checkLinuxStart).toHaveBeenCalledTimes(1);
       expect(shell.scripts.some((s) => s.includes("nohup"))).toBe(false);
+    });
+
+    it("checks what it ran before when the image after the quit can't be read", async () => {
+      const shell = fakeShell();
+      const deps = makeDeps({
+        shell,
+        client: { ...CLIENT, platform: "linux", arch: "x64", bundle: { kind: "none" } },
+        probes: [
+          box("Daintree-1.3.0.AppImage", { pid: 77, build: OLD_RUNNING }),
+          box("Daintree-1.3.0.AppImage", { pid: 77, build: OLD_RUNNING }),
+          // Cut short: nothing says which image is there now.
+          "@@dt:uname Linux x86_64\n",
+          box("Daintree-1.3.0.AppImage", { pid: 78, build: NEW_RUNNING }),
+        ],
+      });
+      const checked: string[] = [];
+      deps.checkLinuxStart = vi.fn(async (target) => {
+        checked.push(target.executable);
+      });
+      await expect(
+        install(deps, { hostId: "box", applyStaged: { version: "1.4.0" } })
+      ).resolves.toMatchObject({ status: "staged-applied" });
+      expect(checked).toEqual(["/home/node/Applications/Daintree-1.3.0.AppImage"]);
+      const start = shell.scripts.filter((s) => s.includes("nohup"));
+      expect(start).toHaveLength(1);
+      expect(start[0]).toContain("'/home/node/Applications/Daintree-1.3.0.AppImage'");
+    });
+
+    it("says why it couldn't start the host again when only that restart's check refused", async () => {
+      const shell = fakeShell((script) =>
+        script.includes("nohup") ? { ...ok(), code: 1, stderr: "exec failed" } : ok()
+      );
+      const deps = linuxDeps(shell);
+      let calls = 0;
+      deps.checkLinuxStart = vi.fn(async () => {
+        if (calls++ > 0)
+          throw new AppError({ code: "UNSUPPORTED", message: "libgbm.so.1 is missing" });
+      });
+      await expect(
+        install(deps, { hostId: "box", applyStaged: { version: "1.4.0" } })
+      ).rejects.toThrow(
+        /Couldn't start Daintree on the host.*Daintree couldn't be started again on the host\. libgbm\.so\.1 is missing/s
+      );
     });
 
     it("checks what a service its update repointed now runs", async () => {
