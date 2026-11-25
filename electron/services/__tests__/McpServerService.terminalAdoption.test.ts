@@ -180,6 +180,16 @@ describe("McpServerService terminal hand-over (#12490)", () => {
     expect(service.listTerminalAdoptions()).toEqual([]);
   });
 
+  it("drops what a revoked pane bearer held for its own workers, unfenced (#18172)", () => {
+    const revoke = vi.spyOn(service.getWorkerSteerQueue(), "revokePrincipal");
+
+    service.revokeOwnershipPrincipal(ORCHESTRATOR.principalId);
+
+    // Under the owner key the pane's calls held them by, as `ownerOf` gives it.
+    expect(revoke).toHaveBeenCalledWith(principalOwnerKey(ORCHESTRATOR.principalId));
+    revoke.mockRestore();
+  });
+
   it("lets no restart give a trashed pane back to the conversation that launched it (#16845)", () => {
     _resetAssistantPaneCreationsForTests();
     attachAssistantPaneCreationPersistence({

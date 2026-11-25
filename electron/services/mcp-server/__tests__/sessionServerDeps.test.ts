@@ -675,6 +675,8 @@ describe("createSessionServerDeps", () => {
     ],
     ["the global Assistant's relay session", { relay: { ...RELAY, global: true as const } }, true],
     ["a direct session", {}, false],
+    // #18172: an agent pane holds sends for its own workers under its bearer.
+    ["an agent pane's own session", { role: "agent-pane" as const }, true],
   ])("hands %s the held-send reads as it should", (_label, capture, expected) => {
     const workerSteerQueue = { status: vi.fn(), cancel: vi.fn() };
     const deps = fakeSource();

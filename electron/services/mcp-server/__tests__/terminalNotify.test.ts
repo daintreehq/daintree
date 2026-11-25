@@ -3544,7 +3544,13 @@ describe("held prompts on a worker's line (#16187)", () => {
         text: `${RETIRED_LINE}\n\n[From the Assistant] Rebase onto develop`,
         token: expect.any(String),
         handback: "hb-1",
-        guard: { kind: "settled-prompt-exact", agentIncarnation: 3, agentSessionId: "session-9" },
+        // Pinned to the agent its wake checked, so a swap before the write can't take it (#18172).
+        guard: {
+          kind: "settled-prompt-exact",
+          agentIncarnation: 3,
+          agentSessionId: "session-9",
+          agentId: "claude",
+        },
         promptAsWritten: "Rebase onto develop",
         // Filed as the Assistant's prompt once written, so another's held prompt drops on it.
         promptOwner: "principal-assistant",

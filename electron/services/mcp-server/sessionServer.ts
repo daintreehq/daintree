@@ -183,6 +183,7 @@ import {
   type AssistantTarget,
 } from "../assistants/AssistantTerminalControl.js";
 import type { GlobalCloseTarget, WorkerSteerTarget } from "../assistants/GlobalWorkerSteer.js";
+import type { OwnedWhenBusy } from "../assistants/OwnedWorkerSend.js";
 import type { WorktreeLocalWork } from "../../../shared/types/worktreeLocalWork.js";
 import {
   GLOBAL_CLOSE_REFUSAL_NOTE,
@@ -1587,6 +1588,137 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       return steer !== undefined ? deps.globalSteer!.applyUpdate(steer, run) : run();
     };
 
+    // A send to the caller's own worker that names `whenBusy` (#18172): the
+    // renderer's send types into a turn, so main reads the worker and writes
+    // at its prompt, refuses, or holds, under the gate's ownership as admitted.
+    const sendOwnedWhenBusy = async (
+      terminalId: string
+    ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
+      const ttlSeconds = readQueueTtlSeconds(callArgs);
+      const command = typeof callArgs.command === "string" ? callArgs.command : "";
+      if (command.trim().length === 0) {
+        throw new AssistantTargetError(
+          "VALIDATION_ERROR",
+          "A send needs a non-empty `command`. Nothing was sent."
+        );
+      }
+      const parsedGeneration = RunGenerationArgSchema.safeParse(callArgs.generation);
+      if (!parsedGeneration.success) {
+        throw new AssistantTargetError(
+          "VALIDATION_ERROR",
+          "`generation` must be the whole number the run was listed with. Nothing was sent."
+        );
+      }
+      // What the renderer's schema would have refused, since this send never
+      // reaches it: the receipt echoes the id, so an oversized one would lose it.
+      if (callArgs.handback !== undefined && typeof callArgs.handback !== "boolean") {
+        throw new AssistantTargetError(
+          "VALIDATION_ERROR",
+          "`handback` is true or false. Nothing was sent."
+        );
+      }
+      if (terminalId.length > 512) {
+        throw new AssistantTargetError(
+          "VALIDATION_ERROR",
+          "`terminalId` is at most 512 characters. Nothing was sent."
+        );
+      }
+      const service = deps.ownedSend;
+      if (service === undefined) {
+        throw new AssistantTargetError(
+          EXECUTION_ERROR_CODE,
+          "This host can't read the terminal for `whenBusy` right now. Nothing was sent."
+        );
+      }
+      const queueing = callArgs.whenBusy === "queue";
+      // A held send is read back and withdrawn under this session's principal;
+      // an api-key client has none to answer for it.
+      if (queueing && workerSteerQueue === undefined) {
+        throw new AssistantTargetError(
+          "VALIDATION_ERROR",
+          '`whenBusy: "queue"` needs a connection that can read back and withdraw a held message, and this one can\'t. Nothing was sent. Send with `whenBusy: "refuse"`, or without `whenBusy`.'
+        );
+      }
+      // Checked by identity, so a release and re-creation, or a take-back and
+      // a fresh hand-over, under the same id is not the authority admitted.
+      const adoption = admittedAdoption;
+      const creation = adoption === undefined ? ownedResourceRecord : undefined;
+      const stillOwned = (): boolean =>
+        adoption !== undefined
+          ? sessionStore.terminalAdoption.get(ownershipOwner, terminalId) === adoption
+          : creation !== undefined &&
+            sessionStore.resourceOwnership.get(ownershipOwner, "terminal", terminalId) === creation;
+      const notOwned = {
+        code: RESOURCE_NOT_OWNED_CODE,
+        message: `Terminal '${terminalId}' stopped being this session's before the send reached it. Nothing was sent.`,
+      };
+      // A write main makes itself answers to whoever drives the project now,
+      // and reaches only the project this session is bound to, as its view
+      // does, or for an unbound one the project its record was made in: a
+      // relaunch under the id elsewhere is not the terminal it was given.
+      const expectedProjectId =
+        sessionStore.sessionWorkspaceMap.get(sessionId) ?? ownedResourceRecord?.workspaceId;
+      const writeRefusal = (projectId: string): { code: string; message: string } | null => {
+        if (expectedProjectId !== undefined && projectId !== expectedProjectId) {
+          return {
+            code: WORKER_STEER_REFUSALS.notFound,
+            message: `Terminal '${terminalId}' isn't in the project this session reaches it in. Nothing was sent.`,
+          };
+        }
+        return deps.relay
+          ? deps.relay.refuseWrite(projectId)
+          : ((deps.refuseWrite ?? deps.refuseViewWrite)?.(projectId) ?? null);
+      };
+      const whenBusy: OwnedWhenBusy = queueing
+        ? {
+            kind: "queue",
+            ttlSeconds,
+            // The notice armed for this call follows the held send.
+            takeNotice: () => {
+              const notice = pendingNotify;
+              pendingNotify = undefined;
+              return notice;
+            },
+            onWritten: () => {
+              const pane = tier === "external" ? null : ownPane();
+              if (pane !== null) terminalNotify?.supersede(pane, terminalId);
+            },
+          }
+        : { kind: "refuse" };
+      const result = await service.prompt(
+        {
+          terminalId,
+          inputOwner: ownershipOwner,
+          authorize: (projectId) => {
+            if (sessionStore.getTier(sessionId) === null) {
+              throw new AssistantTargetError(SESSION_GONE, SESSION_GONE_MESSAGE);
+            }
+            // Its caller stopped waiting while the worker was read: nothing
+            // goes out that it was never told of.
+            if (extra.signal.aborted) {
+              throw new AssistantTargetError(
+                EXECUTION_ERROR_CODE,
+                `The call was cancelled before the send to '${terminalId}' went out. Nothing was sent.`
+              );
+            }
+            if (!stillOwned()) throw new AssistantTargetError(notOwned.code, notOwned.message);
+            const refusal = writeRefusal(projectId);
+            if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
+          },
+          // A held send answers to the principal that queued it, whose end
+          // drops it, not this MCP session, which may close before the turn ends.
+          authorizeHeld: (projectId) => (stillOwned() ? writeRefusal(projectId) : notOwned),
+        },
+        {
+          command,
+          handback: callArgs.handback === true,
+          ...(parsedGeneration.data !== undefined ? { generation: parsedGeneration.data } : {}),
+          whenBusy,
+        }
+      );
+      return { envelope: { result: { ok: true, result } }, raised: true };
+    };
+
     const settleGlobalCloseLedger = (
       envelope: DispatchEnvelope,
       dispatchedGeneration: number | undefined
@@ -2910,11 +3042,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }) as CallToolResult;
         }
 
-        // A held prompt is written long after this call returns (#16187);
-        // its notice, or a status read, says what became of it.
+        // A held prompt is written long after this call returns (#16187),
+        // to a worker this session owns as well (#18172); its notice, or a
+        // status read, says what became of it.
         if (
           waitForReply &&
-          (globalSteerTerminalId !== undefined || assistantTarget !== undefined) &&
           actionId === "terminal.sendCommandOwned" &&
           callArgs.whenBusy === "queue"
         ) {
@@ -4320,6 +4452,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           };
         };
 
+        // An owned send that names `whenBusy` runs in main (#18172); without
+        // one it keeps the renderer's immediate send.
+        const ownedWhenBusySend =
+          actionId === "terminal.sendCommandOwned" &&
+          assistantEnvelope === undefined &&
+          ownedResourceId !== undefined &&
+          (callArgs.whenBusy !== undefined || callArgs.queueTtlSeconds !== undefined);
+
         try {
           // An `*Owned` tool that cleared the gate above delegates to the real
           // action under its own id, with arguments rebuilt from scratch rather
@@ -4337,25 +4477,27 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // has let the run it names through, and answered the same way.
           const { envelope: dispatched, raised } = assistantEnvelope
             ? { envelope: assistantEnvelope, raised: true }
-            : actionId === CLAUDE_UPDATE_TOOL && ownedResourceId !== undefined
-              ? await applyClaudeUpdate(ownedResourceId)
-              : globalRevealTerminalId !== undefined
-                ? await deps.globalSteer!.reveal(globalSteerTarget(globalRevealTerminalId), () =>
-                    dispatchOwnedResourceAction(
-                      ownedResource as RendererOwnedResourceTool,
-                      globalRevealTerminalId!
+            : ownedWhenBusySend
+              ? await sendOwnedWhenBusy(ownedResourceId!)
+              : actionId === CLAUDE_UPDATE_TOOL && ownedResourceId !== undefined
+                ? await applyClaudeUpdate(ownedResourceId)
+                : globalRevealTerminalId !== undefined
+                  ? await deps.globalSteer!.reveal(globalSteerTarget(globalRevealTerminalId), () =>
+                      dispatchOwnedResourceAction(
+                        ownedResource as RendererOwnedResourceTool,
+                        globalRevealTerminalId!
+                      )
                     )
-                  )
-                : listPaging ||
-                    ownedResource?.executor !== "renderer" ||
-                    ownedResourceId === undefined
-                  ? {
-                      envelope: listPaging
-                        ? await collectListPages()
-                        : await dispatchToRenderer(actionId, dispatchArgs),
-                      raised: true,
-                    }
-                  : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
+                  : listPaging ||
+                      ownedResource?.executor !== "renderer" ||
+                      ownedResourceId === undefined
+                    ? {
+                        envelope: listPaging
+                          ? await collectListPages()
+                          : await dispatchToRenderer(actionId, dispatchArgs),
+                        raised: true,
+                      }
+                    : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
           // A close trashes the panel and its process runs on through the
           // grace, so the answer says what the host saw of each one (#14474).
           // Every route a close takes ends here: renderer, viewless, owned,
@@ -4523,11 +4665,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({ code: "EXECUTION_ERROR", message });
           }
         } catch (err) {
-          // The steer's gate refusing a reveal (#16096), or an update's
-          // preflight refusing its pane (#17908): its own words, as a refused
-          // steer's are.
+          // The steer's gate refusing a reveal (#16096), an update's
+          // preflight refusing its pane (#17908), or an owned send's
+          // `whenBusy` refusing (#18172): its own words, as a refused steer's are.
           if (
-            (globalRevealTerminalId !== undefined || actionId === CLAUDE_UPDATE_TOOL) &&
+            (globalRevealTerminalId !== undefined ||
+              actionId === CLAUDE_UPDATE_TOOL ||
+              ownedWhenBusySend) &&
             err instanceof AssistantTargetError
           ) {
             outcome = {

@@ -88,6 +88,7 @@ import {
   type OwnPane,
 } from "./mcp-server/terminalNotify.js";
 import { WorkerSteerQueue } from "./assistants/WorkerSteerQueue.js";
+import { liveOwnedWorkerSend, type OwnedWorkerSend } from "./assistants/OwnedWorkerSend.js";
 import { liveClaudeUpdateApply, type ClaudeUpdateApply } from "./assistants/ClaudeUpdateApply.js";
 import type { ListenerRoute } from "./mcp-server/listenerHold.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
@@ -251,6 +252,11 @@ export class McpServerService {
   private readonly terminalNotify: TerminalNotifyService;
   /** Prompts the global Assistant held for a busy worker's next prompt (#16187), on its notice line. */
   private readonly workerSteerQueue: WorkerSteerQueue;
+  /** Sends to a caller's own worker that name `whenBusy` (#18172), held on the queue above. */
+  private readonly ownedSend: OwnedWorkerSend = liveOwnedWorkerSend({
+    pty: () => getPtyClient(),
+    queue: () => this.workerSteerQueue,
+  });
   /** Claude Code updates assistants asked to apply (#17908), one per pane at a time. */
   private readonly claudeUpdate: ClaudeUpdateApply = liveClaudeUpdateApply(() => getPtyClient());
   /** A pane's launch principal, whichever bearers it holds: the key its notices are held under. */
@@ -604,6 +610,7 @@ export class McpServerService {
       },
       readClaudeUsage: readClaudeUsageObservations,
       claudeUpdate: this.claudeUpdate,
+      ownedSend: this.ownedSend,
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
         handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
@@ -909,6 +916,10 @@ export class McpServerService {
     // is not silently handed to the new one (#12490).
     this.sessionStore.terminalAdoption.revokePrincipal(principal);
     this.terminalNotify.revokeOwner(paneNotifyKey(principal));
+    // What it held for its own workers is never typed for a relaunched pane
+    // (#18172). Unfenced: a hold admitted after this finds its ownership gone
+    // when it comes to be written, and drops.
+    this.workerSteerQueue.revokePrincipal(principalOwnerKey(principal));
   }
 
   /**

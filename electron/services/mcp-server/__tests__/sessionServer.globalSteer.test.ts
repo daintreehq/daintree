@@ -13,6 +13,7 @@ import {
   stampTypedInput,
 } from "../../../../shared/utils/terminalInputProvenance.js";
 import { WorkerSteerQueue } from "../../assistants/WorkerSteerQueue.js";
+import { OwnedWorkerSend } from "../../assistants/OwnedWorkerSend.js";
 import { ClaudeUpdateApply, type ClaudeUpdateRecord } from "../../assistants/ClaudeUpdateApply.js";
 import { CLAUDE_UPDATE_NOT_OFFERED } from "../../../../shared/types/claudeUpdateApply.js";
 import type { LaneWake, NotifyTerminalInfo, TerminalNotifyHandlers } from "../terminalNotify.js";
@@ -82,6 +83,8 @@ function harness(options: {
   global: boolean;
   tier?: "core" | "full";
   refuseWrite?: { code: string; message: string } | null;
+  /** An agent pane's own session rather than a relayed one: no relay, no steer. */
+  pane?: boolean;
 }) {
   const records = new Map<string, WorkerSteerRecord>([
     [WORKER, atPrompt()],
@@ -128,6 +131,18 @@ function harness(options: {
     doubleEscape: pty.doubleEscape,
     sleep: async () => {},
   });
+  // A send to a worker the caller launched or was handed, naming `whenBusy` (#18172).
+  const ownedSend = new OwnedWorkerSend({
+    getTerminalProjectId: (id) => records.get(id)?.projectId ?? null,
+    getLiveGeneration: (id) => generations.get(id) ?? null,
+    getTerminal: async (id) => {
+      const record = records.get(id);
+      return record ? { ...record } : null;
+    },
+    submit: (id, text, token, handbackCode, guard, owner) =>
+      pty.submit(id, text, token, handbackCode, guard, owner),
+    queue: () => queue,
+  });
   const store = new SessionStore(() => {});
   stores.push(store);
   store.sessionTierMap.set(SESSION, options.tier ?? "core");
@@ -171,15 +186,20 @@ function harness(options: {
     sessionStore: store,
     requestManifest: vi.fn().mockResolvedValue(TOOLS.map(makeManifestEntry)),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: { ran: true } } }),
-    relay: {
-      shellName: options.shellName,
-      ...(options.global ? { global: true as const } : {}),
-      refuseWrite,
-    },
-    // A project assistant's session is handed no steer; the gate must not
-    // need its absence to refuse, so both are given one here.
-    globalSteer: steer,
+    ...(options.pane
+      ? { refuseWrite }
+      : {
+          relay: {
+            shellName: options.shellName,
+            ...(options.global ? { global: true as const } : {}),
+            refuseWrite,
+          },
+          // A project assistant's session is handed no steer; the gate must not
+          // need its absence to refuse, so both are given one here.
+          globalSteer: steer,
+        }),
     workerSteerQueue: queue,
+    ownedSend,
     claudeUpdate,
   });
   return { deps, store, pty, records, generations, refuseWrite, wakes };
@@ -688,6 +708,21 @@ describe.each(LANES)(
       expect(wakes[0]!.recheck(prompted)).toEqual({ kind: "unavailable", reason: "typed" });
     });
 
+    it("drops a held prompt once another agent takes the worker's PTY (#18172)", async () => {
+      const { deps, records, wakes } = harness({ shellName, global: true });
+      records.set(WORKER, working());
+      const server = await serve(deps);
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: WORKER, command: "go", generation: 4, whenBusy: "queue" },
+      });
+
+      expect(wakes[0]!.recheck(atItsPrompt({ detectedAgentId: "codex" }))).toEqual({
+        kind: "unavailable",
+        reason: "restarted",
+      });
+    });
+
     it("follows the held prompt with the call's notice, completed only once it is written", async () => {
       const pending = { complete: vi.fn(), cancel: vi.fn() };
       const handlers = {
@@ -792,22 +827,345 @@ describe.each(LANES)(
       expect(wakes).toEqual([]);
     });
 
-    it("leaves its own launches on the owned path: nothing is held for them", async () => {
+    it("holds a send to its own working worker for its next prompt (#18172)", async () => {
+      const { deps, pty, records, wakes } = harness({ shellName, global: true });
+      records.set(MINE, working());
+      const server = await serve(deps);
+
+      const held = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: MINE, command: "reply done2", whenBusy: "queue" },
+      });
+
+      expect(held.isError).toBeFalsy();
+      const receipt = answerOf(held) as { queuedSendToken: string };
+      expect(receipt).toMatchObject({ sent: false, queued: true, terminalId: MINE });
+      expect(receipt).not.toHaveProperty("submissionToken");
+      expect(pty.submit).not.toHaveBeenCalled();
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(wakes).toHaveLength(1);
+      // Its own words, unstamped: it launched this worker.
+      expect(wakes[0]!.steer?.text).toBe("reply done2");
+
+      const status = await callTool(server, {
+        name: "terminal.getStatus",
+        arguments: { terminalIds: [MINE], queuedSendToken: receipt.queuedSendToken },
+      });
+      expect(answerOf(status)).toMatchObject({
+        queuedSend: { status: "queued", waitingOn: "working" },
+      });
+      const cancelled = await callTool(server, {
+        name: "terminal.cancelQueuedSend",
+        arguments: { terminalId: MINE, queuedSendToken: receipt.queuedSendToken },
+      });
+      expect(answerOf(cancelled)).toMatchObject({ cancelled: true });
+      expect(wakes[0]!.beforeType()).toBe(false);
+    });
+
+    it("waits out an approval on a worker handed to it, and never types into one", async () => {
       const { deps, records, wakes } = harness({ shellName, global: true });
+      records.set(HANDED, atPrompt({ waitingReason: "approval", agentIncarnation: 1 }));
+      const server = await serve(deps);
+
+      const held = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: HANDED, command: "next task", whenBusy: "queue" },
+      });
+
+      expect(answerOf(held)).toMatchObject({ queued: true, terminalId: HANDED });
+      const wake = wakes[0]!;
+      expect(wake.recheck(atItsPrompt({ waitingReason: "approval" }))).toEqual({
+        kind: "held",
+        reason: "approval",
+      });
+      expect(
+        wake.recheck(atItsPrompt({ agentState: "working", waitingReason: undefined }))
+      ).toEqual({
+        kind: "held",
+        reason: "working",
+      });
+      expect(wake.recheck(atItsPrompt())).toEqual({ kind: "ready" });
+    });
+
+    it("sends nothing to its own working worker under `refuse`", async () => {
+      const { deps, pty, records, wakes } = harness({ shellName, global: true });
       records.set(MINE, working());
       const server = await serve(deps);
 
       const result = await callTool(server, {
         name: "terminal.sendCommandOwned",
-        arguments: { terminalId: MINE, command: "go", whenBusy: "queue" },
+        arguments: { terminalId: MINE, command: "go", whenBusy: "refuse" },
       });
 
-      expect(result.isError).toBeFalsy();
+      expect(toolErrorPayload(result).code).toBe(WORKER_STEER_REFUSALS.busy);
+      expect(pty.submit).not.toHaveBeenCalled();
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
       expect(wakes).toEqual([]);
+    });
+
+    it("types into its own worker at once without `whenBusy`, and at its prompt with one", async () => {
+      const { deps, pty, records, wakes } = harness({ shellName, global: true });
+      records.set(MINE, working());
+      const server = await serve(deps);
+
+      // Steering its own worker mid-turn stays the default.
+      const now = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: MINE, command: "steer" },
+      });
+      expect(now.isError).toBeFalsy();
       expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
+
+      records.set(MINE, atPrompt({ agentIncarnation: 1 }));
+      const atItsOwn = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: MINE, command: "next", whenBusy: "refuse" },
+      });
+      expect(answerOf(atItsOwn)).toMatchObject({ sent: true, terminalId: MINE });
+      expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
+      expect(pty.submit).toHaveBeenCalledTimes(1);
+      const [id, text, , , guard] = pty.submit.mock.calls[0]!;
+      expect([id, text]).toEqual([MINE, "next"]);
+      expect(guard).toMatchObject({ kind: "settled-prompt-exact", agentIncarnation: 1 });
+      expect(wakes).toEqual([]);
+    });
+
+    it("follows its own held send with the call's notice, and cancels a refused one's", async () => {
+      const pending = { complete: vi.fn(), cancel: vi.fn() };
+      const handlers = {
+        whenIdle: vi.fn(),
+        prepareSend: vi.fn().mockResolvedValue(pending),
+        prepareLaunch: vi.fn(),
+        prepareKeys: vi.fn(),
+        forgetTarget: vi.fn(),
+        holdTarget: vi.fn(),
+        settleTargetHold: vi.fn(),
+        supersede: vi.fn(),
+        releaseHold: vi.fn(),
+      } satisfies TerminalNotifyHandlers;
+      const { deps, records, wakes } = harness({ shellName, global: true });
+      records.set(MINE, working());
+      const server = await serve({
+        ...deps,
+        terminalNotify: handlers,
+        resolveOwnPane: () => ({ key: "relay\u0000p", terminalId: "relay\u0000p" }),
+      });
+
+      const held = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: MINE, command: "go", whenBusy: "queue", notify: true },
+      });
+      expect(answerOf(held)).toMatchObject({ queued: true });
+      expect(pending.complete).not.toHaveBeenCalled();
+      expect(pending.cancel).not.toHaveBeenCalled();
+      expect(wakes[0]!.beforeType()).toBe(true);
+      wakes[0]!.report({ kind: "delivered" }, { phase: "pty_written", submissionToken: "line-9" });
+      expect(pending.complete).toHaveBeenCalledWith({ submissionToken: "line-9" });
+
+      const refused = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: MINE, command: "go", whenBusy: "refuse", notify: true },
+      });
+      expect(refused.isError).toBe(true);
+      expect(pending.cancel).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses what an owned send can't take, writing and holding nothing", async () => {
+      const { deps, pty, records, wakes } = harness({ shellName, global: true });
+      records.set(MINE, working());
+      const server = await serve(deps);
+
+      for (const [args, pattern] of [
+        [{ queueTtlSeconds: 600 }, /goes only with/],
+        [{ whenBusy: "queue", handback: "true" }, /`handback` is true or false/],
+        [{ whenBusy: "queue", command: "   " }, /non-empty `command`/],
+      ] as const) {
+        const result = await callTool(server, {
+          name: "terminal.sendCommandOwned",
+          arguments: { terminalId: MINE, command: "go", ...args },
+        });
+        const payload = toolErrorPayload(result);
+        expect(payload.code, JSON.stringify(args)).toBe("VALIDATION_ERROR");
+        expect(payload.message).toMatch(pattern);
+      }
+      expect(pty.submit).not.toHaveBeenCalled();
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+      expect(wakes).toEqual([]);
+    });
+
+    it("reaches its own worker only in the project the session is bound to", async () => {
+      const { deps, pty, records, wakes } = harness({ shellName, global: true });
+      records.set(MINE, atPrompt({ projectId: "proj-2", agentIncarnation: 1 }));
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: MINE, command: "go", whenBusy: "refuse" },
+      });
+
+      expect(toolErrorPayload(result).code).toBe(WORKER_STEER_REFUSALS.notFound);
+      expect(pty.submit).not.toHaveBeenCalled();
+      expect(wakes).toEqual([]);
+    });
+
+    it("sends nothing once its caller has stopped waiting", async () => {
+      const { deps, pty, records } = harness({ shellName, global: true });
+      records.set(MINE, atPrompt({ agentIncarnation: 1 }));
+      const server = await serve(deps);
+      const cancelled = new AbortController();
+      cancelled.abort();
+      const handler = (
+        server as unknown as {
+          _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<unknown>>;
+        }
+      )._requestHandlers.get("tools/call")!;
+
+      const result = (await handler(
+        {
+          method: "tools/call",
+          params: {
+            name: "terminal.sendCommandOwned",
+            arguments: { terminalId: MINE, command: "go", whenBusy: "refuse" },
+          },
+          jsonrpc: "2.0",
+          id: 1,
+        },
+        { signal: cancelled.signal, _meta: {}, sendNotification: vi.fn(), requestId: 1 }
+      )) as { content: unknown; isError?: boolean };
+
+      expect(toolErrorPayload(result).message).toMatch(/cancelled before the send/);
+      expect(pty.submit).not.toHaveBeenCalled();
+    });
+
+    it("drops a held send once the worker stops being its own", async () => {
+      const { deps, records, store, wakes } = harness({ shellName, global: true });
+      records.set(MINE, working());
+      records.set(HANDED, working());
+      const server = await serve(deps);
+      for (const terminalId of [MINE, HANDED]) {
+        await callTool(server, {
+          name: "terminal.sendCommandOwned",
+          arguments: { terminalId, command: "go", whenBusy: "queue" },
+        });
+      }
+      expect(wakes).toHaveLength(2);
+
+      // A release and re-creation under the same id is not the creation it was held under.
+      const owner = store.resourceOwnership.ownerOf(SESSION);
+      store.resourceOwnership.release(owner, "terminal", MINE);
+      store.resourceOwnership.record(owner, [{ kind: "terminal", id: MINE }]);
+      expect(wakes[0]!.beforeType()).toBe(false);
+
+      // A take-back and a fresh hand-over is not the consent it was held under.
+      store.terminalAdoption.release(HANDED);
+      store.terminalAdoption.adopt({
+        terminalId: HANDED,
+        orchestratorPaneId: "pane-1",
+        principalId: "relay-principal",
+      });
+      expect(wakes[1]!.beforeType()).toBe(false);
+    });
+
+    it("refuses to wait for a reply to a send it may hold for its own worker", async () => {
+      const { deps, pty, records, wakes } = harness({ shellName, global: true });
+      records.set(MINE, atPrompt({ agentIncarnation: 1 }));
+      const server = await serve(deps);
+
+      const result = await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: MINE, command: "go", whenBusy: "queue", waitForReply: true },
+      });
+
+      const payload = toolErrorPayload(result);
+      expect(payload.code).toBe("VALIDATION_ERROR");
+      expect(payload.message).toMatch(/waitForReply/);
+      expect(pty.submit).not.toHaveBeenCalled();
+      expect(wakes).toEqual([]);
     });
   }
 );
+
+describe("an agent pane's send to its own worker (#18172)", () => {
+  const working = () =>
+    atPrompt({ agentState: "working", waitingReason: undefined, agentIncarnation: 1 });
+
+  it("reaches it only in the project the pane is bound to", async () => {
+    const { deps, pty, records, wakes } = harness({ shellName: "", global: false, pane: true });
+    records.set(MINE, atPrompt({ projectId: "proj-2", agentIncarnation: 1 }));
+    const server = await serve(deps);
+
+    const result = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: MINE, command: "go", whenBusy: "refuse" },
+    });
+
+    expect(toolErrorPayload(result).code).toBe(WORKER_STEER_REFUSALS.notFound);
+    expect(pty.submit).not.toHaveBeenCalled();
+    expect(wakes).toEqual([]);
+  });
+
+  it("reaches it unbound only in the project its creation was recorded in", async () => {
+    const { deps, pty, records, store } = harness({ shellName: "", global: false, pane: true });
+    store.sessionWorkspaceMap.delete(SESSION);
+    const owner = store.resourceOwnership.ownerOf(SESSION);
+    store.resourceOwnership.release(owner, "terminal", MINE);
+    store.resourceOwnership.record(owner, [{ kind: "terminal", id: MINE }], PROJECT);
+    // Relaunched under the same id in another project.
+    records.set(MINE, atPrompt({ projectId: "proj-2", agentIncarnation: 1 }));
+    const server = await serve(deps);
+
+    const result = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: MINE, command: "go", whenBusy: "refuse" },
+    });
+
+    expect(toolErrorPayload(result).code).toBe(WORKER_STEER_REFUSALS.notFound);
+    expect(pty.submit).not.toHaveBeenCalled();
+
+    records.set(MINE, atPrompt({ agentIncarnation: 1 }));
+    const atItsOwn = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: MINE, command: "go", whenBusy: "refuse" },
+    });
+    expect(answerOf(atItsOwn)).toMatchObject({ sent: true });
+  });
+
+  it("holds for its next prompt under `queue`", async () => {
+    const { deps, pty, records, wakes } = harness({ shellName: "", global: false, pane: true });
+    records.set(MINE, working());
+    const server = await serve(deps);
+
+    const held = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: MINE, command: "then this", whenBusy: "queue" },
+    });
+
+    expect(answerOf(held)).toMatchObject({ sent: false, queued: true, terminalId: MINE });
+    expect(pty.submit).not.toHaveBeenCalled();
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+    expect(wakes).toHaveLength(1);
+    // A pane's write answers to the drive rule, as its renderer send does.
+    expect(wakes[0]!.beforeType()).toBe(true);
+  });
+
+  it("refuses `queue` from a connection that can't read a hold back, sending nothing", async () => {
+    const { deps, pty, records, wakes } = harness({ shellName: "", global: false, pane: true });
+    records.set(MINE, working());
+    const server = await serve({ ...deps, workerSteerQueue: undefined });
+
+    const result = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: MINE, command: "then this", whenBusy: "queue" },
+    });
+
+    const payload = toolErrorPayload(result);
+    expect(payload.code).toBe("VALIDATION_ERROR");
+    expect(payload.message).toMatch(/can't/);
+    expect(pty.submit).not.toHaveBeenCalled();
+    expect(deps.dispatchAction).not.toHaveBeenCalled();
+    expect(wakes).toEqual([]);
+  });
+});
 
 describe.each(LANES)(
   "a global Assistant's Claude Code update ($lane) (#17908)",

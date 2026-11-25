@@ -26,6 +26,11 @@ export interface HeldRunIdentity extends PromptInputProvenance {
   agentIncarnation?: number;
   agentSessionId?: string;
   worktreeId?: string;
+  /**
+   * The agent detected in the PTY when it was held (#18172): detection can
+   * hand the PTY to another agent without a respawn, which is another run.
+   */
+  agentId?: string;
 }
 
 export interface HoldSteerRequest {
@@ -41,6 +46,8 @@ export interface HoldSteerRequest {
   promptAsWritten: string;
   handbackCode?: string;
   ttlSeconds: number;
+  /** What it waits on as it is held, as a status read reports it; `working` when absent. */
+  waitingOn?: string;
   /**
    * Asked right before the line is written, long after the call that queued
    * it: everything the call itself was held to but its own MCP session, which
@@ -155,7 +162,7 @@ export class WorkerSteerQueue {
         status: "queued",
         queuedAt: now,
         expiresAt,
-        waitingOn: "working",
+        waitingOn: request.waitingOn ?? "working",
       },
       principal: request.principal,
       projectId: request.projectId,
@@ -299,6 +306,7 @@ export class WorkerSteerQueue {
       info.agentIncarnation !== run.agentIncarnation ||
       (info.launchGeneration !== undefined && info.launchGeneration !== entry.generation) ||
       (run.agentSessionId !== undefined && info.agentSessionId !== run.agentSessionId) ||
+      (run.agentId !== undefined && info.detectedAgentId !== run.agentId) ||
       (info.worktreeId ?? "") !== (run.worktreeId ?? "")
     ) {
       return drop("restarted");

@@ -99,6 +99,24 @@ describe("WorkerSteerQueue (#16187)", () => {
     });
   });
 
+  it("drops one held for an agent another has taken the PTY from, and keeps it for that agent (#18172)", () => {
+    queue.hold(
+      request({ run: { agentIncarnation: 2, agentSessionId: "sess-1", agentId: "claude" } })
+    );
+
+    expect(lastWake().recheck(atPrompt())).toEqual({ kind: "ready" });
+    expect(lastWake().recheck(atPrompt({ detectedAgentId: "codex" }))).toEqual({
+      kind: "unavailable",
+      reason: "restarted",
+    });
+  });
+
+  it("reports what a send held at an approval waits on, not a turn (#18172)", () => {
+    queue.hold(request({ waitingOn: "approval" }));
+
+    expect(queue.status(OWNER, "tok-1")).toMatchObject({ status: "queued", waitingOn: "approval" });
+  });
+
   it("holds while the worker works, at a question or an approval, and goes at its exact prompt", () => {
     queue.hold(request());
     const wake = lastWake();
