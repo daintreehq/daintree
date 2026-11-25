@@ -58,7 +58,6 @@ import {
 } from "./hostModeBootstrap.js";
 import { liveHostRecord, probeHost, type ProbeOutcome } from "./hostProbe.js";
 import { checkLinuxStart, type LibraryCheckTarget } from "./linuxHostLibraries.js";
-import { raceAbort } from "../../utils/raceAbort.js";
 import type { HostModeObservation } from "../../../shared/types/ipc/remoteHosts.js";
 import { NIGHTLY_FEED_URL, STABLE_FEED_URL, type ClientBuild, planInstall } from "./installPlan.js";
 import { createSshCommandChannel, failureDetail, type HostCommandChannel } from "./remoteShell.js";
@@ -191,11 +190,8 @@ export class HostSetupService {
   private readonly unstartable = new Map<string, number>();
   /** Rechecks so far, by connection: a probe under way through one doesn't record what it saw before it. */
   private readonly rechecks = new Map<string, number>();
-  /** Installs as root, by connection: the one under way, or when the last one ended. */
-  private readonly packageInstalls = new Map<
-    string,
-    { pending: Promise<CommandResult> | null; endedAt: number }
-  >();
+  /** When an install as root last started, by connection. */
+  private readonly packageInstallStarts = new Map<string, number>();
 
   constructor(private readonly deps: HostSetupDeps) {
     this.operations = new OperationRegistry({
@@ -505,7 +501,10 @@ export class HostSetupService {
         });
       } catch (error) {
         if (signal?.aborted) return "not-startable";
-        if (busy()) return refused("busy");
+        // Its install as root gave way to an install or removal here; anything else is said as it is.
+        if (error instanceof AppError && error.code === "CANCELLED" && busy()) {
+          return refused("busy");
+        }
         throw error;
       }
       // The check can take minutes (an install as root among them): looked at again.
@@ -603,13 +602,14 @@ export class HostSetupService {
     this.rechecks.set(key, (this.rechecks.get(key) ?? 0) + 1);
     this.unstartable.delete(key);
     // Someone asked again: the next start may install as root again too.
-    if (this.packageInstalls.get(key)?.pending === null) this.packageInstalls.delete(key);
+    this.packageInstallStarts.delete(key);
   }
 
   /**
    * The check a Linux start on this connection runs first: see
    * linuxHostLibraries.ts. `repeatInstall: false` installs as root only when
-   * no install there ended lately without its start going ahead.
+   * no install there started in the last while; the machine itself runs one
+   * at a time.
    */
   private linuxStartCheck(
     connection: HostConnection,
@@ -620,70 +620,38 @@ export class HostSetupService {
     signal?: AbortSignal,
     options?: { repeatInstall?: boolean }
   ) => Promise<void> {
-    return async (target, signal, options) => {
+    return (target, signal, options) => {
       const key = connectionKey(connection);
-      const installPackages = this.packageInstaller(connection, options?.repeatInstall !== false);
-      await checkLinuxStart(
+      const now = this.deps.now ?? Date.now;
+      const install =
+        connection.kind === "cloud"
+          ? (this.deps.cloudPackageInstaller?.(connection.bindingId) ?? null)
+          : null;
+      return checkLinuxStart(
         {
           channel,
           hostLabel: formatHostConnection(connection),
-          installPackages,
+          installPackages: install
+            ? (installSignal) => {
+                this.packageInstallStarts.set(key, now());
+                return install(installSignal);
+              }
+            : null,
           mayInstall,
-          ...(installPackages === null && this.packageInstalls.has(key)
-            ? { withoutInstall: "Retry to have Daintree install its packages there as root again" }
-            : {}),
+          installHeld:
+            options?.repeatInstall === false
+              ? () => {
+                  const at = this.packageInstallStarts.get(key);
+                  const since = at === undefined ? Number.NaN : now() - at;
+                  // A time ahead of the clock (it moved back) says nothing about how long ago.
+                  return since >= 0 && since < UNSTARTABLE_HOLD_MS
+                    ? "Daintree installed its packages there as root a few minutes ago. Retry to have it install them again"
+                    : null;
+                }
+              : undefined,
         },
         target,
         signal
-      );
-      // It can start: what an earlier install there left holds nothing back now.
-      if (this.packageInstalls.get(key)?.pending === null) this.packageInstalls.delete(key);
-    };
-  }
-
-  /**
-   * Installs a cloud machine's packages as root, one at a time: a start that
-   * asks while one runs waits on it rather than running apt beside it. Null
-   * where Daintree installs none, and, unless `repeat`, for a while after an
-   * install there ended and its start still didn't go ahead.
-   */
-  private packageInstaller(
-    connection: HostConnection,
-    repeat: boolean
-  ): ((signal?: AbortSignal) => Promise<CommandResult>) | null {
-    if (connection.kind !== "cloud") return null;
-    const install = this.deps.cloudPackageInstaller?.(connection.bindingId);
-    if (!install) return null;
-    const key = connectionKey(connection);
-    const now = this.deps.now ?? Date.now;
-    const last = this.packageInstalls.get(key);
-    if (!repeat && last?.pending === null) {
-      const since = now() - last.endedAt;
-      // A time ahead of the clock (it moved back) says nothing about how long ago.
-      if (since >= 0 && since < UNSTARTABLE_HOLD_MS) return null;
-    }
-    return async (signal) => {
-      let pending = this.packageInstalls.get(key)?.pending;
-      if (!pending) {
-        // Tied to no one start's signal: one that gives up mustn't end it for the others.
-        const started = install().finally(() => {
-          if (this.packageInstalls.get(key)?.pending === started) {
-            this.packageInstalls.set(key, { pending: null, endedAt: now() });
-          }
-        });
-        started.catch(() => {});
-        pending = started;
-        this.packageInstalls.set(key, { pending: started, endedAt: now() });
-      }
-      const result = await raceAbort(pending, signal, null);
-      return (
-        result ?? {
-          code: null,
-          stdout: "",
-          stderr: "Cancelled",
-          spawnError: null,
-          timedOut: false,
-        }
       );
     };
   }

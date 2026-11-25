@@ -312,6 +312,21 @@ describe("checkLinuxStart", () => {
     expect(installPackages).not.toHaveBeenCalled();
   });
 
+  it("refuses without installing when told why not to install this time", async () => {
+    const installPackages = vi.fn(async () => ok());
+    const { channel, scripts } = channelAnswering(ok("@@dt:libs missing libnspr4.so\n"));
+    const error = await refusal(
+      checkLinuxStart(
+        { channel, hostLabel: "box", installPackages, installHeld: () => "Installed a moment ago" },
+        target
+      )
+    );
+    expect(error.libraries).toEqual(["libnspr4.so"]);
+    expect(error.userMessage).toContain("Installed a moment ago.");
+    expect(installPackages).not.toHaveBeenCalled();
+    expect(scripts).toHaveLength(1);
+  });
+
   it("keeps a long diagnostic from crowding out the command", async () => {
     const { channel } = channelAnswering(ok("@@dt:libs missing libnspr4.so\n"));
     const error = await refusal(

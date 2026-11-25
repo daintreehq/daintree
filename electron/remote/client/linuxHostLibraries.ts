@@ -72,11 +72,15 @@ export const HOST_PACKAGES_COMMAND = `apt-get update && apt-get satisfy -y --no-
  * nothing. The install itself is never cut short: a dpkg stopped halfway
  * leaves apt refusing everything until someone repairs it by hand. So it
  * ignores the session going away, writes nothing to it while it runs, and
- * says only the last lines apt printed, after, when a step failed.
+ * says only the last lines apt printed, after, when a step failed. One left
+ * running by a device that stopped waiting is waited for, not run beside.
  */
 export const HOST_PACKAGES_ROOT_SCRIPT = [
   `[ "$(id -u)" = 0 ] || exit 40`,
   `trap '' HUP PIPE`,
+  `l=/run/lock; [ -d "$l" ] && [ -w "$l" ] || l=/tmp`,
+  `exec 9>"$l/daintree-host-packages.lock"`,
+  `if command -v flock >/dev/null 2>&1; then flock -w 480 9 || exit 44; fi`,
   `export DEBIAN_FRONTEND=noninteractive`,
   `e=$(mktemp) || exit 43`,
   `trap 'rm -f "$e"' 0`,
@@ -91,6 +95,7 @@ const INSTALL_FAILURES: Record<number, string> = {
   41: "apt-get couldn't fetch the package lists",
   42: "apt-get couldn't install them",
   43: "it couldn't make a temporary file",
+  44: "an earlier install of its packages there was still running",
 };
 
 /** What to check: the executable a start runs, and whether it is an AppImage to look inside. */
@@ -218,8 +223,11 @@ export interface LinuxStartCheckDeps {
   installPackages: ((signal?: AbortSignal) => Promise<CommandResult>) | null;
   /** Asked right before an install as root: false once the start it is for is no longer wanted. */
   mayInstall?: () => boolean;
-  /** Said with the refusal when `installPackages` is null here only for now. */
-  withoutInstall?: string;
+  /**
+   * Asked right before an install as root, after `mayInstall`: why not to
+   * install this time, said with the refusal; null to install.
+   */
+  installHeld?: () => string | null;
 }
 
 async function check(
@@ -276,9 +284,11 @@ export async function checkLinuxStart(
   if (signal?.aborted) throw cancelled();
   if (first.kind !== "missing") return;
   if (!deps.installPackages) {
-    throw new HostLibrariesMissingError(first.libraries, deps.hostLabel, deps.withoutInstall);
+    throw new HostLibrariesMissingError(first.libraries, deps.hostLabel);
   }
   if (deps.mayInstall?.() === false) throw cancelled();
+  const held = deps.installHeld?.() ?? null;
+  if (held !== null) throw new HostLibrariesMissingError(first.libraries, deps.hostLabel, held);
   const installed = await install(deps.installPackages, signal);
   if (signal?.aborted) throw cancelled();
   if (installed.code !== 0) {

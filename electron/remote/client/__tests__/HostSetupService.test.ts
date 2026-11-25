@@ -624,7 +624,7 @@ describe("HostSetupService", () => {
         expect(installs.count).toBe(1);
         // A dial nobody asked for still says what is missing, and how to install it again.
         await expect(setup.ensureHostRunning(machine)).rejects.toMatchObject({
-          userMessage: expect.stringMatching(/libnspr4\.so.*Retry to have Daintree install/s),
+          userMessage: expect.stringMatching(/libnspr4\.so.*Retry to have it install them again/s),
         });
         expect(installs.count).toBe(1);
         // Someone asking for the host back installs again, as does a Retry.
@@ -637,18 +637,19 @@ describe("HostSetupService", () => {
         expect(installs.count).toBe(3);
       });
 
-      it("has a start that asks while an install runs wait on it rather than install beside it", async () => {
+      it("doesn't install as root from a dial nobody asked for while one it started still runs", async () => {
         const { setup, installs, release } = stillMissing();
         installs.hold = true;
         const first = setup.ensureHostRunning(machine).catch((e: unknown) => e);
         await vi.waitFor(() => expect(installs.count).toBe(1));
-        const second = setup
-          .ensureHostRunning(machine, undefined, undefined, { explicit: true })
-          .catch((e: unknown) => e);
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        release();
-        await Promise.all([first, second]);
+        await expect(setup.ensureHostRunning(machine)).rejects.toMatchObject({
+          userMessage: expect.stringContaining(
+            "installed its packages there as root a few minutes ago"
+          ),
+        });
         expect(installs.count).toBe(1);
+        release();
+        await first;
       });
 
       it("installs the packages as root on a cloud machine that allows it, checks again, then starts", async () => {
