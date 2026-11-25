@@ -185,6 +185,11 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           maxLength: 200,
         },
+        holdOnRestart: {
+          description:
+            "Don't resume it after a restart: it waits to be started. For one-shot work.",
+          type: "boolean",
+        },
         source: {
           oneOf: [
             {

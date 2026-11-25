@@ -86,6 +86,7 @@ describe("runLaunchInNewWorktree (#15738)", () => {
         waitForReply: true,
         waitSeconds: 600,
         model: "sol",
+        holdOnRestart: true,
       },
       { callTool: run.callTool, signal: live(), now: () => clock }
     );
@@ -111,6 +112,9 @@ describe("runLaunchInNewWorktree (#15738)", () => {
       waitForReply: true,
       waitSeconds: 600,
       model: "sol",
+      // A one-shot worker held at launch (#18178), so the strict parse of
+      // this call's own arguments has to know the field too.
+      holdOnRestart: true,
       worktreeId: WORKTREE,
     });
     expect(outcome.ok).toBe(true);

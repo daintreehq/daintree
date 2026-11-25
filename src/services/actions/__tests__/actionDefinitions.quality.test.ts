@@ -1663,7 +1663,8 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // plugin.backupDatabases a pluginId; plugin.setNotificationsSilenced a
     // pluginId and a flag; agentSettings.set an agentId and settings;
     // worktree.retireOwned a worktreeId; schedules.runNow a scheduleId;
-    // terminal.cancelQueuedSend a queuedSendToken). Schemas are non-strict, so
+    // terminal.cancelQueuedSend a queuedSendToken;
+    // terminal.setHoldOnRestartOwned a hold). Schemas are non-strict, so
     // the union satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
@@ -1678,6 +1679,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       agentId: "claude",
       settings: {},
       silenced: true,
+      hold: true,
       worktreeId: "/wt/placeholder",
       scheduleId: "s-placeholder",
       queuedSendToken: "q-placeholder",
