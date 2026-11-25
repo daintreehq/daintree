@@ -67,13 +67,17 @@ describe("ClaudeLimitStopTracker (#18192)", () => {
     const person = harness();
     person.observe(COUNTING);
     person.type("\x1b");
-    expect(person.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: "auto-continue-cancelled" });
+    expect(person.observe(CANCELLED_SCREEN)).toMatchObject({
+      skipAtStop: "auto-continue-cancelled",
+    });
 
     const mixed = harness();
     mixed.observe(COUNTING);
     mixed.type("\x1b", "assistant-1");
     mixed.type("q");
-    expect(mixed.observe(CANCELLED_SCREEN)).toMatchObject({ skipAtStop: "auto-continue-cancelled" });
+    expect(mixed.observe(CANCELLED_SCREEN)).toMatchObject({
+      skipAtStop: "auto-continue-cancelled",
+    });
 
     const typing = harness();
     typing.observe(COUNTING);

@@ -119,7 +119,8 @@ function viewRows(serialized: string): string[] {
   return screen.split("\n");
 }
 
-export type ClaudeLimitScreenVerdict = { line: "continue" } | { skip: CodexLimitContinueSkipReason };
+export type ClaudeLimitScreenVerdict =
+  { line: "continue" } | { skip: CodexLimitContinueSkipReason };
 
 /**
  * Whether a Claude Code pane's screen is still the one its stop left

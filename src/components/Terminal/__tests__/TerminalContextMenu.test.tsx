@@ -1725,7 +1725,12 @@ describe("TerminalContextMenu — grouped into submenus (#15526)", () => {
   });
 
   it("offers Continue when usage limit resets on a Claude Code pane, ahead of any limit (#18192)", () => {
-    renderMenu({ ...agentPane, title: "Claude", launchAgentId: "claude", detectedAgentId: "claude" });
+    renderMenu({
+      ...agentPane,
+      title: "Claude",
+      launchAgentId: "claude",
+      detectedAgentId: "claude",
+    });
     fireEvent.click(
       screen.getByRole("menuitemcheckbox", { name: "Continue when usage limit resets" })
     );

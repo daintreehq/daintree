@@ -41,14 +41,19 @@ describe("readClaudeLimitScreen (#18192)", () => {
   });
 
   it("reads the countdown when a narrow pane wraps it", () => {
-    const wrapped = rows({ footer: "  Usage limit reached · continuing" }).concat("  automatically at 10am");
+    const wrapped = rows({ footer: "  Usage limit reached · continuing" }).concat(
+      "  automatically at 10am"
+    );
     expect(readClaudeLimitScreen(wrapped, 40)).toMatchObject({ countdown: true });
   });
 
   it("names the same stop through a repaint with blank rows, and another under other history", () => {
     const first = readClaudeLimitScreen(cancelled(), 80) as { key: string };
     const repainted = readClaudeLimitScreen(["", ...cancelled(), "", ""], 80) as { key: string };
-    const later = readClaudeLimitScreen(rows({ above: ["● Fixed the lexer."], between: [CANCELLED] }), 80) as {
+    const later = readClaudeLimitScreen(
+      rows({ above: ["● Fixed the lexer."], between: [CANCELLED] }),
+      80
+    ) as {
       key: string;
     };
     expect(repainted.key).toBe(first.key);
@@ -56,18 +61,29 @@ describe("readClaudeLimitScreen (#18192)", () => {
   });
 
   it("says when something was printed after the banner", () => {
-    expect(readClaudeLimitScreen(rows({ between: ["● Retrying the request."] }), 80)).toMatchObject({
-      last: false,
-    });
+    expect(readClaudeLimitScreen(rows({ between: ["● Retrying the request."] }), 80)).toMatchObject(
+      {
+        last: false,
+      }
+    );
   });
 
   it("says nothing either way of a banner with no composer under it, and nothing at all with no banner", () => {
-    expect(readClaudeLimitScreen(["● Refactoring the parser.", BANNER, HINT], 80)).toBe("no-composer");
+    expect(readClaudeLimitScreen(["● Refactoring the parser.", BANNER, HINT], 80)).toBe(
+      "no-composer"
+    );
     expect(readClaudeLimitScreen(["● Done.", "", RULE, "❯ ", RULE, FOOTER], 80)).toBeNull();
   });
 
   it("leaves a usage warning in the footer, which isn't a stop", () => {
-    const warning = ["● Done.", "", RULE, "❯ ", RULE, "  You've used 90% of your weekly limit · resets 9pm"];
+    const warning = [
+      "● Done.",
+      "",
+      RULE,
+      "❯ ",
+      RULE,
+      "  You've used 90% of your weekly limit · resets 9pm",
+    ];
     expect(readClaudeLimitScreen(warning, 80)).toBeNull();
   });
 });
@@ -88,10 +104,18 @@ describe("judgeClaudeLimitScreen (#18192)", () => {
 
   it.each([
     ["a draft in the composer", rows({ between: [CANCELLED], input: "❯ fix the lexer" }), "draft"],
-    ["a new turn after the banner", rows({ between: [CANCELLED, "● Retrying."] }), "banner-not-last"],
+    [
+      "a new turn after the banner",
+      rows({ between: [CANCELLED, "● Retrying."] }),
+      "banner-not-last",
+    ],
     ["another banner", rows({ between: [] }), "banner-changed"],
     ["no banner", ["● Done.", RULE, "❯ ", RULE, FOOTER], "banner-gone"],
-    ["a dialog in the composer's place", ["● Refactoring the parser.", BANNER, HINT, CANCELLED, "  1. Yes"], "no-composer"],
+    [
+      "a dialog in the composer's place",
+      ["● Refactoring the parser.", BANNER, HINT, CANCELLED, "  1. Yes"],
+      "no-composer",
+    ],
   ])("types nothing with %s", (_label, lines, skip) => {
     expect(judgeClaudeLimitScreen(serialized(lines), 80, key)).toEqual({ skip });
   });

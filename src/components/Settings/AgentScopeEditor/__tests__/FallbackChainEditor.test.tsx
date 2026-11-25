@@ -195,14 +195,17 @@ describe("FallbackChainEditor — continuing when the usage limit resets (#17912
       .map((id) => document.getElementById(id)?.textContent ?? "")
       .join(" ");
 
-  it.each(["codex", "claude"])("offers it on a %s preset with no fallback chain, and stores only true", (agentId) => {
-    const onUpdatePreset = renderEditor({ id: "home", name: "Home" }, agentId);
-    const toggle = screen.getByRole("switch", { name: label });
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  it.each(["codex", "claude"])(
+    "offers it on a %s preset with no fallback chain, and stores only true",
+    (agentId) => {
+      const onUpdatePreset = renderEditor({ id: "home", name: "Home" }, agentId);
+      const toggle = screen.getByRole("switch", { name: label });
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
 
-    fireEvent.click(toggle);
-    expect(onUpdatePreset).toHaveBeenCalledWith("home", { continueAtLimitReset: true });
-  });
+      fireEvent.click(toggle);
+      expect(onUpdatePreset).toHaveBeenCalledWith("home", { continueAtLimitReset: true });
+    }
+  );
 
   it("clears it rather than storing false", () => {
     const onUpdatePreset = renderEditor(

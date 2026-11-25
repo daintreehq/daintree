@@ -2546,7 +2546,10 @@ export class TerminalProcess {
   }
 
   /** {@link answerCodexLimit} for a Claude Code pane's stop, read off its banner alone (#18192). */
-  private answerClaudeLimit(query: CodexLimitQuery, observedSince: number | null): CodexLimitAnswer {
+  private answerClaudeLimit(
+    query: CodexLimitQuery,
+    observedSince: number | null
+  ): CodexLimitAnswer {
     const t = this.terminalInfo;
     const held = this.claudeLimitStop.held();
     const unknown = (reason: CodexLimitUnknownReason): CodexLimitAnswer => ({

@@ -2136,7 +2136,9 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
     expect(answer(terminal)).toEqual({ reset: { status: "unknown", reason: "no-banner" } });
 
     // Claude's own wait ran out and it took the turn up again.
-    await show(claudeScreen({ after: ["> continue", "", "● Picking up where the parser left off.", ""] }));
+    await show(
+      claudeScreen({ after: ["> continue", "", "● Picking up where the parser left off.", ""] })
+    );
     expect(stops).toEqual([]);
     expect(typed()).toBe("");
     terminal.dispose();
@@ -2160,7 +2162,10 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
       stamp: { run: stops[0]!.run, seq: stops[0]!.seq, observedAt: expect.any(Number) },
     });
     expect(JSON.stringify(reply)).not.toMatch(/limit|9pm/);
-    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "continued", line: "continue" });
+    expect(await continueAt(terminal, stops[0]!)).toEqual({
+      status: "continued",
+      line: "continue",
+    });
     expect(typed()).toBe("\x1bcontinue\r");
     terminal.dispose();
   });
@@ -2229,7 +2234,10 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
     await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
     expect(stops).toHaveLength(1);
     expect(answer(terminal)).not.toHaveProperty("skipAtStop");
-    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "continued", line: "continue" });
+    expect(await continueAt(terminal, stops[0]!)).toEqual({
+      status: "continued",
+      line: "continue",
+    });
     terminal.dispose();
   });
 
@@ -2238,7 +2246,10 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
     expect(stops).toHaveLength(1);
     expect(answer(terminal)).toMatchObject({ reset: { status: "known", resetsAt } });
     expect(answer(terminal)).not.toHaveProperty("skipAtStop");
-    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "continued", line: "continue" });
+    expect(await continueAt(terminal, stops[0]!)).toEqual({
+      status: "continued",
+      line: "continue",
+    });
     expect(typed()).toBe("continue\r");
     terminal.dispose();
   });
@@ -2248,7 +2259,10 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
     terminal.write("\x1b", undefined, "assistant-1");
     await show(cancelledScreen());
     await show(claudeScreen({ notice: [CANCELLED, ""], footer: COUNTDOWN }));
-    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "skipped", reason: "own-wait" });
+    expect(await continueAt(terminal, stops[0]!)).toEqual({
+      status: "skipped",
+      reason: "own-wait",
+    });
     expect(typed()).toBe("\x1b");
     terminal.dispose();
   });
@@ -2257,7 +2271,10 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
     const { terminal, stops } = await armedClaudePane(claudeScreen());
     terminal.setCodexLimitContinueArmed(false);
     expect(answer(terminal)).toEqual({ reset: { status: "unknown", reason: "no-banner" } });
-    expect(await continueAt(terminal, stops[0]!)).toEqual({ status: "skipped", reason: "disarmed" });
+    expect(await continueAt(terminal, stops[0]!)).toEqual({
+      status: "skipped",
+      reason: "disarmed",
+    });
     terminal.dispose();
   });
 });
