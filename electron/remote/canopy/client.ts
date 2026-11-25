@@ -9,6 +9,7 @@ import {
   type HostAssistantDirectory,
   type HostSignInStep,
   type HostSignInTerminal,
+  type SignInShownAnswer,
 } from "../../../shared/types/ipc/canopyHost.js";
 import type {
   AssistantOpenDestination,
@@ -64,8 +65,9 @@ export const SIGN_IN_OFFER_MS = 30_000;
 /**
  * What became of a sign-in started for an assistant (#18197). `shown`: the
  * window's dialog opened its terminal live. `withdrawn`: it ended before that,
- * closed in the window, refused there over another sign-in, or its link or
- * view went. `busy`: a sign-in was already open in that window, so none started.
+ * closed in the window, refused there over another sign-in, or its view went.
+ * `busy`: a sign-in was already open in that window, so none started.
+ * `undelivered`: it started, but the window couldn't be told of it.
  */
 export type SignInOfferAnswer =
   | "shown"
@@ -74,6 +76,7 @@ export type SignInOfferAnswer =
   | "expired"
   | "cancelled"
   | "no_window"
+  | "undelivered"
   | "unsupported"
   | "disconnected"
   | "rate_limited"
@@ -81,8 +84,9 @@ export type SignInOfferAnswer =
 
 interface SignInOffer {
   finish(answer: SignInOfferAnswer, release: boolean): void;
-  /** Whether its window still shows it to the person. */
+  /** Whether its window is still on screen, showing the assistant it was started for. */
   stillShown(): boolean;
+  expiresAt: number;
 }
 
 export interface CanopyHostsClientOptions {
@@ -574,6 +578,9 @@ export class CanopyHostsClient {
     }
     try {
       const answer = await this.callSignIn(sub, parsed);
+      if (parsed.op === "unwatch" && sub.signIn.watchId === parsed.watchId) {
+        sub.signIn.watchId = null;
+      }
       if (parsed.op !== "watch") return null;
       const view = answer as CanopyTerminalView;
       // Released or ended while the host answered: that stream is gone.
@@ -605,13 +612,13 @@ export class CanopyHostsClient {
    * sign-in under way: it watches it and lets it go, and the person types into
    * it. Never started over another sign-in open in that view; one nobody
    * opened within {@link SIGN_IN_OFFER_MS}, or whose call was cancelled first,
-   * ends on its host.
+   * is let go on its host.
    */
   offerSignIn(
     webContentsId: number,
     hostId: HostId,
     agentId: string,
-    options: { stillShown: () => boolean; signal?: AbortSignal }
+    options: { hostName: string; stillShown: () => boolean; signal?: AbortSignal }
   ): Promise<SignInOfferAnswer> {
     if (options.signal?.aborted === true) return Promise.resolve("cancelled");
     if ((this.views.get(webContentsId)?.signIns.size ?? 0) > 0) return Promise.resolve("busy");
@@ -630,7 +637,7 @@ export class CanopyHostsClient {
         resolve(answer);
       };
       const onAbort = () => finish("cancelled", true);
-      const offer: SignInOffer = { finish, stillShown: options.stillShown };
+      const offer: SignInOffer = { finish, stillShown: options.stillShown, expiresAt };
       // Armed before the start, so a slow one is held to the same deadline.
       const timer = setTimeout(() => finish("expired", true), SIGN_IN_OFFER_MS);
       timer.unref?.();
@@ -642,12 +649,13 @@ export class CanopyHostsClient {
           const sent = this.options.send(webContentsId, {
             kind: "sign-in-offer",
             hostId,
+            hostName: options.hostName,
             agentId,
             consumer,
             terminal,
             expiresAt,
           });
-          if (!sent) finish("no_window", true);
+          if (!sent) finish("undelivered", true);
         },
         (error: unknown) => finish(signInOfferFailure(error), false)
       );
@@ -656,16 +664,19 @@ export class CanopyHostsClient {
 
   /**
    * The view's dialog opened the terminal of a sign-in started for an
-   * assistant, live, on screen (#18197). Only the view it was started in says
-   * so, and only while that view is still shown; nothing it sends is read.
+   * assistant, live (#18197). Taken only from the view it was started in,
+   * while a watch this Shell served it is open, before its deadline, and while
+   * that view is on screen showing the assistant; nothing it sends is read.
    */
-  signInShown(webContentsId: number, consumer: unknown): void {
-    if (!isCanopyViewerId(consumer)) return;
+  signInShown(webContentsId: number, consumer: unknown): SignInShownAnswer {
+    if (!isCanopyViewerId(consumer)) return "gone";
     const offer = this.offers.get(offerKey(webContentsId, consumer));
     const sub = this.views.get(webContentsId)?.signIns.get(consumer);
-    if (!offer || !sub?.signIn || sub.signIn.terminalId === null) return;
-    if (!offer.stillShown()) return;
+    if (!offer || !sub?.signIn || sub.signIn.terminalId === null) return "gone";
+    if (Date.now() >= offer.expiresAt) return "gone";
+    if (sub.signIn.watchId === null || !offer.stillShown()) return "not_shown";
     offer.finish("shown", false);
+    return "shown";
   }
 
   /** The consumer stopped showing its assistant: its viewer and watch there end. */
@@ -1094,7 +1105,9 @@ function signInOfferFailure(error: unknown): SignInOfferAnswer {
   switch (codeOf(error)) {
     case "UNSUPPORTED":
       return "unsupported";
+    // A link that drops ends the sign-ins on it, a start in flight included.
     case "HOST_DISCONNECTED":
+    case "OUTCOME_UNKNOWN":
       return "disconnected";
     case "RATE_LIMITED":
       return "rate_limited";

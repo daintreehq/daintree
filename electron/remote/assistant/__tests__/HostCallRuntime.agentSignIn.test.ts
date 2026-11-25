@@ -30,7 +30,7 @@ function summary(agentIds: string[]): HostMetricsSummary {
 function host(hostId: string, overrides: Partial<ObservedHost> = {}): ObservedHost {
   return {
     hostId,
-    name: hostId,
+    name: `${hostId} (named)`,
     connection: { status: "connected", rttMs: 3 } as ObservedHost["connection"],
     lastSeenAt: 1000,
     summary: summary(["claude", "codex"]),
@@ -42,6 +42,7 @@ function host(hostId: string, overrides: Partial<ObservedHost> = {}): ObservedHo
 type Start = (request: {
   helpSessionId: string;
   hostId: string;
+  hostName: string;
   agentId: string;
   signal?: AbortSignal;
 }) => Promise<SignInOfferAnswer>;
@@ -98,9 +99,27 @@ describe("HostCallRuntime host.startAgentSignIn (#18197)", () => {
     expect(start).toHaveBeenCalledWith({
       helpSessionId: "a",
       hostId: "studio",
+      hostName: "studio (named)",
       agentId: "codex",
       signal,
     });
+  });
+
+  it("withdraws a global session's waiting sign-in when coordination leaves it", async () => {
+    let withdrawn: AbortSignal | undefined;
+    start.mockImplementationOnce(
+      (request) =>
+        new Promise((resolve) => {
+          withdrawn = request.signal;
+          request.signal?.addEventListener("abort", () => resolve("cancelled"));
+        })
+    );
+    const outcome = runtime.startAgentSignIn("g", { hostId: "studio", agentId: "claude" });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(withdrawn?.aborted).toBe(false);
+    runtime.standDown("g");
+    await expect(outcome).resolves.toMatchObject({ ok: true, value: { outcome: "expired" } });
   });
 
   it("reaches the global Assistant that is coordinating, and refuses one standing by", async () => {
@@ -155,23 +174,40 @@ describe("HostCallRuntime host.startAgentSignIn (#18197)", () => {
       "expired",
       "cancelled",
       "no_window",
+      "undelivered",
       "unsupported",
       "disconnected",
       "rate_limited",
       "failed",
     ];
     const seen = new Map<string, string>();
+    const details = new Set<string>();
     for (const answer of answers) {
       start.mockResolvedValueOnce(answer);
       const outcome = await runtime.startAgentSignIn("a", { hostId: "studio", agentId: "codex" });
       if (!outcome.ok) throw new Error(`refused for ${answer}`);
       expect(HostStartAgentSignInResultSchema.parse(outcome.value)).toEqual(outcome.value);
       seen.set(answer, outcome.value.outcome);
-      expect(outcome.value.detail ?? "", answer).not.toMatch(/signed in|logged in|succeeded/i);
+      details.add(outcome.value.detail ?? "");
+      expect(outcome.value.detail ?? "", answer).not.toMatch(
+        /signed in|logged in|succeeded|complete/i
+      );
     }
-    expect([...seen].filter(([, outcome]) => outcome === "ok").map(([answer]) => answer)).toEqual([
-      "shown",
-    ]);
+    expect(Object.fromEntries(seen)).toEqual({
+      shown: "ok",
+      withdrawn: "conflict",
+      busy: "conflict",
+      expired: "expired",
+      cancelled: "expired",
+      no_window: "policy_rejected",
+      undelivered: "conflict",
+      unsupported: "unsupported",
+      disconnected: "disconnected",
+      rate_limited: "rate_limited",
+      failed: "conflict",
+    });
+    // Each says what happened and what to do next in words of its own.
+    expect(details.size).toBe(answers.length);
   });
 
   it("is unsupported where the Shell can't start sign-ins on hosts", async () => {

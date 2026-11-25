@@ -315,6 +315,7 @@ export interface HostCallRuntimeDeps {
   startAgentSignIn?(request: {
     helpSessionId: string;
     hostId: HostId;
+    hostName: string;
     agentId: string;
     signal?: AbortSignal;
   }): Promise<SignInOfferAnswer>;
@@ -2688,18 +2689,24 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return this.outcomeWith("policy_rejected", notCoordinatingSignInDetail(caller.slot));
       }
       const start = this.deps.startAgentSignIn;
+      // A global session's offer is withdrawn when coordination leaves it (#18143).
+      const withdrawn = isGlobalAssistantId(caller.projectId)
+        ? this.withStandDown(helpSessionId, signal)
+        : signal;
       return runHostAgentSignIn(
         {
           host: (hostId) => {
             const host = this.deps.hosts().find((candidate) => candidate.hostId === hostId);
             if (!host) return null;
             const connected = host.connection.status === "connected";
+            const name = host.name;
             // As Settings → Hosts lists them: only what the link open now brought.
             // None reported yet reads as unknown, as `host.list` reads it.
             const current =
               connected && host.summaryFromCurrentLink !== false ? host.summary : null;
             const clis = current?.agentClis ?? [];
             return {
+              name,
               connected,
               agentIds: clis.length === 0 ? null : clis.map((cli) => cli.agentId),
             };
@@ -2707,10 +2714,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           controlOn: (hostId) => this.deps.controlEnabled?.(hostId) === true,
           ...(start
             ? {
-                offer: (hostId: HostId, agentId: string, abort?: AbortSignal) =>
+                offer: (
+                  host: { hostId: HostId; name: string },
+                  agentId: string,
+                  abort?: AbortSignal
+                ) =>
                   start({
                     helpSessionId,
-                    hostId,
+                    hostId: host.hostId,
+                    hostName: host.name,
                     agentId,
                     ...(abort ? { signal: abort } : {}),
                   }),
@@ -2718,7 +2730,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             : {}),
         },
         args,
-        signal
+        withdrawn
       );
     });
   }

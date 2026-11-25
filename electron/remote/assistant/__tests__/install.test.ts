@@ -543,7 +543,7 @@ describe("installHostControl (#13493)", () => {
         webContentsId: number,
         hostId: string,
         agentId: string,
-        options: { stillShown: () => boolean; signal?: AbortSignal }
+        options: { hostName: string; stillShown: () => boolean; signal?: AbortSignal }
       ) => Promise<string>;
       const offerSignIn = vi.fn<Offer>(async () => "shown");
       let unregister: (() => void) | null = null;
@@ -554,6 +554,7 @@ describe("installHostControl (#13493)", () => {
             startAgentSignIn: (request: {
               helpSessionId: string;
               hostId: string;
+              hostName: string;
               agentId: string;
               signal?: AbortSignal;
             }) => Promise<unknown>;
@@ -562,6 +563,7 @@ describe("installHostControl (#13493)", () => {
         return runtime.deps.startAgentSignIn({
           helpSessionId,
           hostId: "studio",
+          hostName: "Studio",
           agentId: "codex",
           ...(signal ? { signal } : {}),
         });
@@ -588,13 +590,22 @@ describe("installHostControl (#13493)", () => {
 
         await expect(start("global", signal)).resolves.toBe("shown");
         expect(offerSignIn).toHaveBeenCalledWith(41, "studio", "codex", {
+          hostName: "Studio",
           stillShown: expect.any(Function),
           signal,
         });
-        // Still on screen is read when the view says so, not when it started.
+        // Read when the view says so, not when it started.
         const { stillShown } = offerSignIn.mock.calls[0]![3];
         expect(stillShown()).toBe(true);
         onScreen.set(41, { visible: true, minimized: true });
+        expect(stillShown()).toBe(false);
+        onScreen.set(41, { visible: true, minimized: false });
+        // Another view on screen showing it too doesn't take it from 41.
+        onScreen.set(42, { visible: true, minimized: false });
+        globalAssistant.views = [42, 41];
+        expect(stillShown()).toBe(true);
+        // Moved off 41 to another window: 41, still on screen, no longer shows it.
+        globalAssistant.views = [42];
         expect(stillShown()).toBe(false);
         off();
       });

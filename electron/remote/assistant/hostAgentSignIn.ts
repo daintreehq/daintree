@@ -8,6 +8,8 @@ import type { SignInOfferAnswer } from "../canopy/client.js";
 
 /** One of this Shell's hosts, as `host.startAgentSignIn` needs it. */
 export interface SignInHost {
+  /** Its name in this Shell's host list, for the dialog's title. */
+  name: string;
   connected: boolean;
   /**
    * The CLIs it reports installed on the link open now, as Settings → Hosts
@@ -24,7 +26,11 @@ export interface HostAgentSignInToolDeps {
    * Starts it in the window showing the caller and waits until that window
    * opens it; absent where this Shell can't start sign-ins on hosts.
    */
-  offer?(hostId: HostId, agentId: string, signal?: AbortSignal): Promise<SignInOfferAnswer>;
+  offer?(
+    host: { hostId: HostId; name: string },
+    agentId: string,
+    signal?: AbortSignal
+  ): Promise<SignInOfferAnswer>;
 }
 
 const LOCAL_DETAIL =
@@ -45,12 +51,12 @@ const ANSWERS: Record<SignInOfferAnswer, { outcome: HostControlOutcomeCode; deta
   shown: {
     outcome: "ok",
     detail:
-      "A terminal on the host is running that CLI's own sign-in, open in the window showing you. The person finishes it there, the browser approval and any code included. Nothing here says whether it worked: ask them.",
+      "A terminal on the host opened with that CLI's own sign-in, in the window showing you. The person finishes it there, the browser approval and any code included. Nothing here says whether it worked: ask them.",
   },
   withdrawn: {
     outcome: "conflict",
     detail:
-      "It ended before the window opened it: closed there, refused over another sign-in open there, or its link or window went. Nothing is left running.",
+      "It ended before the window opened it: closed there, refused over another sign-in open there, or its window went. Call again once the person is ready.",
   },
   busy: {
     outcome: "conflict",
@@ -60,27 +66,36 @@ const ANSWERS: Record<SignInOfferAnswer, { outcome: HostControlOutcomeCode; deta
   expired: {
     outcome: "expired",
     detail:
-      "The window didn't open it in time, so it was ended on the host. Ask the person to bring up the window showing you, then call again.",
+      "The window didn't open it in time, so the host was asked to end it. Ask the person to bring up the window showing you, then call again.",
   },
   cancelled: {
     outcome: "expired",
-    detail: "The call was cancelled before the window opened it, so it was ended on the host.",
+    detail: "The call was cancelled before the window opened it, so the host was asked to end it.",
   },
   no_window: {
     outcome: "policy_rejected",
     detail:
       "No window on screen shows you, so no sign-in was started. Ask the person to bring up the window showing you, then call again.",
   },
+  undelivered: {
+    outcome: "conflict",
+    detail:
+      "It started on the host, but the window showing you couldn't be told of it, so the host was asked to end it. Call again.",
+  },
   unsupported: {
     outcome: "unsupported",
     detail:
       "That host's Daintree is too old to start sign-ins from here. It needs a newer Daintree.",
   },
-  disconnected: { outcome: "disconnected", detail: DISCONNECTED_DETAIL },
+  disconnected: {
+    outcome: "disconnected",
+    detail:
+      "The link to the host dropped, which ends any sign-in on it. host.bringBack can try to bring it back.",
+  },
   rate_limited: {
     outcome: "rate_limited",
     detail:
-      "That host already runs as many sign-ins as it allows. Ask the person to finish or close one first.",
+      "The host refused another sign-in for now; it may already run as many as it allows. Try again shortly, or ask the person to close one.",
   },
   failed: {
     outcome: "conflict",
@@ -114,6 +129,6 @@ export async function runHostAgentSignIn(
   if (!host.connected) return answer("disconnected", DISCONNECTED_DETAIL);
   if (host.agentIds === null) return answer("not_found", UNREPORTED_DETAIL);
   if (!host.agentIds.includes(agentId)) return answer("not_found", NOT_INSTALLED_DETAIL);
-  const { outcome, detail } = ANSWERS[await offer(hostId, agentId, signal)];
+  const { outcome, detail } = ANSWERS[await offer({ hostId, name: host.name }, agentId, signal)];
   return { outcome, detail, retryAfterMs: null };
 }

@@ -313,7 +313,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy-host:sign-in-shown": {
     args: [consumer: string];
-    result: void;
+    result: import("./canopyHost.js").SignInShownAnswer;
   };
   "canopy-host:sign-in-step": {
     args: [consumer: string, step: import("./canopyHost.js").HostSignInStep];

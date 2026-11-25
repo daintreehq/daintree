@@ -43,7 +43,6 @@ import { useMcpBridge } from "./hooks/useMcpBridge";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useScheduledRunLaunchBridge } from "./hooks/useScheduledRunLaunchBridge";
 import { useScheduledRunFinishBridge } from "./hooks/useScheduledRunFinishBridge";
-import { useHostSignInOfferBridge } from "./hooks/useHostSignInOfferBridge";
 import { useTerminalWhenDoneBridge } from "./hooks/useTerminalWhenDoneBridge";
 import { useCodexLimitContinueBridge } from "./hooks/useCodexLimitContinueBridge";
 import { useHeldComposerSendBridge } from "./hooks/useHeldComposerSendBridge";
@@ -87,6 +86,7 @@ import { useResumeAgentSession } from "./hooks/useResumeAgentSession";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { usePendingHostSwitchSync } from "./hooks/usePendingHostSwitchSync";
 import { HostSwitchScreenHost } from "./components/HostSwitch/HostSwitchScreenHost";
+import { HostSignInOffers } from "./components/Settings/Hosts/HostSignInOffers";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CopyFlash } from "./components/ui/CopyFlash";
 import { TooltipProvider } from "./components/ui/tooltip";
@@ -180,7 +180,6 @@ function AppInner() {
   usePluginBridge();
   useScheduledRunLaunchBridge();
   useScheduledRunFinishBridge();
-  useHostSignInOfferBridge();
   useTerminalWhenDoneBridge();
   useCodexLimitContinueBridge();
   useHeldComposerSendBridge();
@@ -597,6 +596,7 @@ function AppInner() {
               </Profiler>
             </DndProvider>
             <HostSwitchScreenHost />
+            <HostSignInOffers />
 
             <Suspense fallback={null}>
               <LazyModalHostLayer

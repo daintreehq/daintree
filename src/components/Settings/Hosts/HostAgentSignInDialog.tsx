@@ -8,7 +8,7 @@ import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import type { HostSignInTerminal } from "@shared/types/ipc/canopyHost";
 import type { HostId } from "@shared/types/remoteHosts";
 import { agentSignInLabels, hostSignInTerminalApi, newSignInConsumer } from "./hostAgentSignIn";
-import { holdSignInDialog } from "./hostSignInOffers";
+import { holdSignInDialog } from "./signInDialogHold";
 
 type Phase =
   | { kind: "starting" }
@@ -27,22 +27,57 @@ function SignInTerminal({
   hostId: HostId;
   consumer: string;
   terminal: HostSignInTerminal;
-  /** An assistant's sign-in (#18197): Main hears once its terminal is live here, and nothing else. */
+  /**
+   * An assistant's sign-in (#18197): Main hears once its terminal is live on
+   * screen here, and nothing else. It doesn't take the keyboard on its own,
+   * since the person didn't open it: stray typing never reaches the login.
+   */
   acknowledge: boolean;
 }) {
   const [api] = useState(() => hostSignInTerminalApi(hostId, consumer));
-  const acknowledged = useRef(false);
+  const live = useRef(false);
+  const tryAcknowledge = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (!acknowledge) return undefined;
+    let disposed = false;
+    let sent = false;
+    // Main takes it only while this view is on screen; a hidden or minimized
+    // window says so again once it is shown.
+    const attempt = () => {
+      if (disposed || sent || !live.current || document.visibilityState !== "visible") return;
+      sent = true;
+      canopyHostClient.signInShown(consumer).then(
+        (answer) => {
+          if (answer === "not_shown") sent = false;
+        },
+        () => {
+          sent = false;
+        }
+      );
+    };
+    tryAcknowledge.current = attempt;
+    document.addEventListener("visibilitychange", attempt);
+    window.addEventListener("focus", attempt);
+    attempt();
+    return () => {
+      disposed = true;
+      tryAcknowledge.current = () => {};
+      document.removeEventListener("visibilitychange", attempt);
+      window.removeEventListener("focus", attempt);
+    };
+  }, [acknowledge, consumer]);
+
   return (
     <CanopyTerminal
       runId={terminal.terminalId}
       spawnedAt={terminal.spawnedAt}
       api={api}
       endedMessage={ENDED_MESSAGE}
-      autoFocus
+      autoFocus={!acknowledge}
       onStreamChange={(stream) => {
-        if (!acknowledge || acknowledged.current || stream.watchId === null) return;
-        acknowledged.current = true;
-        void canopyHostClient.signInShown(consumer).catch(() => {});
+        live.current = stream.watchId !== null;
+        tryAcknowledge.current();
       }}
     />
   );

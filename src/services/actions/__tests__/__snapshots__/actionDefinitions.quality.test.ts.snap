@@ -3378,7 +3378,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Open a host's agent CLI sign-in in a terminal in the window showing you, as Settings → Hosts does. The person finishes it there; you can't type or read it. ok: opened, not signed in.",
+    "description": "Open a host agent CLI's sign-in in a terminal in the window showing you. Only the person can type in, read or finish it. ok means it opened, not that it worked.",
     "examples": undefined,
     "id": "host.startAgentSignIn",
     "keywords": [

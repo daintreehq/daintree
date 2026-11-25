@@ -839,11 +839,7 @@ export type HostBringBackResult = z.infer<typeof HostBringBackResultSchema>;
 
 export const HostStartAgentSignInArgsSchema = z.object({
   hostId: hostIdSchema,
-  agentId: z
-    .string()
-    .min(1)
-    .max(256)
-    .describe("An installed CLI's agentId, as the host list names it."),
+  agentId: z.string().min(1).max(256).describe("Installed CLI id from the host list."),
 });
 export type HostStartAgentSignInArgs = z.infer<typeof HostStartAgentSignInArgsSchema>;
 

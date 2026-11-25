@@ -868,14 +868,24 @@ describe("host.startAgentSignIn audit (#18197)", () => {
       token: "TOKEN-SENTINEL",
     });
     expect(args).toEqual({ hostId: "studio-01", agentId: "codex" });
+    // An id-shaped code passed by mistake is no agent the registry knows.
+    for (const agentId of ["AGENT SENTINEL", "ABCD-EFGH", "wdjb-mjht"]) {
+      expect(projectAuditArgs("host.startAgentSignIn", { hostId: "studio-01", agentId })).toEqual({
+        hostId: "studio-01",
+        agentId: null,
+      });
+    }
     expect(
-      projectAuditArgs("host.startAgentSignIn", { hostId: "studio-01", agentId: "AGENT SENTINEL" })
-    ).toEqual({ hostId: "studio-01", agentId: null });
+      projectAuditArgs("host.startAgentSignIn", { hostId: "studio 01 SENTINEL", agentId: "codex" })
+    ).toEqual({ hostId: null, agentId: "codex" });
     const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
     expect(audited).not.toContain("SENTINEL");
     expect(projectAuditResult("host.startAgentSignIn", "nope")).toEqual({ status: "unrecognized" });
     expect(projectAuditResult("host.startAgentSignIn", { outcome: "OUTCOME-SENTINEL" })).toEqual({
       outcome: null,
+    });
+    expect(projectAuditResult("host.startAgentSignIn", { outcome: "expired" })).toEqual({
+      outcome: "expired",
     });
   });
 });

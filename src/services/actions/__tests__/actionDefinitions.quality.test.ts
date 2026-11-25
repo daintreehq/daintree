@@ -630,12 +630,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // handed pane is refused, that a held pane waits whatever the resume setting
   // says, and that starting it clears the hold. In-app only, off the external
   // surface.
-  // 27_950 → 28_150 for #18197, measured at 28_118 B (+184 over develop's
+  // 27_950 → 28_100 for #18197, measured at 28_094 B (+160 over develop's
   // 27_934): `host.startAgentSignIn`, so an Assistant can open a host's agent
-  // CLI sign-in for the person. It has to say the person finishes it, that the
-  // caller can't type or read it, and that ok never means signed in. Trimmed
-  // first; in-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 28_150;
+  // CLI sign-in for the person. It has to say only the person types in, reads
+  // and finishes it, and that ok never means it worked. Trimmed twice; in-app
+  // only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 28_100;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

@@ -90,15 +90,25 @@ async function settleStart(): Promise<void> {
   for (let i = 0; i < 5; i++) await Promise.resolve();
 }
 
+const PENDING = Symbol("pending");
+/** What a promise has settled to by now, or PENDING. */
+async function peek<T>(promise: Promise<T>): Promise<T | typeof PENDING> {
+  return Promise.race([promise, settleStart().then(() => PENDING)]);
+}
+
+function opts(extra: { stillShown?: () => boolean; signal?: AbortSignal } = {}) {
+  return { hostName: "Studio", stillShown: () => true, ...extra };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
-  it("starts it for the asking view, offers it there, and answers shown once that view has it live", async () => {
+  it("starts it for the asking view, offers it there, and answers shown once that view has it live on screen", async () => {
     const s = setup();
     let shown = true;
-    const answer = s.client.offerSignIn(VIEW, "studio", "codex", { stillShown: () => shown });
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts({ stillShown: () => shown }));
     await settleStart();
 
     expect(s.starts()).toEqual([
@@ -111,57 +121,76 @@ describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
     expect(offer).toMatchObject({
       webContentsId: VIEW,
       event: {
-        kind: "sign-in-offer",
         hostId: "studio",
+        hostName: "Studio",
         agentId: "codex",
         terminal: { terminalId: "daintree-sign-in-1", spawnedAt: 100 },
       },
     });
-    if (offer?.event.kind !== "sign-in-offer") throw new Error("no offer");
-    const { consumer, expiresAt } = offer.event;
+    const { consumer, expiresAt } = offer!.event as { consumer: string; expiresAt: number };
     expect(expiresAt).toBeGreaterThan(Date.now());
 
-    // Only the view it was started in, while it is on screen, can say so.
-    s.client.signInShown(OTHER_VIEW, consumer);
+    // Before its stream is open there, nothing is shown yet.
+    expect(s.client.signInShown(VIEW, consumer)).toBe("not_shown");
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    // Another view never speaks for it.
+    expect(s.client.signInShown(OTHER_VIEW, consumer)).toBe("gone");
     shown = false;
-    s.client.signInShown(VIEW, consumer);
-    shown = true;
-    s.client.signInShown(VIEW, consumer);
-    await expect(answer).resolves.toBe("shown");
+    expect(s.client.signInShown(VIEW, consumer)).toBe("not_shown");
+    expect(await peek(answer)).toBe(PENDING);
 
-    // Handed to the person now: it keeps running, and that view watches it as its own.
+    shown = true;
+    expect(s.client.signInShown(VIEW, consumer)).toBe("shown");
+    await expect(answer).resolves.toBe("shown");
+    expect(s.client.signInShown(VIEW, consumer)).toBe("gone");
+
+    // Handed to the person now: it keeps running for that view.
     expect(s.releases()).toEqual([]);
     await expect(s.client.signInStep(VIEW, consumer, { op: "watch" })).resolves.toMatchObject({
       watchId: 9,
     });
   });
 
-  it("starts none over a sign-in already open in that view", async () => {
+  it("takes no word of a stream the view has let go", async () => {
     const s = setup();
-    await s.client.startSignIn(VIEW, "dialog-1", "studio", "claude");
-    await expect(
-      s.client.offerSignIn(VIEW, "studio", "codex", { stillShown: () => true })
-    ).resolves.toBe("busy");
-    expect(s.starts()).toHaveLength(1);
-    expect(s.offers()).toEqual([]);
-  });
-
-  it("ends one nobody opened in time on its host", async () => {
-    vi.useFakeTimers();
-    const s = setup();
-    const answer = s.client.offerSignIn(VIEW, "studio", "codex", { stillShown: () => false });
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts());
     await settleStart();
     const consumer = (s.offers()[0]?.event as { consumer: string }).consumer;
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    await s.client.signInStep(VIEW, consumer, { op: "unwatch", watchId: 9 });
+    expect(s.client.signInShown(VIEW, consumer)).toBe("not_shown");
+    expect(await peek(answer)).toBe(PENDING);
+  });
+
+  it("starts none over a sign-in already open in that view, and isn't held up by one in another", async () => {
+    const s = setup();
+    await s.client.startSignIn(OTHER_VIEW, "dialog-0", "studio", "claude");
+    void s.client.offerSignIn(VIEW, "studio", "codex", opts());
+    await settleStart();
+    expect(s.starts()).toHaveLength(2);
+
+    await expect(s.client.offerSignIn(VIEW, "studio", "codex", opts())).resolves.toBe("busy");
+    expect(s.starts()).toHaveLength(2);
+    expect(s.offers()).toHaveLength(1);
+  });
+
+  it("lets one nobody opened go at its deadline, and takes no word of it after", async () => {
+    vi.useFakeTimers();
+    const s = setup();
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts({ stillShown: () => false }));
+    await settleStart();
+    const consumer = (s.offers()[0]?.event as { consumer: string }).consumer;
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
     // A view no longer on screen shows it to nobody.
-    s.client.signInShown(VIEW, consumer);
-    await vi.advanceTimersByTimeAsync(SIGN_IN_OFFER_MS);
+    expect(s.client.signInShown(VIEW, consumer)).toBe("not_shown");
+    await vi.advanceTimersByTimeAsync(SIGN_IN_OFFER_MS - 1);
+    expect(await peek(answer)).toBe(PENDING);
+    await vi.advanceTimersByTimeAsync(1);
     await expect(answer).resolves.toBe("expired");
     expect(s.releases()).toEqual([
       { method: CanopyLinkMethod.RELEASE, payload: { viewerId: "v1" } },
     ]);
-    await expect(s.client.signInStep(VIEW, consumer, { op: "watch" })).rejects.toMatchObject({
-      code: "NOT_FOUND",
-    });
+    expect(s.client.signInShown(VIEW, consumer)).toBe("gone");
   });
 
   it("holds a slow start to the same deadline", async () => {
@@ -175,52 +204,64 @@ describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
             })
           : null,
     });
-    const answer = s.client.offerSignIn(VIEW, "studio", "codex", { stillShown: () => true });
-    await vi.advanceTimersByTimeAsync(SIGN_IN_OFFER_MS);
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts());
+    await vi.advanceTimersByTimeAsync(SIGN_IN_OFFER_MS - 1);
+    expect(await peek(answer)).toBe(PENDING);
+    await vi.advanceTimersByTimeAsync(1);
     await expect(answer).resolves.toBe("expired");
+    // Let go while it started: the host is told at once.
+    expect(s.releases()).toHaveLength(1);
     finishStart({ terminalId: "daintree-sign-in-1", spawnedAt: 100 });
     await settleStart();
-    // Started for nobody: ended on its host, and never offered.
     expect(s.offers()).toEqual([]);
-    expect(s.releases()).toHaveLength(1);
   });
 
-  it("answers withdrawn when it ends before it is live: let go in the view, the view gone, or its link reopened", async () => {
-    const endings: Array<(s: ReturnType<typeof setup>, consumer: string) => void> = [
-      (s, consumer) => s.client.releaseSignIn(VIEW, consumer),
-      (s) => s.goneView(VIEW),
-      (s) => s.linkReopened(),
+  it("answers withdrawn, and lets it go on the host, when it ends before it is live", async () => {
+    const endings: Array<[string, (s: ReturnType<typeof setup>, consumer: string) => void]> = [
+      ["let go in the view", (s, consumer) => s.client.releaseSignIn(VIEW, consumer)],
+      ["the view gone", (s) => s.goneView(VIEW)],
     ];
-    for (const end of endings) {
+    for (const [name, end] of endings) {
       const s = setup();
-      const answer = s.client.offerSignIn(VIEW, "studio", "codex", { stillShown: () => true });
+      const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts());
       await settleStart();
       const consumer = (s.offers()[0]?.event as { consumer: string }).consumer;
       end(s, consumer);
-      await expect(answer).resolves.toBe("withdrawn");
-      // Saying shown afterwards changes nothing.
-      s.client.signInShown(VIEW, consumer);
+      await expect(answer, name).resolves.toBe("withdrawn");
+      expect(s.releases(), name).toHaveLength(1);
+      expect(s.client.signInShown(VIEW, consumer), name).toBe("gone");
     }
+    // A link that comes back has already ended it on the host.
+    const s = setup();
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts());
+    await settleStart();
+    s.linkReopened();
+    await expect(answer).resolves.toBe("withdrawn");
   });
 
-  it("ends it when the call is cancelled before the view opens it, and starts none once cancelled", async () => {
-    const s = setup();
-    const abort = new AbortController();
-    const answer = s.client.offerSignIn(VIEW, "studio", "codex", {
-      stillShown: () => true,
-      signal: abort.signal,
+  it("ends it when the call is cancelled, a start still in flight included, and starts none once cancelled", async () => {
+    let finishStart: (value: unknown) => void = () => {};
+    const s = setup({
+      answer: (_method, payload) =>
+        payload.op === "start"
+          ? new Promise((resolve) => {
+              finishStart = resolve;
+            })
+          : null,
     });
+    const abort = new AbortController();
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts({ signal: abort.signal }));
     await settleStart();
     abort.abort();
     await expect(answer).resolves.toBe("cancelled");
     expect(s.releases()).toHaveLength(1);
+    finishStart({ terminalId: "daintree-sign-in-1", spawnedAt: 100 });
+    await settleStart();
+    expect(s.offers()).toEqual([]);
 
     const before = s.starts().length;
     await expect(
-      s.client.offerSignIn(VIEW, "studio", "codex", {
-        stillShown: () => true,
-        signal: abort.signal,
-      })
+      s.client.offerSignIn(VIEW, "studio", "codex", opts({ signal: abort.signal }))
     ).resolves.toBe("cancelled");
     expect(s.starts()).toHaveLength(before);
   });
@@ -228,22 +269,22 @@ describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
   it("leaves a sign-in the view has live running when the call is cancelled after", async () => {
     const s = setup();
     const abort = new AbortController();
-    const answer = s.client.offerSignIn(VIEW, "studio", "codex", {
-      stillShown: () => true,
-      signal: abort.signal,
-    });
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts({ signal: abort.signal }));
     await settleStart();
-    s.client.signInShown(VIEW, (s.offers()[0]?.event as { consumer: string }).consumer);
+    const consumer = (s.offers()[0]?.event as { consumer: string }).consumer;
+    await s.client.signInStep(VIEW, consumer, { op: "watch" });
+    s.client.signInShown(VIEW, consumer);
     await expect(answer).resolves.toBe("shown");
     abort.abort();
     expect(s.releases()).toEqual([]);
   });
 
-  it("ends one the view can no longer be told of", async () => {
+  it("lets go of one the view couldn't be told of, after trying to tell it", async () => {
     const s = setup({ send: () => false });
-    await expect(
-      s.client.offerSignIn(VIEW, "studio", "codex", { stillShown: () => true })
-    ).resolves.toBe("no_window");
+    await expect(s.client.offerSignIn(VIEW, "studio", "codex", opts())).resolves.toBe(
+      "undelivered"
+    );
+    expect(s.offers()).toHaveLength(1);
     expect(s.releases()).toHaveLength(1);
   });
 
@@ -251,6 +292,9 @@ describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
     const cases: Array<[string, string]> = [
       ["UNSUPPORTED", "unsupported"],
       ["RATE_LIMITED", "rate_limited"],
+      ["OUTCOME_UNKNOWN", "disconnected"],
+      ["CANCELLED", "withdrawn"],
+      ["NOT_FOUND", "withdrawn"],
       ["INTERNAL", "failed"],
     ];
     for (const [code, expected] of cases) {
@@ -259,15 +303,23 @@ describe("CanopyHostsClient sign-ins started for an assistant (#18197)", () => {
           throw new AppError({ code: code as "INTERNAL", message: "SENTINEL from the host" });
         },
       });
-      await expect(
-        s.client.offerSignIn(VIEW, "studio", "codex", { stillShown: () => true })
-      ).resolves.toBe(expected);
-      expect(s.offers()).toEqual([]);
+      await expect(s.client.offerSignIn(VIEW, "studio", "codex", opts()), code).resolves.toBe(
+        expected
+      );
+      expect(s.offers(), code).toEqual([]);
     }
     const s = setup();
     s.connections.delete("studio");
-    await expect(
-      s.client.offerSignIn(VIEW, "studio", "codex", { stillShown: () => true })
-    ).resolves.toBe("disconnected");
+    await expect(s.client.offerSignIn(VIEW, "studio", "codex", opts())).resolves.toBe(
+      "disconnected"
+    );
+  });
+
+  it("settles a waiting offer when the client is disposed", async () => {
+    const s = setup();
+    const answer = s.client.offerSignIn(VIEW, "studio", "codex", opts());
+    await settleStart();
+    s.client.dispose();
+    await expect(answer).resolves.toBe("cancelled");
   });
 });

@@ -145,11 +145,21 @@ export type CanopyHostEvent =
   | {
       kind: "sign-in-offer";
       hostId: HostId;
+      /** The host's name in this Shell's host list, for the dialog's title. */
+      hostName: string;
       agentId: string;
       consumer: string;
       terminal: HostSignInTerminal;
       expiresAt: number;
     };
+
+/**
+ * Main's word on a view saying it shows a sign-in started for an assistant
+ * (#18197): `not_shown` while that view isn't on screen showing the assistant
+ * or its stream isn't live, so it says so again once it is; `gone` when
+ * nothing waits on it any more.
+ */
+export type SignInShownAnswer = "shown" | "not_shown" | "gone";
 
 /** The terminal an agent CLI's sign-in runs in on its host (#18196), by this incarnation. */
 export interface HostSignInTerminal {

@@ -55,7 +55,6 @@ import {
 } from "./hostPluginRequests";
 import { holdPluginViewRetries } from "./pluginViewConsentResets";
 import { onHostCopySettingsRequest, takePendingHostCopySettings } from "./hostCopySettingsRequests";
-import { onHostSignInOffer, takePendingHostSignIn, type HostSignInOffer } from "./hostSignInOffers";
 import { clientErrorText } from "@/utils/clientAppError";
 
 /** A to Z as people number machines (studio-2 before studio-10), like every other host list. */
@@ -143,9 +142,6 @@ export default function HostsSettingsTab() {
     (HostPluginsRequest & { seq: number }) | null
   >(null);
   const [copyRequest, setCopyRequest] = useState<{ hostId: HostId; seq: number } | null>(null);
-  // A sign-in an assistant started on a host (#18197): its details open, and
-  // they open the CLI's sign-in as its row would. Nothing remounts for it.
-  const [signInOffer, setSignInOffer] = useState<(HostSignInOffer & { seq: number }) | null>(null);
 
   useEffect(() => {
     const open = (hostId: HostId, intent: HostUpdateIntent) => {
@@ -196,17 +192,6 @@ export default function HostsSettingsTab() {
     return onHostPluginsRequest(open);
   }, []);
 
-  useEffect(() => {
-    const open = (offer: HostSignInOffer) => {
-      setFocusBackFor(null);
-      setDetailHostId(offer.hostId);
-      setSignInOffer((prev) => ({ ...offer, seq: (prev?.seq ?? 0) + 1 }));
-    };
-    const pending = takePendingHostSignIn(Date.now());
-    if (pending) open(pending);
-    return onHostSignInOffer(open);
-  }, []);
-
   // A plugin view refused here and reset on this page asks again once Settings
   // has closed, not over it: this tab stays mounted until the dialog's exit ends.
   useEffect(() => holdPluginViewRetries(), []);
@@ -250,8 +235,6 @@ export default function HostsSettingsTab() {
           openUpdate={openUpdate ? updateRequest.intent : false}
           focusSection={focusPlugins ? pluginsRequest.sectionId : undefined}
           offerCopySettings={offerCopySettings}
-          signInOffer={signInOffer?.hostId === detail.descriptor.id ? signInOffer : undefined}
-          onSignInOfferTaken={(seq) => setSignInOffer((prev) => (prev?.seq === seq ? null : prev))}
           onBack={(viaKeyboard) => {
             returnFocusTo.current = { hostId: detail.descriptor.id, visible: viaKeyboard === true };
             setFocusBackFor(null);
@@ -259,7 +242,6 @@ export default function HostsSettingsTab() {
             setUpdateRequest(null);
             setPluginsRequest(null);
             setCopyRequest(null);
-            setSignInOffer(null);
           }}
         />
       </>

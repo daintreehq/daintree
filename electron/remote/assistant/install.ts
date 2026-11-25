@@ -457,13 +457,18 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     // An agent CLI's sign-in on a host, started for the window showing the
     // assistant and answered once that window opens it (#18197). Only a view
     // on screen counts: a cached project view or a hidden window shows nobody.
-    startAgentSignIn: async ({ helpSessionId, hostId, agentId, signal }) => {
+    startAgentSignIn: async ({ helpSessionId, hostId, hostName, agentId, signal }) => {
       const webContentsId = askingWindow(helpSessionId, isOnScreen);
       if (webContentsId === null) return "no_window";
       const canopyHosts = getRemoteService("canopyHosts");
       if (!canopyHosts) return "unsupported";
       return canopyHosts.offerSignIn(webContentsId, hostId, agentId, {
-        stillShown: () => isOnScreen(webContentsId),
+        hostName,
+        // That view, on screen and still showing the assistant: a global one
+        // moved to another window meanwhile is no longer shown there.
+        stillShown: () =>
+          askingWindow(helpSessionId, (id) => id === webContentsId && isOnScreen(id)) ===
+          webContentsId,
         ...(signal ? { signal } : {}),
       });
     },

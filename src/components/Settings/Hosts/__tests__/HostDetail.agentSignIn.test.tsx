@@ -1,13 +1,11 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { StrictMode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostListEntry, HostMetricsSummary } from "@shared/types/remoteHosts";
 
 const signIns = vi.hoisted(() => ({
   startSignIn: vi.fn(),
-  releaseSignIn: vi.fn(async (_consumer: string) => undefined),
-  signInShown: vi.fn(async (_consumer: string) => undefined),
+  releaseSignIn: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/clients/remoteHostsClient", () => ({
@@ -25,7 +23,6 @@ vi.mock("@/clients/canopyHostClient", () => ({
   canopyHostClient: {
     startSignIn: signIns.startSignIn,
     releaseSignIn: signIns.releaseSignIn,
-    signInShown: signIns.signInShown,
     signInStep: vi.fn(async () => null),
     onEvent: vi.fn(() => () => {}),
   },
@@ -36,35 +33,17 @@ vi.mock("@/components/Canopy/CanopyTerminal", () => ({
     runId,
     endedMessage,
     autoFocus,
-    onStreamChange,
   }: {
     runId: string;
     endedMessage?: string;
     autoFocus?: boolean;
-    onStreamChange?: (state: {
-      watchId: number | null;
-      ended: boolean;
-      secretPrompt: boolean;
-    }) => void;
   }) => (
     <div
       data-testid="sign-in-pane"
       data-run-id={runId}
       data-ended-message={endedMessage}
       data-auto-focus={String(autoFocus === true)}
-    >
-      {/* The stream's own transitions, as the live pane publishes them. */}
-      <button
-        type="button"
-        data-testid="pane-opening"
-        onClick={() => onStreamChange?.({ watchId: null, ended: false, secretPrompt: false })}
-      />
-      <button
-        type="button"
-        data-testid="pane-live"
-        onClick={() => onStreamChange?.({ watchId: 3, ended: false, secretPrompt: false })}
-      />
-    </div>
+    />
   ),
 }));
 vi.mock("../HostPluginsSection", () => ({ HostPluginsSection: () => null }));
@@ -136,30 +115,9 @@ async function settle() {
   });
 }
 
-/** Past the task the dialog lets an adopted sign-in go in. */
-async function settleRelease() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-}
-
-function offer(overrides: { seq?: number; agentId?: string; consumer?: string } = {}) {
-  return {
-    seq: overrides.seq ?? 1,
-    hostId: "studio-01",
-    agentId: overrides.agentId ?? "claude",
-    consumer: overrides.consumer ?? "offer-1",
-    terminal: { terminalId: "daintree-sign-in-9", spawnedAt: 5 },
-    expiresAt: Date.now() + 30_000,
-  };
-}
-
-beforeEach(async () => {
-  // A dialog the last test left lets its adopted sign-in go a task later.
-  await new Promise((resolve) => setTimeout(resolve, 0));
+beforeEach(() => {
   signIns.startSignIn.mockReset();
   signIns.releaseSignIn.mockClear();
-  signIns.signInShown.mockClear();
   signIns.startSignIn.mockResolvedValue({ terminalId: "daintree-sign-in-1", spawnedAt: 10 });
 });
 
@@ -288,144 +246,5 @@ describe("HostDetail agent CLI sign-in", () => {
     await settle();
     expect(agentClisText()).toBe(before);
     expect(before.toLowerCase()).not.toMatch(/signed in|not signed|authenticated/);
-  });
-});
-
-describe("HostDetail sign-in started by an assistant (#18197)", () => {
-  it("opens it as the CLI's row would, on the terminal Main started, starting none", async () => {
-    render(<HostDetail entry={entry()} onBack={() => {}} signInOffer={offer()} />);
-    await settle();
-    const dialog = screen.getByTestId("host-agent-sign-in-dialog");
-    expect(dialog.textContent).toContain("Sign in to Claude on studio-01");
-    expect(dialog.textContent).toContain("Runs claude auth login on studio-01.");
-    expect(screen.getByTestId("sign-in-pane").getAttribute("data-run-id")).toBe(
-      "daintree-sign-in-9"
-    );
-    expect(screen.getByTestId("sign-in-pane").getAttribute("data-auto-focus")).toBe("true");
-    expect(signIns.startSignIn).not.toHaveBeenCalled();
-  });
-
-  it("tells Main once, when its terminal goes live, and never for the person's own", async () => {
-    const { unmount } = render(
-      <HostDetail entry={entry()} onBack={() => {}} signInOffer={offer()} />
-    );
-    await settle();
-    fireEvent.click(screen.getByTestId("pane-opening"));
-    expect(signIns.signInShown).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("pane-live"));
-    fireEvent.click(screen.getByTestId("pane-live"));
-    expect(signIns.signInShown.mock.calls).toEqual([["offer-1"]]);
-    unmount();
-
-    signIns.signInShown.mockClear();
-    render(<HostDetail entry={entry()} onBack={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
-    await settle();
-    fireEvent.click(screen.getByTestId("pane-live"));
-    expect(signIns.signInShown).not.toHaveBeenCalled();
-  });
-
-  it("ends it on the host when the dialog closes, and opens each offer once", async () => {
-    const first = offer();
-    const { rerender } = render(
-      <HostDetail entry={entry()} onBack={() => {}} signInOffer={first} />
-    );
-    await settle();
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    await settleRelease();
-    expect(signIns.releaseSignIn).toHaveBeenCalledWith("offer-1");
-    expect(screen.queryByTestId("host-agent-sign-in-dialog")).toBeNull();
-
-    rerender(<HostDetail entry={entry()} onBack={() => {}} signInOffer={{ ...first }} />);
-    await settle();
-    expect(screen.queryByTestId("host-agent-sign-in-dialog")).toBeNull();
-
-    rerender(
-      <HostDetail
-        entry={entry()}
-        onBack={() => {}}
-        signInOffer={offer({ seq: 2, consumer: "offer-2" })}
-      />
-    );
-    await settle();
-    expect(screen.getByTestId("host-agent-sign-in-dialog")).toBeTruthy();
-  });
-
-  it("holds it while the host's rows are on their way, and says once it was taken", async () => {
-    const taken = vi.fn();
-    const waiting = { ...entry(), summary: null } as HostListEntry;
-    const { rerender } = render(
-      <HostDetail
-        entry={waiting}
-        onBack={() => {}}
-        signInOffer={offer()}
-        onSignInOfferTaken={taken}
-      />
-    );
-    await settle();
-    expect(screen.queryByTestId("host-agent-sign-in-dialog")).toBeNull();
-    expect(taken).not.toHaveBeenCalled();
-
-    rerender(
-      <HostDetail
-        entry={entry()}
-        onBack={() => {}}
-        signInOffer={offer()}
-        onSignInOfferTaken={taken}
-      />
-    );
-    await settle();
-    expect(screen.getByTestId("host-agent-sign-in-dialog")).toBeTruthy();
-    expect(taken.mock.calls).toEqual([[1]]);
-  });
-
-  it("says one it left alone was taken too, so it isn't offered again", async () => {
-    const taken = vi.fn();
-    render(
-      <HostDetail
-        entry={entry()}
-        onBack={() => {}}
-        signInOffer={offer({ seq: 4, agentId: "codex" })}
-        onSignInOfferTaken={taken}
-      />
-    );
-    await settle();
-    expect(taken.mock.calls).toEqual([[4]]);
-  });
-
-  it("keeps the sign-in through StrictMode's replayed mount", async () => {
-    render(
-      <StrictMode>
-        <HostDetail entry={entry()} onBack={() => {}} signInOffer={offer()} />
-      </StrictMode>
-    );
-    await settle();
-    await settleRelease();
-    expect(signIns.releaseSignIn).not.toHaveBeenCalled();
-    expect(screen.getByTestId("sign-in-pane").getAttribute("data-run-id")).toBe(
-      "daintree-sign-in-9"
-    );
-    expect(signIns.startSignIn).not.toHaveBeenCalled();
-  });
-
-  it("leaves alone one for a CLI the host doesn't list, or while a sign-in is open, or a host not connected", async () => {
-    const { rerender, unmount } = render(
-      <HostDetail entry={entry()} onBack={() => {}} signInOffer={offer({ agentId: "codex" })} />
-    );
-    await settle();
-    expect(screen.queryByTestId("host-agent-sign-in-dialog")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Sign in to Gemini on studio-01" }));
-    await settle();
-    rerender(<HostDetail entry={entry()} onBack={() => {}} signInOffer={offer({ seq: 2 })} />);
-    await settle();
-    // The person's own sign-in stays, untouched.
-    expect(screen.getByTestId("host-agent-sign-in-dialog").textContent).toContain("Gemini");
-    expect(signIns.releaseSignIn).not.toHaveBeenCalled();
-    unmount();
-
-    render(<HostDetail entry={entry(false)} onBack={() => {}} signInOffer={offer({ seq: 3 })} />);
-    await settle();
-    expect(screen.queryByTestId("host-agent-sign-in-dialog")).toBeNull();
   });
 });

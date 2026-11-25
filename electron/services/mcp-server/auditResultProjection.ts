@@ -7,6 +7,7 @@ import {
   HOST_WATCH_STATUSES,
   HOST_WATCH_WAITING_REASONS,
 } from "../../../shared/types/hostControl.js";
+import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { HANDBACK_REPORTS } from "../../../shared/types/handback.js";
 import { isHostSettingKey } from "../../../shared/types/hostSettings.js";
 import { HOST_BRING_BACK_STATUSES, HOST_WAKE_RESULTS } from "../../../shared/types/hostWake.js";
@@ -501,10 +502,15 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
   ["host.bringBack", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
   [
     "host.startAgentSignIn",
-    // The host and the agent's registry id, each only when it is id-shaped.
+    // The host when it is id-shaped, and the agent only by an id the registry
+    // knows: a code pasted into the wrong field never reaches the log.
     (args) => {
       const record = asRecord(args);
-      return { hostId: auditHostId(record?.hostId), agentId: auditHostId(record?.agentId) };
+      const agentId = record?.agentId;
+      return {
+        hostId: auditHostId(record?.hostId),
+        agentId: typeof agentId === "string" && getAgentConfig(agentId) ? agentId : null,
+      };
     },
   ],
   [

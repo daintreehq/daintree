@@ -233,7 +233,7 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.startAgentSignIn",
     title: "Sign in to a host's agent CLI",
     description:
-      "Open a host's agent CLI sign-in in a terminal in the window showing you, as Settings → Hosts does. The person finishes it there; you can't type or read it. ok: opened, not signed in.",
+      "Open a host agent CLI's sign-in in a terminal in the window showing you. Only the person can type in, read or finish it. ok means it opened, not that it worked.",
     category: "help",
     kind: "command",
     danger: "safe",

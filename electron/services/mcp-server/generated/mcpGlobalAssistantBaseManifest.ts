@@ -1278,7 +1278,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
-      "Open a host's agent CLI sign-in in a terminal in the window showing you, as Settings → Hosts does. The person finishes it there; you can't type or read it. ok: opened, not signed in.",
+      "Open a host agent CLI's sign-in in a terminal in the window showing you. Only the person can type in, read or finish it. ok means it opened, not that it worked.",
     enabled: true,
     id: "host.startAgentSignIn",
     inputSchema: {
@@ -1295,7 +1295,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
           type: "string",
           minLength: 1,
           maxLength: 256,
-          description: "An installed CLI's agentId, as the host list names it.",
+          description: "Installed CLI id from the host list.",
         },
       },
       required: ["hostId", "agentId"],
