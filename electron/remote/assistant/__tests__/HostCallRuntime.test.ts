@@ -5,11 +5,13 @@ import {
 } from "../../../../shared/types/hostControl.js";
 import {
   HostCallRuntime,
+  type HostCallerRefusal,
   type HostCallRuntimeDeps,
   type ObservedHost,
   type OpenRun,
 } from "../HostCallRuntime.js";
 import type { HostWatchListener } from "../HostWatches.js";
+import { HOST_CONTROL_UNAVAILABLE_MESSAGE } from "../../../services/mcp-server/hostControlTools.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -87,7 +89,57 @@ describe("HostCallRuntime (#13493, #13496)", () => {
     it("offers nothing once disposed", async () => {
       runtime.dispose();
       expect(runtime.isCallReachable("a")).toBe(false);
-      await expect(runtime.list("a")).resolves.toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
+      // Its sessions are told the tools are missing here, not that they aren't assistants.
+      await expect(runtime.list("a")).resolves.toEqual({
+        ok: false,
+        code: "NOT_ELIGIBLE",
+        message: HOST_CONTROL_UNAVAILABLE_MESSAGE,
+      });
+      expect(runtime.callerRefusal("a")).toBe(HOST_CONTROL_UNAVAILABLE_MESSAGE);
+    });
+
+    it("tells a session what it lacks, the same before its arguments are read and at the call (#18164)", async () => {
+      const lacking = new Map<string, HostCallerRefusal>();
+      const told = new HostCallRuntime({
+        getSessionLane: () => ({ projectId: "proj-1", slot: 0 }),
+        callerRun: (id) => lacking.get(id) ?? runs.get(id) ?? null,
+        client: () => null,
+        hosts: () => hosts,
+        inLocalView: () => true,
+        listHostProjects,
+      });
+      const reasons: HostCallerRefusal[] = [
+        "ended",
+        "replaced",
+        "remote-view",
+        "no-window",
+        "terminal-down",
+      ];
+      const texts = new Set<string>();
+      for (const reason of reasons) {
+        // The boundary found a run; by the time the call settles, the session has lost it.
+        lacking.delete("a");
+        expect(told.callerRefusal("a")).toBeNull();
+        lacking.set("a", reason);
+        expect(told.callerRefusal("a")).not.toBeNull();
+        const answer = await told.list("a");
+        expect(answer).toEqual({
+          ok: false,
+          code: "NOT_ELIGIBLE",
+          message: told.callerRefusal("a"),
+        });
+        texts.add((answer as { message: string }).message);
+      }
+      // Each says what that session lacks, not who may call.
+      expect(texts.size).toBe(reasons.length);
+      for (const text of texts) {
+        expect(text).not.toMatch(/Daintree Assistant running on this machine/);
+      }
+      expect(lacking.get("a")).toBe("terminal-down");
+      expect(told.callerRefusal("a")).toMatch(/no running terminal/);
+      lacking.set("a", "no-window");
+      expect(told.callerRefusal("a")).toMatch(/window of its project on this machine/);
+      expect(listHostProjects).not.toHaveBeenCalled();
     });
   });
 
