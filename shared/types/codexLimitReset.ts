@@ -78,6 +78,12 @@ export interface CodexLimitStamp {
   /** The pane process that holds it: a sequence alone repeats in a replacement. */
   run: string;
   observedAt: number;
+  /**
+   * The banner's identity, as a digest the pty host makes of what it parsed
+   * (#18193): a restored pane is matched against it, and nothing of the screen
+   * leaves the host.
+   */
+  identity?: string;
 }
 
 /**
@@ -87,7 +93,35 @@ export interface CodexLimitStamp {
  */
 export type CodexLimitAnswer =
   | { stamp: CodexLimitStamp }
-  | { reset: CodexLimitReset; stamp?: CodexLimitStamp; skipAtStop?: CodexLimitStopSkip };
+  | {
+      reset: CodexLimitReset;
+      stamp?: CodexLimitStamp;
+      skipAtStop?: CodexLimitStopSkip;
+      /**
+       * The stamped stop is the restored process's redraw of the stop saved
+       * before a cold restart (#18193): its reset is the saved one, never what
+       * this banner reads as now.
+       */
+      restored?: true;
+    }
+  | { checkpoint: CodexLimitCheckpoint | null };
+
+/**
+ * What an armed pane holds as Daintree quits (#18193), for a cold restore to
+ * pick up: the stop it is still at, untouched since it showed, or Claude Code's
+ * own wait for the reset, which dies with its process, or a restore still
+ * owed its saved stop. Null when it is at none of these.
+ */
+export type CodexLimitCheckpoint =
+  | { kind: "stop"; seq: number; run: string; identity: string }
+  /** A restored process still owed the redraw of its saved stop, with nothing written to it since its launch. */
+  | { kind: "replaying" }
+  | {
+      kind: "own-wait";
+      identity: string;
+      /** Epoch ms by which the window resets, read off the pane's own first sighting. */
+      resetsAt: number;
+    };
 
 /**
  * Why the stamped stop isn't Daintree's to continue, whatever its reset says
@@ -98,4 +132,7 @@ export type CodexLimitStopSkip = Extract<CodexLimitContinueSkipReason, "auto-con
 
 /** The question: a first read, or a resolve of a stamped banner against a reading. */
 export type CodexLimitQuery =
-  { seq?: undefined } | { seq: number; run: string; evidence: CodexLimitEvidence | null };
+  | { seq?: undefined; checkpoint?: undefined }
+  | { seq: number; run: string; evidence: CodexLimitEvidence | null; checkpoint?: undefined }
+  /** What the pane holds for a cold restore, as Daintree quits (#18193). */
+  | { seq?: undefined; checkpoint: true };

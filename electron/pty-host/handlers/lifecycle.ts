@@ -106,6 +106,8 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
         if (msg.options.postSpawnInput) {
           ptyManager.write(msg.id, msg.options.postSpawnInput);
         }
+        // A restored pane's input since its restore counts from here (#18193).
+        ptyManager.markLaunchInputDone(msg.id);
       } catch (error) {
         console.error(`[PtyHost] Spawn failed for terminal ${msg.id}:`, error);
         const parsedError = parseSpawnError(error);

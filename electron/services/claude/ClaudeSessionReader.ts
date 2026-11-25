@@ -930,3 +930,68 @@ export async function readClaudeContextUsage(
     await handle?.close();
   }
 }
+
+/** The entry a Claude Code conversation ends on (#18193), as far as a limit's continuation reads it. */
+export interface ClaudeTranscriptLeaf {
+  /** The record's own id. */
+  uuid: string;
+  /** Claude Code's own stand-in for a reply that failed, its usage-limit notice among them. */
+  apiError: boolean;
+}
+
+/** A leaf sits in the newest few records; a tool result can still fill one with a whole file. */
+const LEAF_MAX_SCAN_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The newest record of the main conversation, said to the agent or by it
+ * (#18193): what a usage limit saved before a cold restart is compared
+ * against, so a turn taken since (in another terminal, while Daintree was
+ * closed) is seen even when its limit reads the same. Subagent records and
+ * Claude Code's bookkeeping (summaries, snapshots, system notes) are stepped
+ * over. Null when the transcript or a leaf can't be read; one file is opened
+ * for reading and closed, and nothing of it is kept but the id.
+ */
+export async function readClaudeTranscriptLeaf(
+  location: ClaudeSessionLocation,
+  options: { signal?: AbortSignal; chunkBytes?: number; maxScanBytes?: number } = {}
+): Promise<ClaudeTranscriptLeaf | null> {
+  const { signal } = options;
+  if (!isSafeSessionId(location.sessionId)) return null;
+  let handle: FileHandle | null = null;
+  try {
+    const transcript = await findTranscript(location, signal);
+    if (!transcript) return null;
+    const opened = await openVerified(transcript.file, transcript.rootReal);
+    if (!opened) return null;
+    handle = opened.handle;
+    const state: ScanState = { partialTail: false, capReached: false };
+    for await (const bytes of linesFromEnd(handle, opened.stats.size, state, {
+      chunkBytes: options.chunkBytes ?? CHUNK_BYTES,
+      maxScanBytes: options.maxScanBytes ?? LEAF_MAX_SCAN_BYTES,
+      signal,
+    })) {
+      let record: unknown;
+      try {
+        record = JSON.parse(bytes.toString("utf8"));
+      } catch {
+        continue;
+      }
+      if (!record || typeof record !== "object") continue;
+      // A record still being written is newer than any leaf found behind it.
+      if (state.partialTail) return null;
+      const { type, uuid, isSidechain, isMeta, isCompactSummary, isApiErrorMessage } =
+        record as Record<string, unknown>;
+      if ((type !== "user" && type !== "assistant") || isSidechain === true) continue;
+      if (isMeta === true || isCompactSummary === true) continue;
+      const id = boundedString(uuid);
+      if (id === null) return null;
+      return { uuid: id, apiError: isApiErrorMessage === true };
+    }
+    return null;
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return null;
+  } finally {
+    await handle?.close();
+  }
+}

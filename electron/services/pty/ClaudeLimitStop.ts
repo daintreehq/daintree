@@ -5,6 +5,7 @@ import type {
 import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { resolveResetsAt } from "./ClaudeUsageWarnings.js";
 import { readClaudeLimitScreen } from "./claudeLimitStopScreen.js";
+import { limitStopIdentity } from "./limitStopIdentity.js";
 
 /** Claude prints the reset's minute without its seconds: it has passed once that minute ends. */
 const MINUTE_MS = 60_000;
@@ -38,6 +39,16 @@ export interface ClaudeLimitStop {
   seq: number;
   /** The banner and whether Claude's wait was cancelled, as the reset's check compares it. */
   bannerKey: string;
+  /**
+   * The banner alone, whether or not a wait of Claude's was drawn with it, as
+   * a digest: what a stop saved before a cold restart is matched on (#18193).
+   */
+  identity: string;
+  /**
+   * First seen by a restored process before any input reached it, so a
+   * redraw of the conversation it resumed rather than a limit it hit (#18193).
+   */
+  replay: boolean;
   /** The history above the banner, the most of it any look showed. */
   context: string;
   incarnation: number;
@@ -68,6 +79,25 @@ export interface ClaudeLimitLook {
   observedSince: number | null;
   /** When the pane first showed `window`'s reached limit with `resetText`, if that is known. */
   shownAt(window: ClaudeUsageWindow, resetText: string): number | null;
+  /** A restored process that has taken no input yet: what it shows is its resumed history (#18193). */
+  replay?: boolean;
+}
+
+/**
+ * Claude Code's own wait for the reset, on screen in an armed pane (#18193). It
+ * is a timer inside the CLI's process, so a cold restart loses it; Daintree
+ * saves it as Daintree quits, and never acts on it while it runs.
+ */
+export interface ClaudeOwnWait {
+  identity: string;
+  incarnation: number;
+  reset: ClaudeLimitStop["reset"];
+  /** The terminal's input count when it first showed. */
+  inputSeq: number;
+  /** The latest look showed it: a frame without the banner (a resize) keeps what it first showed. */
+  shown: boolean;
+  /** A prompt was sent while it showed: gone from a look after that, it has ended. */
+  endsIfHidden?: boolean;
 }
 
 interface EscapeNote {
@@ -94,6 +124,7 @@ interface EscapeNote {
  */
 export class ClaudeLimitStopTracker {
   private stop: ClaudeLimitStop | null = null;
+  private countdown: ClaudeOwnWait | null = null;
   private escapes: EscapeNote[] = [];
   /** When a look first showed a live banner, since the last that showed none (monotonic). */
   private bannerSince: number | null = null;
@@ -106,9 +137,15 @@ export class ClaudeLimitStopTracker {
     return this.stop;
   }
 
+  /** Claude's own wait as the latest look showed it, or null. */
+  ownWait(): ClaudeOwnWait | null {
+    return this.countdown;
+  }
+
   /** Forget everything: the pane torn down. */
   clear(): void {
     this.stop = null;
+    this.countdown = null;
     if (this.escapes.length > 0) this.escapes = [];
     this.bannerSince = null;
     this.armedAt = null;
@@ -121,6 +158,7 @@ export class ClaudeLimitStopTracker {
    */
   hide(): void {
     this.bannerSince = null;
+    this.countdown = null;
     if (this.stop) {
       this.stop.shown = false;
       this.stop.ownWait = false;
@@ -138,7 +176,10 @@ export class ClaudeLimitStopTracker {
   }
 
   /** A write of input at monotonic `at`, as the pty host took it; `owner` names the assistant it was written for. */
-  noteInput(data: string, owner: string | undefined, at: number): void {
+  noteInput(data: string, owner: string | undefined, at: number, sendsPrompt = false): void {
+    // A prompt sent while Claude waits: a wait still on screen at the next look
+    // is the one first seen, touched; one drawn after it went away is another.
+    if (sendsPrompt && this.countdown) this.countdown.endsIfHidden = true;
     if (!isEscapeOnly(data)) return;
     this.escapes.push({ at, assistant: owner !== undefined });
     if (this.escapes.length > MAX_ESCAPES) this.escapes.shift();
@@ -154,6 +195,14 @@ export class ClaudeLimitStopTracker {
     // place) says nothing either way.
     if (screen === "no-composer") return;
     const held = this.stop;
+    // A frame with no banner at all keeps the wait's first sighting; anything
+    // printed after the banner, or the banner with no wait of Claude's, ends it.
+    if (screen === null) {
+      if (this.countdown?.endsIfHidden) this.countdown = null;
+      else if (this.countdown) this.countdown.shown = false;
+    } else if (!screen.last || !screen.countdown) {
+      this.countdown = null;
+    }
     if (screen === null || !screen.last) {
       this.bannerSince = null;
       if (held) {
@@ -166,10 +215,23 @@ export class ClaudeLimitStopTracker {
       return;
     }
     this.bannerSince ??= look.tick;
+    const identity = limitStopIdentity("claude", JSON.stringify([screen.window, screen.resetText]));
     if (screen.countdown) {
       if (held) {
         held.shown = false;
         held.ownWait = true;
+      }
+      const seen = this.countdown;
+      if (seen !== null && seen.identity === identity && seen.incarnation === look.incarnation) {
+        seen.shown = true;
+      } else {
+        this.countdown = {
+          identity,
+          incarnation: look.incarnation,
+          reset: resetOf(screen.window, screen.resetText, look),
+          inputSeq: look.inputSeq,
+          shown: true,
+        };
       }
       return;
     }
@@ -194,6 +256,8 @@ export class ClaudeLimitStopTracker {
     this.stop = {
       seq: this.nextSeq(),
       bannerKey: screen.bannerKey,
+      identity,
+      replay: resumed ? kept.replay : look.replay === true,
       context,
       incarnation: look.incarnation,
       observedSince: look.observedSince,

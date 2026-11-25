@@ -359,11 +359,13 @@ const { mockResolveSettingTemplate } = vi.hoisted(() => ({
 const { mockArmWhenDoneLaunch } = vi.hoisted(() => ({
   mockArmWhenDoneLaunch: vi.fn(() => true),
 }));
-const { mockNoteContinuationLaunch } = vi.hoisted(() => ({
+const { mockNoteContinuationLaunch, mockPrepareContinuationLaunch } = vi.hoisted(() => ({
   mockNoteContinuationLaunch: vi.fn(),
+  mockPrepareContinuationLaunch: vi.fn(async () => {}),
 }));
 vi.mock("../../../../services/codexLimitContinuation/codexLimitContinuationLive.js", () => ({
   noteContinuationLaunch: mockNoteContinuationLaunch,
+  prepareContinuationLaunch: mockPrepareContinuationLaunch,
 }));
 vi.mock("../../../../services/terminalWhenDone/terminalWhenDoneLive.js", () => ({
   armWhenDoneLaunch: mockArmWhenDoneLaunch,
@@ -3930,7 +3932,12 @@ describe("terminal close handlers - resume journaling", () => {
       ptyClient.getTerminalAsync.mockResolvedValue(null);
       ptyClient.gracefulKill.mockResolvedValue(null);
       const forgetPane = vi.fn();
-      setContinuationForgetter({ forgetPane, forgetProject: vi.fn(), noteSpawn: vi.fn() });
+      setContinuationForgetter({
+        forgetPane,
+        forgetProject: vi.fn(),
+        noteSpawn: vi.fn(),
+        checkpointForQuit: vi.fn(async () => {}),
+      });
       try {
         const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
         await handler({}, "term-1", { forRestart: true });
@@ -4576,6 +4583,56 @@ describe("terminal spawn handler - a preset arming the pane to continue (#17912)
     expect(ptyClient.spawn.mock.calls[0][1].agentAccountId).toBeUndefined();
   });
 
+  it("reads what the previous run saved before the spawn goes out (#18193)", async () => {
+    let finishRead!: () => void;
+    mockPrepareContinuationLaunch.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishRead = resolve))
+    );
+    const spawning = codexSpawn();
+    await vi.waitFor(() => expect(mockPrepareContinuationLaunch).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
+    finishRead();
+    await spawning;
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the continuation what a restore resumes, and nothing of it for any other launch (#18193)", async () => {
+    await codexSpawn({ restore: true, agentSessionId: "019a-thread" });
+    expect(mockNoteContinuationLaunch).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        restore: { agentId: "codex", sessionId: "019a-thread", startsFresh: false },
+      })
+    );
+    await codexSpawn({ id: "terminal-codex-2" });
+    expect(mockNoteContinuationLaunch.mock.calls.at(-1)![0]).not.toHaveProperty("restore");
+  });
+
+  it("names a restore that forks its conversation as a fresh one (#18193)", async () => {
+    const claudeRestore = {
+      id: "terminal-claude",
+      launchAgentId: "claude",
+      command: "claude --resume 1ad2578c-b710-4302-90c1-b222c4c29aa2",
+      agentSessionId: "1ad2578c-b710-4302-90c1-b222c4c29aa2",
+      restore: true,
+    };
+    await codexSpawn(claudeRestore);
+    expect(mockNoteContinuationLaunch).toHaveBeenLastCalledWith(
+      expect.objectContaining({ restore: expect.objectContaining({ startsFresh: false }) })
+    );
+    await codexSpawn({
+      id: "terminal-claude",
+      launchAgentId: "claude",
+      command: "claude --resume 1ad2578c-b710-4302-90c1-b222c4c29aa2",
+      agentSessionId: "1ad2578c-b710-4302-90c1-b222c4c29aa2",
+      agentLaunchFlags: ["--fork-session"],
+      restore: true,
+    });
+    expect(mockNoteContinuationLaunch).toHaveBeenLastCalledWith(
+      expect.objectContaining({ restore: expect.objectContaining({ startsFresh: true }) })
+    );
+  });
+
   it("names the launch's own preset as the original when the launch names none", async () => {
     await codexSpawn({ originalAgentPresetId: undefined });
 
@@ -4609,7 +4666,12 @@ describe("terminal spawn handler - a preset arming the pane to continue (#17912)
 
   it("only names any other spawn, for an agent Daintree can't continue, a shell, or the Assistant", async () => {
     const noteSpawn = vi.fn();
-    setContinuationForgetter({ forgetPane: vi.fn(), forgetProject: vi.fn(), noteSpawn });
+    setContinuationForgetter({
+      forgetPane: vi.fn(),
+      forgetProject: vi.fn(),
+      noteSpawn,
+      checkpointForQuit: vi.fn(async () => {}),
+    });
     try {
       await codexSpawn({ id: "gemini-pane", launchAgentId: "gemini", command: "gemini" });
       await codexSpawn({ id: "shell-pane", launchAgentId: undefined, command: undefined });

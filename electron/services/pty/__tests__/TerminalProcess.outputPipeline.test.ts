@@ -1587,7 +1587,9 @@ describe("TerminalProcess Codex limit reset (#17906)", () => {
     });
   const stampOf = (terminal: TerminalProcess) => {
     const answer = terminal.answerCodexLimit({}, terminal.analysisObservedSince());
-    if ("reset" in answer) throw new Error(`expected a stamp, got ${JSON.stringify(answer)}`);
+    if ("reset" in answer || "checkpoint" in answer) {
+      throw new Error(`expected a stamp, got ${JSON.stringify(answer)}`);
+    }
     return answer.stamp;
   };
   const codexBucket = (...windows: Array<{ usedPercent: number; resetsAt: number | null }>) => ({
@@ -2159,7 +2161,12 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
         source: "banner",
         observedAt: expect.any(Number),
       },
-      stamp: { run: stops[0]!.run, seq: stops[0]!.seq, observedAt: expect.any(Number) },
+      stamp: {
+        run: stops[0]!.run,
+        seq: stops[0]!.seq,
+        observedAt: expect.any(Number),
+        identity: expect.any(String),
+      },
     });
     expect(JSON.stringify(reply)).not.toMatch(/limit|9pm/);
     expect(await continueAt(terminal, stops[0]!)).toEqual({
@@ -2372,5 +2379,420 @@ describe("TerminalProcess continuing a Claude Code pane once its own wait is gon
       reason: "disarmed",
     });
     terminal.dispose();
+  });
+});
+
+describe("TerminalProcess restored after a cold restart (#18193)", () => {
+  const unsubscribers: Array<() => void> = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 10, 19, 15, 0));
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  function collect() {
+    const stops: Array<{ run: string; seq: number }> = [];
+    unsubscribers.push(
+      events.on("agent:codex-limit-stopped", (payload) =>
+        stops.push({ run: payload.run, seq: payload.seq })
+      )
+    );
+    return stops;
+  }
+
+  type Internals = { terminalInfo: { ptyProcess: IPty } };
+  const typedInto = (terminal: TerminalProcess) => {
+    const write = vi.spyOn((terminal as unknown as Internals).terminalInfo.ptyProcess, "write");
+    return () => write.mock.calls.map(([data]) => data).join("");
+  };
+
+  async function show(screen: string) {
+    ptyOnDataCallback!(screen);
+    await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+  }
+
+  async function continueAt(terminal: TerminalProcess, stop: { run: string; seq: number }) {
+    const result = terminal.continueAtCodexLimit(stop);
+    await vi.advanceTimersByTimeAsync(2_000);
+    return result;
+  }
+
+  const checkpointOf = (terminal: TerminalProcess) => {
+    const answer = terminal.answerCodexLimit(
+      { checkpoint: true },
+      terminal.analysisObservedSince()
+    );
+    if (!("checkpoint" in answer))
+      throw new Error(`expected a checkpoint, got ${JSON.stringify(answer)}`);
+    return answer.checkpoint;
+  };
+
+  /** A restored pane's process: launched by a restore, its own launch input written. */
+  function restoredPane(launchAgentId: "codex" | "claude", restoreIdentity?: string) {
+    const stops = collect();
+    const terminal = createTerminal({ launchAgentId, restore: true });
+    // The host's own launch input comes before the mark, and never counts.
+    terminal.write(`${launchAgentId} resume\r`);
+    terminal.markLaunchInputDone();
+    terminal.setCodexLimitContinueArmed(true, restoreIdentity);
+    return { terminal, stops, typed: typedInto(terminal) };
+  }
+
+  describe("a Codex pane", () => {
+    const BANNER = "■ You’ve hit your usage limit. Try again at 3:40 PM.";
+    const stopScreen = (after: string[] = []) =>
+      "\x1b[?2004h\x1b[2J\x1b[H• Ran the tests.\r\n\r\n" +
+      `${BANNER}\r\n\r\n` +
+      after.map((row) => `${row}\r\n\r\n`).join("") +
+      "\x1b[48;2;30;30;30m\x1b[K\r\n" +
+      "\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[22m\x1b[K\r\n" +
+      "\x1b[K\x1b[0m\r\n" +
+      "  ? for shortcuts";
+
+    /** What the run before the quit saved: its own sighting's identity, as the host stamped it. */
+    async function savedIdentity() {
+      const stops = collect();
+      const terminal = createTerminal({ launchAgentId: "codex" });
+      terminal.setCodexLimitContinueArmed(true);
+      await show(stopScreen());
+      expect(stops).toHaveLength(1);
+      const checkpoint = checkpointOf(terminal);
+      terminal.dispose();
+      if (checkpoint?.kind !== "stop") throw new Error("expected the stop held untouched");
+      return checkpoint.identity;
+    }
+
+    it("never reports a stop its resumed history redraws when nothing was saved", async () => {
+      const { terminal, stops } = restoredPane("codex");
+      await show(stopScreen());
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+      expect(stops).toEqual([]);
+      // Recognised all the same: only its report is held back.
+      expect(terminal.answerCodexLimit({}, terminal.analysisObservedSince())).toHaveProperty(
+        "stamp"
+      );
+      terminal.dispose();
+    });
+
+    it("keeps a redraw resumed history though a draft was typed and erased, and nothing was sent", async () => {
+      const { terminal, stops } = restoredPane("codex");
+      terminal.write("x");
+      terminal.write("\x7f");
+      await show(stopScreen());
+      expect(stops).toEqual([]);
+      terminal.dispose();
+    });
+
+    it("keeps a redraw resumed history though a multi-line paste was put in the composer", async () => {
+      const { terminal, stops } = restoredPane("codex");
+      terminal.write("\x1b[200~first line\rsecond line\x1b[201~");
+      terminal.write("\x1b\r");
+      await show(stopScreen());
+      expect(stops).toEqual([]);
+      terminal.dispose();
+    });
+
+    it("keeps a redraw resumed history through a soft newline and a paste sent in pieces", async () => {
+      const { terminal, stops } = restoredPane("codex");
+      terminal.write("first line\n");
+      terminal.write("\x1b[200~");
+      terminal.write("pasted\rbody\r");
+      terminal.write("\x1b[201~");
+      await show(stopScreen());
+      expect(stops).toEqual([]);
+      // An Enter after the paste closed does send.
+      terminal.write("\r");
+      await show(stopScreen().replace("Ran the tests.", "Ran the tests again."));
+      expect(stops).toHaveLength(1);
+      terminal.dispose();
+    });
+
+    it("never takes another limit's redraw for the saved one", async () => {
+      const { terminal, stops } = restoredPane("codex", "another-stop");
+      await show(stopScreen());
+      expect(stops).toEqual([]);
+      terminal.dispose();
+    });
+
+    it("takes the saved stop's identity sent after the arming, as main sends it", async () => {
+      const identity = await savedIdentity();
+      const { terminal, stops } = restoredPane("codex");
+      await show(stopScreen());
+      expect(stops).toEqual([]);
+      terminal.setCodexLimitContinueArmed(true, identity);
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS + 500);
+      expect(stops).toHaveLength(1);
+      terminal.dispose();
+    });
+
+    it("reports a limit hit after a prompt as a limit of its own, never the saved one", async () => {
+      const identity = await savedIdentity();
+      const { terminal, stops } = restoredPane("codex", identity);
+      terminal.write("keep going\r");
+      await show(stopScreen());
+      expect(stops).toHaveLength(1);
+      expect(terminal.answerCodexLimit({}, terminal.analysisObservedSince())).not.toHaveProperty(
+        "restored"
+      );
+      terminal.dispose();
+    });
+
+    it("reports a replayed redraw of the bound stop after a gap as that stop again", async () => {
+      const identity = await savedIdentity();
+      const { terminal, stops } = restoredPane("codex", identity);
+      await show(stopScreen());
+      // Something over the banner for a while, then the same screen back.
+      await show("\x1b[2J\x1b[H• Ran the tests.\r\n");
+      await vi.advanceTimersByTimeAsync(6_000);
+      await show(stopScreen());
+      expect(stops).toHaveLength(2);
+      expect(stops[1]!.seq).not.toBe(stops[0]!.seq);
+      expect(terminal.answerCodexLimit({}, terminal.analysisObservedSince())).toMatchObject({
+        stamp: stops[1],
+        restored: true,
+      });
+      terminal.dispose();
+    });
+
+    it("answers that an unbound restore is still owed its stop, until input reaches it", async () => {
+      const { terminal } = restoredPane("codex", "saved-digest");
+      expect(checkpointOf(terminal)).toEqual({ kind: "replaying" });
+      terminal.write("x");
+      expect(checkpointOf(terminal)).toBeNull();
+      terminal.dispose();
+    });
+
+    it("reports the redraw of the saved stop as that stop, and types `continue` into it", async () => {
+      const identity = await savedIdentity();
+      const { terminal, stops, typed } = restoredPane("codex", identity);
+      await show(stopScreen());
+      expect(stops).toHaveLength(1);
+      expect(terminal.answerCodexLimit({}, terminal.analysisObservedSince())).toMatchObject({
+        stamp: { ...stops[0], identity },
+        restored: true,
+      });
+      expect(await continueAt(terminal, stops[0]!)).toEqual({
+        status: "continued",
+        line: "continue",
+      });
+      expect(typed()).toBe("continue\r");
+      terminal.dispose();
+    });
+
+    it("types nothing into a restored pane that took input before its redraw, though it was erased", async () => {
+      const identity = await savedIdentity();
+      const { terminal, stops, typed } = restoredPane("codex", identity);
+      terminal.write("x");
+      terminal.write("\x7f");
+      await show(stopScreen());
+      expect(stops).toHaveLength(1);
+      expect(await continueAt(terminal, stops[0]!)).toEqual({
+        status: "skipped",
+        reason: "input-since",
+      });
+      expect(typed()).toBe("x\x7f");
+      terminal.dispose();
+    });
+
+    it("types nothing into a restored pane whose conversation has a turn after the limit", async () => {
+      const identity = await savedIdentity();
+      const { terminal, stops, typed } = restoredPane("codex", identity);
+      await show(stopScreen(["› keep going", "• Picked the parser up again."]));
+      expect(stops).toHaveLength(1);
+      expect(await continueAt(terminal, stops[0]!)).toEqual({
+        status: "skipped",
+        reason: "banner-not-last",
+      });
+      expect(typed()).toBe("");
+      terminal.dispose();
+    });
+
+    it("holds a stop untouched for the quit, and none once input followed it", async () => {
+      const stops = collect();
+      const terminal = createTerminal({ launchAgentId: "codex" });
+      terminal.setCodexLimitContinueArmed(true);
+      await show(stopScreen());
+      expect(checkpointOf(terminal)).toEqual({
+        kind: "stop",
+        ...stops[0],
+        identity: expect.any(String),
+      });
+      terminal.write("x");
+      expect(checkpointOf(terminal)).toBeNull();
+      terminal.dispose();
+    });
+
+    it("holds no stop for the quit once a choice dialog showed after it", async () => {
+      const terminal = createTerminal({ launchAgentId: "codex" });
+      terminal.setCodexLimitContinueArmed(true);
+      await show(stopScreen());
+      const info = (terminal as unknown as { terminalInfo: Record<string, unknown> }).terminalInfo;
+      info.agentState = "waiting";
+      info.waitingReason = "approval";
+      await show(stopScreen());
+      info.waitingReason = "error";
+      expect(checkpointOf(terminal)).toBeNull();
+      terminal.dispose();
+    });
+  });
+
+  describe("a Claude Code pane", () => {
+    // The banner's reset is 9pm UTC the same day.
+    const resetsAt = Date.UTC(2026, 10, 19, 21, 0) + 60_000;
+    const RULE = "─".repeat(78);
+    const BANNER = "  ⎿  You've hit your weekly limit · resets 9pm (UTC)";
+    const CANCELLED = "  ⎿  Automatic continue cancelled · /rate-limit-options to re-arm";
+    const COUNTDOWN = "  Usage limit reached · continuing automatically at 9pm · esc to cancel";
+    const claudeScreen = ({
+      notice = [] as string[],
+      footer = "  ⏵⏵ accept edits on (shift+tab to cycle)",
+    } = {}) =>
+      "\x1b[2J\x1b[H" +
+      [
+        "● Refactoring the parser.",
+        BANNER,
+        "     /upgrade to increase your usage limit.",
+        "",
+        ...notice,
+        RULE,
+        "❯ ",
+        RULE,
+        footer,
+      ].join("\r\n");
+
+    /** Claude's own countdown as Daintree quits: saved from the pane's own sighting. */
+    async function savedOwnWait() {
+      const stops = collect();
+      const terminal = createTerminal({ launchAgentId: "claude" });
+      terminal.setCodexLimitContinueArmed(true);
+      await show(claudeScreen({ footer: COUNTDOWN }));
+      expect(stops).toEqual([]);
+      const checkpoint = checkpointOf(terminal);
+      terminal.dispose();
+      if (checkpoint?.kind !== "own-wait") throw new Error("expected Claude's own wait");
+      return checkpoint;
+    }
+
+    it("saves Claude's own countdown with the reset it showed, and nothing once input followed", async () => {
+      expect(await savedOwnWait()).toEqual({
+        kind: "own-wait",
+        identity: expect.any(String),
+        resetsAt,
+      });
+      const terminal = createTerminal({ launchAgentId: "claude" });
+      terminal.setCodexLimitContinueArmed(true);
+      await show(claudeScreen({ footer: COUNTDOWN }));
+      terminal.write("x");
+      terminal.write("\x7f");
+      // A frame without the banner (a resize), then the countdown again.
+      await show("\x1b[2J\x1b[H");
+      await show(claudeScreen({ footer: COUNTDOWN }));
+      expect(checkpointOf(terminal)).toBeNull();
+      terminal.dispose();
+    });
+
+    it("holds Claude's countdown touched by an Enter while it stayed on screen", async () => {
+      const terminal = createTerminal({ launchAgentId: "claude" });
+      terminal.setCodexLimitContinueArmed(true);
+      await show(claudeScreen({ footer: COUNTDOWN }));
+      terminal.write("\r");
+      await show(claudeScreen({ footer: COUNTDOWN }));
+      expect(checkpointOf(terminal)).toBeNull();
+      terminal.dispose();
+    });
+
+    it("keeps the reset its countdown first showed through a frame without it", async () => {
+      const terminal = createTerminal({ launchAgentId: "claude" });
+      terminal.setCodexLimitContinueArmed(true);
+      await show(claudeScreen({ footer: COUNTDOWN }));
+      await show("\x1b[2J\x1b[H");
+      expect(checkpointOf(terminal)).toBeNull();
+      await show(claudeScreen({ footer: COUNTDOWN }));
+      expect(checkpointOf(terminal)).toMatchObject({ kind: "own-wait", resetsAt });
+      terminal.dispose();
+    });
+
+    it("continues the redraw of a saved countdown, its cancel notice judged before the restart", async () => {
+      const saved = await savedOwnWait();
+      const { terminal, stops, typed } = restoredPane("claude", saved.identity);
+      await show(claudeScreen({ notice: [CANCELLED, ""] }));
+      expect(stops).toHaveLength(1);
+      const reply = terminal.answerCodexLimit({}, terminal.analysisObservedSince());
+      expect(reply).toMatchObject({ restored: true });
+      expect(reply).not.toHaveProperty("skipAtStop");
+      expect(await continueAt(terminal, stops[0]!)).toEqual({
+        status: "continued",
+        line: "continue",
+      });
+      expect(typed()).toBe("continue\r");
+      terminal.dispose();
+    });
+
+    it("never reports a redrawn limit nobody saved", async () => {
+      const { terminal, stops } = restoredPane("claude");
+      await show(claudeScreen());
+      await vi.advanceTimersByTimeAsync(RATE_LIMIT_SETTLE_MS * 4);
+      expect(stops).toEqual([]);
+      terminal.dispose();
+    });
+
+    it("types nothing into a restored pane that took input before its redraw", async () => {
+      const saved = await savedOwnWait();
+      const { terminal, stops, typed } = restoredPane("claude", saved.identity);
+      terminal.write("\x1b");
+      await show(claudeScreen());
+      expect(stops).toHaveLength(1);
+      expect(await continueAt(terminal, stops[0]!)).toEqual({
+        status: "skipped",
+        reason: "input-since",
+      });
+      expect(typed()).toBe("\x1b");
+      terminal.dispose();
+    });
+
+    it("never lets a limit with other words claim the saved countdown", async () => {
+      const saved = await savedOwnWait();
+      const { terminal, stops } = restoredPane("claude", saved.identity);
+      await show(claudeScreen().replace("resets 9pm", "resets 11pm"));
+      expect(stops).toEqual([]);
+      terminal.dispose();
+    });
+
+    it("types nothing into a restored pane that took input since its restore", async () => {
+      const saved = await savedOwnWait();
+      const { terminal, stops, typed } = restoredPane("claude", saved.identity);
+      await show(claudeScreen());
+      terminal.write("\x1b");
+      expect(await continueAt(terminal, stops[0]!)).toEqual({
+        status: "skipped",
+        reason: "input-since",
+      });
+      expect(typed()).toBe("\x1b");
+      terminal.dispose();
+    });
+
+    it("reports a later limit with the same words as a limit of its own, after the restored one", async () => {
+      const saved = await savedOwnWait();
+      const { terminal, stops } = restoredPane("claude", saved.identity);
+      await show(claudeScreen());
+      expect(await continueAt(terminal, stops[0]!)).toMatchObject({ status: "continued" });
+      await show(
+        claudeScreen().replace(
+          "● Refactoring the parser.",
+          "● Refactoring the parser.\r\n> continue\r\n● Back on it."
+        )
+      );
+      expect(stops).toHaveLength(2);
+      const reply = terminal.answerCodexLimit({}, terminal.analysisObservedSince());
+      expect(reply).not.toHaveProperty("restored");
+      terminal.dispose();
+    });
   });
 });

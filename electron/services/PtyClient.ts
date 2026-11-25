@@ -3182,9 +3182,17 @@ export class PtyClient extends EventEmitter {
     return promise.catch(() => false);
   }
 
-  /** Arm or disarm reporting the terminal's settled Codex stop (#17909). */
-  setCodexLimitContinue(id: string, armed: boolean): void {
-    this.shardForTerminal(id).send({ type: "set-codex-limit-continue", id, armed });
+  /**
+   * Arm or disarm reporting the terminal's settled Codex stop (#17909);
+   * `restoreIdentity` names the stop saved before a cold restart (#18193).
+   */
+  setCodexLimitContinue(id: string, armed: boolean, restoreIdentity?: string | null): void {
+    this.shardForTerminal(id).send({
+      type: "set-codex-limit-continue",
+      id,
+      armed,
+      ...(restoreIdentity !== undefined && { restoreIdentity }),
+    });
   }
 
   /**

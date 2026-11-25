@@ -29,6 +29,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     setSabMode: vi.fn(),
     isSabMode: vi.fn(() => false),
     write: vi.fn(),
+    markLaunchInputDone: vi.fn(),
     submit: vi.fn(),
     resize: vi.fn(),
     spawn: vi.fn(),
@@ -706,5 +707,18 @@ describe("lifecycle spawn — TERMINAL_ALREADY_LIVE rejection protects the live 
 
     expect(ctx.ptyManager.write).toHaveBeenCalledTimes(1);
     expect(ctx.ptyManager.write).toHaveBeenCalledWith("t1", "claude\r");
+  });
+
+  it("marks where input since a restore counts from once its own launch input is written (#18193)", () => {
+    const ctx = makeCtx();
+    (ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>).mockReturnValue(termInfo(1234));
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { postSpawnInput: "claude\r" } });
+
+    const write = (ctx.ptyManager.write as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!;
+    const marked = ctx.ptyManager.markLaunchInputDone as ReturnType<typeof vi.fn>;
+    expect(marked).toHaveBeenCalledWith("t1");
+    expect(marked.mock.invocationCallOrder[0]).toBeGreaterThan(write);
   });
 });

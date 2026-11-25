@@ -346,8 +346,17 @@ export type PtyHostRequest =
   | { type: "withdraw-submission"; id: string; submissionToken: string }
   /** Drop input queued for the PTY but not yet written; input stays open. */
   | { type: "cancel-pending-input"; id: string }
-  /** Arm or disarm reporting this pane's settled Codex stop (#17909). */
-  | { type: "set-codex-limit-continue"; id: string; armed: boolean }
+  /**
+   * Arm or disarm reporting this pane's settled Codex stop (#17909).
+   * `restoreIdentity` names the stop saved before a cold restart that this
+   * restored process may redraw (#18193); null forgets it.
+   */
+  | {
+      type: "set-codex-limit-continue";
+      id: string;
+      armed: boolean;
+      restoreIdentity?: string | null;
+    }
   /** Check the pane is still at `stop` and type the line that continues it (#17909). */
   | {
       type: "continue-codex-limit";

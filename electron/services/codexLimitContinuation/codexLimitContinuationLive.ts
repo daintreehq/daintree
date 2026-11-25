@@ -1,4 +1,6 @@
-import { powerMonitor } from "electron";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { app, powerMonitor } from "electron";
 import { CHANNELS } from "../../ipc/channels.js";
 import { broadcastToProjectRenderers } from "../../ipc/utils.js";
 import { store } from "../../store.js";
@@ -11,7 +13,16 @@ import { readCodexLimitStop } from "../codex/CodexLimitReset.js";
 import type { AgentSettings } from "../../../shared/types/agentSettings.js";
 import type { AgentPreset } from "../../../shared/config/agentRegistry.js";
 import type { CodexLimitStopRef } from "../../../shared/types/codexLimitContinuation.js";
-import { CodexLimitContinuation, type ContinuationTerminal } from "./CodexLimitContinuation.js";
+import type { CodexLimitCheckpoint } from "../../../shared/types/codexLimitReset.js";
+import { isCleaningUp } from "../../lifecycle/shutdownCoordinator.js";
+import { resilientAtomicWriteFile } from "../../utils/fs.js";
+import {
+  CodexLimitContinuation,
+  type ContinuationRestore,
+  type ContinuationTerminal,
+  type ContinuationTurn,
+} from "./CodexLimitContinuation.js";
+import { ContinuationStore } from "./ContinuationStore.js";
 import {
   decideLimitFallback,
   limitFallbackOptIn,
@@ -35,7 +46,74 @@ async function readTerminal(terminalId: string): Promise<ContinuationTerminal | 
     isAssistantTerminal: info.isAssistantTerminal === true,
     spawnedAt: info.spawnedAt,
     launchGeneration: info.launchGeneration,
+    agentSessionId: info.agentSessionId,
   };
+}
+
+/** What an armed pane holds as Daintree quits (#18193); undefined when its host didn't answer. */
+async function readCheckpoint(
+  terminalId: string
+): Promise<CodexLimitCheckpoint | null | undefined> {
+  const pty = getPtyClient();
+  if (!pty) return undefined;
+  const info = await pty.getTerminalAsync(terminalId, undefined, {
+    strict: true,
+    codexLimit: { checkpoint: true },
+  });
+  // A record already gone says nothing about what the pane held.
+  if (!info) return undefined;
+  const answer = info.codexLimit;
+  return answer && "checkpoint" in answer ? answer.checkpoint : null;
+}
+
+/**
+ * The newest entry of the pane's Claude Code transcript (#18193), read from the
+ * store remembered at its spawn; undefined wherever that store isn't certain.
+ */
+async function readTurn(terminalId: string): Promise<ContinuationTurn | undefined> {
+  const [{ resolveClaudeTerminal }, { getClaudePaneProjectsRoot }, { readClaudeTranscriptLeaf }] =
+    await Promise.all([
+      import("../claude/ClaudeSubagentService.js"),
+      import("../claude/ClaudeSessionStore.js"),
+      import("../claude/ClaudeSessionReader.js"),
+    ]);
+  const resolved = await resolveClaudeTerminal(terminalId);
+  if ("status" in resolved) return undefined;
+  const projectsRoot = getClaudePaneProjectsRoot(terminalId, resolved.parentSessionId);
+  if (!projectsRoot) return undefined;
+  const leaf = await readClaudeTranscriptLeaf({
+    projectsRoot,
+    cwd: resolved.cwd,
+    sessionId: resolved.parentSessionId,
+  });
+  return leaf ?? undefined;
+}
+
+const STORE_FILE = "limit-continuation.json";
+let continuationStore: ContinuationStore | null = null;
+
+/** The saved continuations (#18193), read only once a pane Daintree can continue launches. */
+function getContinuationStore(): ContinuationStore {
+  if (continuationStore) return continuationStore;
+  const file = path.join(app.getPath("userData"), STORE_FILE);
+  continuationStore = new ContinuationStore({
+    read: () =>
+      fs.readFile(file, "utf-8").catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      }),
+    write: (data) => resilientAtomicWriteFile(file, data, "utf-8", { mode: 0o600 }),
+  });
+  return continuationStore;
+}
+
+/**
+ * Awaited by the spawn handler before it sends a launch of an agent a pane can
+ * be armed for (#18193), so the launch is noted against what the previous run
+ * saved however soon its spawn is answered.
+ */
+export function prepareContinuationLaunch(): Promise<void> {
+  return getContinuationStore().ready();
 }
 
 /** The project's own presets for `agentId`, or null when they couldn't be read. */
@@ -106,6 +184,8 @@ export interface AgentLaunchForContinuation {
   agentId: string;
   presetId: string | undefined;
   originalPresetId: string | undefined;
+  /** Set for a restore's launch (#18193). */
+  restore?: ContinuationRestore;
 }
 
 /**
@@ -115,7 +195,9 @@ export interface AgentLaunchForContinuation {
  * preset doesn't arm it, of a pane nothing has armed or noted, creates nothing.
  */
 export function noteContinuationLaunch(launch: AgentLaunchForContinuation): void {
-  const arms =
+  const saved = getContinuationStore();
+  const savedStop = saved.hasBootStop(launch.projectId, launch.terminalId);
+  const presetArms =
     launch.presetId !== undefined &&
     limitResetOptIn(
       {
@@ -125,14 +207,27 @@ export function noteContinuationLaunch(launch: AgentLaunchForContinuation): void
       },
       readOwnPresets(launch.agentId)
     );
+  // A pane that was waiting at a limit as Daintree quit was armed then, and
+  // its restore is armed as it was unless its menu says otherwise (#18193).
+  const arms = presetArms || (launch.restore !== undefined && savedStop);
   // A launch noted earlier is still awaiting its spawn, so this one, newer,
-  // must be noted too, or that one's default would be taken for it.
-  if (!arms && !service?.followsLaunches(launch.terminalId)) return;
+  // must be noted too, or that one's default would be taken for it. A menu
+  // choice or a stop the previous run saved is taken up here, or let go by a
+  // launch that isn't the pane's restore.
+  if (
+    !arms &&
+    !savedStop &&
+    saved.override(launch.projectId, launch.terminalId) !== true &&
+    !service?.followsLaunches(launch.terminalId)
+  ) {
+    return;
+  }
   getCodexLimitContinuation().noteLaunch({
     terminalId: launch.terminalId,
     projectId: launch.projectId,
     launchGeneration: launch.launchGeneration,
     arms,
+    ...(launch.restore && { restore: launch.restore }),
   });
 }
 
@@ -186,7 +281,12 @@ export function getCodexLimitContinuation(): CodexLimitContinuation {
       if (!pty) throw new Error("No pty host");
       return pty.continueCodexLimitAsync(terminalId, stop);
     },
-    setHostArmed: (terminalId, armed) => getPtyClient()?.setCodexLimitContinue(terminalId, armed),
+    setHostArmed: (terminalId, armed, restoreIdentity) =>
+      getPtyClient()?.setCodexLimitContinue(terminalId, armed, restoreIdentity),
+    store: getContinuationStore(),
+    readCheckpoint,
+    readTurn,
+    isQuitting: isCleaningUp,
     notify: (projectId, change) =>
       broadcastToProjectRenderers(projectId, CHANNELS.CODEX_LIMIT_CONTINUE_CHANGED, change),
     setTimer: (callback, delayMs) => {
@@ -227,4 +327,10 @@ export function _resetCodexLimitContinuationForTest(): void {
   stopForgetting?.();
   stopForgetting = null;
   setContinuationForgetter(null);
+  continuationStore = null;
+}
+
+/** @internal Tests only: the store a later service is built on. */
+export function _setContinuationStoreForTest(next: ContinuationStore | null): void {
+  continuationStore = next;
 }

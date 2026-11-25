@@ -8,6 +8,7 @@ export interface ContinuationForgetter {
   forgetPane(terminalId: string): void;
   forgetProject(projectId: string): void;
   noteSpawn(terminalId: string, projectId: string, launchGeneration: number): void;
+  checkpointForQuit(): Promise<void>;
 }
 
 let forgetter: ContinuationForgetter | null = null;
@@ -22,6 +23,14 @@ export function forgetContinuationPane(terminalId: string): void {
 
 export function forgetContinuationProject(projectId: string): void {
   forgetter?.forgetProject(projectId);
+}
+
+/**
+ * Daintree is quitting, before its terminals are stopped (#18193): what armed
+ * panes hold is saved for a cold restore. Nothing to do when nothing was armed.
+ */
+export function checkpointContinuationForQuit(): Promise<void> {
+  return forgetter?.checkpointForQuit() ?? Promise.resolve();
 }
 
 export function noteContinuationSpawn(

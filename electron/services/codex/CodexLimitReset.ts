@@ -47,6 +47,8 @@ export interface CodexLimitStop {
   stamp: CodexLimitStamp | null;
   /** Set when the stamped stop isn't Daintree's to continue (#18192). */
   skipAtStop?: CodexLimitStopSkip;
+  /** The stamped stop is a restored process's redraw of the stop saved before a cold restart (#18193). */
+  restored?: true;
 }
 
 /**
@@ -84,10 +86,11 @@ export async function readCodexLimitStop(
     const first = await read({});
     if (first === "unanswered") return unknown("not-observed");
     const asked = first?.codexLimit;
-    if (!first || !asked) return unknown("no-banner");
+    if (!first || !asked || "checkpoint" in asked) return unknown("no-banner");
     if ("reset" in asked) {
       const stop: CodexLimitStop = { reset: asked.reset, stamp: asked.stamp ?? null };
       if (asked.skipAtStop !== undefined) stop.skipAtStop = asked.skipAtStop;
+      if (asked.restored === true) stop.restored = true;
       return stop;
     }
     const home = liveAgentOf(first) === "codex" ? first.codexHome : undefined;
