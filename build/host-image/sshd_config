@@ -1,0 +1,24 @@
+# The whole server config, not a drop-in: Ubuntu's own accepts the client's
+# LANG and LC_* (a Mac sends LC_CTYPE=UTF-8, which Linux has no locale for)
+# and serves whatever host keys it finds.
+Port 22
+HostKey /etc/ssh/daintree/ssh_host_key
+AuthorizedKeysFile /etc/ssh/daintree/authorized_keys
+AllowUsers daintree
+
+AuthenticationMethods publickey
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+PermitRootLogin no
+# Containers have no audit or login session for PAM to open.
+UsePAM no
+
+# The link reaches the Host's Unix socket through `-O forward -L`.
+AllowTcpForwarding yes
+AllowStreamLocalForwarding yes
+X11Forwarding no
+PrintMotd no
+SetEnv LANG=C.UTF-8
+Subsystem sftp internal-sftp
