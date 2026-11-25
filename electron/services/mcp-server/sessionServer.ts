@@ -99,6 +99,7 @@ import {
 import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
 import { withClosedPanelProcesses } from "./closedPanelProcesses.js";
 import {
+  closedPaneOf,
   readClosedPaneWorktrees,
   withCloseWorktree,
   type ClosingAgentPane,
@@ -2839,14 +2840,35 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             results.push(batchItemOutcome(item.target, itemResult));
           }
           if (batchClosedPanes !== undefined && batchClosedPanes.size > 0) {
-            const panes = [...batchClosedPanes.values()];
+            // A worktree the question already read stands for an own pane in
+            // it too, so the call reads each worktree once and its items agree.
+            const worktreeKey = (projectId: string | undefined, worktreeId: string | undefined) =>
+              projectId === undefined || worktreeId === undefined
+                ? undefined
+                : `${projectId}\u0000${worktreeId}`;
+            const asked = new Map<string, WorktreeLocalWork>();
+            for (const { target, worktree } of globalEligible) {
+              const key = worktreeKey(globalBatchProject, target.worktreeId);
+              if (key !== undefined) asked.set(key, worktree);
+            }
+            const askedOf = (pane: ClosingAgentPane) => {
+              const key =
+                pane.unread === true ? undefined : worktreeKey(pane.projectId, pane.worktreeId);
+              return key === undefined ? undefined : asked.get(key);
+            };
+            const unasked = [...batchClosedPanes.values()].filter(
+              (pane) => askedOf(pane) === undefined
+            );
             const worktrees = await readClosedPaneWorktrees(
               deps.readClosedPaneWorktrees,
-              panes,
+              unasked,
               extra.signal
             );
             const worktreeOf = new Map(
-              panes.map((pane, index) => [pane.terminalId, worktrees[index]])
+              [...batchClosedPanes.values()].map((pane) => [
+                pane.terminalId,
+                askedOf(pane) ?? worktrees[unasked.indexOf(pane)],
+              ])
             );
             results.forEach((entry, index) => {
               const worktree = entry.ok ? worktreeOf.get(entry.target) : undefined;
@@ -4328,29 +4350,40 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // Every route a close takes ends here: renderer, viewless, owned,
           // an assistant's, and each item of `terminal.closeMany`.
           // Every agent close also says what its pane's worktree holds that
-          // exists only on this machine (#18173), read once it closed, beside
-          // its process. A batch item leaves the read to its batch.
-          const closingAgent = closingPane !== undefined ? await closingPane : null;
-          const closedPane =
-            closingAgent !== null &&
+          // exists only on this machine (#18173), read beside its process and
+          // only once the close reports the pane it named closed. A batch item
+          // leaves the git read to its batch.
+          const closedNamed =
+            closingId !== undefined &&
             dispatched.result.ok &&
-            closedIdsInclude(dispatched.result.result, closingAgent.terminalId)
-              ? closingAgent
+            closedIdsInclude(dispatched.result.result, closingId);
+          const closedInProject =
+            dispatched.dispatchedWorkspace?.kind === "project"
+              ? dispatched.dispatchedWorkspace.workspaceId
               : undefined;
-          if (closedPane !== undefined) closedPanes?.set(closedPane.terminalId, closedPane);
+          const readClosedPane = async (
+            capture: Promise<ClosingAgentPane | null>
+          ): Promise<WorktreeLocalWork | undefined> => {
+            const pane = closedPaneOf(await capture, closedInProject);
+            if (pane === null) return undefined;
+            if (closedPanes !== undefined) {
+              closedPanes.set(pane.terminalId, pane);
+              return undefined;
+            }
+            const [worktree] = await readClosedPaneWorktrees(
+              deps.readClosedPaneWorktrees,
+              [pane],
+              extra.signal
+            );
+            return worktree;
+          };
           const [withProcesses, closedPaneWorktree] = await Promise.all([
             readClosedPanelProcess !== undefined && CLOSE_TOOLS.has(actionId)
               ? withClosedPanelProcesses(dispatched.result, readClosedPanelProcess).then(
                   (result): DispatchEnvelope => ({ ...dispatched, result })
                 )
               : dispatched,
-            closedPane !== undefined && closedPanes === undefined
-              ? readClosedPaneWorktrees(
-                  deps.readClosedPaneWorktrees,
-                  [closedPane],
-                  extra.signal
-                ).then(([worktree]) => worktree)
-              : undefined,
+            closingPane !== undefined && closedNamed ? readClosedPane(closingPane) : undefined,
           ]);
           // A global close says what its question said of the worktree (#18151).
           const closeWorktree = globalCloseAdmitted ? globalCloseWorktree : closedPaneWorktree;

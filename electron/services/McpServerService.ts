@@ -31,7 +31,7 @@ import type {
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
 import { readClosedPanelProcess } from "./mcp-server/closedPanelProcesses.js";
-import { closingAgentPane, closingAgentPaneFromLaunch } from "./mcp-server/closedPaneWorktree.js";
+import { readClosingAgentPaneFrom } from "./mcp-server/closedPaneWorktree.js";
 import {
   resolveClosedTerminalGeneration,
   waitForClosedPanelExits,
@@ -649,17 +649,17 @@ export class McpServerService {
           { signal, deadlineMs: GLOBAL_CLOSE_WORKTREE_READ_DEADLINE_MS }
         );
       },
-      // Strict, so a pty-host slow to answer reads as unknown rather than as
-      // a pane that never ran an agent.
-      readClosingAgentPane: async (terminalId) => {
-        const client = getPtyClient();
-        const record = client
-          ? await client.getTerminalAsync(terminalId, undefined, { strict: true })
-          : null;
-        return record !== null
-          ? closingAgentPane(terminalId, record)
-          : closingAgentPaneFromLaunch(terminalId, getLifecycleLedger().getEntry(terminalId));
-      },
+      // Strict, so a pty-host slow to answer falls back on the launch facts
+      // rather than reading as a pane that never ran an agent.
+      readClosingAgentPane: (terminalId) =>
+        readClosingAgentPaneFrom(
+          terminalId,
+          async (id) => {
+            const client = getPtyClient();
+            return client ? client.getTerminalAsync(id, undefined, { strict: true }) : null;
+          },
+          (id) => getLifecycleLedger().getEntry(id)
+        ),
       readClosedPaneWorktrees: async (panes, signal) => {
         const { projectStore } = await import("./ProjectStore.js");
         return readWorktreesLocalWork(

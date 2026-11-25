@@ -606,6 +606,80 @@ describe("assistant close approval (#12881)", () => {
     });
   });
 
+  // #18173: and what its agent pane's worktree holds, read once it closed,
+  // with nothing asked that the close didn't already ask.
+  describe("its agent pane's worktree (#18173)", () => {
+    const observed = {
+      kind: "observed" as const,
+      unpushedCommits: 1,
+      changedEntries: 0,
+      hiddenFromStatus: 0,
+    };
+    // A close output schema, so the facts are checked on the structured
+    // content the tool advertises as well as on its text.
+    const manifest: ActionManifestEntry[] = [
+      {
+        ...makeManifestEntry("terminal.close"),
+        kind: "command",
+        danger: "safe",
+        outputSchema: {
+          type: "object",
+          properties: { closedIds: { type: "array" }, worktree: { type: "object" } },
+        },
+      },
+    ];
+    const readers = () => ({
+      readClosingAgentPane: vi.fn(async (terminalId: string) => ({
+        terminalId,
+        worktreeId: `/wt/${terminalId}`,
+      })),
+      readClosedPaneWorktrees: vi.fn(async (_panes: unknown, _signal: unknown) => [observed]),
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+    });
+
+    it("returns them with an idle own agent's close, asking nothing", async () => {
+      const requestCloseApproval = vi.fn();
+      const deps = readers();
+      const { start } = closeDeps("help", requestCloseApproval, { "t-own": "idle" }, deps);
+      const server = await start("s-close-own-facts", ["t-own"]);
+
+      const result = await callTool(server, {
+        name: "terminal.close",
+        arguments: { terminalId: "t-own" },
+      });
+
+      expect(requestCloseApproval).not.toHaveBeenCalled();
+      expect(JSON.parse((result.content as Array<{ text: string }>)[0]!.text)).toEqual({
+        closedIds: ["t-own"],
+        worktree: observed,
+      });
+      expect(result.structuredContent).toEqual({ closedIds: ["t-own"], worktree: observed });
+      expect(deps.readClosedPaneWorktrees).toHaveBeenCalledWith(
+        [{ projectId: undefined, worktreeId: "/wt/t-own" }],
+        expect.anything()
+      );
+    });
+
+    it("reads the pane only once the person approved its close", async () => {
+      const requestCloseApproval = vi.fn().mockResolvedValue(approve(["t-user"]));
+      const deps = readers();
+      const { start } = closeDeps("help", requestCloseApproval, {}, deps);
+      const server = await start("s-close-unowned-facts");
+
+      const result = await callTool(server, {
+        name: "terminal.close",
+        arguments: { terminalId: "t-user" },
+      });
+
+      expect(requestCloseApproval).toHaveBeenCalledTimes(1);
+      expect(deps.readClosingAgentPane.mock.invocationCallOrder[0]!).toBeGreaterThan(
+        requestCloseApproval.mock.invocationCallOrder[0]!
+      );
+      expect(result.structuredContent).toEqual({ closedIds: ["t-user"], worktree: observed });
+    });
+  });
+
   it.each(["working", "waiting"] as const)(
     "asks before closing its own panel whose agent is %s",
     async (state) => {

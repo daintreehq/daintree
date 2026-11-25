@@ -71,6 +71,46 @@ export function closingAgentPaneFromLaunch(
 }
 
 /**
+ * The agent pane a close names, from the host's record of it, or from the
+ * launch facts main kept when the host has no record or didn't answer in
+ * time: a host that is slow says nothing of whether the pane ran an agent,
+ * and git can be read without it. Never rejects.
+ */
+export async function readClosingAgentPaneFrom(
+  terminalId: string,
+  readRecord: (terminalId: string) => Promise<ClosingPaneRecord | null>,
+  launchOf: (
+    terminalId: string
+  ) => Pick<LedgerEntrySnapshot, "facts" | "detectedAgentIds"> | undefined
+): Promise<ClosingAgentPane | null> {
+  const record = await readRecord(terminalId).catch(() => null);
+  return record !== null
+    ? closingAgentPane(terminalId, record)
+    : closingAgentPaneFromLaunch(terminalId, launchOf(terminalId));
+}
+
+/**
+ * The pane a close reached, as captured, unless the capture is of another
+ * project's run: a pane its view keeps after its agent exited frees the id
+ * on the host, and a launch in another project may take it. That record
+ * says nothing of the pane closed here, so its worktree reads as unreadable.
+ */
+export function closedPaneOf(
+  pane: ClosingAgentPane | null,
+  closedInProject: string | undefined
+): ClosingAgentPane | null {
+  if (pane === null || pane.unread === true) return pane;
+  if (
+    closedInProject !== undefined &&
+    pane.projectId !== undefined &&
+    pane.projectId !== closedInProject
+  ) {
+    return { terminalId: pane.terminalId, unread: true };
+  }
+  return pane;
+}
+
+/**
  * A successful close's answer with what was read of the closed agent pane's
  * worktree, so the caller can report it. Anything else passes through
  * untouched.

@@ -1,18 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorktreeLocalWork } from "../../../../shared/types/worktreeLocalWork.js";
 import {
+  closedPaneOf,
   closingAgentPane,
   closingAgentPaneFromLaunch,
   readClosedPaneWorktrees,
+  readClosingAgentPaneFrom,
   withCloseWorktree,
   type ClosedPaneWorktreeRequest,
 } from "../closedPaneWorktree.js";
 
-const observed = (unpushedCommits: number): WorktreeLocalWork => ({
+const observed = (unpushedCommits: number, hiddenFromStatus = 0): WorktreeLocalWork => ({
   kind: "observed",
   unpushedCommits,
   changedEntries: 0,
-  hiddenFromStatus: 0,
+  hiddenFromStatus,
 });
 
 describe("closingAgentPane (#18173)", () => {
@@ -59,12 +61,78 @@ describe("closingAgentPane (#18173)", () => {
   });
 });
 
+describe("readClosingAgentPaneFrom (#18173)", () => {
+  const launch = {
+    facts: { launchAgentId: "claude", projectId: "p1", worktreeId: "/wt/launch" },
+    detectedAgentIds: [],
+  };
+
+  it("takes the host's record over the launch facts while there is one", async () => {
+    const launchOf = vi.fn(() => launch);
+    expect(
+      await readClosingAgentPaneFrom(
+        "t1",
+        async () => ({ projectId: "p1", worktreeId: "/wt/now", detectedAgentId: "claude" }),
+        launchOf
+      )
+    ).toEqual({ terminalId: "t1", projectId: "p1", worktreeId: "/wt/now" });
+    // A live shell is a shell, whatever was launched under the id before.
+    expect(
+      await readClosingAgentPaneFrom("t1", async () => ({ projectId: "p1" }), launchOf)
+    ).toBeNull();
+    expect(launchOf).not.toHaveBeenCalled();
+  });
+
+  it("falls back on the launch facts when the host has no record or doesn't answer", async () => {
+    const pane = { terminalId: "t1", projectId: "p1", worktreeId: "/wt/launch" };
+    expect(
+      await readClosingAgentPaneFrom(
+        "t1",
+        async () => null,
+        () => launch
+      )
+    ).toEqual(pane);
+    expect(
+      await readClosingAgentPaneFrom(
+        "t1",
+        async () => {
+          throw new Error("TIMEOUT");
+        },
+        () => launch
+      )
+    ).toEqual(pane);
+    // Nothing on this host knows the id: not an agent pane it can speak for.
+    expect(
+      await readClosingAgentPaneFrom(
+        "t1",
+        async () => {
+          throw new Error("TIMEOUT");
+        },
+        () => undefined
+      )
+    ).toBeNull();
+  });
+});
+
+describe("closedPaneOf (#18173)", () => {
+  it("reads another project's run under the same id as unreadable, never as this pane", () => {
+    const pane = { terminalId: "t1", projectId: "p-b", worktreeId: "/wt/b" };
+    expect(closedPaneOf(pane, "p-a")).toEqual({ terminalId: "t1", unread: true });
+    expect(closedPaneOf(pane, "p-b")).toBe(pane);
+    // Either side unknown: nothing to tell them apart by.
+    expect(closedPaneOf(pane, undefined)).toBe(pane);
+    const unplaced = { terminalId: "t1", worktreeId: "/wt/b" };
+    expect(closedPaneOf(unplaced, "p-a")).toBe(unplaced);
+    expect(closedPaneOf(null, "p-a")).toBeNull();
+  });
+});
+
 describe("readClosedPaneWorktrees (#18173)", () => {
   const signal = new AbortController().signal;
 
   it("asks only for panes in a worktree, in one call, and answers every pane in order", async () => {
-    const read = vi.fn(async (panes: readonly ClosedPaneWorktreeRequest[]) =>
-      panes.map((_, index) => observed(index + 1))
+    const read = vi.fn(async (panes: readonly ClosedPaneWorktreeRequest[], _signal: AbortSignal) =>
+      panes.map((_, index) => observed(index + 1, index))
     );
 
     const answers = await readClosedPaneWorktrees(
@@ -72,7 +140,9 @@ describe("readClosedPaneWorktrees (#18173)", () => {
       [
         { terminalId: "a", projectId: "p1", worktreeId: "/wt/a" },
         { terminalId: "none", projectId: "p1" },
-        { terminalId: "lost", unread: true },
+        // A pane whose record couldn't be read is never asked about, even
+        // with a worktree to its name.
+        { terminalId: "lost", worktreeId: "/wt/lost", unread: true },
         { terminalId: "b", worktreeId: "/wt/b" },
       ],
       signal
@@ -85,10 +155,10 @@ describe("readClosedPaneWorktrees (#18173)", () => {
     ]);
     expect(read.mock.calls[0]![1]).toBe(signal);
     expect(answers).toEqual([
-      observed(1),
+      observed(1, 0),
       { kind: "not-applicable" },
       { kind: "unreadable" },
-      observed(2),
+      observed(2, 1),
     ]);
   });
 
@@ -130,9 +200,11 @@ describe("withCloseWorktree (#18173)", () => {
     expect(
       withCloseWorktree({ ok: true, result: { closedIds: ["t1"], processes: [] } }, observed(1))
     ).toEqual({ ok: true, result: { closedIds: ["t1"], processes: [], worktree: observed(1) } });
-    const failed = { ok: false as const, error: { code: "X", message: "no" } };
+    const failed = { ok: false as const, error: { code: "NOT_FOUND" as const, message: "no" } };
     expect(withCloseWorktree(failed, observed(1))).toBe(failed);
     const odd = { ok: true as const, result: { sent: true } };
     expect(withCloseWorktree(odd, observed(1))).toBe(odd);
+    const empty = { ok: true as const, result: null };
+    expect(withCloseWorktree(empty, observed(1))).toBe(empty);
   });
 });

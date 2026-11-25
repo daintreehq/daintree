@@ -317,9 +317,9 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   ) => Promise<import("../../../shared/types/worktreeLocalWork.js").WorktreeLocalWork[]>;
   /**
    * The agent pane a close names, as this host recorded it when the close
-   * went out (#18173): null for no record, or a pane that never ran an agent.
-   * Rejects when the record can't be read. Absent, a close returns no
-   * `worktree` unless the global Assistant's question read one.
+   * went out (#18173): null for a pane that never ran an agent, or one
+   * nothing on this host recorded. Absent, a close returns no `worktree`
+   * unless the global Assistant's question read one.
    */
   readClosingAgentPane?: (
     terminalId: string
