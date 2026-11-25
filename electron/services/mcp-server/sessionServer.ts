@@ -1653,13 +1653,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         message: `Terminal '${terminalId}' stopped being this session's before the send reached it. Nothing was sent.`,
       };
       // A write main makes itself answers to whoever drives the project now,
-      // and reaches only the project this session is bound to, as its view does.
-      const boundProjectId = sessionStore.sessionWorkspaceMap.get(sessionId);
+      // and reaches only the project this session is bound to, as its view
+      // does, or for an unbound one the project its record was made in: a
+      // relaunch under the id elsewhere is not the terminal it was given.
+      const expectedProjectId =
+        sessionStore.sessionWorkspaceMap.get(sessionId) ?? ownedResourceRecord?.workspaceId;
       const writeRefusal = (projectId: string): { code: string; message: string } | null => {
-        if (boundProjectId !== undefined && projectId !== boundProjectId) {
+        if (expectedProjectId !== undefined && projectId !== expectedProjectId) {
           return {
             code: WORKER_STEER_REFUSALS.notFound,
-            message: `Terminal '${terminalId}' isn't in the project this session is bound to. Nothing was sent.`,
+            message: `Terminal '${terminalId}' isn't in the project this session reaches it in. Nothing was sent.`,
           };
         }
         return deps.relay

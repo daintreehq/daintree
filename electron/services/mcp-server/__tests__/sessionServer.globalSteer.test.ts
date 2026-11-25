@@ -708,6 +708,21 @@ describe.each(LANES)(
       expect(wakes[0]!.recheck(prompted)).toEqual({ kind: "unavailable", reason: "typed" });
     });
 
+    it("drops a held prompt once another agent takes the worker's PTY (#18172)", async () => {
+      const { deps, records, wakes } = harness({ shellName, global: true });
+      records.set(WORKER, working());
+      const server = await serve(deps);
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: WORKER, command: "go", generation: 4, whenBusy: "queue" },
+      });
+
+      expect(wakes[0]!.recheck(atItsPrompt({ detectedAgentId: "codex" }))).toEqual({
+        kind: "unavailable",
+        reason: "restarted",
+      });
+    });
+
     it("follows the held prompt with the call's notice, completed only once it is written", async () => {
       const pending = { complete: vi.fn(), cancel: vi.fn() };
       const handlers = {
@@ -1073,6 +1088,47 @@ describe.each(LANES)(
 describe("an agent pane's send to its own worker (#18172)", () => {
   const working = () =>
     atPrompt({ agentState: "working", waitingReason: undefined, agentIncarnation: 1 });
+
+  it("reaches it only in the project the pane is bound to", async () => {
+    const { deps, pty, records, wakes } = harness({ shellName: "", global: false, pane: true });
+    records.set(MINE, atPrompt({ projectId: "proj-2", agentIncarnation: 1 }));
+    const server = await serve(deps);
+
+    const result = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: MINE, command: "go", whenBusy: "refuse" },
+    });
+
+    expect(toolErrorPayload(result).code).toBe(WORKER_STEER_REFUSALS.notFound);
+    expect(pty.submit).not.toHaveBeenCalled();
+    expect(wakes).toEqual([]);
+  });
+
+  it("reaches it unbound only in the project its creation was recorded in", async () => {
+    const { deps, pty, records, store } = harness({ shellName: "", global: false, pane: true });
+    store.sessionWorkspaceMap.delete(SESSION);
+    const owner = store.resourceOwnership.ownerOf(SESSION);
+    store.resourceOwnership.release(owner, "terminal", MINE);
+    store.resourceOwnership.record(owner, [{ kind: "terminal", id: MINE }], PROJECT);
+    // Relaunched under the same id in another project.
+    records.set(MINE, atPrompt({ projectId: "proj-2", agentIncarnation: 1 }));
+    const server = await serve(deps);
+
+    const result = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: MINE, command: "go", whenBusy: "refuse" },
+    });
+
+    expect(toolErrorPayload(result).code).toBe(WORKER_STEER_REFUSALS.notFound);
+    expect(pty.submit).not.toHaveBeenCalled();
+
+    records.set(MINE, atPrompt({ agentIncarnation: 1 }));
+    const atItsOwn = await callTool(server, {
+      name: "terminal.sendCommandOwned",
+      arguments: { terminalId: MINE, command: "go", whenBusy: "refuse" },
+    });
+    expect(answerOf(atItsOwn)).toMatchObject({ sent: true });
+  });
 
   it("holds for its next prompt under `queue`", async () => {
     const { deps, pty, records, wakes } = harness({ shellName: "", global: false, pane: true });

@@ -279,14 +279,15 @@ export class OwnedWorkerSend {
         `Terminal '${terminalId}' hasn't been seen settling, so a draft in it can't be ruled out. ${NOTHING_SENT}`
       );
     }
-    // Keys at an approval move its selector and never reach the prompt; the
-    // held send drops only on input that could have (`recheck`).
-    const typed =
-      whenBusy.waitingOn === "approval" ? "nothing" : typedSinceSettle(record, inputOwner);
+    // Keys at an approval can't be told from a draft typed once its selector
+    // closed, while the host still reads the approval: either refuses.
+    const typed = typedSinceSettle(record, inputOwner);
     if (typed === "someone") {
       refuse(
         WORKER_STEER_REFUSALS.typing,
-        `Someone has typed into terminal '${terminalId}' since its agent last settled, so their input stays as it is. ${NOTHING_SENT}`
+        whenBusy.waitingOn === "approval"
+          ? `Someone has typed into terminal '${terminalId}' at its approval, which can't be told from a draft. ${NOTHING_SENT} Send once the approval is answered.`
+          : `Someone has typed into terminal '${terminalId}' since its agent last settled, so their input stays as it is. ${NOTHING_SENT}`
       );
     }
     if (typed === "own-keys") {
@@ -347,7 +348,7 @@ export class OwnedWorkerSend {
       queuedSendToken: held.queuedSendToken,
       expiresAt: held.expiresAt,
       ...(held.supersededToken ? { supersededToken: held.supersededToken } : {}),
-      message: `Held, not sent: it is typed the next time the agent waits at its own prompt with nothing typed there, and dropped if it is sent another prompt first (yours without \`whenBusy\` too) or the run changes.${superseded} Check it with terminal.getStatus and this queuedSendToken; withdraw it with terminal.cancelQueuedSend.`,
+      message: `Held, not sent: it is typed the next time the agent waits at its own prompt with nothing typed there, and dropped if it gets other input first (your own send without \`whenBusy\` too) or the run changes.${superseded} Check it with terminal.getStatus and this queuedSendToken; withdraw it with terminal.cancelQueuedSend.`,
     };
   }
 }

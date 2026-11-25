@@ -423,6 +423,8 @@ export class GlobalWorkerSteer {
             : {}),
           ...(record.agentSessionId !== undefined ? { agentSessionId: record.agentSessionId } : {}),
           ...(record.worktreeId !== undefined ? { worktreeId: record.worktreeId } : {}),
+          // Detection can hand the PTY to another agent without a respawn (#18172).
+          ...(record.detectedAgentId !== undefined ? { agentId: record.detectedAgentId } : {}),
           ...(record.lastOwnedPromptInput !== undefined
             ? { lastOwnedPromptInput: record.lastOwnedPromptInput }
             : {}),

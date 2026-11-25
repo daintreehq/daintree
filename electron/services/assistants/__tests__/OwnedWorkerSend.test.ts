@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_STEER_REFUSALS } from "../../../../shared/types/assistantControl.js";
 import type { ExactPromptGuard } from "../../../../shared/types/pty-host.js";
 import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
-import { withoutHandbackInstruction } from "../../../../shared/utils/handback.js";
+import {
+  appendHandbackInstruction,
+  withoutHandbackInstruction,
+} from "../../../../shared/utils/handback.js";
 import { AssistantTargetError } from "../AssistantTerminalControl.js";
 import type { WorkerSteerRecord } from "../GlobalWorkerSteer.js";
 import {
@@ -137,18 +140,25 @@ describe("OwnedWorkerSend (#18172)", () => {
     expect(submit).not.toHaveBeenCalled();
   });
 
-  it("holds over keys pressed at the approval, which never reach the prompt", async () => {
-    const navigated = atPrompt({ waitingReason: "approval", lastStateChange: 1_000 });
-    stampTypedInput(navigated, 2_000);
-    record = navigated;
+  it("waits out its CLI's folder-trust prompt too, answered only by the person", async () => {
+    record = atPrompt({ waitingReason: "approval", approvalKind: "trust" });
 
     expect(await prompt(QUEUE)).toMatchObject({ queued: true });
+    expect(holds[0]).toMatchObject({ waitingOn: "approval" });
+  });
 
-    // The same keys at its prompt are a draft the hold would type over.
-    const drafted = atPrompt({ lastStateChange: 1_000 });
-    stampTypedInput(drafted, 2_000);
-    record = drafted;
-    expect((await refusal(prompt(QUEUE))).code).toBe(WORKER_STEER_REFUSALS.typing);
+  it("refuses to hold over input at an approval, which can't be told from a draft", async () => {
+    // A draft typed once the selector closed reads as keys at the approval
+    // until the host rereads it, and a later settle would hide it.
+    const typed = atPrompt({ waitingReason: "approval", lastStateChange: 1_000 });
+    stampTypedInput(typed, 2_000);
+    record = typed;
+
+    const error = await refusal(prompt(QUEUE));
+
+    expect(error.code).toBe(WORKER_STEER_REFUSALS.typing);
+    expect(error.message).toMatch(/once the approval is answered/);
+    expect(holds).toEqual([]);
   });
 
   it("carries a held handback's code and instruction, and the text as written", async () => {
@@ -160,6 +170,7 @@ describe("OwnedWorkerSend (#18172)", () => {
     expect(held!.handbackCode).toEqual(expect.any(String));
     expect(held!.text).not.toBe("reply done2");
     expect(held!.text).toContain(held!.handbackCode);
+    expect(held!.text).toBe(appendHandbackInstruction("reply done2", held!.handbackCode!, "run"));
     expect(withoutHandbackInstruction(held!.text, held!.handbackCode!)).toBe("reply done2");
     expect(held!.promptAsWritten).toBe("reply done2");
   });
@@ -292,9 +303,13 @@ describe("OwnedWorkerSend (#18172)", () => {
 
   it("refuses a terminal the host now places in another project", async () => {
     record = working({ projectId: "proj-other" });
-
     expect((await refusal(prompt(QUEUE))).code).toBe(WORKER_STEER_REFUSALS.notFound);
+
+    record = atPrompt({ projectId: "proj-other" });
+    expect((await refusal(prompt(REFUSE))).code).toBe(WORKER_STEER_REFUSALS.notFound);
+
     expect(holds).toEqual([]);
+    expect(submit).not.toHaveBeenCalled();
   });
 
   it("answers a host that can't hold, or a hold the store refuses, with nothing sent", async () => {
