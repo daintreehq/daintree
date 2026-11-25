@@ -5075,6 +5075,7 @@ export interface GeneratedIpcInvokeMap {
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
+        agentAccountId?: string | undefined;
         fallbackChainIndex?: number | undefined;
         handbackCode?: string | undefined;
         whenDone?: "background" | "close" | undefined;
