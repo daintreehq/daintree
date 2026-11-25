@@ -78,6 +78,7 @@ import {
   isExitConfirmationPending,
   setExitConfirmationPending,
 } from "./attachedShells.js";
+import { loadedHelpSessionService } from "../services/helpSessionRuntime.js";
 import {
   noteChildProcessGone,
   noteRendererGone,
@@ -161,7 +162,10 @@ export function routeLastWindowCloseThroughQuit(): boolean {
   if (getActiveShutdown() || isSignalShutdown()) return false;
   if (isConfirmingQuit || isExitConfirmationPending()) return true;
   const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
-  if (activeCount === 0 && getAttachedShells().length === 0) return false;
+  // A lane kept running across restarts must still be running when the quit
+  // fixes which come back, not ended first by this window's views going (#18177).
+  const keptLaneLive = loadedHelpSessionService()?.hasLiveKeptProjectLane() === true;
+  if (activeCount === 0 && getAttachedShells().length === 0 && !keptLaneLive) return false;
   setImmediate(() => app.quit());
   return true;
 }
@@ -557,6 +561,17 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       try {
         helpSessions = (await import("../services/HelpSessionService.js")).helpSessionService;
         assistantLanes = helpSessions.snapshotLaneTerminals();
+        // The lanes kept running across restarts that come back after this
+        // quit, fixed before the kill whose exits would otherwise read as
+        // theirs (#18177): all but those the snapshot saw exited. One missing
+        // from it may sit on a shard that didn't answer, and a run that really
+        // ended was unmarked as it did. Landed by the store flush in `revokeAll`.
+        const exited = new Set(
+          [...terminalInfoById.values()].filter((t) => t.isExited === true).map((t) => t.id)
+        );
+        helpSessions.holdStandingRunsForQuit(exited).catch((err: unknown) => {
+          console.warn("[MAIN] Recording the kept assistant lanes at quit failed:", err);
+        });
       } catch (err) {
         console.warn("[MAIN] Assistant lane snapshot at quit failed:", err);
       }
@@ -702,8 +717,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       await Promise.all(assistantCaptureWrites);
 
       // A restart to install an update brings back the lanes it stops, by the
-      // ids just captured (#16753); any other quit leaves them to be resumed by
-      // hand (#10815). Running means its process was alive in the pre-kill
+      // ids just captured (#16753); any other quit brings back only the lanes
+      // kept running across restarts, held above (#18177), and leaves the rest
+      // to be resumed by hand (#10815). Running means its process was alive in the pre-kill
       // snapshot: a lane binding can outlast an assistant that exited, and a
       // snapshot that failed records nothing.
       if (

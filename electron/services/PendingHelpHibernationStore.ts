@@ -60,6 +60,28 @@ export interface LaunchResume {
   lanes: Record<string, string>;
 }
 
+/**
+ * What the previous run left for this launch to resume, handed out once: the
+ * lanes an update restart stopped (#16753), and the lanes kept running across
+ * restarts that were still running when it ended, by quit or crash (#18177),
+ * each by the conversation its pointer names now.
+ */
+export interface LaunchResumeBatch {
+  /** `assistantSlotKey(projectId, slot)` → the conversation to reopen. */
+  lanes: Record<string, string>;
+  /** The lanes in `lanes` back because they are kept running, not because of an update. */
+  standing: ReadonlySet<string>;
+}
+
+/**
+ * A lane the person chose to keep running across restarts (#18177). Being in
+ * the map is the choice; `running` says a run of it was live when last
+ * written, so the next launch knows it didn't stop on its own or by a Stop.
+ */
+interface KeptRunning {
+  running?: true;
+}
+
 interface FileShape {
   version: number;
   entries: Record<string, PersistedHelpHibernation>;
@@ -71,6 +93,8 @@ interface FileShape {
    * so a handover's pointers and its choice land in one write.
    */
   coordinators?: Record<string, number>;
+  /** The lanes kept running across restarts (#18177), by slot key; optional like `resumeAtLaunch`. */
+  keepRunning?: Record<string, KeptRunning>;
 }
 
 /**
@@ -91,6 +115,11 @@ export class PendingHelpHibernationStore {
   private resumeAtLaunch: LaunchResume | null = null;
   // What this launch read back, handed out once by `takeResumeAtLaunch`.
   private loadedResumeAtLaunch: LaunchResume | null = null;
+  // The kept lanes the previous run left running (#18177), with the conversation
+  // each pointer named as it loaded, handed out with it.
+  private loadedStanding = new Map<string, string>();
+  /** The lanes kept running across restarts, and whether a run of each is live (#18177). */
+  private readonly keepRunning = new Map<string, { running: boolean }>();
   // The conversations the entries read back could resume (#16845), as read: a
   // lane that moves on later in this run doesn't take one out.
   private readonly loadedConversationIds = new Set<string>();
@@ -99,6 +128,8 @@ export class PendingHelpHibernationStore {
   private filePath: string;
   // Serialize writes so a rapid capture-then-clear can't race on disk.
   private writeChain: Promise<void> = Promise.resolve();
+  // Whether what is held now failed to reach disk, so a later ask writes it again.
+  private dirty = false;
 
   constructor(filePath?: string) {
     this.filePath = filePath ?? path.join(app.getPath("userData"), FILE_NAME);
@@ -118,6 +149,7 @@ export class PendingHelpHibernationStore {
       if (parsed.version !== FILE_VERSION && !legacyUnslotted) return;
       const entries = parsed.entries;
       if (!entries || typeof entries !== "object") return;
+      const standing = legacyUnslotted ? [] : this.readKeepRunning(parsed.keepRunning);
       const cutoff = Date.now() - STALE_AFTER_MS;
       for (const [rawKey, entry] of Object.entries(entries)) {
         if (!rawKey) continue;
@@ -125,7 +157,9 @@ export class PendingHelpHibernationStore {
         // lane that existed then — slot 0.
         const key = legacyUnslotted ? assistantSlotKey(rawKey, DEFAULT_ASSISTANT_SLOT) : rawKey;
         if (!this.isValid(entry)) continue;
-        if (entry.capturedAt < cutoff) continue;
+        // A lane kept running is current however long ago it started: a
+        // coordinator up for weeks still names the conversation it runs.
+        if (entry.capturedAt < cutoff && !standing.includes(key)) continue;
         // Defensively strip any `panelWasOpen` that reached disk (manual edit,
         // corruption, or a regression in `persist()`): the field is in-memory
         // only and a disk-loaded `true` would auto-resume a prior-session token
@@ -152,12 +186,19 @@ export class PendingHelpHibernationStore {
         }
       }
       if (!legacyUnslotted) this.readCoordinators(parsed.coordinators);
-      if (parsed.resumeAtLaunch !== undefined) {
+      if (parsed.resumeAtLaunch !== undefined || standing.length > 0) {
         // Off disk before anything can resume from it: a crash during this
         // launch must bring back nothing on the next one (#10815). A launch that
-        // can't take it off resumes nothing either.
+        // can't take it off resumes nothing either. A kept lane is marked
+        // running again only once this launch has it running.
         const resume = legacyUnslotted ? null : this.readResumeAtLaunch(parsed.resumeAtLaunch);
-        if (await this.write()) this.loadedResumeAtLaunch = resume;
+        if (await this.write()) {
+          this.loadedResumeAtLaunch = resume;
+          for (const slotKey of standing) {
+            const agentSessionId = this.entries.get(slotKey)?.agentSessionId;
+            if (agentSessionId) this.loadedStanding.set(slotKey, agentSessionId);
+          }
+        }
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
@@ -201,8 +242,10 @@ export class PendingHelpHibernationStore {
     return this.entries.get(slotKey) ?? null;
   }
 
-  set(slotKey: string, entry: PendingHelpHibernation): Promise<void> {
+  /** With `running`, a kept lane's run is marked live or over in the same write (#18177). */
+  set(slotKey: string, entry: PendingHelpHibernation, running?: boolean): Promise<void> {
     this.entries.set(slotKey, entry);
+    if (running !== undefined) this.markRunning({ [slotKey]: running });
     return this.persist();
   }
 
@@ -216,22 +259,96 @@ export class PendingHelpHibernationStore {
     return this.persist();
   }
 
-  /** What the previous run's update shutdown recorded, once per launch; null after. */
-  takeResumeAtLaunch(): LaunchResume | null {
-    const taken = this.loadedResumeAtLaunch;
+  /**
+   * What the previous run left to resume, once per launch; null after, and
+   * when nothing. A kept lane comes back by the conversation its pointer named
+   * as it loaded, only while it still names it and the lane is still kept:
+   * one started over since, or whose id never came back, stays down.
+   */
+  takeResumeAtLaunch(): LaunchResumeBatch | null {
+    const lanes: Record<string, string> = { ...this.loadedResumeAtLaunch?.lanes };
+    const standing = new Set<string>();
+    for (const [slotKey, agentSessionId] of this.loadedStanding) {
+      if (!this.keepRunning.has(slotKey) || lanes[slotKey] !== undefined) continue;
+      if (this.entries.get(slotKey)?.agentSessionId !== agentSessionId) continue;
+      lanes[slotKey] = agentSessionId;
+      standing.add(slotKey);
+    }
     this.loadedResumeAtLaunch = null;
-    return taken;
+    this.loadedStanding.clear();
+    return Object.keys(lanes).length > 0 ? { lanes, standing } : null;
   }
 
-  /** Resolves once every queued write has landed. */
-  flush(): Promise<void> {
-    return this.writeChain.catch(() => undefined);
+  /** Whether the person chose to keep this lane running across restarts (#18177). */
+  isKeptRunning(slotKey: string): boolean {
+    return this.keepRunning.has(slotKey);
   }
 
-  clear(slotKey: string): Promise<void> {
-    if (!this.entries.has(slotKey)) return Promise.resolve();
-    this.entries.delete(slotKey);
-    return this.persist();
+  /**
+   * Keep a lane running across restarts, or stop keeping it (#18177), with
+   * whether a run of it is live now. Resolves whether the choice reached disk;
+   * one that didn't is still held, and written again by the next write, an
+   * ask for the same choice, or a flush.
+   */
+  async setKeepRunning(slotKey: string, keep: boolean, running = false): Promise<boolean> {
+    const before = this.keepRunning.get(slotKey);
+    if (keep ? before?.running === running : before === undefined) {
+      // Saved once the write already carrying it lands.
+      await this.writeChain.catch(() => undefined);
+      return this.dirty ? this.write() : true;
+    }
+    if (keep) this.keepRunning.set(slotKey, { running });
+    else this.keepRunning.delete(slotKey);
+    return this.write();
+  }
+
+  /**
+   * Stop keeping a removed project's lanes running across restarts (#18177):
+   * the folder added back gets the same id, and nothing of it is kept for it.
+   */
+  async forgetKeepRunning(projectId: string): Promise<void> {
+    await this.load();
+    let changed = false;
+    for (const slotKey of [...this.keepRunning.keys()]) {
+      if (projectIdFromSlotKey(slotKey) !== projectId) continue;
+      this.keepRunning.delete(slotKey);
+      changed = true;
+    }
+    if (changed) await this.persist();
+  }
+
+  /**
+   * Mark kept lanes' runs live or over (#18177), in one write; a lane that
+   * isn't kept is left out, and nothing is written when nothing changed.
+   */
+  setRunning(running: Record<string, boolean>): Promise<void> {
+    return this.markRunning(running) || this.dirty
+      ? this.persist()
+      : this.writeChain.catch(() => undefined);
+  }
+
+  /** Resolves once every queued write has landed, writing again what failed to. */
+  async flush(): Promise<void> {
+    await this.writeChain.catch(() => undefined);
+    if (this.dirty) await this.persist();
+  }
+
+  /**
+   * Forget a lane's conversation. Its run is no longer one to bring back, and
+   * the choice to keep it running goes too unless `keepRunningChoice` (#18177).
+   */
+  clear(slotKey: string, options?: { keepRunningChoice?: boolean }): Promise<void> {
+    const hadEntry = this.entries.delete(slotKey);
+    const kept = this.keepRunning.get(slotKey);
+    let keptChanged = false;
+    if (kept && options?.keepRunningChoice !== true) {
+      this.keepRunning.delete(slotKey);
+      keptChanged = true;
+    } else if (kept?.running) {
+      kept.running = false;
+      keptChanged = true;
+    }
+    return hadEntry || keptChanged ? this.persist() : Promise.resolve();
   }
 
   /**
@@ -295,6 +412,31 @@ export class PendingHelpHibernationStore {
     return Object.keys(valid).length > 0 ? { recordedAt, lanes: valid } : null;
   }
 
+  /** Reads the kept lanes, and returns those the previous run left running. */
+  private readKeepRunning(raw: unknown): string[] {
+    if (!raw || typeof raw !== "object") return [];
+    const running: string[] = [];
+    for (const [slotKey, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (!projectIdFromSlotKey(slotKey) || slotFromSlotKey(slotKey) === null) continue;
+      if (!value || typeof value !== "object") continue;
+      this.keepRunning.set(slotKey, { running: false });
+      if ((value as KeptRunning).running === true) running.push(slotKey);
+    }
+    return running;
+  }
+
+  /** In memory only; true when a kept lane's mark changed. */
+  private markRunning(running: Record<string, boolean>): boolean {
+    let changed = false;
+    for (const [slotKey, live] of Object.entries(running)) {
+      const kept = this.keepRunning.get(slotKey);
+      if (!kept || kept.running === live) continue;
+      kept.running = live;
+      changed = true;
+    }
+    return changed;
+  }
+
   private readCoordinators(raw: unknown): void {
     if (!raw || typeof raw !== "object") return;
     for (const [projectId, slot] of Object.entries(raw as Record<string, unknown>)) {
@@ -324,6 +466,16 @@ export class PendingHelpHibernationStore {
       ...(this.coordinators.size > 0
         ? { coordinators: Object.fromEntries(this.coordinators) }
         : {}),
+      ...(this.keepRunning.size > 0
+        ? {
+            keepRunning: Object.fromEntries(
+              [...this.keepRunning].map(([slotKey, { running }]) => [
+                slotKey,
+                running ? { running: true as const } : {},
+              ])
+            ),
+          }
+        : {}),
     };
     const work = this.writeChain
       .catch(() => undefined)
@@ -331,8 +483,12 @@ export class PendingHelpHibernationStore {
         resilientAtomicWriteFile(this.filePath, JSON.stringify(snapshot, null, 2) + "\n", "utf-8", {
           mode: 0o600,
         }).then(
-          () => true,
+          () => {
+            this.dirty = false;
+            return true;
+          },
           (err: unknown) => {
+            this.dirty = true;
             console.warn("[PendingHelpHibernationStore] Failed to persist:", err);
             return false;
           }

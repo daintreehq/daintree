@@ -1939,6 +1939,14 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     mockGetAssistantScratchEnv.mockReturnValue(null);
   });
 
+  // As PtyClient.spawn does once it sends the spawn: a refused one mints none.
+  const spawnSends = () =>
+    ptyClient.spawn.mockImplementation(
+      (id: string, options: Parameters<typeof ledgerFactsFromSpawnOptions>[0]) => {
+        getLifecycleLedger().recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      }
+    );
+
   it("skips per-pane MCP injection when DAINTREE_MCP_TOKEN is a valid help token (session-dir owns the .mcp.json)", async () => {
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
 
@@ -3159,6 +3167,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
 
   it("records the assistant lane's conversation id as its durable pointer at spawn (#13205)", async () => {
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+    spawnSends();
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -3184,10 +3193,38 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     );
   });
 
+  it("records the pointer of a spawn PtyClient refused without sending it as one that never ran (#18177)", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: "claude --session-id 11111111-2222-3333-4444-555555555555",
+        launchAgentId: "claude",
+        agentSessionId: "11111111-2222-3333-4444-555555555555",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(mockRecordLaneLaunchForToken).toHaveBeenCalledExactlyOnceWith(
+      "help-token",
+      "11111111-2222-3333-4444-555555555555",
+      { spawnRefused: true }
+    );
+  });
+
   it("records a resume main turned into a fresh start as a fresh conversation (#17919)", async () => {
     const SESSION = "006fdfc0-67bf-4df0-ad82-48ebfe4df184";
     mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
     findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+    spawnSends();
 
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -3220,6 +3257,7 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     async (_case, flags, expected) => {
       const SESSION = "11111111-2222-3333-4444-555555555555";
       mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+      spawnSends();
 
       const deps = { ptyClient } as unknown as HandlerDependencies;
       registerTerminalLifecycleHandlers(deps);

@@ -21,6 +21,15 @@ import type { HelpSessionService } from "./HelpSessionService.js";
 import type { PtyClient } from "./PtyClient.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 
+/** A keep-running choice that didn't reach disk (#18177): held, and saved again with the next write. */
+export const keepRunningNotSaved = () =>
+  new AppError({
+    code: "INTERNAL",
+    message: "The choice to keep the assistant running across restarts wasn't saved.",
+    userMessage:
+      "Daintree couldn't save that choice. It holds it and saves it with its next change.",
+  });
+
 const stillStarting = () =>
   new AppError({
     code: "UNSUPPORTED",
@@ -98,13 +107,14 @@ export function liveGlobalAssistantDeps(
       const service = await help();
       await service.restorePendingHibernation(GLOBAL_ASSISTANT_ID, slot, claimId);
     },
-    discardResume: async () => {
+    discardResume: async (options) => {
       const service = await help();
       // Forgotten once the pointers are in: one cleared before would come back with them.
       await service.whenPendingHibernationStoreWired();
-      await service.discardConversation(GLOBAL_ASSISTANT_ID, slot);
+      await service.discardConversation(GLOBAL_ASSISTANT_ID, slot, options);
     },
     keepsConversation: () => loadedHelp?.peekPendingHibernation(GLOBAL_ASSISTANT_ID, slot) != null,
+    keptRunning: () => loadedHelp?.isLaneKeptRunning(GLOBAL_ASSISTANT_ID, slot) ?? false,
     savePinnedAgent: (agentId) => writePinnedAgent(slot, agentId),
     coordinates: () => globalAssistantCoordinatorSlot() === slot,
     spawn: async (spec) => {
@@ -128,6 +138,9 @@ export function liveGlobalAssistantDeps(
             agentLaunchFlags: flags,
             ...(spec.resumeAgentSessionId
               ? { resumeAgentSessionId: spec.resumeAgentSessionId }
+              : {}),
+            ...(spec.resumeAgentSessionId && spec.exactResume
+              ? { exactResume: true as const }
               : {}),
           }),
         spec.terminalId
@@ -492,6 +505,22 @@ export async function handGlobalAssistantCoordination(slot: GlobalAssistantSlot)
         userMessage: `${sessionName(slot)} hasn't started a conversation yet. Start it, then hand coordination to it.`,
       })
   );
+}
+
+/**
+ * Keep the session at `slot` running across restarts, or stop keeping it
+ * (#18177); every window hears the change. Refused when it couldn't be saved,
+ * though the choice is held and saved again with the next write.
+ */
+export async function setGlobalAssistantKeepRunning(
+  slot: GlobalAssistantSlot,
+  keep: boolean
+): Promise<void> {
+  if (shuttingDown) throw shuttingDownError();
+  const service = await help();
+  const saved = await service.setLaneKeepRunning(GLOBAL_ASSISTANT_ID, slot, keep);
+  getGlobalAssistantService(slot).refresh();
+  if (!saved) throw keepRunningNotSaved();
 }
 
 /**

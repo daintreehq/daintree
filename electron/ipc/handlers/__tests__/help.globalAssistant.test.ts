@@ -8,6 +8,7 @@ const registry = vi.hoisted(() => ({
   join: vi.fn(),
   hand: vi.fn(async (_slot: number) => {}),
   coordinator: 0 as 0 | 1,
+  keep: vi.fn(async (_slot: number, _keep: boolean) => {}),
 }));
 vi.mock("../../../services/globalAssistant.js", () => ({
   getGlobalAssistantService: (slot = 0) => (slot === 1 ? secondService : service),
@@ -16,6 +17,7 @@ vi.mock("../../../services/globalAssistant.js", () => ({
   joinNewGlobalAssistantLaunch: registry.join,
   globalAssistantCoordinatorSlot: () => registry.coordinator,
   handGlobalAssistantCoordination: registry.hand,
+  setGlobalAssistantKeepRunning: registry.keep,
   stopGlobalAssistantSession: async (
     slot: number,
     check: (instance: GlobalAssistantService) => void
@@ -106,6 +108,7 @@ describe("global assistant IPC handlers", () => {
     registry.startNew.mockReset();
     registry.join.mockReset();
     registry.hand.mockClear();
+    registry.keep.mockClear();
     registry.coordinator = 0;
     pty.generation = 3;
     pty.spawnResult.clear();
@@ -113,6 +116,23 @@ describe("global assistant IPC handlers", () => {
     pty.read.mockResolvedValue(null);
     bus.stateChanged.clear();
     broadcast.mockClear();
+  });
+
+  it("keeps the session it names running across restarts, for a window, and answers with it (#18177)", async () => {
+    const view = await handlers.handleSetGlobalAssistantKeepRunning(ctx(10, 1), true, 1);
+    expect(registry.keep).toHaveBeenCalledExactlyOnceWith(1, true);
+    expect(view.slot).toBe(1);
+
+    await expect(
+      handlers.handleSetGlobalAssistantKeepRunning(ctx(10, null), true, 1)
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+    await expect(
+      handlers.handleSetGlobalAssistantKeepRunning(ctx(10, 1), "yes" as unknown as boolean, 0)
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      handlers.handleSetGlobalAssistantKeepRunning(ctx(10, 1), true, 2)
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(registry.keep).toHaveBeenCalledTimes(1);
   });
 
   it("names the running session by its exact terminal and PTY launch generation", async () => {

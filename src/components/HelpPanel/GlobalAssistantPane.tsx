@@ -6,6 +6,7 @@ import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuMeta,
@@ -157,6 +158,7 @@ export function GlobalAssistantPane({
     cancelLaunch,
     startNew,
     handCoordination,
+    setKeepRunning,
   } = useGlobalAssistant(active, (shown) => canTypeTo(canopyOpen, target, shown), false, slot);
   const sessions = useGlobalAssistantSessions(active);
   const occupiedCount = sessions?.filter((session) => session.occupied).length ?? 0;
@@ -453,6 +455,20 @@ export function GlobalAssistantPane({
                       : null
                   }
                 />
+                {/* The session's own, so only one this window can see is in use;
+                    a Stop turns it off with the conversation (#18177). */}
+                {view?.occupied && !boundElsewhere && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuCheckboxItem
+                      checked={view.keepRunning}
+                      onCheckedChange={(checked) => void setKeepRunning(checked === true)}
+                      data-testid="help-global-keep-running"
+                    >
+                      Keep running across restarts
+                    </DropdownMenuCheckboxItem>
+                  </>
+                )}
                 {stoppable && (
                   <>
                     <DropdownMenuSeparator />

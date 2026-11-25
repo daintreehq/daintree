@@ -1219,6 +1219,13 @@ export class ProjectStore {
     invalidatePrefetchCache(projectId);
     // A launch still waiting to spawn would register a run for a project that's gone.
     cancelScheduledLaunches({ projectId });
+    // Nor is any of its Assistant lanes kept running across restarts, so one
+    // still queued to resume at this launch stands down (#18177).
+    try {
+      await getPendingHelpHibernationStore().forgetKeepRunning(projectId);
+    } catch (error) {
+      logError(`Failed to forget the kept assistant lanes of ${projectId}`, error);
+    }
     // Those runs, open ones included, will never end now.
     if (runsRemoved > 0) {
       events.emit("scheduled-runs:deleted", { projectId, scheduleId: null, timestamp: Date.now() });

@@ -39,6 +39,8 @@ import {
   DEFAULT_ASSISTANT_SLOT,
   isValidAssistantSlot,
 } from "../../../shared/config/assistantSlots.js";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
+import { keepRunningNotSaved } from "../../services/globalAssistant.js";
 
 /**
  * Resolve a renderer-supplied slot (#12108). Absent means slot 0 — an older
@@ -694,12 +696,15 @@ async function handleRestorePendingHibernation(
  * conversation, or closing its tab (#13205). The only renderer path that clears
  * a lane's durable resume pointer; CLI exits and crashes leave it in place.
  */
-async function handleDiscardConversation(
+export async function handleDiscardConversation(
   ctx: import("../types.js").IpcContext,
   projectId: string,
-  rawSlot?: number
+  rawSlot?: number,
+  /** A clear starts the lane over, still kept running across restarts (#18177). */
+  options?: { keepRunningChoice?: boolean }
 ): Promise<void> {
-  if (typeof projectId !== "string" || !projectId) return;
+  // A global session's conversation is its own service's to forget (#18177).
+  if (typeof projectId !== "string" || !projectId || isGlobalAssistantId(projectId)) return;
   if (!ctx.projectId || ctx.projectId !== projectId) {
     console.warn(
       "[help] discardConversation: projectId mismatch — refusing cross-project discard",
@@ -710,7 +715,65 @@ async function handleDiscardConversation(
   const slot = resolveSlot(rawSlot);
   if (slot === null) return;
   const { helpSessionService } = await getHelpSessionService();
-  await helpSessionService.discardConversation(projectId, slot);
+  await helpSessionService.discardConversation(
+    projectId,
+    slot,
+    options?.keepRunningChoice === true ? { keepRunningChoice: true } : undefined
+  );
+}
+
+/** A lane of the sender's own project, or null when it names another or no lane. */
+function ownLane(
+  ctx: import("../types.js").IpcContext,
+  projectId: unknown,
+  rawSlot: unknown,
+  what: string
+): { projectId: string; slot: number } | null {
+  // A global session is set through its own channel, from a window (#18177).
+  if (typeof projectId !== "string" || !projectId || isGlobalAssistantId(projectId)) return null;
+  if (!ctx.projectId || ctx.projectId !== projectId) {
+    console.warn(`[help] ${what}: projectId mismatch — refusing a cross-project call`, {
+      requested: projectId,
+      fromView: ctx.projectId,
+      webContentsId: ctx.webContentsId,
+    });
+    return null;
+  }
+  const slot = resolveSlot(rawSlot);
+  return slot === null ? null : { projectId, slot };
+}
+
+/** Whether the person chose to keep a lane of this project running across restarts (#18177). */
+export async function handleGetKeepRunning(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  rawSlot?: number
+): Promise<boolean> {
+  const lane = ownLane(ctx, projectId, rawSlot, "getKeepRunning");
+  if (!lane) return false;
+  const { helpSessionService } = await getHelpSessionService();
+  await helpSessionService.whenPendingHibernationStoreWired();
+  return helpSessionService.isLaneKeptRunning(lane.projectId, lane.slot);
+}
+
+/**
+ * Keep a lane of this project running across restarts, or stop keeping it
+ * (#18177). Answers with the choice now held; refused when it wasn't saved,
+ * though the choice is held and saved again with the next write.
+ */
+export async function handleSetKeepRunning(
+  ctx: import("../types.js").IpcContext,
+  projectId: string,
+  rawSlot: number,
+  keep: boolean
+): Promise<boolean> {
+  const lane = ownLane(ctx, projectId, rawSlot, "setKeepRunning");
+  if (!lane || typeof keep !== "boolean") return false;
+  const { helpSessionService } = await getHelpSessionService();
+  if (!(await helpSessionService.setLaneKeepRunning(lane.projectId, lane.slot, keep))) {
+    throw keepRunningNotSaved();
+  }
+  return helpSessionService.isLaneKeptRunning(lane.projectId, lane.slot);
 }
 
 async function handleReportPanelOpen(
@@ -787,6 +850,11 @@ export const helpNamespace = defineIpcNamespace({
     setGlobalAssistantCoordinator: op(
       HELP_METHOD_CHANNELS.setGlobalAssistantCoordinator,
       globalAssistant.handleSetGlobalAssistantCoordinator,
+      { withContext: true }
+    ),
+    setGlobalAssistantKeepRunning: op(
+      HELP_METHOD_CHANNELS.setGlobalAssistantKeepRunning,
+      globalAssistant.handleSetGlobalAssistantKeepRunning,
       { withContext: true }
     ),
     attachGlobalAssistant: op(
@@ -880,6 +948,12 @@ export const helpNamespace = defineIpcNamespace({
       { withContext: true }
     ),
     discardConversation: op(HELP_METHOD_CHANNELS.discardConversation, handleDiscardConversation, {
+      withContext: true,
+    }),
+    getKeepRunning: op(HELP_METHOD_CHANNELS.getKeepRunning, handleGetKeepRunning, {
+      withContext: true,
+    }),
+    setKeepRunning: op(HELP_METHOD_CHANNELS.setKeepRunning, handleSetKeepRunning, {
       withContext: true,
     }),
     listPastSessions: op(HELP_METHOD_CHANNELS.listPastSessions, handleListPastSessions, {

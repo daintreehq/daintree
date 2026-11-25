@@ -117,6 +117,161 @@ describe("GlobalAssistantService", () => {
     expect(other.deps.spawn.mock.calls[0]![0].resumeAgentSessionId).toBeUndefined();
   });
 
+  describe("resuming after a restart (#18177)", () => {
+    const kept = { agentId: "claude", agentSessionId: "conv", claimId: "c1" };
+
+    it("reopens exactly the recorded conversation, refusing rather than starting another", async () => {
+      const { deps } = makeDeps();
+      deps.takeResume.mockResolvedValue(kept);
+      const state = await new GlobalAssistantService(deps).resumeAfterRestart("conv");
+      expect(state.phase).toBe("running");
+      expect(deps.spawn.mock.calls[0]![0]).toMatchObject({
+        resumeAgentSessionId: "conv",
+        exactResume: true,
+      });
+    });
+
+    it.each([
+      ["no conversation is kept", null],
+      ["the kept conversation moved on", { ...kept, agentSessionId: "conv-new" }],
+    ])("starts nothing when %s, and hands the claim back", async (_case, pending) => {
+      const { deps } = makeDeps();
+      deps.takeResume.mockResolvedValue(pending);
+      const service = new GlobalAssistantService(deps);
+
+      await expect(service.resumeAfterRestart("conv")).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      expect(deps.provision).not.toHaveBeenCalled();
+      expect(deps.spawn).not.toHaveBeenCalled();
+      if (pending) expect(deps.releaseResume).toHaveBeenCalledWith(pending.claimId);
+      expect(service.getState().phase).toBe("absent");
+    });
+
+    it("reopens it on the agent it ran when a hand-off left it on another than a Start runs", async () => {
+      const { deps } = makeDeps();
+      deps.takeResume.mockResolvedValue({ ...kept, agentId: "codex" });
+      const service = new GlobalAssistantService(deps);
+
+      const state = await service.resumeAfterRestart("conv");
+
+      expect(deps.canRun).toHaveBeenCalledWith("codex");
+      expect(deps.spawn.mock.calls[0]![0]).toMatchObject({
+        agentId: "codex",
+        resumeAgentSessionId: "conv",
+        exactResume: true,
+      });
+      expect(state).toMatchObject({ agentId: "codex", pinnedAgentId: null });
+    });
+
+    it("needs no usable default to reopen it on the agent it ran", async () => {
+      const { deps } = makeDeps({ agentId: vi.fn(async () => null) });
+      deps.takeResume.mockResolvedValue({ ...kept, agentId: "copilot" });
+
+      await new GlobalAssistantService(deps).resumeAfterRestart("conv");
+
+      expect(deps.spawn.mock.calls[0]![0]).toMatchObject({ agentId: "copilot", exactResume: true });
+    });
+
+    it("keeps a restore on another agent going through a change of default while it starts", async () => {
+      const usable = deferred<boolean>();
+      const { deps } = makeDeps({ canRun: vi.fn(() => usable.promise) });
+      deps.takeResume.mockResolvedValue({ ...kept, agentId: "codex" });
+      const service = new GlobalAssistantService(deps);
+      const restoring = service.resumeAfterRestart("conv");
+      await vi.waitFor(() => expect(deps.canRun).toHaveBeenCalled());
+
+      await service.onAgentChanged("antigravity");
+      usable.resolve(true);
+
+      await expect(restoring).resolves.toMatchObject({ phase: "running", agentId: "codex" });
+      await service.onAgentChanged("claude");
+      expect(service.getState().phase).toBe("running");
+    });
+
+    it("leaves a Start queued behind a cancelled restore following the default", async () => {
+      const taken = deferred<{ agentId: string; agentSessionId: string; claimId: string } | null>();
+      const { deps } = makeDeps();
+      deps.takeResume.mockReturnValueOnce(taken.promise);
+      const service = new GlobalAssistantService(deps);
+      const restoring = service.resumeAfterRestart("conv").catch(() => {});
+      await vi.waitFor(() => expect(deps.takeResume).toHaveBeenCalled());
+      await service.cancelLaunch();
+      const provisioned = deferred<null>();
+      deps.provision.mockReturnValueOnce(provisioned.promise);
+      const started = service.ensureSession().catch(() => {});
+
+      taken.resolve({ ...kept, agentId: "codex" });
+      await restoring;
+      await vi.waitFor(() => expect(deps.provision).toHaveBeenCalledWith("claude"));
+      await service.onAgentChanged("antigravity");
+
+      expect(service.getState().phase).toBe("absent");
+      provisioned.resolve(null);
+      await started;
+    });
+
+    it("starts nothing when the agent it ran can't run here now, and hands the claim back", async () => {
+      const { deps } = makeDeps({ canRun: vi.fn(async (agentId: string) => agentId !== "codex") });
+      deps.takeResume.mockResolvedValue({ ...kept, agentId: "codex" });
+
+      await expect(
+        new GlobalAssistantService(deps).resumeAfterRestart("conv")
+      ).rejects.toMatchObject({ code: "UNSUPPORTED" });
+      expect(deps.provision).not.toHaveBeenCalled();
+      expect(deps.releaseResume).toHaveBeenCalledWith("c1");
+    });
+
+    it("leaves a session already running or starting alone", async () => {
+      const spawned = deferred<boolean>();
+      const { deps } = makeDeps({ spawn: vi.fn(() => spawned.promise) });
+      const service = new GlobalAssistantService(deps);
+      const started = service.ensureSession();
+
+      await expect(service.resumeAfterRestart("conv")).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      spawned.resolve(true);
+      await started;
+      await expect(service.resumeAfterRestart("conv")).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      expect(deps.spawn).toHaveBeenCalledTimes(1);
+      expect(deps.spawn.mock.calls[0]![0].exactResume).toBeUndefined();
+    });
+
+    it("leaves a session alone while a clear holds it, so the clear's own start runs", async () => {
+      const revoked = deferred<void>();
+      const { deps } = makeDeps({ revoke: vi.fn(() => revoked.promise) });
+      deps.takeResume.mockResolvedValue(kept);
+      const service = new GlobalAssistantService(deps);
+      await service.ensureSession();
+      deps.takeResume.mockResolvedValue(null);
+      const cleared = service.restart();
+
+      await expect(service.resumeAfterRestart("conv")).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      revoked.resolve();
+      await expect(cleared).resolves.toMatchObject({ phase: "running" });
+      expect(deps.spawn.mock.calls.at(-1)![0].exactResume).toBeUndefined();
+    });
+
+    it("says whether it is kept running, and keeps that through a clear but not a stop", async () => {
+      const keptRunning = vi.fn(() => true);
+      const { deps } = makeDeps({ keptRunning });
+      const service = new GlobalAssistantService(deps);
+      expect(service.getState().keepRunning).toBe(true);
+      keptRunning.mockReturnValue(false);
+      expect(service.getState().keepRunning).toBe(false);
+
+      await service.ensureSession();
+      await service.restart();
+      expect(deps.discardResume).toHaveBeenLastCalledWith({ keepRunningChoice: true });
+      await service.discard();
+      expect(deps.discardResume).toHaveBeenLastCalledWith(undefined);
+    });
+  });
+
   it("refuses with a clear error when no agent can run it", async () => {
     const { deps } = makeDeps({ agentId: vi.fn(async () => null) });
     const service = new GlobalAssistantService(deps);

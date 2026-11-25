@@ -102,6 +102,8 @@ export interface GlobalAssistantState {
    * the person chose.
    */
   coordinating: boolean;
+  /** Whether the person chose to keep it running across restarts (#18177). */
+  keepRunning: boolean;
   /** Bumps with every run, so a panel can tell a new session from the one it showed. */
   generation: number;
   agentId: string | null;

@@ -136,6 +136,7 @@ function globalView(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantVi
     phase: "absent",
     pinnedAgentId: null,
     coordinating: false,
+    keepRunning: false,
     occupied: false,
     generation: 0,
     agentId: null,

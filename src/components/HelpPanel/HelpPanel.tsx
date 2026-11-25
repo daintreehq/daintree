@@ -40,6 +40,7 @@ import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { usePaletteStore } from "@/store/paletteStore";
 import { HelpPanelHeader, summarizeLaneActivity, type AssistantScope } from "./HelpPanelHeader";
+import { useLaneKeepRunning } from "./useLaneKeepRunning";
 import { HelpSessionTabs, helpSessionTabId } from "./HelpSessionTabs";
 import { HelpSessionLaneRuntime } from "./HelpSessionLaneRuntime";
 import {
@@ -952,6 +953,12 @@ export function HelpPanel({
     globalSlot
   );
   const projectIdentity = useProjectAssistantIdentity(activeWorkspaceId);
+  // A scratch's lanes can't start with no view, so only a project's are kept (#18177).
+  const {
+    keepRunning,
+    setKeepRunning,
+    refresh: refreshKeepRunning,
+  } = useLaneKeepRunning(currentProject?.id ?? null, activeSlot);
   const globalIdentity = useGlobalAssistantIdentity();
   const globalAssistantName = displayIdentityName(globalIdentity, "Global assistant");
   const globalActivity = useMemo(
@@ -1341,6 +1348,9 @@ export function HelpPanel({
         onOpenDocs={handleOpenAssistantDocs}
         autoLaunchEnabled={autoLaunchEnabled}
         onAutoLaunchEnabledChange={setAutoLaunchEnabled}
+        keepRunning={globalSelected ? null : keepRunning}
+        onKeepRunningChange={setKeepRunning}
+        onMenuOpen={refreshKeepRunning}
         onClose={handleClose}
         isFocused={isHighlighted}
         newSessionAgentIds={supportedInstalledAgentIds}

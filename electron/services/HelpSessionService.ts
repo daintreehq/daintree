@@ -55,6 +55,7 @@ import type {
 import { AssistantSessionFiles } from "./AssistantSessionFiles.js";
 import { HelpSessionError } from "./helpSessionError.js";
 import { publishHelpSessionService } from "./helpSessionRuntime.js";
+import { events } from "./events.js";
 import {
   ASSISTANT_AGENT_DIR_KEY_MAX_LENGTH,
   ASSISTANT_AGENT_DIR_KEY_PATTERN,
@@ -111,7 +112,7 @@ const DEFAULT_BYPASS_PERMISSIONS = false;
 const SCHEDULED_RUN_SESSIONS_KEPT = 64;
 
 function isValidStartedBy(startedBy: HelpSessionStartedBy): boolean {
-  if (startedBy.kind === "update-restart") return true;
+  if (startedBy.kind === "update-restart" || startedBy.kind === "standing-restart") return true;
   const parts =
     startedBy.kind === "relay"
       ? [startedBy.senderId, startedBy.linkSessionId, startedBy.askingHelpSessionId]
@@ -214,7 +215,9 @@ export type HelpSessionStartedBy =
   /** A due schedule whose agent is the Assistant (#16169), for one run of it. */
   | { kind: "schedule"; scheduleId: string; runId: string }
   /** A lane a restart to install an update stopped, resumed by the next launch (#16753). */
-  | { kind: "update-restart" };
+  | { kind: "update-restart" }
+  /** A lane kept running across restarts, resumed by the next launch after a quit or crash (#18177). */
+  | { kind: "standing-restart" };
 
 /** A stopped lane's kept conversation, as its pointer holds it (#16763). */
 export interface KeptLane {
@@ -320,6 +323,25 @@ interface LaneConversation {
   agentSessionId: string;
   conversationOwnershipId: string;
 }
+
+/**
+ * A lane's live run (#18177): the terminal it runs in, and whether the lane's
+ * pointer is known to name the conversation it runs. Followed for every lane,
+ * so choosing to keep one running later marks only what is known of its run;
+ * only a kept lane's confirmed run is marked on disk for the next launch. A
+ * fork never is: its pointer names the conversation it forked from, and a quit
+ * capture may hand that same id back. A run the PTY host replayed may be on
+ * another conversation, until a capture says which.
+ */
+interface LaneRun {
+  terminalId: string;
+  confirmed: boolean;
+  /** False for a fork, which no capture can confirm. */
+  confirmable: boolean;
+}
+
+/** The PTY events that end or unsettle a kept lane's run (#18177). */
+type StandingRunEvents = Pick<PtyClient, "on" | "off">;
 
 export interface AssistantLaneSnapshot {
   slotKey: string;
@@ -614,6 +636,13 @@ export class HelpSessionService {
   // its release by `claimLaneResume`.
   private readonly resumingSlotKeys = new Set<string>();
   private readonly laneDetachedListeners = new Set<(projectId: string) => void>();
+  // Each lane's live run (#18177), by slot key.
+  private readonly laneRuns = new Map<string, LaneRun>();
+  // The runs an orderly quit is stopping (#18177): their ends from then on are
+  // the quit's, not the lanes', so the next launch still brings them back.
+  private quitHeldTerminals: ReadonlySet<string> | null = null;
+  private unwatchStandingRuns: (() => void) | null = null;
+  private standingRunsPty: StandingRunEvents | null = null;
   private onMcpSessionRepinnedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private projectMetadataReader: ProjectMetadataReader | null = null;
@@ -1869,27 +1898,31 @@ export class HelpSessionService {
         const panelWasOpen = opts?.rendererGone
           ? panelOpenAtCapture
           : this.panelOpenByProjectId.get(record.projectId) === true;
-        void this.pendingHibernationStore
-          .set(slotKey, {
+        const captured = {
+          agentId: record.agentId,
+          agentSessionId: capturedAgentSessionId,
+          cwd: record.sessionPath,
+          capturedAt: Date.now(),
+          panelWasOpen,
+          ...this.ownershipAfterCapture(slotKey, {
             agentId: record.agentId,
-            agentSessionId: capturedAgentSessionId,
-            cwd: record.sessionPath,
-            capturedAt: Date.now(),
-            panelWasOpen,
-            ...this.ownershipAfterCapture(slotKey, {
-              agentId: record.agentId,
-              agentSessionId: record.agentSessionId ?? "",
-              conversationOwnershipId: record.conversationOwnershipId,
-              captured: capturedAgentSessionId,
-            }),
-          })
-          .catch((err) => {
-            console.warn(
-              "[HelpSessionService] Failed to persist pending hibernation:",
-              record.projectId,
-              err
-            );
-          });
+            agentSessionId: record.agentSessionId ?? "",
+            conversationOwnershipId: record.conversationOwnershipId,
+            captured: capturedAgentSessionId,
+          }),
+        };
+        // A global session's quit capture names its conversation (#18177).
+        void (
+          this.confirmQuitRun(slotKey)
+            ? this.pendingHibernationStore.set(slotKey, captured, true)
+            : this.pendingHibernationStore.set(slotKey, captured)
+        ).catch((err) => {
+          console.warn(
+            "[HelpSessionService] Failed to persist pending hibernation:",
+            record.projectId,
+            err
+          );
+        });
       }
       this.pendingCapturesBySlotKey.delete(slotKey);
     }
@@ -2071,7 +2104,7 @@ export class HelpSessionService {
   recordLaneLaunchForToken(
     token: string,
     agentSessionId?: string,
-    options?: { freshConversation?: true; forkedConversation?: true }
+    options?: { freshConversation?: true; forkedConversation?: true; spawnRefused?: true }
   ): Promise<void> {
     if (!token || !this.pendingHibernationStore) return Promise.resolve();
     const record = this.sessionsByToken.get(token);
@@ -2094,13 +2127,28 @@ export class HelpSessionService {
     this.bumpLaneRevision(slotKey);
     // The launch that held the claim has spent it.
     this.claimsBySlotKey.delete(slotKey);
-    const written = this.pendingHibernationStore.set(slotKey, {
+    const entry = {
       agentId: record.agentId,
       agentSessionId: agentSessionId ?? "",
       cwd: record.sessionPath,
       capturedAt: Date.now(),
       ...(conversationOwnershipId !== undefined ? { conversationOwnershipId } : {}),
-    });
+    };
+    // The lane's run (#18177): none for a spawn the PTY client refused, which
+    // never ran, and a fork's is never confirmed. A kept lane's is marked in
+    // the same write as its pointer.
+    const terminalId =
+      options?.spawnRefused === true ? undefined : this.terminalBySessionId.get(record.sessionId);
+    const forked = options?.forkedConversation === true;
+    if (terminalId === undefined) this.laneRuns.delete(slotKey);
+    else this.laneRuns.set(slotKey, { terminalId, confirmed: !forked, confirmable: !forked });
+    const written = this.pendingHibernationStore.isKeptRunning(slotKey)
+      ? this.pendingHibernationStore.set(
+          slotKey,
+          entry,
+          this.laneRuns.get(slotKey)?.confirmed === true
+        )
+      : this.pendingHibernationStore.set(slotKey, entry);
     if (conversationOwnershipId !== undefined) {
       try {
         this.conversationOwnership?.bind(record.sessionId, conversationOwnershipId);
@@ -2236,9 +2284,15 @@ export class HelpSessionService {
     ) {
       return Promise.resolve();
     }
-    if (entry.agentSessionId === agentSessionId) return Promise.resolve();
+    // The capture names the conversation a kept lane's quit run is on (#18177).
+    const running = this.confirmQuitRun(lane.slotKey);
+    if (entry.agentSessionId === agentSessionId) {
+      return running
+        ? this.pendingHibernationStore.setRunning({ [lane.slotKey]: true })
+        : Promise.resolve();
+    }
     const { conversationOwnershipId, ...rest } = entry;
-    return this.pendingHibernationStore.set(lane.slotKey, {
+    const captured = {
       ...rest,
       agentSessionId,
       capturedAt: Date.now(),
@@ -2248,7 +2302,10 @@ export class HelpSessionService {
         conversationOwnershipId,
         captured: agentSessionId,
       }),
-    });
+    };
+    return running
+      ? this.pendingHibernationStore.set(lane.slotKey, captured, true)
+      : this.pendingHibernationStore.set(lane.slotKey, captured);
   }
 
   /**
@@ -2286,6 +2343,163 @@ export class HelpSessionService {
       back
     );
     return back !== undefined ? { conversationOwnershipId: back } : {};
+  }
+
+  /** Whether the person chose to keep this lane running across restarts (#18177). */
+  isLaneKeptRunning(projectId: string, slot: number): boolean {
+    return this.pendingHibernationStore?.isKeptRunning(assistantSlotKey(projectId, slot)) ?? false;
+  }
+
+  /**
+   * Keep a lane running across restarts, or stop keeping it (#18177). Turned
+   * on while the lane runs a conversation its pointer is known to name, that
+   * run is marked at once, so a crash right after brings it back; turned off,
+   * the run carries on and nothing brings it back. Resolves whether the choice
+   * reached disk; one that didn't isn't made.
+   */
+  async setLaneKeepRunning(projectId: string, slot: number, keep: boolean): Promise<boolean> {
+    if (!(await this.whenPendingHibernationStoreWired())) return false;
+    const store = this.pendingHibernationStore;
+    if (!store) return false;
+    const slotKey = assistantSlotKey(projectId, slot);
+    const run = this.laneRuns.get(slotKey);
+    const running =
+      keep &&
+      run !== undefined &&
+      run.confirmed &&
+      this.liveLaneTerminal(slotKey) === run.terminalId;
+    return store.setKeepRunning(slotKey, keep, running);
+  }
+
+  /**
+   * Whether a project lane kept running across restarts runs now (#18177):
+   * closing the last window then has to quit before that window's views go,
+   * or their teardown would end the run as if it had stopped.
+   */
+  hasLiveKeptProjectLane(): boolean {
+    const store = this.pendingHibernationStore;
+    if (!store) return false;
+    for (const slotKey of this.laneRuns.keys()) {
+      if (isGlobalAssistantId(projectIdFromSlotKey(slotKey))) continue;
+      if (store.isKeptRunning(slotKey)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Follow the PTY events that end a kept lane's run, or unsettle which
+   * conversation it is on (#18177). Called as soon as the service and the PTY
+   * client both exist, before a view can launch, and again later; once per client.
+   */
+  watchStandingRuns(pty: StandingRunEvents): void {
+    if (this.standingRunsPty === pty) return;
+    this.unwatchStandingRuns?.();
+    const onExit = (terminalId: string) => this.noteStandingRunEnded(terminalId);
+    // A refused spawn never ran, a quit under way or not; one refused because
+    // the terminal already runs leaves that run be.
+    const onSpawnResult = (
+      terminalId: string,
+      result: { success: boolean; error?: { code?: string } }
+    ) => {
+      if (result.success || result.error?.code === "TERMINAL_ALREADY_LIVE") return;
+      this.noteStandingRunEnded(terminalId, { neverRan: true });
+    };
+    const onIncarnationLost = (fact: { terminalId: string }) =>
+      this.noteStandingRunUnsettled(fact.terminalId);
+    pty.on("exit", onExit);
+    pty.on("spawn-result", onSpawnResult);
+    pty.on("incarnation-lost", onIncarnationLost);
+    // The agent CLI quitting inside its shell ends the run as surely as the PTY going.
+    const offAgentExit = events.on("agent:exited", ({ terminalId, exitKind }) => {
+      if (exitKind === "subcommand") this.noteStandingRunEnded(terminalId);
+    });
+    this.standingRunsPty = pty;
+    this.unwatchStandingRuns = () => {
+      pty.off("exit", onExit);
+      pty.off("spawn-result", onSpawnResult);
+      pty.off("incarnation-lost", onIncarnationLost);
+      offAgentExit();
+      this.standingRunsPty = null;
+      this.unwatchStandingRuns = null;
+    };
+  }
+
+  /**
+   * A lane's run ended (#18177): its PTY exited, its spawn was refused, or its
+   * agent CLI quit. A kept lane is left down by the next launch, unless the
+   * run is one an orderly quit is stopping.
+   */
+  noteStandingRunEnded(terminalId: string, options?: { neverRan?: true }): void {
+    if (options?.neverRan !== true && this.quitHeldTerminals?.has(terminalId)) return;
+    const ended: Record<string, boolean> = {};
+    for (const [slotKey, run] of this.laneRuns) {
+      if (run.terminalId !== terminalId) continue;
+      this.laneRuns.delete(slotKey);
+      ended[slotKey] = false;
+    }
+    this.writeStandingRuns(ended);
+  }
+
+  /**
+   * The PTY host lost a lane's run and replays it (#18177): the replay may run
+   * another conversation than the pointer names, so a kept lane isn't marked
+   * until a capture says which, during a quit too.
+   */
+  noteStandingRunUnsettled(terminalId: string): void {
+    const unsettled: Record<string, boolean> = {};
+    for (const [slotKey, run] of this.laneRuns) {
+      if (run.terminalId !== terminalId || !run.confirmed) continue;
+      run.confirmed = false;
+      unsettled[slotKey] = false;
+    }
+    this.writeStandingRuns(unsettled);
+  }
+
+  /**
+   * Fixes, before shutdown's kill, which kept lanes the next launch brings
+   * back (#18177): every run still followed, whose ends from here on are the
+   * quit's, except one the pre-kill terminal snapshot saw `exited`, which is
+   * unmarked.
+   */
+  holdStandingRunsForQuit(exited: ReadonlySet<string>): Promise<void> {
+    const held = new Set<string>();
+    const ended: Record<string, boolean> = {};
+    for (const [slotKey, run] of this.laneRuns) {
+      if (!exited.has(run.terminalId)) {
+        held.add(run.terminalId);
+        continue;
+      }
+      this.laneRuns.delete(slotKey);
+      ended[slotKey] = false;
+    }
+    this.quitHeldTerminals = held;
+    return this.pendingHibernationStore?.setRunning(ended) ?? Promise.resolve();
+  }
+
+  /** Confirms a lane's quit run once a capture names its conversation; whether it is marked. */
+  private confirmQuitRun(slotKey: string): boolean {
+    const run = this.laneRuns.get(slotKey);
+    if (!run?.confirmable || !this.quitHeldTerminals?.has(run.terminalId)) return false;
+    run.confirmed = true;
+    return true;
+  }
+
+  /** The terminal a lane runs in now, while a session of it holds it. */
+  private liveLaneTerminal(slotKey: string): string | null {
+    const terminalId = this.activeHelpTerminalBySlotKey.get(slotKey);
+    if (terminalId === undefined) return null;
+    for (const [sessionId, bound] of this.terminalBySessionId) {
+      const record = this.sessionsById.get(sessionId);
+      if (bound === terminalId && record && !record.revoked) return terminalId;
+    }
+    return null;
+  }
+
+  private writeStandingRuns(running: Record<string, boolean>): void {
+    if (Object.keys(running).length === 0) return;
+    void this.pendingHibernationStore?.setRunning(running).catch((err: unknown) => {
+      console.warn("[HelpSessionService] Saving a kept lane's run failed:", err);
+    });
   }
 
   /**
@@ -2490,7 +2704,11 @@ export class HelpSessionService {
    * the conversation stays recoverable. Also drops the lane's claim and any
    * in-flight capture ownership, so a late capture can't resurrect it.
    */
-  async discardConversation(projectId: string, slot: number): Promise<void> {
+  async discardConversation(
+    projectId: string,
+    slot: number,
+    options?: { keepRunningChoice?: boolean }
+  ): Promise<void> {
     if (!projectId) return;
     // Starting over ends the lane's run whether or not a resume store is wired.
     for (const record of this.sessionsById.values()) {
@@ -2512,6 +2730,8 @@ export class HelpSessionService {
       );
       await Promise.all(unspawned.map((record) => this.revokeSession(record.sessionId)));
     }
+    // Ended on purpose, even during a quit: nothing brings this run back (#18177).
+    this.laneRuns.delete(slotKey);
     if (!this.pendingHibernationStore) return;
     this.pendingCapturesBySlotKey.delete(slotKey);
     this.claimsBySlotKey.delete(slotKey);
@@ -2531,7 +2751,9 @@ export class HelpSessionService {
       }
     }
     for (const id of forgotten) this.forgetConversationOwnership(id);
-    await this.pendingHibernationStore.clear(slotKey);
+    await (options
+      ? this.pendingHibernationStore.clear(slotKey, options)
+      : this.pendingHibernationStore.clear(slotKey));
   }
 
   /**
@@ -3080,6 +3302,7 @@ export class HelpSessionService {
 
   dispose(): void {
     this.disposed = true;
+    this.unwatchStandingRuns?.();
     if (this.sweepTimer) {
       clearInterval(this.sweepTimer);
       this.sweepTimer = null;

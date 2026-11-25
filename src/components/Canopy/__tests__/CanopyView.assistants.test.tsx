@@ -165,6 +165,7 @@ function globalRunning(overrides: Partial<GlobalAssistantView> = {}): GlobalAssi
     phase: "running",
     pinnedAgentId: null,
     coordinating: false,
+    keepRunning: false,
     occupied: true,
     generation: 1,
     agentId: "claude",

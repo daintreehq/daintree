@@ -415,6 +415,45 @@ describe("HelpPanelHeader", () => {
     });
   });
 
+  describe("keep running across restarts (#18177)", () => {
+    const toggle = (view: ReturnType<typeof renderHeader>) =>
+      view.queryByRole("menuitemcheckbox", { name: "Keep running across restarts" });
+
+    it("shows the lane's choice once read, under a label that never changes, and hands on a change", () => {
+      const onKeepRunningChange = vi.fn();
+      const off = renderHeader({ keepRunning: false, onKeepRunningChange });
+      expect(toggle(off)!.getAttribute("aria-checked")).toBe("false");
+      fireEvent.click(toggle(off)!);
+      expect(onKeepRunningChange).toHaveBeenLastCalledWith(true);
+      off.unmount();
+
+      const on = renderHeader({ keepRunning: true, onKeepRunningChange });
+      expect(toggle(on)!.getAttribute("aria-checked")).toBe("true");
+      fireEvent.click(toggle(on)!);
+      expect(onKeepRunningChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it("leaves it out while the choice is unread, or where a lane can't be kept", () => {
+      const unread = renderHeader({ keepRunning: null, onKeepRunningChange: vi.fn() });
+      expect(toggle(unread)).toBeNull();
+      unread.unmount();
+
+      const global = renderHeader({
+        scope: "global",
+        keepRunning: true,
+        onKeepRunningChange: vi.fn(),
+      });
+      expect(toggle(global)).toBeNull();
+    });
+
+    it("asks for the choice again each time the menu opens", () => {
+      const onMenuOpen = vi.fn();
+      const view = renderHeader({ keepRunning: false, onKeepRunningChange: vi.fn(), onMenuOpen });
+      fireEvent.click(view.getByTestId("menu-open"));
+      expect(onMenuOpen).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("new session on a named agent (#13442)", () => {
     const menuItems = (container: HTMLElement) => [
       ...container.querySelectorAll<HTMLButtonElement>("[data-testid='overflow-menu'] > button"),

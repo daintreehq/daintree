@@ -913,11 +913,16 @@ export class HelpSessionController {
    * conversation and closing the tab land here — an agent exit, a PTY crash or
    * an app quit leave the pointer for the lane to resume from.
    */
-  private _discardConversation(workspaceId: string | null): void {
+  private _discardConversation(
+    workspaceId: string | null,
+    options?: { keepRunningChoice: true }
+  ): void {
     if (!workspaceId) return;
     // Optional-chained like the hibernation peeks: a missing binding degrades
     // to the old behaviour rather than throwing out of a stop path.
-    const discarded = window.electron.help.discardConversation?.(workspaceId, this.slot);
+    const discarded = options
+      ? window.electron.help.discardConversation?.(workspaceId, this.slot, options)
+      : window.electron.help.discardConversation?.(workspaceId, this.slot);
     if (discarded) safeFireAndForget(discarded, { context: "Help: discard conversation" });
   }
 
@@ -1081,7 +1086,10 @@ export class HelpSessionController {
       // a live read would strand the scratch's entry (#11068).
       if (reservedId) {
         useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
-        if (!options.vacantOnly) this._discardConversation(launchProject.id);
+        // The lane starts over, still kept running across restarts if it was (#18177).
+        if (!options.vacantOnly) {
+          this._discardConversation(launchProject.id, { keepRunningChoice: true });
+        }
         this._patch({ showResumeBanner: false });
       }
     }

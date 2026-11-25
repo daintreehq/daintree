@@ -1012,6 +1012,9 @@ export interface GeneratedElectronAPI {
     getGlobalAssistantState(
       ...args: IpcInvokeMap["help:global-assistant-state"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-state"]["result"]>;
+    getKeepRunning(
+      ...args: IpcInvokeMap["help:get-keep-running"]["args"]
+    ): Promise<IpcInvokeMap["help:get-keep-running"]["result"]>;
     getPinnedActionContext(
       ...args: IpcInvokeMap["help:get-pinned-action-context"]["args"]
     ): Promise<IpcInvokeMap["help:get-pinned-action-context"]["result"]>;
@@ -1069,6 +1072,12 @@ export interface GeneratedElectronAPI {
     setGlobalAssistantInputEligible(
       ...args: IpcInvokeMap["help:global-assistant-input-eligible"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-input-eligible"]["result"]>;
+    setGlobalAssistantKeepRunning(
+      ...args: IpcInvokeMap["help:global-assistant-set-keep-running"]["args"]
+    ): Promise<IpcInvokeMap["help:global-assistant-set-keep-running"]["result"]>;
+    setKeepRunning(
+      ...args: IpcInvokeMap["help:set-keep-running"]["args"]
+    ): Promise<IpcInvokeMap["help:set-keep-running"]["result"]>;
     startNewGlobalAssistant(
       ...args: IpcInvokeMap["help:global-assistant-start-new"]["args"]
     ): Promise<IpcInvokeMap["help:global-assistant-start-new"]["result"]>;

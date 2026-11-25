@@ -11,6 +11,7 @@ function viewOf(patch: Partial<GlobalAssistantView>): GlobalAssistantView {
     occupied: false,
     pinnedAgentId: null,
     coordinating: false,
+    keepRunning: false,
     generation: 0,
     agentId: null,
     terminalId: null,

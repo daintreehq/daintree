@@ -40,6 +40,8 @@ export interface GlobalAssistantHandle {
   startNew: (agentId: string, onClaimed: (slot: GlobalAssistantSlot) => void) => Promise<boolean>;
   /** Hand coordination to the session at `to`, as the person asked (#18143). */
   handCoordination: (to: GlobalAssistantSlot) => Promise<boolean>;
+  /** Keep the session running across restarts, or stop keeping it (#18177). */
+  setKeepRunning: (keep: boolean) => Promise<boolean>;
 }
 
 /**
@@ -312,6 +314,15 @@ export function useGlobalAssistant(
     [run, slot]
   );
 
+  const setKeepRunning = useCallback(
+    (keep: boolean) =>
+      run(
+        () => window.electron.help.setGlobalAssistantKeepRunning(keep, slot),
+        "Daintree couldn't change whether the global assistant keeps running."
+      ),
+    [run, slot]
+  );
+
   // Held by another surface of this view, it is this window's already: taken
   // without asking, as typing here is all the person can do in it now.
   const inputOwner = view?.inputOwner ?? null;
@@ -341,5 +352,6 @@ export function useGlobalAssistant(
     cancelLaunch,
     startNew,
     handCoordination,
+    setKeepRunning,
   };
 }

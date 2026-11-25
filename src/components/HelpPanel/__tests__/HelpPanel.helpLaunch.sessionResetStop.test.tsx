@@ -1251,7 +1251,10 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
     await flushLaunch();
 
     expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
-    expect(mockDiscardConversation).toHaveBeenCalledWith("proj-1", 0);
+    // Starting the lane over keeps it running across restarts if it was (#18177).
+    expect(mockDiscardConversation).toHaveBeenCalledExactlyOnceWith("proj-1", 0, {
+      keepRunningChoice: true,
+    });
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
       expect.objectContaining({

@@ -56,6 +56,8 @@ export interface GlobalAssistantSpawnSpec {
   env: Record<string, string>;
   /** Reopen this exact conversation; absent, start one. */
   resumeAgentSessionId?: string;
+  /** Refuse rather than start another conversation when that one can't be reopened (#18177). */
+  exactResume?: true;
   /** The first turn of a run that continues from a hand-off (#18140). */
   prompt?: string;
 }
@@ -78,8 +80,11 @@ export interface GlobalAssistantDeps {
   /** Claim the exact conversation a previous run left, if any. */
   takeResume(): Promise<GlobalAssistantResume | null>;
   releaseResume(claimId: string): Promise<void>;
-  /** Forget the conversation: the next run starts a new one. */
-  discardResume(): Promise<void>;
+  /**
+   * Forget the conversation: the next run starts a new one. The choice to keep
+   * the session running across restarts goes with it unless `keepRunningChoice` (#18177).
+   */
+  discardResume(options?: { keepRunningChoice?: boolean }): Promise<void>;
   /** Spawn the PTY; false when nothing started. */
   spawn(spec: GlobalAssistantSpawnSpec): Promise<boolean>;
   /**
@@ -97,6 +102,8 @@ export interface GlobalAssistantDeps {
   savePinnedAgent?(agentId: string | null): void;
   /** Whether it is the session that coordinates (#18143). Absent, it always is. */
   coordinates?(): boolean;
+  /** Whether the person chose to keep it running across restarts (#18177). Absent, it isn't. */
+  keptRunning?(): boolean;
 }
 
 export interface GlobalAssistantOptions {
@@ -191,6 +198,7 @@ export class GlobalAssistantService {
       occupied: this.isOccupied(),
       pinnedAgentId: this.pinnedAgentId,
       coordinating: this.coordinates(),
+      keepRunning: this.deps.keptRunning?.() ?? false,
       generation: this.generation,
       agentId: this.run?.agentId ?? this.starting?.agentId ?? this.pinnedAgentId ?? null,
       terminalId: this.run?.terminalId ?? null,
@@ -286,9 +294,26 @@ export class GlobalAssistantService {
     return this.admit(options?.fresh === true, null);
   }
 
+  /**
+   * Reopen exactly the conversation a run kept running across restarts was on
+   * (#18177), as a Start would, refusing rather than starting another. Only a
+   * session with nothing running or starting is resumed this way.
+   */
+  resumeAfterRestart(agentSessionId: string): Promise<GlobalAssistantState> {
+    if (this.closed) {
+      return Promise.reject(refuse("CANCELLED", "The app is shutting down."));
+    }
+    // Held by a clear or stop under way: that one decides what runs next.
+    if (this.run || (this.launch && this.launchInFlight()) || this.holds > 0) {
+      return Promise.reject(refuse("VALIDATION", "This global assistant session is in use."));
+    }
+    return this.admit(false, null, agentSessionId);
+  }
+
   private admit(
     fresh: boolean,
-    choice: GlobalAssistantChoice | null
+    choice: GlobalAssistantChoice | null,
+    exact: string | null = null
   ): Promise<GlobalAssistantState> {
     if (this.closed) {
       return Promise.reject(refuse("CANCELLED", "The app is shutting down."));
@@ -305,7 +330,8 @@ export class GlobalAssistantService {
       generation,
       fresh,
       predecessor,
-      choice
+      choice,
+      exact
     )
       .catch((err: unknown) => {
         // Stopped while starting, whatever it ran into on the way down.
@@ -333,7 +359,8 @@ export class GlobalAssistantService {
     generation: number,
     fresh: boolean,
     predecessor: Promise<unknown> | null,
-    choice: GlobalAssistantChoice | null
+    choice: GlobalAssistantChoice | null,
+    exact: string | null
   ): Promise<GlobalAssistantState> {
     const superseded = () => generation !== this.generation || this.closed;
 
@@ -347,9 +374,12 @@ export class GlobalAssistantService {
     // Chosen before the await, so a stop meanwhile can't hand it another's agent.
     // A hand-off names its own agent for the run (#18140).
     const pinned = this.pinnedAgentId;
-    let agentId = choice ? choice.agentId : (pinned ?? (await this.deps.agentId()));
+    let agentId: string | null = choice ? choice.agentId : (pinned ?? (await this.deps.agentId()));
     if (superseded()) throw stoppedWhileStarting();
-    if (!agentId) throw refuse("UNSUPPORTED", "No agent is available to run the global assistant.");
+    const noAgent = () =>
+      refuse("UNSUPPORTED", "No agent is available to run the global assistant.");
+    // A restore after a restart needs no default: it runs as its conversation did (#18177).
+    if (!agentId && exact === null) throw noAgent();
     this.launchAgentId = agentId;
     this.startingExited = false;
 
@@ -359,6 +389,20 @@ export class GlobalAssistantService {
     if (!choice && pinned !== null && pending?.agentSessionId && pending.agentId !== pinned) {
       agentId = pending.agentId;
       this.launchAgentId = agentId;
+    }
+    // A restore after a restart reopens its conversation on the agent it ran,
+    // which a hand-off may have made another than a Start chooses (#18177).
+    // Held as chosen, as that run was, so a change of default leaves it be.
+    let restoredElsewhere = false;
+    if (
+      exact !== null &&
+      pending &&
+      pending.agentSessionId === exact &&
+      pending.agentId !== agentId
+    ) {
+      agentId = pending.agentId;
+      this.launchAgentId = agentId;
+      restoredElsewhere = true;
     }
     const resume =
       pending && pending.agentId === agentId && pending.agentSessionId ? pending : null;
@@ -370,10 +414,22 @@ export class GlobalAssistantService {
       await releaseResume();
       throw stoppedWhileStarting();
     }
+    // Only once it is still this launch, so a superseded one can't hand it to the next.
+    if (restoredElsewhere) this.launchChosen = true;
+    // A restore after a restart reopens exactly the conversation the run was
+    // on, on the agent a Start chooses, or nothing (#18177).
+    if (exact !== null && resume?.agentSessionId !== exact) {
+      await releaseResume();
+      throw refuse("NOT_FOUND", "The global assistant's conversation can't be reopened as it was.");
+    }
+    if (!agentId) {
+      await releaseResume();
+      throw noAgent();
+    }
     // The agent it will run, when no default chose it, is checked here: the CLI
     // may have gone, or be too old for its wiring. The conversation is kept.
     // A hand-off's agent was checked as it was asked for.
-    if (!choice && (pinned !== null || !this.followsDefault)) {
+    if (!choice && (pinned !== null || !this.followsDefault || restoredElsewhere)) {
       const usable = await this.canRun(agentId);
       if (!usable || superseded()) {
         await releaseResume();
@@ -399,7 +455,12 @@ export class GlobalAssistantService {
     }
 
     const terminalId = `terminal-${randomUUID()}`;
-    const run: Run = { sessionId: session.sessionId, terminalId, agentId, chosen: choice !== null };
+    const run: Run = {
+      sessionId: session.sessionId,
+      terminalId,
+      agentId,
+      chosen: choice !== null || restoredElsewhere,
+    };
     this.starting = run;
 
     if (superseded()) {
@@ -419,6 +480,7 @@ export class GlobalAssistantService {
           ...(session.mcpUrl ? { [LAUNCH_ENV_KEYS.url]: session.mcpUrl } : {}),
         },
         ...(resume ? { resumeAgentSessionId: resume.agentSessionId } : {}),
+        ...(resume && exact !== null ? { exactResume: true as const } : {}),
         ...(choice ? { prompt: choice.prompt } : {}),
       });
     } catch (err) {
@@ -484,8 +546,9 @@ export class GlobalAssistantService {
         this.deps.kill(run.terminalId);
       }
       if (reason === "restart" || reason === "discard") {
+        // A clear starts the same session over, still kept running (#18177); a stop doesn't.
         await this.deps
-          .discardResume()
+          .discardResume(reason === "restart" ? { keepRunningChoice: true } : undefined)
           .catch((err) =>
             console.warn("[GlobalAssistant] Forgetting the conversation failed:", err)
           );
