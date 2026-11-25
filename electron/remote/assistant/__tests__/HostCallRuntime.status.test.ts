@@ -261,6 +261,7 @@ describe("HostCallRuntime host.status (#16191)", () => {
     expect(local?.outcome).toBe("unsupported");
     for (const target of [remote, local]) {
       expect(target?.detail).toContain("Settings → Integrations → MCP server");
+      expect(target?.detail).not.toMatch(/\bis off\b/);
     }
     expect(remote?.detail).toContain("on that host");
     expect(local?.detail).toContain("on this machine");

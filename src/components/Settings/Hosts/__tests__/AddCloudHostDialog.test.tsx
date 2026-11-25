@@ -463,9 +463,27 @@ describe("AddCloudHostDialog MCP server (#18187)", () => {
     open(provider("boat", "Boat", NONE), catalog());
     await screen.findByText(/Default ·/);
     expect(checked()).toBe("true");
+    // What it turns on is said with it.
+    const describedBy = mcpBox().getAttribute("aria-describedby") ?? "";
+    const description = describedBy
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(description).toContain("127.0.0.1");
+    expect(description).toContain("Settings → Integrations → MCP server");
     fireEvent.click(mcpBox());
     expect(checked()).toBe("false");
     expect(await create()).toMatchObject({ mcpServerOnConnect: false });
+  });
+
+  it("can't be changed while the machine is being created", async () => {
+    const answer = deferred<{ hostId: string }>();
+    client.createHost.mockReturnValue(answer.promise);
+    open(provider("boat", "Boat", NONE), catalog());
+    await create();
+    expect(mcpBox().hasAttribute("disabled")).toBe(true);
+    answer.resolve({ hostId: "build" });
+    await screen.findByTestId("add-cloud-host-progress");
   });
 
   it("leaves an existing machine's server alone unless ticked, whatever was chosen for a new one", async () => {
@@ -474,7 +492,10 @@ describe("AddCloudHostDialog MCP server (#18187)", () => {
     open(provider("boat", "Boat", NONE), catalog());
     await screen.findByText(/Default ·/);
     fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
-    fireEvent.click(await screen.findByRole("radio", { name: /^old/ }));
+    const old = await screen.findByRole("radio", { name: /^old/ });
+    // Nothing to ask about until a machine is chosen.
+    expect(screen.queryByRole("checkbox", { name: "Turn on its MCP server" })).toBeNull();
+    fireEvent.click(old);
     expect(checked()).toBe("false");
 
     // A tick for the existing machine doesn't reach back to the new one, nor the new one's here.
@@ -484,6 +505,11 @@ describe("AddCloudHostDialog MCP server (#18187)", () => {
     fireEvent.click(mcpBox());
     fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
     // The list is read again on the way back; the machine chosen stays chosen.
+    await screen.findByRole("radio", { name: /^old/ });
+    expect(checked()).toBe("true");
+    fireEvent.click(screen.getByRole("radio", { name: "New machine" }));
+    expect(checked()).toBe("false");
+    fireEvent.click(screen.getByRole("radio", { name: "Existing machine" }));
     await screen.findByRole("radio", { name: /^old/ });
     expect(checked()).toBe("true");
 

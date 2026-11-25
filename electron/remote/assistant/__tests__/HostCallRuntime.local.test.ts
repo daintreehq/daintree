@@ -499,6 +499,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       expect(settled.value.detail).toContain(
         "Settings → Integrations → MCP server on this machine"
       );
+      expect(settled.value.detail).not.toMatch(/\bis off\b/);
     });
 
     it("stops the call's tool in process when its caller cancels it (#17985)", async () => {

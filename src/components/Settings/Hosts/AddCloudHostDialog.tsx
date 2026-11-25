@@ -591,9 +591,9 @@ export function AddCloudHostDialog({ isOpen, onClose, onReady }: AddCloudHostDia
             />
             <FieldLabel>Turn on its MCP server</FieldLabel>
             <FieldDescription>
-              Lets your assistant run tools there once it connects. The server listens only on
-              127.0.0.1, so only programs on the machine reach it; turn it off on the host in
-              Settings → Integrations → MCP server.
+              Lets your assistant run tools there through Daintree once it connects. Its HTTP
+              listener binds to 127.0.0.1 only; turn it off on the host in Settings → Integrations →
+              MCP server.
             </FieldDescription>
           </Field>
         )}

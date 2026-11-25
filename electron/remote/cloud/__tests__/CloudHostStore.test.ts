@@ -72,9 +72,9 @@ describe("CloudHostStore MCP server ask (#18187)", () => {
     expect(store.binding("cb_abcdefgh12")?.mcpServerOnConnect).toBe(true);
 
     store.updateBinding("cb_abcdefgh12", ({ mcpServerOnConnect: _taken, ...rest }) => rest);
-    expect(new CloudHostStore(backend).binding("cb_abcdefgh12")).not.toHaveProperty(
-      "mcpServerOnConnect"
-    );
+    const reopened = new CloudHostStore(backend).binding("cb_abcdefgh12");
+    expect(reopened?.id).toBe("cb_abcdefgh12");
+    expect(reopened).not.toHaveProperty("mcpServerOnConnect");
   });
 
   it("reads anything but a plain yes, and a binding from before it, as no ask", () => {
@@ -85,11 +85,13 @@ describe("CloudHostStore MCP server ask (#18187)", () => {
       bindings: [
         { ...binding({ id: "cb_abcdefgh13" }), mcpServerOnConnect: "true" },
         { ...binding({ id: "cb_abcdefgh14" }), mcpServerOnConnect: 1 },
+        { ...binding({ id: "cb_abcdefgh16" }), mcpServerOnConnect: false },
+        { ...binding({ id: "cb_abcdefgh17" }), mcpServerOnConnect: null },
         binding({ id: "cb_abcdefgh15" }),
       ],
     });
     const read = new CloudHostStore(backend).bindings();
-    expect(read).toHaveLength(3);
+    expect(read).toHaveLength(5);
     for (const entry of read) expect(entry).not.toHaveProperty("mcpServerOnConnect");
   });
 });

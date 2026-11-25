@@ -966,7 +966,8 @@ export class CloudHostLifecycle {
       );
     }
     const { selection, picks } = checkProvisioning(provider, catalog, request.provisioning);
-    const mcpMark = mcpServerOnConnectMark(request.mcpServerOnConnect);
+    // Only Settings' create offers it, as with the mark: a worktree's machine is made without asking.
+    const mcpMark = mark === null ? mcpServerOnConnectMark(request.mcpServerOnConnect) : {};
     const bindingId = `cb_${crypto.randomBytes(6).toString("hex")}`;
     const binding: StoredCloudBinding = {
       id: bindingId,

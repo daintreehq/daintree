@@ -1,3 +1,4 @@
+import { createLogger } from "../../utils/logger.js";
 import type { LinkSession } from "../link/session.js";
 import { EmptyPayloadSchema, LinkMethod, type McpServerEnabledAnswer } from "./linkMethods.js";
 
@@ -5,9 +6,16 @@ export interface McpServerEnableHostServer {
   onSession(listener: (ctx: { session: LinkSession }) => void): () => void;
 }
 
+const logger = createLogger("main:mcpServerEnableHost");
+
 async function enableMcpServer(): Promise<McpServerEnabledAnswer> {
   const { mcpServerService } = await import("../../services/McpServerService.js");
-  await mcpServerService.setEnabled(true);
+  try {
+    await mcpServerService.setEnabled(true);
+  } catch (error) {
+    // Why it didn't start stays here: the Shell is told only that it doesn't run.
+    logger.warn("Couldn't start the MCP server a Shell turned on", { error });
+  }
   // Enabled is saved before the start: a start that couldn't bind still leaves it on for the next.
   return { running: mcpServerService.isRunning };
 }

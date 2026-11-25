@@ -58,7 +58,13 @@ export class CloudMcpServerOnConnect {
     if (host?.connection.kind !== "cloud" || host.connection.bindingId !== binding.id) return;
     // A link already replaced leaves the ask to the one that replaced it.
     if (!session.isOpen || this.deps.sessionFor(hostId) !== session) return;
-    this.deps.store.updateBinding(binding.id, ({ mcpServerOnConnect: _asked, ...rest }) => rest);
+    try {
+      this.deps.store.updateBinding(binding.id, ({ mcpServerOnConnect: _asked, ...rest }) => rest);
+    } catch {
+      // Not asked while the ask can't be taken off: the next link asks again.
+      this.deps.unconfirmed(host, "WRITE_FAILED");
+      return;
+    }
     void this.enable(host, session);
   }
 

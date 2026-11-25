@@ -47,9 +47,9 @@ function setup(options: { asked?: boolean; connection?: HostDescriptor["connecti
     name: "Build box",
     connection: options.connection ?? { kind: "cloud", bindingId: BINDING },
   } as HostDescriptor;
-  const makeSession = (answer: (method: string) => Promise<unknown>) => {
+  const makeSession = (answer: (method: string) => Promise<unknown>, isOpen = true) => {
     const call: Call = vi.fn((method: string) => answer(method));
-    return { link: { isOpen: true, call } as unknown as LinkSession, call };
+    return { link: { isOpen, call } as unknown as LinkSession, call };
   };
   let current = makeSession(async () => ({ running: true }));
   const unconfirmed = vi.fn();
@@ -65,8 +65,11 @@ function setup(options: { asked?: boolean; connection?: HostDescriptor["connecti
     onConnect,
     unconfirmed,
     asked: () => store.binding(BINDING)?.mcpServerOnConnect === true,
-    connect(answer: (method: string) => Promise<unknown> = async () => ({ running: true })) {
-      current = makeSession(answer);
+    connect(
+      answer: (method: string) => Promise<unknown> = async () => ({ running: true }),
+      isOpen = true
+    ) {
+      current = makeSession(answer, isOpen);
       onConnect.sessionOpened(HOST, current.link);
       return current;
     },
@@ -84,6 +87,10 @@ describe("CloudMcpServerOnConnect", () => {
     expect(first.call).toHaveBeenCalledExactlyOnceWith(LinkMethod.ENABLE_MCP_SERVER, null, {
       timeoutMs: expect.any(Number),
     });
+    // A deadline, so a host that never answers doesn't hold the ask open.
+    const { timeoutMs } = first.call.mock.calls[0]![2] as { timeoutMs: number };
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(Number.isFinite(timeoutMs)).toBe(true);
     expect(t.asked()).toBe(false);
     expect(t.unconfirmed).not.toHaveBeenCalled();
 
@@ -95,9 +102,14 @@ describe("CloudMcpServerOnConnect", () => {
   it("takes the ask off the binding before the host answers, so a lost answer is never asked again", async () => {
     const t = setup();
     let release!: () => void;
-    const first = t.connect(() => new Promise((resolve) => (release = () => resolve(null))));
+    let askedAtSend: boolean | null = null;
+    const first = t.connect(() => {
+      askedAtSend = t.asked();
+      return new Promise((resolve) => (release = () => resolve(null)));
+    });
 
     expect(first.call).toHaveBeenCalledTimes(1);
+    expect(askedAtSend).toBe(false);
     expect(t.asked()).toBe(false);
 
     // The link drops before the answer, and the host comes back.
@@ -126,12 +138,41 @@ describe("CloudMcpServerOnConnect", () => {
     expect(session.call).toHaveBeenCalledTimes(1);
   });
 
-  it("asks nothing when the host no longer names this machine's binding", async () => {
-    const t = setup({ connection: { kind: "cloud", bindingId: "cb_otherone" } });
+  it("leaves the ask for a later link when the current one is already closed", async () => {
+    const t = setup();
+    const closed = t.connect(undefined, false);
+    await settle();
+    expect(closed.call).not.toHaveBeenCalled();
+    expect(t.asked()).toBe(true);
+  });
+
+  it.each([
+    ["names another binding", { kind: "cloud", bindingId: "cb_otherone" }],
+    ["is no longer a cloud host", { kind: "ssh", target: "build.local" }],
+  ])("asks nothing when the host %s", async (_case, connection) => {
+    const t = setup({ connection: connection as HostDescriptor["connection"] });
     const session = t.connect();
     await settle();
     expect(session.call).not.toHaveBeenCalled();
     expect(t.asked()).toBe(true);
+  });
+
+  it("asks nothing while the ask can't be taken off, and leaves it for the next link", async () => {
+    const t = setup();
+    const update = vi.spyOn(t.store, "updateBinding").mockImplementationOnce(() => {
+      throw new Error("ENOSPC");
+    });
+    const first = t.connect();
+    await settle();
+    expect(first.call).not.toHaveBeenCalled();
+    expect(t.unconfirmed).toHaveBeenCalledExactlyOnceWith(t.host, "WRITE_FAILED");
+    expect(t.asked()).toBe(true);
+
+    update.mockRestore();
+    const second = t.connect();
+    await settle();
+    expect(second.call).toHaveBeenCalledTimes(1);
+    expect(t.asked()).toBe(false);
   });
 
   it.each([
@@ -145,11 +186,25 @@ describe("CloudMcpServerOnConnect", () => {
       "UNSUPPORTED",
     ],
     [
-      "drops the link before answering",
+      "can't be reached as the call is sent",
       async () => {
         throw new AppError({ code: "HOST_DISCONNECTED", message: "gone" });
       },
       "HOST_DISCONNECTED",
+    ],
+    [
+      "drops the link after the call reached it",
+      async () => {
+        throw new AppError({ code: "OUTCOME_UNKNOWN", message: "closed before an answer" });
+      },
+      "OUTCOME_UNKNOWN",
+    ],
+    [
+      "fails in a way that names no code",
+      async () => {
+        throw new Error("boom");
+      },
+      null,
     ],
   ])(
     "says the server wasn't confirmed when the host %s, and doesn't ask again",
@@ -182,11 +237,15 @@ describe("CloudMcpServerOnConnect", () => {
     expect(fresh.asked()).toBe(true);
   });
 
-  it("names the host in an inbox notice, one per host", () => {
+  it("names the host and where to check in an inbox notice, one per host whatever it's called", () => {
     const t = setup();
     const toast = mcpServerUnconfirmedToast(t.host);
     expect(toast.priority).toBe("low");
     expect(toast.message).toContain("Build box");
+    expect(toast.message).toContain("Settings → Integrations → MCP server");
+    expect(mcpServerUnconfirmedToast({ ...t.host, name: "Renamed" }).replaceKey).toBe(
+      toast.replaceKey
+    );
     expect(toast.replaceKey).not.toBe(
       mcpServerUnconfirmedToast({ ...t.host, id: "other" }).replaceKey
     );

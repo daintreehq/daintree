@@ -1,13 +1,19 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const svc = vi.hoisted(() => ({
   running: false,
-  startFails: false,
+  /** How the next start goes: bound, couldn't bind (left off, no error), or threw. */
+  start: "binds" as "binds" | "fails" | "throws",
+  /** Held until released, when set: the start is still under way. */
+  hold: null as Promise<void> | null,
   setEnabled: null as unknown as (enabled: boolean) => Promise<void>,
 }));
 svc.setEnabled = vi.fn(async (enabled: boolean) => {
-  if (enabled && !svc.startFails) svc.running = true;
+  if (svc.hold) await svc.hold;
+  if (!enabled) return;
+  if (svc.start === "throws") throw new Error("No free port between 45454 and 45464");
+  if (svc.start === "binds") svc.running = true;
 });
 
 vi.mock("../../../services/McpServerService.js", () => ({
@@ -26,7 +32,8 @@ import { installMcpServerEnableHost } from "../mcpServerEnableHost.js";
 type Handler = (payload: unknown) => unknown;
 type Schema = { safeParse(v: unknown): { success: boolean; data?: unknown } };
 
-function linkedHost() {
+/** One link: the payload checked against the method's schema, then handled, as the link would. */
+function link() {
   const handlers = new Map<string, { schema: Schema; handler: Handler }>();
   const closers: Array<() => void> = [];
   const session = {
@@ -42,15 +49,6 @@ function linkedHost() {
       return () => {};
     },
   } as unknown as LinkSession;
-  let listener: ((ctx: { session: LinkSession }) => void) | null = null;
-  const dispose = installMcpServerEnableHost({
-    onSession: (next) => {
-      listener = next;
-      return () => (listener = null);
-    },
-  });
-  listener!({ session });
-  /** As the link would: the payload checked against the method's schema, then handled. */
   const call = async (method: string, payload: unknown) => {
     const entry = handlers.get(method);
     if (!entry) throw new Error("UNSUPPORTED");
@@ -61,48 +59,87 @@ function linkedHost() {
   const close = () => {
     for (const closer of closers.splice(0)) closer();
   };
-  return { call, close, dispose, attached: () => listener !== null };
+  return { session, call, close };
 }
 
+function host() {
+  let listener: ((ctx: { session: LinkSession }) => void) | null = null;
+  const dispose = installMcpServerEnableHost({
+    onSession: (next) => {
+      listener = next;
+      return () => (listener = null);
+    },
+  });
+  const attach = () => {
+    const next = link();
+    listener?.({ session: next.session });
+    return next;
+  };
+  return { attach, dispose };
+}
+
+beforeEach(() => {
+  svc.running = false;
+  svc.start = "binds";
+  svc.hold = null;
+  vi.mocked(svc.setEnabled).mockClear();
+});
+
 describe("installMcpServerEnableHost", () => {
-  it("turns the server on and answers that it runs, in the shape the Shell reads", async () => {
-    svc.running = false;
-    svc.startFails = false;
-    vi.mocked(svc.setEnabled).mockClear();
-    const host = linkedHost();
+  it("answers only once the start has finished, in the shape the Shell reads", async () => {
+    let release!: () => void;
+    svc.hold = new Promise((resolve) => (release = resolve));
+    const shell = host().attach();
 
-    const answer = await host.call(LinkMethod.ENABLE_MCP_SERVER, null);
-
-    expect(svc.setEnabled).toHaveBeenCalledExactlyOnceWith(true);
-    expect(McpServerEnabledAnswerSchema.parse(answer)).toEqual({ running: true });
-  });
-
-  it("answers not running when the server was turned on but didn't start", async () => {
-    svc.running = false;
-    svc.startFails = true;
-    const host = linkedHost();
-
-    await expect(host.call(LinkMethod.ENABLE_MCP_SERVER, null)).resolves.toEqual({
-      running: false,
+    let answered = false;
+    const answer = shell.call(LinkMethod.ENABLE_MCP_SERVER, null).then((value) => {
+      answered = true;
+      return value;
     });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(answered).toBe(false);
+
+    release();
+    expect(McpServerEnabledAnswerSchema.parse(await answer)).toEqual({ running: true });
+    expect(svc.setEnabled).toHaveBeenCalledExactlyOnceWith(true);
   });
 
-  it("takes no arguments, so a Shell can never ask it to turn the server off", async () => {
-    vi.mocked(svc.setEnabled).mockClear();
-    const host = linkedHost();
+  it.each([
+    ["couldn't bind", "fails" as const],
+    ["threw, keeping why to itself", "throws" as const],
+  ])("answers not running when the start %s", async (_case, start) => {
+    svc.start = start;
+    const shell = host().attach();
 
-    await expect(host.call(LinkMethod.ENABLE_MCP_SERVER, { enabled: false })).rejects.toThrow(
-      "VALIDATION"
-    );
-    expect(svc.setEnabled).not.toHaveBeenCalled();
+    const answer = await shell.call(LinkMethod.ENABLE_MCP_SERVER, null);
+
+    expect(answer).toEqual({ running: false });
+    expect(JSON.stringify(answer)).not.toContain("45454");
+    expect(svc.setEnabled).toHaveBeenCalledExactlyOnceWith(true);
   });
 
-  it("stops answering on a closed link, and stops attaching once disposed", async () => {
-    const host = linkedHost();
-    host.close();
-    await expect(host.call(LinkMethod.ENABLE_MCP_SERVER, null)).rejects.toThrow("UNSUPPORTED");
+  it.each([{ enabled: false }, { enabled: true }])(
+    "takes no arguments, so a Shell can never say which way to switch it (%o)",
+    async (payload) => {
+      const shell = host().attach();
+      await expect(shell.call(LinkMethod.ENABLE_MCP_SERVER, payload)).rejects.toThrow("VALIDATION");
+      expect(svc.setEnabled).not.toHaveBeenCalled();
+    }
+  );
 
-    host.dispose();
-    expect(host.attached()).toBe(false);
+  it("stops answering on a closed link, answers the next one, and attaches none once disposed", async () => {
+    const installed = host();
+    const first = installed.attach();
+    first.close();
+    await expect(first.call(LinkMethod.ENABLE_MCP_SERVER, null)).rejects.toThrow("UNSUPPORTED");
+
+    const second = installed.attach();
+    await expect(second.call(LinkMethod.ENABLE_MCP_SERVER, null)).resolves.toEqual({
+      running: true,
+    });
+
+    installed.dispose();
+    const third = installed.attach();
+    await expect(third.call(LinkMethod.ENABLE_MCP_SERVER, null)).rejects.toThrow("UNSUPPORTED");
   });
 });
