@@ -95,11 +95,8 @@ export function useCloudMachineForm(
     providerId: string;
     value: string;
   } | null>(null);
-  /** What the person picked here, for the account they picked it for. */
-  const [picked, setPicked] = useState<{
-    accountId: string;
-    selection: CloudProvisioningSelection;
-  } | null>(null);
+  /** What the person picked here, for each account they picked it for. */
+  const [picked, setPicked] = useState<Readonly<Record<string, CloudProvisioningSelection>>>({});
   const [catalog, setCatalog] = useState<CloudCatalog | null>(null);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   // Bumped by Retry: reads again without touching what's been filled in.
@@ -130,7 +127,7 @@ export function useCloudMachineForm(
   const provisioning =
     currentCatalog && provider
       ? startingSelection(provider, currentCatalog, [
-          picked?.accountId === currentCatalog.accountId ? picked.selection : null,
+          picked[currentCatalog.accountId] ?? null,
           currentCatalog.lastChoice,
         ])
       : NO_PROVISIONING;
@@ -181,9 +178,9 @@ export function useCloudMachineForm(
   const pick = (dimension: CloudProvisioningDimension, id: string | null) => {
     if (!currentCatalog) return;
     const accountId = currentCatalog.accountId;
-    setPicked({ accountId, selection: { ...provisioning, [dimension]: id } });
+    setPicked((current) => ({ ...current, [accountId]: { ...provisioning, [dimension]: id } }));
     // The size on screen stays put: choosing it again picked nothing a control could see.
-    if (pickedId === undefined && machineType !== null) {
+    if (pickedSize === undefined && machineType !== null) {
       const shown = machineType;
       setPickedTypes((current) => ({ ...current, [accountId]: shown }));
     }
