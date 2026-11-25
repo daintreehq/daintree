@@ -57,7 +57,11 @@ vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
 
 import { CloudMachineSection } from "../CloudMachineSection";
 import { cloudHostsClient } from "@/clients/cloudHostsClient";
-import { BOAT_PROVIDER, provider } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
+import {
+  BOAT_PROVIDER,
+  DELETE_ONLY_PROVIDER,
+  provider,
+} from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 import { clockTime, dayTime, IDLE_STOP_UNKNOWN } from "@/components/Hosts/cloud/cloudHostLabels";
 import { ClientAppError } from "@/utils/clientAppError";
 
@@ -1248,5 +1252,55 @@ describe("CloudMachineSection with an order waiting on a choice (#18231)", () =>
     };
     view.rerender(section());
     expect(screen.getByTestId("cloud-machine-state").textContent).toContain("Running");
+  });
+});
+
+describe("CloudMachineSection for a machine whose provider has no stop (#18229)", () => {
+  const leasy = (overrides: Partial<CloudHostStatus> = {}) =>
+    status({
+      providerId: DELETE_ONLY_PROVIDER.id,
+      resourceId: "dseq-4242",
+      machine: "running",
+      operation: null,
+      hourlyDollars: 0.036,
+      lifetime: { kind: "none" },
+      lifetimeSeconds: null,
+      autoStopAt: null,
+      observedAt: Date.now(),
+      ...overrides,
+    });
+  const pageText = () => document.body.textContent ?? "";
+
+  it("offers no Stop while it runs, and says it runs, and bills, until it's deleted", () => {
+    show(leasy(), [DELETE_ONLY_PROVIDER]);
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Check status" })).toBeTruthy();
+    expect(screen.getByTestId("cloud-machine-state").textContent).toContain(
+      "Running · $0.036/h · runs until deleted"
+    );
+    expect(screen.getByTestId("cloud-machine-lifetime").textContent).toBe(
+      "Leasy has no stop: a machine runs, and bills, until it's deleted."
+    );
+    expect(screen.queryByTestId("cloud-machine-stopped-billing")).toBeNull();
+  });
+
+  it("says deleting it loses everything on it, and never promises a kept disk", () => {
+    show(leasy(), [DELETE_ONLY_PROVIDER]);
+    expect(pageText()).toContain(
+      "Kept only while the machine exists. Deleting it loses everything on it, its disk included."
+    );
+    expect(pageText()).not.toMatch(/kept (for )?at least|saved when it stops|No completed save/);
+    expect(pageText()).not.toContain("until you stop it");
+  });
+
+  it("offers no Start for one that reports stopped or an error", () => {
+    for (const machine of ["stopped", "error"] as const) {
+      show(leasy({ machine }), [DELETE_ONLY_PROVIDER]);
+      expect(screen.queryByRole("button", { name: "Start" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+      expect(screen.getByTestId("cloud-machine-state").textContent).not.toContain("when started");
+      cleanup();
+    }
   });
 });

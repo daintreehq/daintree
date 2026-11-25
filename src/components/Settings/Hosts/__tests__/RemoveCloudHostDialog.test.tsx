@@ -19,6 +19,7 @@ vi.mock("@/clients/systemClient", () => ({ systemClient: system }));
 import { RemoveCloudHostDialog } from "../RemoveCloudHostDialog";
 import {
   BOAT_PROVIDER,
+  DELETE_ONLY_PROVIDER,
   provider as providerWith,
 } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 
@@ -381,6 +382,44 @@ describe("RemoveCloudHostDialog for a provider without deletion, as its machine 
     );
     expect(dialogText()).toContain(
       "Acme has deleted its saved disk. It keeps billing Personal until it's deleted."
+    );
+  });
+});
+
+describe("RemoveCloudHostDialog for a machine whose provider has no stop (#18229)", () => {
+  const leasy = (overrides: Partial<CloudHostStatus> = {}) =>
+    status({
+      providerId: "leasy",
+      createdFor: null,
+      machine: "running",
+      rawState: "active",
+      lifetime: { kind: "none" },
+      lifetimeSeconds: null,
+      ...overrides,
+    });
+
+  it("says keeping it bills until it's deleted, never until it stops or that its disk is kept", () => {
+    open(leasy(), DELETE_ONLY_PROVIDER);
+    expect(dialogText()).toContain(
+      "It keeps running, and billing Personal, until it's deleted. You can add it back from Add host."
+    );
+    expect(dialogText()).not.toMatch(/until it stops|kept for|stays stopped/);
+  });
+
+  it("states that deleting it loses everything on it, disk included, behind the typed name", async () => {
+    open(leasy(), DELETE_ONLY_PROVIDER);
+    expect(dialogText()).toContain("Everything on it goes for good, its disk included");
+    fireEvent.click(screen.getByRole("radio", { name: /Delete the machine too/ }));
+    expect(screen.getByRole("heading", { name: "Delete 'Login box'?" })).toBeTruthy();
+    expect(dialogText()).toContain(
+      "Its machine and everything on it, its disk included, are deleted from Leasy for good, and Personal stops paying for it. The host leaves your list."
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Delete machine" }));
+    expect(cloudClient.deleteMachine).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Login box" } });
+    fireEvent.click(screen.getByRole("button", { name: "Delete machine" }));
+    await waitFor(() =>
+      expect(cloudClient.deleteMachine).toHaveBeenCalledWith("build", "bx_23456789")
     );
   });
 });

@@ -8,6 +8,7 @@ import type {
 import { cleanupChoiceCopy, cleanupConsequence, machinesMarkedFor } from "../worktreeCloudMachines";
 import {
   BOAT_PROVIDER,
+  DELETE_ONLY_PROVIDER,
   provider as acme,
 } from "@/components/Hosts/cloud/__tests__/cloudProviderFixtures";
 
@@ -171,5 +172,37 @@ describe("cleanupChoiceCopy", () => {
       "Cloud machine 'login-box' will be deleted from Boat"
     );
     expect(cleanupConsequence(machine, "stop")).toBe("Cloud machine 'login-box' will be stopped");
+  });
+});
+
+describe("a worktree's machine whose provider has no stop (#18229)", () => {
+  const leasy = (overrides: Partial<CloudHostStatus> = {}) =>
+    machinesMarkedFor(
+      snapshot(
+        [status({ providerId: "leasy", lifetime: { kind: "none" }, ...overrides })],
+        [DELETE_ONLY_PROVIDER]
+      ),
+      WORKTREE
+    )[0]!;
+
+  it("offers keep or delete, never stop, whatever the machine last reported", () => {
+    expect(leasy().choices).toEqual(["keep", "delete"]);
+    expect(leasy({ machine: "stopped" }).choices).toEqual(["keep", "delete"]);
+    expect(leasy({ machine: "error" }).choices).toEqual(["keep", "delete"]);
+  });
+
+  it("still only keeps one it can't act on yet", () => {
+    expect(leasy({ resourceId: null }).choices).toEqual(["keep"]);
+    expect(leasy({ providerUnavailable: "Leasy is unavailable" }).choices).toEqual(["keep"]);
+  });
+
+  it("says keeping it bills until it's deleted, and deleting it takes everything on it", () => {
+    const machine = leasy();
+    expect(cleanupChoiceCopy(machine, "keep", NOW).description).toBe(
+      "It keeps running, and billing Personal, until it's deleted."
+    );
+    expect(cleanupChoiceCopy(machine, "delete", NOW).description).toBe(
+      "It and everything on its disk are deleted from Leasy for good once the worktree is deleted, and Personal stops paying for it. Its host leaves your list."
+    );
   });
 });

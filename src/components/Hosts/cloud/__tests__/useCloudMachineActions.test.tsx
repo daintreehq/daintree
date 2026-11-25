@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type {
   CloudHostStatus,
   CloudHostsSnapshot,
@@ -19,7 +19,8 @@ vi.mock("@/clients/cloudHostsClient", () => ({
 }));
 
 import { useCloudMachineActions } from "../useCloudMachineActions";
-import { BOAT_PROVIDER, provider } from "./cloudProviderFixtures";
+import { cloudHostsClient } from "@/clients/cloudHostsClient";
+import { BOAT_PROVIDER, DELETE_ONLY_PROVIDER, provider } from "./cloudProviderFixtures";
 
 function status(overrides: Partial<CloudHostStatus> = {}): CloudHostStatus {
   return {
@@ -166,5 +167,40 @@ describe("useCloudMachineActions for a machine that sleeps when idle (#17347)", 
     expect(dialogText()).toContain(
       "build's machine is asleep. It bills Personal about $0.036 an hour while it runs. Agent 37 bills only for its disk while it's stopped or asleep. It sleeps by itself after 15 minutes without activity."
     );
+  });
+});
+
+describe("useCloudMachineActions for a machine whose provider has no stop (#18229)", () => {
+  afterEach(() => vi.mocked(cloudHostsClient.startHost).mockClear());
+
+  it("opens no Stop or Start confirm, and sends nothing", () => {
+    show(status(), DELETE_ONLY_PROVIDER);
+    act(() => actions!.requestStop("build", "build"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    act(() => actions!.confirmStart({ hostId: "build", name: "build" }));
+    act(() => actions!.start("build"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(cloudHostsClient.startHost).not.toHaveBeenCalled();
+    expect(cloudHostsClient.stopHost).not.toHaveBeenCalled();
+  });
+
+  it("closes a Start confirm asked for before the provider said it has no stop", async () => {
+    const stopped = status({ machine: "stopped" });
+    cloud.snapshot = {
+      providers: [],
+      accounts: [],
+      hosts: [{ ...stopped, providerId: DELETE_ONLY_PROVIDER.id }],
+    };
+    const { rerender } = render(<Harness />);
+    act(() => actions!.confirmStart({ hostId: "build", name: "build" }));
+    expect(screen.getByRole("dialog").textContent).toContain("Start 'build'?");
+
+    cloud.snapshot = { ...cloud.snapshot, providers: [DELETE_ONLY_PROVIDER] };
+    rerender(<Harness />);
+    // A press that lands while it closes sends nothing either.
+    const confirm = screen.queryByRole("button", { name: "Start machine" });
+    if (confirm) fireEvent.click(confirm);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(cloudHostsClient.startHost).not.toHaveBeenCalled();
   });
 });
