@@ -113,6 +113,12 @@ export const WorktreeCreateWithRecipeArgsSchema = z.object({
   focusPolicy: z.unknown().optional(),
 });
 
+/** `terminal.setHoldOnRestartOwned`'s arguments, once main's ownership gate rebuilt them (#18178). */
+export const SetHoldOnRestartOwnedArgsSchema = z.object({
+  terminalId: z.string().min(1),
+  hold: z.boolean(),
+});
+
 /** `agent.launch`'s arguments, as its renderer action takes them; the UI-only ones have no effect with no view. */
 export const AgentLaunchArgsSchema = z.object({
   agentId: z.string().min(1),

@@ -3083,6 +3083,36 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
+      "Keep an agent panel this session launched (not a handed one) from resuming on restart, or release it. Held, it waits to be started whatever the resume setting; starting it clears the hold.",
+    enabled: true,
+    id: "terminal.setHoldOnRestartOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description: "Panel `id` this session launched.",
+        },
+        hold: {
+          type: "boolean",
+          description: "False hands it back to the resume setting.",
+        },
+      },
+      required: ["terminalId", "hold"],
+    },
+    keywords: ["resume", "restart", "finished", "owned"],
+    kind: "command",
+    name: "terminal.setHoldOnRestartOwned",
+    requiresArgs: true,
+    title: "Hold owned agent on restart",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
       "Wait, up to a deadline, for the processes of panels this session closed to exit. Each reports exited with its code, running at the deadline, or unknown. Can end their trash grace early instead of sitting it out. Use it before deleting their worktree.",
     enabled: true,
     examples: [

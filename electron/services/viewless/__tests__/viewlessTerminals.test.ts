@@ -879,3 +879,98 @@ describe("terminal.list restore metadata with no frontend (#14017)", () => {
     expect(byId["t-gone"]).not.toHaveProperty("restored");
   });
 });
+
+// An Assistant with no view holding a worker it launched (#18178): main's
+// gate checked ownership, so this writes the saved layout a restore reads.
+describe("terminal.setHoldOnRestartOwned with no frontend", () => {
+  function holdDeps() {
+    return makeDeps(
+      {},
+      {
+        state: savedState(
+          [
+            {
+              id: "t-worker",
+              kind: "terminal",
+              title: "Claude: review",
+              location: "grid",
+              launchAgentId: "claude",
+              agentSessionId: "sess-w",
+            },
+            { id: "t-shell", kind: "terminal", title: "zsh", location: "grid" },
+            {
+              id: "t-browser",
+              kind: "browser",
+              title: "Docs",
+              location: "grid",
+              launchAgentId: "claude",
+            },
+          ],
+          { mruList: ["terminal:t-worker"] }
+        ),
+      }
+    );
+  }
+
+  it("holds and releases the saved agent panel, leaving everything else as it was", async () => {
+    const { deps, store } = holdDeps();
+    const before = store.read();
+
+    const held = await executeViewlessAction(
+      request("terminal.setHoldOnRestartOwned", { terminalId: "t-worker", hold: true }),
+      deps
+    );
+
+    expect(held).toEqual({ ok: true, result: { terminalId: "t-worker", holdOnRestart: true } });
+    const afterHold = store.read();
+    expect(afterHold?.terminals.find((t) => t.id === "t-worker")).toEqual({
+      ...before?.terminals.find((t) => t.id === "t-worker"),
+      holdOnRestart: true,
+    });
+    expect(afterHold?.terminals.filter((t) => t.id !== "t-worker")).toEqual(
+      before?.terminals.filter((t) => t.id !== "t-worker")
+    );
+    expect(afterHold?.mruList).toEqual(["terminal:t-worker"]);
+
+    const released = await executeViewlessAction(
+      request("terminal.setHoldOnRestartOwned", { terminalId: "t-worker", hold: false }),
+      deps
+    );
+
+    expect(released).toEqual({
+      ok: true,
+      result: { terminalId: "t-worker", holdOnRestart: false },
+    });
+    expect(store.read()).toEqual(before);
+  });
+
+  it.each(["t-shell", "t-browser", "t-missing"])(
+    "refuses %s, which restore never holds, and writes nothing",
+    async (terminalId) => {
+      const { deps, store } = holdDeps();
+      const before = store.read();
+
+      const result = await executeViewlessAction(
+        request("terminal.setHoldOnRestartOwned", { terminalId, hold: true }),
+        deps
+      );
+
+      expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+      expect(JSON.stringify(result)).toContain("not an agent terminal");
+      expect(store.read()).toEqual(before);
+    }
+  );
+
+  it("refuses a call without a boolean hold", async () => {
+    const { deps, store } = holdDeps();
+    const before = store.read();
+
+    const result = await executeViewlessAction(
+      request("terminal.setHoldOnRestartOwned", { terminalId: "t-worker" }),
+      deps
+    );
+
+    expect(result).toMatchObject({ ok: false, error: { code: "VALIDATION_ERROR" } });
+    expect(store.read()).toEqual(before);
+  });
+});
