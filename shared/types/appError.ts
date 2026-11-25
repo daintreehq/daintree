@@ -126,6 +126,9 @@ export type AppErrorCode =
   | "STALE_GENERATION"
   | "PERSIST_FAILED"
   | "SESSION_NOT_FOUND"
+  // An exact Claude resume whose conversation the store its launch reads
+  // provably lacks; the message names that store (#18190).
+  | "CLAUDE_CONVERSATION_NOT_FOUND"
   // Remote Hosts. A plugin is missing on, or can't run on, the window's host;
   // the details travel as `AppErrorDetails`.
   | "PLUGIN_NOT_ON_HOST"

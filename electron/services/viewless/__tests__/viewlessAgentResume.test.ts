@@ -15,6 +15,7 @@ import {
   type AgentSessionPaneRuntime,
 } from "../viewlessAgentResume.js";
 import { makeDeps, makeHosts, makePty, makeWorktree, PROJECT } from "./viewlessTestDeps.js";
+import type { SpawnOutcome } from "../../assistants/assistantLaunch.js";
 
 const WORKTREE = makeWorktree({
   id: "/repo-wt/feature",
@@ -74,7 +75,7 @@ function makeRuntime(overrides: Partial<AgentSessionPaneRuntime> = {}) {
     isDirectory: vi.fn(async (_path: string) => true),
     confirmSpawn: vi.fn(async (_terminalId: string, spawn: () => Promise<void>) => {
       await spawn();
-      return true;
+      return { started: true } as SpawnOutcome;
     }),
     ...overrides,
   };
@@ -716,16 +717,48 @@ describe("resumeAgentSessionAsPane", () => {
     expect(spawns(invoke)).toHaveLength(0);
   });
 
-  it("records nothing when the pty-host reports the spawn failed", async () => {
+  it("records nothing when the pty-host reports the spawn failed, and names its code (#18190)", async () => {
     const { deps, store } = resumeDeps();
     const runtime = makeRuntime({
       confirmSpawn: vi.fn(async (_id: string, spawn: () => Promise<void>) => {
         await spawn();
-        return false;
+        return { started: false, code: "EACCES" } as SpawnOutcome;
       }),
     });
     const result = await resumeAgentSessionAsPane(REQUEST, deps, runtime);
     expect(result).toMatchObject({ status: "refused", reason: "spawn-failed" });
+    expect(result.status === "refused" && result.message).toMatch(/\bEACCES\b/);
+    expect(store.read()?.terminals ?? []).toHaveLength(0);
+  });
+
+  it("still refuses a failed start the pty-host gave no code for", async () => {
+    const { deps } = resumeDeps();
+    const runtime = makeRuntime({
+      confirmSpawn: vi.fn(async (_id: string, spawn: () => Promise<void>) => {
+        await spawn();
+        return { started: false } as SpawnOutcome;
+      }),
+    });
+    await expect(resumeAgentSessionAsPane(REQUEST, deps, runtime)).resolves.toMatchObject({
+      status: "refused",
+      reason: "spawn-failed",
+      message: expect.any(String),
+    });
+  });
+
+  it("refuses a conversation the store lacks as its own reason, with the handler's naming of that store (#18190)", async () => {
+    const { deps, invoke, store } = resumeDeps();
+    const base = invoke.getMockImplementation()!;
+    const message =
+      "No Claude conversation for this session is in $HOME/.claude-work/projects, the store this launch reads; a fresh one isn't started under its id.";
+    invoke.mockImplementation(async (projectId, channel, args) => {
+      if (channel === CHANNELS.TERMINAL_SPAWN) {
+        throw Object.assign(new Error(message), { code: "CLAUDE_CONVERSATION_NOT_FOUND" });
+      }
+      return base(projectId, channel, args);
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toEqual({ status: "refused", reason: "conversation-not-found", message });
     expect(store.read()?.terminals ?? []).toHaveLength(0);
   });
 
@@ -738,6 +771,7 @@ describe("resumeAgentSessionAsPane", () => {
     });
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
     expect(result).toMatchObject({ status: "refused", reason: "spawn-failed" });
+    expect(result.status === "refused" && result.message).toContain("spawn queue full");
     expect(store.read()?.terminals ?? []).toHaveLength(0);
   });
 

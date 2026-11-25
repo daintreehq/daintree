@@ -155,7 +155,7 @@ export async function spawnHostAssistantLive(
 export async function resumeAgentSessionAsPaneLive(
   request: import("./viewlessAgentResume.js").AgentSessionPaneRequest
 ): Promise<import("./viewlessAgentResume.js").AgentSessionPaneResult> {
-  const [{ resumeAgentSessionAsPane }, { spawnAndConfirm }, { getPtyClient }, { stat }, deps] =
+  const [{ resumeAgentSessionAsPane }, { spawnAndReport }, { getPtyClient }, { stat }, deps] =
     await Promise.all([
       import("./viewlessAgentResume.js"),
       import("../assistants/assistantLaunch.js"),
@@ -166,7 +166,7 @@ export async function resumeAgentSessionAsPaneLive(
   return resumeAgentSessionAsPane(request, deps, {
     isDirectory: async (path) => (await stat(path)).isDirectory(),
     confirmSpawn: (terminalId, spawn) =>
-      spawnAndConfirm(
+      spawnAndReport(
         getPtyClient(),
         async () => {
           await spawn();

@@ -98,6 +98,7 @@ export const AgentSessionPaneRefusalSchema = z.enum([
   "missing-account",
   "missing-preset",
   "settings-unavailable",
+  "conversation-not-found",
   "spawn-failed",
   "cancelled",
   "not-authorized",

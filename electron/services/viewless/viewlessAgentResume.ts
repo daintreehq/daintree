@@ -3,6 +3,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 import type { PanelSnapshot, Project } from "../../../shared/types/project.js";
 import type { AgentSessionPaneRefusal } from "../../../shared/types/agentSessionSchemas.js";
 import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
+import type { SpawnOutcome } from "../assistants/assistantLaunch.js";
 import { getEffectiveAgentConfig, type AgentPreset } from "../../../shared/config/agentRegistry.js";
 import {
   buildResumeCommand,
@@ -97,10 +98,11 @@ export type AgentSessionPaneResult =
 export interface AgentSessionPaneRuntime {
   isDirectory(path: string): Promise<boolean>;
   /**
-   * Runs `spawn` and resolves whether the PTY started: false only once the
-   * pty-host reports the spawn failed, or nothing could listen for its report.
+   * Runs `spawn` and resolves whether the PTY started: not started only once the
+   * pty-host reports the spawn failed, with its code, or nothing could listen
+   * for its report.
    */
-  confirmSpawn(terminalId: string, spawn: () => Promise<void>): Promise<boolean>;
+  confirmSpawn(terminalId: string, spawn: () => Promise<void>): Promise<SpawnOutcome>;
 }
 
 /**
@@ -111,6 +113,8 @@ export interface AgentSessionPaneRuntime {
 function isResumeTarget(sessionId: string): boolean {
   return /^[A-Za-z0-9][\w.:-]*$/.test(sessionId) && !/^(latest|last)$/i.test(sessionId);
 }
+
+const NOT_STARTED = "The resumed session's terminal didn't start";
 
 const refused = (reason: AgentSessionPaneRefusal, message: string): AgentSessionPaneResult => ({
   status: "refused",
@@ -146,7 +150,8 @@ const inFlight = new Map<
  * caller env the launch was given. It never falls back to "the latest"
  * conversation: an agent that can't reopen one by id is refused. Nor to a
  * new one: a Claude conversation the CLI never wrote fails the spawn
- * (`exactResume`) rather than starting afresh under its id.
+ * (`exactResume`) rather than starting afresh under its id, and is refused as
+ * `conversation-not-found`, naming the store that lacked it.
  *
  * A live pane of the project already holding the session is returned instead
  * of a second agent on one transcript, wherever it is filed (#18009), as
@@ -360,9 +365,9 @@ async function launchResumedPane(
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, launchEnv);
   const accountId = account.kind === "account" ? account.account.id : undefined;
   const actionContext = paneLaunchContext(agentId, project.id, worktreeId, terminalId, title);
-  let started: boolean;
+  let outcome: SpawnOutcome;
   try {
-    started = await runtime.confirmSpawn(terminalId, async () => {
+    outcome = await runtime.confirmSpawn(terminalId, async () => {
       await deps.invoke<string>(project.id, CHANNELS.TERMINAL_SPAWN, [
         {
           id: terminalId,
@@ -395,10 +400,19 @@ async function launchResumedPane(
       ]);
     });
   } catch (err) {
-    console.warn("[Viewless] Resume launch failed:", formatErrorMessage(err, "unknown"));
-    started = false;
+    const message = formatErrorMessage(err, "unknown");
+    if ((err as { code?: unknown } | null)?.code === "CLAUDE_CONVERSATION_NOT_FOUND") {
+      return refused("conversation-not-found", message);
+    }
+    console.warn("[Viewless] Resume launch failed:", message);
+    return refused("spawn-failed", `${NOT_STARTED}: ${message}`);
   }
-  if (!started) return refused("spawn-failed", "The resumed session's terminal didn't start.");
+  if (!outcome.started) {
+    return refused(
+      "spawn-failed",
+      outcome.code ? `${NOT_STARTED}: the terminal host reported ${outcome.code}.` : `${NOT_STARTED}.`
+    );
+  }
 
   const snapshot: PanelSnapshot = {
     id: terminalId,

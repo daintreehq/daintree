@@ -4,8 +4,10 @@ import os from "os";
 import path from "path";
 import type { AgentSessionRecord } from "../../../../shared/types/ipc/agentSessionHistory.js";
 import type { ShellEnvironmentObservation } from "../../../setup/shellEnvironmentObservation.js";
+import { sanitizeErrorMessage } from "../../../ipc/transportSafeError.js";
 import {
   __resetClaudeSessionStoreForTests,
+  describeClaudeProjectsRoot,
   findUntouchedClaudeSession,
   getClaudePaneConversationStore,
   getClaudePaneProjectsRoot,
@@ -148,6 +150,30 @@ describe("resolvePaneClaudeProjectsRoot", () => {
 
   it("is unknown on Windows, whose PowerShell and cmd profiles are never probed", () => {
     expect(resolvePaneClaudeProjectsRoot({}, { ...machine(), platform: "win32" })).toBeNull();
+  });
+});
+
+describe.skipIf(process.platform === "win32")("describeClaudeProjectsRoot (#18190)", () => {
+  const HOME = "/Users/someone";
+
+  it("names a store under the home folder from $HOME, which the packaged sanitizer keeps", () => {
+    const label = describeClaudeProjectsRoot(`${HOME}/work/.claude-alt/projects`, HOME);
+    expect(label).toBe("$HOME/work/.claude-alt/projects");
+    expect(sanitizeErrorMessage(`No conversation is in ${label}; refused.`)).toContain(label);
+  });
+
+  it("names a store outside the home folder by its config folder alone", () => {
+    const label = describeClaudeProjectsRoot("/srv/team/claude-shared/projects", HOME);
+    expect(label).not.toContain("/srv");
+    expect(label).toContain("claude-shared/projects");
+    expect(sanitizeErrorMessage(`No conversation is in ${label}; refused.`)).toContain(label);
+  });
+
+  it("never reads a sibling of the home folder as inside it", () => {
+    expect(describeClaudeProjectsRoot("/Users/someone-else/.claude/projects", HOME)).not.toMatch(
+      /^\$HOME/
+    );
+    expect(describeClaudeProjectsRoot("/projects", HOME)).not.toContain("$HOME/");
   });
 });
 

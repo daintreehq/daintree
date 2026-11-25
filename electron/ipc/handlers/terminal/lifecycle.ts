@@ -21,6 +21,7 @@ import { getRemoteService } from "../../../remote/runtime.js";
 import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import {
+  describeClaudeProjectsRoot,
   findUntouchedClaudeSession,
   rememberClaudePaneStore,
   resolvePaneClaudeProjectsRoot,
@@ -871,11 +872,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           projectsRoot: claudePaneStore ?? null,
         }).catch(() => undefined);
     // A caller resuming one exact conversation would otherwise get an empty
-    // one wearing its id (#16019). Refused before anything is minted or armed.
+    // one wearing its id (#16019). Refused before anything is minted or armed,
+    // naming where it looked, so a caller can tell this from a failed start (#18190).
     if (untouchedSessionId && exactResume) {
-      throw new Error(
-        `Terminal ${id.slice(0, 8)} has no Claude conversation to resume; refusing a fresh one under its id`
-      );
+      const store = claudePaneStore
+        ? `${describeClaudeProjectsRoot(claudePaneStore)}, the store this launch reads`
+        : "the store this launch reads";
+      throw new AppError({
+        code: "CLAUDE_CONVERSATION_NOT_FOUND",
+        message: `No Claude conversation for this session is in ${store}; a fresh one isn't started under its id.`,
+      });
     }
     if (claudePaneStore !== undefined) {
       rememberClaudePaneStore(id, claudePaneStore, reopenedConversation);

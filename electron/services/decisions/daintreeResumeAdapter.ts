@@ -77,6 +77,8 @@ const LAUNCH_REFUSALS: Record<AgentSessionPaneRefusal, ResumeFailure> = {
   "missing-account": "resume_failed",
   "missing-preset": "resume_failed",
   "settings-unavailable": "resume_host_unreadable",
+  // The launch refused it as #16019 asks; for delivery, as good as a failed start.
+  "conversation-not-found": "resume_spawn_failed",
   "spawn-failed": "resume_spawn_failed",
   // Only once delivery stopped, which the adapter throws for first.
   cancelled: "resume_failed",

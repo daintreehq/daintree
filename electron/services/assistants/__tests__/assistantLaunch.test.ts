@@ -10,6 +10,7 @@ import {
   firstUsableDefault,
   meetsAssistantVersionFloor,
   spawnAndConfirm,
+  spawnAndReport,
   startAssistantWithoutView,
   viewlessLaunchableAgents,
   type AssistantLaunchDeps,
@@ -661,5 +662,96 @@ describe("spawnAndConfirm (#13511)", () => {
     const pty = new EventEmitter();
     await expect(spawnAndConfirm(pty as never, async () => false, "t-1")).resolves.toBe(false);
     await expect(spawnAndConfirm(null, async () => true, "t-1")).resolves.toBe(false);
+  });
+});
+
+describe("spawnAndReport (#18190)", () => {
+  it("keeps the code of the first report for its own terminal", async () => {
+    const pty = new EventEmitter();
+    const outcome = spawnAndReport(
+      pty as never,
+      async () => {
+        pty.emit("spawn-result", "other-terminal", {
+          success: false,
+          error: { code: "ENOENT", message: "x" },
+        });
+        // Emitted inside the spawn call, as PtyClient's own refusals are.
+        pty.emit("spawn-result", "t-1", {
+          success: false,
+          error: { code: "PROJECT_NOT_READY", message: "still cloning" },
+        });
+        pty.emit("spawn-result", "t-1", { success: true });
+        return true;
+      },
+      "t-1"
+    );
+    await expect(outcome).resolves.toEqual({ started: false, code: "PROJECT_NOT_READY" });
+    expect(pty.listenerCount("spawn-result")).toBe(0);
+  });
+
+  it("reports a failure with no code as one", async () => {
+    const pty = new EventEmitter();
+    const outcome = spawnAndReport(
+      pty as never,
+      async () => {
+        setTimeout(() => pty.emit("spawn-result", "t-1", { success: false }), 0);
+        return true;
+      },
+      "t-1"
+    );
+    await expect(outcome).resolves.toEqual({ started: false });
+  });
+
+  it("reads a refusal reported during a handler slower than the wait, not the wait's default", async () => {
+    vi.useFakeTimers();
+    try {
+      const pty = new EventEmitter();
+      const outcome = spawnAndReport(
+        pty as never,
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20_000));
+          pty.emit("spawn-result", "t-1", {
+            success: false,
+            error: { code: "EACCES", message: "denied" },
+          });
+          return true;
+        },
+        "t-1"
+      );
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(outcome).resolves.toEqual({ started: false, code: "EACCES" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a code reported before the handler declined", async () => {
+    const pty = new EventEmitter();
+    const outcome = spawnAndReport(
+      pty as never,
+      async () => {
+        pty.emit("spawn-result", "t-1", {
+          success: false,
+          error: { code: "PENDING_SPAWNS_CAPPED", message: "cap" },
+        });
+        return false;
+      },
+      "t-1"
+    );
+    await expect(outcome).resolves.toEqual({ started: false, code: "PENDING_SPAWNS_CAPPED" });
+  });
+
+  it("lets a handler error through, with nothing left listening", async () => {
+    const pty = new EventEmitter();
+    await expect(
+      spawnAndReport(
+        pty as never,
+        async () => {
+          throw new Error("spawn queue full");
+        },
+        "t-1"
+      )
+    ).rejects.toThrow("spawn queue full");
+    expect(pty.listenerCount("spawn-result")).toBe(0);
   });
 });

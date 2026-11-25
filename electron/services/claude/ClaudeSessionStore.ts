@@ -152,6 +152,26 @@ export function resolvePaneClaudeProjectsRoot(
   return trimmed && path.isAbsolute(trimmed) ? path.join(trimmed, "projects") : null;
 }
 
+/**
+ * A store named for a message that leaves the process: under the home folder
+ * as `$HOME/...`, which the packaged error sanitizer keeps where it would strip
+ * an absolute path and the user name in it; elsewhere by its config folder's
+ * name alone.
+ */
+export function describeClaudeProjectsRoot(projectsRoot: string, home = os.homedir()): string {
+  const relative = path.relative(home, projectsRoot);
+  if (
+    relative !== "" &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  ) {
+    return `$HOME/${relative.split(path.sep).join("/")}`;
+  }
+  const configFolder = path.basename(path.dirname(projectsRoot));
+  return configFolder ? `${configFolder}/projects outside $HOME` : "a projects folder outside $HOME";
+}
+
 const unreachableUntil = new Map<string, number>();
 
 function isCoolingDown(projectsRoot: string): boolean {
