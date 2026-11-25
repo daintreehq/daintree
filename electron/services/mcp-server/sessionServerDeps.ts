@@ -37,6 +37,7 @@ import {
   WorkspaceBindingError,
 } from "./rendererBridge.js";
 import { relayWriteStanding } from "./relayWriteRule.js";
+import { isMcpHostRoutingEnabled } from "./driveTarget.js";
 import { getGlobalAssistantBaseManifest, getViewlessHelpBaseManifest } from "./baseManifest.js";
 import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -1103,6 +1104,25 @@ export function createSessionServerDeps(
       : undefined;
 
   /**
+   * Why no window can ask about a close (#18176). A project assistant running
+   * with no view gets a window to ask in only once one of its project's
+   * windows takes it over, so it is told how that happens; any other session
+   * without a pin has lost the window it was given.
+   */
+  const noCloseApprovalWindow = (): string => {
+    const viewless =
+      viewlessProjectId !== null &&
+      !isGlobalAssistantId(viewlessProjectId) &&
+      deps.sessionStore.sessionViewlessHelpMap.get(sessionId) === viewlessProjectId;
+    if (!viewless) return "No Daintree window is pinned to this session to ask the user.";
+    const lead =
+      "This assistant isn't attached to a window of this project, so nobody can be asked to approve this close.";
+    return isMcpHostRoutingEnabled()
+      ? `${lead} Open the project in a window and take control of it there, which takes this assistant over, and retry once it has.`
+      : `${lead} Open the project in one window here, which takes this assistant over, and retry once it has.`;
+  };
+
+  /**
    * Ask the user whether Daintree's own assistant may close panels it did not
    * open, or whose agent is busy, without closing anything yet (#12881).
    * Routed to the window the session is pinned to, where the close would
@@ -1113,9 +1133,7 @@ export function createSessionServerDeps(
     (actionId, args) => {
       const id = deps.sessionStore.sessionWebContentsMap.get(sessionId);
       if (id === undefined || !pinnedDispatch) {
-        return Promise.reject(
-          new Error("No Daintree window is pinned to this session to ask the user.")
-        );
+        return Promise.reject(new Error(noCloseApprovalWindow()));
       }
       return pinnedDispatch(
         id,
