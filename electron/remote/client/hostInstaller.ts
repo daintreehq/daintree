@@ -85,13 +85,14 @@ export interface InstallerDeps {
   installToken?: () => string;
   /**
    * Refuses a Linux start whose binary the loader can't run, naming every
-   * library it can't find, after installing them where Daintree may and
-   * `install` isn't false (see linuxHostLibraries.ts).
+   * library it can't find, after installing them where Daintree may (see
+   * linuxHostLibraries.ts). `repeatInstall: false` skips an install when one
+   * there just ended without its start going ahead.
    */
   checkLinuxStart?(
     target: LinuxLaunchTarget,
     signal?: AbortSignal,
-    options?: { install?: boolean }
+    options?: { repeatInstall?: boolean }
   ): Promise<void>;
 }
 
@@ -1175,8 +1176,6 @@ export async function runHostInstall(
 
     /** Why recovery didn't start the build it put back, when a library check said so. */
     let recoveryRefusal: string | null = null;
-    /** The new build's start was checked, so any install as root this run allows was tried. */
-    let startChecked = false;
 
     /** Stop whatever the swap started, put the previous build back, start it, and check it. */
     const recover = async (): Promise<Recovery> => {
@@ -1213,8 +1212,8 @@ export async function runHostInstall(
         if (!lock.held()) return "lock-lost";
         if (startTarget && deps.checkLinuxStart) {
           try {
-            // The new build's check already had this run's one install as root.
-            await deps.checkLinuxStart(startTarget, settle, { install: !startChecked });
+            // Never a second install as root after one the new build's check just ran.
+            await deps.checkLinuxStart(startTarget, settle, { repeatInstall: false });
           } catch (error) {
             recoveryRefusal = formatErrorMessage(error, "a library check failed");
             return "not-restored";
@@ -1313,7 +1312,6 @@ export async function runHostInstall(
         report({ stage: "restarting", fraction: 0.9, message: "Starting Daintree on the host" });
         ensureHeld();
         if (startTarget && deps.checkLinuxStart) {
-          startChecked = true;
           await deps.checkLinuxStart(startTarget, settle);
           ensureHeld();
           // A cancel during the check still lands before the new build runs.

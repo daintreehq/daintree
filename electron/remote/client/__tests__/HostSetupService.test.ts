@@ -589,34 +589,66 @@ describe("HostSetupService", () => {
         expect(cloudPackageInstaller).not.toHaveBeenCalled();
       });
 
-      it("goes by a library refusal for a while, rather than checking and installing on every dial", async () => {
-        const scripts: string[] = [];
-        const run: CommandRunner = async (_command, args) => {
-          const script = args.at(-1) ?? "";
-          scripts.push(script);
-          if (script.includes("@@dt:uname")) return ok(box({ image: true }));
-          if (script.includes("@@dt:libs")) return ok("@@dt:libs missing libnspr4.so\n");
-          return ok();
+      /** A cloud machine whose libraries stay missing however often they are installed. */
+      const stillMissing = () => {
+        const channel = {
+          exec: async (script: string) =>
+            script.includes("@@dt:uname")
+              ? ok(box({ image: true }))
+              : script.includes("@@dt:libs")
+                ? ok("@@dt:libs missing libnspr4.so\n")
+                : ok(),
+          execWithInput: async () => ok(),
+          sendFile: async () => ok(),
         };
-        const { setup } = service("", { run });
-        await expect(setup.ensureHostRunning(studio)).rejects.toMatchObject({
-          code: "UNSUPPORTED",
+        let release: () => void = () => {};
+        const installs = { count: 0, hold: false };
+        const install = vi.fn(async () => {
+          installs.count++;
+          if (installs.hold) await new Promise<void>((resolve) => (release = resolve));
+          return ok();
         });
-        const checks = () => scripts.filter((c) => c.includes("@@dt:libs")).length;
-        expect(checks()).toBe(1);
-        const onRefused = vi.fn();
-        await expect(
-          setup.ensureHostRunning(studio, undefined, undefined, { onRefused })
-        ).resolves.toBe("not-startable");
-        expect(onRefused).toHaveBeenCalledWith("held");
-        expect(checks()).toBe(1);
-        // Someone asking for the host back looks again.
-        await expect(
-          setup.ensureHostRunning(studio, undefined, undefined, { explicit: true })
-        ).rejects.toMatchObject({
-          code: "UNSUPPORTED",
+        const { setup } = service("", {
+          channelFor: () => channel,
+          cloudPackageInstaller: () => install,
         });
-        expect(checks()).toBe(2);
+        return { setup, installs, release: () => release() };
+      };
+      const machine = { kind: "cloud", bindingId: "b-1" } as const;
+
+      it("doesn't install as root on every dial after an install that didn't let it start", async () => {
+        const { setup, installs } = stillMissing();
+        await expect(setup.ensureHostRunning(machine)).rejects.toMatchObject({
+          userMessage: expect.stringContaining("still missing after Daintree installed"),
+        });
+        expect(installs.count).toBe(1);
+        // A dial nobody asked for still says what is missing, and how to install it again.
+        await expect(setup.ensureHostRunning(machine)).rejects.toMatchObject({
+          userMessage: expect.stringMatching(/libnspr4\.so.*Retry to have Daintree install/s),
+        });
+        expect(installs.count).toBe(1);
+        // Someone asking for the host back installs again, as does a Retry.
+        await expect(
+          setup.ensureHostRunning(machine, undefined, undefined, { explicit: true })
+        ).rejects.toThrow();
+        expect(installs.count).toBe(2);
+        setup.recheckStart(machine);
+        await expect(setup.ensureHostRunning(machine)).rejects.toThrow();
+        expect(installs.count).toBe(3);
+      });
+
+      it("has a start that asks while an install runs wait on it rather than install beside it", async () => {
+        const { setup, installs, release } = stillMissing();
+        installs.hold = true;
+        const first = setup.ensureHostRunning(machine).catch((e: unknown) => e);
+        await vi.waitFor(() => expect(installs.count).toBe(1));
+        const second = setup
+          .ensureHostRunning(machine, undefined, undefined, { explicit: true })
+          .catch((e: unknown) => e);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        release();
+        await Promise.all([first, second]);
+        expect(installs.count).toBe(1);
       });
 
       it("installs the packages as root on a cloud machine that allows it, checks again, then starts", async () => {

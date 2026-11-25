@@ -788,8 +788,8 @@ describe("runHostInstall", () => {
       const shell = fakeShell();
       const deps = makeDeps({ shell, probes: [box(), box(), box()], working: [0] });
       const asked: unknown[] = [];
-      deps.checkLinuxStart = vi.fn(async (_target, _signal, options) => {
-        asked.push(options);
+      deps.checkLinuxStart = vi.fn(async (target, _signal, options) => {
+        asked.push([target.executable, options]);
         if (asked.length === 1) {
           throw new AppError({
             code: "UNSUPPORTED",
@@ -800,8 +800,11 @@ describe("runHostInstall", () => {
       await expect(install(deps, { hostId: "box" })).rejects.toThrow(
         /libnspr4\.so isn't installed there\. The previous build was put back and is running again/
       );
-      // The new build's check already had this run's install as root.
-      expect(asked).toEqual([undefined, { install: false }]);
+      // The previous build, at the same path, never installing again right after the new one's check did.
+      expect(asked).toEqual([
+        ["/home/node/Applications/Daintree.AppImage", undefined],
+        ["/home/node/Applications/Daintree.AppImage", { repeatInstall: false }],
+      ]);
       expect(starts(shell.scripts)).toHaveLength(1);
       expect(shell.scripts.findIndex((s) => s.includes("nohup"))).toBeGreaterThan(
         shell.scripts.findIndex((s) => s.includes("@@dt:rolledback"))
@@ -839,7 +842,7 @@ describe("runHostInstall", () => {
       );
     });
 
-    it("lets recovery install as root when the new build's check never ran", async () => {
+    it("checks the previous build before starting it when the swap itself fails", async () => {
       const shell = fakeShell((script) =>
         script.includes("mv -f") && script.includes(NEW_BUILD) ? { ...ok(), code: 1 } : ok()
       );
@@ -849,7 +852,8 @@ describe("runHostInstall", () => {
         asked.push(options);
       });
       await expect(install(deps, { hostId: "box" })).rejects.toThrow(/put back/);
-      expect(asked).toEqual([{ install: true }]);
+      // No install as root ran for the new build, so this one may.
+      expect(asked).toEqual([{ repeatInstall: false }]);
     });
 
     it("won't stop one whose own record doesn't say it was started on connect", async () => {

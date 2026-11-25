@@ -218,6 +218,8 @@ export interface LinuxStartCheckDeps {
   installPackages: ((signal?: AbortSignal) => Promise<CommandResult>) | null;
   /** Asked right before an install as root: false once the start it is for is no longer wanted. */
   mayInstall?: () => boolean;
+  /** Said with the refusal when `installPackages` is null here only for now. */
+  withoutInstall?: string;
 }
 
 async function check(
@@ -274,7 +276,7 @@ export async function checkLinuxStart(
   if (signal?.aborted) throw cancelled();
   if (first.kind !== "missing") return;
   if (!deps.installPackages) {
-    throw new HostLibrariesMissingError(first.libraries, deps.hostLabel);
+    throw new HostLibrariesMissingError(first.libraries, deps.hostLabel, deps.withoutInstall);
   }
   if (deps.mayInstall?.() === false) throw cancelled();
   const installed = await install(deps.installPackages, signal);
