@@ -105,7 +105,7 @@ export type CanopyAssistantWorkAnswer = z.infer<typeof CanopyAssistantWorkAnswer
 /** The most a sign-in's typing carries in one call, as a Canopy pane's does. */
 export const MAX_SIGN_IN_INPUT_LENGTH = 64_000;
 
-const watchId = z.number().int().safe();
+const watchId = z.number().int();
 const gridSize = z.number().int().min(1).max(1_000);
 
 export const CanopySignInPayloadSchema = z.discriminatedUnion("op", [

@@ -96,7 +96,8 @@ describe("liveHostSignInDeps().spawn", () => {
     };
     await liveHostSignInDeps().spawn({ terminalId: "daintree-sign-in-2", agentId: "codex" });
     if (process.platform !== "win32") {
-      expect(spawns[0]!.options.args?.at(-1)).toContain("/home/me/.local/bin/codex login");
+      const line = (spawns[0]!.options.args?.at(-1) ?? "").split("\n")[1];
+      expect(line).toMatch(/^'?\/home\/me\/\.local\/bin\/codex'? login$/);
     }
   });
 

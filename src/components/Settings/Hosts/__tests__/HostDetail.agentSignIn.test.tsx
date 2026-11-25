@@ -38,6 +38,7 @@ vi.mock("../HostCopySettingsSection", () => ({ HostCopySettingsSection: () => nu
 vi.mock("../HostSettingsSection", () => ({ HostSettingsSection: () => null }));
 vi.mock("../HostSessionsSection", () => ({ HostSessionsSection: () => null }));
 
+import { ClientAppError } from "@/utils/clientAppError";
 import { HostDetail } from "../HostDetail";
 
 const HANDSHAKE = {
@@ -164,10 +165,11 @@ describe("HostDetail agent CLI sign-in", () => {
 
   it("says why a sign-in didn't start, and starts it afresh on Try again", async () => {
     signIns.startSignIn.mockRejectedValueOnce(
-      Object.assign(new Error("needs newer"), {
-        code: "UNSUPPORTED",
-        userMessage: "This host needs a newer Daintree to sign in its agents from here.",
-      })
+      new ClientAppError(
+        "UNSUPPORTED",
+        "Host studio-01 has no agent sign-ins",
+        "This host needs a newer Daintree to sign in its agents from here."
+      )
     );
     render(<HostDetail entry={entry()} onBack={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Sign in to Claude on studio-01" }));
