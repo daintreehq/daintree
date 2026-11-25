@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { isImage, main, publishDecision, pullToken, readManifest } from "./host-image-registry.mjs";
 
 const repository = "daintreehq/daintree-host";
@@ -258,5 +261,25 @@ describe("the workflow's commands", () => {
     );
     await expect(result).resolves.toBe(3);
     expect(reports.join("\n")).toMatch(/no token.*401/s);
+  });
+
+  it("hands its outputs to the step through GITHUB_OUTPUT", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "host-image-registry-"));
+    const file = path.join(dir, "output");
+    const previous = process.env.GITHUB_OUTPUT;
+    process.env.GITHUB_OUTPUT = file;
+    const quiet = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const { fetchImpl } = registry(token(), json(404, { errors: [{ code: "NAME_UNKNOWN" }] }));
+      await expect(
+        main(["check", repository, "1.2.3", imageId], { env: credentials, fetchImpl })
+      ).resolves.toBe(0);
+      expect(readFileSync(file, "utf8")).toBe("push=true\n");
+    } finally {
+      quiet.mockRestore();
+      if (previous === undefined) delete process.env.GITHUB_OUTPUT;
+      else process.env.GITHUB_OUTPUT = previous;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

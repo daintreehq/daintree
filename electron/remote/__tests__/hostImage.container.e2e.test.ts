@@ -77,10 +77,13 @@ async function start(
   return host;
 }
 
-async function volume(files: Record<string, string>): Promise<string> {
+async function volume(
+  files: Record<string, string>,
+  modes: Record<string, string> = {}
+): Promise<string> {
   const name = await createVolume();
   volumes.push(name);
-  await writeSecrets(image, name, files);
+  await writeSecrets(image, name, files, modes);
   return name;
 }
 
@@ -180,7 +183,11 @@ describe.skipIf(!ENABLED)(
       // armed for anything left.
       await Promise.allSettled(hosts.map((host) => host.dispose()));
       await removeVolumes(volumes).catch((err: unknown) => report(String(err)));
-      if (root) await fs.rm(root, { recursive: true, force: true });
+      if (root) {
+        await fs
+          .rm(root, { recursive: true, force: true })
+          .catch((err: unknown) => report(String(err)));
+      }
       const left = await Promise.all([remainingContainers(), remainingVolumes()]);
       if (left.every((ids) => ids.length === 0)) disarmWatchdog();
     }, TEST_TIMEOUT_MS);
@@ -249,7 +256,7 @@ describe.skipIf(!ENABLED)(
             badHostKey,
           ],
         ];
-        const secrets = [privateLogin, encryptedWithPassphrase];
+        const secretValues = [privateLogin, encryptedWithPassphrase];
         for (const [label, env, refusal] of cases) {
           const attempt = startImageHost(image, { env, userKey: login.file });
           const message = await attempt.then(
@@ -260,13 +267,34 @@ describe.skipIf(!ENABLED)(
           const printed = message.replace(/^The container stopped \(exit 1\): /, "");
           expect(printed.trim().split("\n"), label).toEqual([refusal]);
           // What it says about a key never includes the key, in any form.
-          for (const secret of secrets) {
+          for (const secret of secretValues) {
             expect(message, label).not.toContain(needle(secret));
             expect(message, label).not.toContain(
               Buffer.from(secret).toString("base64").slice(0, 40)
             );
           }
         }
+
+        // A mounted host key the login could read is refused, not served: anything
+        // running as the login could then be this machine.
+        const hostKey = await makeHostKey(root, "readable-host");
+        const readable = await volume(
+          {
+            daintree_authorized_keys: `${login.publicKey}\n`,
+            daintree_ssh_host_key: hostKey.privateKey,
+          },
+          { daintree_ssh_host_key: "0644" }
+        );
+        const message = await startImageHost(image, {
+          secrets: readable,
+          userKey: login.file,
+        }).then(
+          () => "started",
+          (err: Error) => err.message
+        );
+        expect(message.replace(/^The container stopped \(exit 1\): /, "").trim()).toBe(
+          "daintree-host: /run/secrets/daintree_ssh_host_key can be read by users other than root: mount it owned by root with mode 0400 or 0600"
+        );
       },
       TEST_TIMEOUT_MS
     );
@@ -377,9 +405,9 @@ describe.skipIf(!ENABLED)(
             /Permission denied/
           );
 
-          // Two keys now, with a comment and a blank line between them, and the first gone.
+          // Two keys now, the first gone, with comments and blank lines as sshd allows them.
           await writeSecrets(image, secrets, {
-            daintree_authorized_keys: `# rotated\n${second.publicKey}\n\n${third.publicKey}\n`,
+            daintree_authorized_keys: `# rotated\n${second.publicKey}\n  \n  # and\n\t${third.publicKey}\n`,
             host_key_pem: hostKey.privateKey,
           });
           // Held to the same host key throughout, by the route's pin.

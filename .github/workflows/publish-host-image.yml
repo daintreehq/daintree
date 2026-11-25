@@ -27,9 +27,10 @@ permissions:
 
 concurrency:
   # One run at a time per tag, so a version's check and push can't interleave
-  # with another run's. Per tag rather than one group: a group keeps a single
-  # pending run, and a newer one would cancel a release waiting its turn.
-  group: publish-host-image-${{ github.ref }}
+  # with another run's. Per tag rather than one group, and manual runs apart: a
+  # group keeps a single pending run, and a newer one would cancel a release
+  # waiting its turn.
+  group: publish-host-image-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 env:

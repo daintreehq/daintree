@@ -63,7 +63,9 @@ export interface ImageInputs {
 export async function writeSecrets(
   image: string,
   volume: string,
-  files: Record<string, string>
+  files: Record<string, string>,
+  /** Modes for some of them; the rest are 0600, owned by root. */
+  modes: Record<string, string> = {}
 ): Promise<void> {
   const env: NodeJS.ProcessEnv = { ...process.env };
   const args = ["run", "--rm", "--label", RUN_LABEL, "--volume", `${volume}:/s`];
@@ -73,6 +75,11 @@ export async function writeSecrets(
     env[`DAINTREE_E2E_SECRET_${index}`] = contents;
     args.push("--env", `DAINTREE_E2E_SECRET_${index}`);
     lines.push(`printf '%s' "$DAINTREE_E2E_SECRET_${index}" > /s/${name}`);
+    const mode = modes[name];
+    if (mode !== undefined) {
+      if (!/^[0-7]{3,4}$/.test(mode)) throw new Error(`Not a mode: ${mode}`);
+      lines.push(`chmod ${mode} /s/${name}`);
+    }
   });
   args.push("--entrypoint", "sh", image, "-c", lines.join("\n"));
   await docker(args, 60_000, env);

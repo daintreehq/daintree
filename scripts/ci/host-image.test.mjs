@@ -29,8 +29,8 @@ function runCommands(dockerfile) {
   const joined = lines.join("\n").replace(/\\\n/g, " ");
   return joined
     .split("\n")
-    .filter((line) => /^RUN\s/.test(line))
-    .flatMap((line) => line.replace(/^RUN\s+/, "").split("&&"))
+    .filter((line) => /^RUN\s/i.test(line))
+    .flatMap((line) => line.replace(/^RUN\s+/i, "").split("&&"))
     .map((command) => command.trim().replace(/\s+/g, " "));
 }
 
@@ -88,7 +88,7 @@ describe("publish-host-image workflow", () => {
 
   it("serializes each tag's runs without cancelling one waiting its turn", () => {
     expect(workflow.concurrency).toEqual({
-      group: "publish-host-image-${{ github.ref }}",
+      group: "publish-host-image-${{ github.event_name }}-${{ github.ref }}",
       "cancel-in-progress": false,
     });
   });

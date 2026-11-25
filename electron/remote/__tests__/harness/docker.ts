@@ -84,9 +84,24 @@ export function installExitHook(): void {
         swept = false;
       }
     }
-    // What this couldn't remove, their own time limit or the watchdog does.
-    if (swept) disarmWatchdog();
+    // What this couldn't remove, their own time limit or the watchdog does: it
+    // stays armed unless nothing carrying the label is left, tracked or not (a
+    // create whose ID never came back).
+    if (swept && nothingLabelled()) disarmWatchdog();
   });
+}
+
+/** Whether the daemon holds no container or volume with this run's label, asked synchronously. */
+function nothingLabelled(): boolean {
+  try {
+    const filter = ["--filter", `label=${RUN_LABEL}`];
+    const options = { encoding: "utf8" as const, timeout: 20_000 };
+    const containers = execFileSync("docker", ["ps", "--all", "--quiet", ...filter], options);
+    const volumes = execFileSync("docker", ["volume", "ls", "--quiet", ...filter], options);
+    return containers.trim() === "" && volumes.trim() === "";
+  } catch {
+    return false;
+  }
 }
 
 /** A container this run created some other way than {@link startContainer}. */

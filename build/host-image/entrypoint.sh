@@ -62,9 +62,14 @@ write_checked() {
 public_keys() {
   found=""
   while IFS= read -r line || [ -n "$line" ]; do
+    # As sshd reads the file: leading whitespace doesn't count.
+    line=${line#"${line%%[![:space:]]*}"}
     case $line in
       "" | "#"*) continue ;;
-      *"PRIVATE KEY"*) return 1 ;;
+      *"PRIVATE KEY"*)
+        rm -f "$1.line"
+        return 1
+        ;;
     esac
     printf '%s\n' "$line" > "$1.line" || return 1
     if ! ssh-keygen -l -f "$1.line" > /dev/null 2>&1; then
@@ -91,6 +96,18 @@ fi
 chmod 644 "$authorized_keys.new"
 mv -f "$authorized_keys.new" "$authorized_keys"
 
+# A host key file the login could read would let anything running as the login
+# be this machine; a mount can't be hidden once read, so it's refused instead.
+host_key_file=${DAINTREE_SSH_HOST_KEY_FILE:-}
+if [ -z "${DAINTREE_SSH_HOST_KEY+set}" ]; then
+  [ -n "$host_key_file" ] || host_key_file="$secrets/daintree_ssh_host_key"
+  if [ -f "$host_key_file" ]; then
+    case "$(stat -L -c '%u %a' "$host_key_file")" in
+      "0 "*00) ;;
+      *) fail "$host_key_file can be read by users other than root: mount it owned by root with mode 0400 or 0600" ;;
+    esac
+  fi
+fi
 provided=$(read_input DAINTREE_SSH_HOST_KEY "$secrets/daintree_ssh_host_key")
 if [ -n "$provided" ]; then
   # A bad key stops the start even with a good one from an earlier start on disk:
