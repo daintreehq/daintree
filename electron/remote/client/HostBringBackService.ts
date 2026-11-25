@@ -51,6 +51,17 @@ export interface HostBringBackDeps {
     route: Extract<WakeRoute, { kind: "route" }>,
     signal: AbortSignal
   ): Promise<void>;
+  /**
+   * A cloud host's wake (#18183): starts its machine when its provider, asked
+   * now, says it is asleep, and settles once it runs. Resolves whether a start
+   * went; `sent` hears the provider take it. Sends nothing once `signal` aborts.
+   */
+  wakeCloud(
+    hostId: HostId,
+    bindingId: string,
+    signal: AbortSignal,
+    sent: () => void
+  ): Promise<boolean>;
   now?: () => number;
   deadlineMs?: number;
   nudgeMs?: number;
@@ -91,10 +102,13 @@ function restarting(state: HostConnectionState): boolean {
  * host's row) and this machine's assistants (`host.bringBack`) alike: one
  * attempt per host, which every later caller joins until it answers. It
  * sends the host's wake first when one is set up and this machine is on its
- * LAN, then dials it as a person's Retry does, letting that dial start
- * Daintree there in Host mode where Host mode is on. It answers with what it
- * observed once the link is up, can't come up by waiting, or the deadline
- * passes. It never changes the host's settings or turns Host mode on.
+ * LAN, or starts a cloud host's machine that its provider says is asleep
+ * (#18183), then dials it as a person's Retry does, letting that dial start
+ * Daintree there in Host mode where Host mode is on. A cloud host is dialled
+ * again until the deadline, since its tunnel may be waking the machine. It
+ * answers with what it observed once the link is up, can't come up by
+ * waiting, or the deadline passes. It never changes the host's settings or
+ * turns Host mode on.
  */
 export class HostBringBackService {
   private readonly attempts = new Map<HostId, Promise<HostBringBackAnswer>>();
@@ -158,6 +172,7 @@ export class HostBringBackService {
     const hostId = descriptor.id;
     const startedAt = now();
     const ssh = descriptor.connection.kind === "ssh";
+    const cloud = descriptor.connection.kind === "cloud";
     let wake: HostWakeResult = "not_needed";
     let wakeError: string | null = null;
     let reached = false;
@@ -184,8 +199,14 @@ export class HostBringBackService {
             console.error("[HostBringBack] Cleanup failed:", error);
           }
         }
-        // Why no wake went is what matters when nothing else got through.
-        const said = status === "not_wakeable" && wakeError !== null ? wakeError : observed;
+        // Why no wake went, or why a cloud machine's start failed, is what matters when nothing
+        // else got through.
+        const said =
+          wakeError !== null &&
+          (status === "not_wakeable" ||
+            (cloud && !reached && (status === "unreachable" || status === "timed_out")))
+            ? wakeError
+            : observed;
         resolve({
           status,
           wake,
@@ -276,8 +297,9 @@ export class HostBringBackService {
               return;
             }
             // Nothing more to try: no wake went, and the dial got nowhere the
-            // host answered from (a host saying it is restarting has).
-            if (!reached && wake !== "sent" && state.restarting !== true) {
+            // host answered from (a host saying it is restarting has). A cloud
+            // host's tunnel may be waking its machine, so it has the deadline.
+            if (!cloud && !reached && wake !== "sent" && state.restarting !== true) {
               finish(ssh ? "not_wakeable" : "unreachable");
             }
             return;
@@ -366,6 +388,28 @@ export class HostBringBackService {
         cleanups.push(() => clearTimeout(timer));
       };
 
+      const connection = descriptor.connection;
+      if (connection.kind === "cloud") {
+        let waking: Promise<boolean>;
+        try {
+          waking = deps.wakeCloud(hostId, connection.bindingId, abort.signal, () => {
+            if (!settled) wake = "sent";
+          });
+        } catch (error) {
+          waking = Promise.reject(error);
+        }
+        void waking.then(
+          () => afterSettle(),
+          (error: unknown) => {
+            if (settled) return;
+            // A start the provider took and then didn't finish was still sent.
+            if (wake !== "sent") wake = "failed";
+            wakeError = formatErrorMessage(error, "The cloud machine couldn't be started");
+            afterSettle();
+          }
+        );
+        return;
+      }
       const setup = ssh ? descriptor.wake : undefined;
       if (!ssh) {
         afterSettle();
