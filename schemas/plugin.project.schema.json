@@ -2112,6 +2112,14 @@
                           "installUrl": {
                             "type": "string",
                             "maxLength": 2048
+                          },
+                          "installCommand": {
+                            "type": "string",
+                            "maxLength": 512
+                          },
+                          "signInCommand": {
+                            "type": "string",
+                            "maxLength": 512
                           }
                         },
                         "required": [
