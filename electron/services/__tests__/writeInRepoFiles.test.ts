@@ -1506,6 +1506,22 @@ describe("readInRepoPresets", () => {
     expect(result.codex?.map((preset) => preset.id)).toEqual(["ok"]);
   });
 
+  it("counts a skipped file that still names an id as a partial read, and one with no id as nothing (#18191)", async () => {
+    const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "no-id.json"), JSON.stringify({ name: "No ID" }));
+    const unread: string[] = [];
+    const read = () =>
+      identityFiles.readInRepoPresets(tmpDir, { onUnreadable: (agentId) => unread.push(agentId) });
+
+    await read();
+    expect(unread).toEqual([]);
+
+    await fs.writeFile(path.join(agentDir, "half.json"), JSON.stringify({ id: "ccr-team" }));
+    await read();
+    expect(unread).toEqual(["claude"]);
+  });
+
   it("skips files missing required id or name fields", async () => {
     const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
     await fs.mkdir(agentDir, { recursive: true });

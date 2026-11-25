@@ -21,7 +21,7 @@ import {
   composeAgentLaunchEnv,
   findUnloadedLaunchPreset,
 } from "../../../shared/utils/agentLaunchPlan.js";
-import { getMergedPreset } from "../../../shared/utils/agentPresets.js";
+import { getMergedPreset, getMergedPresetIdentities } from "../../../shared/utils/agentPresets.js";
 import { unknownAgentIdMessage } from "../../../shared/utils/agentLaunchValidation.js";
 import { reconcileResumeLaunchFlagsWith } from "../../../shared/utils/agentResumeFlags.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -512,20 +512,34 @@ async function readResumeLaunchChoice(
     if (typeof presetId !== "string" || !PRESET_ID.test(presetId)) {
       presetGone = "its preset";
     } else {
-      // An id a higher source might hold, unread, isn't the one a lower source has.
+      // An id a higher source might hold, unread, isn't the one a lower source
+      // has. A repository read that skipped a file of this agent's confirms
+      // only the user's own presets: the skipped file may be the repository's
+      // copy of the id, ahead of another of its own or a route's.
       let unsettled: string | undefined;
       let preset: AgentPreset | undefined;
       try {
-        unsettled = findUnloadedLaunchPreset({
-          agentId,
-          isAgent: true,
-          worktreeId,
-          settings,
-          ccrPresets: sources.ccrPresets,
-          projectPresets: sources.projectPresets,
-          presetInventory: sources.presetInventory,
-          options: { presetId },
-        });
+        const custom = settings?.agents?.[agentId]?.customPresets;
+        const confirmable =
+          sources.presetInventory.project ||
+          getMergedPresetIdentities(
+            agentId,
+            custom,
+            sources.ccrPresets,
+            sources.projectPresets
+          ).find((identity) => identity.id === presetId)?.source === "custom";
+        unsettled = !confirmable
+          ? presetId
+          : findUnloadedLaunchPreset({
+              agentId,
+              isAgent: true,
+              worktreeId,
+              settings,
+              ccrPresets: sources.ccrPresets,
+              projectPresets: sources.projectPresets,
+              presetInventory: sources.presetInventory,
+              options: { presetId },
+            });
         preset =
           unsettled === undefined
             ? getMergedPreset(

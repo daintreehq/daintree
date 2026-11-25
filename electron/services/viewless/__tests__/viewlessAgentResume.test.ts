@@ -1158,6 +1158,34 @@ describe("resumeAgentSessionAsPane on what the session launched on (#18191)", ()
     );
   });
 
+  it("confirms no repository copy of an id while another of the repository's files was skipped", async () => {
+    const TEAM = { id: "team", name: "Team", env: { ANTHROPIC_BASE_URL: "https://team" } };
+    const make = (skipped: boolean) => {
+      const made = resumeDeps({
+        sessions: [record({ agentPresetId: "team" })],
+        settings: claudeSettings({}),
+      });
+      // The skipped file may be the copy of `team` that ranked first.
+      made.deps.agents.getProjectPresets = async (_path, options) => {
+        if (skipped) options?.onUnreadable?.("claude");
+        return { claude: [TEAM] };
+      };
+      return made;
+    };
+
+    const skipped = make(true);
+    await expect(
+      resumeAgentSessionAsPane(REQUEST, skipped.deps, makeRuntime())
+    ).resolves.toMatchObject({ status: "refused", reason: "settings-unavailable" });
+    expect(spawns(skipped.invoke)).toEqual([]);
+
+    const whole = make(false);
+    await expect(
+      resumeAgentSessionAsPane(REQUEST, whole.deps, makeRuntime())
+    ).resolves.toMatchObject({ status: "launched" });
+    expect(spawns(whole.invoke)[0]).toMatchObject({ agentPresetId: "team" });
+  });
+
   it("refuses a preset a repository's unread presets might hold, and resumes one the user's own settings hold", async () => {
     const unread = resumeDeps({
       sessions: [record({ agentPresetId: "team" })],

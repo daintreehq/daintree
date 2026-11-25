@@ -864,6 +864,14 @@ export class ProjectIdentityFiles {
               `[ProjectIdentityFiles] Skipping invalid preset: ${agentId}/${fileName}`,
               summary
             );
+            // One that names an id still claims it, so its skip is a partial read.
+            if (
+              parsed !== null &&
+              typeof parsed === "object" &&
+              typeof (parsed as { id?: unknown }).id === "string"
+            ) {
+              options.onUnreadable?.(agentId);
+            }
             continue;
           }
           if (seenIds.has(parsed.id)) {
