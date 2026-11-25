@@ -1609,6 +1609,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           "`generation` must be the whole number the run was listed with. Nothing was sent."
         );
       }
+      // What the renderer's schema would have refused, since this send never
+      // reaches it: the receipt echoes the id, so an oversized one would lose it.
+      if (callArgs.handback !== undefined && typeof callArgs.handback !== "boolean") {
+        throw new AssistantTargetError(
+          "VALIDATION_ERROR",
+          "`handback` is true or false. Nothing was sent."
+        );
+      }
+      if (terminalId.length > 512) {
+        throw new AssistantTargetError(
+          "VALIDATION_ERROR",
+          "`terminalId` is at most 512 characters. Nothing was sent."
+        );
+      }
       const service = deps.ownedSend;
       if (service === undefined) {
         throw new AssistantTargetError(
@@ -1638,11 +1652,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         code: RESOURCE_NOT_OWNED_CODE,
         message: `Terminal '${terminalId}' stopped being this session's before the send reached it. Nothing was sent.`,
       };
-      // A write main makes itself answers to whoever drives the project now.
-      const driveRefusal = (projectId: string): { code: string; message: string } | null =>
-        deps.relay
+      // A write main makes itself answers to whoever drives the project now,
+      // and reaches only the project this session is bound to, as its view does.
+      const boundProjectId = sessionStore.sessionWorkspaceMap.get(sessionId);
+      const writeRefusal = (projectId: string): { code: string; message: string } | null => {
+        if (boundProjectId !== undefined && projectId !== boundProjectId) {
+          return {
+            code: WORKER_STEER_REFUSALS.notFound,
+            message: `Terminal '${terminalId}' isn't in the project this session is bound to. Nothing was sent.`,
+          };
+        }
+        return deps.relay
           ? deps.relay.refuseWrite(projectId)
           : ((deps.refuseWrite ?? deps.refuseViewWrite)?.(projectId) ?? null);
+      };
       const whenBusy: OwnedWhenBusy = queueing
         ? {
             kind: "queue",
@@ -1667,13 +1690,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             if (sessionStore.getTier(sessionId) === null) {
               throw new AssistantTargetError(SESSION_GONE, SESSION_GONE_MESSAGE);
             }
+            // Its caller stopped waiting while the worker was read: nothing
+            // goes out that it was never told of.
+            if (extra.signal.aborted) {
+              throw new AssistantTargetError(
+                EXECUTION_ERROR_CODE,
+                `The call was cancelled before the send to '${terminalId}' went out. Nothing was sent.`
+              );
+            }
             if (!stillOwned()) throw new AssistantTargetError(notOwned.code, notOwned.message);
-            const refusal = driveRefusal(projectId);
+            const refusal = writeRefusal(projectId);
             if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
           },
           // A held send answers to the principal that queued it, whose end
           // drops it, not this MCP session, which may close before the turn ends.
-          authorizeHeld: (projectId) => (stillOwned() ? driveRefusal(projectId) : notOwned),
+          authorizeHeld: (projectId) => (stillOwned() ? writeRefusal(projectId) : notOwned),
         },
         {
           command,

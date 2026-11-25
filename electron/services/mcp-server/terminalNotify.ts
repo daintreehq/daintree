@@ -2633,6 +2633,9 @@ export class TerminalNotifyService {
     // agent without a respawn. The host holds the whole line to that.
     const promptOnLine = wakes.some(({ wake }) => isHeldPrompt(wake));
     const decisionOnLine = wakes.some(({ wake }) => wake.kind === "decision");
+    // A held steer is pinned the same way (#18172), so a swap after its
+    // recheck can't hand it to another agent.
+    const steerOnLine = wakes.some(({ wake }) => wake.kind === "steer");
     const guard: TerminalSubmitGuard =
       promptOnLine || decisionOnLine
         ? {
@@ -2641,7 +2644,7 @@ export class TerminalNotifyService {
               ? { agentIncarnation: info.agentIncarnation }
               : {}),
             ...(info.agentSessionId !== undefined ? { agentSessionId: info.agentSessionId } : {}),
-            ...(decisionOnLine && info.detectedAgentId !== undefined
+            ...((decisionOnLine || steerOnLine) && info.detectedAgentId !== undefined
               ? { agentId: info.detectedAgentId }
               : {}),
             ...(promptOnLine || (!decisionsOnly && holdsPrompt(owner))

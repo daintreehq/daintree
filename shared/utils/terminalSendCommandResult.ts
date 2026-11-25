@@ -33,6 +33,6 @@ export function buildTerminalSendCommandReceipt(
     terminalId,
     command: command.slice(0, MAX_ECHOED_COMMAND_CHARS),
     submissionToken,
-    message: `Accepted for writing now, not held. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
+    message: `Accepted, not held. Do not send this command again; check delivery with the terminal-status capability using this submissionToken.`,
   };
 }

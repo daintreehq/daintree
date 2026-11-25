@@ -26,6 +26,11 @@ export interface HeldRunIdentity extends PromptInputProvenance {
   agentIncarnation?: number;
   agentSessionId?: string;
   worktreeId?: string;
+  /**
+   * The agent detected in the PTY when it was held (#18172): detection can
+   * hand the PTY to another agent without a respawn, which is another run.
+   */
+  agentId?: string;
 }
 
 export interface HoldSteerRequest {
@@ -301,6 +306,7 @@ export class WorkerSteerQueue {
       info.agentIncarnation !== run.agentIncarnation ||
       (info.launchGeneration !== undefined && info.launchGeneration !== entry.generation) ||
       (run.agentSessionId !== undefined && info.agentSessionId !== run.agentSessionId) ||
+      (run.agentId !== undefined && info.detectedAgentId !== run.agentId) ||
       (info.worktreeId ?? "") !== (run.worktreeId ?? "")
     ) {
       return drop("restarted");

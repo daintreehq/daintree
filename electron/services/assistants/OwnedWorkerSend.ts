@@ -138,7 +138,7 @@ export class OwnedWorkerSend {
       );
     }
     const record = await this.deps.getTerminal(terminalId).catch(() => null);
-    if (record === null) {
+    if (record === null || (record.projectId !== undefined && record.projectId !== projectId)) {
       refuse(
         WORKER_STEER_REFUSALS.notFound,
         `Terminal '${terminalId}' can't be read right now. ${NOTHING_SENT}`
@@ -279,7 +279,10 @@ export class OwnedWorkerSend {
         `Terminal '${terminalId}' hasn't been seen settling, so a draft in it can't be ruled out. ${NOTHING_SENT}`
       );
     }
-    const typed = typedSinceSettle(record, inputOwner);
+    // Keys at an approval move its selector and never reach the prompt; the
+    // held send drops only on input that could have (`recheck`).
+    const typed =
+      whenBusy.waitingOn === "approval" ? "nothing" : typedSinceSettle(record, inputOwner);
     if (typed === "someone") {
       refuse(
         WORKER_STEER_REFUSALS.typing,
@@ -307,6 +310,7 @@ export class OwnedWorkerSend {
             : {}),
           ...(record.agentSessionId !== undefined ? { agentSessionId: record.agentSessionId } : {}),
           ...(record.worktreeId !== undefined ? { worktreeId: record.worktreeId } : {}),
+          ...(record.detectedAgentId !== undefined ? { agentId: record.detectedAgentId } : {}),
           ...(record.lastOwnedPromptInput !== undefined
             ? { lastOwnedPromptInput: record.lastOwnedPromptInput }
             : {}),
@@ -343,7 +347,7 @@ export class OwnedWorkerSend {
       queuedSendToken: held.queuedSendToken,
       expiresAt: held.expiresAt,
       ...(held.supersededToken ? { supersededToken: held.supersededToken } : {}),
-      message: `Held, not sent: it is typed the next time the agent waits at its own prompt with nothing typed there, and dropped if someone else sends it input or the run changes first.${superseded} Check it with terminal.getStatus and this queuedSendToken; withdraw it with terminal.cancelQueuedSend.`,
+      message: `Held, not sent: it is typed the next time the agent waits at its own prompt with nothing typed there, and dropped if it is sent another prompt first (yours without \`whenBusy\` too) or the run changes.${superseded} Check it with terminal.getStatus and this queuedSendToken; withdraw it with terminal.cancelQueuedSend.`,
     };
   }
 }

@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_STEER_REFUSALS } from "../../../../shared/types/assistantControl.js";
 import type { ExactPromptGuard } from "../../../../shared/types/pty-host.js";
 import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
+import { withoutHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { AssistantTargetError } from "../AssistantTerminalControl.js";
 import type { WorkerSteerRecord } from "../GlobalWorkerSteer.js";
 import {
   OwnedWorkerSend,
+  type OwnedWorkerSendDeps,
   type OwnedSendRequest,
   type OwnedSendTarget,
   type OwnedWhenBusy,
@@ -42,7 +44,7 @@ describe("OwnedWorkerSend (#18172)", () => {
   let generation: number | null;
   let holds: HoldSteerRequest[];
   let holdError: Error | null;
-  let submit: ReturnType<typeof vi.fn>;
+  let submit: ReturnType<typeof vi.fn<OwnedWorkerSendDeps["submit"]>>;
   let authorize: ReturnType<typeof vi.fn>;
   let authorizeHeld: ReturnType<typeof vi.fn>;
   let queueAvailable: boolean;
@@ -73,7 +75,7 @@ describe("OwnedWorkerSend (#18172)", () => {
     holds = [];
     holdError = null;
     queueAvailable = true;
-    submit = vi.fn();
+    submit = vi.fn<OwnedWorkerSendDeps["submit"]>();
     authorize = vi.fn();
     authorizeHeld = vi.fn(() => null);
     send = new OwnedWorkerSend({
@@ -114,7 +116,8 @@ describe("OwnedWorkerSend (#18172)", () => {
       projectId: PROJECT,
       terminalId: WORKER,
       generation: 4,
-      run: { agentIncarnation: 2, agentSessionId: "sess-1" },
+      // Pinned to the agent it was held for: a swap in the PTY is another run.
+      run: { agentIncarnation: 2, agentSessionId: "sess-1", agentId: "claude" },
       // The caller's own words: an owned send is never stamped as a steer.
       text: "reply done2",
       promptAsWritten: "reply done2",
@@ -125,13 +128,40 @@ describe("OwnedWorkerSend (#18172)", () => {
   });
 
   it("waits out an approval for its own worker, held for the prompt after it", async () => {
-    record = atPrompt({ waitingReason: "approval", approvalKind: "tool" });
+    record = atPrompt({ waitingReason: "approval" });
 
     const receipt = await prompt(QUEUE);
 
     expect(receipt).toMatchObject({ queued: true });
     expect(holds[0]).toMatchObject({ waitingOn: "approval" });
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("holds over keys pressed at the approval, which never reach the prompt", async () => {
+    const navigated = atPrompt({ waitingReason: "approval", lastStateChange: 1_000 });
+    stampTypedInput(navigated, 2_000);
+    record = navigated;
+
+    expect(await prompt(QUEUE)).toMatchObject({ queued: true });
+
+    // The same keys at its prompt are a draft the hold would type over.
+    const drafted = atPrompt({ lastStateChange: 1_000 });
+    stampTypedInput(drafted, 2_000);
+    record = drafted;
+    expect((await refusal(prompt(QUEUE))).code).toBe(WORKER_STEER_REFUSALS.typing);
+  });
+
+  it("carries a held handback's code and instruction, and the text as written", async () => {
+    record = working();
+
+    await prompt(QUEUE, { handback: true });
+
+    const [held] = holds;
+    expect(held!.handbackCode).toEqual(expect.any(String));
+    expect(held!.text).not.toBe("reply done2");
+    expect(held!.text).toContain(held!.handbackCode);
+    expect(withoutHandbackInstruction(held!.text, held!.handbackCode!)).toBe("reply done2");
+    expect(held!.promptAsWritten).toBe("reply done2");
   });
 
   it("refuses a working worker under `refuse`, writing and holding nothing", async () => {
@@ -231,9 +261,10 @@ describe("OwnedWorkerSend (#18172)", () => {
   it("refuses to hold a slash command, which could arrive as prose", async () => {
     record = working();
 
-    const error = await refusal(prompt(QUEUE, { command: "/clear" }));
-
-    expect(error.code).toBe("VALIDATION_ERROR");
+    for (const command of ["/clear", "  /clear"]) {
+      const error = await refusal(prompt(QUEUE, { command }));
+      expect(error.code).toBe("VALIDATION_ERROR");
+    }
     expect(holds).toEqual([]);
   });
 
@@ -241,6 +272,7 @@ describe("OwnedWorkerSend (#18172)", () => {
     record = working();
     const named = await refusal(prompt(QUEUE, { generation: 3 }));
     expect(named.code).toBe(WORKER_STEER_REFUSALS.restarted);
+    expect(await prompt(QUEUE, { generation: 4 })).toMatchObject({ queued: true });
 
     // Relaunched while the record was read: the line was meant for the run before.
     send = new OwnedWorkerSend({
@@ -256,6 +288,13 @@ describe("OwnedWorkerSend (#18172)", () => {
     const relaunched = await refusal(prompt(QUEUE, { generation: 4 }));
     expect(relaunched.code).toBe(WORKER_STEER_REFUSALS.restarted);
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a terminal the host now places in another project", async () => {
+    record = working({ projectId: "proj-other" });
+
+    expect((await refusal(prompt(QUEUE))).code).toBe(WORKER_STEER_REFUSALS.notFound);
+    expect(holds).toEqual([]);
   });
 
   it("answers a host that can't hold, or a hold the store refuses, with nothing sent", async () => {
