@@ -1627,8 +1627,40 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               },
               hasPty: {
                 description:
-                  "False once the process exited or a kill was requested. Not a health probe: a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface.",
+                  "False once the process exited, a kill was requested, or restore held the pane. Not a health probe: a wedged agent reads true. `renderer` sets it only when held.",
                 type: "boolean",
+              },
+              restored: {
+                type: "object",
+                properties: {
+                  at: {
+                    type: "number",
+                  },
+                  disposition: {
+                    type: "string",
+                    enum: ["resume", "fresh", "held"],
+                  },
+                  heldReason: {
+                    type: "string",
+                  },
+                  lastSeen: {
+                    type: "object",
+                    properties: {
+                      agentState: {
+                        type: "string",
+                      },
+                      at: {
+                        type: "number",
+                      },
+                    },
+                    required: ["agentState"],
+                    additionalProperties: false,
+                  },
+                },
+                required: ["at", "disposition"],
+                additionalProperties: false,
+                description:
+                  "Set when restore rebuilt the panel (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended.",
               },
               error: {
                 description:
