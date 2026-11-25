@@ -348,14 +348,24 @@ export const HostCallArgsSchema = z
       ),
   })
   // A caller-chosen id names a first send, a callId a resend: one call is never both (#14240).
-  .refine((args) => args.callId === undefined || args.newCallId === undefined)
-  .refine(namesOneTarget)
-  .refine((args) => args.hostId === "local" || args.tool.length <= MAX_LINK_TOOL_ID_CHARS)
+  // Each rule's `reason` is the fixed text a refusal names it by (#18164).
+  .refine((args) => args.callId === undefined || args.newCallId === undefined, {
+    path: ["newCallId"],
+    params: { reason: "can't be sent with callId" },
+  })
+  .refine(namesOneTarget, {
+    params: { reason: "should name one target: a projectId, or throwaway: true" },
+  })
+  .refine((args) => args.hostId === "local" || args.tool.length <= MAX_LINK_TOOL_ID_CHARS, {
+    path: ["tool"],
+    params: { reason: `should be at most ${MAX_LINK_TOOL_ID_CHARS} characters on another machine` },
+  })
   // A throwaway target takes only its own tools, with their own arguments.
   .refine(
     (args) =>
       args.throwaway === undefined ||
-      HostThrowawayCallSchema.safeParse({ tool: args.tool, args: args.args ?? {} }).success
+      HostThrowawayCallSchema.safeParse({ tool: args.tool, args: args.args ?? {} }).success,
+    { params: { reason: "should name a throwaway tool with only its own args" } }
   );
 export type HostCallArgs = z.infer<typeof HostCallArgsSchema>;
 
@@ -856,14 +866,20 @@ export const HostStatusArgsSchema = z.object({
     .refine(
       (targets) =>
         new Set(targets.map(({ hostId, projectId }) => `${hostId}\u0000${projectId}`)).size ===
-        targets.length
+        targets.length,
+      { params: { reason: "should name each project once" } }
     )
     .refine(
       (targets) =>
         targets.reduce(
           (sum, { hostId, projectId }) => sum + jsonBytes(hostId) + jsonBytes(projectId),
           0
-        ) <= HOST_STATUS_TARGET_ID_BYTES_MAX
+        ) <= HOST_STATUS_TARGET_ID_BYTES_MAX,
+      {
+        params: {
+          reason: `should name at most ${HOST_STATUS_TARGET_ID_BYTES_MAX} bytes of host and project ids`,
+        },
+      }
     )
     .describe("1-64 projects, each named once, on any hosts."),
   includeOutput: z

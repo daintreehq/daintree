@@ -226,15 +226,25 @@ export interface OpenRun {
   standby?: true;
 }
 
+/**
+ * What a session that answers in no run here lacks (#18164), as observed: its
+ * session ended, it isn't the assistant running in its pane, a window on
+ * another machine holds it, no window of its project here shows it, or its
+ * terminal isn't running.
+ */
+export type HostCallerRefusal =
+  "ended" | "replaced" | "remote-view" | "no-window" | "terminal-down";
+
 export interface HostCallRuntimeDeps {
   /** The lane a live help session was provisioned for; null once it is revoked or ending. */
   getSessionLane(helpSessionId: string): { projectId: string; slot: number } | null;
   /**
    * The run a help session is answering in right now, when it is the running
-   * assistant of its lane in one of this machine's own views; null for a
-   * session its lane replaced, or an assistant a remote Shell's view runs here.
+   * assistant of its lane in one of this machine's own views. Otherwise what
+   * it lacks, such as a session its lane replaced or an assistant a remote
+   * Shell's view runs here; null says only that it has no run.
    */
-  callerRun(helpSessionId: string): OpenRun | null;
+  callerRun(helpSessionId: string): OpenRun | HostCallerRefusal | null;
   /** Read at each call: the client is installed with the database and may come later. */
   client():
     | (Pick<HostControlLinkClient, "relayCall" | "throwawayCall"> &
@@ -369,6 +379,17 @@ export interface HostCallRuntimeDeps {
 const ERROR_MESSAGE = "Hosts can't be reached right now.";
 const NOT_ELIGIBLE_MESSAGE =
   "Only a Daintree Assistant running on this machine can reach its hosts.";
+const DISPOSED_MESSAGE = "Host tools aren't available on this machine right now.";
+/** What a refused caller is told it lacks (#18164): fixed words, since refusals reach the audit log. */
+const CALLER_REFUSAL_MESSAGES: Record<HostCallerRefusal, string> = {
+  ended: "This assistant session has ended, so it can't call host tools.",
+  replaced: "This session isn't the assistant running in its pane, so it can't call host tools.",
+  "remote-view":
+    "This assistant is attached to a window on another machine, so it can't call this machine's host tools.",
+  "no-window":
+    "This assistant isn't attached to a window of its project on this machine, which host tools need. Open the project in a window here, and retry once that window has taken the assistant over.",
+  "terminal-down": "This assistant's terminal isn't running, so it can't call host tools.",
+};
 
 /**
  * Calls whose notices this Shell still waits for (#13500). Past this a call
@@ -1144,10 +1165,28 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     });
   }
 
+  /** The run a calling session answers in, or the fixed words on what it lacks. */
+  private callerOrRefusal(helpSessionId: string): { run: OpenRun } | { refusal: string } {
+    if (this.disposed) return { refusal: DISPOSED_MESSAGE };
+    const found = this.deps.callerRun(helpSessionId);
+    if (found === null) return { refusal: NOT_ELIGIBLE_MESSAGE };
+    return typeof found === "string" ? { refusal: CALLER_REFUSAL_MESSAGES[found] } : { run: found };
+  }
+
   /** The run a calling session answers in, when it may reach hosts at all. */
   private caller(helpSessionId: string): OpenRun | null {
-    if (this.disposed) return null;
-    return this.deps.callerRun(helpSessionId);
+    const found = this.callerOrRefusal(helpSessionId);
+    return "run" in found ? found.run : null;
+  }
+
+  /**
+   * Why this session can't call the host tools right now, in fixed words;
+   * null when it can (#18164). The same check every call makes, asked before
+   * its arguments are read, so a caller that can't call learns that first.
+   */
+  callerRefusal(helpSessionId: string): string | null {
+    const found = this.callerOrRefusal(helpSessionId);
+    return "refusal" in found ? found.refusal : null;
   }
 
   /**
@@ -3091,12 +3130,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     helpSessionId: string,
     work: (caller: OpenRun) => Promise<T>
   ): Promise<HostControlOutcome<T>> {
-    const caller = this.caller(helpSessionId);
-    if (caller === null) {
-      return { ok: false, code: "NOT_ELIGIBLE", message: NOT_ELIGIBLE_MESSAGE };
-    }
+    const caller = this.callerOrRefusal(helpSessionId);
+    if ("refusal" in caller) return { ok: false, code: "NOT_ELIGIBLE", message: caller.refusal };
     try {
-      return { ok: true, value: await work(caller) };
+      return { ok: true, value: await work(caller.run) };
     } catch (error) {
       if (error instanceof RefusalError) {
         return { ok: false, code: error.code, message: error.message };

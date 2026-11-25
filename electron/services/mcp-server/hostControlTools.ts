@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import { HOST_THROWAWAY_TOOL_SIGNATURES } from "../../../shared/types/hostThrowaway.js";
 import {
@@ -34,6 +35,7 @@ import {
   type HostWatchResult,
 } from "../../../shared/types/hostControl.js";
 import type { HostInventorySnapshot } from "../globalAssistantInventory.js";
+import { describeArgsIssue } from "./fixedArgsIssue.js";
 
 /**
  * What the MCP server needs of the Shell's host-control runtime (#13493),
@@ -46,6 +48,12 @@ import type { HostInventorySnapshot } from "../globalAssistantInventory.js";
 export interface HostControlRuntimeHandle {
   /** Whether this session is offered the host tools (#13493): from its start, hosts or not. */
   isCallReachable(helpSessionId: string): boolean;
+  /**
+   * Why this session can't call the host tools right now, in fixed words that
+   * say what it lacks; null when it can. Asked before any arguments are read
+   * (#18164), so a caller that can't call is told so whatever it sent.
+   */
+  callerRefusal(helpSessionId: string): string | null;
   list(helpSessionId: string, args: HostListArgs): Promise<HostControlOutcome<HostListResult>>;
   call(
     helpSessionId: string,
@@ -136,7 +144,11 @@ export async function readHostInventory(): Promise<HostInventorySnapshot | null>
 
 export const HOST_CONTROL_NOT_ELIGIBLE_MESSAGE =
   "Only a Daintree Assistant running on this machine can reach its hosts.";
-const INVALID_ARGS_MESSAGE = "The arguments don't match this tool's schema.";
+/** A `host.call` or `host.status` from a session admitted at neither assistant tier. */
+const TIER_NOT_ELIGIBLE_MESSAGE =
+  "This tool needs a session at the core or full tool set, and this one has neither.";
+const INVALID_ARGS_LEAD = "The arguments don't match this tool's schema";
+const INVALID_ARGS_MESSAGE = `${INVALID_ARGS_LEAD}.`;
 /** Why a throwaway call didn't parse (#14446): only its own tools, named so the caller can pick one. */
 const INVALID_THROWAWAY_MESSAGE = `A throwaway call names no projectId and takes only these tools, with these args: ${HOST_THROWAWAY_TOOL_SIGNATURES}. Project tools need a projectId instead.`;
 
@@ -151,8 +163,12 @@ export interface HostControlAccess {
   ): Promise<HostControlOutcome<HostControlToolResult>>;
 }
 
-function notEligible(): { ok: false; code: "NOT_ELIGIBLE"; message: string } {
-  return { ok: false, code: "NOT_ELIGIBLE", message: HOST_CONTROL_NOT_ELIGIBLE_MESSAGE };
+function notEligible(message = HOST_CONTROL_NOT_ELIGIBLE_MESSAGE): {
+  ok: false;
+  code: "NOT_ELIGIBLE";
+  message: string;
+} {
+  return { ok: false, code: "NOT_ELIGIBLE", message };
 }
 
 function invalidArgs(message = INVALID_ARGS_MESSAGE): {
@@ -161,6 +177,18 @@ function invalidArgs(message = INVALID_ARGS_MESSAGE): {
   message: string;
 } {
   return { ok: false, code: "INVALID_ARGS", message };
+}
+
+/** The first field a parse refused, named by the schema and never by what was sent (#18164). */
+function parseRefusal(schema: z.ZodType, raw: unknown, error: z.ZodError) {
+  return invalidArgs(describeArgsIssue(schema, raw, error, INVALID_ARGS_LEAD));
+}
+
+/** Fields that each parse but don't go together for the operation named, a schema value. */
+function operationMisfit(operation: string) {
+  return invalidArgs(
+    `${INVALID_ARGS_LEAD}: these fields don't go together for operation "${operation}". Each field's description says which operations take it.`
+  );
 }
 
 /** Each operation takes its own arguments and no other's, so an apply carries nothing but its ticket. */
@@ -271,43 +299,60 @@ async function dispatch(
   switch (toolId) {
     case HOST_CALL_TOOL: {
       // A call with no tier from its session is no call this machine admitted.
-      if (context === undefined) return notEligible();
+      if (context === undefined) return notEligible(TIER_NOT_ELIGIBLE_MESSAGE);
       const parsed = HostCallArgsSchema.safeParse(raw);
       if (parsed.success) return runtime.call(helpSessionId, parsed.data, context);
-      const throwaway = (raw as { throwaway?: unknown } | null)?.throwaway === true;
-      return invalidArgs(throwaway ? INVALID_THROWAWAY_MESSAGE : INVALID_ARGS_MESSAGE);
+      // Only a throwaway call that broke a rule across its fields is told the
+      // throwaway tools; any field it got wrong first is named like any call's.
+      const first = parsed.error.issues[0];
+      const throwawayRule =
+        (raw as { throwaway?: unknown } | null)?.throwaway === true &&
+        first?.code === "custom" &&
+        first.path.length === 0;
+      return throwawayRule
+        ? invalidArgs(INVALID_THROWAWAY_MESSAGE)
+        : parseRefusal(HostCallArgsSchema, raw, parsed.error);
     }
     case HOST_ENSURE_PROJECT_TOOL: {
       const parsed = HostEnsureProjectArgsSchema.safeParse(raw);
-      return parsed.success ? runtime.ensureProject(helpSessionId, parsed.data) : invalidArgs();
+      return parsed.success
+        ? runtime.ensureProject(helpSessionId, parsed.data)
+        : parseRefusal(HostEnsureProjectArgsSchema, raw, parsed.error);
     }
     case HOST_SETTINGS_TOOL: {
       const parsed = HostSettingsArgsSchema.safeParse(raw);
-      return parsed.success && settingsArgsFit(parsed.data)
-        ? context === undefined
-          ? runtime.settings(helpSessionId, parsed.data)
-          : runtime.settings(helpSessionId, parsed.data, context)
-        : invalidArgs();
+      if (!parsed.success) return parseRefusal(HostSettingsArgsSchema, raw, parsed.error);
+      if (!settingsArgsFit(parsed.data)) return operationMisfit(parsed.data.operation);
+      return context === undefined
+        ? runtime.settings(helpSessionId, parsed.data)
+        : runtime.settings(helpSessionId, parsed.data, context);
     }
     case HOST_WATCH_TOOL: {
       const parsed = HostWatchArgsSchema.safeParse(raw);
-      return parsed.success && watchArgsFit(parsed.data)
+      if (!parsed.success) return parseRefusal(HostWatchArgsSchema, raw, parsed.error);
+      return watchArgsFit(parsed.data)
         ? runtime.watch(helpSessionId, parsed.data)
-        : invalidArgs();
+        : operationMisfit(parsed.data.operation);
     }
     case HOST_LIST_TOOL: {
       const parsed = HostListArgsSchema.safeParse(raw);
-      return parsed.success ? runtime.list(helpSessionId, parsed.data) : invalidArgs();
+      return parsed.success
+        ? runtime.list(helpSessionId, parsed.data)
+        : parseRefusal(HostListArgsSchema, raw, parsed.error);
     }
     case HOST_BRING_BACK_TOOL: {
       const parsed = HostBringBackArgsSchema.safeParse(raw);
-      return parsed.success ? runtime.bringBack(helpSessionId, parsed.data) : invalidArgs();
+      return parsed.success
+        ? runtime.bringBack(helpSessionId, parsed.data)
+        : parseRefusal(HostBringBackArgsSchema, raw, parsed.error);
     }
     case HOST_STATUS_TOOL: {
       // Each project is read at the tier the call was admitted at here, as `host.call` is.
-      if (context === undefined) return notEligible();
+      if (context === undefined) return notEligible(TIER_NOT_ELIGIBLE_MESSAGE);
       const parsed = HostStatusArgsSchema.safeParse(raw);
-      return parsed.success ? runtime.status(helpSessionId, parsed.data, context) : invalidArgs();
+      return parsed.success
+        ? runtime.status(helpSessionId, parsed.data, context)
+        : parseRefusal(HostStatusArgsSchema, raw, parsed.error);
     }
     default:
       return invalidArgs();
@@ -316,7 +361,8 @@ async function dispatch(
 
 /**
  * Binds one MCP session to the runtime. The help session and the runtime are
- * read live at each call, so a revoked bearer or a stopped runtime refuses at once.
+ * read live at each call, so a revoked bearer or a stopped runtime refuses at
+ * once, and a session that can't call is refused before its arguments are read.
  */
 export function bindHostControl(resolveHelpSessionId: () => string | undefined): HostControlAccess {
   const caller = () => {
@@ -332,6 +378,8 @@ export function bindHostControl(resolveHelpSessionId: () => string | undefined):
     run: async (toolId, args, context) => {
       const found = caller();
       if (found === null) return notEligible();
+      const refusal = found.runtime.callerRefusal(found.helpSessionId);
+      if (refusal !== null) return notEligible(refusal);
       return dispatch(found.runtime, found.helpSessionId, toolId, args, context);
     },
   };

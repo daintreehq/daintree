@@ -24,6 +24,11 @@ import {
 } from "../../assistants/AssistantTerminalControl.js";
 import { TIER_NOT_PERMITTED_CODE } from "../shared.js";
 import {
+  bindHostControl,
+  setHostControlRuntime,
+  type HostControlRuntimeHandle,
+} from "../hostControlTools.js";
+import {
   callHandler,
   toolErrorPayload,
   fakeSessionStore,
@@ -639,6 +644,57 @@ describe("host control tools (#13493)", () => {
     expect(result.isError).toBe(true);
     expect(toolErrorPayload(result).code).toBe("NOT_ELIGIBLE");
     expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("tells an assistant that can't call host.status so whatever it sent, and an eligible one its first bad field (#18164)", async () => {
+    const lacks = "This assistant isn't attached to a window of its project on this machine.";
+    let refusal: string | null = lacks;
+    const status = vi.fn(async () => ({
+      ok: true as const,
+      value: { hosts: [], targets: [], terminals: [] },
+    }));
+    const removeRuntime = setHostControlRuntime({
+      isCallReachable: () => refusal === null,
+      callerRefusal: () => refusal,
+      status,
+    } as unknown as HostControlRuntimeHandle);
+    try {
+      const { deps } = hubDeps({ reachable: false, tier: "full" });
+      deps.hostControl = bindHostControl(() => "hub");
+      const server = createSessionServer("sess", deps);
+      await server.connect(makeMockTransport());
+      const valid = { targets: [{ hostId: "local", projectId: "proj-2" }] };
+
+      for (const args of [{}, valid]) {
+        const refused = await callTool(server, { name: "host.status", arguments: args });
+        expect(refused.isError).toBe(true);
+        expect(toolErrorPayload(refused)).toMatchObject({ code: "NOT_ELIGIBLE", message: lacks });
+      }
+      const audited = vi.mocked(deps.appendAuditRecord).mock.calls.map(([record]) => record);
+      expect(audited).toHaveLength(2);
+      for (const record of audited) {
+        expect(record).toMatchObject({
+          toolId: "host.status",
+          outcome: {
+            kind: "result",
+            value: { ok: false, error: { code: "RESTRICTED", message: lacks } },
+          },
+        });
+      }
+
+      refusal = null;
+      const malformed = await callTool(server, { name: "host.status", arguments: {} });
+      expect(toolErrorPayload(malformed)).toMatchObject({
+        code: "INVALID_ARGS",
+        message: "The arguments don't match this tool's schema: 'targets' is required.",
+      });
+      const read = await callTool(server, { name: "host.status", arguments: valid });
+      expect(read.isError).toBeFalsy();
+      expect(status).toHaveBeenCalledTimes(1);
+      expect(status).toHaveBeenCalledWith("hub", valid, { tier: "full" });
+    } finally {
+      removeRuntime();
+    }
   });
 });
 

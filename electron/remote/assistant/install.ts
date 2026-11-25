@@ -40,6 +40,7 @@ import { agentWaitingOf, type AgentWaitingListener } from "../metrics/agentWaiti
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import {
   HostCallRuntime,
+  type HostCallerRefusal,
   type HostCallRuntimeDeps,
   type ObservedHost,
   type OpenRun,
@@ -166,24 +167,21 @@ function noteHostCallAnswer(
  * The run a help session answers in, when one of this machine's own views
  * shows it, or when it is this machine's global assistant (#14161), which
  * main owns and no view holds, or one of its schedules' assistants no view
- * has taken over yet (#16169).
+ * has taken over yet (#16169). Otherwise, what it lacks (#18164).
  */
-function localRunOf(helpSessionId: string): OpenRun | null {
+function localCallerOf(helpSessionId: string): OpenRun | HostCallerRefusal {
   const lane = helpSessions.getSessionLane(helpSessionId);
-  if (lane === null) return null;
+  if (lane === null) return "ended";
   const running = helpSessions.getRunningLaneSession(lane.projectId, lane.slot);
-  if (running === null || running.sessionId !== helpSessionId) return null;
+  if (running === null || running.sessionId !== helpSessionId) return "replaced";
   // An assistant a remote Shell's view runs here is that Shell's, never this one's.
   const handle = running.projectViewWebContentsId;
-  if (
-    !isGlobalAssistantId(lane.projectId) &&
-    !isOwnScheduledWithoutView(helpSessionId, handle) &&
-    (isRemoteEndpointHandle(handle) || getProjectForWebContents(handle) !== lane.projectId)
-  ) {
-    return null;
+  if (!isGlobalAssistantId(lane.projectId) && !isOwnScheduledWithoutView(helpSessionId, handle)) {
+    if (isRemoteEndpointHandle(handle)) return "remote-view";
+    if (getProjectForWebContents(handle) !== lane.projectId) return "no-window";
   }
   const launchGeneration = getPtyClient()?.getLiveGeneration(running.terminalId) ?? null;
-  if (launchGeneration === null) return null;
+  if (launchGeneration === null) return "terminal-down";
   // A global session that isn't coordinating names no conversation (#18143):
   // the one it ran under while it coordinated is the coordinator's now.
   const standby =
@@ -200,6 +198,11 @@ function localRunOf(helpSessionId: string): OpenRun | null {
     ...(conversationOwnershipId !== null ? { conversationOwnershipId } : {}),
     ...(standby ? { standby: true as const } : {}),
   };
+}
+
+function localRunOf(helpSessionId: string): OpenRun | null {
+  const found = localCallerOf(helpSessionId);
+  return typeof found === "string" ? null : found;
 }
 
 let localMachineName: string | undefined;
@@ -374,7 +377,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
   };
   const runtime = new HostCallRuntime({
     getSessionLane: (helpSessionId) => helpSessions.getSessionLane(helpSessionId),
-    callerRun: localRunOf,
+    callerRun: localCallerOf,
     client: () => getRemoteService("hostControlLinkClient") ?? null,
     hosts: () => deps.observeHosts(),
     listHostProjects: deps.listHostProjects,

@@ -7,10 +7,16 @@ import {
   type HostControlRuntimeHandle,
 } from "../hostControlTools.js";
 
+/** What the fake runtime tells a session it refuses. */
+const LACKS_WINDOW = "Host tools need this assistant attached to a window of its project.";
+
 function fakeRuntime() {
   const ok = <T>(value: T) => Promise.resolve({ ok: true as const, value });
   return {
     isCallReachable: vi.fn((helpSessionId: string) => helpSessionId === "hub"),
+    callerRefusal: vi.fn((helpSessionId: string) =>
+      helpSessionId === "hub" ? null : LACKS_WINDOW
+    ),
     list: vi.fn(() => ok({ hosts: [] })),
     call: vi.fn(() =>
       ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, callId: "c", result: null })
@@ -89,7 +95,7 @@ describe("runHostControlTool (#13493)", () => {
     const runtime = fakeRuntime();
     const uninstall = setHostControlRuntime(runtime);
     const access = bindHostControl(() => "hub");
-    const results = await Promise.all([
+    const [missingTool, retired] = await Promise.all([
       runHostControlTool("host.call", { hostId: "h" }, access, { tier: "core" }),
       runHostControlTool(
         "host.sendMessage",
@@ -98,14 +104,160 @@ describe("runHostControlTool (#13493)", () => {
       ),
     ]);
     uninstall();
-    for (const result of results) {
-      expect(result).toEqual({
+    expect(missingTool).toEqual({
+      ok: false,
+      code: "INVALID_ARGS",
+      message: "The arguments don't match this tool's schema: 'tool' is required.",
+    });
+    expect(retired).toEqual({
+      ok: false,
+      code: "INVALID_ARGS",
+      message: "The arguments don't match this tool's schema.",
+    });
+    expect(runtime.call).not.toHaveBeenCalled();
+  });
+
+  it("refuses a session that can't call before reading anything it sent (#18164)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "viewless");
+    const answers = await Promise.all([
+      runHostControlTool("host.status", {}, access, { tier: "full" }),
+      runHostControlTool(
+        "host.status",
+        { targets: [{ hostId: "local", projectId: "p1" }] },
+        access,
+        { tier: "full" }
+      ),
+      runHostControlTool("host.call", { hostId: "h" }, access, { tier: "full" }),
+      runHostControlTool("host.list", { includeAgents: "yes" }, access),
+      runHostControlTool("host.settings", { operation: "read" }, access),
+      runHostControlTool("host.watch", "not even an object", access),
+      runHostControlTool("host.retired", {}, access),
+    ]);
+    uninstall();
+    for (const answer of answers) {
+      expect(answer).toEqual({ ok: false, code: "NOT_ELIGIBLE", message: LACKS_WINDOW });
+    }
+    expect(runtime.callerRefusal).toHaveBeenCalledWith("viewless");
+    for (const method of [runtime.status, runtime.call, runtime.list, runtime.settings]) {
+      expect(method).not.toHaveBeenCalled();
+    }
+    expect(runtime.watch).not.toHaveBeenCalled();
+  });
+
+  it("names the first field a parse refused, by the schema's own names, never what was sent (#18164)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const lead = "The arguments don't match this tool's schema: ";
+    const cases: Array<[string, unknown, string]> = [
+      ["host.status", {}, "'targets' is required."],
+      ["host.status", { targets: [] }, "'targets' should have at least 1 item."],
+      [
+        "host.status",
+        { targets: [{ hostId: "local", projectId: "p" }, { hostId: "local" }] },
+        "'targets[1].projectId' is required.",
+      ],
+      [
+        "host.status",
+        { targets: [{ hostId: "local", projectId: "p" }], includeOutput: { lines: 0 } },
+        "'includeOutput.lines' should be no less than 1.",
+      ],
+      ["host.list", { includeAgents: "yes" }, "'includeAgents' should be a boolean."],
+      [
+        "host.watch",
+        { operation: "poll" },
+        `'operation' should be one of "arm", "cancel", "list", "read".`,
+      ],
+      [
+        "host.call",
+        { hostId: "h", projectId: "p", tool: "t", args: "x" },
+        "'args' should be an object.",
+      ],
+      // A rule across fields says so in its own fixed words.
+      [
+        "host.call",
+        { hostId: "h", tool: "t" },
+        "the arguments should name one target: a projectId, or throwaway: true.",
+      ],
+      [
+        "host.call",
+        { hostId: "h", projectId: "p", tool: "t", callId: "a", newCallId: "b" },
+        "'newCallId' can't be sent with callId.",
+      ],
+      [
+        "host.call",
+        { hostId: "studio", projectId: "p", tool: "x".repeat(129) },
+        "'tool' should be at most 128 characters on another machine.",
+      ],
+      // A throwaway call missing a field is told that field, not the throwaway tools.
+      [
+        "host.call",
+        { throwaway: true, tool: "throwaway.launch", args: { agentId: "claude" } },
+        "'hostId' is required.",
+      ],
+      [
+        "host.status",
+        {
+          targets: [
+            { hostId: "local", projectId: "p" },
+            { hostId: "local", projectId: "p" },
+          ],
+        },
+        "'targets' should name each project once.",
+      ],
+      [
+        "host.status",
+        { targets: [{ hostId: "local", projectId: "p" }], includeOutput: "all" },
+        "'includeOutput' matches none of its accepted forms.",
+      ],
+      [
+        "host.settings",
+        { operation: "apply", ticket: "t", hostIds: ["h"] },
+        `these fields don't go together for operation "apply". Each field's description says which operations take it.`,
+      ],
+      [
+        "host.watch",
+        { operation: "cancel" },
+        `these fields don't go together for operation "cancel". Each field's description says which operations take it.`,
+      ],
+      ["host.bringBack", "studio", "the arguments should be an object."],
+    ];
+    for (const [toolId, args, reason] of cases) {
+      const answer = await runHostControlTool(toolId, args, access, { tier: "full" });
+      expect(answer, `${toolId} ${JSON.stringify(args)}`).toEqual({
         ok: false,
         code: "INVALID_ARGS",
-        message: "The arguments don't match this tool's schema.",
+        message: `${lead}${reason}`,
       });
     }
-    expect(runtime.call).not.toHaveBeenCalled();
+
+    // A key it doesn't take is named by where it was sent, never by its own name.
+    const unknownKey = await runHostControlTool(
+      "host.settings",
+      { operation: "preview", hostIds: ["h"], patch: { "sk-live-secret": true } },
+      access
+    );
+    expect(unknownKey).toEqual({
+      ok: false,
+      code: "INVALID_ARGS",
+      message: `${lead}'patch' has a field this tool doesn't take.`,
+    });
+    // Nor does a bad value repeat itself.
+    const badValue = await runHostControlTool(
+      "host.settings",
+      { operation: "preview", hostIds: ["h"], patch: { canopyMode: "sk-live-secret" } },
+      access
+    );
+    expect(badValue).toMatchObject({ code: "INVALID_ARGS" });
+    expect(JSON.stringify(badValue)).not.toContain("sk-live-secret");
+    expect(badValue).toMatchObject({
+      message: `${lead}'patch.canopyMode' should be one of "unset", "on", "hidden".`,
+    });
+    uninstall();
+    expect(runtime.status).not.toHaveBeenCalled();
+    expect(runtime.settings).not.toHaveBeenCalled();
   });
 
   it("hands host.call to the runtime with the calling session's tier, and never without one", async () => {
@@ -164,8 +316,14 @@ describe("runHostControlTool (#13493)", () => {
     expect(projectTool).toMatchObject({
       message: expect.stringContaining("throwaway.close {runId}"),
     });
-    expect(neither).not.toMatchObject({ message: expect.stringContaining("throwaway") });
-    expect(notTrue).not.toMatchObject({ message: expect.stringContaining("throwaway") });
+    // One that isn't a throwaway call is told what it got wrong, never the throwaway tools.
+    expect(neither).toMatchObject({
+      message:
+        "The arguments don't match this tool's schema: the arguments should name one target: a projectId, or throwaway: true.",
+    });
+    expect(notTrue).toMatchObject({
+      message: "The arguments don't match this tool's schema: 'throwaway' should be true.",
+    });
   });
 
   it("hands host.call the caller's own first-send id, and refuses one sent beside a callId (#14240)", async () => {

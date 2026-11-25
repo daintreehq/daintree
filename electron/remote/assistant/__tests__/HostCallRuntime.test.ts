@@ -5,6 +5,7 @@ import {
 } from "../../../../shared/types/hostControl.js";
 import {
   HostCallRuntime,
+  type HostCallerRefusal,
   type HostCallRuntimeDeps,
   type ObservedHost,
   type OpenRun,
@@ -88,6 +89,49 @@ describe("HostCallRuntime (#13493, #13496)", () => {
       runtime.dispose();
       expect(runtime.isCallReachable("a")).toBe(false);
       await expect(runtime.list("a")).resolves.toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
+      expect(runtime.callerRefusal("a")).toEqual(expect.any(String));
+    });
+
+    it("tells a session what it lacks, the same before its arguments are read and at the call (#18164)", async () => {
+      const lacking = new Map<string, HostCallerRefusal>();
+      const told = new HostCallRuntime({
+        getSessionLane: () => ({ projectId: "proj-1", slot: 0 }),
+        callerRun: (id) => lacking.get(id) ?? runs.get(id) ?? null,
+        client: () => null,
+        hosts: () => hosts,
+        inLocalView: () => true,
+        listHostProjects,
+      });
+      const reasons: HostCallerRefusal[] = [
+        "ended",
+        "replaced",
+        "remote-view",
+        "no-window",
+        "terminal-down",
+      ];
+      expect(told.callerRefusal("a")).toBeNull();
+      const texts = new Set<string>();
+      for (const reason of reasons) {
+        lacking.set("a", reason);
+        const refusal = told.callerRefusal("a");
+        expect(refusal).not.toBeNull();
+        texts.add(refusal!);
+        // A session that lost its run after the boundary asked is refused the same way at the call.
+        await expect(told.list("a")).resolves.toEqual({
+          ok: false,
+          code: "NOT_ELIGIBLE",
+          message: refusal,
+        });
+      }
+      // Each says what that session lacks, not who may call.
+      expect(texts.size).toBe(reasons.length);
+      for (const text of texts)
+        expect(text).not.toMatch(/Daintree Assistant running on this machine/);
+      expect(lacking.get("a")).toBe("terminal-down");
+      expect(told.callerRefusal("a")).toMatch(/terminal/);
+      lacking.set("a", "no-window");
+      expect(told.callerRefusal("a")).toMatch(/window of its project on this machine/);
+      expect(listHostProjects).not.toHaveBeenCalled();
     });
   });
 

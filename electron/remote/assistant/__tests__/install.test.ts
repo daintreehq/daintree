@@ -583,6 +583,45 @@ describe("installHostControl (#13493)", () => {
     await expect(runtime.list("scheduled")).resolves.toMatchObject({ ok: false });
     off();
   });
+
+  it("tells an assistant that can't reach hosts what it lacks (#18164)", async () => {
+    const off = installHostControl({
+      observeHosts: () => [],
+      isHostControlEnabled: () => false,
+    });
+    runLocally("proj-1", 0, "local");
+    // A remote Shell's view, no view at all, a window showing another project, a stopped terminal.
+    running.set("proj-1:1", {
+      sessionId: "remote",
+      terminalId: "t-remote",
+      projectViewWebContentsId: -3,
+    });
+    generations.set("t-remote", 1);
+    running.set("proj-2:0", {
+      sessionId: "viewless",
+      terminalId: "t-viewless",
+      projectViewWebContentsId: 0,
+    });
+    generations.set("t-viewless", 1);
+    runLocally("proj-2", 1, "moved", 60);
+    views.set(60, "proj-1");
+    runLocally("proj-1", 2, "stopped");
+    generations.delete("t-stopped");
+    const runtime = hostControl.runtime as HostCallRuntime;
+
+    expect(runtime.callerRefusal("local")).toBeNull();
+    expect(runtime.callerRefusal("remote")).toMatch(/window on another machine/);
+    expect(runtime.callerRefusal("viewless")).toMatch(/window of its project on this machine/);
+    expect(runtime.callerRefusal("moved")).toBe(runtime.callerRefusal("viewless"));
+    expect(runtime.callerRefusal("stopped")).toMatch(/terminal isn't running/);
+    expect(runtime.callerRefusal("nobody")).toMatch(/session has ended/);
+    await expect(runtime.list("viewless")).resolves.toEqual({
+      ok: false,
+      code: "NOT_ELIGIBLE",
+      message: runtime.callerRefusal("viewless"),
+    });
+    off();
+  });
 });
 
 describe("assistantsUseHost (#15878)", () => {
