@@ -13,7 +13,7 @@ describe("launchChoiceForRecord", () => {
     expect(launchChoiceForRecord({})).toEqual({});
   });
 
-  it("keeps the account for a later run of the same CLI in the shell, never the preset", () => {
+  it("names neither for a later run started by hand in the shell", () => {
     expect(
       launchChoiceForRecord({
         agentAccountId: "work",
@@ -22,7 +22,7 @@ describe("launchChoiceForRecord", () => {
         launchAgentId: "claude",
         detectedAgentId: "claude",
       })
-    ).toEqual({ agentAccountId: "work" });
+    ).toEqual({});
   });
 
   it("names no account while another CLI is the one detected in the terminal", () => {

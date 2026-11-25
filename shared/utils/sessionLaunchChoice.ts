@@ -14,11 +14,11 @@ const PRESET_ID = /^[A-Za-z0-9_.-]{1,100}$/;
  * capture writes (#18191): ids only, so a resume reads both again from the
  * settings and the record never holds an environment value.
  *
- * The account is the terminal's: a later run of the same CLI started in its
- * shell inherits the folder the PTY was spawned with. Not while another CLI is
- * the one detected there, whose own folder variable the launch never set. The
- * preset is the launched run's alone, since a run started by hand takes none
- * of its arguments, so it goes once another agent run has taken the PTY over.
+ * Only the run Daintree launched: one started by hand in the shell afterwards
+ * may have inherited the account's folder and the preset's env without its
+ * arguments, or changed either, so no id names what it ran on and a resume
+ * refuses rather than reopen it on a provider it may not have used. Nor while
+ * another CLI is the one detected, whose folder variable the launch never set.
  */
 export function launchChoiceForRecord(terminal: {
   agentPresetId?: unknown;
@@ -35,6 +35,6 @@ export function launchChoiceForRecord(terminal: {
     ...(launchedRun &&
       typeof agentPresetId === "string" &&
       PRESET_ID.test(agentPresetId) && { agentPresetId }),
-    ...(!otherCli && isAccountId(agentAccountId) && { agentAccountId }),
+    ...(launchedRun && !otherCli && isAccountId(agentAccountId) && { agentAccountId }),
   };
 }

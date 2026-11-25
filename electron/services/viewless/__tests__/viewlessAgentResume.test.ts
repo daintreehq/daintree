@@ -1158,6 +1158,31 @@ describe("resumeAgentSessionAsPane on what the session launched on (#18191)", ()
     );
   });
 
+  it.each([
+    [
+      "a repository copy the merge throws away",
+      { customPresets: [] },
+      [{ id: "ccr-team", name: "   " }],
+    ],
+    ["a user copy the merge throws away", { customPresets: [{ id: "ccr-team", name: "" }] }, []],
+    ["a saved preset list that isn't one", { customPresets: { "ccr-team": {} } }, []],
+  ])("refuses a route's copy of an id behind %s", async (_label, entry, repository) => {
+    const made = resumeDeps({
+      sessions: [record({ agentPresetId: "ccr-team" })],
+      settings: claudeSettings(entry),
+    });
+    made.deps.agents.getCcrPresets = async () => [
+      { id: "ccr-team", name: "Team route", env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:3456" } },
+    ];
+    made.deps.agents.getProjectPresets = async () =>
+      repository.length > 0 ? { claude: repository as never } : {};
+
+    await expect(
+      resumeAgentSessionAsPane(REQUEST, made.deps, makeRuntime())
+    ).resolves.toMatchObject({ status: "refused", reason: "settings-unavailable" });
+    expect(spawns(made.invoke)).toEqual([]);
+  });
+
   it("confirms no repository copy of an id while another of the repository's files was skipped", async () => {
     const TEAM = { id: "team", name: "Team", env: { ANTHROPIC_BASE_URL: "https://team" } };
     const make = (skipped: boolean) => {

@@ -455,6 +455,16 @@ interface ResumeLaunchChoice {
 /** Launchable preset ids, as `sanitizePreset` admits them. */
 const PRESET_ID = /^[A-Za-z0-9_.-]{1,100}$/;
 
+/** Whether a stored preset list holds an entry for `id`, or is no list at all and so might. */
+function claimsPresetId(bucket: unknown, id: string): boolean {
+  if (bucket === undefined || bucket === null) return false;
+  if (!Array.isArray(bucket)) return true;
+  return bucket.some(
+    (entry: unknown) =>
+      typeof entry === "object" && entry !== null && (entry as { id?: unknown }).id === id
+  );
+}
+
 /**
  * The preset and account a session's record says it launched on (#18191), read
  * again from the settings as they are now: the record keeps ids, never env. A
@@ -519,15 +529,21 @@ async function readResumeLaunchChoice(
       let unsettled: string | undefined;
       let preset: AgentPreset | undefined;
       try {
-        const custom = settings?.agents?.[agentId]?.customPresets;
-        const confirmable =
-          sources.presetInventory.project ||
-          getMergedPresetIdentities(
-            agentId,
-            custom,
-            sources.ccrPresets,
-            sources.projectPresets
-          ).find((identity) => identity.id === presetId)?.source === "custom";
+        const custom: unknown = settings?.agents?.[agentId]?.customPresets;
+        const source = getMergedPresetIdentities(
+          agentId,
+          Array.isArray(custom) ? custom : undefined,
+          sources.ccrPresets,
+          sources.projectPresets
+        ).find((identity) => identity.id === presetId)?.source;
+        // A higher source's copy of the id that the merge threw away as
+        // malformed leaves the id unconfirmed too, whatever a lower one holds.
+        const discarded =
+          (claimsPresetId(custom, presetId) && source !== "custom") ||
+          (claimsPresetId(sources.projectPresets, presetId) &&
+            source !== "custom" &&
+            source !== "project");
+        const confirmable = !discarded && (sources.presetInventory.project || source === "custom");
         unsettled = !confirmable
           ? presetId
           : findUnloadedLaunchPreset({
