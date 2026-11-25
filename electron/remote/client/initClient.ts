@@ -1128,7 +1128,8 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
         // Only a link that stopped because no Daintree listened there: one up,
         // dialling, let go, or stopped for another reason (ssh refused) is left be.
         const state = manager.connectionState(host.id);
-        if (state.status !== "unreachable" || !state.stoppedRetrying || !state.hostModeOff) continue;
+        if (state.status !== "unreachable" || !state.stoppedRetrying || !state.hostModeOff)
+          continue;
         const link = manager.get(host.id);
         if (!link) continue;
         // Parked a while with nothing using it: the dial gets the whole idle window.
