@@ -14,10 +14,13 @@ import {
 /** A settings file: what goes in comes back out as JSON, and survives a new store over it. */
 function disk() {
   let saved: unknown;
+  let orders: unknown;
   return {
-    get: () => saved,
-    set: (_key: "cloudHosts", value: CloudHostsValue) => {
-      saved = JSON.parse(JSON.stringify(value));
+    get: (key: "cloudHosts" | "cloudCreateOrders" = "cloudHosts") =>
+      key === "cloudHosts" ? saved : orders,
+    set: (key: "cloudHosts" | "cloudCreateOrders", value: unknown) => {
+      if (key === "cloudHosts") saved = JSON.parse(JSON.stringify(value));
+      else orders = JSON.parse(JSON.stringify(value));
     },
     write(value: unknown) {
       saved = JSON.parse(JSON.stringify(value));
