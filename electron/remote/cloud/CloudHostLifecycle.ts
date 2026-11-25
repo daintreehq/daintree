@@ -1140,11 +1140,12 @@ export class CloudHostLifecycle {
     if (unfit) throw invalid(`${size.label} isn't available: ${unfit}.`);
     // Only Settings' create offers it, as with the mark: a worktree's machine is made without asking.
     const mcpMark = mark === null ? mcpServerOnConnectMark(request.mcpServerOnConnect) : {};
-    // Checked with nothing awaited before the binding is written: a removal that began first
-    // refuses the create, and one that begins after sees the host and refuses itself.
-    if (this.deps.accounts.isRemoving(account.id)) {
-      throw invalid(`${account.displayName} is being removed. Choose another account.`);
-    }
+    // Checked with nothing awaited before the binding is written: a removal or key replacement
+    // that began first refuses the create, and one that begins after sees the host. One that
+    // finished while the catalog was read took the account with it.
+    this.deps.accounts.requireAccount(account.id);
+    const fenced = this.deps.accounts.createRefusal(account.id);
+    if (fenced) throw invalid(fenced);
     const bindingId = `cb_${crypto.randomBytes(6).toString("hex")}`;
     const binding: StoredCloudBinding = {
       id: bindingId,
@@ -2050,10 +2051,19 @@ export class CloudHostLifecycle {
     resource: ProviderResource
   ): boolean {
     const binding = this.deps.store.binding(order.bindingId);
-    const bound = binding ? this.bindCreated(binding.id, resource) : "settled";
+    // The host as it is now: one rewritten for another account meanwhile is never given it.
+    const ours = binding?.accountId === order.accountId && binding.providerId === order.providerId;
+    const bound = binding && ours ? this.bindCreated(binding.id, resource) : "settled";
     if (bound === "bound") {
       const key = this.placedKeys.get(order.id);
       if (key) this.heldKeys.set(order.bindingId, key);
+      // The host has its machine: any other order it holds is closed, never chosen from.
+      for (const other of this.ordersFor(order.bindingId)) {
+        if (other.id === order.id || other.state === "close") continue;
+        if (other.state === "leasing" && this.operations.has(order.bindingId)) continue;
+        this.markClosing(other.id);
+        void this.settleOrder(other.id).catch(() => {});
+      }
       return true;
     }
     if (bound === "held") {
@@ -2137,8 +2147,12 @@ export class CloudHostLifecycle {
     for (const order of this.actionableOrders()) {
       if (bindingId !== undefined && order.bindingId !== bindingId) continue;
       if (order.state === "open" || this.orderWork.has(order.id)) continue;
-      // A placement or lease still out is its operation's.
-      if (this.operations.has(order.bindingId) && this.deps.store.binding(order.bindingId)) {
+      // A placement or lease still out is its operation's; a close is anyone's, joined if under way.
+      if (
+        order.state !== "close" &&
+        this.operations.has(order.bindingId) &&
+        this.deps.store.binding(order.bindingId)
+      ) {
         continue;
       }
       if (this.deps.accounts.providerUnavailable(order.providerId)) continue;
@@ -2294,6 +2308,7 @@ export class CloudHostLifecycle {
       throw invalid("Missing the rate of the offer you chose.");
     }
     if (this.removing.has(binding.id)) throw invalid("This host is being removed.");
+    if (binding.resourceId) throw invalid("This host has its machine already.");
     // Never joined: a second choice while one is leased would be a second lease asked for.
     if (this.operations.has(binding.id)) {
       throw invalid("An offer is being leased for this host already. Wait for it to finish.");
@@ -2914,9 +2929,11 @@ export class CloudHostLifecycle {
       await running.promise.catch(() => {});
     }
     // Its orders are closed first, so a machine a lease made (here, or one this device never
-    // heard of) is deleted with the host. One still being placed leased nothing: its close
-    // runs once the host is forgotten.
-    for (const order of this.ordersFor(confirmed.id)) {
+    // heard of) is deleted with the host. One still being placed leased nothing, and one whose
+    // provider no longer takes orders can't be closed here: their closes run once the host is
+    // forgotten, and keep trying.
+    const closesOrders = !!this.registeredProvider(confirmed.providerId)?.offerCreate;
+    for (const order of closesOrders ? this.ordersFor(confirmed.id) : []) {
       if (order.state === "placing") continue;
       this.markClosing(order.id);
       try {

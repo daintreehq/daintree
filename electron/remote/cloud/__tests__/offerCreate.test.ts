@@ -623,6 +623,50 @@ describe("offer-based create (#18230)", () => {
     expect(env.api.placeOrder).toHaveBeenCalledTimes(1);
   });
 
+  it("closes the host's newer order once an older one's lease is bound, and refuses its choice", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a")];
+    const hostId = await env.create();
+    const newer = await env.awaitChoice();
+    const binding = env.store.bindings()[0]!;
+    // An earlier placement of this host, found and leased where this device didn't see it.
+    const older = env.api.commitLate({ labels: { daintree: "1" }, idempotencyKey: "older" });
+    const leased = env.api.leaseElsewhere(older);
+    env.store.putCreateOrder({
+      id: "co_older",
+      bindingId: binding.id,
+      accountId: env.account.id,
+      providerId: "boat",
+      labels: { daintree: "1" },
+      idempotencyKey: "older",
+      state: "close",
+      orderIds: [older],
+      placedAt: env.clock.at,
+      waitingSince: null,
+      offerId: null,
+    });
+    env.crash();
+    await vi.waitFor(() => expect(env.status()?.resourceId).toBe(leased));
+    await vi.waitFor(() => expect(env.api.orders.get(newer.order.id)?.state).toBe("closed"));
+    expect(env.status()?.pendingCreate).toBeUndefined();
+    await expect(env.lifecycle.chooseOffer(hostId, newer.order.id, "a", 0.5)).rejects.toMatchObject(
+      { code: "VALIDATION" }
+    );
+    expect(env.api.leaseOffer).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(env.store.createOrders()).toEqual([]));
+  });
+
+  it("deletes a host whose provider no longer takes orders, leaving its order to be closed", async () => {
+    const env = await offerCloud();
+    env.api.offersOnPlace = [offer("a")];
+    const hostId = await env.create();
+    await env.awaitChoice();
+    delete (env.provider as { offerCreate?: unknown }).offerCreate;
+    await env.lifecycle.deleteMachine(hostId, null);
+    expect(env.hosts).toEqual([]);
+    expect(env.store.createOrders()).toMatchObject([{ state: "close" }]);
+  });
+
   it("refuses a Retry once the provider no longer creates through offers, sending nothing", async () => {
     const env = await offerCloud();
     env.api.offersOnPlace = [offer("a")];
@@ -630,6 +674,7 @@ describe("offer-based create (#18230)", () => {
     await env.awaitChoice();
     delete (env.provider as { offerCreate?: unknown }).offerCreate;
     await expect(env.lifecycle.retryCreate(hostId)).rejects.toMatchObject({ code: "VALIDATION" });
+    expect(env.status()?.lastError?.code).toBe("unsupported");
     expect(env.provider.create).not.toHaveBeenCalled();
     expect(env.store.createOrders()).toHaveLength(1);
   });
@@ -1036,6 +1081,33 @@ describe("offer-based create (#18230)", () => {
       await removal;
       expect(env.store.bindings()).toEqual([]);
       expect(env.api.placeOrder).not.toHaveBeenCalled();
+    });
+
+    it("takes a key that can't say whose it is only when it reaches an order still owed a close", async () => {
+      const env = await offerCloud();
+      env.api.offersOnPlace = [offer("a")];
+      const hostId = await env.create();
+      const choice = await env.awaitChoice();
+      env.api.plans.close.push("fail");
+      env.removeHost(hostId);
+      await vi.waitFor(() => expect(env.api.closeOrder).toHaveBeenCalledTimes(1));
+      env.provider.checkCredentials = async () => ({
+        identity: null,
+        scopes: [
+          { scope: { kind: "personal" as const, id: "personal", name: "Personal" }, active: true },
+        ],
+      });
+      // The order is still open at the provider: the new key reads it, so it is this workspace's.
+      await env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_y" });
+      expect(env.api.listOffers).toHaveBeenLastCalledWith(
+        expect.objectContaining({ values: { apiKey: "boat_live_y" } }),
+        choice.order.id
+      );
+      // Once it is closed nothing proves whose a key is, so the next one is refused.
+      env.api.orders.get(choice.order.id)!.state = "closed";
+      await expect(
+        env.accounts.replaceCredentials(env.account.id, { apiKey: "boat_live_z" })
+      ).rejects.toMatchObject({ userMessage: expect.stringContaining("can't reach it") });
     });
 
     it("keeps an account whose order record this build can't read", async () => {

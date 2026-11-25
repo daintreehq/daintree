@@ -27,6 +27,7 @@ import {
   readPluginProviderLabel,
   type CloudHostStore,
   type StoredCloudAccount,
+  type StoredCreateOrder,
   type StoredProviderConsent,
 } from "./CloudHostStore.js";
 import { cloudCredentialHint, normalizeCloudCredentials } from "./cloudCredentials.js";
@@ -239,8 +240,12 @@ export class CloudAccountService {
   private readonly unforgotten = new Set<string>();
   /** Per account, the replace or remove committing now; the next one waits for it. */
   private readonly commits = new Map<string, Promise<unknown>>();
-  /** Removals under way per account, from before their first check until they finish. */
-  private readonly removingAccounts = new Map<string, number>();
+  /**
+   * Removals, and replacements by a key that can't say whose it is, under way
+   * per account, from before their first check until they finish: no create
+   * is admitted on the account meanwhile (#18230).
+   */
+  private readonly fences = new Map<string, { removing: number; replacing: number }>();
 
   constructor(private readonly deps: CloudAccountServiceDeps) {}
 
@@ -686,32 +691,20 @@ export class CloudAccountService {
       throw invalid(`Those credentials can't bill ${account.scope.name}.`);
     }
     let wasGranted = false;
-    const summary = await this.serialize(account.id, async () => {
-      // Removed while the check was out: nothing is sealed for an account that's gone.
-      const before = this.requireAccount(account.id);
-      this.requireCurrentOrigin(before);
-      // The plugin may have changed while it checked them.
-      this.requireSameConsent(account.providerId, agreed);
-      // A check of the old set may have learned who it signs in as meanwhile.
-      refuseOtherIdentity(before);
-      // Two accounts for one sign-in and wallet are refused at connect, and so here.
-      const identity = checked.identity ?? before.identity;
-      const duplicate =
-        identity &&
-        this.findDuplicate(before.providerId, identity, before.scope.id, before.apiUrl, before.id);
-      if (duplicate) {
-        throw invalid(
-          `${duplicate.displayName} is already connected as ${identity} for ${before.scope.name}. Remove one of them instead.`
-        );
-      }
-      // Nothing says whose these are: they must see the machines this account already has.
-      if (checked.identity === null) await this.requireSameMachines(before, provider, credentials);
-      // Read before anything is overwritten: a set that can't be read now couldn't be put back.
-      const previous = await this.deps.vault.get(account.id);
-      await this.deps.vault.put(account.id, credentials);
-      try {
-        // A connect may have finished while the set was sealed.
-        const raced =
+    // A key that can't say whose it is must see what the account already holds; no create is
+    // admitted meanwhile, so none is made with the old key after that look (#18230).
+    const commit = () =>
+      this.serialize(account.id, async () => {
+        // Removed while the check was out: nothing is sealed for an account that's gone.
+        const before = this.requireAccount(account.id);
+        this.requireCurrentOrigin(before);
+        // The plugin may have changed while it checked them.
+        this.requireSameConsent(account.providerId, agreed);
+        // A check of the old set may have learned who it signs in as meanwhile.
+        refuseOtherIdentity(before);
+        // Two accounts for one sign-in and wallet are refused at connect, and so here.
+        const identity = checked.identity ?? before.identity;
+        const duplicate =
           identity &&
           this.findDuplicate(
             before.providerId,
@@ -720,34 +713,62 @@ export class CloudAccountService {
             before.apiUrl,
             before.id
           );
-        if (raced) throw invalid(`${raced.displayName} is already connected as ${identity}.`);
-        const latest = this.deps.store.account(account.id) ?? before;
-        // A check of the old set may have learned whose account this is while the new one was sealed.
-        refuseOtherIdentity(latest);
-        this.requireSameConsent(account.providerId, agreed);
-        wasGranted = this.consentFor(account.providerId)?.granted ?? false;
-        this.deps.store.putAccount(
-          {
-            ...latest,
-            // Who the new set signs in as, never what a check of the old one wrote while it was sealed.
-            identity,
-            keyHint: this.hint(provider, credentials),
-            credentialRevision: newCredentialRevision(),
-            validation: { status: "valid", checkedAt: this.now() },
-          },
-          agreed?.record
-        );
-        this.consentWritten(agreed);
-      } catch (error) {
-        // The account still names the set it had (a remove waits its turn), so the vault goes back to it.
-        await (
-          previous ? this.deps.vault.put(account.id, previous) : this.deps.vault.delete(account.id)
-        ).catch(() => {});
-        throw error;
-      }
-      this.catalogs.delete(account.id);
-      return this.requireSummary(account.id);
-    });
+        if (duplicate) {
+          throw invalid(
+            `${duplicate.displayName} is already connected as ${identity} for ${before.scope.name}. Remove one of them instead.`
+          );
+        }
+        // Nothing says whose these are: they must see the machines this account already has.
+        if (checked.identity === null)
+          await this.requireSameMachines(before, provider, credentials);
+        // Read before anything is overwritten: a set that can't be read now couldn't be put back.
+        const previous = await this.deps.vault.get(account.id);
+        await this.deps.vault.put(account.id, credentials);
+        try {
+          // A connect may have finished while the set was sealed.
+          const raced =
+            identity &&
+            this.findDuplicate(
+              before.providerId,
+              identity,
+              before.scope.id,
+              before.apiUrl,
+              before.id
+            );
+          if (raced) throw invalid(`${raced.displayName} is already connected as ${identity}.`);
+          const latest = this.deps.store.account(account.id) ?? before;
+          // A check of the old set may have learned whose account this is while the new one was sealed.
+          refuseOtherIdentity(latest);
+          this.requireSameConsent(account.providerId, agreed);
+          wasGranted = this.consentFor(account.providerId)?.granted ?? false;
+          this.deps.store.putAccount(
+            {
+              ...latest,
+              // Who the new set signs in as, never what a check of the old one wrote while it was sealed.
+              identity,
+              keyHint: this.hint(provider, credentials),
+              credentialRevision: newCredentialRevision(),
+              validation: { status: "valid", checkedAt: this.now() },
+            },
+            agreed?.record
+          );
+          this.consentWritten(agreed);
+        } catch (error) {
+          // The account still names the set it had (a remove waits its turn), so the vault goes back to it.
+          await (
+            previous
+              ? this.deps.vault.put(account.id, previous)
+              : this.deps.vault.delete(account.id)
+          ).catch(() => {});
+          throw error;
+        }
+        this.catalogs.delete(account.id);
+        return this.requireSummary(account.id);
+      });
+    const summary =
+      checked.identity === null
+        ? await this.fenced(account.id, "replacing", commit)
+        : await commit();
     this.consentKept(agreed, wasGranted);
     return summary;
   }
@@ -784,14 +805,19 @@ export class CloudAccountService {
     provider: CloudProvider,
     values: CloudCredentialValues
   ): Promise<void> {
-    // An order a create placed is closed with the account's key, after its host may be gone (#18230).
-    if (
-      this.deps.store.createOrders().some((order) => order.accountId === account.id) ||
-      this.deps.store.unreadableOrdersFor(account.id) > 0
-    ) {
-      throw invalid(
-        "An order this account placed for a new machine isn't closed yet, and a new key may not see it. Replace the key once it is."
-      );
+    // An order a create placed is closed with the account's key, after its host may be gone
+    // (#18230): the new key must reach one of them.
+    const orders = this.deps.store.createOrders().filter((order) => order.accountId === account.id);
+    let reached = false;
+    if (orders.length > 0 || this.deps.store.unreadableOrdersFor(account.id) > 0) {
+      reached =
+        this.deps.store.unreadableOrdersFor(account.id) === 0 &&
+        (await this.reachesAnOrder(account, provider, values, orders));
+      if (!reached) {
+        throw invalid(
+          "An order this account placed for a new machine isn't closed yet, and that key can't reach it. Replace the key once it is closed, or with one for the same workspace."
+        );
+      }
     }
     const bound = this.deps.store.bindings().filter((binding) => binding.accountId === account.id);
     // A create sent and not yet found is looked for, and deleted, with the account's key; one
@@ -809,7 +835,7 @@ export class CloudAccountService {
     const resourceIds = bound
       .filter((binding) => binding.resourceId !== null)
       .map((binding) => binding.resourceId!);
-    if (resourceIds.length === 0) return;
+    if (resourceIds.length === 0 || reached) return;
     const credentials = { values, scopeId: account.scope.id, apiUrl: account.apiUrl };
     for (const resourceId of resourceIds) {
       try {
@@ -825,6 +851,29 @@ export class CloudAccountService {
     throw invalid(
       `That key can't see this account's machines, so it may belong to another ${provider.info(process.platform).name} workspace. Connect it as another account instead.`
     );
+  }
+
+  /** Whether the key reads one of these orders: an order closed or leased since proves nothing either way. */
+  private async reachesAnOrder(
+    account: StoredCloudAccount,
+    provider: CloudProvider,
+    values: CloudCredentialValues,
+    orders: readonly StoredCreateOrder[]
+  ): Promise<boolean> {
+    const offers = provider.offerCreate;
+    if (!offers) return false;
+    const credentials = { values, scopeId: account.scope.id, apiUrl: account.apiUrl };
+    for (const orderId of orders.flatMap((order) => order.orderIds ?? [])) {
+      try {
+        await offers.listOffers(credentials, orderId);
+        return true;
+      } catch (error) {
+        if (provider.describeError(error).code !== "not-found") {
+          throw this.asAppError(provider, error);
+        }
+      }
+    }
+    return false;
   }
 
   rename(accountId: unknown, displayName: unknown): CloudAccountSummary {
@@ -845,9 +894,8 @@ export class CloudAccountService {
     const account = this.requireAccount(accountId);
     // No create is admitted on it meanwhile: one placed after the checks below would be
     // left with no credentials here to settle it (#18230).
-    this.removingAccounts.set(account.id, (this.removingAccounts.get(account.id) ?? 0) + 1);
-    try {
-      await this.serialize(account.id, async () => {
+    await this.fenced(account.id, "removing", () =>
+      this.serialize(account.id, async () => {
         this.requireAccount(account.id);
         this.refuseWhileBound(account);
         // Orders its creates placed are closed, and keys its machines were given revoked, first;
@@ -859,18 +907,39 @@ export class CloudAccountService {
         await this.deps.vault.delete(account.id);
         this.deps.store.removeAccount(account.id);
         this.catalogs.delete(account.id);
-      });
-    } finally {
-      const left = (this.removingAccounts.get(account.id) ?? 1) - 1;
-      if (left > 0) this.removingAccounts.set(account.id, left);
-      else this.removingAccounts.delete(account.id);
-    }
+      })
+    );
     await this.deps.onAccountRemoved?.(account.id).catch(() => {});
   }
 
-  /** Whether the account is being removed now, so nothing new may be made with it. */
-  isRemoving(accountId: string): boolean {
-    return this.removingAccounts.has(accountId);
+  /** Runs `work` with creates on the account refused for its whole length. */
+  private async fenced<T>(
+    accountId: string,
+    kind: "removing" | "replacing",
+    work: () => Promise<T>
+  ): Promise<T> {
+    const add = (by: 1 | -1) => {
+      const current = this.fences.get(accountId) ?? { removing: 0, replacing: 0 };
+      const next = { ...current, [kind]: Math.max(0, current[kind] + by) };
+      if (next.removing === 0 && next.replacing === 0) this.fences.delete(accountId);
+      else this.fences.set(accountId, next);
+    };
+    add(1);
+    try {
+      return await work();
+    } finally {
+      add(-1);
+    }
+  }
+
+  /** Why nothing new may be made with the account now; null when it may. */
+  createRefusal(accountId: string): string | null {
+    const fence = this.fences.get(accountId);
+    if (!fence) return null;
+    const name = this.deps.store.account(accountId)?.displayName ?? "That account";
+    return fence.removing > 0
+      ? `${name} is being removed. Choose another account.`
+      : `${name}'s credentials are being replaced. Try again in a moment.`;
   }
 
   private refuseWhileBound(account: StoredCloudAccount): void {

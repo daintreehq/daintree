@@ -125,9 +125,9 @@ export interface OfferCreate {
    * Leases exactly this offer and answers with the machine. One that has
    * gone is refused with nothing leased, never swapped for another, and the
    * order stays open for another choice. `expected` is the rate the person
-   * saw: a bidder can quote again under the same offer id, so one that no
-   * longer quotes it is refused the same way, checked as close to the lease
-   * as the provider can.
+   * saw, which Daintree always passes: a bidder can quote again under the
+   * same offer id, so the provider must refuse one that no longer quotes it
+   * the same way, checking the rate as it accepts the offer.
    */
   leaseOffer(
     credentials: ProviderCredentials,
