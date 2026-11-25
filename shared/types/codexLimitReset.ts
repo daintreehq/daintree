@@ -1,3 +1,5 @@
+import type { CodexLimitContinueSkipReason } from "./codexLimitContinuation.js";
+
 /**
  * When a Codex pane's spent usage window resets (#17906). The banner it is
  * read from stays in the pty host: only these shapes cross a process.
@@ -84,7 +86,15 @@ export interface CodexLimitStamp {
  * (#17909).
  */
 export type CodexLimitAnswer =
-  { stamp: CodexLimitStamp } | { reset: CodexLimitReset; stamp?: CodexLimitStamp };
+  | { stamp: CodexLimitStamp }
+  | { reset: CodexLimitReset; stamp?: CodexLimitStamp; skipAtStop?: CodexLimitStopSkip };
+
+/**
+ * Why the stamped stop isn't Daintree's to continue, whatever its reset says
+ * (#18192): Claude Code's own wait was cancelled, and not by an assistant's
+ * Escape alone.
+ */
+export type CodexLimitStopSkip = Extract<CodexLimitContinueSkipReason, "auto-continue-cancelled">;
 
 /** The question: a first read, or a resolve of a stamped banner against a reading. */
 export type CodexLimitQuery =

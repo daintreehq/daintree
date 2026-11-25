@@ -110,7 +110,7 @@ describe("CodexLimitContinuation (#17909)", () => {
     const h = harness();
     h.setTerminal(codexPane({ projectId: "elsewhere" }));
     await expect(h.service.set("t1", true, PROJECT)).rejects.toMatchObject({ code: "NOT_FOUND" });
-    h.setTerminal(codexPane({ launchAgentId: "claude", detectedAgentId: "claude" }));
+    h.setTerminal(codexPane({ launchAgentId: "gemini", detectedAgentId: "gemini" }));
     await expect(h.service.set("t1", true, PROJECT)).rejects.toBeInstanceOf(
       CodexLimitContinuationError
     );
@@ -119,6 +119,97 @@ describe("CodexLimitContinuation (#17909)", () => {
       code: "UNSUPPORTED",
     });
     expect(h.active).toEqual([]);
+  });
+
+  it("arms a Claude Code pane too, ahead of any limit (#18192)", async () => {
+    const h = harness();
+    h.setTerminal(codexPane({ launchAgentId: "claude", detectedAgentId: "claude" }));
+    await h.service.set("t1", true, PROJECT);
+    expect(h.state()).toEqual({ status: "armed" });
+    expect(h.hostArmed).toEqual([["t1", true]]);
+  });
+
+  const claudePane = () => codexPane({ launchAgentId: "claude", detectedAgentId: "claude" });
+  const bannerReset = (resetsAt = RESETS_AT) =>
+    ({
+      status: "known",
+      resetsAt,
+      precision: "minute",
+      source: "banner",
+      observedAt: START,
+    }) as const;
+
+  it.each(["auto-continue-cancelled"] as const)(
+    "records a Claude stop its user took over (%s) at once, with no wait and nothing typed (#18192)",
+    async (skipAtStop) => {
+      const h = harness();
+      h.setTerminal(claudePane());
+      await h.service.set("t1", true, PROJECT);
+      h.setStop({ reset: bannerReset(), stamp: { ...STOP, observedAt: START }, skipAtStop });
+      await h.service.handleStop("t1", STOP);
+      expect(h.state()).toEqual({ status: "skipped", at: expect.any(Number), reason: skipAtStop });
+      await vi.advanceTimersByTimeAsync(RESETS_AT - START + 10 * 60_000);
+      expect(h.continueAt).not.toHaveBeenCalled();
+    }
+  );
+
+  it("names a person's cancellation ahead of a reset it couldn't read (#18192)", async () => {
+    const h = harness();
+    h.setTerminal(claudePane());
+    await h.service.set("t1", true, PROJECT);
+    h.setStop({
+      reset: { status: "unknown", reason: "unreadable-time" },
+      stamp: { ...STOP, observedAt: START },
+      skipAtStop: "auto-continue-cancelled",
+    });
+    await h.service.handleStop("t1", STOP);
+    expect(h.state()).toMatchObject({ status: "skipped", reason: "auto-continue-cancelled" });
+  });
+
+  it.each([
+    ["falls back", "fallback", "falls-back"],
+    ["can't tell whether it falls back", "unknown", "fallback-undetermined"],
+  ] as const)(
+    "puts a preset that %s ahead of a stop its user took over (#18192)",
+    async (_label, fallback, reason) => {
+      const h = harness();
+      h.setTerminal(claudePane());
+      await h.service.set("t1", true, PROJECT);
+      h.setStop({
+        reset: bannerReset(),
+        stamp: { ...STOP, observedAt: START },
+        skipAtStop: "auto-continue-cancelled",
+      });
+      h.setFallback(fallback);
+      await h.service.handleStop("t1", STOP);
+      expect(h.state()).toMatchObject({ status: "skipped", reason });
+    }
+  );
+
+  it.each([
+    ["another sighting", { run: "run-a", seq: 2 }],
+    ["another process's sighting under the same number", { run: "run-b", seq: 1 }],
+  ])("never lets a verdict on %s skip this one (#18192)", async (_label, stamp) => {
+    const h = harness();
+    h.setTerminal(claudePane());
+    await h.service.set("t1", true, PROJECT);
+    h.setStop({
+      reset: bannerReset(),
+      stamp: { ...stamp, observedAt: START },
+      skipAtStop: "auto-continue-cancelled",
+    });
+    await h.service.handleStop("t1", STOP);
+    // The answer is about another sighting, so the check that follows decides.
+    expect(h.state()).toMatchObject({ status: "skipped", reason: "banner-changed" });
+  });
+
+  it("waits out a Claude stop of its own from the banner's reset (#18192)", async () => {
+    const h = harness();
+    h.setTerminal(claudePane());
+    await h.service.set("t1", true, PROJECT);
+    h.setStop({ reset: bannerReset(), stamp: { ...STOP, observedAt: START } });
+    await h.service.handleStop("t1", STOP);
+    expect(h.state()).toMatchObject({ status: "waiting", resetsAt: RESETS_AT });
   });
 
   it("waits until just after the reset, then has the host continue the stop once", async () => {

@@ -4,6 +4,7 @@ import type {
   CodexLimitQuery,
   CodexLimitReset,
   CodexLimitStamp,
+  CodexLimitStopSkip,
   CodexLimitUnknownReason,
 } from "../../../shared/types/codexLimitReset.js";
 import { liveAgentOf, type LiveAgentTerminal } from "../agentUsage/AgentUsageWatch.js";
@@ -44,6 +45,8 @@ export interface CodexLimitStop {
   reset: CodexLimitReset;
   /** Null when no banner answered: the reset is then unknown. */
   stamp: CodexLimitStamp | null;
+  /** Set when the stamped stop isn't Daintree's to continue (#18192). */
+  skipAtStop?: CodexLimitStopSkip;
 }
 
 /**
@@ -82,7 +85,11 @@ export async function readCodexLimitStop(
     if (first === "unanswered") return unknown("not-observed");
     const asked = first?.codexLimit;
     if (!first || !asked) return unknown("no-banner");
-    if ("reset" in asked) return { reset: asked.reset, stamp: asked.stamp ?? null };
+    if ("reset" in asked) {
+      const stop: CodexLimitStop = { reset: asked.reset, stamp: asked.stamp ?? null };
+      if (asked.skipAtStop !== undefined) stop.skipAtStop = asked.skipAtStop;
+      return stop;
+    }
     const home = liveAgentOf(first) === "codex" ? first.codexHome : undefined;
     // Asked for only now, after the stamp read: so after the banner showed.
     const evidence = home ? await deps.readEvidence(home).catch(() => null) : null;

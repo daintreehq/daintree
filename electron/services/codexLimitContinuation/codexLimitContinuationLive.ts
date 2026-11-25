@@ -56,9 +56,13 @@ async function readProjectPresets(
 }
 
 /** Read from this machine's settings and the project's files: the pane's host decides. */
-async function decideFallback(terminal: ContinuationTerminal): Promise<LimitFallback> {
+export async function decideFallback(terminal: ContinuationTerminal): Promise<LimitFallback> {
   const agentId = terminal.launchAgentId;
   if (agentId === undefined || terminal.agentPresetId === undefined) return "none";
+  // The preset belongs to the agent it launched: another CLI started in the
+  // pane afterwards isn't that conversation, and the pty host never falls it
+  // back (#18192).
+  if ((terminal.detectedAgentId ?? agentId) !== agentId) return "none";
   const run = {
     agentId,
     presetId: terminal.agentPresetId,

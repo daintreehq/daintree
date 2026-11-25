@@ -140,7 +140,8 @@ interface PendingLaunch extends ContinuationLaunch {
 }
 
 /**
- * Continuing armed Codex panes once their usage limit resets (#17909). The
+ * Continuing armed Codex panes once their usage limit resets (#17909), and
+ * Claude Code panes once Claude's own wait for the reset is gone (#18192). The
  * user arms a pane; its host reports the stop once it has settled; this asks
  * whether the pane falls back instead and when the limit resets, waits until
  * then, and has the host check the pane and type the line. Lives in main, so
@@ -492,7 +493,7 @@ export class CodexLimitContinuation {
       typeof terminal === "string"
         ? null
         : await this.deps.decideFallback(terminal).catch(() => "unknown" as const);
-    const { reset, stamp } = await reading;
+    const { reset, stamp, skipAtStop } = await reading;
     if (this.panes.get(terminalId) !== pane || pane.epoch !== epoch) return;
     if (terminal === "gone") return;
     if (terminal === "unanswered") return this.record(pane, "host-unanswered");
@@ -501,6 +502,11 @@ export class CodexLimitContinuation {
     pane.spawnedAt = terminal.spawnedAt ?? pane.spawnedAt;
     if (fallback === "fallback") return this.record(pane, "falls-back");
     if (fallback !== "none") return this.record(pane, "fallback-undetermined");
+    // A stop its user took over (#18192), whatever its reset says: only one
+    // about this very sighting, so a verdict on another never suppresses it.
+    if (skipAtStop !== undefined && stamp?.run === stop.run && stamp.seq === stop.seq) {
+      return this.record(pane, skipAtStop);
+    }
     if (reset.status === "unknown") return this.record(pane, reset.reason);
     if (stamp === null || stamp.run !== stop.run || stamp.seq !== stop.seq) {
       return this.record(pane, "banner-changed");

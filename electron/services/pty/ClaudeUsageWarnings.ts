@@ -46,6 +46,8 @@ const YOUVE = String.raw`you(?:[${APOSTROPHES}]ve|\s+have)`;
 // anything else after the limit is a sentence about one.
 const TAIL = String.raw`(?:${TRAILING_BORDER}$|\s*[${SEPARATORS}]\s*(.*)$)`;
 const SEGMENT_SEPARATOR = /[·∙•]/;
+// A reset a narrow pane wrapped onto the next row with its separator (#18192).
+const WRAPPED_RESET = new RegExp(String.raw`^\s*[${SEPARATORS}]\s*(resets(?:\s.*)?)$`, "i");
 const BORDER_GLYPHS = new Set(BORDERS);
 // Claude's own segments never quote; code holding a message as a string does.
 const CODE_DELIMITER = /["`]/;
@@ -159,6 +161,11 @@ function messageStarts(row: string, cols: number | undefined): MessageStart[] {
   return starts;
 }
 
+/** Whether `row` reaches the pane's right edge, where the next word would wrap. */
+function fillsRow(row: string, cols: number | undefined): boolean {
+  return cols !== undefined && row.trimEnd().length >= cols - RIGHT_EDGE_SLACK;
+}
+
 function withoutTrailingBorder(text: string): string {
   let end = text.length;
   while (end > 0 && (BORDER_GLYPHS.has(text[end - 1]!) || text[end - 1]!.trim() === "")) end--;
@@ -205,7 +212,16 @@ function matchRow(
       if (match === null) continue;
       const percentForm = PERCENT_FORMS.has(form.statement);
       const named = percentForm ? match[2]! : match[1]!;
-      const segments = segmentsOf(percentForm ? match[3] : match[2]);
+      const own = segmentsOf(percentForm ? match[3] : match[2]);
+      // Only a row that ran to the pane's edge can have wrapped, and a row
+      // under it that isn't a plain reset is something else.
+      const wrapped =
+        own.length === 0 && next !== undefined && !start.atGap && fillsRow(row, cols)
+          ? WRAPPED_RESET.exec(next)
+          : null;
+      const carried = wrapped === null ? null : segmentsOf(wrapped[1]);
+      const segments =
+        carried === null || carried.some((segment) => CODE_DELIMITER.test(segment)) ? own : carried;
       if (segments.some((segment) => CODE_DELIMITER.test(segment))) continue;
       const resetIndex = segments.findIndex((segment) => /^resets(?:\s|$)/i.test(segment));
       if (form.needsReset && resetIndex < 0) continue;
@@ -214,7 +230,7 @@ function matchRow(
       let resetText: string | null = null;
       if (resetIndex >= 0) {
         resetText = segments[resetIndex]!.slice("resets".length).trim();
-        if (resetIndex === segments.length - 1 && next !== undefined) {
+        if (resetIndex === segments.length - 1 && next !== undefined && segments === own) {
           resetText = carriedReset(resetText, next) ?? resetText;
         }
         // Claude truncates a footer warning that doesn't fit with "…"; any
@@ -246,6 +262,30 @@ export function scanClaudeUsageMessages(
     if (message !== null) byWindow.set(message.window, message);
   }
   return [...byWindow.values()];
+}
+
+/** A usage message and the index in the lines given of the row it starts on. */
+export interface LocatedClaudeUsageMessage extends ClaudeUsageMessage {
+  row: number;
+}
+
+/**
+ * Every usage message {@link scanClaudeUsageMessages} reads at the tail of
+ * `lines`, top to bottom, with where each starts (#18192): a reader that
+ * judges what is drawn around a message needs its place.
+ */
+export function locateClaudeUsageMessages(
+  lines: readonly string[],
+  cols?: number
+): LocatedClaudeUsageMessage[] {
+  const start = Math.max(0, lines.length - SCAN_LINES);
+  const tail = lines.slice(start).map((line) => stripAnsi(line));
+  const located: LocatedClaudeUsageMessage[] = [];
+  for (let i = 0; i < tail.length; i++) {
+    const message = matchRow(tail[i]!, tail[i + 1], cols);
+    if (message !== null) located.push({ ...message, row: start + i });
+  }
+  return located;
 }
 
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];

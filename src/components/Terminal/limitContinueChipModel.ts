@@ -55,7 +55,7 @@ const SKIPS: Record<
   { kind: "no-reset" | "skipped" | "unconfirmed" | "hidden"; copy: string }
 > = {
   "no-reset": { kind: "no-reset", copy: "The limit names no reset, as a credit or spend cap" },
-  "no-reset-stated": { kind: "no-reset", copy: "Codex didn't say when the limit resets" },
+  "no-reset-stated": { kind: "no-reset", copy: "The limit message didn't say when it resets" },
   "unreadable-banner": { kind: "no-reset", copy: "The limit message couldn't be read" },
   unattributed: {
     kind: "no-reset",
@@ -107,11 +107,19 @@ const SKIPS: Record<
   "already-continued": { kind: "skipped", copy: "Daintree already tried this reset" },
   disarmed: { kind: "skipped", copy: "It was turned off for this pane" },
   "process-changed": { kind: "skipped", copy: "The pane restarted, exited or moved" },
-  "agent-gone": { kind: "skipped", copy: "Codex left the pane, or the pane is in the trash" },
+  "agent-gone": { kind: "skipped", copy: "The agent left the pane, or the pane is in the trash" },
   "banner-gone": { kind: "skipped", copy: "The limit message left the screen" },
   "input-since": {
     kind: "skipped",
     copy: "Something was typed or sent to the pane after the limit",
+  },
+  "auto-continue-cancelled": {
+    kind: "skipped",
+    copy: "Claude Code's automatic continue was cancelled, not by an assistant's Escape alone. Turning this off and on hands the stop back to Daintree.",
+  },
+  "own-wait": {
+    kind: "skipped",
+    copy: "Claude Code showed it would continue by itself",
   },
   "dialog-since": { kind: "skipped", copy: "A dialog showed in the pane after the limit" },
   "input-pending": {
@@ -119,12 +127,15 @@ const SKIPS: Record<
     copy: "Input was still waiting to be written to the pane",
   },
   "input-locked": { kind: "skipped", copy: "The pane's input was locked" },
-  "agent-working": { kind: "skipped", copy: "Codex looked busy" },
+  "agent-working": { kind: "skipped", copy: "The agent looked busy" },
   "output-since": { kind: "skipped", copy: "The pane printed while it was being checked" },
   "reads-paused": { kind: "skipped", copy: "The pane's output wasn't being read" },
   "unreadable-screen": { kind: "skipped", copy: "The pane's screen couldn't be read" },
   "banner-not-last": { kind: "skipped", copy: "Something was printed after the limit message" },
-  "no-composer": { kind: "skipped", copy: "Daintree didn't recognize Codex's prompt on screen" },
+  "no-composer": {
+    kind: "skipped",
+    copy: "Daintree didn't recognize the agent's prompt on screen",
+  },
   draft: { kind: "skipped", copy: "The prompt wasn't empty" },
   "unrecognized-footer": {
     kind: "skipped",

@@ -194,7 +194,16 @@ describe("gatePluginPresetLaunch", () => {
       (await summaryFor({ settings: { agents: {} } as never, projectPresets: [work] }))
         .continuesAtLimitReset
     ).toBeUndefined();
-    // Nor can it for an agent that waits for its own reset.
+    // Nor can it for an agent Daintree can't continue.
+    expect(
+      (
+        await summaryFor(
+          { settings: { agents: { gemini: { customPresets: [work] } } } as never },
+          { agentId: "gemini", presetId: "work", prompt: "hello" }
+        )
+      ).continuesAtLimitReset
+    ).toBeUndefined();
+    // Claude Code's own preset can (#18192).
     expect(
       (
         await summaryFor(
@@ -202,7 +211,7 @@ describe("gatePluginPresetLaunch", () => {
           { agentId: "claude", presetId: "work", prompt: "hello" }
         )
       ).continuesAtLimitReset
-    ).toBeUndefined();
+    ).toBe(true);
   });
 
   it("passes through, unasked, a plugin that doesn't declare the capability", async () => {

@@ -157,6 +157,16 @@ describe("readCodexLimitStop (#17909)", () => {
     expect(await readCodexLimitStop("t1", fake)).toEqual({ reset: known, stamp });
   });
 
+  it("carries a stop its user took over, read without a quota reading (#18192)", async () => {
+    const { fake } = deps([{ reset: known, stamp, skipAtStop: "auto-continue-cancelled" }]);
+    expect(await readCodexLimitStop("t1", fake)).toEqual({
+      reset: known,
+      stamp,
+      skipAtStop: "auto-continue-cancelled",
+    });
+    expect(fake.readEvidence).not.toHaveBeenCalled();
+  });
+
   it("names the replacement when the banner changed between the reads", async () => {
     const next = { seq: 5, run: "r1", observedAt: 1_200 };
     const { fake } = deps([

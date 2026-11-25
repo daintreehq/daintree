@@ -21,6 +21,7 @@ vi.mock("../../codex/CodexLimitReset.js", () => ({ readCodexLimitStop: vi.fn() }
 
 import {
   _resetCodexLimitContinuationForTest,
+  decideFallback,
   noteContinuationLaunch,
   peekCodexLimitContinuation,
 } from "../codexLimitContinuationLive.js";
@@ -99,5 +100,41 @@ describe("codexLimitContinuationLive — launches a preset arms (#17912)", () =>
     expect(peekCodexLimitContinuation()?.isArmed("t1")).toBe(true);
     events.emit("terminal:trash-cleared", { id: "t1", expiresAt: 0 });
     expect(peekCodexLimitContinuation()?.isArmed("t1")).toBe(false);
+  });
+});
+
+describe("codexLimitContinuationLive — whose preset decides a fallback (#18192)", () => {
+  const pane = (detectedAgentId: string | undefined) => ({
+    projectId: undefined,
+    launchAgentId: "codex",
+    detectedAgentId,
+    agentPresetId: "home",
+    originalAgentPresetId: "home",
+    fallbackChainIndex: 0,
+    isAssistantTerminal: false,
+    spawnedAt: 1_000,
+    launchGeneration: undefined,
+  });
+
+  beforeEach(() => {
+    state.settings = {
+      agents: {
+        codex: {
+          customPresets: [
+            { id: "home", name: "Home", fallbackOnRateLimit: true, fallbacks: ["work"] },
+            { id: "work", name: "Work" },
+          ],
+        },
+      },
+    };
+  });
+
+  it("reads the launch's preset for the agent it launched", async () => {
+    // Its project's presets can't be read here, so the chain can't be placed.
+    expect(await decideFallback(pane("codex"))).toBe("unknown");
+  });
+
+  it("never lets the launch's preset decide for another agent run in the pane", async () => {
+    expect(await decideFallback(pane("claude"))).toBe("none");
   });
 });

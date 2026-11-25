@@ -104,6 +104,12 @@ export interface TerminalInputControllerHost {
   serializeScreen(): Promise<SerializedTerminalSnapshot | null>;
   /** A count that moves whenever output reaches this terminal or goes on to its views. */
   outputMark(): number;
+  /**
+   * Each write {@link TerminalInputController.inputSequence} counts, as it is
+   * taken: `owner` names the assistant it was written for, absent for anyone
+   * else's (#18192).
+   */
+  noteInput?(data: string, owner: string | undefined): void;
 }
 
 function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
@@ -243,6 +249,7 @@ export class TerminalInputController {
     terminal.lastInputTime = Date.now();
     if (!isTerminalReportOnly(data)) {
       this.inputCount++;
+      this.host.noteInput?.(data, undefined);
       this.stampTyped(terminal.lastInputTime);
     }
     // Read before the analysis hears the keys: in-thread, it can move the
@@ -318,7 +325,10 @@ export class TerminalInputController {
       return false;
     }
     terminal.lastInputTime = Date.now();
-    if (!isTerminalReportOnly(data)) this.inputCount++;
+    if (!isTerminalReportOnly(data)) {
+      this.inputCount++;
+      this.host.noteInput?.(data, inputOwner);
+    }
     // Read before the analysis hears the keys: in-thread, it can move the
     // state on before the write returns.
     const reachesPrompt = keysReachPrompt(terminal);
@@ -724,7 +734,7 @@ export class TerminalInputController {
       if (ctx?.abandonEnterOnInput === true) {
         const owner = this.captureOwner();
         const typedBefore = terminal.lastTypedInputAt;
-        const screen = await this.readScreenAtEnter(observedAtAdmission);
+        const screen = await this.readScreenAtEnter(observedAtAdmission, ctx.holdsAtScreen);
         if (
           screen === null ||
           !this.isStillOwnedBy(generation, owner) ||
@@ -829,7 +839,7 @@ export class TerminalInputController {
       !this.isStillOwnedBy(generation, owner);
     const screen =
       ctx?.abandonEnterOnInput === true && !enterStopped()
-        ? await this.readScreenAtEnter(observedAtAdmission)
+        ? await this.readScreenAtEnter(observedAtAdmission, ctx.holdsAtScreen)
         : undefined;
 
     if (!this.host.terminalInfo.ptyProcess) {
@@ -906,7 +916,8 @@ export class TerminalInputController {
    * hasn't flushed, can't be seen from here.
    */
   private async readScreenAtEnter(
-    observedAtAdmission: number | null
+    observedAtAdmission: number | null,
+    holdsAtScreen?: (serialized: string) => boolean
   ): Promise<{ unchanged: () => boolean } | null> {
     if (observedAtAdmission === null) return null;
     const mark = this.host.outputMark();
@@ -926,6 +937,7 @@ export class TerminalInputController {
       ]);
       if (snapshot === null || !unchanged()) return null;
       if (showsSelectorAtEnter(snapshot.data, this.host.terminalInfo.detectedAgentId)) return null;
+      if (holdsAtScreen !== undefined && !holdsAtScreen(snapshot.data)) return null;
       return { unchanged };
     } catch {
       return null;

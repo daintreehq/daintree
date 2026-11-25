@@ -195,19 +195,22 @@ describe("FallbackChainEditor — continuing when the usage limit resets (#17912
       .map((id) => document.getElementById(id)?.textContent ?? "")
       .join(" ");
 
-  it("offers it with no fallback chain, and stores only true", () => {
-    const onUpdatePreset = renderEditor({ id: "home", name: "Home" }, "codex");
-    const toggle = screen.getByRole("switch", { name: label });
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  it.each(["codex", "claude"])(
+    "offers it on a %s preset with no fallback chain, and stores only true",
+    (agentId) => {
+      const onUpdatePreset = renderEditor({ id: "home", name: "Home" }, agentId);
+      const toggle = screen.getByRole("switch", { name: label });
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
 
-    fireEvent.click(toggle);
-    expect(onUpdatePreset).toHaveBeenCalledWith("home", { continueAtLimitReset: true });
-  });
+      fireEvent.click(toggle);
+      expect(onUpdatePreset).toHaveBeenCalledWith("home", { continueAtLimitReset: true });
+    }
+  );
 
-  it("clears it rather than storing false", () => {
+  it.each(["codex", "claude"])("clears it on a %s preset rather than storing false", (agentId) => {
     const onUpdatePreset = renderEditor(
       { id: "home", name: "Home", continueAtLimitReset: true },
-      "codex"
+      agentId
     );
     const toggle = screen.getByRole("switch", { name: label });
     expect(toggle.getAttribute("aria-checked")).toBe("true");
@@ -217,7 +220,7 @@ describe("FallbackChainEditor — continuing when the usage limit resets (#17912
   });
 
   it.each([
-    ["an agent that waits for its own reset", "claude"],
+    ["an agent Daintree can't continue", "gemini"],
     ["no agent", undefined],
   ])("offers nothing for %s", (_label, agentId) => {
     renderEditor({ id: "home", name: "Home", fallbacks: ["work"] }, agentId);
