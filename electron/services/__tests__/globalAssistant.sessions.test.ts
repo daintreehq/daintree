@@ -295,22 +295,22 @@ describe("global assistant sessions (#18142)", () => {
   it("keeps each session running across restarts on its own, through a clear but not a stop (#18177)", async () => {
     const [first, second] = registry.getGlobalAssistantServices();
     const heard: boolean[] = [];
-    second!.onChange((state) => heard.push(state.keepRunning));
+    first!.onChange((state) => heard.push(state.keepRunning));
 
-    await registry.setGlobalAssistantKeepRunning(1, true);
-    expect([first!.getState().keepRunning, second!.getState().keepRunning]).toEqual([false, true]);
+    await registry.setGlobalAssistantKeepRunning(0, true);
+    expect([first!.getState().keepRunning, second!.getState().keepRunning]).toEqual([true, false]);
     // Every window hears it, the help service's own load aside.
     expect(heard.at(-1)).toBe(true);
 
-    await second!.ensureSession();
-    await second!.restart();
-    expect(second!.getState().keepRunning).toBe(true);
-    await second!.discard();
+    await first!.ensureSession();
+    await first!.restart();
+    expect(first!.getState().keepRunning).toBe(true);
+    await first!.discard();
     expect(help.discards).toEqual([
-      { slot: 1, keepRunningChoice: true },
-      { slot: 1, keepRunningChoice: false },
+      { slot: 0, keepRunningChoice: true },
+      { slot: 0, keepRunningChoice: false },
     ]);
-    expect(second!.getState().keepRunning).toBe(false);
+    expect(first!.getState().keepRunning).toBe(false);
   });
 
   it("starts no new session before the kept conversations can be read", async () => {

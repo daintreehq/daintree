@@ -293,6 +293,7 @@ const helpSessionMock = vi.hoisted(() => ({
   ),
   noteQuitCapture: vi.fn(async (_lane: unknown, _agentSessionId: string) => {}),
   recordLanesToResumeAtLaunch: vi.fn(async (_lanes: unknown) => {}),
+  holdStandingRunsForQuit: vi.fn(async (_alive: ReadonlySet<string> | null) => {}),
   revokeAll: vi.fn(async () => {}),
 }));
 vi.mock("../../services/HelpSessionService.js", () => ({
@@ -2682,6 +2683,45 @@ describe("registerShutdownHandler", () => {
       );
       // An ordinary quit leaves its lanes to be resumed by hand (#10815).
       expect(helpSessionMock.recordLanesToResumeAtLaunch).not.toHaveBeenCalled();
+    });
+
+    it("fixes, before the kill of any quit, which kept lanes come back: those whose process is alive (#18177)", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const gracefulKillByProject = vi.fn(async () => []);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [
+          agentTerminal,
+          { ...agentTerminal, id: "assistant", isAssistantTerminal: true },
+          { ...agentTerminal, id: "gone", isAssistantTerminal: true, isExited: true },
+        ]),
+        gracefulKillByProject,
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(helpSessionMock.holdStandingRunsForQuit).toHaveBeenCalledExactlyOnceWith(
+        new Set([agentTerminal.id, "assistant"])
+      );
+      expect(helpSessionMock.holdStandingRunsForQuit.mock.invocationCallOrder[0]).toBeLessThan(
+        gracefulKillByProject.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("holds the kept lanes as they stand when the quit can't snapshot the terminals (#18177)", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => {
+          throw new Error("host gone");
+        }),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(helpSessionMock.holdStandingRunsForQuit).toHaveBeenCalledExactlyOnceWith(null);
     });
 
     it("records the lanes an update restart stops, after their captures and before the install (#16753)", async () => {

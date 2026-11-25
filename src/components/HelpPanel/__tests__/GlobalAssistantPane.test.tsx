@@ -114,6 +114,7 @@ function viewOf(patch: Partial<GlobalAssistantView> = {}): GlobalAssistantView {
     phase: "absent",
     pinnedAgentId: null,
     coordinating: false,
+    keepRunning: false,
     occupied: false,
     generation: 0,
     agentId: null,
@@ -162,6 +163,9 @@ function makeHelp(initial: GlobalAssistantView, attachmentId: string) {
       throw new Error("no new session in this test");
     }),
     setGlobalAssistantCoordinator: vi.fn(async (): Promise<GlobalAssistantView[]> => []),
+    setGlobalAssistantKeepRunning: vi.fn(
+      async (keep: boolean): Promise<GlobalAssistantView> => running({ keepRunning: keep })
+    ),
     onGlobalAssistantChanged: vi.fn((callback: (state: GlobalAssistantView) => void) => {
       listeners.add(callback);
       return () => listeners.delete(callback);
@@ -1240,9 +1244,9 @@ describe("GlobalAssistantPane (#14454)", () => {
     const rows = (menu: HTMLElement) =>
       Array.from(menu.querySelectorAll('[role="menuitem"]')).map((row) => row.textContent);
     const structure = (menu: HTMLElement) =>
-      Array.from(menu.querySelectorAll('[role="menuitem"], [role="separator"]')).map((el) =>
-        el.getAttribute("role") === "separator" ? "—" : el.textContent
-      );
+      Array.from(
+        menu.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"], [role="separator"]')
+      ).map((el) => (el.getAttribute("role") === "separator" ? "—" : el.textContent));
     const closeMenu = async (menu: HTMLElement) => {
       fireEvent.click(within(menu).getByRole("menuitem", { name: "Open docs" }));
       await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
@@ -1269,6 +1273,8 @@ describe("GlobalAssistantPane (#14454)", () => {
         "Open docs",
         "—",
         "Hand this run on…",
+        "—",
+        "Keep running across restarts",
         "—",
         "Stop global assistant",
       ]);
@@ -1429,6 +1435,41 @@ describe("GlobalAssistantPane (#14454)", () => {
       fireEvent.click(await screen.findByRole("button", { name: "Stop session 2" }));
       await flush();
       expect(help.discardGlobalAssistant).toHaveBeenCalledWith(3, 1, true);
+    });
+
+    it("keeps the session on screen running across restarts from its menu, checked as main holds it (#18177)", async () => {
+      installHelp(running());
+      renderPane();
+      await flush();
+
+      openMenu();
+      const toggle = await screen.findByRole("menuitemcheckbox", {
+        name: "Keep running across restarts",
+      });
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      fireEvent.click(toggle);
+      await flush();
+      expect(help.setGlobalAssistantKeepRunning).toHaveBeenCalledExactlyOnceWith(true, 0);
+
+      // Another window turning it off is heard here too.
+      push(running({ keepRunning: false }));
+      push(running({ keepRunning: true }));
+      openMenu();
+      expect(
+        (
+          await screen.findByRole("menuitemcheckbox", { name: "Keep running across restarts" })
+        ).getAttribute("aria-checked")
+      ).toBe("true");
+    });
+
+    it("offers no keep-running choice for a session nobody is using (#18177)", async () => {
+      installHelp(viewOf());
+      renderPane();
+      await flush();
+
+      openMenu();
+      await screen.findByText("Open docs");
+      expect(screen.queryByRole("menuitemcheckbox", { name: "Keep running across restarts" })).toBeNull();
     });
 
     it("marks the session that coordinates and hands coordination over from either menu (#18143)", async () => {

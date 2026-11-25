@@ -694,7 +694,7 @@ async function handleRestorePendingHibernation(
  * conversation, or closing its tab (#13205). The only renderer path that clears
  * a lane's durable resume pointer; CLI exits and crashes leave it in place.
  */
-async function handleDiscardConversation(
+export async function handleDiscardConversation(
   ctx: import("../types.js").IpcContext,
   projectId: string,
   rawSlot?: number,
@@ -740,7 +740,7 @@ function ownLane(
 }
 
 /** Whether the person chose to keep a lane of this project running across restarts (#18177). */
-async function handleGetKeepRunning(
+export async function handleGetKeepRunning(
   ctx: import("../types.js").IpcContext,
   projectId: string,
   rawSlot?: number
@@ -756,7 +756,7 @@ async function handleGetKeepRunning(
  * Keep a lane of this project running across restarts, or stop keeping it
  * (#18177). Answers with the choice now held.
  */
-async function handleSetKeepRunning(
+export async function handleSetKeepRunning(
   ctx: import("../types.js").IpcContext,
   projectId: string,
   rawSlot: number,
