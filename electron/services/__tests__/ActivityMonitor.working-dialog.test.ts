@@ -43,12 +43,18 @@ const PROMPT_SCREEN = [
 
 const monitors: ActivityMonitor[] = [];
 
-function startPane(id: string, agentId = "codex", completionPatterns?: RegExp[]) {
+function startPane(
+  id: string,
+  agentId = "codex",
+  completionPatterns?: RegExp[],
+  pollingIntervalMs?: number
+) {
   const onStateChange = vi.fn();
   let visible = ["booting"];
   const monitor = new ActivityMonitor(id, 1000, onStateChange, {
     agentId,
     completionPatterns,
+    pollingIntervalMs,
     getVisibleLines: (n) => visible.slice(-n),
     getCursorLine: () => visible.at(-1) ?? null,
     initialState: "idle",
@@ -339,10 +345,10 @@ describe("ActivityMonitor and a menu over a running turn (#18167)", () => {
     expect(settles(onStateChange)).toEqual([]);
   });
 
-  it("ends a hold it inherited when no picker is on screen", () => {
+  it("ends a hold it takes over from the monitor before it", () => {
     const onStateChange = vi.fn();
     let elapsed = 40;
-    const monitor = new ActivityMonitor("inherited", 1000, onStateChange, {
+    const monitor = new ActivityMonitor("takeover", 1000, onStateChange, {
       agentId: "codex",
       getVisibleLines: () => [...TRANSCRIPT, `• Working (${elapsed}s • esc to interrupt)`],
       getCursorLine: () => null,
@@ -350,8 +356,8 @@ describe("ActivityMonitor and a menu over a running turn (#18167)", () => {
       skipInitialStateEmit: true,
     });
     monitors.push(monitor);
+    expect(closed(onStateChange)).toHaveLength(1);
     monitor.startPolling();
-    // Past the boot window a monitor seeded busy starts in, the turn ticking on.
     for (let i = 0; i < 100; i++) {
       elapsed++;
       monitor.onData("\x1b[H tick");
@@ -363,9 +369,9 @@ describe("ActivityMonitor and a menu over a running turn (#18167)", () => {
     expect(opened(onStateChange)).toEqual([]);
   });
 
-  it("keeps a hold it inherited while the picker is still up", () => {
+  it("publishes a picker still up when it takes over, once past boot", () => {
     const onStateChange = vi.fn();
-    const monitor = new ActivityMonitor("kept", 1000, onStateChange, {
+    const monitor = new ActivityMonitor("takeover-open", 1000, onStateChange, {
       agentId: "codex",
       getVisibleLines: () => PICKER,
       getCursorLine: () => null,
@@ -377,7 +383,27 @@ describe("ActivityMonitor and a menu over a running turn (#18167)", () => {
     vi.advanceTimersByTime(60_000);
 
     expect(monitor.getState()).toBe("busy");
-    expect(closed(onStateChange)).toEqual([]);
+    expect(closed(onStateChange)).toHaveLength(1);
+    expect(opened(onStateChange)).toHaveLength(1);
     expect(settles(onStateChange)).toEqual([]);
+  });
+
+  it("settles on the retry confirmation at a slower polling tier", () => {
+    const { monitor, onStateChange, draw } = startPane("retry-slow", "codex", undefined, 200);
+
+    draw(PICKER);
+    vi.advanceTimersByTime(5_000);
+    expect(opened(onStateChange)).toHaveLength(1);
+    draw([
+      ...TRANSCRIPT,
+      "•   Stop this attempt and retry?",
+      "",
+      "  › 1. Keep waiting",
+      "    2. Stop and retry",
+    ]);
+    vi.advanceTimersByTime(30_000);
+
+    expect(monitor.getState()).toBe("idle");
+    expect(settles(onStateChange).at(-1)?.[3]?.waitingReason).toBe("approval");
   });
 });

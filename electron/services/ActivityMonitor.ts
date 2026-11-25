@@ -525,10 +525,15 @@ export class ActivityMonitor {
 
     // State preservation
     this.state = options?.initialState ?? "idle";
-    // Taking over a working agent, this monitor can't know whether the one
-    // before it published a menu open (#18167): it starts as if it had, so its
-    // first reads either keep that hold or end it.
-    this.workingDialogShown = this.state === "busy" && hasWorkingDialog(this.agentId);
+    // Taking over a working agent, as after an analysis worker is rebuilt, this
+    // monitor owns no hold the one before it put on sends (#18167): it ends any,
+    // and publishes the menu again once it sees it.
+    if (this.state === "busy" && hasWorkingDialog(this.agentId)) {
+      this.onStateChange(this.terminalId, this.spawnedAt, "busy", {
+        trigger: "pattern",
+        workingDialog: false,
+      });
+    }
     this.skipInitialStateEmit = options?.skipInitialStateEmit ?? false;
     this.simpleOutputState = simpleOutputState;
 
@@ -2152,8 +2157,11 @@ export class ActivityMonitor {
       this.simpleSnapshotSettleFrom,
       this.lastParsedAt
     );
+    // Read on, while a menu seen open seems gone, until that is confirmed.
     const closing =
-      this.workingDialogShown && !this.workingDialogSeen && !this.workingDialogGaveWayToDialog;
+      this.workingDialogShown &&
+      !this.workingDialogSeen &&
+      this.workingDialogReadAt - this.workingDialogGoneSince < SIMPLE_SNAPSHOT_SETTLE_MS;
     if (
       (fresh || now - this.workingDialogReadAt >= SIMPLE_SNAPSHOT_MIN_INTERVAL_MS) &&
       (closing || this.workingDialogReadAt - changedAt < SIMPLE_SNAPSHOT_SETTLE_MS)
