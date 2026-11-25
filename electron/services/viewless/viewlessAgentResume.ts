@@ -4,6 +4,7 @@ import type { PanelSnapshot, Project } from "../../../shared/types/project.js";
 import type { AgentSessionPaneRefusal } from "../../../shared/types/agentSessionSchemas.js";
 import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
 import type { SpawnOutcome } from "../assistants/assistantLaunch.js";
+import { sanitizeErrorMessage } from "../../ipc/transportSafeError.js";
 import { getEffectiveAgentConfig, type AgentPreset } from "../../../shared/config/agentRegistry.js";
 import {
   buildResumeCommand,
@@ -400,7 +401,8 @@ async function launchResumedPane(
       ]);
     });
   } catch (err) {
-    const message = formatErrorMessage(err, "unknown");
+    // An unpackaged build's envelope passes the handler's paths and secrets through.
+    const message = sanitizeErrorMessage(formatErrorMessage(err, "unknown"));
     if ((err as { code?: unknown } | null)?.code === "CLAUDE_CONVERSATION_NOT_FOUND") {
       return refused("no-conversation", message);
     }

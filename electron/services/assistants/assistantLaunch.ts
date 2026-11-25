@@ -529,9 +529,9 @@ export async function spawnAndConfirm(
 }
 
 /**
- * {@link spawnAndConfirm}, keeping the refusal's code. The wait starts before
- * the handler runs, so a report that lands while a slow handler is still
- * running outranks the wait's default even once the wait has run out.
+ * {@link spawnAndConfirm}, keeping the refusal's code. Listened for before the
+ * handler runs, since some refusals are reported inside it, and waited for
+ * only once it has queued the spawn, so a slow handler doesn't spend the wait.
  */
 export async function spawnAndReport(
   pty: Pick<PtyClient, "on" | "off"> | null,
@@ -556,9 +556,10 @@ export async function spawnAndReport(
     return code ? { started: false, code } : { started: false };
   };
   pty.on("spawn-result", onResult);
-  const timer = setTimeout(settle, SPAWN_RESULT_WAIT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     if (!(await spawn())) return failed();
+    timer = setTimeout(settle, SPAWN_RESULT_WAIT_MS);
     await reported;
     if (!report) return unreportedStarted ? { started: true } : { started: false };
     return report.success === true ? { started: true } : failed();

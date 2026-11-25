@@ -26,6 +26,7 @@ import { relaunchResumeAsAssignedSession } from "../../../shared/types/agentSett
 import type { AgentSessionRecord } from "../../../shared/types/ipc/agentSessionHistory.js";
 import type { ConversationStore } from "../../../shared/types/panel.js";
 import { conversationStoreFor } from "../../../shared/utils/conversationStore.js";
+import { sanitizeErrorMessage } from "../../ipc/transportSafeError.js";
 import {
   getShellEnvironmentObservation,
   type ShellEnvironmentObservation,
@@ -153,25 +154,24 @@ export function resolvePaneClaudeProjectsRoot(
 }
 
 /**
- * A store named for a message that leaves the process: under the home folder
- * as `$HOME/...`, which the packaged error sanitizer keeps where it would strip
- * an absolute path and the user name in it; elsewhere by its config folder's
- * name alone.
+ * A store from {@link resolvePaneClaudeProjectsRoot}, named for a message that
+ * leaves the process. Under the home folder it reads `$HOME/...`, which the
+ * packaged error sanitizer keeps where it strips an absolute path and the user
+ * name in it. Any other store, and one whose name the sanitizer would mangle,
+ * is the pane's `CLAUDE_CONFIG_DIR`, since only the default store comes
+ * without it.
  */
 export function describeClaudeProjectsRoot(projectsRoot: string, home = os.homedir()): string {
   const relative = path.relative(home, projectsRoot);
-  if (
+  const underHome =
     relative !== "" &&
     relative !== ".." &&
     !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  ) {
-    return `$HOME/${relative.split(path.sep).join("/")}`;
-  }
-  const configFolder = path.basename(path.dirname(projectsRoot));
-  return configFolder
-    ? `${configFolder}/projects outside $HOME`
-    : "a projects folder outside $HOME";
+    !path.isAbsolute(relative);
+  const label = underHome ? `$HOME/${relative.split(path.sep).join("/")}` : undefined;
+  return label !== undefined && sanitizeErrorMessage(label) === label
+    ? label
+    : "$CLAUDE_CONFIG_DIR/projects";
 }
 
 const unreachableUntil = new Map<string, number>();

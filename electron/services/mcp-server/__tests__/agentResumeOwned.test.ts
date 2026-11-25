@@ -176,6 +176,7 @@ describe("agent.resumeOwned in main (#16341)", () => {
     const { result } = await run();
 
     expect(result.result.status).toBe(status);
+    if (helper.status === "refused") expect(result.result.reason).toBe(helper.reason);
     expect(AgentResumeOwnedResultSchema.parse(result.result)).toEqual(result.result);
   });
 });

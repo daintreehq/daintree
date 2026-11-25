@@ -725,6 +725,46 @@ describe("spawnAndReport (#18190)", () => {
     }
   });
 
+  it("waits its full time for a report that comes after a slow handler has returned", async () => {
+    vi.useFakeTimers();
+    try {
+      const pty = new EventEmitter();
+      const outcome = spawnAndReport(
+        pty as never,
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 20_000));
+          setTimeout(
+            () =>
+              pty.emit("spawn-result", "t-1", {
+                success: false,
+                error: { code: "ENOENT", message: "no shell" },
+              }),
+            1_000
+          );
+          return true;
+        },
+        "t-1"
+      );
+      await vi.advanceTimersByTimeAsync(21_000);
+      await expect(outcome).resolves.toEqual({ started: false, code: "ENOENT" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers not started when the handler declines, whatever was reported", async () => {
+    const pty = new EventEmitter();
+    const outcome = spawnAndReport(
+      pty as never,
+      async () => {
+        pty.emit("spawn-result", "t-1", { success: true });
+        return false;
+      },
+      "t-1"
+    );
+    await expect(outcome).resolves.toEqual({ started: false });
+  });
+
   it("keeps a code reported before the handler declined", async () => {
     const pty = new EventEmitter();
     const outcome = spawnAndReport(

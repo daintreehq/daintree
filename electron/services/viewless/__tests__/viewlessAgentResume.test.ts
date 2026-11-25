@@ -717,19 +717,22 @@ describe("resumeAgentSessionAsPane", () => {
     expect(spawns(invoke)).toHaveLength(0);
   });
 
-  it("records nothing when the pty-host reports the spawn failed, and names its code (#18190)", async () => {
-    const { deps, store } = resumeDeps();
-    const runtime = makeRuntime({
-      confirmSpawn: vi.fn(async (_id: string, spawn: () => Promise<void>) => {
-        await spawn();
-        return { started: false, code: "EACCES" } as SpawnOutcome;
-      }),
-    });
-    const result = await resumeAgentSessionAsPane(REQUEST, deps, runtime);
-    expect(result).toMatchObject({ status: "refused", reason: "spawn-failed" });
-    expect(result.status === "refused" && result.message).toMatch(/\bEACCES\b/);
-    expect(store.read()?.terminals ?? []).toHaveLength(0);
-  });
+  it.each(["EACCES", "PROJECT_NOT_READY"] as const)(
+    "records nothing when the pty-host reports the spawn failed, and names its code %s (#18190)",
+    async (code) => {
+      const { deps, store } = resumeDeps();
+      const runtime = makeRuntime({
+        confirmSpawn: vi.fn(async (_id: string, spawn: () => Promise<void>) => {
+          await spawn();
+          return { started: false, code } as SpawnOutcome;
+        }),
+      });
+      const result = await resumeAgentSessionAsPane(REQUEST, deps, runtime);
+      expect(result).toMatchObject({ status: "refused", reason: "spawn-failed" });
+      expect(result.status === "refused" && result.message).toMatch(new RegExp(`\\b${code}\\b`));
+      expect(store.read()?.terminals ?? []).toHaveLength(0);
+    }
+  );
 
   it("still refuses a failed start the pty-host gave no code for", async () => {
     const { deps } = resumeDeps();
@@ -739,18 +742,15 @@ describe("resumeAgentSessionAsPane", () => {
         return { started: false } as SpawnOutcome;
       }),
     });
-    await expect(resumeAgentSessionAsPane(REQUEST, deps, runtime)).resolves.toMatchObject({
-      status: "refused",
-      reason: "spawn-failed",
-      message: expect.any(String),
-    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, runtime);
+    expect(result).toMatchObject({ status: "refused", reason: "spawn-failed" });
+    expect(result.status === "refused" && result.message).not.toMatch(/undefined|reported/);
   });
 
   it("refuses a conversation the store lacks as its own reason, with the handler's naming of that store (#18190)", async () => {
     const { deps, invoke, store } = resumeDeps();
     const base = invoke.getMockImplementation()!;
-    const message =
-      "No Claude conversation for this session is in $HOME/.claude-work/projects, the store this launch reads; a fresh one isn't started under its id.";
+    const message = "Not in $HOME/.claude-work/projects.";
     invoke.mockImplementation(async (projectId, channel, args) => {
       if (channel === CHANNELS.TERMINAL_SPAWN) {
         throw Object.assign(new Error(message), { code: "CLAUDE_CONVERSATION_NOT_FOUND" });
@@ -760,6 +760,36 @@ describe("resumeAgentSessionAsPane", () => {
     const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
     expect(result).toEqual({ status: "refused", reason: "no-conversation", message });
     expect(store.read()?.terminals ?? []).toHaveLength(0);
+  });
+
+  it("classifies the refusal by its code, never by its wording", async () => {
+    const { deps, invoke } = resumeDeps();
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) => {
+      if (channel === CHANNELS.TERMINAL_SPAWN) {
+        throw new Error("No Claude conversation for this session is in $HOME/.claude/projects.");
+      }
+      return base(projectId, channel, args);
+    });
+    await expect(resumeAgentSessionAsPane(REQUEST, deps, makeRuntime())).resolves.toMatchObject({
+      status: "refused",
+      reason: "spawn-failed",
+    });
+  });
+
+  it("keeps a host path in the handler's error out of the refusal", async () => {
+    const { deps, invoke } = resumeDeps();
+    const base = invoke.getMockImplementation()!;
+    invoke.mockImplementation(async (projectId, channel, args) => {
+      if (channel === CHANNELS.TERMINAL_SPAWN) {
+        throw new Error("Cannot launch CLI: /Users/someone/.npm/bin/claude");
+      }
+      return base(projectId, channel, args);
+    });
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+    expect(result).toMatchObject({ status: "refused", reason: "spawn-failed" });
+    expect(result.status === "refused" && result.message).toContain("Cannot launch CLI");
+    expect(result.status === "refused" && result.message).not.toContain("/Users/someone");
   });
 
   it("refuses when the spawn handler rejects", async () => {

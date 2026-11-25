@@ -156,24 +156,42 @@ describe("resolvePaneClaudeProjectsRoot", () => {
 describe.skipIf(process.platform === "win32")("describeClaudeProjectsRoot (#18190)", () => {
   const HOME = "/Users/someone";
 
-  it("names a store under the home folder from $HOME, which the packaged sanitizer keeps", () => {
-    const label = describeClaudeProjectsRoot(`${HOME}/work/.claude-alt/projects`, HOME);
-    expect(label).toBe("$HOME/work/.claude-alt/projects");
-    expect(sanitizeErrorMessage(`No conversation is in ${label}; refused.`)).toContain(label);
-  });
-
-  it("names a store outside the home folder by its config folder alone", () => {
-    const label = describeClaudeProjectsRoot("/srv/team/claude-shared/projects", HOME);
-    expect(label).not.toContain("/srv");
-    expect(label).toContain("claude-shared/projects");
-    expect(sanitizeErrorMessage(`No conversation is in ${label}; refused.`)).toContain(label);
-  });
-
-  it("never reads a sibling of the home folder as inside it", () => {
-    expect(describeClaudeProjectsRoot("/Users/someone-else/.claude/projects", HOME)).not.toMatch(
-      /^\$HOME/
+  const survives = (label: string) =>
+    expect(sanitizeErrorMessage(`No conversation is in ${label}; refused.`)).toBe(
+      `No conversation is in ${label}; refused.`
     );
-    expect(describeClaudeProjectsRoot("/projects", HOME)).not.toContain("$HOME/");
+
+  it("names a store under the home folder by its path from $HOME, which the packaged sanitizer keeps", () => {
+    expect(describeClaudeProjectsRoot(`${HOME}/.claude/projects`, HOME)).toBe(
+      "$HOME/.claude/projects"
+    );
+    const label = describeClaudeProjectsRoot(`${HOME}/work/.claude-alt/projects/`, HOME);
+    expect(label).toBe("$HOME/work/.claude-alt/projects");
+    survives(label);
+  });
+
+  it("names any store outside the home folder by CLAUDE_CONFIG_DIR, never by its path", () => {
+    for (const root of [
+      "/srv/team-a/claude/projects",
+      "/srv/team-b/claude/projects",
+      "/Users/someone-else/.claude/projects",
+      // A home reached through another path names no user either.
+      "/Volumes/data/Users/someone/projects",
+      // The home folder itself is never the default store.
+      HOME,
+    ]) {
+      const label = describeClaudeProjectsRoot(root, HOME);
+      expect(label).toBe("$CLAUDE_CONFIG_DIR/projects");
+      survives(label);
+    }
+  });
+
+  it("falls back to CLAUDE_CONFIG_DIR for a home path the packaged sanitizer would mangle", () => {
+    const raw = "$HOME/Claude (Work)/projects";
+    expect(sanitizeErrorMessage(raw)).not.toBe(raw);
+    expect(describeClaudeProjectsRoot(`${HOME}/Claude (Work)/projects`, HOME)).toBe(
+      "$CLAUDE_CONFIG_DIR/projects"
+    );
   });
 });
 
