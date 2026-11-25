@@ -15,6 +15,7 @@ import type { HelpSessionStartedBy } from "../HelpSessionService.js";
 import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
 import type { AgentId } from "../../../shared/types/agent.js";
 import type { PtyClient } from "../PtyClient.js";
+import type { SpawnErrorCode, SpawnResult } from "../../../shared/types/pty-host.js";
 import type { AssistantLaunchSettings } from "../../../shared/utils/assistantLaunchFlags.js";
 import { READY_SCREEN_LINES, untilAssistantReady } from "./assistantReadiness.js";
 
@@ -509,6 +510,9 @@ export async function liveAssistantLaunchDeps(): Promise<AssistantLaunchDeps> {
  */
 const SPAWN_RESULT_WAIT_MS = 15_000;
 
+/** How a spawn went, with the code the terminal host refused it with, when it gave one. */
+export type SpawnOutcome = { started: true } | { started: false; code?: SpawnErrorCode };
+
 /**
  * Whether the assistant's PTY actually started. The spawn handler only queues
  * it; a bad shell or a full spawn queue is reported afterwards, as its spawn
@@ -521,19 +525,44 @@ export async function spawnAndConfirm(
   /** What no report in time means; a caller with no readiness wait after it reads it as no start. */
   options: { unreportedStarted?: boolean } = {}
 ): Promise<boolean> {
-  if (!pty) return false;
+  return (await spawnAndReport(pty, spawn, terminalId, options)).started;
+}
+
+/**
+ * {@link spawnAndConfirm}, keeping the refusal's code. Listened for before the
+ * handler runs, since some refusals are reported inside it, and waited for
+ * only once it has queued the spawn, so a slow handler doesn't spend the wait.
+ */
+export async function spawnAndReport(
+  pty: Pick<PtyClient, "on" | "off"> | null,
+  spawn: () => Promise<boolean>,
+  terminalId: string,
+  options: { unreportedStarted?: boolean } = {}
+): Promise<SpawnOutcome> {
+  if (!pty) return { started: false };
   const unreportedStarted = options.unreportedStarted ?? true;
-  let settle: (started: boolean) => void = () => {};
-  const reported = new Promise<boolean>((resolve) => {
+  let report: Pick<SpawnResult, "success" | "error"> | undefined;
+  let settle: () => void = () => {};
+  const reported = new Promise<void>((resolve) => {
     settle = resolve;
   });
-  const onResult = (id: string, result: { success?: boolean } | undefined) => {
-    if (id === terminalId) settle(result?.success === true);
+  const onResult = (id: string, result: Pick<SpawnResult, "success" | "error"> | undefined) => {
+    if (id !== terminalId || report) return;
+    report = result ?? { success: false };
+    settle();
+  };
+  const failed = (): SpawnOutcome => {
+    const code = report?.error?.code;
+    return code ? { started: false, code } : { started: false };
   };
   pty.on("spawn-result", onResult);
-  const timer = setTimeout(() => settle(unreportedStarted), SPAWN_RESULT_WAIT_MS);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    return (await spawn()) && (await reported);
+    if (!(await spawn())) return failed();
+    timer = setTimeout(settle, SPAWN_RESULT_WAIT_MS);
+    await reported;
+    if (!report) return unreportedStarted ? { started: true } : { started: false };
+    return report.success === true ? { started: true } : failed();
   } finally {
     clearTimeout(timer);
     pty.off("spawn-result", onResult);

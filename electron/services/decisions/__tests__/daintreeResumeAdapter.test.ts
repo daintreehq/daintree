@@ -561,6 +561,7 @@ describe("DaintreeResume", () => {
     ["missing-account", "resume_failed"],
     ["missing-preset", "resume_failed"],
     ["settings-unavailable", "resume_host_unreadable"],
+    ["no-conversation", "resume_spawn_failed"],
     ["spawn-failed", "resume_spawn_failed"],
   ] as const)("names the launch's refusal %s", async (refusal, reason) => {
     const h = setup();

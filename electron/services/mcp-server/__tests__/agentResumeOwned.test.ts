@@ -159,6 +159,14 @@ describe("agent.resumeOwned in main (#16341)", () => {
     ["launched", LAUNCHED],
     ["refused", { status: "refused", reason: "panel-limit", message: "Full." }],
     [
+      "refused",
+      {
+        status: "refused",
+        reason: "no-conversation",
+        message: "No Claude conversation for this session is in $HOME/.claude/projects.",
+      },
+    ],
+    [
       "existing",
       { status: "existing", projectId: "project-1", worktreeId: "wt-1", terminalId: "terminal-1" },
     ],
@@ -168,6 +176,7 @@ describe("agent.resumeOwned in main (#16341)", () => {
     const { result } = await run();
 
     expect(result.result.status).toBe(status);
+    if (helper.status === "refused") expect(result.result.reason).toBe(helper.reason);
     expect(AgentResumeOwnedResultSchema.parse(result.result)).toEqual(result.result);
   });
 });

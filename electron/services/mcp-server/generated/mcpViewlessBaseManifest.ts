@@ -569,17 +569,17 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         worktreeId: {
           type: "string",
           minLength: 1,
-          description: "The worktree the session ran in.",
+          description: "The session's worktree.",
         },
         agentId: {
           type: "string",
           minLength: 1,
-          description: "The session record's `agentId`.",
+          description: "The session's `agentId`.",
         },
         sessionId: {
           type: "string",
           minLength: 1,
-          description: "The session record's `sessionId`, exactly.",
+          description: "The session's `sessionId`, exactly.",
         },
       },
       required: ["worktreeId", "agentId", "sessionId"],
@@ -624,6 +624,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 "missing-account",
                 "missing-preset",
                 "settings-unavailable",
+                "no-conversation",
                 "spawn-failed",
                 "cancelled",
                 "not-authorized",

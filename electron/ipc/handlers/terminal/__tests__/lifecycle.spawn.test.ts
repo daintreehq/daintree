@@ -115,6 +115,7 @@ vi.mock("../../../../services/claude/ClaudeSessionStore.js", () => ({
   CLAUDE_TRANSCRIPT_LOOKUP_TIMEOUT_MS: 1_500,
   CLAUDE_STORE_UNREACHABLE_COOLDOWN_MS: 60_000,
   resolvePaneClaudeProjectsRoot: claudeStoreMocks.resolvePaneClaudeProjectsRoot,
+  describeClaudeProjectsRoot: (projectsRoot: string) => `<store ${projectsRoot}>`,
   rememberClaudePaneStore: claudeStoreMocks.rememberClaudePaneStore,
   __resetClaudeSessionStoreForTests: vi.fn(),
   observeClaudeTranscript: vi.fn(async () => "unknown"),
@@ -1408,9 +1409,13 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     it("refuses an exact resume whose conversation was never written, spawning and minting nothing (#16019)", async () => {
       findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
 
+      // Typed and naming the store it checked, so a resume can tell it from a failed start (#18190).
       await expect(
         spawnClaude({ shell: "/usr/bin/nu", agentSessionId: SESSION, exactResume: true })
-      ).rejects.toThrow(/no Claude conversation to resume/);
+      ).rejects.toMatchObject({
+        code: "CLAUDE_CONVERSATION_NOT_FOUND",
+        message: expect.stringContaining(`<store ${CLAUDE_STORE}>`),
+      });
       expect(ptyClient.spawn).not.toHaveBeenCalled();
       expect(mockPreparePaneConfig).not.toHaveBeenCalled();
       expect(claudeStoreMocks.rememberClaudePaneStore).not.toHaveBeenCalled();

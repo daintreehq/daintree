@@ -98,6 +98,7 @@ export const AgentSessionPaneRefusalSchema = z.enum([
   "missing-account",
   "missing-preset",
   "settings-unavailable",
+  "no-conversation",
   "spawn-failed",
   "cancelled",
   "not-authorized",
@@ -108,9 +109,9 @@ export type AgentSessionPaneRefusal = z.infer<typeof AgentSessionPaneRefusalSche
 // `agent.resumeOwned` (#16341). No project: the call runs in the one its session
 // is bound to. No flags, command or directory: those come from the journal.
 export const AgentResumeOwnedArgsSchema = z.object({
-  worktreeId: z.string().min(1).describe("The worktree the session ran in."),
-  agentId: z.string().min(1).describe("The session record's `agentId`."),
-  sessionId: z.string().min(1).describe("The session record's `sessionId`, exactly."),
+  worktreeId: z.string().min(1).describe("The session's worktree."),
+  agentId: z.string().min(1).describe("The session's `agentId`."),
+  sessionId: z.string().min(1).describe("The session's `sessionId`, exactly."),
 });
 
 // Top-level object, for `buildToolOutputSchema`. Every field is required and
