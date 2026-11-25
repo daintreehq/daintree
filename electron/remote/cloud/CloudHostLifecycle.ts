@@ -129,10 +129,21 @@ function nameOf(provider: CloudProvider): string {
   return provider.info(process.platform).name;
 }
 
-/** A start or stop for a provider whose machines have none, refused before anything is sent. */
+/**
+ * A start or stop refused because the machine's provider has neither, before
+ * anything is sent. Its own class so a Bring back can tell it from a start
+ * that was tried and failed: such a machine has no wake to fail.
+ */
+export class NoStopOrStartError extends AppError {}
+
 function noStopOrStart(provider: CloudProvider): AppError {
-  const message = `${nameOf(provider)} machines don't stop or start. Delete the machine to end it.`;
-  return new AppError({ code: "UNSUPPORTED", message, userMessage: message });
+  const message = `${nameOf(provider)} machines don't stop or start, so this one can only be deleted.`;
+  return new NoStopOrStartError({ code: "UNSUPPORTED", message, userMessage: message });
+}
+
+/** Whether the provider declares that its machines end only by Delete (#18227). */
+function deleteOnly(provider: CloudProvider): boolean {
+  return provider.info(process.platform).stopMode === "delete-only";
 }
 
 /** A worktree's machine on a provider whose create waits for the person to choose an offer. */
@@ -1704,6 +1715,7 @@ export class CloudHostLifecycle {
       if (binding.creation) return this.retryCreate(hostId);
       throw invalid("This host has no machine yet.");
     }
+    this.requireStopAndStart(binding.providerId);
     // A Bring back's wake under way becomes this Start: it joins it, and it starts the machine
     // as a Start would, whatever the wake would have decided. One a Stop or removal already
     // ended is waited out instead, so this Start comes after that, not into it.
@@ -1739,6 +1751,11 @@ export class CloudHostLifecycle {
     signal: AbortSignal,
     sent: () => void
   ): Promise<boolean> {
+    // A machine that can't start is never woken: refused before it is waited on or read.
+    const asked = this.deps.store.binding(bindingId);
+    if (!this.disposed && !signal.aborted && asked?.resourceId && asked.hostId === hostId) {
+      this.requireStopAndStart(asked.providerId);
+    }
     // A few looks at most: a sleep or an operation beginning between two of them means look again.
     for (let look = 0; look < 3; look++) {
       const sleeping = this.idleSleeping.has(bindingId) ? this.idleAttempts.get(bindingId) : null;
@@ -1909,6 +1926,7 @@ export class CloudHostLifecycle {
     // Refused while its provider isn't registered, before the intent changes.
     this.deps.accounts.provider(binding.providerId);
     if (!binding.resourceId) throw invalid("This host has no machine to stop.");
+    this.requireStopAndStart(binding.providerId);
     const running = this.operations.get(binding.id);
     // A start, or a create whose machine exists and is still coming up, is
     // superseded by the stop the person asked for now.
@@ -2114,6 +2132,7 @@ export class CloudHostLifecycle {
       // Refused while its provider isn't registered, before anything is written.
       this.deps.accounts.provider(binding.providerId);
       if (choice === "delete") this.requireDeletion(binding.providerId);
+      else this.requireStopAndStart(binding.providerId);
       if (planned.has(binding.id)) throw invalid("Choose once for each machine.");
       if (mutation && this.keptForDelete.has(`${binding.id}\u0000${mutation}`)) continue;
       const current = binding.worktreeCleanup;
@@ -2210,6 +2229,7 @@ export class CloudHostLifecycle {
     const binding = this.requireBindingForHost(hostId);
     const cleanup = binding.worktreeCleanup;
     if (!cleanup) throw invalid("There's nothing left to do for this machine.");
+    if (cleanup.choice === "stop") this.requireStopAndStart(binding.providerId);
     if (cleanup.phase === "unconfirmed") {
       throw invalid(
         "Daintree can't tell whether its worktree was deleted, so it leaves the machine as it is. Stop or remove it here if the worktree is gone."
@@ -2439,6 +2459,26 @@ export class CloudHostLifecycle {
    * shutdown partway leaves it due, and so does a provider that isn't there.
    */
   private async runCleanup(bindingId: string): Promise<CloudWorktreeCleanupOutcome | null> {
+    const saved = this.deps.store.binding(bindingId);
+    const savedCleanup = saved?.worktreeCleanup;
+    // A stop chosen for a machine that has none (one replayed after a restart) ends nothing: it
+    // fails as it stands, never retried by itself, and the machine runs on until it's deleted.
+    if (saved?.hostId && savedCleanup?.choice === "stop") {
+      const refusal = this.stopAndStartRefusal(saved.providerId);
+      if (refusal) {
+        this.setCleanupError(bindingId, savedCleanup.attemptId, "failed", {
+          code: "unsupported",
+          message: refusal.message,
+          at: this.now(),
+        });
+        return {
+          hostId: saved.hostId,
+          machineName: saved.observation?.name ?? savedCleanup.resourceId,
+          choice: savedCleanup.choice,
+          error: refusal.message,
+        };
+      }
+    }
     const binding = this.deps.store.updateBinding(bindingId, (current) =>
       current.worktreeCleanup
         ? {
@@ -2589,6 +2629,22 @@ export class CloudHostLifecycle {
     if (info.capabilities.deletion) return;
     const message = `Daintree can't delete machines on ${info.name}. Delete it in ${info.name}'s console.`;
     throw new AppError({ code: "UNSUPPORTED", message, userMessage: message });
+  }
+
+  /**
+   * Refuses a stop or start through a registered provider whose machines can
+   * only be deleted, before any intent is written, link let go or request
+   * sent. An unregistered one is refused later, with the reason it's unavailable.
+   */
+  private requireStopAndStart(providerId: CloudProviderId): void {
+    const refusal = this.stopAndStartRefusal(providerId);
+    if (refusal) throw refusal;
+  }
+
+  private stopAndStartRefusal(providerId: CloudProviderId): AppError | null {
+    if (this.deps.accounts.providerUnavailable(providerId) !== null) return null;
+    const provider = this.deps.accounts.provider(providerId);
+    return deleteOnly(provider) ? noStopOrStart(provider) : null;
   }
 
   /** Reads the machine's state now, for a person's refresh. Never starts anything. */
@@ -3689,6 +3745,7 @@ export class CloudHostLifecycle {
    * a way that leaves that stop, as its keeper found on the current link.
    */
   private idleStopRole(binding: StoredCloudBinding, provider: CloudProvider): IdleStopRole | null {
+    if (deleteOnly(provider)) return null;
     const { persistence } = provider.info(process.platform).capabilities;
     if (persistence.stoppedComputeBilled || persistence.retentionDays === 0) return null;
     const keys = provider.machineKeys !== undefined;
