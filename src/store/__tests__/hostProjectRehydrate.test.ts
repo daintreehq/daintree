@@ -69,6 +69,7 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
 }));
 
 import { refreshHostDrafts, rehydrateHostProjectState } from "../hostProjectRehydrate";
+import { arePanelsRestored, beginPanelRestore } from "@/utils/stateHydration/panelRestoreGate";
 import { draftInputPersistence } from "../persistence/draftInputPersistence";
 import {
   _resetHostOwnedWritesForTesting,
@@ -174,6 +175,27 @@ describe("rehydrateHostProjectState", () => {
     expect(drafts.restoreProjectDraftInputs).toHaveBeenCalledWith("proj-1", {
       t2: "only on the host",
     });
+  });
+
+  // #18176: a panel the host saved that this view lacks isn't one an
+  // assistant's close may read as missing while it is being added.
+  it("holds the close check open while it reads the host, however it ends", async () => {
+    beginPanelRestore()();
+    let answer: (saved: unknown) => void = () => {};
+    hydrate.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+
+    const done = rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true });
+    await vi.waitFor(() => expect(hydrate).toHaveBeenCalled());
+    expect(arePanelsRestored()).toBe(false);
+    answer(hostSaved({ workspaceId: "proj-2" }));
+    await done;
+    expect(arePanelsRestored()).toBe(true);
+
+    hydrate.mockRejectedValue(new Error("host gone"));
+    await expect(
+      rehydrateHostProjectState("proj-1", { isCurrent: current, authoritative: true })
+    ).rejects.toThrow("host gone");
+    expect(arePanelsRestored()).toBe(true);
   });
 
   it("ignores a worktree this view doesn't know", async () => {

@@ -66,6 +66,7 @@ import {
   runDroppedViewRestore,
   useProjectStore,
 } from "../projectStore";
+import { arePanelsRestored, beginPanelRestore } from "@/utils/stateHydration/panelRestoreGate";
 
 const PROJECT = { id: "proj-1", name: "One", path: "/repo/one" };
 
@@ -277,6 +278,19 @@ describe("projectStore.sleepProject", () => {
       expect(isDroppedViewLayoutPending("proj-1")).toBe(true);
       expect(claimDroppedViewRestore("proj-1")).toBe(true);
       await runDroppedViewRestore("proj-1", async () => {});
+    });
+
+    // #18176: the dropped view's panels are gone until its layout is put
+    // back, so an assistant's close mustn't read any of them as missing.
+    it("holds the close check open from the drop until the view is restored", () => {
+      beginPanelRestore()();
+      setCurrentProject(PROJECT);
+
+      useProjectStore.getState().dropToNoProject();
+
+      expect(arePanelsRestored()).toBe(false);
+      beginPanelRestore()();
+      expect(arePanelsRestored()).toBe(true);
     });
 
     it("waits for a restore still in flight before sleeping again", async () => {

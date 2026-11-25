@@ -1,25 +1,34 @@
 /**
- * Whether this view's panels are back since its latest restore began (#18176),
- * so a missing id can be read as missing. A view that just took over an
- * assistant is up before its panels are, and an id it hasn't restored yet is
- * not one the close would miss for long.
+ * Whether this view's panels are all in its store (#18176), so a missing id
+ * can be read as missing. A view that just took over an assistant is up
+ * before its panels are, and an id it hasn't restored yet is not one the
+ * close would miss for long.
  *
- * Each restore takes a token and settles only its own, so an older restore
- * finishing late never reports a newer one done. Nothing has been restored
- * until the first one settles.
+ * Every path that puts panels back holds the gate open while it runs: the
+ * view's own restore, and the host read-backs of a view that regained it.
+ * Emptying the store keeps it open until a restore next finishes. Nothing has
+ * been restored until the first one does.
  */
-let latestRestore = 0;
-let settledRestore = -1;
+let inFlight = 0;
+let restored = false;
 
-export function beginPanelRestore(): number {
-  latestRestore += 1;
-  return latestRestore;
+/** Hold the gate open for one restore; the returned call ends it, once. */
+export function beginPanelRestore(): () => void {
+  inFlight += 1;
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    inFlight -= 1;
+    restored = true;
+  };
 }
 
-export function settlePanelRestore(token: number): void {
-  if (token === latestRestore) settledRestore = token;
+/** The store was emptied: nothing reads as missing until a restore finishes. */
+export function markPanelsCleared(): void {
+  restored = false;
 }
 
 export function arePanelsRestored(): boolean {
-  return settledRestore === latestRestore;
+  return restored && inFlight === 0;
 }

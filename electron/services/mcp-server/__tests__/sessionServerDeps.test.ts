@@ -1070,7 +1070,9 @@ describe("a close question with no window to ask in (#18176)", () => {
     restore = setMcpDriveTargetResolver(() => ({ state: "vacant" }));
     const routingOn = await refusal();
     expect(routingOn).toMatch(/The window that has control of this project takes it over/);
-    expect(routingOn).toMatch(/opening this assistant in the project's Assistant panel/);
+    expect(routingOn).toMatch(
+      /while no window has control, opening this assistant in the project's Assistant panel/
+    );
     expect(routingOn).not.toMatch(/one window here/);
 
     expect(dispatchActionForWebContents).not.toHaveBeenCalled();

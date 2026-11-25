@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ActionManifestEntry } from "@shared/types/actions";
 import {
   MCP_CONFIRM_DECISION_MS,
@@ -19,7 +19,7 @@ import {
   resetWorktreeSnapshotSyncForTesting,
   trackWorktreeSnapshot,
 } from "@/store/worktreeSnapshotSync";
-import { beginPanelRestore, settlePanelRestore } from "@/utils/stateHydration/panelRestoreGate";
+import { beginPanelRestore } from "@/utils/stateHydration/panelRestoreGate";
 
 const mocks = vi.hoisted(() => ({
   listForTransfer: vi.fn(() => [] as ActionManifestEntry[]),
@@ -1057,7 +1057,7 @@ describe("useMcpBridge", () => {
   it.each(["terminal-does-not-exist-052", "constructor"])(
     "answers an assistant close of '%s', which no panel here has, as a miss without asking",
     async (terminalId) => {
-      settlePanelRestore(beginPanelRestore());
+      beginPanelRestore()();
       mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.close", title: "Close panel" }));
       mocks.panelsById = { p1: { id: "p1", title: "zsh" } };
 
@@ -1098,7 +1098,7 @@ describe("useMcpBridge", () => {
     ["a browser panel", { id: "browser-1", title: "Docs", kind: "browser" }],
     ["a trashed panel", { id: "browser-1", title: "Docs", kind: "browser", location: "trash" }],
   ])("asks about an assistant close of %s this view has", async (_label, panel) => {
-    settlePanelRestore(beginPanelRestore());
+    beginPanelRestore()();
     mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.close", title: "Close panel" }));
     mocks.panelsById = { "browser-1": panel };
 
@@ -1132,8 +1132,8 @@ describe("useMcpBridge", () => {
   // A window that just took an assistant over is up before its panels are,
   // so an id it hasn't put back yet waits for the person as it always has.
   it("still asks about a panel this view hasn't restored yet", async () => {
-    settlePanelRestore(beginPanelRestore());
-    beginPanelRestore();
+    beginPanelRestore()();
+    onTestFinished(beginPanelRestore());
     mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.close", title: "Close panel" }));
 
     renderHook(() => useMcpBridge());
@@ -1163,7 +1163,7 @@ describe("useMcpBridge", () => {
       { terminalIds: ["gone", 42] },
     ],
   ])("leaves %s of a missing panel to its dialog", async (_label, approvalReason, args) => {
-    settlePanelRestore(beginPanelRestore());
+    beginPanelRestore()();
     mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.close", title: "Close panel" }));
 
     renderHook(() => useMcpBridge());
@@ -1185,7 +1185,7 @@ describe("useMcpBridge", () => {
   // A batch keeps its one checklist over every id it named: the rows the
   // person leaves checked close, and a missing one answers per item.
   it("still asks about a one-panel closeMany whose panel this view doesn't have", async () => {
-    settlePanelRestore(beginPanelRestore());
+    beginPanelRestore()();
     mocks.get.mockReturnValue(safeManifestEntry({ id: "terminal.closeMany", title: "Close" }));
 
     renderHook(() => useMcpBridge());

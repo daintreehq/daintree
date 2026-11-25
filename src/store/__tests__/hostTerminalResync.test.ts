@@ -56,6 +56,7 @@ vi.mock("@/utils/stateHydration/statePatcher", () => ({
 }));
 
 import { resyncHostTerminals } from "../hostTerminalResync";
+import { arePanelsRestored, beginPanelRestore } from "@/utils/stateHydration/panelRestoreGate";
 import { noteUpdateInstalledEvent } from "../updateInstalledEvents";
 import { markSpawnUnconfirmed } from "../slices/panelRegistry/unconfirmedSpawn";
 import {
@@ -132,6 +133,25 @@ describe("resyncHostTerminals", () => {
       await loadTerminalService();
       expect(setAgentState).toHaveBeenCalledWith("t-1", "working");
     });
+  });
+
+  // #18176: a terminal the host started while this view was away isn't a
+  // panel yet, so an assistant's close mustn't read it as missing meanwhile.
+  it("holds the close check open while it reads the host, however it ends", async () => {
+    beginPanelRestore()();
+    let answer: (infos: unknown[]) => void = () => {};
+    getForProject.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+
+    const overtaken = resyncHostTerminals("proj-1", { isCurrent: () => false });
+    await vi.waitFor(() => expect(getForProject).toHaveBeenCalled());
+    expect(arePanelsRestored()).toBe(false);
+    answer([]);
+    await overtaken;
+    expect(arePanelsRestored()).toBe(true);
+
+    getForProject.mockRejectedValue(new Error("host gone"));
+    await expect(resyncHostTerminals("proj-1", current)).rejects.toThrow("host gone");
+    expect(arePanelsRestored()).toBe(true);
   });
 
   it("keeps a directing pane directing over a newer waiting report", async () => {

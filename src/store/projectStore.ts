@@ -71,6 +71,7 @@ import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isEphemeralPanel } from "./slices/panelRegistry/panelCount";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
+import { markPanelsCleared } from "@/utils/stateHydration/panelRestoreGate";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -1480,6 +1481,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       clearFleetArmingThroughAccessor();
       set({ currentProject: null, worktreeLoadError: null });
       clearPanelStoreForSwitchThroughAccessor();
+      markPanelsCleared();
       await get().loadProjects();
 
       return result;
@@ -1521,6 +1523,9 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     // restore re-adds the same ids, and reusing an instance would carry the dead
     // process's parser state and screen modes into the respawned one.
     clearPanelStoreForSwitchThroughAccessor({ destroyInstances: true });
+    // Until this view's layout is put back, an assistant's close reads no
+    // panel as missing (#18176).
+    markPanelsCleared();
   },
 
   sleepProject: async (projectId, options) => {

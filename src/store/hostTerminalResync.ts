@@ -4,6 +4,7 @@ import type { BackendTerminalInfo, TerminalReconnectResult } from "@shared/types
 import { getWorktreePathIndex, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { cancelDriveLeaseHold, isHeldForDriveLease } from "@/store/driveLeaseWaitStore";
 import { logWarn } from "@/utils/logger";
+import { beginPanelRestore } from "@/utils/stateHydration/panelRestoreGate";
 import {
   updateInstalledChangedSince,
   updateInstalledEventMark,
@@ -46,6 +47,20 @@ export interface HostTerminalResyncOptions {
  * on its own stream.
  */
 export async function resyncHostTerminals(
+  projectId: string,
+  options: HostTerminalResyncOptions
+): Promise<void> {
+  // Terminals the host started while this view was away are panels it hasn't
+  // shown yet, so none of them reads as missing until this ends (#18176).
+  const endPanelRestore = beginPanelRestore();
+  try {
+    await resyncWithHost(projectId, options);
+  } finally {
+    endPanelRestore();
+  }
+}
+
+async function resyncWithHost(
   projectId: string,
   options: HostTerminalResyncOptions
 ): Promise<void> {

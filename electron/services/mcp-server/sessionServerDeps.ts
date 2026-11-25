@@ -1109,8 +1109,9 @@ export function createSessionServerDeps(
    * windows takes it over, so it is told how that happens: on its own (the
    * one window here with Host mode off, the window with control with it on;
    * two windows here take it over on neither's say), or by opening it in a
-   * window's Assistant panel, which takes it over whatever drives the
-   * project. Any other session without a pin has lost the window it was given.
+   * window's Assistant panel, which with Host mode on only works while no
+   * window has control. Any other session without a pin has lost the window
+   * it was given.
    */
   const noCloseApprovalWindow = (): string => {
     const viewless =
@@ -1119,12 +1120,11 @@ export function createSessionServerDeps(
       deps.sessionStore.sessionViewlessHelpMap.get(sessionId) === viewlessProjectId;
     if (!viewless) return "No Daintree window is pinned to this session to ask the user.";
     const takeOver = isMcpHostRoutingEnabled()
-      ? "The window that has control of this project takes it over once it's ready"
-      : "Opening the project in one window here takes it over";
+      ? "The window that has control of this project takes it over once it's ready, or, while no window has control, opening this assistant in the project's Assistant panel in a window here does."
+      : "Opening the project in one window here takes it over, and so does opening this assistant in the project's Assistant panel in a window here.";
     return (
       "This assistant isn't attached to a window of this project, so nobody can be asked to approve this close. " +
-      `${takeOver}, and so does opening this assistant in the project's Assistant panel in a window here. ` +
-      "Retry once it's attached."
+      `${takeOver} Retry once it's attached.`
     );
   };
 

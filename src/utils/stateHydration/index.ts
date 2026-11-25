@@ -54,7 +54,7 @@ import { isRemoteWindow, setHostPlatformInfo } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { publishWakeCandidates } from "@/services/wakeContinue/wakeContinue";
-import { beginPanelRestore, settlePanelRestore } from "./panelRestoreGate";
+import { beginPanelRestore } from "./panelRestoreGate";
 
 /**
  * Record which machine this view's project lives on. A remote view also asks
@@ -210,7 +210,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     prefetchedHydrateResult,
   } = options;
   const hydrationStartedAt = Date.now();
-  const panelRestore = beginPanelRestore();
+  const endPanelRestore = beginPanelRestore();
 
   /**
    * Wrap a restore phase in a hydration batch so every `addPanel` call inside `run`
@@ -892,7 +892,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     throw error;
   } finally {
     suppressMruRecording(false);
-    settlePanelRestore(panelRestore);
+    endPanelRestore();
     markRendererPerformance(PERF_MARKS.HYDRATE_COMPLETE, {
       durationMs: Date.now() - hydrationStartedAt,
       panelCount: panelRestoreCount,

@@ -9,6 +9,7 @@ import {
 import { hydratedSettingsOf, type HydratedSettings } from "@/store/hostResyncSignal";
 import { getWorktreeIdSet, getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { logWarn } from "@/utils/logger";
+import { beginPanelRestore } from "@/utils/stateHydration/panelRestoreGate";
 import type { SavedDrafts } from "@/store/persistence/draftInputPersistence";
 
 /**
@@ -67,6 +68,20 @@ export interface HostProjectRehydrateOptions {
  * started here. Panels this view has and the host's save lacks are kept.
  */
 export async function rehydrateHostProjectState(
+  projectId: string,
+  options: HostProjectRehydrateOptions
+): Promise<void> {
+  // Panels the host saved that this view lacks are added here, so none of
+  // them reads as missing until this ends (#18176).
+  const endPanelRestore = beginPanelRestore();
+  try {
+    await rehydrateFromHost(projectId, options);
+  } finally {
+    endPanelRestore();
+  }
+}
+
+async function rehydrateFromHost(
   projectId: string,
   options: HostProjectRehydrateOptions
 ): Promise<void> {
