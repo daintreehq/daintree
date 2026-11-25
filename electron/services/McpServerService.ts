@@ -31,6 +31,7 @@ import type {
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
 import { readClosedPanelProcess } from "./mcp-server/closedPanelProcesses.js";
+import { readClosingAgentPaneFrom } from "./mcp-server/closedPaneWorktree.js";
 import {
   resolveClosedTerminalGeneration,
   waitForClosedPanelExits,
@@ -229,6 +230,13 @@ export interface McpWakeHold {
  * worktrees (#18151) before what hasn't answered reads as unreadable.
  */
 const GLOBAL_CLOSE_WORKTREE_READ_DEADLINE_MS = 20_000;
+
+/**
+ * How long any other agent close's answer waits on git for the panels'
+ * worktrees (#18173). The panels are already closed and nobody is being
+ * asked, so a slow read comes back unreadable rather than holding the answer.
+ */
+const CLOSE_RESULT_WORKTREE_READ_DEADLINE_MS = 3_000;
 
 export class McpServerService {
   // Mutable reference updated by start(); read by bridge's getActiveProjectWebContents.
@@ -639,6 +647,30 @@ export class McpServerService {
         return readWorktreesLocalWork(
           worktreeIds.map((worktreeId) => ({ projectPath, worktreeId })),
           { signal, deadlineMs: GLOBAL_CLOSE_WORKTREE_READ_DEADLINE_MS }
+        );
+      },
+      // Strict, so a pty-host slow to answer reads as unreadable rather than
+      // as a pane that never ran an agent.
+      readClosingAgentPane: (terminalId) =>
+        readClosingAgentPaneFrom(
+          terminalId,
+          async (id) => {
+            const client = getPtyClient();
+            return client ? client.getTerminalAsync(id, undefined, { strict: true }) : null;
+          },
+          (id) => getLifecycleLedger().getEntry(id)
+        ),
+      readClosedPaneWorktrees: async (panes, signal) => {
+        const { projectStore } = await import("./ProjectStore.js");
+        return readWorktreesLocalWork(
+          panes.map(({ projectId, worktreeId }) => ({
+            projectPath:
+              projectId === undefined
+                ? null
+                : (projectStore.getProjectById(projectId)?.path ?? null),
+            worktreeId,
+          })),
+          { signal, deadlineMs: CLOSE_RESULT_WORKTREE_READ_DEADLINE_MS }
         );
       },
       terminalGenerationOf: (terminalId) => {

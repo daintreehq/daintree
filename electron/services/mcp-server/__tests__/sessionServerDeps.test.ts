@@ -224,10 +224,12 @@ describe("createSessionServerDeps", () => {
         },
       },
     ],
-  ])("hands %s the closed-process reader", (_label, capture) => {
+  ])("hands %s the closed-process and closed-pane worktree readers", (_label, capture) => {
     const deps = fakeSource();
     const readClosedPanelProcess = vi.fn();
-    (deps as { readClosedPanelProcess?: unknown }).readClosedPanelProcess = readClosedPanelProcess;
+    const readClosingAgentPane = vi.fn();
+    const readClosedPaneWorktrees = vi.fn();
+    Object.assign(deps, { readClosedPanelProcess, readClosingAgentPane, readClosedPaneWorktrees });
 
     const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
       sessionId: "s",
@@ -236,6 +238,9 @@ describe("createSessionServerDeps", () => {
     });
 
     expect(sessionDeps.readClosedPanelProcess).toBe(readClosedPanelProcess);
+    // #18173: every agent close's answer says what its worktree holds.
+    expect(sessionDeps.readClosingAgentPane).toBe(readClosingAgentPane);
+    expect(sessionDeps.readClosedPaneWorktrees).toBe(readClosedPaneWorktrees);
   });
 
   // #15729: an owned worktree delete refuses outright without it; #15737: a

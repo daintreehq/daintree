@@ -29,6 +29,6 @@ export const PanelCloseResultSchema = z.object({
     .optional()
     .describe("Each closed panel's process after the close: closed is not stopped."),
   worktree: WorktreeLocalWorkWireSchema.optional().describe(
-    "Agent you didn't launch: its worktree when asked. unpushedCommits: on no remote at last fetch (null: none yet); changedEntries: changed or untracked paths."
+    "A closed agent pane's worktree. unpushedCommits: on no remote at last fetch (null: none yet); changedEntries: changed or untracked paths."
   ),
 });

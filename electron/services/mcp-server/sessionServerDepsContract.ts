@@ -316,6 +316,25 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     signal: AbortSignal
   ) => Promise<import("../../../shared/types/worktreeLocalWork.js").WorktreeLocalWork[]>;
   /**
+   * The agent pane a close names, as this host recorded it when the close
+   * went out (#18173): null for a pane that never ran an agent, or one
+   * nothing on this host recorded. Absent, a close returns no `worktree`
+   * unless the global Assistant's question read one.
+   */
+  readClosingAgentPane?: (
+    terminalId: string
+  ) => Promise<import("./closedPaneWorktree.js").ClosingAgentPane | null>;
+  /**
+   * What each worktree named holds that exists only on this machine, read
+   * after the close returned (#18173), one answer per request in order, on a
+   * short deadline since nobody waits on a question. Never rejects; whatever
+   * git couldn't report in time is unreadable.
+   */
+  readClosedPaneWorktrees?: (
+    panes: ReadonlyArray<import("./closedPaneWorktree.js").ClosedPaneWorktreeRequest>,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/worktreeLocalWork.js").WorktreeLocalWork[]>;
+  /**
    * Whether a terminal belongs to the workspace of this session's pinned view,
    * re-resolved on every call (#12883). What admits Daintree's own assistant to
    * `terminal.readLastMessageOwned` for a pane it did not create: it already

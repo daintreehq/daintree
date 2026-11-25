@@ -21,7 +21,13 @@ import { noteClosedTerminals } from "../sessionCallOwnership.js";
 import type { TerminalProcessRecord, WorktreeLiveTerminal } from "../worktreeProcessGuard.js";
 import type { AgentLastMessageResult } from "../../../../shared/types/agentLastMessage.js";
 import { encodeMessageCursor } from "../../claude/ClaudeMessageCursor.js";
-import { SESSION_GONE, CONFIRMATION_REQUIRED_CODE, type DispatchEnvelope } from "../shared.js";
+import {
+  SESSION_GONE,
+  CONFIRMATION_REQUIRED_CODE,
+  RESOURCE_NOT_OWNED_CODE,
+  type DispatchEnvelope,
+} from "../shared.js";
+import type { WorktreeLocalWork } from "../../../../shared/types/worktreeLocalWork.js";
 import { RendererBridgeUnavailableError } from "../rendererBridge.js";
 import { AssistantTargetError } from "../../assistants/AssistantTerminalControl.js";
 import { CLAUDE_UPDATE_NOT_OFFERED } from "../../../../shared/types/claudeUpdateApply.js";
@@ -826,6 +832,481 @@ describe("session-scoped resource ownership (#11909)", () => {
 
       expect(readClosedPanelProcess).not.toHaveBeenCalled();
       expect(payloadOf<{ processes: unknown[] }>(result).processes).toEqual([]);
+    });
+
+    // #18173: closing an agent you launched says what its worktree holds that
+    // exists only on this machine, as the global Assistant's close of someone
+    // else's agent already did, with nothing asked.
+    describe("its agent pane's worktree (#18173)", () => {
+      const observed = (unpushedCommits: number, changedEntries = 0, hiddenFromStatus = 0) => ({
+        kind: "observed" as const,
+        unpushedCommits,
+        changedEntries,
+        hiddenFromStatus,
+      });
+      const closedEnvelope = (args: unknown) => ({
+        result: {
+          ok: true as const,
+          result: { closedIds: [(args as { terminalId: string }).terminalId] },
+        },
+      });
+      const closeEcho = (_id: string, args: unknown) => Promise.resolve(closedEnvelope(args));
+      type ReadPanes = NonNullable<SessionServerDeps["readClosedPaneWorktrees"]>;
+      const worktreeReader = (answer: (panes: Parameters<ReadPanes>[0]) => WorktreeLocalWork[]) =>
+        vi.fn<ReadPanes>(async (panes) => answer(panes));
+
+      it("returns the facts with an owned close: the pane read as it went out, git once it closed", async () => {
+        const readClosingAgentPane = vi.fn(async (terminalId: string) => ({
+          terminalId,
+          projectId: "project-1",
+          worktreeId: "/wt/t2",
+        }));
+        const readClosedPaneWorktrees = worktreeReader(() => [observed(1, 0, 2)]);
+        const readClosedPanelProcess = vi.fn(async (terminalId: string) => ({
+          terminalId,
+          exited: false,
+          trashExpiresAt: 1_700_000_020_000,
+        }));
+        let finishClose: () => void = () => {};
+        const dispatchAction = vi.fn(
+          (_id: string, args: unknown) =>
+            new Promise<ReturnType<typeof closedEnvelope>>((resolve) => {
+              finishClose = () => resolve(closedEnvelope(args));
+            })
+        );
+        const { store, server } = harness(
+          "s-facts",
+          {},
+          {
+            readClosingAgentPane,
+            readClosedPaneWorktrees,
+            readClosedPanelProcess,
+            dispatchAction,
+          }
+        );
+        store.resourceOwnership.record("s-facts", [{ kind: "terminal", id: "terminal-1" }]);
+
+        const pending = callTool(server, {
+          name: "terminal.closeOwned",
+          arguments: { terminalId: "terminal-1" },
+        });
+        await vi.waitFor(() => expect(dispatchAction).toHaveBeenCalledTimes(1));
+        // The record is read before the close goes out, so a run that takes
+        // the id afterwards can't lend the answer its worktree; git waits for
+        // the close to finish.
+        expect(readClosingAgentPane).toHaveBeenCalledTimes(1);
+        expect(readClosingAgentPane).toHaveBeenCalledWith("terminal-1");
+        expect(readClosingAgentPane.mock.invocationCallOrder[0]!).toBeLessThan(
+          dispatchAction.mock.invocationCallOrder[0]!
+        );
+        expect(readClosedPaneWorktrees).not.toHaveBeenCalled();
+        finishClose();
+        const result = await pending;
+
+        expect(result.isError).toBeFalsy();
+        expect(payloadOf(result)).toEqual({
+          closedIds: ["terminal-1"],
+          processes: [
+            { terminalId: "terminal-1", exited: false, trashExpiresAt: 1_700_000_020_000 },
+          ],
+          worktree: observed(1, 0, 2),
+        });
+        expect(readClosedPaneWorktrees).toHaveBeenCalledTimes(1);
+        expect(readClosedPaneWorktrees.mock.calls[0]![0]).toEqual([
+          { projectId: "project-1", worktreeId: "/wt/t2" },
+        ]);
+        expect(store.resourceOwnership.owns("s-facts", "terminal", "terminal-1")).toBe(false);
+      });
+
+      it("never holds the close for the pane's record: it is awaited after the dispatch", async () => {
+        let answerRecord: (pane: { terminalId: string; worktreeId: string }) => void = () => {};
+        const readClosingAgentPane = vi.fn(
+          () =>
+            new Promise<{ terminalId: string; worktreeId: string }>((resolve) => {
+              answerRecord = resolve;
+            })
+        );
+        const dispatchAction = vi.fn(async (id: string, args: unknown) => {
+          // The close is out while the record read is still unanswered.
+          answerRecord({ terminalId: "terminal-1", worktreeId: "/wt/t2" });
+          return closeEcho(id, args);
+        });
+        const { store, server } = harness(
+          "s-facts-order",
+          {},
+          {
+            readClosingAgentPane,
+            readClosedPaneWorktrees: async () => [observed(2)],
+            dispatchAction,
+          }
+        );
+        store.resourceOwnership.record("s-facts-order", [{ kind: "terminal", id: "terminal-1" }]);
+
+        const result = await callTool(server, {
+          name: "terminal.closeOwned",
+          arguments: { terminalId: "terminal-1" },
+        });
+
+        expect(dispatchAction).toHaveBeenCalledTimes(1);
+        expect(payloadOf<{ worktree: unknown }>(result).worktree).toEqual(observed(2));
+      });
+
+      it("adds nothing for a pane that never ran an agent", async () => {
+        const readClosedPaneWorktrees = worktreeReader(() => [observed(1)]);
+        const { store, server } = harness(
+          "s-facts-shell",
+          {},
+          {
+            readClosingAgentPane: async () => null,
+            readClosedPaneWorktrees,
+            dispatchAction: vi.fn(closeEcho),
+          }
+        );
+        store.resourceOwnership.record("s-facts-shell", [{ kind: "terminal", id: "terminal-1" }]);
+
+        const result = await callTool(server, {
+          name: "terminal.closeOwned",
+          arguments: { terminalId: "terminal-1" },
+        });
+
+        expect(result.isError).toBeFalsy();
+        expect(payloadOf(result)).toEqual({ closedIds: ["terminal-1"] });
+        expect(readClosedPaneWorktrees).not.toHaveBeenCalled();
+      });
+
+      it("says unreadable, never clean, when the pane's record or its git can't be read", async () => {
+        const recordFails = harness(
+          "s-facts-record",
+          {},
+          {
+            readClosingAgentPane: async () => {
+              throw new Error("pty host timed out");
+            },
+            readClosedPaneWorktrees: worktreeReader(() => [observed(0)]),
+            dispatchAction: vi.fn(closeEcho),
+          }
+        );
+        recordFails.store.resourceOwnership.record("s-facts-record", [
+          { kind: "terminal", id: "terminal-1" },
+        ]);
+        const gitFails = harness(
+          "s-facts-git",
+          {},
+          {
+            readClosingAgentPane: async (terminalId) => ({ terminalId, worktreeId: "/wt/t2" }),
+            readClosedPaneWorktrees: async () => {
+              throw new Error("git went away");
+            },
+            dispatchAction: vi.fn(closeEcho),
+          }
+        );
+        gitFails.store.resourceOwnership.record("s-facts-git", [
+          { kind: "terminal", id: "terminal-1" },
+        ]);
+
+        for (const { server, deps } of [recordFails, gitFails]) {
+          const result = await callTool(server, {
+            name: "terminal.closeOwned",
+            arguments: { terminalId: "terminal-1" },
+          });
+          // The close itself stands either way.
+          expect(result.isError).toBeFalsy();
+          expect(payloadOf(result)).toEqual({
+            closedIds: ["terminal-1"],
+            worktree: { kind: "unreadable" },
+          });
+          expect(deps.dispatchAction).toHaveBeenCalledTimes(1);
+        }
+        expect(recordFails.deps.readClosedPaneWorktrees).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ["project", "project-a"],
+        ["scratch", "scratch-a"],
+      ] as const)(
+        "reads another workspace's run under the same id as unreadable, from a %s view",
+        async (kind, workspaceId) => {
+          const readClosedPaneWorktrees = worktreeReader(() => [observed(9)]);
+          const sessionId = `s-facts-other-${kind}`;
+          const { store, server } = harness(
+            sessionId,
+            {},
+            {
+              // The view that ran the close is this workspace's; the host's
+              // record under the id is a run project B launched since.
+              readClosingAgentPane: async (terminalId) => ({
+                terminalId,
+                projectId: "project-b",
+                worktreeId: "/wt/b",
+              }),
+              readClosedPaneWorktrees,
+              dispatchAction: vi.fn(async (id: string, args: unknown) => ({
+                ...(await closeEcho(id, args)),
+                dispatchedWorkspace: { kind, workspaceId, workspacePath: "/repo/a" },
+              })),
+            }
+          );
+          store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+
+          const result = await callTool(server, {
+            name: "terminal.closeOwned",
+            arguments: { terminalId: "terminal-1" },
+          });
+
+          expect(payloadOf(result)).toEqual({
+            closedIds: ["terminal-1"],
+            worktree: { kind: "unreadable" },
+          });
+          expect(readClosedPaneWorktrees).not.toHaveBeenCalled();
+        }
+      );
+
+      it("reads the pane's worktree when the view that closed it is its own", async () => {
+        const readClosedPaneWorktrees = worktreeReader(() => [observed(2)]);
+        const { store, server } = harness(
+          "s-facts-same-project",
+          {},
+          {
+            readClosingAgentPane: async (terminalId) => ({
+              terminalId,
+              projectId: "project-a",
+              worktreeId: "/wt/a",
+            }),
+            readClosedPaneWorktrees,
+            dispatchAction: vi.fn(async (id: string, args: unknown) => ({
+              ...(await closeEcho(id, args)),
+              dispatchedWorkspace: {
+                kind: "project" as const,
+                workspaceId: "project-a",
+                workspacePath: "/repo/a",
+              },
+            })),
+          }
+        );
+        store.resourceOwnership.record("s-facts-same-project", [
+          { kind: "terminal", id: "terminal-1" },
+        ]);
+
+        const result = await callTool(server, {
+          name: "terminal.closeOwned",
+          arguments: { terminalId: "terminal-1" },
+        });
+
+        expect(payloadOf<{ worktree: unknown }>(result).worktree).toEqual(observed(2));
+        expect(readClosedPaneWorktrees).toHaveBeenCalledTimes(1);
+      });
+
+      it("reads nothing when the close didn't close the pane it named", async () => {
+        const readClosedPaneWorktrees = worktreeReader(() => [observed(1)]);
+        for (const closedIds of [[], ["terminal-other"]]) {
+          const sessionId = `s-facts-miss-${closedIds.length}`;
+          const { store, server } = harness(
+            sessionId,
+            { "terminal.close": { result: { ok: true, result: { closedIds } } } },
+            {
+              readClosingAgentPane: async (terminalId) => ({ terminalId, worktreeId: "/wt/t2" }),
+              readClosedPaneWorktrees,
+            }
+          );
+          store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+
+          const result = await callTool(server, {
+            name: "terminal.closeOwned",
+            arguments: { terminalId: "terminal-1" },
+          });
+
+          expect(result.isError).toBeFalsy();
+          expect(payloadOf(result)).toEqual({ closedIds });
+        }
+        expect(readClosedPaneWorktrees).not.toHaveBeenCalled();
+      });
+
+      it("reads nothing for a close that failed, and the failure stands", async () => {
+        const readClosedPaneWorktrees = worktreeReader(() => [observed(1)]);
+        const failures: Array<Partial<SessionServerDeps>> = [
+          {
+            dispatchAction: vi.fn(async () => ({
+              result: {
+                ok: false as const,
+                error: { code: "EXECUTION_ERROR" as const, message: "teardown failed" },
+              },
+            })),
+          },
+          {
+            dispatchAction: vi.fn(async () => {
+              throw new Error("renderer went away");
+            }),
+          },
+        ];
+        for (const [index, failure] of failures.entries()) {
+          const sessionId = `s-facts-failed-${index}`;
+          const { store, server } = harness(
+            sessionId,
+            {},
+            {
+              readClosingAgentPane: async (terminalId) => ({ terminalId, worktreeId: "/wt/t2" }),
+              readClosedPaneWorktrees,
+              ...failure,
+            }
+          );
+          store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+
+          const result = await callTool(server, {
+            name: "terminal.closeOwned",
+            arguments: { terminalId: "terminal-1" },
+          });
+
+          expect(result.isError).toBe(true);
+          expect(errorText(result)).toMatch(/teardown failed|renderer went away/);
+          expect(store.resourceOwnership.owns(sessionId, "terminal", "terminal-1")).toBe(true);
+        }
+        expect(readClosedPaneWorktrees).not.toHaveBeenCalled();
+      });
+
+      it("leaves a closeAll without the field: it closes many panels and names none", async () => {
+        const manifest: ActionManifestEntry[] = [
+          ...ownedManifest(),
+          { ...makeManifestEntry("terminal.closeAll"), kind: "command", danger: "safe" },
+        ];
+        const readClosingAgentPane = vi.fn(async (terminalId: string) => ({
+          terminalId,
+          worktreeId: "/wt/t2",
+        }));
+        const readClosedPaneWorktrees = worktreeReader(() => [observed(1)]);
+        const { store, server } = harness(
+          "s-facts-all",
+          { "terminal.closeAll": { result: { ok: true, result: { closedIds: ["terminal-1"] } } } },
+          {
+            requestManifest: vi.fn().mockResolvedValue(manifest),
+            getCachedManifest: vi.fn(() => manifest),
+            readClosingAgentPane,
+            readClosedPaneWorktrees,
+          }
+        );
+        // `terminal.closeAll` is the assistant's alone, at full.
+        seedLiveSession(store, "s-facts-all", "full");
+        store.sessionOriginMap.set("s-facts-all", "help");
+
+        const result = await callTool(server, { name: "terminal.closeAll", arguments: {} });
+
+        expect(payloadOf(result)).toEqual({ closedIds: ["terminal-1"] });
+        expect(readClosingAgentPane).not.toHaveBeenCalled();
+        expect(readClosedPaneWorktrees).not.toHaveBeenCalled();
+      });
+
+      it("reads a closeMany's worktrees in one call once every item has closed", async () => {
+        const manifest: ActionManifestEntry[] = [
+          ...ownedManifest(),
+          { ...makeManifestEntry("terminal.closeMany"), kind: "command", danger: "safe" },
+        ];
+        const worktreeOf: Record<string, string | undefined> = {
+          "terminal-1": "/wt/shared",
+          "terminal-2": "/wt/shared",
+          "terminal-3": "/wt/own",
+          "terminal-4": undefined,
+        };
+        const readClosingAgentPane = vi.fn(async (terminalId: string) =>
+          terminalId === "terminal-5"
+            ? null
+            : {
+                terminalId,
+                projectId: "project-1",
+                ...(worktreeOf[terminalId] !== undefined
+                  ? { worktreeId: worktreeOf[terminalId] }
+                  : {}),
+              }
+        );
+        const readClosedPaneWorktrees = worktreeReader((panes) =>
+          panes.map(({ worktreeId }) => observed(worktreeId === "/wt/shared" ? 4 : 0))
+        );
+        let finishLastClose: () => void = () => {};
+        const dispatchAction = vi.fn((_id: string, args: unknown) =>
+          (args as { terminalId: string }).terminalId === "terminal-5"
+            ? new Promise<ReturnType<typeof closedEnvelope>>((resolve) => {
+                finishLastClose = () => resolve(closedEnvelope(args));
+              })
+            : closeEcho(_id, args)
+        );
+        const { store, server } = harness(
+          "s-facts-many",
+          {},
+          {
+            requestManifest: vi.fn().mockResolvedValue(manifest),
+            getCachedManifest: vi.fn(() => manifest),
+            readClosingAgentPane,
+            readClosedPaneWorktrees,
+            dispatchAction,
+          }
+        );
+        seedLiveSession(store, "s-facts-many", "core");
+        store.resourceOwnership.record("s-facts-many", [
+          { kind: "terminal", id: "terminal-1" },
+          { kind: "terminal", id: "terminal-2" },
+          { kind: "terminal", id: "terminal-3" },
+          { kind: "terminal", id: "terminal-4" },
+          { kind: "terminal", id: "terminal-5" },
+        ]);
+
+        const pending = callTool(server, {
+          name: "terminal.closeMany",
+          arguments: {
+            terminalIds: [
+              "terminal-1",
+              "terminal-2",
+              "terminal-3",
+              "terminal-4",
+              "terminal-5",
+              "terminal-foreign",
+            ],
+          },
+        });
+        await vi.waitFor(() => expect(dispatchAction).toHaveBeenCalledTimes(5));
+        // No item reads git on its own, and the batch waits for its last close.
+        expect(readClosedPaneWorktrees).not.toHaveBeenCalled();
+        finishLastClose();
+        const result = await pending;
+
+        const { results } = payloadOf<{
+          results: Array<{
+            target: string;
+            ok: boolean;
+            result?: { closedIds?: string[]; worktree?: unknown };
+            error?: { code?: string };
+          }>;
+        }>(result);
+        expect(
+          results.map(({ target, ok, result: answer }) => [
+            target,
+            ok,
+            answer?.closedIds,
+            answer?.worktree,
+          ])
+        ).toEqual([
+          ["terminal-1", true, ["terminal-1"], observed(4)],
+          ["terminal-2", true, ["terminal-2"], observed(4)],
+          ["terminal-3", true, ["terminal-3"], observed(0)],
+          ["terminal-4", true, ["terminal-4"], { kind: "not-applicable" }],
+          ["terminal-5", true, ["terminal-5"], undefined],
+          ["terminal-foreign", false, undefined, undefined],
+        ]);
+        expect(results[5]!.error?.code).toBe(RESOURCE_NOT_OWNED_CODE);
+        // The refused item is never looked up: only the closes that went out.
+        expect(readClosingAgentPane.mock.calls.map(([id]) => id)).toEqual([
+          "terminal-1",
+          "terminal-2",
+          "terminal-3",
+          "terminal-4",
+          "terminal-5",
+        ]);
+        // One read for the batch: the shared worktree is asked about once
+        // per pane in a single reader call, which reads it once.
+        expect(readClosedPaneWorktrees).toHaveBeenCalledTimes(1);
+        expect(readClosedPaneWorktrees.mock.calls[0]![0]).toEqual([
+          { projectId: "project-1", worktreeId: "/wt/shared" },
+          { projectId: "project-1", worktreeId: "/wt/shared" },
+          { projectId: "project-1", worktreeId: "/wt/own" },
+        ]);
+      });
     });
 
     it("refuses another session's terminal without dispatching", async () => {

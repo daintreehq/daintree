@@ -1,5 +1,5 @@
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
-import type { ActionDispatchResult, ActionError } from "../../../shared/types/actions.js";
+import type { ActionError } from "../../../shared/types/actions.js";
 import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
 import type { WorktreeLocalWork } from "../../../shared/types/worktreeLocalWork.js";
 import { pluralize } from "../../../shared/utils/pluralize.js";
@@ -110,23 +110,6 @@ export async function readGlobalCloseWorktrees(
   } catch {
     return fallback;
   }
-}
-
-/**
- * A successful close's answer with what the person was shown of the panel's
- * worktree, so the calling assistant can report it. Anything else passes
- * through untouched.
- */
-export function withGlobalCloseWorktree(
-  result: ActionDispatchResult,
-  worktree: WorktreeLocalWork
-): ActionDispatchResult {
-  if (!result.ok) return result;
-  const answer = result.result as { closedIds?: unknown } | null | undefined;
-  if (answer === null || typeof answer !== "object" || !Array.isArray(answer.closedIds)) {
-    return result;
-  }
-  return { ...result, result: { ...answer, worktree } };
 }
 
 /** The question put to the person at the Shell about one close. */
