@@ -14,7 +14,7 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import type {
   TerminalOutputActivityLookup,
@@ -40,6 +40,14 @@ import {
   matchesTerminalLocationFilter,
   type TerminalLocationFilter,
 } from "@shared/utils/terminalLocationFilter";
+
+/**
+ * A pane restore held rather than launched (#18171). `addPanel` commits the hold
+ * and returns before any spawn, so the pty-host has nothing for it to answer.
+ */
+function isHeldPanel(panel: PanelInstance | undefined): panel is PtyPanelData {
+  return panel !== undefined && isPtyPanel(panel) && panel.restoreRecovery !== undefined;
+}
 
 export const terminalQueryActionRuns = {
   "terminal.list": async (args: unknown) => {
@@ -256,12 +264,14 @@ export const terminalQueryActionRuns = {
     // for a batched hop, and the default poll still issues none.
     let activity: Record<string, TerminalOutputActivityLookup> | null = null;
     let activityError: string | undefined;
+    // A held pane has no process to read, so it is left out of every pty-host
+    // batch: the reads would only come back unreadable and put an error on a
+    // row that resolved.
+    const readable = resolved.filter((r) => r.terminal !== undefined && !isHeldPanel(r.terminal));
     if (includeOutput) {
-      const idsToFetch = resolved.filter((r) => r.terminal !== undefined).map((r) => r.id);
+      const idsToFetch = readable.map((r) => r.id);
       // Only a PTY panel has a tracker to read.
-      const activityIds = resolved
-        .filter((r) => r.terminal !== undefined && isPtyPanel(r.terminal))
-        .map((r) => r.id);
+      const activityIds = readable.filter((r) => isPtyPanel(r.terminal!)).map((r) => r.id);
       // Async wrappers so a bridge that throws synchronously settles as a
       // rejection like any other failure, rather than escaping the call.
       const readOutputs = async (): Promise<Record<string, SerializedTerminalSnapshot | null>> =>
@@ -290,7 +300,7 @@ export const terminalQueryActionRuns = {
     let submissions: Record<string, TerminalSubmissionLookup> | null = null;
     let submissionError: string | undefined;
     if (submissionToken !== undefined) {
-      const idsToLookUp = resolved.filter((r) => r.terminal !== undefined).map((r) => r.id);
+      const idsToLookUp = readable.map((r) => r.id);
       if (idsToLookUp.length > 0) {
         try {
           submissions = await terminalClient.getSubmissions(idsToLookUp, submissionToken);
@@ -309,6 +319,20 @@ export const terminalQueryActionRuns = {
           agentId: null,
           agentState: null,
           error: "Terminal not found",
+        };
+      }
+
+      // What the pane itself knows, as `terminal.info.get` reports it: no
+      // process, and how restore held it. `agentState` stays the detector's.
+      if (isHeldPanel(terminal)) {
+        return {
+          terminalId: terminal.id,
+          agentId: terminal.launchAgentId ?? null,
+          agentState: null,
+          hasPty: false,
+          armed: armedIds.has(terminal.id),
+          ...restoredField(terminal),
+          ...(includeOutput ? { recentOutput: null } : {}),
         };
       }
 
@@ -447,26 +471,30 @@ export const terminalQueryActionRuns = {
     // fallback answers in (#12316), so a client reads one shape whether or not
     // its workspace had a live view.
     //
-    // `hasPty` is a field this richer surface cannot observe (#12336).
-    // `PtyPanelData.hasPty` exists on the type but nothing in the renderer
-    // ever writes it — not `addPanel`, not `statePatcher` on restore or
-    // reconnect, and not the `onExit` listener in `store/listeners/panel/
-    // lifecycle.ts` — which is why `fleetEligibility.ts` records that it lags
-    // and reaches for `runtimeStatus` instead. Forwarding it would emit
-    // nothing while claiming a view saw everything; deriving it from
-    // `runtimeStatus` would publish an interpretation as a process fact. The
-    // pty-host computes it, so the reduced answer reports it and this one
-    // says it could not look. `lastOutputChangeAt` is also read off the
+    // `hasPty` is a field this richer surface cannot observe for a pane that
+    // spawned (#12336). `PtyPanelData.hasPty` is written only for a recovery
+    // hold (`addPanel`) — not by `statePatcher` on restore or reconnect, and
+    // not by the `onExit` listener in `store/listeners/panel/lifecycle.ts` —
+    // which is why `fleetEligibility.ts` records that it lags and reaches for
+    // `runtimeStatus` instead. Forwarding it would emit nothing while claiming
+    // a view saw everything; deriving it from `runtimeStatus` would publish an
+    // interpretation as a process fact. The pty-host computes it, so the
+    // reduced answer reports it and this one says it could not look. A held
+    // pane is the exception (#18171): the panel knows it never spawned, and a
+    // listed field is absent from every entry, so `hasPty` is listed only when
+    // no held row reports it. `lastOutputChangeAt` is also read off the
     // pty-host (#12428), but only on calls that asked for output (#12495), so
     // it is unobservable on the default poll and on a call whose activity
     // read failed outright. `lastTypedInputAt` rides the same read (#12718).
     //
     // Tails are fitted last, once every other field is in place, so the
     // budget they split is what the rest of the snapshot leaves (#12450).
-    const unavailableFields: TerminalStatusUnavailableField[] =
-      includeOutput && activityError === undefined
-        ? ["hasPty"]
-        : ["hasPty", "lastOutputChangeAt", "lastTypedInputAt"];
+    const unavailableFields: TerminalStatusUnavailableField[] = [
+      ...(entries.some((entry) => entry.hasPty !== undefined) ? [] : (["hasPty"] as const)),
+      ...(includeOutput && activityError === undefined
+        ? []
+        : (["lastOutputChangeAt", "lastTypedInputAt"] as const)),
+    ];
     return boundTerminalStatusOutput(
       {
         terminals: entries,

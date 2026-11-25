@@ -82,6 +82,23 @@ export const TerminalInputLineSchema = z
   })
   .describe(INPUT_LINE_DESCRIPTION);
 
+/**
+ * How restore brought a terminal back (#14017), absent on a pane it never
+ * rebuilt. Strings, not enums, for the reason and state: they come off
+ * persisted panel data, where a stale spelling should degrade one field rather
+ * than fail the whole read.
+ */
+export const TerminalRestoredSchema = z
+  .object({
+    at: z.number(),
+    disposition: z.enum(["resume", "fresh", "held"]),
+    heldReason: z.string().optional(),
+    lastSeen: z.object({ agentState: z.string(), at: z.number().optional() }).optional(),
+  })
+  .describe(
+    "Set when restore rebuilt the panel (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended."
+  );
+
 export const TerminalStatusEntrySchema = z.object({
   terminalId: z.string(),
   agentId: z.string().nullable(),
@@ -139,8 +156,9 @@ export const TerminalStatusEntrySchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "False once the process exited or a kill was requested. Not a health probe: a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface."
+      "False once the process exited, a kill was requested, or restore held the pane. Not a health probe: a wedged agent reads true. `renderer` sets it only when held."
     ),
+  restored: TerminalRestoredSchema.optional(),
   submission: TerminalSubmissionRecordSchema.optional().describe(
     "Delivery record for the named token. Absent without a token or when the terminal could not be read, which differs from holding no record."
   ),

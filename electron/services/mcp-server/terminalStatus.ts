@@ -3,6 +3,7 @@ import { GLOBAL_ASSISTANT_ID } from "../../../shared/config/globalAssistant.js";
 import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { readTailSnapshot } from "../../../shared/utils/artifactParser.js";
+import { restoredField } from "../../../shared/utils/restoreProvenance.js";
 import { captureTerminalTail } from "../../../shared/utils/terminalInputLine.js";
 import {
   boundTerminalStatusOutput,
@@ -14,6 +15,7 @@ import {
   type TerminalStatusEntry,
   type TerminalStatusResult,
 } from "../../../shared/types/terminalStatus.js";
+import type { PanelSnapshot, ProjectState } from "../../../shared/types/project.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -54,6 +56,12 @@ export type ViewlessStatusPtyClient = Pick<
 
 export interface ViewlessTerminalStatusDeps {
   ptyClient: ViewlessStatusPtyClient;
+  /**
+   * The bound project's saved layout, read only for ids the pty-host could not
+   * place (#18171): a pane restore held never spawned, so its layout entry is
+   * the only record of it.
+   */
+  getProjectState: (projectId: string) => Promise<Pick<ProjectState, "terminals"> | null>;
 }
 
 interface ParsedArgs {
@@ -222,6 +230,32 @@ export async function isAgentPaneInWorkspace(
   return record ? isVisibleToBoundSession(record, workspaceId) : false;
 }
 
+/**
+ * A pane of the bound project that restore held rather than launched (#18171),
+ * as the saved layout records it: a PTY kind still carrying its hold, the same
+ * test `terminal.list` reports `restored` by when there is no live process.
+ */
+function isHeldPanel(snapshot: PanelSnapshot | undefined): snapshot is PanelSnapshot {
+  if (snapshot === undefined || snapshot.restoreRecovery === undefined) return false;
+  return panelKindHasPty(snapshot.kind ?? "terminal");
+}
+
+/**
+ * A held pane has no process, so it reports what the layout knows and leaves
+ * every process measurement out rather than inventing one. `agentState` stays
+ * the detector's, which has seen nothing since the restart.
+ */
+function buildHeldEntry(snapshot: PanelSnapshot, includeOutput: boolean): TerminalStatusEntry {
+  return {
+    terminalId: snapshot.id,
+    agentId: snapshot.launchAgentId ?? null,
+    agentState: null,
+    hasPty: false,
+    ...restoredField(snapshot),
+    ...(includeOutput ? { recentOutput: null } : {}),
+  };
+}
+
 function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalStatusEntry {
   const agentState = record.agentState ?? null;
 
@@ -334,19 +368,51 @@ export async function buildViewlessTerminalStatus(
 
   const placed = new Set<string>();
   const unplaced: string[] = [];
+  let anyUnplaced = false;
   for (const id of uniqueIds) {
     const owner = deps.ptyClient.getTerminalProjectId(id);
-    if (owner === workspaceOf(id)) placed.add(id);
+    if (owner === workspaceOf(id)) {
+      placed.add(id);
+      continue;
+    }
+    anyUnplaced = true;
     // `null` means untracked, not foreign — the inventory decides those. A
     // non-null owner that is some other workspace is settled here: never
     // looked up, so never routed at its shard.
-    else if (owner === null) unplaced.push(id);
+    if (owner === null) unplaced.push(id);
   }
-  if (unplaced.length > 0) {
-    // A failed inventory folds to `[]` in `PtyClient`, which leaves those rows
-    // "not found or unavailable" — honest, since nothing could be observed.
-    const inventory = new Set(await deps.ptyClient.getTerminalsForProjectAsync(workspaceId));
-    for (const id of unplaced) if (inventory.has(id)) placed.add(id);
+  // A foreign id pays for the same project-scoped reads an unknown one does,
+  // so the layout read below cannot make the two answer at different speeds.
+  // Both reads are of the bound project only; neither names the id.
+  const held = new Map<string, PanelSnapshot>();
+  if (anyUnplaced) {
+    let inventory: Set<string> | null = null;
+    try {
+      inventory = new Set(
+        await deps.ptyClient.getTerminalsForProjectAsync(workspaceId, { strict: true })
+      );
+    } catch {
+      // Nothing could be observed, so those rows stay "not found or
+      // unavailable" — and the layout is not read: with a shard silent, a live
+      // terminal it never stamped would read as the hold the layout remembers.
+    }
+    if (inventory !== null) {
+      for (const id of unplaced) if (inventory.has(id)) placed.add(id);
+      // A rejected read means the saved panels are unknown, not absent.
+      const state = await deps.getProjectState(workspaceId).catch(() => null);
+      const snapshots = new Map<string, PanelSnapshot>();
+      for (const snapshot of state?.terminals ?? []) {
+        if (!snapshots.has(snapshot.id)) snapshots.set(snapshot.id, snapshot);
+      }
+      for (const id of unplaced) {
+        // Assistants and the global's sessions are never layout panes of
+        // this project; only an ordinary id can be answered from the layout.
+        if (placed.has(id) || isGlobal(id) || admittedAssistants?.has(id) === true) continue;
+        const snapshot = snapshots.get(id);
+        if (!isHeldPanel(snapshot) || isAssistantTerminalRecord({ id })) continue;
+        held.set(id, snapshot);
+      }
+    }
   }
   const lookupIds = uniqueIds.filter((id) => placed.has(id));
 
@@ -402,8 +468,16 @@ export async function buildViewlessTerminalStatus(
     });
   }
 
+  // Checked again after every await: a spawn that took the id meanwhile ends
+  // the hold, and the layout no longer describes what runs under it.
+  for (const id of held.keys()) {
+    if (deps.ptyClient.getTerminalProjectId(id) !== null) held.delete(id);
+  }
+
   const terminals = terminalIds.map((id): TerminalStatusEntry => {
     const record = records.get(id);
+    const heldSnapshot = held.get(id);
+    if (!record && heldSnapshot !== undefined) return buildHeldEntry(heldSnapshot, includeOutput);
     if (!record) {
       // Deliberately one message for three cases: no such terminal, one in
       // another workspace, and one the backend could not be read for. The first
@@ -473,8 +547,9 @@ export async function handleTerminalGetStatusViewless(
       "The terminal backend is not available, so terminal status cannot be read without a live view."
     );
   }
+  const { projectStore } = await import("../ProjectStore.js");
   return buildViewlessTerminalStatus(
-    { ptyClient },
+    { ptyClient, getProjectState: (projectId) => projectStore.getProjectState(projectId) },
     workspaceId,
     rawArgs,
     admittedAssistants,

@@ -110,7 +110,7 @@ describe("a host notice's transition against the host's own status (#15726)", ()
         return { status: "done", result: { isError: false, structured: {}, text: null } };
       }
       const status = await buildViewlessTerminalStatus(
-        { ptyClient: pty.statusClient as never },
+        { ptyClient: pty.statusClient as never, getProjectState: async () => null },
         HOST_PROJECT,
         payload.args
       );

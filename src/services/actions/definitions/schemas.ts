@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TerminalRestoredSchema } from "@shared/types/terminalStatusSchemas";
 import { AwaitedReplySchema } from "@shared/types/replyWait";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
 import { DANGEROUS_MODES } from "@shared/types/dangerousMode";
@@ -464,23 +465,6 @@ export const PanelLimitSnapshotSchema = z.object({
   tier: z.enum(["ok", "soft", "confirm", "hard"]),
 });
 
-/**
- * How restore brought a terminal back (#14017), absent on a pane it never
- * rebuilt. Strings, not enums, for the reason and state: they come off
- * persisted panel data, where a stale spelling should degrade one field rather
- * than fail the whole read.
- */
-export const TerminalRestoredSchema = z
-  .object({
-    at: z.number(),
-    disposition: z.enum(["resume", "fresh", "held"]),
-    heldReason: z.string().optional(),
-    lastSeen: z.object({ agentState: z.string(), at: z.number().optional() }).optional(),
-  })
-  .describe(
-    "Set when restore rebuilt the panel (`at`, epoch ms). lastSeen: agent state saved before then, not proof a run ended."
-  );
-
 export const TerminalSummarySchema = z.object({
   id: z.string(),
   kind: z.string(),
@@ -514,6 +498,7 @@ export const TerminalSummarySchema = z.object({
 
 export {
   TerminalInputLineSchema,
+  TerminalRestoredSchema,
   TerminalStatusEntrySchema,
   TerminalStatusResultSchema,
   TerminalSubmissionRecordSchema,
